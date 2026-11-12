@@ -194,11 +194,15 @@ class RoomResumeTest {
         val joinerRoom = makeSeamRoom(loom.join(InMemoryTag("Bob")), SessionRole.Joiner, "Bob", clock)
 
         hostRoom.roster.first { it.size == 1 }
+        // The joiner must have identified its host: a Resume goes to the host alone (#3165).
+        joinerRoom.roster.first { it.isNotEmpty() }
 
         val badToken = ResumeToken(
             peerId = joinerRoom.selfId,
             roomId = RoomId("room-xyz"), // wrong room
             issuedAt = 0L,
+            // The member's real secret, so the room check is the only thing this token gets wrong.
+            secret = assertNotNull(joinerRoom.resumeToken, "the joiner must hold its token").secret,
         )
 
         val result = joinerRoom.resume(badToken)

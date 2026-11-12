@@ -175,5 +175,6 @@ class RoomConformanceGapDeclarationTest {
         suite.resumeExpiredHasExactCode()
         suite.resumeInvalidTokenHasExactCode()
         suite.resumeAfterLeaveIsLocalWindowClosed()
+        suite.aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen()
     }
 }

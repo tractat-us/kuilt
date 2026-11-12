@@ -978,6 +978,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
     }
 
     // Targets: [apple]
+    final fun aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen() // us.tractat.kuilt.conformance/RoomConformanceSuite.aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen|aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen(){}[0]
+
+    // Targets: [apple]
     final fun aTokenMintedForAnotherRoomIsRefused() // us.tractat.kuilt.conformance/RoomConformanceSuite.aTokenMintedForAnotherRoomIsRefused|aTokenMintedForAnotherRoomIsRefused(){}[0]
 
     // Targets: [apple]
@@ -1090,6 +1093,9 @@ abstract class us.tractat.kuilt.conformance/RoomConformanceSuite { // us.tractat
 
     // Targets: [apple]
     final fun theTeardownFaultReallyFires() // us.tractat.kuilt.conformance/RoomConformanceSuite.theTeardownFaultReallyFires|theTeardownFaultReallyFires(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen|aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen(){}[0]
 
     // Targets: [wasmJs]
     final fun aTokenMintedForAnotherRoomIsRefused(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomConformanceSuite.aTokenMintedForAnotherRoomIsRefused|aTokenMintedForAnotherRoomIsRefused(){}[0]

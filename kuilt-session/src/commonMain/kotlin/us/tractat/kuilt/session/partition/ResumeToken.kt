@@ -1,26 +1,42 @@
 package us.tractat.kuilt.session.partition
 
+import kotlinx.serialization.Serializable
 import us.tractat.kuilt.core.PeerId
 
 /**
- * Opaque token a joiner presents when reconnecting after a transport drop.
+ * The credential a joiner presents when reconnecting after a transport drop.
  *
- * The leader validates two claims:
+ * The host validates three claims, in this order:
  * 1. The [roomId] matches the current session — prevents cross-session replay.
- * 2. The reconnect window for [peerId] is still open — prevents stale reconnects.
+ * 2. The [secret] matches the one the host minted for [peerId] at admit — proves the resume is
+ *    [peerId]'s own (#3165). The room checks it **before** the window controller is asked anything,
+ *    so a wrong secret leaves the real member's window open.
+ * 3. The reconnect window for [peerId] is still open and unspent — prevents stale reconnects.
  *
- * The leader's own identity is **not** encoded here. Only [roomId] is. This
- * preserves forward-compatibility: if an auto-election protocol replaces the
- * leader mid-session, [roomId] survives the transition and joiners can resume
- * against the new host without token renegotiation.
+ * [peerId], [roomId] and [issuedAt] are public knowledge inside a room — every member learns every
+ * id and the room id from the roster — so without [secret] any admitted member could write a token
+ * for any other. The secret is the one field a bystander never sees: the host sends it only in the
+ * direct `Welcome` to the member it names, and the joiner sends it back only to the host. A joiner
+ * whose host sent no secret (a host that predates it) holds no token at all, so it cannot resume.
+ *
+ * **A token is good only against the host that minted it.** That host keeps the secret and the
+ * reconnect window in memory, so a host that did not mint it — a re-elected leader, or another
+ * server in a cluster — refuses it.
+ *
+ * **A persisted token is a bearer secret.** `@Serializable` so a joiner can keep the token across
+ * its own restart (#1593); whoever holds the stored bytes can resume as this member for as long as
+ * the host lives, so store it as you would a password. [secret] serializes as hex; [toString]
+ * redacts it.
  *
  * [issuedAt] is epoch-millis from the injected clock (never [System.currentTimeMillis]
  * directly — callers must inject via `clock: () -> Long`).
  */
+@Serializable
 public data class ResumeToken(
     val peerId: PeerId,
     val roomId: RoomId,
     val issuedAt: Long,
+    val secret: ResumeSecret,
 )
 
 /**
@@ -32,6 +48,7 @@ public data class ResumeToken(
  * Consumer application-layer session identifiers are separate concerns and must
  * not be conflated with this transport-layer room identity.
  */
+@Serializable
 @kotlin.jvm.JvmInline
 public value class RoomId(
     public val value: String,

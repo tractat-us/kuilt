@@ -111,9 +111,14 @@ class DrainingGenerationReconnectTest {
             assertTrue(h.reweaves() >= 1, "the roster drop must have started a re-weave (re-weaves: ${h.reweaves()})")
             assertEquals(1, h.dials(), "the first re-weave must have reused the draining generation")
             assertFalse(resumed.isCompleted, "nothing can have resumed over the dying generation")
-            assertTrue(
-                h.firstBase().deadBroadcasts >= 1,
-                "the rig fired: the Resume went out on the dying generation while its Torn was held",
+            // The rig fired: a resume flight began on the dying generation while its Torn was held,
+            // and is waiting there for a host the drained roster no longer lists. It sends nothing:
+            // a Resume goes to the host alone (#3165), so the old receipt — a frame broadcast into
+            // the dead generation — cannot exist any more.
+            assertAll(
+                { assertTrue(h.joinerRoom.hasPendingResume(), "a resume flight must be waiting on the dying generation") },
+                { assertEquals(1, h.joinerRoom.resumeFlightsStarted(), "exactly that one flight has begun") },
+                { assertEquals(0, h.firstBase().deadBroadcasts, "nothing may be broadcast into the dead generation") },
             )
 
             // The dying generation now tears.
@@ -151,14 +156,15 @@ class DrainingGenerationReconnectTest {
             h.cutFirstLink()
             runCurrent()
 
-            // The rig fired: the tear landed before the wait for Woven saw a value, so no Resume went
-            // out on the dying generation. Were it to land during the flight instead, that is the
-            // first test's interleaving, and this test would no longer pin `first { Woven }`.
+            // The rig fired: the tear landed before the wait for Woven saw a value, so no resume flight
+            // began on the dying generation — the one flight is the fresh generation's. Were it to land
+            // during the flight instead, that is the first test's interleaving (two flights), and this
+            // test would no longer pin `first { Woven }`.
             assertAll(
                 {
                     assertEquals(
-                        0,
-                        h.firstBase().deadBroadcasts,
+                        1,
+                        h.joinerRoom.resumeFlightsStarted(),
                         "the tear must land before the machine sees the dying generation Woven",
                     )
                 },

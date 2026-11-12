@@ -1,6 +1,7 @@
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.test.TestScope
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertFailsWith
@@ -12,6 +13,25 @@ class RoomResumeHarnessTest {
     ): RoomConformanceSuite = object : RoomConformanceSuite() {
         override fun newResumeHarness(scope: TestScope): ResumeHarness =
             change(referenceResumeHarness(scope, fastHeartbeatConfig))
+    }
+
+    /**
+     * Positive control for the forged-resume property (#3165): a host that checks only a token's
+     * public fields lets the forgery through, and the property must red on it — on the follow-up
+     * resume, which is the half that tells a spent window from an unspent one.
+     */
+    @Test
+    fun aHostThatIgnoresTheSecretFailsTheForgedResumeProperty() {
+        val failure = assertFailsWith<AssertionError> {
+            object : RoomConformanceSuite() {
+                override fun newResumeHarness(scope: TestScope): ResumeHarness =
+                    referenceResumeHarness(scope, fastHeartbeatConfig, ignoreSecret = true)
+            }.aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen()
+        }
+        assertAll(
+            { assertContains(failure.message.orEmpty(), "a forgery without the secret must be refused") },
+            { assertContains(failure.message.orEmpty(), "the forgery must not spend its window") },
+        )
     }
 
     @Test

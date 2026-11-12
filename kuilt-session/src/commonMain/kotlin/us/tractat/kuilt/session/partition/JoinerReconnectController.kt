@@ -19,10 +19,11 @@ import us.tractat.kuilt.session.admit.RejectCode
  * observe `events.filterIsInstance<JoinerReconnectEvent.Resumed>()` and push
  * current application state to `event.peerId`.
  *
- * The leader identity is not part of [ResumeToken]; only [RoomId] is. This
- * preserves forward-compatibility: if a future auto-election protocol promotes a
- * new leader mid-session, [RoomId] survives the transition and joiners can
- * resume against the new host without token renegotiation.
+ * **A resume is good only against the host that admitted the joiner.** That host holds the member's
+ * [ResumeSecret] and this controller holds its window, both in memory, so a host that did not mint
+ * them — a newly elected leader, another server in a cluster — refuses the resume. The joiner then
+ * ends its episode on the refusal, and only a consumer that reacts to it (`ClusterClient` does)
+ * joins again.
  *
  * Partition events ([PartitionEvent]) are produced by the partition-detector layer.
  * Until that wiring lands, callers bridge manually: on transport close, invoke
@@ -64,6 +65,13 @@ public interface JoinerReconnectController {
      * 1. Session match — [ResumeToken.roomId] must equal the controller's Room.
      * 2. Window open — the reconnect window for [token.peerId] must still be active at [at].
      * 3. Token not yet consumed — a token may only be used once per window.
+     *
+     * **The [ResumeToken.secret] is not this controller's concern.** The room checks every token
+     * before calling here and answers the rest itself (#3165): a token reaches [tryResume] only when
+     * it names this room, names a **current member**, and carries that member's secret. An
+     * implementation — a consumer's own hold policy included — is protected from forged resumes
+     * without knowing a secret exists, even one that checks none of steps 1–3 for a departed peer,
+     * and must not try to check the secret itself.
      *
      * On success, emits [JoinerReconnectEvent.Resumed] and closes the window so
      * a second [tryResume] with the same token returns [ResumeResult.WindowClosed].

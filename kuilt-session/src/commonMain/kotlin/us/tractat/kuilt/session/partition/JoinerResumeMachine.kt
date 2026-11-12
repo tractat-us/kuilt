@@ -12,11 +12,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
@@ -217,6 +219,19 @@ internal class JoinerResumeMachine(
     private var pendingResume: CompletableDeferred<ResumeResult.JoinerOutcome>? = null
 
     /**
+     * Completes when the current flight's `Resume` has actually gone out (#3165). Installed with
+     * [pendingResume] and guarded by [lock]; a caller that joins the flight reads it there.
+     *
+     * Since a `Resume` goes to the host alone, the flight's owner may wait up to
+     * [HeartbeatConfig.resumeTimeout] for the host to be addressable *before* it sends. A joined
+     * caller that started its reply deadline at the moment it joined could then settle the shared
+     * flight as [ResumeResult.TimedOut] after the host had already spent the window but before its
+     * ack arrived, leaving every later attempt refused. So a joined caller waits for this first, and
+     * starts its reply deadline from the send, exactly as the owner does.
+     */
+    private var pendingSent: CompletableDeferred<Unit>? = null
+
+    /**
      * The most recent host `Reject` for a resume in this episode, or null. Set by [rejectFlight]
      * when a flight was actually pending; read by [runReconnect] to label the terminal event
      * [FailureReason.Refused] instead of [FailureReason.WindowExpired].
@@ -281,16 +296,19 @@ internal class JoinerResumeMachine(
     private var reconnectJob: Job? = null
 
     /**
-     * Mints the [resumeToken] (once) from the [roomId] carried in the joiner's own `Welcome`
-     * or the host's self-introduction. No-op when already minted or [roomId] is null.
+     * Mints the [resumeToken] (once) from the [roomId] and [secret] carried in the joiner's own
+     * `Welcome`. No-op when already minted, or when either is null — a host that sends no secret
+     * (one that predates #3165) leaves this joiner with no token, so a tear goes straight to
+     * terminal rather than presenting a resume that host could not tell from a forgery.
      */
-    fun mintTokenIfAbsent(roomId: String?) {
+    fun mintTokenIfAbsent(roomId: String?, secret: ResumeSecret?) {
         lock.withLock {
-            if (resumeToken == null && roomId != null) {
+            if (resumeToken == null && roomId != null && secret != null) {
                 resumeToken = ResumeToken(
                     peerId = seam.selfId,
                     roomId = RoomId(roomId),
                     issuedAt = clock().toEpochMilliseconds(),
+                    secret = secret,
                 )
             }
         }
@@ -301,6 +319,16 @@ internal class JoinerResumeMachine(
      * (its reply slot installed)? (#1280)
      */
     fun hasPendingFlight(): Boolean = lock.withLock { pendingResume != null }
+
+    /** Guarded by [lock]: how many resume flights this machine has started (not joined). */
+    private var flightsStarted = 0
+
+    /**
+     * Test-visibility (via the room): how many resume flights this machine has started — the
+     * witness that tells "a flight began on that generation" from "none did" now that a `Resume`
+     * the host is not there to receive is never sent at all (#3165).
+     */
+    fun flightsStarted(): Int = lock.withLock { flightsStarted }
 
     /**
      * Takes the pending resume flight (clearing the slot), or null when none is in flight.
@@ -690,7 +718,8 @@ internal class JoinerResumeMachine(
 
     /**
      * Attempt to resume from [token] after a transport drop: send [AdmitMessage.Resume] to
-     * the host and await the reply. The host replies [AdmitMessage.ResumeAck] →
+     * the host — to the host alone, since it carries the member's secret ([sendToHost]) — and await
+     * the reply. The host replies [AdmitMessage.ResumeAck] →
      * [ResumeResult.Success], or [AdmitMessage.Reject] → [ResumeResult.WindowClosed].
      *
      * **Concurrent calls coalesce (#1280).** A room has one reconnect credential and one host,
@@ -705,7 +734,7 @@ internal class JoinerResumeMachine(
      * host-lost *after* a successful resume. Callers that want a retry after a non-Success
      * result simply call again: sequential calls are fresh attempts.
      *
-     * State mutation (installing/joining the deferred) is under [lock]; the suspend broadcast
+     * State mutation (installing/joining the deferred) is under [lock]; the suspend send
      * is outside. A genuine [CancellationException] from the broadcast propagates, but first
      * resolves the shared deferred as [ResumeResult.WindowClosed] so joined callers are never
      * orphaned. The room's `leave()` resolves any still-pending attempt the same way (via
@@ -713,40 +742,102 @@ internal class JoinerResumeMachine(
      */
     suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome {
         // Install (or join) the deferred under lock; check terminal flags first.
-        val (deferred, ownsFlight) = lock.withLock {
+        val (deferred, sent, ownsFlight) = lock.withLock {
             if (host.isTerminal()) return ResumeResult.WindowClosed
             val inFlight = pendingResume
-            if (inFlight != null) {
-                inFlight to false
+            val inFlightSent = pendingSent
+            if (inFlight != null && inFlightSent != null) {
+                Triple(inFlight, inFlightSent, false)
             } else {
-                CompletableDeferred<ResumeResult.JoinerOutcome>().also { pendingResume = it } to true
+                flightsStarted++
+                val reply = CompletableDeferred<ResumeResult.JoinerOutcome>().also { pendingResume = it }
+                val went = CompletableDeferred<Unit>().also { pendingSent = it }
+                Triple(reply, went, true)
             }
         }
         // A resume is already in flight — join it (bounded) rather than orphaning its reply slot.
-        if (!ownsFlight) return awaitFlightBounded(deferred)
+        if (!ownsFlight) return awaitJoinedFlight(deferred, sent)
 
         val resumeMsg = AdmitMessage.encode(
             AdmitMessage.Resume(
                 tokenPeerId = token.peerId.value,
                 tokenRoomId = token.roomId.value,
                 issuedAt = token.issuedAt,
+                resumeSecret = token.secret,
             ),
         )
         // Suspend send outside the lock. A genuine CancellationException propagates (correct),
         // but must still resolve the shared deferred — a joined caller would otherwise hang.
-        // A non-cancellation send failure becomes WindowClosed for every caller of this flight.
+        // A host that is not addressable is TimedOut, exactly what an unanswered frame would have
+        // become; any other send failure becomes WindowClosed for every caller of this flight.
         val sendResult = try {
-            runCatchingCancellable { seam.broadcast(resumeMsg) }
+            runCatchingCancellable { sendToHost(resumeMsg, deferred).also { if (it) sent.complete(Unit) } }
         } catch (e: CancellationException) {
             abandonFlight(deferred)
             throw e
         }
-        if (sendResult.isFailure) {
-            abandonFlight(deferred)
+        val failure = sendResult.exceptionOrNull()
+        when {
+            failure is PeerNotConnected || sendResult.getOrNull() == false ->
+                return settleOrAwait(deferred, ResumeResult.TimedOut)
             // A reply may have raced the failure and resolved the flight first — honor it.
-            return awaitFlightBounded(deferred)
+            failure != null -> abandonFlight(deferred)
         }
+        return awaitFlightBounded(deferred)
+    }
 
+    /**
+     * Sends [bytes] to the identified host **alone**, waiting (bounded by
+     * [HeartbeatConfig.resumeTimeout]) for the host to be addressable on [seam]. Returns `false`
+     * when there is no host to send to — none identified, it never appeared, or the seam tore while
+     * waiting — so the flight settles as [ResumeResult.TimedOut], what a frame nobody received
+     * becomes anyway.
+     *
+     * **Never a broadcast (#3165).** A `Resume` carries the member's resume secret, and on a flat or
+     * mesh fabric a broadcast reaches every peer — admitted or not — so one sniffed resume would let
+     * any of them forge this member's resumes for the life of the host. It was a broadcast from the
+     * first resume implementation, with no recorded reason; the one cost of addressing it is that a
+     * just-re-woven seam may not list the host yet, which is what the bounded wait covers.
+     */
+    private suspend fun sendToHost(
+        bytes: ByteArray,
+        flight: CompletableDeferred<ResumeResult.JoinerOutcome>,
+    ): Boolean {
+        val hostId = host.hostPeer() ?: return false
+        // true: the host is addressable; false: the seam tore first; null: the bound elapsed.
+        val addressable: Boolean? = withTimeoutOrNull(heartbeatConfig.resumeTimeout) {
+            combine(seam.peers, seam.state) { peers: Set<PeerId>, state: SeamState ->
+                when {
+                    hostId in peers -> true
+                    state is SeamState.Torn -> false
+                    else -> null
+                }
+            }.first { it != null }
+        }
+        if (addressable != true) return false
+        // The flight may have been settled while this waited — `leave()` took it, say. Sending then
+        // would have the host spend the window for a reply nobody is waiting for.
+        if (lock.withLock { pendingResume !== flight }) return false
+        seam.sendTo(hostId, bytes)
+        return true
+    }
+
+    /**
+     * A joined caller's wait: first for the owner's send (or the flight settling) under the same
+     * bound the owner's own pre-send wait has, then for the verdict under [awaitFlightBounded] —
+     * so its reply deadline starts from the send, as the owner's does (see [pendingSent]).
+     */
+    private suspend fun awaitJoinedFlight(
+        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
+        sent: CompletableDeferred<Unit>,
+    ): ResumeResult.JoinerOutcome {
+        val reached = withTimeoutOrNull(heartbeatConfig.resumeTimeout) {
+            select<Unit> {
+                sent.onAwait { }
+                deferred.onAwait { }
+            }
+        }
+        if (reached == null) return settleOrAwait(deferred, ResumeResult.TimedOut)
         return awaitFlightBounded(deferred)
     }
 
@@ -759,7 +850,7 @@ internal class JoinerResumeMachine(
      * together and a subsequent [resume] starts a fresh flight. A flight a reply took just before
      * the deadline keeps that reply's verdict: the deadline then only awaits it.
      *
-     * Both caller kinds route through here — the owner (after broadcasting) and a joined caller
+     * Both caller kinds route through here — the owner (after sending) and a joined caller
      * (the `!ownsFlight` early return) — so neither can hang. A late-arriving ResumeAck/Reject
      * after the slot was cleared is a no-op: [takePendingFlight]/[rejectFlight] find no pending
      * flight (or a *later* flight, which the host's single-use-per-window token still resolves

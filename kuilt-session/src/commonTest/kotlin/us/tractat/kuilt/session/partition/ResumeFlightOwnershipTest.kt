@@ -4,6 +4,7 @@ package us.tractat.kuilt.session.partition
 
 import kotlinx.atomicfu.locks.ReentrantLock
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,7 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -90,6 +92,86 @@ class ResumeFlightOwnershipTest {
             rig.assertResumedOnce()
         }
 
+    /**
+     * A generation that tears with the `Resume` already sent and no verdict back settles the flight
+     * at once, and the loop re-weaves without waiting out `resumeTimeout` (#3151).
+     *
+     * `DrainingGenerationReconnectTest` used to pin this, but since a `Resume` goes to the host alone
+     * (#3165) the draining generation never lists the host, so its flight never gets as far as
+     * sending and that test now exercises the wait before the send instead. Here the host stays
+     * listed, so the frame does go out and only the post-send tear arm can settle it.
+     */
+    @Test
+    fun `a tear with the sent flight still pending settles it at once and re-weaves`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            rig.machine.attemptReconnect(Instant.fromEpochMilliseconds(0))
+            runCurrent()
+            val sentBeforeTear = rig.seam.resumesSent
+            val pendingBeforeTear = rig.machine.hasPendingFlight()
+
+            rig.seam.tear()
+            runCurrent()
+
+            assertAll(
+                { assertEquals(1, sentBeforeTear, "precondition: the Resume went out") },
+                { assertTrue(pendingBeforeTear, "precondition: its verdict had not come back") },
+                { assertEquals(2, rig.reweaves(), "the tear must re-weave at once, not after resumeTimeout") },
+                { assertEquals(2, rig.seam.resumesSent, "and resume again over the healed generation") },
+            )
+        }
+
+    /**
+     * A caller that joins a flight whose owner is still waiting for its host to be addressable
+     * starts its reply deadline from the send, not from the moment it joined (#3165 review).
+     *
+     * The owner waits up to `resumeTimeout` before it can send at all, so a joined caller timing from
+     * its join could settle the shared flight `TimedOut` after the host had spent the window but
+     * before the ack arrived, and every later attempt would be refused. Here the joined caller's old
+     * deadline (join + `resumeTimeout`) falls between the send and the ack.
+     */
+    @Test
+    fun `a caller joining a flight that waits for its host times its reply from the send`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = FlightSeam(joinerId, hostId, hostListed = false).also { it.heal() }
+            val machine = JoinerResumeMachine(
+                seam = seam,
+                scope = backgroundScope,
+                clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+                heartbeatConfig = config,
+                reweave = null,
+                lock = ReentrantLock(),
+                host = FlightResumeHost(hostId),
+            )
+            machine.mintTokenIfAbsent("room-1", ResumeSecret.generate())
+            val token = assertNotNull(machine.resumeToken)
+            val bound = config.resumeTimeout.inWholeMilliseconds
+
+            val owner = async { machine.resume(token) }
+            runCurrent()
+            advanceTimeBy(bound / 2)
+            val joined = async { machine.resume(token) }
+            runCurrent()
+            advanceTimeBy(bound / 2 - 10)
+            seam.listHost() // the owner sends now, at about one bound in
+            runCurrent()
+            val sent = seam.resumesSent
+            advanceTimeBy(bound / 2 + 20) // past join + bound, short of send + bound
+            runCurrent()
+            val stillPending = machine.hasPendingFlight()
+            machine.takePendingFlight()?.complete(ResumeResult.Success)
+            runCurrent()
+            val ownerResult = owner.await()
+            val joinedResult = joined.await()
+
+            assertAll(
+                { assertEquals(1, sent, "precondition: the owner sent once the host appeared") },
+                { assertTrue(stillPending, "the joined caller must not settle the flight before its send + bound") },
+                { assertEquals(ResumeResult.Success, ownerResult) },
+                { assertEquals(ResumeResult.Success, joinedResult) },
+            )
+        }
+
     private class Rig(
         val seam: FlightSeam,
         val host: FlightResumeHost,
@@ -106,7 +188,7 @@ class ResumeFlightOwnershipTest {
             scope.runCurrent()
             assertAll(
                 { assertEquals(1, reweaves(), "precondition: one re-weave before the first Resume") },
-                { assertEquals(1, seam.broadcasts, "precondition: the first Resume went out") },
+                { assertEquals(1, seam.resumesSent, "precondition: the first Resume went out") },
                 { assertTrue(machine.hasPendingFlight(), "precondition: the first Resume is in flight") },
             )
             return checkNotNull(machine.takePendingFlight()) { "the flight vanished before the ack took it" }
@@ -114,7 +196,7 @@ class ResumeFlightOwnershipTest {
 
         fun assertResumedOnce() = assertAll(
             { assertEquals(1, reweaves(), "the ack's Success must end the episode with no second re-weave") },
-            { assertEquals(1, seam.broadcasts, "no second Resume may go out after the ack's Success") },
+            { assertEquals(1, seam.resumesSent, "no second Resume may go out after the ack's Success") },
             { assertEquals(1, host.restored, "the episode must end on the success branch") },
             { assertEquals(emptyList(), host.failures, "a resumed room must not go host-lost") },
             { assertFalse(machine.hasPendingFlight(), "no second flight may be in flight") },
@@ -122,7 +204,7 @@ class ResumeFlightOwnershipTest {
     }
 
     private fun TestScope.rig(): Rig {
-        val seam = FlightSeam(joinerId)
+        val seam = FlightSeam(joinerId, hostId)
         val host = FlightResumeHost(hostId)
         var reweaves = 0
         val machine = JoinerResumeMachine(
@@ -138,7 +220,7 @@ class ResumeFlightOwnershipTest {
             lock = ReentrantLock(),
             host = host,
         )
-        machine.mintTokenIfAbsent("room-1")
+        machine.mintTokenIfAbsent("room-1", ResumeSecret.generate())
         return Rig(seam, host, machine, { reweaves }, this)
     }
 }
@@ -166,15 +248,25 @@ private class FlightResumeHost(private val hostPeer: PeerId) : JoinerResumeHost 
 
 /**
  * A seam that starts torn, is healed in place by the re-weave, and can be torn again on demand. It
- * counts broadcasts, which in these tests are only ever the joiner's `Resume`.
+ * counts sends to the host, which in these tests are only ever the joiner's `Resume`.
  */
-private class FlightSeam(override val selfId: PeerId) : Seam {
+private class FlightSeam(
+    override val selfId: PeerId,
+    private val hostId: PeerId,
+    hostListed: Boolean = true,
+) : Seam {
     private val _state = MutableStateFlow<SeamState>(SeamState.Torn(CloseReason.Normal))
     override val state: StateFlow<SeamState> = _state.asStateFlow()
-    override val peers: StateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId)).asStateFlow()
+    private val _peers = MutableStateFlow(if (hostListed) setOf(selfId, hostId) else setOf(selfId))
+    override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
+
+    /** The host becomes addressable on this seam. */
+    fun listHost() {
+        _peers.value = setOf(selfId, hostId)
+    }
     override val incoming: Flow<Swatch> = emptyFlow()
 
-    var broadcasts: Int = 0
+    var resumesSent: Int = 0
         private set
 
     fun heal() {
@@ -186,9 +278,11 @@ private class FlightSeam(override val selfId: PeerId) : Seam {
     }
 
     override suspend fun broadcast(payload: ByteArray) {
-        broadcasts++
+        error("a Resume must never be broadcast (#3165)")
     }
 
-    override suspend fun sendTo(peer: PeerId, payload: ByteArray) = Unit
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        if (peer == hostId) resumesSent++
+    }
     override suspend fun close(reason: CloseReason) = Unit
 }

@@ -9,6 +9,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.session.partition.RoundRobinEndpointSelector
@@ -87,6 +88,7 @@ class EndpointRotationTest {
                 peerId = PeerId("client-peer"),
                 roomId = RoomId("room-1"),
                 issuedAt = 1000L,
+                secret = ResumeSecret.generate(),
             )
             reconnect.setToken(token)
             assertNotNull(reconnect.pendingToken(), "token registered on server-A")
@@ -129,6 +131,7 @@ class EndpointRotationTest {
                     peerId = PeerId("client"),
                     roomId = RoomId("room-2"),
                     issuedAt = 2000L,
+                    secret = ResumeSecret.generate(),
                 ),
             )
 

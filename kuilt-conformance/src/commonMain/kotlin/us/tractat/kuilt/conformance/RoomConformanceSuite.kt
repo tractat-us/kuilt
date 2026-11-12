@@ -48,6 +48,7 @@ import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -393,6 +394,63 @@ public abstract class RoomConformanceSuite {
     @Test
     public fun resumeInvalidTokenHasExactCode(): TestResult =
         assertResumeMapping(ResumeResult.TokenInvalid("session-mismatch"), RejectCode.ResumeTokenInvalid)
+
+    /**
+     * A resume carrying the member's id and room but **not its secret** is refused, and leaves that
+     * member's window open (#3165).
+     *
+     * Every member learns every other member's id and the room id from the roster, so those fields
+     * prove nothing: without this property a room whose host checks only them lets any member
+     * resume as any partitioned other, spending the victim's window and locking it out. The
+     * forgery is presented here by the joiner itself with its own token's secret replaced — the
+     * host cannot tell who sent it, which is the point — and the property has two halves because
+     * either alone is vacuous: the forgery is refused as [RejectCode.ResumeTokenInvalid], **and**
+     * the genuine token afterwards succeeds. The second is the only thing that tells a check made
+     * before the window is spent from one made after it.
+     */
+    @Test
+    public fun aResumeWithoutTheMembersSecretIsRefusedAndLeavesItsWindowOpen(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newResumeHarness(this)
+            val host = h.hostFactory.host(Pattern("Alice"))
+            val joiner = h.joinerFactory.join(InMemoryTag("Bob"))
+            try {
+                host.awaitRoster("the resume rig admitted the joiner") { it.size == 1 }
+                joiner.awaitRoster("the resume rig identified the host") { it.isNotEmpty() }
+                val token = h.prepare(joiner.requireResumeToken(), ResumeResult.Success)
+                val forged = token.copy(secret = ResumeSecret.generate())
+                val refused = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(forged) }
+                val genuine = withTimeoutOrNull(awaitBudget ?: Duration.INFINITE) { joiner.resume(token) }
+                assertAll(
+                    {
+                        assertEquals(
+                            RejectCode.ResumeTokenInvalid,
+                            assertIs<ResumeResult.Refused>(refused, "a forgery without the secret must be refused").code,
+                        )
+                    },
+                    {
+                        assertEquals(
+                            ResumeResult.Success,
+                            genuine,
+                            "the member's own resume must succeed after a forgery: the forgery must not spend its window",
+                        )
+                    },
+                    {
+                        // Where the forgery is refused — before the window controller or inside it —
+                        // is the room's business; that it never spends the window is not.
+                        assertEquals(
+                            listOf<ResumeResult.HostVerdict>(ResumeResult.Success),
+                            h.hostVerdicts().filter { it == ResumeResult.Success },
+                            "only the genuine resume may be granted",
+                        )
+                    },
+                    { assertEquals(2, h.resumeRequests(), "the joiner must actually send both resumes") },
+                )
+            } finally {
+                joiner.leave()
+                host.leave()
+            }
+        }
 
     private fun assertResumeMapping(verdict: ResumeResult.HostVerdict, code: RejectCode?): TestResult =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {

@@ -65,6 +65,7 @@ import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.JoinerResumeHost
 import us.tractat.kuilt.session.partition.JoinerResumeMachine
 import us.tractat.kuilt.session.partition.ResumeRefusal
+import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
@@ -761,6 +762,32 @@ internal class SeamRoom(
      * is not partitioned before it consults this map — and the next episode overwrites it.
      */
     private val episodeDetectedAtMs = mutableMapOf<PeerId, Long>()
+
+    /**
+     * **Host only.** Each current member's [ResumeSecret] — the proof that a `Resume` naming that
+     * member is the member's own (#3165). Guarded by [lock].
+     *
+     * The invariant: on a host with a [reconnectController], `resumeSecrets.keys` equals
+     * `admittedById.keys` whenever [lock] is free. [admitPeer] mints an entry in the critical
+     * section that admits the member (and none on a closed room, which admits nobody),
+     * [removeFromRoster] drops it in the one that removes it, [leave] clears it with the roster, and
+     * nothing else writes it. Two consequences the resume path leans on:
+     *
+     * - **Stable while the member stays.** A same-`PeerId` re-admission (a fresh transport, a fresh
+     *   room instance) finds the entry and reuses it, so the token that member already holds keeps
+     *   working. Whoever the fabric admits under an id receives that id's secret in its `Welcome`
+     *   either way, so reuse is no weaker than rotation; the fabric owns whether the id is real.
+     * - **Checked before the controller, race-free.** A secret never changes while its member is
+     *   present, so [handleResume] can compare it and *then* call
+     *   [JoinerReconnectController.tryResume] with no check-then-act window. That is why the check
+     *   lives here and not in the controller: every hold policy, the consumer-written ones included
+     *   (#1614), is protected by construction and never has to know a secret exists. It holds only
+     *   because [handleResume] lets **no** unchecked token through — not a wrong-room one, not one
+     *   for a departed member — so a policy that checks nothing is still safe.
+     *
+     * Bounded by the live roster, so a fabric that mints a fresh id per connection does not grow it.
+     */
+    private val resumeSecrets = mutableMapOf<PeerId, ResumeSecret>()
     private val _roster = MutableStateFlow<Set<Member>>(emptySet())
     override val roster: StateFlow<Set<Member>> = _roster.asStateFlow()
 
@@ -1595,12 +1622,20 @@ internal class SeamRoom(
         )
 
         // Snapshot current members and mutate roster under lock; no I/O inside.
-        val existingMembers = lock.withLock {
+        // The resume secret is minted (or, on a same-id re-admission, reused) in the SAME critical
+        // section that admits the member — see [resumeSecrets] for the invariant this keeps, and
+        // for why only a host that can answer a resume holds one. A joiner told nothing simply
+        // holds no token.
+        val (existingMembers, resumeSecret) = lock.withLock {
             val existing = admittedById.values.toList()
             addToRoster(member)
-            existing
+            // `closed`: addToRoster admitted nobody, so there is no member to hold a secret for.
+            val secret = reconnectController?.takeIf { !closed }
+                ?.let { resumeSecrets.getOrPut(joinerPeerId) { ResumeSecret.generate() } }
+            existing to secret
         }
 
+        // The roster copy: what every OTHER member is told about the joiner. It carries no secret.
         val welcome = AdmitMessage.Welcome(
             assignedPeerId = joinerPeerId.value,
             displayName = hello.displayName,
@@ -1608,14 +1643,15 @@ internal class SeamRoom(
             deviceId = hello.deviceId,
             roomId = _roomId.value?.value,
         )
-        val welcomeBytes = AdmitMessage.encode(welcome)
 
         // All sends below are outside the lock — they are suspend calls.
 
-        // Send welcome directly to the joiner. Stays INLINE — it addresses the joiner, not the
-        // bystanders, so it shares no recipient with any queued fan-out and has no order to keep
-        // against one. Same for the two joiner-directed loops below.
-        runCatchingCancellable { seam.sendTo(joinerPeerId, welcomeBytes) }
+        // Send welcome directly to the joiner — the ONE frame that carries its secret. Stays
+        // INLINE — it addresses the joiner, not the bystanders, so it shares no recipient with any
+        // queued fan-out and has no order to keep against one. Same for the two joiner-directed
+        // loops below.
+        val directWelcomeBytes = AdmitMessage.encode(welcome.copy(resumeSecret = resumeSecret))
+        runCatchingCancellable { seam.sendTo(joinerPeerId, directWelcomeBytes) }
 
         // Tell the existing members about the joiner (roster sync) — through the per-recipient
         // fan-out lanes (#1781/#2048), not a loop of direct sends. This is a host-authoritative
@@ -1628,6 +1664,9 @@ internal class SeamRoom(
         // anti-entropy to correct it. `fanOutToOtherMembers` re-snapshots the same recipient set
         // (`existingMembers` is `admittedById` minus the joiner, taken moments earlier under the same
         // lock) and adds the terminal-room gate, so this is a strict improvement, not a trade.
+        //
+        // `welcome`, NOT the direct copy above: a bystander holding the joiner's secret could
+        // resume as the joiner and spend its window (#3165).
         fanOutToOtherMembers(joinerPeerId, welcome)
 
         // Bootstrap the joiner's view: send welcomes for all pre-existing members
@@ -1676,12 +1715,43 @@ internal class SeamRoom(
      */
     private suspend fun handleResume(sender: PeerId, msg: AdmitMessage.Resume) {
         val ctrl = reconnectController ?: return
-        val token = ResumeToken(
-            peerId = PeerId(msg.tokenPeerId),
-            roomId = RoomId(msg.tokenRoomId),
-            issuedAt = msg.issuedAt,
-        )
-        val reject = when (val result = ctrl.tryResume(token, at = clock().toEpochMilliseconds())) {
+        // The secret is checked HERE, before the controller is asked anything (#3165). Every member
+        // can write a token's other three fields for any other member, so a forgery that reached
+        // `tryResume` would spend the named member's window and lock it out. Checking before rather
+        // than inside is race-free because a member's secret never changes while it is present
+        // (see [resumeSecrets]); checking AFTER `tryResume` would not be — the window is already
+        // spent by then.
+        //
+        // **No token reaches the controller unchecked.** A hold policy may skip the room-id check or
+        // hold a window for a member that has already gone, so every refusal the room can decide
+        // from its own state, it decides here:
+        // - no secret at all: a joiner that predates it, which cannot prove who it is;
+        // - another room's id, against this room's own write-once id: a token minted elsewhere;
+        // - a peer that is not a current member: it has no seat to resume onto. A `Goodbye` or a
+        //   `PeerLost` removes the member while its window may still be open, and a forgery that
+        //   reached the controller would spend that window, cancelling the expiry whose `Farewell`
+        //   is the only eviction a star bystander ever hears (#1557). Answered as an elapsed window,
+        //   which is what a genuine late resume after an expiry has always been told;
+        // - a member whose secret does not match.
+        val peer = PeerId(msg.tokenPeerId)
+        val presented = msg.resumeSecret
+        val (thisRoom, expected) = lock.withLock { _roomId.value to resumeSecrets[peer] }
+        val verdict = when {
+            presented == null -> ResumeResult.TokenInvalid("missing-secret")
+            msg.tokenRoomId != thisRoom?.value -> ResumeResult.TokenInvalid("session-mismatch")
+            expected == null -> ResumeResult.WindowClosed
+            !expected.matches(presented) -> ResumeResult.TokenInvalid("secret-mismatch")
+            else -> ctrl.tryResume(
+                ResumeToken(
+                    peerId = peer,
+                    roomId = RoomId(msg.tokenRoomId),
+                    issuedAt = msg.issuedAt,
+                    secret = presented,
+                ),
+                at = clock().toEpochMilliseconds(),
+            )
+        }
+        val reject = when (val result = verdict) {
             // handleReconnectResumed fires via the controller event stream.
             ResumeResult.Success -> null
             // Transient: the host's own detector has not fired yet (fast-reconnect race). The
@@ -1717,11 +1787,9 @@ internal class SeamRoom(
      * the whole admit burst — see the comment on the assignment below, which also states what
      * that narrowing costs on a flat loom.
      *
-     * If [welcome.roomId] is set and [resumeToken] is not yet minted, mint it now using
-     * [selfId] as the peer identifier and the received [RoomId].
-     *
-     * Note: the self-admission welcome (`assignedPeerId == selfId`) is used ONLY to mint
-     * the resume token; it does not add self to the roster. Resume confirmations arrive as
+     * The self-admission welcome (`assignedPeerId == selfId`) mints [resumeToken] (once) from its
+     * [RoomId] and the secret the host sent this member alone (#3165); no other shape mints, since
+     * no other shape carries this member's secret. It does not add self to the roster. Resume confirmations arrive as
      * [AdmitMessage.ResumeAck], not as Welcome.
      */
     private fun handleWelcome(sender: PeerId, welcome: AdmitMessage.Welcome) {
@@ -1760,28 +1828,28 @@ internal class SeamRoom(
 
             // Learn the room's identity from the same frame that mints the resume token, so
             // [Room.roomId] and [ResumeToken.roomId] can never name different rooms (#1594). Placed
-            // above the self-admission branch to cover every Welcome shape a joiner accepts, exactly
-            // as the two mintTokenIfAbsent calls below do.
+            // above the self-admission branch to cover every Welcome shape a joiner accepts.
             //
-            // TWO shapes carry a roomId, not one: `admitPeer` builds a single `welcome` with
-            // `roomId = _roomId.value?.value` and both sends it to the joiner itself (the
-            // self-admission Welcome) AND hands that same object to `fanOutToOtherMembers`, which
-            // re-encodes it unchanged to every other admitted member (the roster-sync Welcome). Both
-            // therefore name the room. The bootstrap and host-intro Welcomes send null. Which shape
+            // TWO shapes carry a roomId, not one: `admitPeer` builds one `welcome` with
+            // `roomId = _roomId.value?.value`, sends a copy of it with the joiner's secret added to
+            // the joiner itself (the self-admission Welcome), and hands the secretless original to
+            // `fanOutToOtherMembers`, which re-encodes it to every other admitted member (the
+            // roster-sync Welcome). Both therefore name the room; only the first carries a secret. The bootstrap and host-intro Welcomes send null. Which shape
             // lands first does not matter: they agree on the value, and the write-once guard in
             // [adoptRoomIdIfAbsent] makes every one after the first a no-op.
             adoptRoomIdIfAbsent(welcome.roomId)
 
-            // Self-admission welcome: mint the resume token (once) from the roomId carried here.
+            // Self-admission welcome: mint the resume token (once) from the roomId and the secret
+            // carried here. This is the ONLY shape that mints (#3165): it is the only one carrying
+            // this member's secret. Every other Welcome — another member's roster copy, a
+            // bootstrap, the host intro — carries none, so a token minted from one would be a
+            // token the host refuses.
             if (assignedId == selfId) {
-                resumeMachine?.mintTokenIfAbsent(welcome.roomId)
+                resumeMachine?.mintTokenIfAbsent(welcome.roomId, welcome.resumeSecret)
                 // The host explicitly admitted us — disarm the admit deadline (#1178).
                 admitted.complete(Unit)
                 return@withLock
             }
-
-            // Also mint resume token from host intro welcome if not yet minted.
-            resumeMachine?.mintTokenIfAbsent(welcome.roomId)
 
             if (admittedById.containsKey(assignedId)) return@withLock // already known
             val identity = MemberIdentity(
@@ -2055,6 +2123,9 @@ internal class SeamRoom(
      * internal auto-reconnect's own resume (#1280). No production caller reads this.
      */
     internal fun hasPendingResume(): Boolean = resumeMachine?.hasPendingFlight() ?: false
+
+    /** Test-visibility: how many resume flights this joiner has started (#3165). */
+    internal fun resumeFlightsStarted(): Int = resumeMachine?.flightsStarted() ?: 0
 
     /**
      * Test-visibility: the current reconnect episode's most recent host `Reject` of a resume, or
@@ -3508,6 +3579,8 @@ internal class SeamRoom(
             // Reaped with the member so a long-lived room does not accumulate an entry per peer
             // that ever left. refineWindow's Partitioned gate rejects an announcement for a gone member.
             episodeDetectedAtMs.remove(peerId)
+            // Pruned with the member, keeping `resumeSecrets.keys == admittedById.keys` (#3165).
+            resumeSecrets.remove(peerId)
             // A later admission gets a fresh inbox; close this admission's inbox outside the lock.
             val inbox = memberInboxes.remove(peerId)
             // Keep removal in the same critical section as admission and liveness updates. Otherwise
@@ -3544,6 +3617,9 @@ internal class SeamRoom(
      * room, so it can neither be reached from outside nor answer for a host.
      */
     internal fun hostPeer(): PeerId? = lock.withLock { hostPeerId }
+
+    /** Test-visibility: how many resume secrets this host holds — one per current member (#3165). */
+    internal fun heldResumeSecretCount(): Int = lock.withLock { resumeSecrets.size }
 
     // ── Application frame routing ─────────────────────────────────────────────
 
@@ -3969,6 +4045,8 @@ internal class SeamRoom(
         lock.withLock {
             admittedById.clear()
             episodeDetectedAtMs.clear()
+            // With the members it belongs to, keeping `resumeSecrets.keys == admittedById.keys`.
+            resumeSecrets.clear()
             _roster.value = emptySet()
             _rosterPeers.value = setOf(selfId)
             memberInboxes.values.toList().also { memberInboxes.clear() }

@@ -40,6 +40,7 @@ class ServerClusterReconnectTest {
         peerId = PeerId("self"),
         roomId = roomId,
         issuedAt = 1_000L,
+        secret = ResumeSecret.generate(),
     )
 
     // ── O3: Rotation order ────────────────────────────────────────────────────
