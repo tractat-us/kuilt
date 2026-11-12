@@ -271,6 +271,34 @@ sealed interface us.tractat.kuilt.heddle/Relocation { // us.tractat.kuilt.heddle
     }
 }
 
+sealed interface us.tractat.kuilt.heddle/TopologyParse { // us.tractat.kuilt.heddle/TopologyParse|null[0]
+    final class Invalid : us.tractat.kuilt.heddle/TopologyParse { // us.tractat.kuilt.heddle/TopologyParse.Invalid|null[0]
+        constructor <init>(kotlin.collections/List<us.tractat.kuilt.heddle/TopologyProblem>) // us.tractat.kuilt.heddle/TopologyParse.Invalid.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.heddle.TopologyProblem>){}[0]
+
+        final val problems // us.tractat.kuilt.heddle/TopologyParse.Invalid.problems|{}problems[0]
+            final fun <get-problems>(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyProblem> // us.tractat.kuilt.heddle/TopologyParse.Invalid.problems.<get-problems>|<get-problems>(){}[0]
+
+        final fun component1(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyProblem> // us.tractat.kuilt.heddle/TopologyParse.Invalid.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<us.tractat.kuilt.heddle/TopologyProblem> = ...): us.tractat.kuilt.heddle/TopologyParse.Invalid // us.tractat.kuilt.heddle/TopologyParse.Invalid.copy|copy(kotlin.collections.List<us.tractat.kuilt.heddle.TopologyProblem>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyParse.Invalid.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyParse.Invalid.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyParse.Invalid.toString|toString(){}[0]
+    }
+
+    final class Valid : us.tractat.kuilt.heddle/TopologyParse { // us.tractat.kuilt.heddle/TopologyParse.Valid|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/Topology) // us.tractat.kuilt.heddle/TopologyParse.Valid.<init>|<init>(us.tractat.kuilt.heddle.Topology){}[0]
+
+        final val topology // us.tractat.kuilt.heddle/TopologyParse.Valid.topology|{}topology[0]
+            final fun <get-topology>(): us.tractat.kuilt.heddle/Topology // us.tractat.kuilt.heddle/TopologyParse.Valid.topology.<get-topology>|<get-topology>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/Topology // us.tractat.kuilt.heddle/TopologyParse.Valid.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/Topology = ...): us.tractat.kuilt.heddle/TopologyParse.Valid // us.tractat.kuilt.heddle/TopologyParse.Valid.copy|copy(us.tractat.kuilt.heddle.Topology){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyParse.Valid.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyParse.Valid.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyParse.Valid.toString|toString(){}[0]
+    }
+}
+
 final class us.tractat.kuilt.heddle/AttachmentRecord { // us.tractat.kuilt.heddle/AttachmentRecord|null[0]
     constructor <init>(us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/Weight) // us.tractat.kuilt.heddle/AttachmentRecord.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.Weight){}[0]
 
@@ -645,6 +673,294 @@ final class us.tractat.kuilt.heddle/SlotFinals { // us.tractat.kuilt.heddle/Slot
     }
 }
 
+final class us.tractat.kuilt.heddle/Topology { // us.tractat.kuilt.heddle/Topology|null[0]
+    constructor <init>(kotlin/String, kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node>) // us.tractat.kuilt.heddle/Topology.<init>|<init>(kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>){}[0]
+
+    final val children // us.tractat.kuilt.heddle/Topology.children|{}children[0]
+        final fun <get-children>(): kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> // us.tractat.kuilt.heddle/Topology.children.<get-children>|<get-children>(){}[0]
+    final val root // us.tractat.kuilt.heddle/Topology.root|{}root[0]
+        final fun <get-root>(): kotlin/String // us.tractat.kuilt.heddle/Topology.root.<get-root>|<get-root>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.heddle/Topology.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> // us.tractat.kuilt.heddle/Topology.component2|component2(){}[0]
+    final fun copy(kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> = ...): us.tractat.kuilt.heddle/Topology // us.tractat.kuilt.heddle/Topology.copy|copy(kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Topology.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Topology.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Topology.toString|toString(){}[0]
+
+    sealed interface Node { // us.tractat.kuilt.heddle/Topology.Node|null[0]
+        abstract val name // us.tractat.kuilt.heddle/Topology.Node.name|{}name[0]
+            abstract fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/Topology.Node.name.<get-name>|<get-name>(){}[0]
+        abstract val weight // us.tractat.kuilt.heddle/Topology.Node.weight|{}weight[0]
+            abstract fun <get-weight>(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Topology.Node.weight.<get-weight>|<get-weight>(){}[0]
+
+        final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.heddle/Topology.Node.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Topology.Node> // us.tractat.kuilt.heddle/Topology.Node.Companion.serializer|serializer(){}[0]
+            final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.heddle/Topology.Node.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        }
+    }
+
+    final class Group : us.tractat.kuilt.heddle/Topology.Node { // us.tractat.kuilt.heddle/Topology.Group|null[0]
+        constructor <init>(kotlin/String, us.tractat.kuilt.heddle/Weight, kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node>, us.tractat.kuilt.heddle/Topology.RuntimeChildren? = ...) // us.tractat.kuilt.heddle/Topology.Group.<init>|<init>(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>;us.tractat.kuilt.heddle.Topology.RuntimeChildren?){}[0]
+
+        final val children // us.tractat.kuilt.heddle/Topology.Group.children|{}children[0]
+            final fun <get-children>(): kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> // us.tractat.kuilt.heddle/Topology.Group.children.<get-children>|<get-children>(){}[0]
+        final val name // us.tractat.kuilt.heddle/Topology.Group.name|{}name[0]
+            final fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/Topology.Group.name.<get-name>|<get-name>(){}[0]
+        final val runtimeChildren // us.tractat.kuilt.heddle/Topology.Group.runtimeChildren|{}runtimeChildren[0]
+            final fun <get-runtimeChildren>(): us.tractat.kuilt.heddle/Topology.RuntimeChildren? // us.tractat.kuilt.heddle/Topology.Group.runtimeChildren.<get-runtimeChildren>|<get-runtimeChildren>(){}[0]
+        final val weight // us.tractat.kuilt.heddle/Topology.Group.weight|{}weight[0]
+            final fun <get-weight>(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Topology.Group.weight.<get-weight>|<get-weight>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.heddle/Topology.Group.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Topology.Group.component2|component2(){}[0]
+        final fun component3(): kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> // us.tractat.kuilt.heddle/Topology.Group.component3|component3(){}[0]
+        final fun component4(): us.tractat.kuilt.heddle/Topology.RuntimeChildren? // us.tractat.kuilt.heddle/Topology.Group.component4|component4(){}[0]
+        final fun copy(kotlin/String = ..., us.tractat.kuilt.heddle/Weight = ..., kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> = ..., us.tractat.kuilt.heddle/Topology.RuntimeChildren? = ...): us.tractat.kuilt.heddle/Topology.Group // us.tractat.kuilt.heddle/Topology.Group.copy|copy(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>;us.tractat.kuilt.heddle.Topology.RuntimeChildren?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Topology.Group.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Topology.Group.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Topology.Group.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/Topology.Group> { // us.tractat.kuilt.heddle/Topology.Group.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.heddle/Topology.Group.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/Topology.Group.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/Topology.Group.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/Topology.Group // us.tractat.kuilt.heddle/Topology.Group.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Topology.Group) // us.tractat.kuilt.heddle/Topology.Group.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Topology.Group){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.heddle/Topology.Group.Companion|null[0]
+            final val $childSerializers // us.tractat.kuilt.heddle/Topology.Group.Companion.$childSerializers|{}$childSerializers[0]
+
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Topology.Group> // us.tractat.kuilt.heddle/Topology.Group.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Lane : us.tractat.kuilt.heddle/Topology.Node { // us.tractat.kuilt.heddle/Topology.Lane|null[0]
+        constructor <init>(kotlin/String, us.tractat.kuilt.heddle/Weight = ...) // us.tractat.kuilt.heddle/Topology.Lane.<init>|<init>(kotlin.String;us.tractat.kuilt.heddle.Weight){}[0]
+
+        final val name // us.tractat.kuilt.heddle/Topology.Lane.name|{}name[0]
+            final fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/Topology.Lane.name.<get-name>|<get-name>(){}[0]
+        final val weight // us.tractat.kuilt.heddle/Topology.Lane.weight|{}weight[0]
+            final fun <get-weight>(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Topology.Lane.weight.<get-weight>|<get-weight>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.heddle/Topology.Lane.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Topology.Lane.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., us.tractat.kuilt.heddle/Weight = ...): us.tractat.kuilt.heddle/Topology.Lane // us.tractat.kuilt.heddle/Topology.Lane.copy|copy(kotlin.String;us.tractat.kuilt.heddle.Weight){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Topology.Lane.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Topology.Lane.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Topology.Lane.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/Topology.Lane> { // us.tractat.kuilt.heddle/Topology.Lane.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.heddle/Topology.Lane.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/Topology.Lane.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/Topology.Lane.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/Topology.Lane // us.tractat.kuilt.heddle/Topology.Lane.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Topology.Lane) // us.tractat.kuilt.heddle/Topology.Lane.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Topology.Lane){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.heddle/Topology.Lane.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Topology.Lane> // us.tractat.kuilt.heddle/Topology.Lane.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class RuntimeChildren { // us.tractat.kuilt.heddle/Topology.RuntimeChildren|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/Weight) // us.tractat.kuilt.heddle/Topology.RuntimeChildren.<init>|<init>(us.tractat.kuilt.heddle.Weight){}[0]
+
+        final val weight // us.tractat.kuilt.heddle/Topology.RuntimeChildren.weight|{}weight[0]
+            final fun <get-weight>(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Topology.RuntimeChildren.weight.<get-weight>|<get-weight>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Topology.RuntimeChildren.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/Weight = ...): us.tractat.kuilt.heddle/Topology.RuntimeChildren // us.tractat.kuilt.heddle/Topology.RuntimeChildren.copy|copy(us.tractat.kuilt.heddle.Weight){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Topology.RuntimeChildren.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Topology.RuntimeChildren.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Topology.RuntimeChildren.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/Topology.RuntimeChildren> { // us.tractat.kuilt.heddle/Topology.RuntimeChildren.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.heddle/Topology.RuntimeChildren.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/Topology.RuntimeChildren.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/Topology.RuntimeChildren.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/Topology.RuntimeChildren // us.tractat.kuilt.heddle/Topology.RuntimeChildren.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Topology.RuntimeChildren) // us.tractat.kuilt.heddle/Topology.RuntimeChildren.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Topology.RuntimeChildren){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.heddle/Topology.RuntimeChildren.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Topology.RuntimeChildren> // us.tractat.kuilt.heddle/Topology.RuntimeChildren.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/Topology> { // us.tractat.kuilt.heddle/Topology.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/Topology.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/Topology.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/Topology.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/Topology // us.tractat.kuilt.heddle/Topology.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Topology) // us.tractat.kuilt.heddle/Topology.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Topology){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/Topology.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.heddle/Topology.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun from(us.tractat.kuilt.heddle/TopologyDocument): us.tractat.kuilt.heddle/TopologyParse // us.tractat.kuilt.heddle/Topology.Companion.from|from(us.tractat.kuilt.heddle.TopologyDocument){}[0]
+        final fun problems(kotlin/String, kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node>): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyProblem> // us.tractat.kuilt.heddle/Topology.Companion.problems|problems(kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>){}[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Topology> // us.tractat.kuilt.heddle/Topology.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddle/TopologyDocument|null[0]
+    constructor <init>(kotlin/String, kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node>) // us.tractat.kuilt.heddle/TopologyDocument.<init>|<init>(kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>){}[0]
+
+    final val children // us.tractat.kuilt.heddle/TopologyDocument.children|{}children[0]
+        final fun <get-children>(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> // us.tractat.kuilt.heddle/TopologyDocument.children.<get-children>|<get-children>(){}[0]
+    final val root // us.tractat.kuilt.heddle/TopologyDocument.root|{}root[0]
+        final fun <get-root>(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.root.<get-root>|<get-root>(){}[0]
+
+    final fun component1(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> // us.tractat.kuilt.heddle/TopologyDocument.component2|component2(){}[0]
+    final fun copy(kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ...): us.tractat.kuilt.heddle/TopologyDocument // us.tractat.kuilt.heddle/TopologyDocument.copy|copy(kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyDocument.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyDocument.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.toString|toString(){}[0]
+
+    sealed interface Node { // us.tractat.kuilt.heddle/TopologyDocument.Node|null[0]
+        abstract val name // us.tractat.kuilt.heddle/TopologyDocument.Node.name|{}name[0]
+            abstract fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Node.name.<get-name>|<get-name>(){}[0]
+        abstract val weight // us.tractat.kuilt.heddle/TopologyDocument.Node.weight|{}weight[0]
+            abstract fun <get-weight>(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Node.weight.<get-weight>|<get-weight>(){}[0]
+
+        final object Companion : kotlinx.serialization.internal/SerializerFactory { // us.tractat.kuilt.heddle/TopologyDocument.Node.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/TopologyDocument.Node> // us.tractat.kuilt.heddle/TopologyDocument.Node.Companion.serializer|serializer(){}[0]
+            final fun serializer(kotlin/Array<out kotlinx.serialization/KSerializer<*>>...): kotlinx.serialization/KSerializer<*> // us.tractat.kuilt.heddle/TopologyDocument.Node.Companion.serializer|serializer(kotlin.Array<out|kotlinx.serialization.KSerializer<*>>...){}[0]
+        }
+    }
+
+    final class Group : us.tractat.kuilt.heddle/TopologyDocument.Node { // us.tractat.kuilt.heddle/TopologyDocument.Group|null[0]
+        constructor <init>(kotlin/String, kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., kotlin/String? = ...) // us.tractat.kuilt.heddle/TopologyDocument.Group.<init>|<init>(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;kotlin.String?){}[0]
+
+        final val children // us.tractat.kuilt.heddle/TopologyDocument.Group.children|{}children[0]
+            final fun <get-children>(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> // us.tractat.kuilt.heddle/TopologyDocument.Group.children.<get-children>|<get-children>(){}[0]
+        final val name // us.tractat.kuilt.heddle/TopologyDocument.Group.name|{}name[0]
+            final fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Group.name.<get-name>|<get-name>(){}[0]
+        final val runtimeChildren // us.tractat.kuilt.heddle/TopologyDocument.Group.runtimeChildren|{}runtimeChildren[0]
+            final fun <get-runtimeChildren>(): kotlin/String? // us.tractat.kuilt.heddle/TopologyDocument.Group.runtimeChildren.<get-runtimeChildren>|<get-runtimeChildren>(){}[0]
+        final val weight // us.tractat.kuilt.heddle/TopologyDocument.Group.weight|{}weight[0]
+            final fun <get-weight>(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Group.weight.<get-weight>|<get-weight>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Group.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Group.component2|component2(){}[0]
+        final fun component3(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> // us.tractat.kuilt.heddle/TopologyDocument.Group.component3|component3(){}[0]
+        final fun component4(): kotlin/String? // us.tractat.kuilt.heddle/TopologyDocument.Group.component4|component4(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., kotlin/String? = ...): us.tractat.kuilt.heddle/TopologyDocument.Group // us.tractat.kuilt.heddle/TopologyDocument.Group.copy|copy(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;kotlin.String?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyDocument.Group.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyDocument.Group.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Group.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/TopologyDocument.Group> { // us.tractat.kuilt.heddle/TopologyDocument.Group.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.heddle/TopologyDocument.Group.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/TopologyDocument.Group.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/TopologyDocument.Group.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/TopologyDocument.Group // us.tractat.kuilt.heddle/TopologyDocument.Group.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/TopologyDocument.Group) // us.tractat.kuilt.heddle/TopologyDocument.Group.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.TopologyDocument.Group){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.heddle/TopologyDocument.Group.Companion|null[0]
+            final val $childSerializers // us.tractat.kuilt.heddle/TopologyDocument.Group.Companion.$childSerializers|{}$childSerializers[0]
+
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/TopologyDocument.Group> // us.tractat.kuilt.heddle/TopologyDocument.Group.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final class Lane : us.tractat.kuilt.heddle/TopologyDocument.Node { // us.tractat.kuilt.heddle/TopologyDocument.Lane|null[0]
+        constructor <init>(kotlin/String, kotlin/String = ...) // us.tractat.kuilt.heddle/TopologyDocument.Lane.<init>|<init>(kotlin.String;kotlin.String){}[0]
+
+        final val name // us.tractat.kuilt.heddle/TopologyDocument.Lane.name|{}name[0]
+            final fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.name.<get-name>|<get-name>(){}[0]
+        final val weight // us.tractat.kuilt.heddle/TopologyDocument.Lane.weight|{}weight[0]
+            final fun <get-weight>(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.weight.<get-weight>|<get-weight>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.component2|component2(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.heddle/TopologyDocument.Lane // us.tractat.kuilt.heddle/TopologyDocument.Lane.copy|copy(kotlin.String;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyDocument.Lane.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyDocument.Lane.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.toString|toString(){}[0]
+
+        final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/TopologyDocument.Lane> { // us.tractat.kuilt.heddle/TopologyDocument.Lane.$serializer|null[0]
+            final val descriptor // us.tractat.kuilt.heddle/TopologyDocument.Lane.$serializer.descriptor|{}descriptor[0]
+                final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/TopologyDocument.Lane.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+            final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/TopologyDocument.Lane.$serializer.childSerializers|childSerializers(){}[0]
+            final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/TopologyDocument.Lane // us.tractat.kuilt.heddle/TopologyDocument.Lane.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+            final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/TopologyDocument.Lane) // us.tractat.kuilt.heddle/TopologyDocument.Lane.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.TopologyDocument.Lane){}[0]
+        }
+
+        final object Companion { // us.tractat.kuilt.heddle/TopologyDocument.Lane.Companion|null[0]
+            final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/TopologyDocument.Lane> // us.tractat.kuilt.heddle/TopologyDocument.Lane.Companion.serializer|serializer(){}[0]
+        }
+    }
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/TopologyDocument> { // us.tractat.kuilt.heddle/TopologyDocument.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.heddle/TopologyDocument.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/TopologyDocument.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.heddle/TopologyDocument.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/TopologyDocument // us.tractat.kuilt.heddle/TopologyDocument.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/TopologyDocument) // us.tractat.kuilt.heddle/TopologyDocument.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.TopologyDocument){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.heddle/TopologyDocument.Companion|null[0]
+        final val $childSerializers // us.tractat.kuilt.heddle/TopologyDocument.Companion.$childSerializers|{}$childSerializers[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/TopologyDocument> // us.tractat.kuilt.heddle/TopologyDocument.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/TopologyException : kotlin/IllegalArgumentException { // us.tractat.kuilt.heddle/TopologyException|null[0]
+    constructor <init>(kotlin.collections/List<us.tractat.kuilt.heddle/TopologyProblem>) // us.tractat.kuilt.heddle/TopologyException.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.heddle.TopologyProblem>){}[0]
+
+    final val problems // us.tractat.kuilt.heddle/TopologyException.problems|{}problems[0]
+        final fun <get-problems>(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyProblem> // us.tractat.kuilt.heddle/TopologyException.problems.<get-problems>|<get-problems>(){}[0]
+}
+
+final class us.tractat.kuilt.heddle/TopologyProblem { // us.tractat.kuilt.heddle/TopologyProblem|null[0]
+    constructor <init>(kotlin.collections/List<kotlin/String>, kotlin/Int?, us.tractat.kuilt.heddle/TopologyProblem.Kind, kotlin/String) // us.tractat.kuilt.heddle/TopologyProblem.<init>|<init>(kotlin.collections.List<kotlin.String>;kotlin.Int?;us.tractat.kuilt.heddle.TopologyProblem.Kind;kotlin.String){}[0]
+
+    final val childIndex // us.tractat.kuilt.heddle/TopologyProblem.childIndex|{}childIndex[0]
+        final fun <get-childIndex>(): kotlin/Int? // us.tractat.kuilt.heddle/TopologyProblem.childIndex.<get-childIndex>|<get-childIndex>(){}[0]
+    final val detail // us.tractat.kuilt.heddle/TopologyProblem.detail|{}detail[0]
+        final fun <get-detail>(): kotlin/String // us.tractat.kuilt.heddle/TopologyProblem.detail.<get-detail>|<get-detail>(){}[0]
+    final val kind // us.tractat.kuilt.heddle/TopologyProblem.kind|{}kind[0]
+        final fun <get-kind>(): us.tractat.kuilt.heddle/TopologyProblem.Kind // us.tractat.kuilt.heddle/TopologyProblem.kind.<get-kind>|<get-kind>(){}[0]
+    final val parent // us.tractat.kuilt.heddle/TopologyProblem.parent|{}parent[0]
+        final fun <get-parent>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyProblem.parent.<get-parent>|<get-parent>(){}[0]
+
+    final fun component1(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/TopologyProblem.component1|component1(){}[0]
+    final fun component2(): kotlin/Int? // us.tractat.kuilt.heddle/TopologyProblem.component2|component2(){}[0]
+    final fun component3(): us.tractat.kuilt.heddle/TopologyProblem.Kind // us.tractat.kuilt.heddle/TopologyProblem.component3|component3(){}[0]
+    final fun component4(): kotlin/String // us.tractat.kuilt.heddle/TopologyProblem.component4|component4(){}[0]
+    final fun copy(kotlin.collections/List<kotlin/String> = ..., kotlin/Int? = ..., us.tractat.kuilt.heddle/TopologyProblem.Kind = ..., kotlin/String = ...): us.tractat.kuilt.heddle/TopologyProblem // us.tractat.kuilt.heddle/TopologyProblem.copy|copy(kotlin.collections.List<kotlin.String>;kotlin.Int?;us.tractat.kuilt.heddle.TopologyProblem.Kind;kotlin.String){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyProblem.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyProblem.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyProblem.toString|toString(){}[0]
+
+    final enum class Kind : kotlin/Enum<us.tractat.kuilt.heddle/TopologyProblem.Kind> { // us.tractat.kuilt.heddle/TopologyProblem.Kind|null[0]
+        enum entry DUPLICATE_NAME // us.tractat.kuilt.heddle/TopologyProblem.Kind.DUPLICATE_NAME|null[0]
+        enum entry EMPTY_GROUP // us.tractat.kuilt.heddle/TopologyProblem.Kind.EMPTY_GROUP|null[0]
+        enum entry EMPTY_NAME // us.tractat.kuilt.heddle/TopologyProblem.Kind.EMPTY_NAME|null[0]
+        enum entry INVALID_WEIGHT // us.tractat.kuilt.heddle/TopologyProblem.Kind.INVALID_WEIGHT|null[0]
+
+        final val entries // us.tractat.kuilt.heddle/TopologyProblem.Kind.entries|#static{}entries[0]
+            final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.heddle/TopologyProblem.Kind> // us.tractat.kuilt.heddle/TopologyProblem.Kind.entries.<get-entries>|<get-entries>#static(){}[0]
+
+        final fun valueOf(kotlin/String): us.tractat.kuilt.heddle/TopologyProblem.Kind // us.tractat.kuilt.heddle/TopologyProblem.Kind.valueOf|valueOf#static(kotlin.String){}[0]
+        final fun values(): kotlin/Array<us.tractat.kuilt.heddle/TopologyProblem.Kind> // us.tractat.kuilt.heddle/TopologyProblem.Kind.values|values#static(){}[0]
+    }
+}
+
 final class us.tractat.kuilt.heddle/Weight : kotlin/Comparable<us.tractat.kuilt.heddle/Weight> { // us.tractat.kuilt.heddle/Weight|null[0]
     final val denominator // us.tractat.kuilt.heddle/Weight.denominator|{}denominator[0]
         final fun <get-denominator>(): kotlin/Long // us.tractat.kuilt.heddle/Weight.denominator.<get-denominator>|<get-denominator>(){}[0]
@@ -811,6 +1127,14 @@ final object us.tractat.kuilt.heddle/RationalSerializer : kotlinx.serialization/
 
     final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/RationalSerializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
     final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Rational) // us.tractat.kuilt.heddle/RationalSerializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Rational){}[0]
+}
+
+final object us.tractat.kuilt.heddle/TopologyWeightSerializer : kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Weight> { // us.tractat.kuilt.heddle/TopologyWeightSerializer|null[0]
+    final val descriptor // us.tractat.kuilt.heddle/TopologyWeightSerializer.descriptor|{}descriptor[0]
+        final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/TopologyWeightSerializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+    final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/TopologyWeightSerializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+    final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Weight) // us.tractat.kuilt.heddle/TopologyWeightSerializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Weight){}[0]
 }
 
 final object us.tractat.kuilt.heddle/WeightSerializer : kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Weight> { // us.tractat.kuilt.heddle/WeightSerializer|null[0]

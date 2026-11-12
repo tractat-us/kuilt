@@ -74,6 +74,58 @@ loop `HeddleNode.schedule` runs. An allocator is not thread-safe: one per schedu
     check(ledger.current.edge(light.id)?.issued == 100L)
 ```
 
+### A fair-share tree in one process
+
+**Intent:** load the fair-share tree from a config file — groups, lanes and their weights —
+and show an admin every mistake in it at once, each beside the line it belongs to, instead of
+failing on the first. Mistakes beneath a child whose name is empty or a duplicate appear once that
+name is fixed.
+**Primitive:** `Topology.from(TopologyDocument)` (`:kuilt-heddle-core`). Decode the file into a
+`TopologyDocument` in whatever format you already read, with weights as text (`"3"`, `"3/2"`).
+`from` reports wrong *values* — empty or repeated names, bad weight text, empty groups — and
+returns `TopologyParse.Valid` with a checked `Topology`, or `TopologyParse.Invalid` listing every
+`TopologyProblem` in walk order. Whether a wrong *shape* decodes is up to your format: under a
+default `Json`, a bare-number weight (`"weight": 3`) or a misspelt key throws before `from` runs,
+so quote weights or decode with `Json { isLenient = true }`. A problem's address is
+`parent` (the names from the root down) plus `childIndex`, so a child named `#3` or `a/b` is never
+mistaken for an index or a second level. A `Topology` that exists is valid: its constructor,
+`copy` and its decoder all throw `TopologyException` on the same problems. Mark a group with
+`runtimeChildren` when the app creates its children while running; their names are opaque to
+heddle. Renaming or moving a child is a delete plus an add, and the new child starts with no
+fairness history.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyFromDocument -->
+```kotlin
+    // As decoded from the file: names and weight text, nothing checked yet.
+    val written = TopologyDocument(
+        root = "pool",
+        children = listOf(
+            TopologyDocument.Group(
+                name = "acme",
+                weight = "3",
+                children = listOf(
+                    TopologyDocument.Lane("interactive", weight = "3/2"),
+                    TopologyDocument.Lane("batch"),
+                ),
+            ),
+            TopologyDocument.Group(name = "tenants", runtimeChildren = "1"),
+        ),
+    )
+    val parsed = Topology.from(written)
+    check(parsed is TopologyParse.Valid)
+    check(parsed.topology.children.first().weight == Weight.of(3))
+
+    // A typo is reported, not thrown: the second child of `acme` reuses a name.
+    val typo = written.copy(
+        children = listOf(
+            TopologyDocument.Group("acme", children = listOf(TopologyDocument.Lane("batch"), TopologyDocument.Lane("batch"))),
+        ),
+    )
+    val problem = (Topology.from(typo) as TopologyParse.Invalid).problems.single()
+    check(problem.parent == listOf("pool", "acme") && problem.childIndex == 1)
+    check(problem.kind == TopologyProblem.Kind.DUPLICATE_NAME)
+```
+
 ### Run it over a network — reserve, run, charge once
 
 **Intent:** put the fair-share tally on a live connection between peers — advertise appetite,
