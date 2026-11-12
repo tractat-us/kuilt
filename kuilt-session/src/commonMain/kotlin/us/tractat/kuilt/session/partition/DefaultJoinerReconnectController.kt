@@ -57,12 +57,8 @@ public class DefaultJoinerReconnectController(
         scope.launch { openWindow(peerId, at) }
     }
 
-    override suspend fun enroll(
-        peerId: PeerId,
-        secret: ResumeSecret,
-    ) {
-        mutex.withLock { secrets[peerId] = secret }
-    }
+    override suspend fun enroll(peerId: PeerId): ResumeSecret =
+        mutex.withLock { secrets.getOrPut(peerId) { ResumeSecret.generate() } }
 
     override suspend fun tryResume(
         token: ResumeToken,

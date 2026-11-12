@@ -58,11 +58,16 @@ public interface JoinerReconnectController {
     )
 
     /**
-     * Records [secret] as the credential [peerId] must present to resume — the host calls this each
-     * time it admits [peerId], before the `Welcome` that hands the secret over is sent (#3165).
+     * Returns the secret [peerId] must present to resume, minting it on the first call for that
+     * peer — the host calls this each time it admits [peerId], before the `Welcome` that hands the
+     * secret over is sent (#3165). The implementation mints it and keeps it; the secret must come
+     * from a cryptographically secure source ([ResumeSecret.generate]).
      *
-     * Replaces any secret enrolled for [peerId] before: a member admitted again under the same id
-     * gets a fresh one, and the old token stops working. Enrolling opens no window.
+     * **Stable per peer.** A member admitted again under the same id — a fresh transport, a fresh
+     * room instance — gets the same secret back, so a token it already holds keeps working. That
+     * costs nothing: whoever the fabric admits under an id receives that id's secret in its
+     * `Welcome` either way, so the secret binds a resume to *the member admitted under that id*,
+     * and the fabric owns whether the id is authentic. Enrolling opens no window.
      *
      * **The obligation it creates on [tryResume]:** a token whose [ResumeToken.secret] does not
      * match the one enrolled for [ResumeToken.peerId] — or that names a peer never enrolled — is
@@ -70,10 +75,7 @@ public interface JoinerReconnectController {
      * placed anywhere after the window is spent lets any member who knows the victim's id lock the
      * victim out, which every member does.
      */
-    public suspend fun enroll(
-        peerId: PeerId,
-        secret: ResumeSecret,
-    )
+    public suspend fun enroll(peerId: PeerId): ResumeSecret
 
     /**
      * Attempts to resume the peer identified by [token].

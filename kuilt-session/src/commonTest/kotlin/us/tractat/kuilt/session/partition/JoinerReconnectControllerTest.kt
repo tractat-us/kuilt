@@ -13,6 +13,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /**
  * Unit tests for [DefaultJoinerReconnectController].
@@ -32,9 +33,9 @@ class JoinerReconnectControllerTest {
     // Clock always returns 0; virtual time is advanced via testScheduler.
     private val fixedClock: () -> Long = { 0L }
 
-    // Fixed, distinct secrets, so a token's secret is chosen by the test rather than drawn.
-    private val secretA = ResumeSecret(ByteArray(ResumeSecret.SIZE_BYTES) { 0x0A })
-    private val secretB = ResumeSecret(ByteArray(ResumeSecret.SIZE_BYTES) { 0x0B })
+    // The secrets the controller minted for peerA and peerB, as the host would hand them over.
+    private lateinit var secretA: ResumeSecret
+    private lateinit var secretB: ResumeSecret
 
     /** A controller with [peerA] and [peerB] enrolled, as the host enrols each member at admit. */
     private suspend fun controller(scope: kotlinx.coroutines.CoroutineScope) =
@@ -44,8 +45,8 @@ class JoinerReconnectControllerTest {
             clock = fixedClock,
             scope = scope,
         ).also {
-            it.enroll(peerA, secretA)
-            it.enroll(peerB, secretB)
+            secretA = it.enroll(peerA)
+            secretB = it.enroll(peerB)
         }
 
     // ── Window opened ─────────────────────────────────────────────────────────
@@ -407,23 +408,23 @@ class JoinerReconnectControllerTest {
             assertEquals(ResumeResult.TokenInvalid("secret-mismatch"), ctrl.tryResume(token, at = 1L))
         }
 
+    /**
+     * A member re-admitted under the same id gets its existing secret back, so the token it already
+     * holds still resumes — the secret is per member, not per admission.
+     */
     @Test
-    fun `re-enrolling a peer retires its old secret`() =
+    fun `re-enrolling a peer returns the secret it already holds`() =
         runTest {
             val ctrl = controller(backgroundScope)
-            val fresh = ResumeSecret(ByteArray(ResumeSecret.SIZE_BYTES) { 0x0C })
-            ctrl.enroll(peerA, fresh)
+            val again = ctrl.enroll(peerA)
             ctrl.onPeerUnresponsive(peerA, at = 0L)
             testScheduler.advanceTimeBy(1)
 
-            val stale = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = secretA)
-            val staleResult = ctrl.tryResume(stale, at = 1L)
-            val current = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = fresh)
-            val currentResult = ctrl.tryResume(current, at = 2L)
-
+            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = secretA)
             assertAll(
-                { assertEquals(ResumeResult.TokenInvalid("secret-mismatch"), staleResult) },
-                { assertEquals(ResumeResult.Success, currentResult) },
+                { assertEquals(secretA, again, "re-enrolment must not rotate the secret") },
+                { assertTrue(!secretA.matches(secretB), "two members must not share a secret") },
+                { assertEquals(ResumeResult.Success, ctrl.tryResume(token, at = 1L)) },
             )
         }
 

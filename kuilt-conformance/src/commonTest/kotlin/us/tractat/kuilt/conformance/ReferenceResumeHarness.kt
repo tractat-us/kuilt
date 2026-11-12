@@ -70,10 +70,8 @@ internal fun referenceResumeHarness(
             controller = real
             val enrolled = mutableMapOf<PeerId, ResumeSecret>()
             object : JoinerReconnectController by real {
-                override suspend fun enroll(peerId: PeerId, secret: ResumeSecret) {
-                    enrolled[peerId] = secret
-                    real.enroll(peerId, secret)
-                }
+                override suspend fun enroll(peerId: PeerId): ResumeSecret =
+                    real.enroll(peerId).also { enrolled[peerId] = it }
 
                 override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict {
                     val presented = enrolled[token.peerId]

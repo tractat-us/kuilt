@@ -66,7 +66,6 @@ import us.tractat.kuilt.session.partition.JoinerResumeHost
 import us.tractat.kuilt.session.partition.JoinerResumeMachine
 import us.tractat.kuilt.session.partition.ResumeRefusal
 import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Clock
@@ -1611,13 +1610,11 @@ internal class SeamRoom(
             roomId = _roomId.value?.value,
         )
 
-        // Mint the joiner's resume secret and enroll it BEFORE the Welcome that hands it over, so
-        // no resume can arrive for a secret the controller has not yet been told (#3165). Only a
-        // host that can answer a resume mints one: without a controller there is nothing to check
-        // it against, and a joiner told nothing simply holds no token.
-        val resumeSecret = reconnectController?.let { ctrl ->
-            ResumeSecret.generate().also { ctrl.enroll(joinerPeerId, it) }
-        }
+        // Enroll the joiner with the controller BEFORE the Welcome that hands its secret over, so
+        // no resume can arrive for a secret the controller does not hold (#3165). Only a host that
+        // can answer a resume has one: without a controller there is nothing to check it against,
+        // and a joiner told nothing simply holds no token.
+        val resumeSecret = reconnectController?.enroll(joinerPeerId)
 
         // All sends below are outside the lock — they are suspend calls.
 
