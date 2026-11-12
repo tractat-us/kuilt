@@ -160,6 +160,8 @@ class HeartbeatAnswersTest {
     @Test
     fun wedgedPongSendDoesNotStallRaftAndStaysOneInFlight() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
         val stallFloor = measuredMuxStallFloor()
+        // Fail before pinging for FLOOD_LIMIT milliseconds, not after.
+        assertTrue(stallFloor < FLOOD_LIMIT, "the mux no longer backpressures an unread view (#2863 fixed?): an inline pong send cannot stall Raft, so this arm cannot fail — revisit it")
         val opening = PING_INTERVAL * (stallFloor + stallFloor / 4)
         val liveness = HeartbeatConfig(
             interval = PING_INTERVAL,
@@ -211,7 +213,6 @@ class HeartbeatAnswersTest {
         val voters = host.node.membership.value.voters
 
         assertAll(
-            { assertTrue(stallFloor < FLOOD_LIMIT, "the mux no longer backpressures an unread view (#2863 fixed?): an inline pong send cannot stall Raft, so this arm cannot fail — revisit it") },
             { assertTrue(pingsBeforePropose > stallFloor, "the rig fired: the host sent more pings than the mux stall floor $stallFloor, was $pingsBeforePropose") },
             { assertTrue(pongsBeforePropose > 0, "the rig fired: a pong send entered the wedge") },
             { assertEquals(1, pongsBeforePropose, "one pong in flight, however many pings landed") },
