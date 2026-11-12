@@ -122,9 +122,10 @@ whole ledger inherits the three merge laws for free.
 - `FairShareExecution` — the spend surface both nodes share (`reserve`/`complete`/`cancel`/
   `earmarked`), so code that only spends, such as `:kuilt-warp-heddle`'s admission gate, takes
   either node.
-- `ReserveOutcome` / `ScheduleOutcome` / `GateClosed` — what a spend call did: `Reserved` or
-  `NoHoldings`, `Delegated` or `NothingToDelegate`, and, on a governed node only, `GateClosed` with
-  a `Reason` when this peer may not author entitlement at all.
+- `ReserveOutcome` / `ScheduleOutcome` / `GateClosed` — what a spend call did. `reserve` answers
+  `Reserved` or `NoHoldings`; a governed node's `schedule` answers `Delegated` or
+  `NothingToDelegate` (a static node's returns a plain grant count). Only a governed node adds
+  `GateClosed`, with a `Reason`, when this peer may not author entitlement at all.
 - `HeddleNode` / `heddleStatic` — the node that runs the tally, demand board, reservations,
   and liveness over a `Seam`, and its fixed-roster bootstrap (see below).
 - `GovernedHeddleNode` / `heddleGoverned` — the same node with runtime supply creation and
