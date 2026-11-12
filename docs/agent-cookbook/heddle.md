@@ -22,7 +22,7 @@ spend path.
 
 **Intent:** decide which of several competing children gets the next slice of a shared
 budget, weighted (3:1) and hoarder-proof — "who runs next", a weighted scheduler, EEVDF.
-**Primitive:** `HeddlePolicy.pick(edges, config, localHoldings)` (`:kuilt-heddle`) — a
+**Primitive:** `HeddlePolicy.pick(edges, config, localHoldings)` (`:kuilt-heddle-core`) — a
 **pure** function: no wall clock, no randomness, no floating point, so every replica picks
 the same winner. It serves the eligible child (not running ahead of its fair share) whose
 next grant finishes soonest in virtual time. Returns `null` when nobody is both eligible
@@ -38,6 +38,40 @@ and demanding.
         localHoldings = 1_000L,
     )
     check(grant == Grant(AttachmentId("heavy"), 6L))
+```
+
+### Scheduling without a network
+
+**Intent:** run the fair-share loop in one process — hand a budget down to the children that
+want it, 3:1 by weight, with newcomers and wakers seated level rather than given a head start —
+without a `Seam`, Raft or coroutines.
+**Primitive:** `FairShareAllocator.schedule(parent, ledger, earmarked, demand)`
+(`:kuilt-heddle-core`) over a `LedgerCell`: the latest ledger plus one write step that decides
+each grant on the state it lands on. For a single process the cell is a `var`. It is the same
+loop `HeddleNode.schedule` runs. An allocator is not thread-safe: one per scheduling peer.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleFairShareAllocator -->
+```kotlin
+    // The whole "network": the latest ledger, and one write step that decides on what it lands on.
+    val ledger = object : LedgerCell {
+        override var current = EntitlementLedger.bootstrap(root, mapOf(self to 400L), nonce = "genesis")
+        override fun mutateOrSkip(transform: (EntitlementLedger) -> Patch<EntitlementLedger>?): Boolean {
+            val patch = transform(current) ?: return false
+            current = current.piece(patch.delta)
+            return true
+        }
+    }
+    for (record in listOf(heavy, light)) {
+        ledger.mutateOrSkip { it.prepare(record) }
+        ledger.mutateOrSkip { it.activate(record.id) }
+    }
+
+    val allocator = FairShareAllocator(self, PolicyConfig(quantum = 10L))
+    val wantsEverything = Demand(targetOutstanding = 1_000L, maximumUsefulGrant = 10L)
+    allocator.schedule(root, ledger, earmarked = 0L, demand = { wantsEverything })
+
+    check(ledger.current.edge(heavy.id)?.issued == 300L)
+    check(ledger.current.edge(light.id)?.issued == 100L)
 ```
 
 ### Run it over a network — reserve, run, charge once

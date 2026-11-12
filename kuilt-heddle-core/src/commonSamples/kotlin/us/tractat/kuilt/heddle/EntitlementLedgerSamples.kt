@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
 
@@ -100,4 +101,38 @@ internal fun samplePolicyPick() {
         localHoldings = 1_000L,
     )
     check(idle == null)
+}
+
+/**
+ * Fair share in one process, with no network: keep the ledger in a `var`, hand it to a
+ * [FairShareAllocator] as a [LedgerCell], and schedule. Two children weighted 3:1 both want
+ * everything, so the root's 400 units split 300 / 100.
+ */
+@Suppress("unused")
+internal fun sampleFairShareAllocator() {
+    val root = GroupId("root")
+    val self = ReplicaId("self")
+    val heavy = AttachmentRecord(AttachmentId("heavy"), root, GroupId("heavy"), Weight.of(3))
+    val light = AttachmentRecord(AttachmentId("light"), root, GroupId("light"), Weight.ONE)
+
+    // The whole "network": the latest ledger, and one write step that decides on what it lands on.
+    val ledger = object : LedgerCell {
+        override var current = EntitlementLedger.bootstrap(root, mapOf(self to 400L), nonce = "genesis")
+        override fun mutateOrSkip(transform: (EntitlementLedger) -> Patch<EntitlementLedger>?): Boolean {
+            val patch = transform(current) ?: return false
+            current = current.piece(patch.delta)
+            return true
+        }
+    }
+    for (record in listOf(heavy, light)) {
+        ledger.mutateOrSkip { it.prepare(record) }
+        ledger.mutateOrSkip { it.activate(record.id) }
+    }
+
+    val allocator = FairShareAllocator(self, PolicyConfig(quantum = 10L))
+    val wantsEverything = Demand(targetOutstanding = 1_000L, maximumUsefulGrant = 10L)
+    allocator.schedule(root, ledger, earmarked = 0L, demand = { wantsEverything })
+
+    check(ledger.current.edge(heavy.id)?.issued == 300L)
+    check(ledger.current.edge(light.id)?.issued == 100L)
 }

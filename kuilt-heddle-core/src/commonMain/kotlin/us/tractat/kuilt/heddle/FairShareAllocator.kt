@@ -53,6 +53,7 @@ public interface LedgerCell {
  *
  * @param self the replica whose holdings this allocator delegates.
  * @param policy the quantum and sleeper credit the policy runs with.
+ * @sample us.tractat.kuilt.heddle.sampleFairShareAllocator
  */
 public class FairShareAllocator(
     private val self: ReplicaId,

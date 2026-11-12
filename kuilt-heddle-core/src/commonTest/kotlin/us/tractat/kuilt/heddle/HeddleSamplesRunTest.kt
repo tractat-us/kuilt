@@ -29,4 +29,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun policyPickHolds() = samplePolicyPick()
+
+    @Test
+    fun fairShareAllocatorHolds() = sampleFairShareAllocator()
 }

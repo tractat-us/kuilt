@@ -219,8 +219,8 @@ public final class us/tractat/kuilt/heddle/EntitlementLedger$Companion {
 
 public final class us/tractat/kuilt/heddle/FairShareAllocator {
 	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/PolicyConfig;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun schedule-mLLTQY0 (Ljava/lang/String;Lus/tractat/kuilt/heddle/LedgerCell;JLkotlin/jvm/functions/Function0;)I
-	public final fun virtualTime-3ggexMs (Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/lang/String;Lkotlin/jvm/functions/Function0;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun schedule-mLLTQY0 (Ljava/lang/String;Lus/tractat/kuilt/heddle/LedgerCell;JLkotlin/jvm/functions/Function1;)I
+	public final fun virtualTime-3ggexMs (Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/lang/String;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/heddle/Rational;
 }
 
 public final class us/tractat/kuilt/heddle/Gauge {

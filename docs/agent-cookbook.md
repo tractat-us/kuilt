@@ -57,6 +57,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | merging several mDNS/Multipeer discovery feeds into one lobby roster | `discoveryRoster` | [Discovery](agent-cookbook/fabrics.md#discovery) |
 | a stale-peer sweeper over a discovery list that only ever grows — peers that left still on screen, "nobody is ever removed", a `lastSeen` timeout over *discovered* (not admitted) peers | `PeerDiscoverySource.departures()` — implement it, and hold it to `DiscoverySourceConformanceSuite` | [Peers pile up and are never removed](agent-cookbook/fabrics.md#peers-pile-up-and-are-never-removed) |
 | a weighted / fair-share scheduler — "give this group 3× the share", "who runs the next quantum", a hoarder-proof round-robin | `HeddlePolicy` + `HeddleNode` | [Fair share & placement](agent-cookbook/heddle.md#fair-share--placement) |
+| fair share in one process with no network — a local scheduler over an in-memory ledger, no `Seam` / Raft / coroutines | `FairShareAllocator` + `LedgerCell` (`:kuilt-heddle-core`) | [Fair share & placement](agent-cookbook/heddle.md#fair-share--placement) |
 | an entitlement / quota ledger, "reserve a slot before running then charge once", a coordination-free budget that converges across peers | `EntitlementLedger` + `HeddleNode.reserve`/`complete` | [Fair share & placement](agent-cookbook/heddle.md#fair-share--placement) |
 | minting new quota or re-parenting a group at runtime and needing everyone to agree on the order (no double-mint on a split) | `heddleGoverned` (`GovernedHeddleNode`) | [Fair share & placement](agent-cookbook/heddle.md#fair-share--placement) |
 | gating a `WarpNode`'s tasks by a weighted lane — "interactive gets 3× batch" | `HeddleAdmissionControl` + `TaskDescriptor.inLane` | [Fair share & placement](agent-cookbook/heddle.md#fair-share--placement) |
@@ -84,6 +85,6 @@ The detail lives in seven family pages; each holds the sections named beside it.
 - [Session](agent-cookbook/session.md) — rejoin & reconnect, liveness & presence, per-member frames, a last frame before leaving, host election & the lobby.
 - [Replication](agent-cookbook/replication.md) — replicated data, scaling to many peers, dealing cards, sealed boxes, dedup, archiving what the live replica forgets.
 - [Consensus](agent-cookbook/consensus.md) — consensus & turns, when one of the peers is a server, durable consensus state.
-- [Heddle](agent-cookbook/heddle.md) — weighted fair share, reserving and charging over a network, minting quota and reshaping with agreement, weighted lanes over warp.
+- [Heddle](agent-cookbook/heddle.md) — weighted fair share, scheduling in one process without a network, reserving and charging over a network, minting quota and reshaping with agreement, weighted lanes over warp.
 - [Warp](agent-cookbook/warp.md) — where a task may run, code mobility.
 - [Otel](agent-cookbook/otel.md) — telemetry & log capture, reporting a failure that will be retried.
