@@ -1,6 +1,7 @@
 ---
 paths:
   - "kuilt-heddle/**"
+  - "kuilt-heddle-core/**"
   - "kuilt-warp-heddle/**"
 ---
 # Heddle
