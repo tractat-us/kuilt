@@ -99,14 +99,21 @@ public data class Topology(public val root: String, public val children: List<No
          * not walked into, because a problem beneath it would have no unambiguous address. Those
          * problems appear once the name is fixed.
          */
-        public fun from(document: TopologyDocument): TopologyParse = TODO("not yet: $document")
+        public fun from(document: TopologyDocument): TopologyParse {
+            val problems = documentProblems(document.root, document.children)
+            return if (problems.isEmpty()) {
+                TopologyParse.Valid(Topology(document.root, document.children.map { it.checked() }))
+            } else {
+                TopologyParse.Invalid(problems)
+            }
+        }
 
         /**
          * The problems a [Topology] with this [root] and these [children] would have; empty when it
          * is valid. The same walk, in the same order, as [from].
          */
         public fun problems(root: String, children: List<Node>): List<TopologyProblem> =
-            emptyList<TopologyProblem>().also { children.map { it.written() } }
+            documentProblems(root, children.map { it.written() })
     }
 }
 
