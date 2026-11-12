@@ -234,6 +234,9 @@ and nothing else does:
   agreement step a Raft node of its own: one proposal from anything else on that node stops everyone.
   Leave that node on its default `ClientIdentity.Auto`: heddle replays its record from the start on
   every boot and restarts its request serials, which a `ClientIdentity.Durable` cannot describe.
+- **A saved record from v0.7.3 does not carry over.** Its `Mint` and `Prepare` entries no longer
+  read, so a peer stops at the first one. Start a fresh record. There is no migrator: this is the
+  accepted price of a reader that never guesses, not a gap waiting to be filled.
 - **A call that gave up may still land.** Each control call waits for its act to be agreed, and a
   `timeout` or a cancellation stops only the wait. The act can still be agreed afterwards, and it
   takes effect when it is — an `enroll` or `depart` included, which opens or closes the spend gate
@@ -246,12 +249,10 @@ and nothing else does:
   the old edge again (`quiesce`), and the amount is worked out from those recorded promises, so a
   peer with a stale view cannot move a wrong one. Expect to call it twice; `pendingAcks(edge)` shows
   who it is still waiting for, and a peer that is down holds it up, on purpose.
-- **A saved record from v0.7.3 does not carry over.** Its `Mint` and `Prepare` entries no longer
-  read, so a peer stops at the first one. Start a fresh record. There is no migrator: this is the
-  accepted price of a reader that never guesses, not a gap waiting to be filled.
 
 `heddleGoverned` returns a `GovernedHeddleNode`: the same data-plane calls as `HeddleNode` plus
-`mint`/`prepare`/`activate`/`close`/`retire`, `quiesce`/`reconcile` and `enroll`/`depart`, each of which returns a
+`mint`/`prepare`/`activate`/`close`/`retire`, `quiesce`/`reconcile` and `enroll`/`depart`, each of
+which returns a
 `ControlOutcome` — `Applied` when it took effect, `Conflict` carrying the structured reason when it
 was refused, or `Indeterminate` when the peer stopped at an unreadable entry with the call still in
 flight, so the act may yet land and must not be retried blindly (`enrolledReplicas()` reads back the
