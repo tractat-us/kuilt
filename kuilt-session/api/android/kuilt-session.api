@@ -952,7 +952,6 @@ public final class us/tractat/kuilt/session/partition/DefaultJoinerReconnectCont
 	public static final field DEFAULT_RECONNECT_WINDOW_MS J
 	public synthetic fun <init> (Ljava/lang/String;JLkotlin/jvm/functions/Function0;Lkotlinx/coroutines/CoroutineScope;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (Ljava/lang/String;JLkotlin/jvm/functions/Function0;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun enroll-t5-yf_A (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun expire-t5-yf_A (Ljava/lang/String;J)V
 	public fun getEvents ()Lkotlinx/coroutines/flow/SharedFlow;
 	public fun onPeerRecovered-t5-yf_A (Ljava/lang/String;J)V
@@ -968,7 +967,6 @@ public abstract interface class us/tractat/kuilt/session/partition/EndpointSelec
 }
 
 public abstract interface class us/tractat/kuilt/session/partition/JoinerReconnectController {
-	public abstract fun enroll-t5-yf_A (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun expire-t5-yf_A (Ljava/lang/String;J)V
 	public abstract fun getEvents ()Lkotlinx/coroutines/flow/SharedFlow;
 	public abstract fun onPeerRecovered-t5-yf_A (Ljava/lang/String;J)V

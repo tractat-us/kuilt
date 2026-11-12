@@ -121,7 +121,6 @@ abstract interface us.tractat.kuilt.session.partition/JoinerReconnectController 
     abstract fun expire(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/JoinerReconnectController.expire|expire(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
     abstract fun onPeerRecovered(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/JoinerReconnectController.onPeerRecovered|onPeerRecovered(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
     abstract fun onPeerUnresponsive(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/JoinerReconnectController.onPeerUnresponsive|onPeerUnresponsive(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
-    abstract suspend fun enroll(us.tractat.kuilt.core/PeerId): us.tractat.kuilt.session.partition/ResumeSecret // us.tractat.kuilt.session.partition/JoinerReconnectController.enroll|enroll(us.tractat.kuilt.core.PeerId){}[0]
     abstract suspend fun tryResume(us.tractat.kuilt.session.partition/ResumeToken, kotlin/Long): us.tractat.kuilt.session.partition/ResumeResult.HostVerdict // us.tractat.kuilt.session.partition/JoinerReconnectController.tryResume|tryResume(us.tractat.kuilt.session.partition.ResumeToken;kotlin.Long){}[0]
 }
 
@@ -1011,7 +1010,6 @@ final class us.tractat.kuilt.session.partition/DefaultJoinerReconnectController 
     final fun expire(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.expire|expire(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
     final fun onPeerRecovered(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.onPeerRecovered|onPeerRecovered(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
     final fun onPeerUnresponsive(us.tractat.kuilt.core/PeerId, kotlin/Long) // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.onPeerUnresponsive|onPeerUnresponsive(us.tractat.kuilt.core.PeerId;kotlin.Long){}[0]
-    final suspend fun enroll(us.tractat.kuilt.core/PeerId): us.tractat.kuilt.session.partition/ResumeSecret // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.enroll|enroll(us.tractat.kuilt.core.PeerId){}[0]
     final suspend fun tryResume(us.tractat.kuilt.session.partition/ResumeToken, kotlin/Long): us.tractat.kuilt.session.partition/ResumeResult.HostVerdict // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.tryResume|tryResume(us.tractat.kuilt.session.partition.ResumeToken;kotlin.Long){}[0]
 
     final object Companion { // us.tractat.kuilt.session.partition/DefaultJoinerReconnectController.Companion|null[0]
