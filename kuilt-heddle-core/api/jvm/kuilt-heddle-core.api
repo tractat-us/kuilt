@@ -1043,6 +1043,13 @@ public final class us/tractat/kuilt/heddle/TopologyException : java/lang/Illegal
 	public final fun getProblems ()Ljava/util/List;
 }
 
+public final class us/tractat/kuilt/heddle/TopologyLoweringKt {
+	public static final fun groupId (Lus/tractat/kuilt/heddle/Topology;[Ljava/lang/String;)Ljava/lang/String;
+	public static final fun lower (Lus/tractat/kuilt/heddle/Topology;J)Ljava/util/List;
+	public static synthetic fun lower$default (Lus/tractat/kuilt/heddle/Topology;JILjava/lang/Object;)Ljava/util/List;
+	public static final fun runtimeChildId (Lus/tractat/kuilt/heddle/Topology;Ljava/util/List;Ljava/lang/String;)Ljava/lang/String;
+}
+
 public abstract interface class us/tractat/kuilt/heddle/TopologyParse {
 }
 

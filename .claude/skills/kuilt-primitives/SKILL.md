@@ -29,7 +29,7 @@ and primitive groups in order.
 |a session too big for everyone-talks-to-everyone — N² links|`GossipSeam` + `deltaTargets = { gossip.activePeers.value }` (`recommendedActiveViewSize`, `FullFanout`, `hostedOverlay`)|`replication.md#scaling-to-many-peers`|
 |dealing cards nobody can peek at — "the dealer could cheat"|`DealSession` + `SraScheme()` (a `CommutativeScheme`)|`replication.md#dealing-cards-nobody-can-peek-at`|
 |a shared random nobody could steer — a seed, a first player, a die roll|`FairRandom.roll()`|`replication.md#nobody-chose-that-number`|
-|a `seenIds` set|`GSet` / kuilt dedup|`replication.md#dedup`|
+|a `seenIds` set|`GSet`/kuilt dedup|`replication.md#dedup`|
 |a longer-retention copy of a replicated log; replaying it, a resume cursor, "did it stop?"|`BoltDecorator` + `AppliedOpSink` (`WarpLogRecordExporter(appliedOps = …)`); `Bolt.replay` + `ReplayScope` → `CleanTail`/`Truncated`; `Bolt.durability()`|`replication.md#archiving-what-the-live-replica-forgets`|
 |merging discovery feeds into one roster; a `try`/`catch` per browse feed|`discoveryRoster` (`onSourceFailure`) — sources are isolated already|`fabrics.md#discovery`|
 |a sweeper over a discovery list — peers that left still on screen|`PeerDiscoverySource.departures()` + `DiscoverySourceConformanceSuite`|`fabrics.md#peers-pile-up-and-are-never-removed`|
@@ -43,7 +43,7 @@ and primitive groups in order.
 |a `MutableStateFlow<SeamState>`, or a `closed`/`tornDown` flag beside one|`SeamStateGate`|`fabrics.md#a-seams-terminal-state`|
 |bytes outliving the process — an `fsync`-rename dance, an IndexedDB wrapper|`DurableStore` + `StoreKey` (`InMemoryDurableStore`, one per platform)|`fabrics.md#durable-storage`|
 |encrypting to a public key, bytes only one recipient can open|`SealedBox.seal`/`open` + `SealPublicKey`/`SealPrivateKey`|`replication.md#sealed-boxes`|
-|a fair-share scheduler, "3× the share"; a quota ledger, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane; a tree from config|`HeddlePolicy.pick` + `HeddleNode`, offline `FairShareAllocator`; `EntitlementLedger` + `HeddleNode.reserve`/`complete`; `heddleGoverned`; `HeddleAdmissionControl` + `TaskDescriptor.inLane`; `Topology.from`|`heddle.md#fair-share--placement`|
+|a fair-share scheduler, "3× the share"; a quota ledger, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane; config trees|`HeddlePolicy.pick` + `HeddleNode`, offline `FairShareAllocator`; `EntitlementLedger` + `HeddleNode.reserve`/`complete`; `heddleGoverned`; `HeddleAdmissionControl` + `TaskDescriptor.inLane`; `Topology.from`/`lower`|`heddle.md#fair-share--placement`|
 |"only run on a GPU / in-region peer", a placement predicate|`Affinity` + `TaskDescriptor.where` + `CapSet`|`warp.md#where-a-task-may-run-location-eligibility`|
 |a content-hash blob cache; running code another peer sent you, an `eval`|`Creel` + `BobbinExchange`; `WasmRuntime` + `WasmSandboxConfig` + `WarpLazyFetch`|`warp.md#code-mobility`|
 |a flush-per-line log exporter, "logging stalls the app"; stamping a line's session/game; resetting a telemetry store; a counter of whether telemetry still lands|`WarpLogRecordExporter.export(records)` + `installLogCapture`; `withLogContext(attributes) { … }`, **not** `CaptureConfig.attributeMapper`; `WarpTelemetry.clear()`; `WarpTelemetry.health` (spans, metrics, logs) + `LogCaptureInstallation.health` (`CaptureHealth.droppedEvents`)|`otel.md#telemetry--log-capture`|
