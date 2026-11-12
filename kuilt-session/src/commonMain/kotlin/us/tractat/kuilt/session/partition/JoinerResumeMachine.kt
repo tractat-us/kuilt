@@ -12,11 +12,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PeerNotConnected
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
@@ -738,20 +740,47 @@ internal class JoinerResumeMachine(
         )
         // Suspend send outside the lock. A genuine CancellationException propagates (correct),
         // but must still resolve the shared deferred — a joined caller would otherwise hang.
-        // A non-cancellation send failure becomes WindowClosed for every caller of this flight.
+        // A host that is not addressable is TimedOut, exactly what an unanswered frame would have
+        // become; any other send failure becomes WindowClosed for every caller of this flight.
         val sendResult = try {
-            runCatchingCancellable { seam.broadcast(resumeMsg) }
+            runCatchingCancellable { sendToHost(resumeMsg) }
         } catch (e: CancellationException) {
             abandonFlight(deferred)
             throw e
         }
-        if (sendResult.isFailure) {
-            abandonFlight(deferred)
+        val failure = sendResult.exceptionOrNull()
+        when {
+            failure is PeerNotConnected || sendResult.getOrNull() == false ->
+                return settleOrAwait(deferred, ResumeResult.TimedOut)
             // A reply may have raced the failure and resolved the flight first — honor it.
-            return awaitFlightBounded(deferred)
+            failure != null -> abandonFlight(deferred)
         }
-
         return awaitFlightBounded(deferred)
+    }
+
+    /**
+     * Sends [bytes] to the identified host **alone**, waiting (bounded by
+     * [HeartbeatConfig.resumeTimeout]) for the host to be addressable on [seam]. Returns `false`
+     * when there is no host to send to — none identified, it never appeared, or the seam tore while
+     * waiting — so the flight settles as [ResumeResult.TimedOut], what a frame nobody received
+     * becomes anyway.
+     *
+     * **Never a broadcast (#3165).** A `Resume` carries the member's resume secret, and on a flat or
+     * mesh fabric a broadcast reaches every peer — admitted or not — so one sniffed resume would let
+     * any of them forge this member's resumes for the life of the host. It was a broadcast from the
+     * first resume implementation, with no recorded reason; the one cost of addressing it is that a
+     * just-re-woven seam may not list the host yet, which is what the bounded wait covers.
+     */
+    private suspend fun sendToHost(bytes: ByteArray): Boolean {
+        val hostId = host.hostPeer() ?: return false
+        val addressable = withTimeoutOrNull(heartbeatConfig.resumeTimeout) {
+            combine(seam.peers, seam.state) { peers, state -> hostId in peers to (state is SeamState.Torn) }
+                .first { (present, torn) -> present || torn }
+                .first
+        } ?: false
+        if (!addressable) return false
+        seam.sendTo(hostId, bytes)
+        return true
     }
 
     /**
