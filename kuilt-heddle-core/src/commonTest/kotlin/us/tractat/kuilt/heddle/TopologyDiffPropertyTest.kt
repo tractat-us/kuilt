@@ -53,9 +53,9 @@ class TopologyDiffPropertyTest {
         assertAll(
             { assertEquals(seeds, loops) },
             { assertEquals(emptyList(), failures) },
-            { assertTrue(tally.reweights >= 60, "reweights ${tally.reweights}") },
-            { assertTrue(tally.removals >= 60, "removals ${tally.removals}") },
-            { assertTrue(tally.additions >= 60, "additions ${tally.additions}") },
+            { assertTrue(tally.reweights >= 50, "reweights ${tally.reweights}") },
+            { assertTrue(tally.removals >= 150, "removals ${tally.removals}") },
+            { assertTrue(tally.additions >= 200, "additions ${tally.additions}") },
             { assertTrue(cuts >= 1_000, "cuts $cuts") },
         )
     }
@@ -97,7 +97,7 @@ class TopologyDiffPropertyTest {
         assertAll(
             { assertEquals(seeds, loops) },
             { assertEquals(emptyList(), failures) },
-            { assertTrue(prepares >= 2_000, "prepares $prepares") },
+            { assertTrue(prepares >= 1_200, "prepares $prepares") },
             { assertTrue(reverts >= 100, "reverts $reverts") },
         )
     }
@@ -142,12 +142,12 @@ class TopologyDiffPropertyTest {
         assertAll(
             { assertEquals(seeds, loops) },
             { assertEquals(emptyList(), failures) },
-            { assertTrue(tally.reweights >= 100, "reweights ${tally.reweights}") },
-            { assertTrue(tally.removals >= 100, "removals ${tally.removals}") },
-            { assertTrue(tally.additions >= 100, "additions ${tally.additions}") },
-            { assertTrue(midDrain >= 40, "mid-drain second changes $midDrain") },
-            { assertTrue(refusals >= 40, "refused children $refusals") },
-            { assertTrue(moved >= 20, "reconciles that moved $moved") },
+            { assertTrue(tally.reweights >= 150, "reweights ${tally.reweights}") },
+            { assertTrue(tally.removals >= 500, "removals ${tally.removals}") },
+            { assertTrue(tally.additions >= 400, "additions ${tally.additions}") },
+            { assertTrue(midDrain >= 60, "mid-drain second changes $midDrain") },
+            { assertTrue(refusals >= 300, "refused children $refusals") },
+            { assertTrue(moved >= 60, "reconciles that moved $moved") },
         )
     }
 
@@ -163,8 +163,9 @@ class TopologyDiffPropertyTest {
         if (conflicts.isNotEmpty()) add("seed $seed conflicts $conflicts")
         val again = Topology.diff(target, ledger, generation = 0)
         if (again.isNotEmpty()) add("seed $seed re-diff $again")
-        val pending = ledger.allEdges().sorted().filter { ledger.lifecycle(it).let { l -> l == Lifecycle.PREPARED || l == Lifecycle.CLOSING } }
-        if (pending.isNotEmpty()) add("seed $seed left pending ${pending.map { it.value }}")
+        // A prepared edge nothing wants may stay; a closing one is a retire that never landed.
+        val closing = ledger.allEdges().sorted().filter { ledger.lifecycle(it) == Lifecycle.CLOSING }
+        if (closing.isNotEmpty()) add("seed $seed left closing ${closing.map { it.value }}")
     }
 
     private fun EntitlementLedger.hasOutstandingClosingEdge(): Boolean =

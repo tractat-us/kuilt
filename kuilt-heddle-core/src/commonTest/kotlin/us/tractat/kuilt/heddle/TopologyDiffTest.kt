@@ -254,15 +254,43 @@ class TopologyDiffTest {
     }
 
     @Test
-    fun aStalePrepareAtAnotherWeightIsRetired() {
-        val booted = bootFrom(fairness())
-        val stale = booted.piece(assertNotNull(booted.prepare(record("root/acme/batch@3:1#4", batch, 3))))
-        val steps = Topology.diff(fairness(), stale, generation = 0)
-        val applied = applyAll(steps, stale)
+    fun aPrepareNothingWantsIsLeftPrepared() {
+        // batch is reweighted while it holds work, so its old edge is left closing and the new one
+        // prepared; then the weight goes back before the drain finishes.
+        val first = applyAll(Topology.diff(fairness(batchWeight = 2), busy(bootFrom(fairness())), 0), busy(bootFrom(fairness())))
+        val back = Topology.diff(fairness(), first.ledger, generation = 0)
+        val done = applyAll(back, drainAll(first.ledger))
         assertAll(
-            { assertEquals(listOf(Close(e("root/acme/batch@3:1#4"), batch), Retire(e("root/acme/batch@3:1#4"), batch)), steps) },
-            { assertEquals(listOf(e("root/acme/batch@1:1#0")), applied.ledger.liveInto(batch)) },
-            { assertEquals(emptyList(), Topology.diff(fairness(), applied.ledger, generation = 0)) },
+            // The rig: an edge closing with work on it, beside a prepared one nothing wants now.
+            { assertEquals(listOf(batch), first.refused) },
+            { assertEquals(Lifecycle.CLOSING, first.ledger.lifecycle(e("root/acme/batch@1:1#0"))) },
+            { assertEquals(Lifecycle.PREPARED, first.ledger.lifecycle(e("root/acme/batch@2:1#1"))) },
+            // Closing the prepared edge would give batch two live inbound edges, quarantining it
+            // and so stopping the very drain its retire waits for. It is left alone.
+            {
+                assertEquals(
+                    listOf(
+                        Prepare(record("root/acme/batch@1:1#2", batch, 1)),
+                        Retire(e("root/acme/batch@1:1#0"), batch),
+                        Activate(e("root/acme/batch@1:1#2"), batch),
+                    ),
+                    back,
+                )
+            },
+            { assertEquals(listOf(e("root/acme/batch@1:1#2")), done.ledger.liveInto(batch)) },
+            { assertEquals(emptyList(), done.ledger.validate()) },
+            { assertEquals(emptyList(), Topology.diff(fairness(), done.ledger, generation = 0)) },
+            // And if its weight comes back, it is the edge adopted.
+            {
+                assertEquals(
+                    listOf(
+                        Close(e("root/acme/batch@1:1#2"), batch),
+                        Retire(e("root/acme/batch@1:1#2"), batch),
+                        Activate(e("root/acme/batch@2:1#1"), batch),
+                    ),
+                    Topology.diff(fairness(batchWeight = 2), done.ledger, generation = 0),
+                )
+            },
         )
     }
 
