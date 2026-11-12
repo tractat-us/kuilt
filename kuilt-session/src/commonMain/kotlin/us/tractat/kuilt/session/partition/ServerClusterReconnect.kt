@@ -11,8 +11,10 @@ import us.tractat.kuilt.core.Tag
  *
  * Connects to one endpoint at a time. On transport tear, advances to the next
  * endpoint per the [selector] (default: deterministic round-robin). On reconnect,
- * the caller presents the [pendingToken] — which survives endpoint changes because
- * it is keyed on [RoomId], not on any specific server identity.
+ * the caller presents the [pendingToken]. The token survives an endpoint change as a value —
+ * it names the [RoomId], not a server — but only the server that admitted the joiner can accept
+ * it: another server holds neither the joiner's [ResumeSecret] nor its window and refuses it, so
+ * a resume against a different endpoint degrades to a fresh join.
  *
  * ## Usage
  *
