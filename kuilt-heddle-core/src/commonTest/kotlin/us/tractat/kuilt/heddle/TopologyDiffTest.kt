@@ -392,8 +392,9 @@ class TopologyDiffTest {
     fun edgesTheDiffDoesNotOwnAreLeftAlone() {
         var ledger = bootFrom(fairness())
         val foreign = listOf(
+            // A runtime child is not on this list: since Task 5 the diff owns those, and closes one
+            // under a group that is not marked (`diffClosesRuntimeChildrenWhenTheMarkerGoes`).
             AttachmentRecord(e("e#99"), GroupId("root"), GroupId("elsewhere"), Weight.ONE),
-            record("root/acme/!x@1:1#0", GroupId("root/acme/!x"), 1),
             record("pool/a@1:1#0", GroupId("pool/a"), 1),
         )
         for (r in foreign) {

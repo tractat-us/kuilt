@@ -917,6 +917,8 @@ public final class us/tractat/kuilt/heddle/Topology$RuntimeChildren$Companion {
 }
 
 public final class us/tractat/kuilt/heddle/TopologyDiffKt {
+	public static final fun attachRuntimeChild (Lus/tractat/kuilt/heddle/Topology;Ljava/util/List;Ljava/lang/String;Lus/tractat/kuilt/heddle/EntitlementLedger;J)Ljava/util/List;
+	public static final fun detachRuntimeChild (Lus/tractat/kuilt/heddle/Topology;Ljava/util/List;Ljava/lang/String;Lus/tractat/kuilt/heddle/EntitlementLedger;)Ljava/util/List;
 	public static final fun diff (Lus/tractat/kuilt/heddle/Topology$Companion;Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/EntitlementLedger;J)Ljava/util/List;
 }
 

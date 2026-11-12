@@ -14,7 +14,7 @@ and primitive groups in order.
 
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
-|a rejoin / reconnect loop, a resume token, a grace window; why a rejoin was refused|`Room.resumeToken` + `Room.resume`; `ResumeResult.JoinerOutcome` (`code.retryable`)|`session.md#rejoin--reconnect`|
+|a rejoin/reconnect loop, a resume token, a grace window; why a rejoin was refused|`Room.resumeToken` + `Room.resume`; `ResumeResult.JoinerOutcome` (`code.retryable`)|`session.md#rejoin--reconnect`|
 |a "why did we drop" classifier; a retry/back-off loop; a per-session id every peer agrees on|`MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`); `ExponentialBackoff`; `Room.roomId` or `RoomFactory.host(pattern, roomId = …)`|`session.md#rejoin--reconnect`|
 |a heartbeat, an idle reaper, "is this peer alive"; reaping a room nobody joined; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
 |a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned(since, windowExpiresAt)` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|
@@ -34,7 +34,7 @@ and primitive groups in order.
 |merging discovery feeds into one roster; a `try`/`catch` per browse feed|`discoveryRoster` (`onSourceFailure`) — sources are isolated already|`fabrics.md#discovery`|
 |a sweeper over a discovery list — peers that left still on screen|`PeerDiscoverySource.departures()` + `DiscoverySourceConformanceSuite`|`fabrics.md#peers-pile-up-and-are-never-removed`|
 |a peer-supplied id straight into a `Set<PeerId>`|`PeerIdentityRegistry`|`fabrics.md#a-peer-id-off-the-wire-straight-into-a-setpeerid`|
-|a 4-byte length prefix and a reassembly loop over a socket|`framed()` → `handshaking()`|`fabrics.md#your-own-transport`|
+|a 4-byte length prefix, a reassembly loop over a socket|`framed()` → `handshaking()`|`fabrics.md#your-own-transport`|
 |that plumbing over plain TCP|`TcpLoom.host` / `TcpLoom.join`|`fabrics.md#plain-tcp-is-already-assembled`|
 |a bare `webSocketSession`; a socket a cancelled dial left open|`ownedWebSocketSession`|`fabrics.md#a-cancelled-dial`|
 |looping a frame back to yourself, a `peers.forEach { sendTo(it, …) }` fan-out|`broadcast`; `peers` includes `selfId`, and `sendTo(selfId, …)` throws|`fabrics.md#sending-to-yourself`|
@@ -43,7 +43,7 @@ and primitive groups in order.
 |a `MutableStateFlow<SeamState>`, or a `closed`/`tornDown` flag beside one|`SeamStateGate`|`fabrics.md#a-seams-terminal-state`|
 |bytes outliving the process — an `fsync`-rename dance, an IndexedDB wrapper|`DurableStore` + `StoreKey` (`InMemoryDurableStore`, one per platform)|`fabrics.md#durable-storage`|
 |encrypting to a public key, bytes only one recipient can open|`SealedBox.seal`/`open` + `SealPublicKey`/`SealPrivateKey`|`replication.md#sealed-boxes`|
-|a fair-share scheduler, "3× the share"; a quota ledger, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane; config trees|`HeddlePolicy.pick` + `HeddleNode`, offline `FairShareAllocator`; `EntitlementLedger` + `HeddleNode.reserve`/`complete`; `heddleGoverned`; `HeddleAdmissionControl` + `TaskDescriptor.inLane`; `Topology.from`/`lower`/`diff`|`heddle.md#fair-share--placement`|
+|a fair-share scheduler, "3× the share"; a quota ledger, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane; config trees|`HeddlePolicy.pick` + `HeddleNode`, offline `FairShareAllocator`; `EntitlementLedger` + `HeddleNode.reserve`/`complete`; `heddleGoverned`; `HeddleAdmissionControl` + `TaskDescriptor.inLane`; `Topology.from`/`lower`/`diff`/`attachRuntimeChild`|`heddle.md#fair-share--placement`|
 |"only run on a GPU / in-region peer", a placement predicate|`Affinity` + `TaskDescriptor.where` + `CapSet`|`warp.md#where-a-task-may-run-location-eligibility`|
 |a content-hash blob cache; running code another peer sent you, an `eval`|`Creel` + `BobbinExchange`; `WasmRuntime` + `WasmSandboxConfig` + `WarpLazyFetch`|`warp.md#code-mobility`|
 |a flush-per-line log exporter, "logging stalls the app"; stamping a line's session/game; resetting a telemetry store; a counter of whether telemetry still lands|`WarpLogRecordExporter.export(records)` + `installLogCapture`; `withLogContext(attributes) { … }`, **not** `CaptureConfig.attributeMapper`; `WarpTelemetry.clear()`; `WarpTelemetry.health` (spans, metrics, logs) + `LogCaptureInstallation.health` (`CaptureHealth.droppedEvents`)|`otel.md#telemetry--log-capture`|
@@ -58,5 +58,5 @@ Inside kuilt, read it directly; consumers take the first working rung:
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
-**Editing this skill:** the description caps at 1,536 characters, this body at 8,192 bytes.
+**Editing this skill:** description ≤ 1,536 chars, body ≤ 8,192 bytes.
 Move prose to `docs/agent-cookbook*`, never drop a route.

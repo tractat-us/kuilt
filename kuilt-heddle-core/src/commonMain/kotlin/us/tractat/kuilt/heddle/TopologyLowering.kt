@@ -49,12 +49,23 @@ public fun Topology.groupId(vararg path: String): GroupId {
  * @throws IllegalArgumentException if [group] does not name a group marked with
  *   [runtimeChildren][Topology.Group.runtimeChildren], or [name] is empty.
  */
-public fun Topology.runtimeChildId(group: List<String>, name: String): GroupId {
+public fun Topology.runtimeChildId(group: List<String>, name: String): GroupId = runtimeChild(group, name).id
+
+/** A runtime child's [id], its [parent] group's id, and the [marker] that group carries. */
+internal class RuntimeChild(val id: GroupId, val parent: GroupId, val marker: Topology.RuntimeChildren)
+
+/**
+ * The runtime child [name] of the group at [group], checked once: [group] names a marked declared
+ * group and [name] is non-empty.
+ *
+ * @throws IllegalArgumentException otherwise, as [Topology.runtimeChildId] documents.
+ */
+internal fun Topology.runtimeChild(group: List<String>, name: String): RuntimeChild {
     require(name.isNotEmpty()) { "a runtime child needs a name" }
     // The root carries no runtime marker, so the path must name a declared group beneath it.
-    val marked = group.isNotEmpty() && (nodeAt(group) as? Topology.Group)?.runtimeChildren != null
-    require(marked) { "$group is not a group marked for runtime children" }
-    return GroupId(runtimeChildPath(idOf(group), name))
+    val marker = requireNotNull(markerAt(group).takeIf { group.isNotEmpty() }) { "$group is not a group marked for runtime children" }
+    val parent = idOf(group)
+    return RuntimeChild(GroupId(runtimeChildPath(parent, name)), GroupId(parent), marker)
 }
 
 /**
@@ -158,22 +169,78 @@ internal fun generationOf(id: AttachmentId): Long? {
 }
 
 /**
- * The highest generation any edge of this ledger carries, or `-1` when none is in the topology
- * grammar. Retired edges count: their ids are spent too, and reusing one would prepare an edge the
- * ledger already knows.
+ * The highest generation any edge of this ledger carries, leaving out the edges in [except], or `-1`
+ * when none is in the topology grammar. Retired edges count: their ids are spent too, and reusing
+ * one would prepare an edge the ledger already knows.
+ *
+ * Read from the ledger's index, which folds the top generation in as edges arrive, so it costs no
+ * pass over the edges. The one exception is when [except] names every edge at the top: the floor is
+ * then somewhere below it, and only a scan finds it. Only [Topology.diff] passes a non-empty
+ * [except], and it reads every edge anyway.
  */
-internal fun EntitlementLedger.generationFloor(): Long =
-    allEdges().maxOfOrNull { generationOf(it) ?: -1L } ?: -1L
+internal fun EntitlementLedger.generationFloor(except: Set<AttachmentId> = emptySet()): Long {
+    val top = generationTop()
+    if (top.edges == 0) return -1L
+    if (except.count { generationOf(it) == top.generation } < top.edges) return top.generation
+    return allEdges().filter { it !in except }.maxOfOrNull { generationOf(it) ?: -1L } ?: -1L
+}
 
 /**
- * The generation to lower at: [supplied], raised past every generation [ledger] already holds, so
- * a caller that lost its counter — after a restart, say — still never reuses an id.
+ * The generation to prepare new edges at: [supplied], raised past every generation [ledger] already
+ * holds, so a caller that lost its counter — after a restart, say — still never reuses an id. The
+ * one rule both [Topology.diff] and [Topology.attachRuntimeChild] number their edges by.
+ *
+ * [except] leaves edges out of the floor. [Topology.diff] passes the prepared edges it adopts, which
+ * is what makes a re-diff after a partial application list exactly the rest: the prepares the first
+ * diff landed are adopted by the second, and would otherwise raise the floor and renumber the
+ * prepares still to come. It cannot reuse an id: a child with an adopted edge is prepared nothing,
+ * so every id the diff writes names a different child from every edge left out.
  *
  * @throws IllegalArgumentException if [supplied] is negative.
  */
-internal fun effectiveGeneration(supplied: Long, ledger: EntitlementLedger): Long {
+internal fun effectiveGeneration(supplied: Long, ledger: EntitlementLedger, except: Set<AttachmentId> = emptySet()): Long {
     require(supplied >= 0L) { "a generation is >= 0, was $supplied" }
-    return maxOf(supplied, checkedAdd(ledger.generationFloor(), 1L))
+    return maxOf(supplied, checkedAdd(ledger.generationFloor(except), 1L))
+}
+
+/**
+ * The highest topology-grammar [generation] among a ledger's edges, and how many [edges] carry it:
+ * the part of [EntitlementLedger.generationFloor] a ledger folds into its index. [NONE] has no edge.
+ */
+internal data class GenerationTop(val generation: Long, val edges: Int) {
+
+    /** This top with [id] counted too. The caller counts each edge once. */
+    fun plus(id: AttachmentId): GenerationTop {
+        // A grammar id ends in `#<generation>`, so a tail below the top cannot raise it, and most
+        // edges are turned away without the full parse.
+        val tail = id.value.substringAfterLast('#', "").toLongOrNull() ?: return this
+        if (tail < generation) return this
+        val exact = generationOf(id) ?: return this
+        return when {
+            exact > generation -> GenerationTop(exact, 1)
+            exact == generation -> GenerationTop(generation, edges + 1)
+            else -> this
+        }
+    }
+
+    companion object {
+        val NONE: GenerationTop = GenerationTop(-1L, 0)
+    }
+}
+
+/**
+ * The runtime-children marker of the declared group at [path], read from the root down, or `null`
+ * when [path] names no declared group or the group is not marked. Never throws, so the diff can ask
+ * about a group the topology no longer declares.
+ */
+internal fun Topology.markerAt(path: List<String>): Topology.RuntimeChildren? {
+    var nodes = children
+    var node: Topology.Node? = null
+    for (name in path) {
+        node = nodes.firstOrNull { it.name == name } ?: return null
+        nodes = (node as? Topology.Group)?.children.orEmpty()
+    }
+    return (node as? Topology.Group)?.runtimeChildren
 }
 
 // ── segments ────────────────────────────────────────────────────────────────────────────────────

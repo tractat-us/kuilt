@@ -189,6 +189,31 @@ class TopologyLoweringTest {
         )
     }
 
+    /**
+     * The one floor rule `diff` and `attachRuntimeChild` share: every edge counts, retired ones
+     * included, except the ones named — which `diff` uses for the prepared edges it adopts.
+     */
+    @Test
+    fun floorLeavesOutOnlyTheEdgesItIsTold() {
+        val booted = bootFrom(fairness, generation = 2)
+        val atTwo = booted.allEdges().filter { generationOf(it) == 2L }.toSet()
+        val stale = AttachmentRecord(AttachmentId("root/acme/batch@1:1#9"), GroupId("root/acme"), GroupId("root/acme/batch"), Weight.ONE)
+        var retired = booted.piece(assertNotNull(booted.prepare(stale)))
+        retired = retired.piece(assertNotNull(retired.close(stale.id)))
+        retired = retired.piece(assertNotNull(retired.retire(stale.id)))
+        assertAll(
+            { assertEquals(5, atTwo.size, "the rig booted five edges at generation 2") },
+            { assertEquals(GenerationTop(2L, 5), booted.generationTop()) },
+            { assertEquals(GenerationTop(9L, 1), retired.generationTop()) },
+            { assertEquals(3L, effectiveGeneration(0L, booted, except = setOf(atTwo.first()))) },
+            { assertEquals(0L, effectiveGeneration(0L, booted, except = atTwo)) },
+            { assertEquals(3L, effectiveGeneration(0L, retired, except = setOf(stale.id))) },
+            { assertEquals(10L, effectiveGeneration(0L, retired, except = atTwo)) },
+            // Naming an edge the ledger does not hold leaves the floor where it is.
+            { assertEquals(3L, effectiveGeneration(0L, booted, except = setOf(AttachmentId("root/x@1:1#2")))) },
+        )
+    }
+
     @Test
     fun aWeightChangeChangesOnlyThatId() {
         val before = fairness.lower().map { it.id.value }.toSet()
