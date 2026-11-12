@@ -20,9 +20,8 @@ import kotlinx.serialization.encoding.Encoder
  *
  * A `Topology` that exists is valid. Every construction path — the constructor, `copy`, and a
  * decode through the generated serializer — runs the same check, and throws [TopologyException]
- * naming every problem at once; problems beneath a child whose name is empty or a duplicate appear
- * once that name is fixed. Because the tree is nested, it cannot express a cycle or a child with two
- * parents. What remains to check is that every name is non-empty and unique among its siblings,
+ * naming every problem at once. Because the tree is nested, it cannot express a cycle or a child
+ * with two parents. What remains to check is that every name is non-empty and unique among its siblings,
  * and that every group has a child to give its share to.
  *
  * The check runs once, at construction, against the lists you pass. Pass lists you will not mutate
@@ -99,9 +98,9 @@ public data class Topology(public val root: String, public val children: List<No
          * Checks an admin's [document]. Never throws: returns the [Topology] it describes, or
          * every problem in it, in the order a reader meets them walking the tree top to bottom.
          *
-         * A child whose own name is a problem — empty, or already used by an earlier sibling — is
-         * not walked into, because a problem beneath it would have no unambiguous address. Those
-         * problems appear once the name is fixed.
+         * Every subtree is walked, including one beneath a child whose own name is empty or a
+         * duplicate: a [TopologyProblem] is addressed by child indices, which stay unique when the
+         * names do not.
          */
         public fun from(document: TopologyDocument): TopologyParse {
             val problems = documentProblems(document.root, document.children)
@@ -128,8 +127,7 @@ public sealed interface TopologyParse {
     public data class Valid(public val topology: Topology) : TopologyParse
 
     /**
-     * The document had at least one problem; [problems] lists them all, in walk order. Problems
-     * beneath a child whose name is empty or a duplicate appear once that name is fixed.
+     * The document had at least one problem; [problems] lists every one, in walk order.
      */
     public data class Invalid(public val problems: List<TopologyProblem>) : TopologyParse
 }
@@ -137,22 +135,34 @@ public sealed interface TopologyParse {
 /**
  * One thing wrong with a topology, addressed so a config page can show it beside the right line.
  *
- * The address is two fields rather than one rendered path, so a child literally named `#3` or
+ * The address is [path]: the child indices from the root down to the node the problem concerns,
+ * counted from zero in the order written. `[]` is the root itself and `[0, 2]` is the third child
+ * of the root's first child. Indices are unique among siblings, so two children with the same name,
+ * or with no name at all, still have different addresses, and a child literally named `#3` or
  * `a/b` can never be mistaken for an index or for two levels.
  *
- * @property parent the names from the root down to the containing group. When [childIndex] is
- *   `null`, the problem belongs to the group at the end of this path itself.
- * @property childIndex the position of the offending child among its siblings, counted from zero
- *   in the order written; `null` when the problem is the group at [parent] itself.
+ * A problem about a child's name or weight and a problem about that same child as a group (an empty
+ * group, a bad runtime-children weight) share its path; [kind] tells them apart.
+ *
+ * @property path the child indices from the root to the node this problem concerns; `[]` is the
+ *   root. Every index is `>= 0`.
+ * @property names the names along [path] for display, starting with the root's, so it always holds
+ *   one more entry than [path]. A name may be `""` or repeat a sibling's: use [path], never
+ *   [names], to identify the node.
  * @property kind what kind of problem this is.
  * @property detail a sentence for a person, naming the offending text.
  */
 public data class TopologyProblem(
-    public val parent: List<String>,
-    public val childIndex: Int?,
+    public val path: List<Int>,
+    public val names: List<String>,
     public val kind: Kind,
     public val detail: String,
 ) {
+    init {
+        require(path.all { it >= 0 }) { "a child index is never negative: $path" }
+        require(names.size == path.size + 1) { "names holds the root's plus one per index: $names for $path" }
+    }
+
     /** The kinds of problem a topology can have. */
     public enum class Kind {
         /** A name is the empty string. */
@@ -170,16 +180,12 @@ public data class TopologyProblem(
 
     /** One line: the address, the kind and the detail. */
     internal fun render(): String {
-        val path = parent.joinToString(prefix = "[", postfix = "]") { quoted(it) }
-        val at = if (childIndex == null) path else "$path child $childIndex"
-        return "$at: $kind: $detail"
+        val shown = names.joinToString(" / ") { quoted(it) }
+        return "$path ($shown): $kind: $detail"
     }
 }
 
-/**
- * Thrown when a [Topology] would hold [problems]; its message lists every one, one per line.
- * Problems beneath a child whose name is empty or a duplicate appear once that name is fixed.
- */
+/** Thrown when a [Topology] would hold [problems]; its message lists every one, one per line. */
 public class TopologyException(public val problems: List<TopologyProblem>) :
     IllegalArgumentException(problems.joinToString("\n") { it.render() })
 
@@ -243,42 +249,44 @@ private fun checkedWeight(text: String): Weight =
 
 private fun documentProblems(root: String, children: List<TopologyDocument.Node>): List<TopologyProblem> =
     buildList {
-        val rootPath = listOf(root)
-        if (root.isEmpty()) add(TopologyProblem(rootPath, null, TopologyProblem.Kind.EMPTY_NAME, "the root has no name"))
-        walkGroup(rootPath, children, runtimeChildren = null)
+        val at = Address(emptyList(), listOf(root))
+        if (root.isEmpty()) add(at.problem(TopologyProblem.Kind.EMPTY_NAME, "the root has no name"))
+        walkGroup(at, children, runtimeChildren = null)
     }
 
+/** Where a node sits: its child indices from the root, and the names along the way for display. */
+private class Address(val path: List<Int>, val names: List<String>) {
+    fun child(index: Int, name: String): Address = Address(path + index, names + name)
+    fun problem(kind: TopologyProblem.Kind, detail: String): TopologyProblem = TopologyProblem(path, names, kind, detail)
+}
+
 private fun MutableList<TopologyProblem>.walkGroup(
-    path: List<String>,
+    group: Address,
     children: List<TopologyDocument.Node>,
     runtimeChildren: String?,
 ) {
     if (runtimeChildren != null && parseWeightText(runtimeChildren) == null) {
-        add(TopologyProblem(path, null, TopologyProblem.Kind.INVALID_WEIGHT, "runtime children weight ${quoted(runtimeChildren)} $NOT_A_WEIGHT"))
+        add(group.problem(TopologyProblem.Kind.INVALID_WEIGHT, "runtime children weight ${quoted(runtimeChildren)} $NOT_A_WEIGHT"))
     }
     if (children.isEmpty() && runtimeChildren == null) {
-        add(TopologyProblem(path, null, TopologyProblem.Kind.EMPTY_GROUP, "the group has no children and is not marked for runtime children"))
+        add(group.problem(TopologyProblem.Kind.EMPTY_GROUP, "the group has no children and is not marked for runtime children"))
     }
     // Looked up by name only; problems are emitted in index order, never in map order.
     val firstIndexOf = HashMap<String, Int>()
     children.forEachIndexed { index, child ->
-        val addressable = when {
-            child.name.isEmpty() -> {
-                add(TopologyProblem(path, index, TopologyProblem.Kind.EMPTY_NAME, "the child has no name"))
-                false
-            }
-            else -> {
-                val first = firstIndexOf.getOrPut(child.name) { index }
-                if (first != index) {
-                    add(TopologyProblem(path, index, TopologyProblem.Kind.DUPLICATE_NAME, "${quoted(child.name)} already names child $first"))
-                }
-                first == index
+        val at = group.child(index, child.name)
+        if (child.name.isEmpty()) {
+            add(at.problem(TopologyProblem.Kind.EMPTY_NAME, "the child has no name"))
+        } else {
+            val first = firstIndexOf.getOrPut(child.name) { index }
+            if (first != index) {
+                add(at.problem(TopologyProblem.Kind.DUPLICATE_NAME, "${quoted(child.name)} already names child $first"))
             }
         }
         if (parseWeightText(child.weight) == null) {
-            add(TopologyProblem(path, index, TopologyProblem.Kind.INVALID_WEIGHT, "weight ${quoted(child.weight)} $NOT_A_WEIGHT"))
+            add(at.problem(TopologyProblem.Kind.INVALID_WEIGHT, "weight ${quoted(child.weight)} $NOT_A_WEIGHT"))
         }
-        if (addressable && child is TopologyDocument.Group) walkGroup(path + child.name, child.children, child.runtimeChildren)
+        if (child is TopologyDocument.Group) walkGroup(at, child.children, child.runtimeChildren)
     }
 }
 

@@ -9,8 +9,7 @@ import kotlinx.serialization.Serializable
  * This is the form a config file decodes into, in whatever format the consumer reads. It checks no
  * values, so a wrong value — an empty or repeated name, bad weight text, an empty group — never
  * fails the decode. A config page reads one, hands it to [Topology.from], and gets either a checked
- * [Topology] or every problem at once, each with an address it can point at. Problems beneath a
- * child whose name is empty or a duplicate appear once that name is fixed.
+ * [Topology] or every problem at once, each with an address it can point at.
  *
  * Weights are text, as written: a whole number (`"3"`) or a ratio (`"3/2"`). Keeping them as text
  * here is what lets a bad weight be reported beside the other problems instead of aborting the

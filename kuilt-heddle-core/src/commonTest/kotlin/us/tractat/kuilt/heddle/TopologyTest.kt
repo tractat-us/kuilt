@@ -18,9 +18,9 @@ class TopologyTest {
     private val json = Json
 
     /** A problem without its prose, so a test pins the address and kind but not the wording. */
-    private data class Key(val parent: List<String>, val childIndex: Int?, val kind: TopologyProblem.Kind)
+    private data class Key(val path: List<Int>, val kind: TopologyProblem.Kind)
 
-    private fun List<TopologyProblem>.keys(): List<Key> = map { Key(it.parent, it.childIndex, it.kind) }
+    private fun List<TopologyProblem>.keys(): List<Key> = map { Key(it.path, it.kind) }
 
     private fun invalid(document: TopologyDocument): List<TopologyProblem> =
         assertIs<TopologyParse.Invalid>(Topology.from(document)).problems
@@ -45,12 +45,18 @@ class TopologyTest {
             {
                 assertEquals(
                     listOf(
-                        Key(listOf("root", "acme"), 1, DUPLICATE_NAME),
-                        Key(listOf("root", "hobby"), 1, EMPTY_NAME),
-                        Key(listOf("root", "idle"), null, EMPTY_GROUP),
-                        Key(listOf("root"), 3, INVALID_WEIGHT),
+                        Key(listOf(0, 1), DUPLICATE_NAME),
+                        Key(listOf(1, 1), EMPTY_NAME),
+                        Key(listOf(2), EMPTY_GROUP),
+                        Key(listOf(3), INVALID_WEIGHT),
                     ),
                     problems.keys(),
+                )
+            },
+            {
+                assertEquals(
+                    listOf(listOf("root", "acme", "batch"), listOf("root", "hobby", ""), listOf("root", "idle"), listOf("root", "x")),
+                    problems.map { it.names },
                 )
             },
             { assertTrue(problems.all { it.detail.isNotBlank() }, "every problem says what is wrong: $problems") },
@@ -61,7 +67,10 @@ class TopologyTest {
     fun emptyNameProblemDoesNotCollideWithHashNames() {
         val problems = invalid(TopologyDocument("root", listOf(lane("#1"), lane(""))))
 
-        assertEquals(listOf(Key(listOf("root"), 1, EMPTY_NAME)), problems.keys())
+        assertAll(
+            { assertEquals(listOf(Key(listOf(1), EMPTY_NAME)), problems.keys()) },
+            { assertEquals(listOf("root", ""), problems.single().names) },
+        )
     }
 
     @Test
@@ -82,14 +91,14 @@ class TopologyTest {
             *rejected.map { text ->
                 {
                     assertEquals(
-                        listOf(Key(listOf("root"), 0, INVALID_WEIGHT)),
+                        listOf(Key(listOf(0), INVALID_WEIGHT)),
                         invalid(TopologyDocument("root", listOf(lane("x", text)))).keys(),
                         "weight text '$text'",
                     )
                 }
             }.toTypedArray(),
             // The runtime-children marker's weight is a property of the group itself.
-            { assertEquals(listOf(Key(listOf("root", "tenants"), null, INVALID_WEIGHT)), markerProblems.keys()) },
+            { assertEquals(listOf(Key(listOf(0), INVALID_WEIGHT)), markerProblems.keys()) },
         )
     }
 
@@ -138,9 +147,9 @@ class TopologyTest {
             {
                 assertEquals(
                     listOf(
-                        Key(listOf("root", "idle"), null, EMPTY_GROUP),
-                        Key(listOf("root"), 1, EMPTY_NAME),
-                        Key(listOf("root"), 3, DUPLICATE_NAME),
+                        Key(listOf(0), EMPTY_GROUP),
+                        Key(listOf(1), EMPTY_NAME),
+                        Key(listOf(3), DUPLICATE_NAME),
                     ),
                     thrown.problems.keys(),
                 )
@@ -183,13 +192,13 @@ class TopologyTest {
         assertAll(
             {
                 val thrown = assertFailsWith<TopologyException> { json.decodeFromString(Topology.serializer(), emptyGroup) }
-                assertEquals(listOf(Key(listOf("root", "idle"), null, EMPTY_GROUP)), thrown.problems.keys())
+                assertEquals(listOf(Key(listOf(0), EMPTY_GROUP)), thrown.problems.keys())
             },
             { assertFailsWith<SerializationException> { json.decodeFromString(Topology.serializer(), zeroWeight) } },
             // The permissive form takes the same bytes without complaint and reports them instead.
             {
                 val document = json.decodeFromString(TopologyDocument.serializer(), emptyGroup)
-                assertEquals(listOf(Key(listOf("root", "idle"), null, EMPTY_GROUP)), invalid(document).keys())
+                assertEquals(listOf(Key(listOf(0), EMPTY_GROUP)), invalid(document).keys())
             },
         )
     }
@@ -237,10 +246,9 @@ class TopologyTest {
     }
 
     @Test
-    fun problemsBeneathAnUnaddressableChildWaitForItsName() {
-        // Beneath the second `batch` and beneath the unnamed group, a problem's parent path would
-        // name two groups at once, so those subtrees are not walked until the name is fixed. The
-        // first `batch` is addressable, and its empty grandchild is reported.
+    fun problemsBeneathAlikeOrUnnamedSiblingsHaveDistinctPaths() {
+        // Both `batch`es and the unnamed group hold an empty `idle`. By name the three would be one
+        // address; by index they are three, so every one is reported.
         val document = TopologyDocument(
             root = "root",
             children = listOf(
@@ -250,13 +258,35 @@ class TopologyTest {
             ),
         )
 
-        assertEquals(
-            listOf(
-                Key(listOf("root", "batch", "idle"), null, EMPTY_GROUP),
-                Key(listOf("root"), 1, DUPLICATE_NAME),
-                Key(listOf("root"), 2, EMPTY_NAME),
-            ),
-            invalid(document).keys(),
+        val problems = invalid(document)
+        val emptyGroups = problems.filter { it.kind == EMPTY_GROUP }
+
+        assertAll(
+            {
+                assertEquals(
+                    listOf(
+                        Key(listOf(0, 0), EMPTY_GROUP),
+                        Key(listOf(1), DUPLICATE_NAME),
+                        Key(listOf(1, 0), EMPTY_GROUP),
+                        Key(listOf(2), EMPTY_NAME),
+                        Key(listOf(2, 0), EMPTY_GROUP),
+                    ),
+                    problems.keys(),
+                )
+            },
+            { assertEquals(listOf(listOf(0, 0), listOf(1, 0), listOf(2, 0)), emptyGroups.map { it.path }) },
+            // The display names cannot tell the two `batch` subtrees apart; the paths can.
+            { assertEquals(listOf("root", "batch", "idle"), emptyGroups[0].names) },
+            { assertEquals(emptyGroups[0].names, emptyGroups[1].names) },
+        )
+    }
+
+    @Test
+    fun aProblemAddressIsWellFormed() {
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { TopologyProblem(listOf(0), listOf("root"), EMPTY_NAME, "d") } },
+            { assertFailsWith<IllegalArgumentException> { TopologyProblem(listOf(-1), listOf("root", "x"), EMPTY_NAME, "d") } },
+            { assertEquals(emptyList(), TopologyProblem(emptyList(), listOf(""), EMPTY_NAME, "d").path) },
         )
     }
 }

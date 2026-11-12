@@ -78,17 +78,18 @@ loop `HeddleNode.schedule` runs. An allocator is not thread-safe: one per schedu
 
 **Intent:** load the fair-share tree from a config file — groups, lanes and their weights —
 and show an admin every mistake in it at once, each beside the line it belongs to, instead of
-failing on the first. Mistakes beneath a child whose name is empty or a duplicate appear once that
-name is fixed.
+failing on the first.
 **Primitive:** `Topology.from(TopologyDocument)` (`:kuilt-heddle-core`). Decode the file into a
 `TopologyDocument` in whatever format you already read, with weights as text (`"3"`, `"3/2"`).
 `from` reports wrong *values* — empty or repeated names, bad weight text, empty groups — and
 returns `TopologyParse.Valid` with a checked `Topology`, or `TopologyParse.Invalid` listing every
 `TopologyProblem` in walk order. Whether a wrong *shape* decodes is up to your format: under a
 default `Json`, a bare-number weight (`"weight": 3`) or a misspelt key throws before `from` runs,
-so quote weights or decode with `Json { isLenient = true }`. A problem's address is
-`parent` (the names from the root down) plus `childIndex`, so a child named `#3` or `a/b` is never
-mistaken for an index or a second level. A `Topology` that exists is valid: its constructor,
+so quote weights or decode with `Json { isLenient = true }`. A problem's address is its `path`,
+the child indices from the root down (`[]` is the root, `[0, 2]` the root's first child's third
+child), so every subtree is reported even beneath two children named alike or not named at all, and
+a child named `#3` or `a/b` is never mistaken for an index or a second level. `names` along the
+path is for display only. A `Topology` that exists is valid: its constructor,
 `copy` and its decoder all throw `TopologyException` on the same problems. Mark a group with
 `runtimeChildren` when the app creates its children while running; their names are opaque to
 heddle. Renaming or moving a child is a delete plus an add, and the new child starts with no
@@ -122,7 +123,8 @@ fairness history.
         ),
     )
     val problem = (Topology.from(typo) as TopologyParse.Invalid).problems.single()
-    check(problem.parent == listOf("pool", "acme") && problem.childIndex == 1)
+    // Addressed by child indices: the root's first child, then that child's second.
+    check(problem.path == listOf(0, 1) && problem.names == listOf("pool", "acme", "batch"))
     check(problem.kind == TopologyProblem.Kind.DUPLICATE_NAME)
 ```
 
