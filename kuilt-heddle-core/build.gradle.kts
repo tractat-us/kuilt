@@ -130,5 +130,11 @@ tasks.named("check") { dependsOn(verifyHeddleCoreDependencies) }
 // the lambda form does not compile on this receiver.
 val runScaleProbe = providers.gradleProperty("heddle.scale.probe").orNull == "true"
 tasks.withType<AbstractTestTask>().configureEach {
-    if (!runScaleProbe) filter.excludeTestsMatching("*LeaseScaleProbe")
+    if (!runScaleProbe) {
+        // Both spellings. The class pattern is what the JVM and Kotlin/Native runners match; the
+        // wasmJs Karma runner matches it against `<class>.<method>` and so needs the second one —
+        // measured: with the class pattern alone the probe still ran in `wasmJsBrowserTest`.
+        filter.excludeTestsMatching("*LeaseScaleProbe")
+        filter.excludeTestsMatching("*LeaseScaleProbe.*")
+    }
 }
