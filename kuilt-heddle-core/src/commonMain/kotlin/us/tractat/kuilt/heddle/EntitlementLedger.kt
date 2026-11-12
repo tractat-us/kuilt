@@ -1234,7 +1234,7 @@ public class EntitlementLedger private constructor(
      * checkpoint written here is `grossEv(issuedAfter)`, which for an unseated edge is
      * `issuedAfter / w`, and [seat] refuses forever afterwards because a gauge now exists. The join
      * cannot repair it either — `max` on a floor that is already the minimum is a no-op. So a
-     * caller driving this must seat first; `HeddleNode.settleJoiners` does, and `HeddleNode.pickOne`
+     * caller driving this must seat first; [FairShareAllocator.schedule] does, and it
      * additionally refuses a gauge-absent edge as a candidate so a mid-round `Activate` cannot slip
      * through the gap.
      */
