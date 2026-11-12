@@ -34,15 +34,9 @@ package us.tractat.kuilt.heddle
  * @throws IllegalArgumentException if [path] does not name a child this topology declares.
  */
 public fun Topology.groupId(vararg path: String): GroupId {
-    var id = escapeSegment(root)
-    var children = children
-    path.forEachIndexed { depth, name ->
-        val child = children.firstOrNull { it.name == name }
-        requireNotNull(child) { "${path.take(depth + 1)} is not a child declared under $root" }
-        id = declaredChildId(id, name)
-        children = (child as? Topology.Group)?.children.orEmpty()
-    }
-    return GroupId(id)
+    val names = path.asList()
+    if (names.isNotEmpty()) nodeAt(names)
+    return GroupId(idOf(names))
 }
 
 /**
@@ -57,17 +51,32 @@ public fun Topology.groupId(vararg path: String): GroupId {
  */
 public fun Topology.runtimeChildId(group: List<String>, name: String): GroupId {
     require(name.isNotEmpty()) { "a runtime child needs a name" }
-    var children = children
-    var marked = false
-    group.forEachIndexed { depth, step ->
-        val child = children.firstOrNull { it.name == step } as? Topology.Group
-        requireNotNull(child) { "${group.take(depth + 1)} is not a group declared under $root" }
-        children = child.children
-        marked = child.runtimeChildren != null
-    }
+    // The root carries no runtime marker, so the path must name a declared group beneath it.
+    val marked = group.isNotEmpty() && (nodeAt(group) as? Topology.Group)?.runtimeChildren != null
     require(marked) { "$group is not a group marked for runtime children" }
-    return GroupId(runtimeChildPath(groupId(*group.toTypedArray()).value, name))
+    return GroupId(runtimeChildPath(idOf(group), name))
 }
+
+/**
+ * The declared node at the non-empty [path], read from the root down.
+ *
+ * @throws IllegalArgumentException at the first step that names no declared child.
+ */
+private fun Topology.nodeAt(path: List<String>): Topology.Node {
+    var children = children
+    var node: Topology.Node? = null
+    path.forEachIndexed { depth, name ->
+        node = requireNotNull(children.firstOrNull { it.name == name }) {
+            "${path.take(depth + 1)} is not a child declared under $root"
+        }
+        children = (node as? Topology.Group)?.children.orEmpty()
+    }
+    return requireNotNull(node) { "the root is not a node" }
+}
+
+/** The id [path] encodes beneath this topology's root, without checking that it is declared. */
+private fun Topology.idOf(path: List<String>): String =
+    path.fold(escapeSegment(root)) { parent, name -> declaredChildId(parent, name) }
 
 /**
  * Every declared edge of this tree, as the records a ledger is prepared with, sorted by id.
@@ -106,15 +115,16 @@ internal data class ParsedPath(val names: List<String>, val runtime: Boolean)
 
 /**
  * The names [group] encodes, or `null` when it is not exactly what [Topology.groupId] or
- * [Topology.runtimeChildId] would print. Only the last segment of a path deeper than the root may
- * be a runtime child's, and every name is non-empty.
+ * [Topology.runtimeChildId] would print. Every name is non-empty, and only the last segment may be
+ * a runtime child's, and only at depth two or deeper: the root carries no runtime marker, so
+ * `root/!x` has no topology that prints it.
  */
 internal fun pathOf(group: GroupId): ParsedPath? {
     val segments = group.value.split('/')
     var runtime = false
     val names = segments.mapIndexed { index, segment ->
         val marked = segment.startsWith(RUNTIME_MARKER)
-        if (marked && (index == 0 || index != segments.lastIndex)) return null
+        if (marked && (index < 2 || index != segments.lastIndex)) return null
         runtime = marked
         val name = unescapeSegment(if (marked) segment.substring(1) else segment) ?: return null
         if (name.isEmpty()) return null

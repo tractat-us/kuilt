@@ -124,7 +124,7 @@ class TopologyLoweringTest {
             }.toTypedArray(),
             // Not the encoding of anything: each must be refused rather than read some other way.
             *listOf(
-                "", "/", "root/", "root//x", "!root", "root/!a/b", "root/!", "root/a b", "root/a/b@1:1#0",
+                "", "/", "root/", "root//x", "!root", "root/!x", "root/!a/b", "root/a/!", "root/a b", "root/a/b@1:1#0",
                 "root/%2f", "root/%41", "root/%2", "root/%ZZ", "root/%C3", "root/%C0%AF", "root/%FF",
             ).map { text -> { assertNull(pathOf(GroupId(text)), "pathOf(\"$text\")") } }.toTypedArray(),
         )
@@ -143,7 +143,7 @@ class TopologyLoweringTest {
             "root/acme@3:1#-1", "root/acme@3:1#+1", "root/acme@3:1#01", "root/acme@3:1#1x", "root/acme@3:1#0#1",
             "root/acme@6:2#0", "root/acme@0:1#0", "root/acme@3:0#0", "root/acme@03:1#0", "root/acme@+3:1#0",
             "root/acme@3:1#99999999999999999999", "root/acme@3:1@3:1#0", "root/a%2fb@1:1#0", "root/!a/b@1:1#0",
-            "@1:1#0", "root//x@1:1#0",
+            "@1:1#0", "root//x@1:1#0", "root/!x@1:1#0",
         )
         assertAll(
             *parsed.map { (text, generation) ->
@@ -170,6 +170,9 @@ class TopologyLoweringTest {
         // An id outside the grammar is somebody else's edge, and says nothing about generations.
         val foreign = AttachmentRecord(AttachmentId("e#99"), GroupId("root"), GroupId("elsewhere"), Weight.ONE)
         val withForeign = booted.piece(assertNotNull(booted.prepare(foreign)))
+        // A floor at the last generation there is leaves no next one: it must refuse, not wrap.
+        val last = stale.copy(id = AttachmentId("root/acme/batch@1:1#${Long.MAX_VALUE}"))
+        val exhausted = booted.piece(assertNotNull(booted.prepare(last)))
         assertAll(
             { assertEquals(Lifecycle.RETIRED, retired.lifecycle(stale.id), "the rig retired the stale edge") },
             { assertEquals(-1L, EntitlementLedger.ZERO.generationFloor()) },
@@ -181,6 +184,8 @@ class TopologyLoweringTest {
             { assertEquals(0L, effectiveGeneration(0L, EntitlementLedger.ZERO)) },
             { assertEquals(3L, effectiveGeneration(3L, EntitlementLedger.ZERO)) },
             { assertFailsWith<IllegalArgumentException> { effectiveGeneration(-1L, EntitlementLedger.ZERO) } },
+            { assertEquals(Long.MAX_VALUE, exhausted.generationFloor()) },
+            { assertFailsWith<ArithmeticException> { effectiveGeneration(0L, exhausted) } },
         )
     }
 
