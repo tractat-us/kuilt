@@ -285,8 +285,8 @@ internal class JoinerResumeMachine(
     /**
      * Mints the [resumeToken] (once) from the [roomId] and [secret] carried in the joiner's own
      * `Welcome`. No-op when already minted, or when either is null — a host that sends no secret
-     * (one that predates #3165) leaves this joiner with no token, so it re-joins fresh rather than
-     * presenting a resume that host could not tell from a forgery.
+     * (one that predates #3165) leaves this joiner with no token, so a tear goes straight to
+     * terminal rather than presenting a resume that host could not tell from a forgery.
      */
     fun mintTokenIfAbsent(roomId: String?, secret: ResumeSecret?) {
         lock.withLock {

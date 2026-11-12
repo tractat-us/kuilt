@@ -129,8 +129,8 @@ public sealed interface AdmitMessage {
      * [issuedAt] — epoch-millis when the token was issued (from the injected clock).
      * [resumeSecret] — the secret from the joiner's own [Welcome.resumeSecret] (#3165). Nullable on
      *   the wire only so a frame from an older joiner still decodes: a host refuses a `Resume`
-     *   without one as [RejectCode.ResumeTokenInvalid], which is terminal, so that joiner re-joins
-     *   fresh instead of resuming.
+     *   without one as [RejectCode.ResumeTokenInvalid]. That code is not retryable, so that joiner's
+     *   reconnect ends in `HostLost(Refused)`; it joins again only if its consumer reacts to that.
      */
     @Serializable
     @SerialName("resume")
