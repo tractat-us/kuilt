@@ -867,6 +867,13 @@ class HeddleNodeTest {
         // A's first sight of e3, 100 behind. Unclamped, every one of A's 100 units is owed to it.
         a.advertise(e1, hungrier)
         a.advertise(behind.id, hungrier)
+        // The rig's other half: e2 is filled, so on A only e1 (100) and e3 (0) compete. Were e2
+        // still demanding this would read 200/3 and the mutation would have no non-joiner to use.
+        assertEquals(
+            Rational.of(50L),
+            a.parentVirtualTime(root),
+            "only e1 and e3 compete on A — e2 is active but filled, the non-joiner off the origin",
+        )
         a.schedule(root)
         h.pump()
 
