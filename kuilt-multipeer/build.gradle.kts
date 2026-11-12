@@ -115,6 +115,9 @@ kotlin {
         jvmMain.dependencies { implementation(libs.jna) }
         commonTest.dependencies {
             implementation(libs.kotlinx.coroutines.test)
+            // MultipeerRoomHostConformanceTest is common code (the host is pure commonMain over a Loom),
+            // so the RoomHost TCK it subclasses has to reach every test target, not only jvm and apple.
+            implementation(project(":kuilt-conformance"))
         }
         // Mirror the manual appleMain wiring for the test compilations so the
         // apple-only unit tests (MCSessionLink / MultipeerPeerLinkFactory) share
@@ -148,7 +151,14 @@ kotlin {
         // exists and a binding could only pass by not running. See MultipeerAndroidStubTest.
         // kotlin-test resolves via a JUnit typealias on the Android unit-test variant, so that one
         // artifact has to be named here; coroutines-test already arrives through commonTest.
-        androidUnitTest.dependencies { implementation(libs.kotlin.testJunit) }
+        androidUnitTest.dependencies {
+            implementation(libs.kotlin.testJunit)
+            // An SLF4J backend for kotlin-logging, now that MultipeerRoomHostConformanceTest builds a
+            // SeamRoom on this variant: without one the room's file-level logger throws
+            // NoClassDefFoundError: org/slf4j/LoggerFactory and the host never opens its room.
+            // Mirrors :kuilt-nw and :kuilt-session.
+            runtimeOnly(libs.logback)
+        }
         jvmTest.dependencies {
             implementation(project(":kuilt-conformance"))
             implementation(libs.kotlin.testJunit)

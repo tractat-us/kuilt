@@ -561,6 +561,22 @@ abstract class us.tractat.kuilt.conformance/MeshConformanceSuite { // us.tractat
     final fun sendToRoutesToExactlyOnePeer(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/MeshConformanceSuite.sendToRoutesToExactlyOnePeer|sendToRoutesToExactlyOnePeer(){}[0]
 }
 
+abstract class us.tractat.kuilt.conformance/PerConnectionRoomHostConformanceSuite : us.tractat.kuilt.conformance/RoomHostConformanceSuite { // us.tractat.kuilt.conformance/PerConnectionRoomHostConformanceSuite|null[0]
+    constructor <init>() // us.tractat.kuilt.conformance/PerConnectionRoomHostConformanceSuite.<init>|<init>(){}[0]
+
+    // Targets: [apple]
+    final fun failingHandlerLeavesRoomAndLoopContinues() // us.tractat.kuilt.conformance/PerConnectionRoomHostConformanceSuite.failingHandlerLeavesRoomAndLoopContinues|failingHandlerLeavesRoomAndLoopContinues(){}[0]
+
+    // Targets: [apple]
+    final fun returningHandlerLeavesRoom() // us.tractat.kuilt.conformance/PerConnectionRoomHostConformanceSuite.returningHandlerLeavesRoom|returningHandlerLeavesRoom(){}[0]
+
+    // Targets: [wasmJs]
+    final fun failingHandlerLeavesRoomAndLoopContinues(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/PerConnectionRoomHostConformanceSuite.failingHandlerLeavesRoomAndLoopContinues|failingHandlerLeavesRoomAndLoopContinues(){}[0]
+
+    // Targets: [wasmJs]
+    final fun returningHandlerLeavesRoom(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/PerConnectionRoomHostConformanceSuite.returningHandlerLeavesRoom|returningHandlerLeavesRoom(){}[0]
+}
+
 abstract class us.tractat.kuilt.conformance/PrincipalAttestationConformanceSuite { // us.tractat.kuilt.conformance/PrincipalAttestationConformanceSuite|null[0]
     constructor <init>() // us.tractat.kuilt.conformance/PrincipalAttestationConformanceSuite.<init>|<init>(){}[0]
 
@@ -1274,6 +1290,28 @@ abstract class us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite 
     final fun rejectedConnectionIsStructurallyExcluded(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomFanoutIsolationConformanceSuite.rejectedConnectionIsStructurallyExcluded|rejectedConnectionIsStructurallyExcluded(){}[0]
 }
 
+abstract class us.tractat.kuilt.conformance/RoomHostConformanceSuite { // us.tractat.kuilt.conformance/RoomHostConformanceSuite|null[0]
+    open val awaitBudget // us.tractat.kuilt.conformance/RoomHostConformanceSuite.awaitBudget|{}awaitBudget[0]
+        open fun <get-awaitBudget>(): kotlin.time/Duration // us.tractat.kuilt.conformance/RoomHostConformanceSuite.awaitBudget.<get-awaitBudget>|<get-awaitBudget>(){}[0]
+
+    abstract fun newHarness(kotlinx.coroutines/CoroutineScope): us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness // us.tractat.kuilt.conformance/RoomHostConformanceSuite.newHarness|newHarness(kotlinx.coroutines.CoroutineScope){}[0]
+
+    final class HostHarness { // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness|null[0]
+        constructor <init>(us.tractat.kuilt.session/RoomHost, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.session/Room>) // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.<init>|<init>(us.tractat.kuilt.session.RoomHost;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.session.Room>){}[0]
+
+        final val connect // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.connect|{}connect[0]
+            final fun <get-connect>(): kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.session/Room> // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.connect.<get-connect>|<get-connect>(){}[0]
+        final val host // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.host|{}host[0]
+            final fun <get-host>(): us.tractat.kuilt.session/RoomHost // us.tractat.kuilt.conformance/RoomHostConformanceSuite.HostHarness.host.<get-host>|<get-host>(){}[0]
+    }
+
+    // Targets: [apple]
+    final fun scopeCancelEndsAll() // us.tractat.kuilt.conformance/RoomHostConformanceSuite.scopeCancelEndsAll|scopeCancelEndsAll(){}[0]
+
+    // Targets: [wasmJs]
+    final fun scopeCancelEndsAll(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/RoomHostConformanceSuite.scopeCancelEndsAll|scopeCancelEndsAll(){}[0]
+}
+
 abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat.kuilt.conformance/SeamConformanceSuite|null[0]
     constructor <init>() // us.tractat.kuilt.conformance/SeamConformanceSuite.<init>|<init>(){}[0]
 
@@ -1570,6 +1608,22 @@ abstract class us.tractat.kuilt.conformance/SeamConformanceSuite { // us.tractat
 
     // Targets: [wasmJs]
     final fun wovenSeamCapabilityIsHonest(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SeamConformanceSuite.wovenSeamCapabilityIsHonest|wovenSeamCapabilityIsHonest(){}[0]
+}
+
+abstract class us.tractat.kuilt.conformance/SingleRoomHostConformanceSuite : us.tractat.kuilt.conformance/RoomHostConformanceSuite { // us.tractat.kuilt.conformance/SingleRoomHostConformanceSuite|null[0]
+    constructor <init>() // us.tractat.kuilt.conformance/SingleRoomHostConformanceSuite.<init>|<init>(){}[0]
+
+    // Targets: [apple]
+    final fun failingHandlerFailsStart() // us.tractat.kuilt.conformance/SingleRoomHostConformanceSuite.failingHandlerFailsStart|failingHandlerFailsStart(){}[0]
+
+    // Targets: [apple]
+    final fun returningHandlerKeepsRoomLive() // us.tractat.kuilt.conformance/SingleRoomHostConformanceSuite.returningHandlerKeepsRoomLive|returningHandlerKeepsRoomLive(){}[0]
+
+    // Targets: [wasmJs]
+    final fun failingHandlerFailsStart(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SingleRoomHostConformanceSuite.failingHandlerFailsStart|failingHandlerFailsStart(){}[0]
+
+    // Targets: [wasmJs]
+    final fun returningHandlerKeepsRoomLive(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/SingleRoomHostConformanceSuite.returningHandlerKeepsRoomLive|returningHandlerKeepsRoomLive(){}[0]
 }
 
 abstract class us.tractat.kuilt.conformance/WireCodecConformanceSuite { // us.tractat.kuilt.conformance/WireCodecConformanceSuite|null[0]

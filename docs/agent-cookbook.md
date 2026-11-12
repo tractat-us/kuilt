@@ -35,6 +35,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | a "you are offline" / "your connection dropped" indicator, distinguishing *your* outage from *their* outage | `Room.localFabric` + `MembershipEvent.LocalFabricLost` | [Liveness & presence](agent-cookbook/session.md#liveness--presence) |
 | a per-member reader built as `room.incoming.filter { it.sender == peer }` — or a fix for "the host never saw that member's first frame", a hello lost before its collector subscribed | `Room.incomingFrom(member)` — held from admission, and failing with `FramesLost` rather than losing frames silently | [Per-member frames](agent-cookbook/session.md#per-member-frames) |
 | a `delay` between a last send and `leave` or `close`, a last frame the far side sometimes misses | `Room.flush(timeout)` / `Seam.flush(timeout)` → `FlushOutcome` (`Drained` is not receipt; most rooms say `Unsupported` today, so keep your `delay` or an ack until yours answers) | [A last frame before leaving](agent-cookbook/session.md#a-last-frame-before-leaving) |
+| a test per room host for "is the room left when the scope is cancelled", a `RoomHost` of your own with no tests | `PerConnectionRoomHostConformanceSuite` / `SingleRoomHostConformanceSuite` (`:kuilt-conformance`) | [Testing a room host](agent-cookbook/session.md#testing-a-room-host) |
 | a drain inside a fabric's `close`, a seam reporting success for a queue it never looked at | `Connection.flush(timeout)` + `flushWithin` | [Telling a caller the frames have left](agent-cookbook/fabrics.md#telling-a-caller-the-frames-have-left) |
 | a last-write-wins register, a grow-only set/counter, an add/remove set, a version vector, "merge these two states" | the CRDT zoo (`LWWRegister`, `GSet`, `PNCounter`, `ORSet`, …) | [Replicated data](agent-cookbook/replication.md#replicated-data) |
 | a nested map where a key removed and recreated loses a write made concurrently under the old one | `CausalMap` (one shared context for every depth) | [Replicated data](agent-cookbook/replication.md#replicated-data) |
@@ -81,7 +82,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 The detail lives in seven family pages; each holds the sections named beside it.
 
 - [Fabrics](agent-cookbook/fabrics.md) — discovery, transports, the seam, payload limits, pumps, durable storage.
-- [Session](agent-cookbook/session.md) — rejoin & reconnect, liveness & presence, per-member frames, a last frame before leaving, host election & the lobby.
+- [Session](agent-cookbook/session.md) — rejoin & reconnect, liveness & presence, per-member frames, a last frame before leaving, host election & the lobby, testing a room host.
 - [Replication](agent-cookbook/replication.md) — replicated data, scaling to many peers, dealing cards, sealed boxes, dedup, archiving what the live replica forgets.
 - [Consensus](agent-cookbook/consensus.md) — consensus & turns, when one of the peers is a server, durable consensus state.
 - [Heddle](agent-cookbook/heddle.md) — weighted fair share, reserving and charging over a network, minting quota and reshaping with agreement, weighted lanes over warp.

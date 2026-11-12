@@ -18,9 +18,10 @@ and primitive groups in order.
 |a "why did we drop" classifier; a retry/back-off loop; a per-session id every peer agrees on|`MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`); `ExponentialBackoff`; `Room.roomId` or `RoomFactory.host(pattern, roomId = …)`|`session.md#rejoin--reconnect`|
 |a heartbeat, an idle reaper, "is this peer alive"; reaping a room nobody joined; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
 |a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned(since, windowExpiresAt)` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|
-|a per-member reader as `room.incoming.filter { it.sender == peer }`, a member's first frame lost before its collector subscribed|`Room.incomingFrom(member)` (fails with `FramesLost`, never silently; `SeamRoomFactory(memberInboxCapacity = 0)` opts out)|`session.md#per-member-frames`|
-|a `delay` between a last send and `leave`/`close`|`Room.flush`/`Seam.flush` → `FlushOutcome` (hub, mesh, NW say `Unsupported`: keep your delay or an ack until yours answers)|`session.md#a-last-frame-before-leaving`|
+|a per-member reader as `room.incoming.filter { it.sender == peer }`, a member's first frame lost before its collector subscribed|`Room.incomingFrom(member)` (fails with `FramesLost`, never silently; capacity `0` opts out)|`session.md#per-member-frames`|
+|a `delay` between a last send and `leave`/`close`|`Room.flush`/`Seam.flush` → `FlushOutcome` (`Unsupported` on hub, mesh, NW: keep your delay)|`session.md#a-last-frame-before-leaving`|
 |a `host == selfId` check, re-electing when the host walks out mid-lobby|`SeamRoomFactory.electLobby` → `ElectionLobby.awaitRoom` → `ElectionOutcome.BecameHost` → `start()`|`session.md#host-election--the-lobby`|
+|a test for your `RoomHost`|`PerConnectionRoomHostConformanceSuite`/`SingleRoomHostConformanceSuite`|`session.md#testing-a-room-host`|
 |a propose→commit turn/session facade, host election with a term|`GameSession` + `TurnSequencer`|`consensus.md#consensus--turns`|
 |a server holding the log clients propose into, a client outliving its server|`ClusterClient` (`clusterClient`/`clusterClientWithNode`) + `ServerCluster` (`serverCluster`)|`consensus.md#when-one-of-the-peers-is-a-server`|
 |a Raft term/vote/log surviving a restart, an `expect`/`actual` `RaftStorage`|`DurableStoreRaftStorage.open(store)` + `RaftStorageConformanceSuite`|`consensus.md#durable-consensus-state`|
@@ -31,7 +32,7 @@ and primitive groups in order.
 |a shared random nobody could steer — a seed, a first player, a die roll|`FairRandom.roll()`|`replication.md#nobody-chose-that-number`|
 |a `seenIds` set|`GSet` / kuilt dedup|`replication.md#dedup`|
 |a longer-retention copy of a replicated log; replaying it, a resume cursor, "did it stop?"|`BoltDecorator` + `AppliedOpSink` (`WarpLogRecordExporter(appliedOps = …)`); `Bolt.replay` + `ReplayScope` → `CleanTail`/`Truncated`; `Bolt.durability()`|`replication.md#archiving-what-the-live-replica-forgets`|
-|merging discovery feeds into one roster; a `try`/`catch` per browse feed|`discoveryRoster` (`onSourceFailure`) — sources are isolated already|`fabrics.md#discovery`|
+|merging discovery feeds into one roster; a `try`/`catch` per browse feed|`discoveryRoster` (`onSourceFailure`)|`fabrics.md#discovery`|
 |a sweeper over a discovery list — peers that left still on screen|`PeerDiscoverySource.departures()` + `DiscoverySourceConformanceSuite`|`fabrics.md#peers-pile-up-and-are-never-removed`|
 |a peer-supplied id straight into a `Set<PeerId>`|`PeerIdentityRegistry`|`fabrics.md#a-peer-id-off-the-wire-straight-into-a-setpeerid`|
 |a 4-byte length prefix and a reassembly loop over a socket|`framed()` → `handshaking()`|`fabrics.md#your-own-transport`|
@@ -46,7 +47,7 @@ and primitive groups in order.
 |a fair-share scheduler, "3× the share"; a quota ledger, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane|`HeddlePolicy.pick` + `HeddleNode`; `EntitlementLedger` + `HeddleNode.reserve`/`complete`; `heddleGoverned` (`GovernedHeddleNode`); `HeddleAdmissionControl` + `TaskDescriptor.inLane`|`heddle.md#fair-share--placement`|
 |"only run on a GPU / in-region peer", a placement predicate|`Affinity` + `TaskDescriptor.where` + `CapSet`|`warp.md#where-a-task-may-run-location-eligibility`|
 |a content-hash blob cache; running code another peer sent you, an `eval`|`Creel` + `BobbinExchange`; `WasmRuntime` + `WasmSandboxConfig` + `WarpLazyFetch`|`warp.md#code-mobility`|
-|a flush-per-line log exporter, "logging stalls the app"; stamping a line's session/game; resetting a telemetry store; a counter of whether telemetry still lands|`WarpLogRecordExporter.export(records)` + `installLogCapture`; `withLogContext(attributes) { … }`, **not** `CaptureConfig.attributeMapper`; `WarpTelemetry.clear()`; `WarpTelemetry.health` (spans, metrics, logs) + `LogCaptureInstallation.health` (`CaptureHealth.droppedEvents`)|`otel.md#telemetry--log-capture`|
+|a flush-per-line log exporter, "logging stalls the app"; stamping a line's session/game; resetting a telemetry store; a counter of whether telemetry still lands|`WarpLogRecordExporter.export(records)` + `installLogCapture`; `withLogContext(attributes) { … }`, **not** `CaptureConfig.attributeMapper`; `WarpTelemetry.clear()`; `WarpTelemetry.health` + `LogCaptureInstallation.health` (`CaptureHealth.droppedEvents`)|`otel.md#telemetry--log-capture`|
 
 ## Fetching a route
 
