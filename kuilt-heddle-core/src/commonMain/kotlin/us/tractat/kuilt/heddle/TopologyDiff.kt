@@ -9,8 +9,16 @@ package us.tractat.kuilt.heddle
  * and the retires of its ancestors in the same removal, and carries on with every other child.
  * Asking [Topology.diff] again later lists what is left.
  *
- * **What an interpreter must hold to.** Three contracts the list cannot enforce on its own:
+ * **What an interpreter must hold to.** Four contracts the list cannot enforce on its own:
  *
+ *  - **Apply the whole list as one unit**, on a working ledger swapped in once, and serve nothing
+ *    from a state part-way through it. A prefix is a state to recover from, never one to schedule
+ *    against: when a runtime child is detached, or its marker goes, while it still has a prepared
+ *    edge, that edge is closed before it is retired, and every prefix between the two holds two
+ *    live inbound edges into the child — a [LedgerConflict.DualActiveInbound] that quarantines it.
+ *    A refused step does not break the unit: it is skipped as below, and the rest of the list
+ *    still applies. Re-entrance is what makes a prefix recoverable, since asking again lists
+ *    exactly the steps that did not land.
  *  - **The steps are valid only against the ledger they were computed from.** Work charged
  *    between the diff and the apply can make a [Reconcile] necessary that the list does not hold:
  *    diff an internal group's reweight, serve seven units beneath it, apply the stale list, and
@@ -94,8 +102,10 @@ public sealed interface TopologyStep {
  * A prepared edge nothing wants is left prepared. It carries nothing and nothing can cross it, and
  * closing it would make it a second live edge into its child — which quarantines the child, and
  * with it every group below, until the retire lands. If its weight comes back, it is adopted. A
- * runtime child nothing wants is the exception, as above: its prepared edge is closed and retired
- * first, before anything can be charged across its live one.
+ * runtime child nothing wants is the exception, as above: its prepared edge is closed, ahead of its
+ * live edge, and retired, so the child cannot come back with the marker. Between that close and
+ * that retire the child has two live inbound edges, which is why the list is applied as one unit
+ * (see [TopologyStep]).
  *
  * **A change of weight is a new edge, and its history resets:** the group restarts at its
  * parent's front. A rename or a move is a delete plus an add, so the new child starts with no
@@ -140,7 +150,7 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
         val path = pathOf(child)?.takeIf { it.runtime } ?: return@mapNotNull null
         val marker = new.markerAt(path.names.drop(1).dropLast(1)) ?: return@mapNotNull null
         if (!edges.attached()) return@mapNotNull null
-        child to DeclaredChild(child, parentOf(child), marker.weight, group = false)
+        child to WantedChild(child, parentOf(child), marker.weight, group = false)
     }
     val children = (wants.keys + edgesByChild.keys).distinct().sorted()
     val adoptedByChild = wants.values.mapNotNull { want -> edgesByChild[want.child].orEmpty().adoptable(want)?.let { want.child to it } }.toMap()
@@ -152,7 +162,7 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
         val edges = edgesByChild[child].orEmpty()
         val want = wants[child]
         if (want == null) {
-            planned.planRemoval(edges, ledger, abandonPrepared = pathOf(child)?.runtime == true)
+            planned.planRemoval(edges, abandonPrepared = pathOf(child)?.runtime == true)
         } else {
             planned.planWanted(want, edges, adoptedByChild[child], ledger) { prepareGeneration }
         }
@@ -180,16 +190,17 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
  *
  * @param generation a counter, `>= 0`, for the edge this attach prepares.
  * @throws IllegalArgumentException if [group] does not name a group marked with
- *   [runtimeChildren][Topology.Group.runtimeChildren], if [name] is empty, or if [generation] is
- *   negative. Nothing else about [name] is refused.
+ *   [runtimeChildren][Topology.Group.runtimeChildren], if [name] is empty, if [generation] is
+ *   negative, or if [ledger] belongs to another root, as [Topology.Companion.diff] refuses it.
+ *   Nothing else about [name] is refused.
  * @sample us.tractat.kuilt.heddle.sampleRuntimeChildren
  */
 public fun Topology.attachRuntimeChild(group: List<String>, name: String, ledger: EntitlementLedger, generation: Long): List<TopologyStep> {
     require(generation >= 0L) { "a generation is >= 0, was $generation" }
-    val child = runtimeChildId(group, name)
-    val marker = requireNotNull(markerAt(group)) { "$group is not a group marked for runtime children" }
-    val want = DeclaredChild(child, parentOf(child), marker.weight, group = false)
-    val edges = ledger.ownedEdgesInto(child, root)
+    val runtime = runtimeChild(group, name)
+    requireSameRoot(ledger)
+    val want = WantedChild(runtime.id, runtime.parent, runtime.marker.weight, group = false)
+    val edges = ledger.ownedEdgesInto(runtime.id, root)
     val planned = ArrayList<Planned>()
     planned.planWanted(want, edges, edges.adoptable(want), ledger) { effectiveGeneration(generation, ledger) }
     return planned.sortedWith(STEP_ORDER).map { it.step }
@@ -202,16 +213,20 @@ public fun Topology.attachRuntimeChild(group: List<String>, name: String, ledger
  * drained.
  *
  * A prepared edge the child has — a re-attach or a reweight still waiting for a drain — is closed
- * and retired first, at once, since nothing has crossed it. Otherwise it would record that the
- * child is wanted, and a later reload would bring the child back.
+ * and retired too, its close ahead of the live edge's, and its retire never refused, since nothing
+ * has crossed it. Otherwise it would record that the child is wanted, and a later reload would
+ * bring the child back. Until that retire lands the child has two live inbound edges, so the list
+ * is applied as one unit (see [TopologyStep]).
  *
  * @throws IllegalArgumentException if [group] does not name a group marked with
- *   [runtimeChildren][Topology.Group.runtimeChildren], or if [name] is empty.
+ *   [runtimeChildren][Topology.Group.runtimeChildren], if [name] is empty, or if [ledger] belongs
+ *   to another root.
  */
 public fun Topology.detachRuntimeChild(group: List<String>, name: String, ledger: EntitlementLedger): List<TopologyStep> {
-    val child = runtimeChildId(group, name)
+    val child = runtimeChild(group, name).id
+    requireSameRoot(ledger)
     val planned = ArrayList<Planned>()
-    planned.planRemoval(ledger.ownedEdgesInto(child, root), ledger, abandonPrepared = true)
+    planned.planRemoval(ledger.ownedEdgesInto(child, root), abandonPrepared = true)
     return planned.sortedWith(STEP_ORDER).map { it.step }
 }
 
@@ -223,7 +238,7 @@ public fun Topology.detachRuntimeChild(group: List<String>, name: String, ledger
  * once its predecessors have retired; and reconcile an internal group whose old edges carried work.
  */
 private fun MutableList<Planned>.planWanted(
-    want: DeclaredChild,
+    want: WantedChild,
     edges: List<OwnedEdge>,
     adopted: OwnedEdge?,
     ledger: EntitlementLedger,
@@ -235,7 +250,7 @@ private fun MutableList<Planned>.planWanted(
         add(Planned(Phase.PREPARE, TopologyStep.Prepare(AttachmentRecord(target, want.parent, child, want.weight))))
     }
     val others = edges.filter { it.id != target }
-    for (edge in others) retireIfLive(edge, ledger)
+    for (edge in others) retireIfLive(edge)
     if (adopted?.lifecycle != Lifecycle.ACTIVE) {
         // Keyed on every other edge the child has ever had, not only the live ones, so the
         // phase cannot change when a partial application retires them.
@@ -256,16 +271,18 @@ private fun MutableList<Planned>.planWanted(
  * child — its prepared edges are closed and retired too, since for a runtime child a prepared edge
  * is the record that it is wanted.
  */
-private fun MutableList<Planned>.planRemoval(edges: List<OwnedEdge>, ledger: EntitlementLedger, abandonPrepared: Boolean) {
+private fun MutableList<Planned>.planRemoval(edges: List<OwnedEdge>, abandonPrepared: Boolean) {
     for (edge in edges) {
         if (abandonPrepared && edge.lifecycle == Lifecycle.PREPARED) {
-            // First among the child's closes and retires: no prefix of the list then leaves the
-            // child looking wanted, and a refused retire behind it cannot strand it closing beside
-            // a draining edge, which would be two live inbound edges.
+            // Closed first among the child's closes, so once its live edge closes no prepared edge
+            // is left to say the child is wanted. Its retire, with nothing outstanding, sorts ahead
+            // of a refusable one, so a refusal cannot strand it closing beside a draining edge. Its
+            // close does open a window of two live inbound edges until that retire lands, which the
+            // one-unit contract on [TopologyStep] covers.
             add(Planned(Phase.CLOSE, TopologyStep.Close(edge.id, edge.record.child), first = true))
             add(Planned(Phase.RETIRE, TopologyStep.Retire(edge.id, edge.record.child), first = true))
         } else {
-            retireIfLive(edge, ledger)
+            retireIfLive(edge)
         }
     }
 }
@@ -313,7 +330,7 @@ private fun EntitlementLedger.strandRelocation(live: AttachmentId, strand: List<
 // ── ownership ───────────────────────────────────────────────────────────────────────────────────
 
 /** A ledger edge the diff owns: in the topology grammar, under the topology's root. */
-private class OwnedEdge(val record: AttachmentRecord, val generation: Long, val lifecycle: Lifecycle) {
+private class OwnedEdge(val record: AttachmentRecord, val generation: Long, val lifecycle: Lifecycle, val outstanding: Long) {
     val id: AttachmentId get() = record.id
 }
 
@@ -339,28 +356,49 @@ private fun EntitlementLedger.ownedEdge(id: AttachmentId, root: String): OwnedEd
         record.parent == parentOf(record.child)
     if (!owned) return null
     val lifecycle = lifecycle(id) ?: return null
-    return OwnedEdge(record, generation, lifecycle)
+    // An edge with a record is known, so it always has a summary; read once, here, with the rest.
+    val summary = edge(id) ?: return null
+    return OwnedEdge(record, generation, lifecycle, summary.outstanding)
 }
 
 /**
  * The edge this child keeps: an active one at [want]'s weight, else the newest prepared one at it.
  * Parent need not be compared — ownership already ties an edge's parent to its child's id.
  */
-private fun List<OwnedEdge>.adoptable(want: DeclaredChild): OwnedEdge? =
+private fun List<OwnedEdge>.adoptable(want: WantedChild): OwnedEdge? =
     filter { it.lifecycle == Lifecycle.ACTIVE && it.record.weight == want.weight }.maxByOrNull { it.generation }
         ?: filter { it.lifecycle == Lifecycle.PREPARED && it.record.weight == want.weight }.maxByOrNull { it.generation }
 
 // ── the desired tree ────────────────────────────────────────────────────────────────────────────
 
-/** One declared node as the ledger sees it. [group] is set for a [Topology.Group]. */
-private class DeclaredChild(val child: GroupId, val parent: GroupId, val weight: Weight, val group: Boolean)
+/**
+ * A child the diff wants, with its parent and weight: a declared node, or a runtime child still
+ * attached under a marked group. [group] is set for a [Topology.Group].
+ */
+private class WantedChild(val child: GroupId, val parent: GroupId, val weight: Weight, val group: Boolean)
 
-private fun Topology.declaredChildren(): List<DeclaredChild> {
-    val out = ArrayList<DeclaredChild>()
+/**
+ * D3 for one runtime child, as [Topology.Companion.diff] checks it: the ledger is not minted at
+ * another root, and if it holds any edge in the topology grammar, some edge hangs off this root.
+ * Read from the mints and the index, not from every edge. The mint check is linear in the mint
+ * records, which grow with service until L2 sizes the mint chunk.
+ */
+private fun Topology.requireSameRoot(ledger: EntitlementLedger) {
+    val rootId = groupId()
+    require(ledger.mintedOnlyAt(rootId)) {
+        "the ledger was minted at ${ledger.mintedRoots().joinToString { it.value }}, not ${rootId.value}: a change of root is not an attach"
+    }
+    require(ledger.generationTop().edges == 0 || ledger.hasChildEdges(rootId)) {
+        "the ledger holds a tree under another root than $root: a change of root is not an attach"
+    }
+}
+
+private fun Topology.declaredChildren(): List<WantedChild> {
+    val out = ArrayList<WantedChild>()
     fun walk(parent: String, nodes: List<Topology.Node>) {
         for (node in nodes) {
             val child = declaredChildId(parent, node.name)
-            out += DeclaredChild(GroupId(child), GroupId(parent), node.weight, node is Topology.Group)
+            out += WantedChild(GroupId(child), GroupId(parent), node.weight, node is Topology.Group)
             if (node is Topology.Group) walk(child, node.children)
         }
     }
@@ -394,14 +432,13 @@ private class Planned(val phase: Phase, val step: TopologyStep, val first: Boole
  * Close and retire [edge] if it is live: an active edge needs both, a closing one only the retire.
  * A prepared edge is never closed — see [Topology.Companion.diff] — and a retired one is done.
  */
-private fun MutableList<Planned>.retireIfLive(edge: OwnedEdge, ledger: EntitlementLedger) {
+private fun MutableList<Planned>.retireIfLive(edge: OwnedEdge) {
     when (edge.lifecycle) {
         Lifecycle.PREPARED, Lifecycle.RETIRED -> return
         Lifecycle.ACTIVE -> add(Planned(Phase.CLOSE, TopologyStep.Close(edge.id, edge.record.child)))
         Lifecycle.CLOSING -> Unit
     }
-    val drained = ledger.edge(edge.id)?.outstanding == 0L
-    add(Planned(Phase.RETIRE, TopologyStep.Retire(edge.id, edge.record.child), first = drained))
+    add(Planned(Phase.RETIRE, TopologyStep.Retire(edge.id, edge.record.child), first = edge.outstanding == 0L))
 }
 
 /**

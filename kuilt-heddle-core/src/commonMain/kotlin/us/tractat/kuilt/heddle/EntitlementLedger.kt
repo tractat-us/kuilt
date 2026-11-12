@@ -625,10 +625,14 @@ public class EntitlementLedger private constructor(
         return EdgeIndex(children, inbound, unretired, folds.settle(emptyMap()), top)
     }
 
-    /** Whether [allEdges] holds [e]: any component but the gauges names it. */
-    private fun mentions(e: AttachmentId): Boolean =
-        e in records || e in lifecycle || e in issued || e in returned || e in leafSpent || e in rollupSpent ||
-            e in issuedRelocIn || e in leafRelocIn || e in leafRelocOut || e in rollupRelocIn || e in rollupRelocOut
+    /**
+     * Whether [allEdges] holds [e], without building it: the same three sources, `records`,
+     * `lifecycle` and [allEdgeCounters], so a counter family added there is seen here too. The
+     * generation fold in [carryIndex] counts an edge once, when this first turns true; were the two
+     * to disagree, an edge would be counted twice and the floor would skip its scan.
+     */
+    internal fun mentions(e: AttachmentId): Boolean =
+        e in records || e in lifecycle || allEdgeCounters().any { e in it }
 
     /**
      * This joined state's index, derived from [base]'s built one. An edge [delta] does not name has
@@ -2019,6 +2023,9 @@ public class EntitlementLedger private constructor(
 
     /** The record set under [id] (empty if unknown) — [HeddleInternalApi], test support. */
     internal fun recordsOf(id: AttachmentId): Set<AttachmentRecord> = records[id] ?: emptySet()
+
+    /** Whether every mint record is at [root]; true for a ledger with none. Allocates nothing. */
+    internal fun mintedOnlyAt(root: GroupId): Boolean = minted.values.all { it.root == root }
 
     /** The highest topology-grammar generation over [allEdges], and how many edges carry it; from the index. */
     internal fun generationTop(): GenerationTop = index.value.generationTop

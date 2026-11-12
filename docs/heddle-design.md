@@ -990,8 +990,14 @@ applied by an interpreter that holds the ledger's only writer; the contracts it 
 keep are on `TopologyStep`.
 
 Children the consumer creates while running hang under a group marked with
-`runtimeChildren`, in their own id namespace, rather than through a fluent runtime
-API; the calls that attach and detach them are not built yet.
+`runtimeChildren`, in their own id namespace (`pool/tenants/!c-7f3a`), so a runtime
+name never collides with a declared one. `Topology.attachRuntimeChild(group, name,
+ledger, generation)` and `detachRuntimeChild(group, name, ledger)` list the steps for
+one child, at the marker's weight, numbered by the same generation floor as the diff.
+Which runtime children exist is the ledger's to say, and the diff owns them as it owns
+declared edges: under a marker the new tree keeps, an attached child is kept, history
+and all; a new marker weight regenerates it on a new edge; and when the marker goes, or
+its group does, the child is closed. Each detach leaves a retired edge behind for good.
 
 ---
 

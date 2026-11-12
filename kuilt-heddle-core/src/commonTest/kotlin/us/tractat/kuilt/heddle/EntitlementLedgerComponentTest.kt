@@ -112,6 +112,26 @@ class EntitlementLedgerComponentTest {
      * degrades accordingly. Distinct values are chosen in [LEDGER_COMPONENTS], so this is a
      * deterministic assertion rather than a probabilistic one.
      */
+    /**
+     * `mentions` answers "is this edge in `allEdges`" without building the set, and the index's
+     * generation fold counts an edge once, when it first turns true. Were the two to disagree on
+     * any component, a merge would count an edge twice, the folded top would claim more edges than
+     * carry it, and the floor would skip the scan it needs. Walked over every component, so a new
+     * one is checked the moment it joins [LEDGER_COMPONENTS].
+     */
+    @Test
+    fun mentionsAgreesWithAllEdgesForEveryComponent() {
+        val e = AttachmentId("component-edge")
+        var mentioned = 0
+        for (c in LEDGER_COMPONENTS) {
+            val inAll = e in c.ledger.allEdges()
+            if (inAll) mentioned++
+            assertEquals(inAll, c.ledger.mentions(e), "${c.name}: mentions disagrees with allEdges")
+        }
+        // The rig reached both answers: the edge-keyed components mention it, the rest do not.
+        assertTrue(mentioned in 1 until LEDGER_COMPONENTS.size, "components whose edge is in allEdges: $mentioned")
+    }
+
     @Test
     fun everyComponentIsObservableThroughHashCode() {
         for (c in LEDGER_COMPONENTS) {

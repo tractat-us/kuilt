@@ -209,6 +209,56 @@ class TopologyRuntimeChildrenTest {
         )
     }
 
+    /**
+     * The window the one-unit contract on [TopologyStep] covers. A reweight whose prepare alone
+     * landed leaves the child ACTIVE beside a PREPARED replacement; a detach then closes the
+     * prepared edge before retiring it, and every prefix in between holds two live inbound edges.
+     * The whole list leaves none, and each prefix re-detaches to exactly the rest — which rests on
+     * a drained retire sorting first even once the abandoned edge is no longer PREPARED.
+     */
+    @Test
+    fun detachingBesideAPreparedReplacementIsOneUnit() {
+        val ledger = attached(bootFrom(pool()), "x")
+        val half = applyClean(Topology.diff(pool(marker = 3), ledger, generation = 0).take(1), ledger)
+        val p = e("root/tenants/!x@3:1#2")
+        val a = e("root/tenants/!x@2:1#1")
+        val detach = pool(marker = 3).detachRuntimeChild(tenants, "x", half)
+        val removal = Topology.diff(pool(marker = null), half, generation = 0)
+        fun dualLive(l: EntitlementLedger) = l.validate().filterIsInstance<LedgerConflict.DualActiveInbound>()
+        assertAll(
+            { assertEquals(Lifecycle.PREPARED, half.lifecycle(p), "the rig left the replacement prepared") },
+            { assertEquals(Lifecycle.ACTIVE, half.lifecycle(a), "beside the active edge") },
+            { assertEquals(listOf(Close(p, runtime("x")), Close(a, runtime("x")), Retire(a, runtime("x")), Retire(p, runtime("x"))), detach) },
+            { assertEquals(detach, removal, "a marker going away takes the same steps") },
+            *(1..2).map { cut ->
+                { assertEquals(listOf(LedgerConflict.DualActiveInbound(runtime("x"))), dualLive(applyClean(detach.take(cut), half)), "cut $cut") }
+            }.toTypedArray(),
+            *(0..detach.size).map { cut ->
+                { assertEquals(detach.drop(cut), pool(marker = 3).detachRuntimeChild(tenants, "x", applyClean(detach.take(cut), half)), "re-detach after cut $cut") }
+            }.toTypedArray(),
+            { assertEquals(emptyList(), applyClean(detach, half).validate()) },
+            { assertEquals(emptyList(), applyClean(removal, half).validate()) },
+        )
+    }
+
+    @Test
+    fun attachAndDetachRefuseAnotherRoot() {
+        val elsewhere = Topology("pool", listOf(Group("tenants", Weight.ONE, listOf(Lane("x")), runtimeChildren = RuntimeChildren(Weight.ONE))))
+        val minted = EntitlementLedger.bootstrap(GroupId("pool"), mapOf(BOOT_HOLDER to BOOT_SUPPLY), "boot")
+        // Another tree's edges with no mint at all: the edges name the root instead.
+        var unminted = EntitlementLedger.ZERO
+        for (record in elsewhere.lower()) unminted = unminted.piece(assertNotNull(unminted.prepare(record)))
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { pool().attachRuntimeChild(tenants, "x", bootFrom(elsewhere), 0) } },
+            { assertFailsWith<IllegalArgumentException> { pool().detachRuntimeChild(tenants, "x", bootFrom(elsewhere)) } },
+            { assertFailsWith<IllegalArgumentException> { pool().attachRuntimeChild(tenants, "x", minted, 0) } },
+            { assertFailsWith<IllegalArgumentException> { pool().attachRuntimeChild(tenants, "x", unminted, 0) } },
+            { assertFailsWith<IllegalArgumentException> { pool().detachRuntimeChild(tenants, "x", unminted) } },
+            // An empty ledger belongs to no tree yet, as for the diff.
+            { assertEquals(2, pool().attachRuntimeChild(tenants, "x", EntitlementLedger.ZERO, 0).size) },
+        )
+    }
+
     @Test
     fun diffLeavesRuntimeChildrenAlone() {
         val ledger = attached(attached(bootFrom(pool()), "c-7f3a"), "x")

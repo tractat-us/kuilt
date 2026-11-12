@@ -49,11 +49,23 @@ public fun Topology.groupId(vararg path: String): GroupId {
  * @throws IllegalArgumentException if [group] does not name a group marked with
  *   [runtimeChildren][Topology.Group.runtimeChildren], or [name] is empty.
  */
-public fun Topology.runtimeChildId(group: List<String>, name: String): GroupId {
+public fun Topology.runtimeChildId(group: List<String>, name: String): GroupId = runtimeChild(group, name).id
+
+/** A runtime child's [id], its [parent] group's id, and the [marker] that group carries. */
+internal class RuntimeChild(val id: GroupId, val parent: GroupId, val marker: Topology.RuntimeChildren)
+
+/**
+ * The runtime child [name] of the group at [group], checked once: [group] names a marked declared
+ * group and [name] is non-empty.
+ *
+ * @throws IllegalArgumentException otherwise, as [Topology.runtimeChildId] documents.
+ */
+internal fun Topology.runtimeChild(group: List<String>, name: String): RuntimeChild {
     require(name.isNotEmpty()) { "a runtime child needs a name" }
     // The root carries no runtime marker, so the path must name a declared group beneath it.
-    require(group.isNotEmpty() && markerAt(group) != null) { "$group is not a group marked for runtime children" }
-    return GroupId(runtimeChildPath(idOf(group), name))
+    val marker = requireNotNull(markerAt(group).takeIf { group.isNotEmpty() }) { "$group is not a group marked for runtime children" }
+    val parent = idOf(group)
+    return RuntimeChild(GroupId(runtimeChildPath(parent, name)), GroupId(parent), marker)
 }
 
 /**
