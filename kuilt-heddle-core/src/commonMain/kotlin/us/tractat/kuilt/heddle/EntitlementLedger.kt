@@ -7,6 +7,7 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * The replicated, conflict-free tally of who was granted what fairness
@@ -169,11 +170,12 @@ import kotlinx.serialization.Serializable
  *
  * ## Equal ledgers encode to equal bytes
  *
- * [piece] builds its maps through a `HashMap` and its record sets with `+`, so iteration order follows
- * the merge history. A `Quilter` hashes this encoding for its anti-entropy root, and two peers whose
- * bytes differ would ship the whole ledger to each other on every round, so every unordered field,
- * at every level, goes through a canonical serializer. A new field must too, and it needs its own
- * arm in `EntitlementLedgerCanonicalEncodingTest`, since no test reds on a field it never writes.
+ * [piece] builds its maps through a `HashMap` (or takes one side's map as it is) and its record sets
+ * with `+`, so iteration order follows the merge history. A `Quilter` hashes this encoding for its
+ * anti-entropy root, and two peers whose bytes differ would ship the whole ledger to each other on
+ * every round, so every unordered field, at every level, goes through a canonical serializer. A new
+ * field must too, and it needs its own arm in `EntitlementLedgerCanonicalEncodingTest`, since no
+ * test reds on a field it never writes.
  *
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerMerge
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerLifecycle
@@ -212,23 +214,58 @@ public class EntitlementLedger private constructor(
     private val transferRelocIn: Map<PathKey, @Serializable(with = CanonicalMapSerializer::class) Map<ReplicaId, GCounter>> = emptyMap(),
     @Serializable(with = CanonicalMapSerializer::class)
     private val transferRelocOut: Map<PathKey, @Serializable(with = CanonicalMapSerializer::class) Map<ReplicaId, GCounter>> = emptyMap(),
+    /** An [EdgeIndex] handed over by [piece]; derived state, see [index]. Never encoded, never compared. */
+    @Transient private val carried: EdgeIndex? = null,
 ) : Quilted<EntitlementLedger> {
 
+    /**
+     * The edge index: who each group's child edges and inbound edges are, which children are not
+     * retired, and the folded net inflow of the ones that are. **Derived state**, a function of
+     * `records`, `lifecycle`, `issued`, `issuedRelocIn` and `returned`: it is never encoded and takes
+     * no part in [equals], so the bytes and the lattice are exactly what they were without it.
+     *
+     * Built on first read, in one pass over `records`, unless [piece] carried one over: a join whose
+     * operand already has its index built derives the result's index from it, touching only the edges
+     * the other operand names. That is what keeps a read after a small patch from paying for the
+     * whole ledger again. A decoded state, or one built through [of], builds its own on first read.
+     */
+    @Transient private val index: Lazy<EdgeIndex> = carried?.let(::lazyOf) ?: lazy { buildIndex() }
+
     /** The join: the componentwise least-upper-bound of `this` and [other]. */
-    override fun piece(other: EntitlementLedger): EntitlementLedger =
+    override fun piece(other: EntitlementLedger): EntitlementLedger {
+        val joined = join(other)
+        // Carry the index from whichever operand has one built, preferring the larger topology so
+        // the edges to revisit are the smaller operand's. Neither built ⇒ the result builds lazily.
+        val mine = index.isInitialized()
+        val theirs = other.index.isInitialized()
+        val base = when {
+            mine && (!theirs || records.size >= other.records.size) -> this
+            theirs -> other
+            else -> return joined
+        }
+        val delta = if (base === this) other else this
+        return joined.withIndex(joined.carryIndex(base, delta))
+    }
+
+    /**
+     * [piece] without the index: the componentwise join of the sixteen lattice components. A
+     * component either side leaves empty is taken from the other side as it is, not copied: every
+     * map here is read-only once built, and a patch touches only a few of the sixteen.
+     */
+    private fun join(other: EntitlementLedger): EntitlementLedger =
         EntitlementLedger(
-            records = records.mergeValues(other.records) { mine, theirs -> mine + theirs },
-            minted = minted.mergeValues(other.minted) { mine, theirs -> maxOf(mine, theirs) },
+            records = records.joinValues(other.records) { mine, theirs -> mine + theirs },
+            minted = minted.joinValues(other.minted) { mine, theirs -> maxOf(mine, theirs) },
             issued = issued.mergeEdgeCounters(other.issued),
             returned = returned.mergeEdgeCounters(other.returned),
             leafSpent = leafSpent.mergeEdgeCounters(other.leafSpent),
             rollupSpent = rollupSpent.mergeEdgeCounters(other.rollupSpent),
-            transfers = transfers.mergeValues(other.transfers) { mine, theirs ->
+            transfers = transfers.joinValues(other.transfers) { mine, theirs ->
                 mine.mergeRows(theirs)
             },
             // The lifecycle max-register: join = max, so CLOSING/RETIRED dominates a
             // laggard's ACTIVE regardless of merge order (design §5.1, §10.10).
-            lifecycle = lifecycle.mergeValues(other.lifecycle) { mine, theirs -> maxOf(mine, theirs) },
+            lifecycle = lifecycle.joinValues(other.lifecycle) { mine, theirs -> maxOf(mine, theirs) },
             // The relocation families are ordinary GCounter maps, so they join exactly as the
             // base counters do — the product-of-lattices argument is unchanged in shape.
             issuedRelocIn = issuedRelocIn.mergeEdgeCounters(other.issuedRelocIn),
@@ -239,16 +276,23 @@ public class EntitlementLedger private constructor(
             // The virtual-time gauge: a per-edge register joined COMPONENTWISE (max floor, max
             // fold) — never lexicographically by floor, which would keep a stale writer's pair
             // whole and reintroduce the double count (#1752, see [Gauge]).
-            gauges = gauges.mergeValues(other.gauges) { mine, theirs -> mine.join(theirs) },
+            gauges = gauges.joinValues(other.gauges) { mine, theirs -> mine.join(theirs) },
             // The transfer relocation pair: the same per-donor-row matrix `transfers` is, joined by
             // the same rule, so the product-of-lattices argument covers them unchanged.
-            transferRelocIn = transferRelocIn.mergeValues(other.transferRelocIn) { mine, theirs ->
+            transferRelocIn = transferRelocIn.joinValues(other.transferRelocIn) { mine, theirs ->
                 mine.mergeRows(theirs)
             },
-            transferRelocOut = transferRelocOut.mergeValues(other.transferRelocOut) { mine, theirs ->
+            transferRelocOut = transferRelocOut.joinValues(other.transferRelocOut) { mine, theirs ->
                 mine.mergeRows(theirs)
             },
         )
+
+    /** These same sixteen components, carrying [index] as already built. */
+    private fun withIndex(index: EdgeIndex): EntitlementLedger = EntitlementLedger(
+        records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
+        issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
+        transferRelocIn, transferRelocOut, carried = index,
+    )
 
     // ─────────────────────────────────────────────────────────────────────────
     // Effective counter reads — base ± relocation. Derived, never stored; the only
@@ -301,10 +345,8 @@ public class EntitlementLedger private constructor(
      * not collapsed, and their reconciliation is a later concern.
      */
     public fun activeChildren(parent: GroupId): List<EdgeSummary> =
-        records
-            .filter { (id, recs) -> recs.any { it.parent == parent } && lifecycleOf(id) == Lifecycle.ACTIVE }
-            .keys
-            .sorted()
+        index.value.unretired[parent].orEmpty()
+            .filter { lifecycleOf(it) == Lifecycle.ACTIVE }
             .mapNotNull { edge(it) }
 
     /**
@@ -463,7 +505,7 @@ public class EntitlementLedger private constructor(
         var cur = group
         while (true) {
             if (!seen.add(cur)) return LineageWalk(edges = null, onCycle = cur == group) // cycle
-            val inboundIds = records.filter { (_, recs) -> recs.any { it.child == cur } }.keys
+            val inboundIds = index.value.inbound[cur].orEmpty()
             if (inboundIds.isEmpty()) break // reached the root
             val liveInbound = inboundIds.filter { isLiveEdge(it) }
             if (liveInbound.isEmpty()) return LineageWalk.QUARANTINED // no live path to the root
@@ -486,11 +528,138 @@ public class EntitlementLedger private constructor(
      * *deflation*: the authority is frozen, never created (a double-spend the sum-wise
      * check alone would miss).
      */
-    private fun childEdges(group: GroupId): List<AttachmentId> =
-        records.filter { (_, recs) -> recs.any { it.parent == group } }.keys.sorted()
+    private fun childEdges(group: GroupId): List<AttachmentId> = index.value.children[group].orEmpty()
 
     /** True when [group] has no child edges — the only groups at which service may be spent. */
     public fun isLeaf(group: GroupId): Boolean = childEdges(group).isEmpty()
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // The edge index — derived, never stored (see [index])
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Every parent any record under [e] names; more than one only for a divergent edge. */
+    private fun parentsOf(e: AttachmentId): Set<GroupId> = records[e]?.mapTo(HashSet()) { it.parent }.orEmpty()
+
+    /** Every child any record under [e] names. */
+    private fun childGroupsOf(e: AttachmentId): Set<GroupId> = records[e]?.mapTo(HashSet()) { it.child }.orEmpty()
+
+    private fun isRetired(e: AttachmentId): Boolean = lifecycle[e] == Lifecycle.RETIRED
+
+    /**
+     * `effIssued(e)[r] − returned(e)[r]` for every replica with a slot on [e], exact in 128 bits and
+     * zero entries dropped: what a retired [e] contributes to its parents' fold.
+     */
+    private fun inflowOf(e: AttachmentId): Map<ReplicaId, Int128> {
+        val replicas = HashSet<ReplicaId>()
+        issued[e]?.replicas()?.let(replicas::addAll)
+        issuedRelocIn[e]?.replicas()?.let(replicas::addAll)
+        returned[e]?.replicas()?.let(replicas::addAll)
+        val out = HashMap<ReplicaId, Int128>()
+        for (r in replicas) {
+            val v = WideSum()
+            v.add(slot(issued, e, r))
+            v.add(slot(issuedRelocIn, e, r))
+            v.sub(slot(returned, e, r))
+            val exact = v.toInt128()
+            if (exact != Int128.ZERO) out[r] = exact
+        }
+        return out
+    }
+
+    /** The whole index, from scratch: one pass over `records`, then one over each parent's children. */
+    private fun buildIndex(): EdgeIndex {
+        val children = HashMap<GroupId, MutableList<AttachmentId>>()
+        val inbound = HashMap<GroupId, MutableList<AttachmentId>>()
+        for (e in records.keys) {
+            for (p in parentsOf(e)) children.getOrPut(p) { ArrayList() }.add(e)
+            for (c in childGroupsOf(e)) inbound.getOrPut(c) { ArrayList() }.add(e)
+        }
+        children.values.forEach { it.sort() }
+        inbound.values.forEach { it.sort() }
+        val unretired = HashMap<GroupId, List<AttachmentId>>()
+        val folds = HashMap<GroupId, HashMap<ReplicaId, WideSum>>()
+        for ((p, edges) in children) {
+            val live = edges.filterNot(::isRetired)
+            if (live.isNotEmpty()) unretired[p] = live
+            for (e in edges) {
+                if (!isRetired(e)) continue
+                for ((r, v) in inflowOf(e)) folds.getOrPut(p) { HashMap() }.getOrPut(r) { WideSum() }.add(v)
+            }
+        }
+        return EdgeIndex(children, inbound, unretired, folds.settle(emptyMap()))
+    }
+
+    /**
+     * This joined state's index, derived from [base]'s built one. An edge [delta] does not name has
+     * the same records, lifecycle and counters in the join as in [base], so only [delta]'s edges are
+     * revisited, and only the groups they touch are copied. Every other entry is shared with
+     * [base]'s index, and when nothing changed the index itself is.
+     *
+     * Records only grow and RETIRED is the top of a max-register, so an edge is only ever added
+     * under a group and only ever leaves the non-retired list. A retired edge's counters can still
+     * move (a relocation drains `returned` on a dead edge, a late patch lands), so its fold term is
+     * taken out at [base]'s value and put back at the join's.
+     */
+    private fun carryIndex(base: EntitlementLedger, delta: EntitlementLedger): EdgeIndex {
+        val from = base.index.value
+        val touched = HashSet<AttachmentId>()
+        touched.addAll(delta.records.keys)
+        touched.addAll(delta.lifecycle.keys)
+        touched.addAll(delta.issued.keys)
+        touched.addAll(delta.issuedRelocIn.keys)
+        touched.addAll(delta.returned.keys)
+
+        val childAdds = HashMap<GroupId, MutableList<AttachmentId>>()
+        val inboundAdds = HashMap<GroupId, MutableList<AttachmentId>>()
+        val liveAdds = HashMap<GroupId, MutableList<AttachmentId>>()
+        val liveRemoves = HashMap<GroupId, MutableSet<AttachmentId>>()
+        val foldDeltas = HashMap<GroupId, HashMap<ReplicaId, WideSum>>()
+        for (e in touched) {
+            val oldParents = base.parentsOf(e)
+            val newParents = parentsOf(e)
+            for (p in newParents) if (p !in oldParents) childAdds.getOrPut(p) { ArrayList() }.add(e)
+            val oldChildren = base.childGroupsOf(e)
+            for (c in childGroupsOf(e)) if (c !in oldChildren) inboundAdds.getOrPut(c) { ArrayList() }.add(e)
+
+            val wasRetired = base.isRetired(e)
+            val nowRetired = isRetired(e)
+            for (p in newParents) {
+                val wasLive = p in oldParents && !wasRetired
+                if (!nowRetired && !wasLive) liveAdds.getOrPut(p) { ArrayList() }.add(e)
+                if (nowRetired && wasLive) liveRemoves.getOrPut(p) { HashSet() }.add(e)
+            }
+            if (wasRetired) {
+                val old = base.inflowOf(e)
+                for (p in oldParents) for ((r, v) in old) foldDeltas.getOrPut(p) { HashMap() }.getOrPut(r) { WideSum() }.sub(v)
+            }
+            if (nowRetired) {
+                val now = inflowOf(e)
+                for (p in newParents) for ((r, v) in now) foldDeltas.getOrPut(p) { HashMap() }.getOrPut(r) { WideSum() }.add(v)
+            }
+        }
+
+        val children = from.children.withSortedAdds(childAdds)
+        val inbound = from.inbound.withSortedAdds(inboundAdds)
+        val unretired = if (liveAdds.isEmpty() && liveRemoves.isEmpty()) {
+            from.unretired
+        } else {
+            HashMap(from.unretired).apply {
+                for (p in liveAdds.keys + liveRemoves.keys) {
+                    val removes = liveRemoves[p].orEmpty()
+                    val kept = get(p).orEmpty().filterNot { it in removes }
+                    val next = mergeSorted(kept, liveAdds[p].orEmpty())
+                    if (next.isEmpty()) remove(p) else put(p, next)
+                }
+            }
+        }
+        val retiredOutflow = foldDeltas.settle(from.retiredOutflow)
+        if (children === from.children && inbound === from.inbound && unretired === from.unretired &&
+            retiredOutflow === from.retiredOutflow
+        ) {
+            return from
+        }
+        return EdgeIndex(children, inbound, unretired, retiredOutflow)
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // holdings — spendable authority, derived, never stored (design §4.2)
@@ -519,18 +688,34 @@ public class EntitlementLedger private constructor(
      * quarantined (see [lineageEdges]) this returns `0` — quarantine is transitive
      * down the path (design §4.6). May be negative (a real overspell net; see
      * [LedgerConflict.PersistentNegativeHoldings]).
+     *
+     * ## Retired children are folded, not skipped
+     *
+     * The child sum runs over every child edge [group] ever had, and a retired one stays in it: a
+     * served child retires with `issued − returned = spent > 0`, and that spend left this group.
+     * The non-retired children are summed here; the retired ones come pre-summed from the [index]'s
+     * per-parent fold, so a group with fifty thousand retired children pays for none of them.
+     *
+     * The sum is kept in 128 bits and narrowed once, at the end. Wherever the old term-by-term
+     * `checkedAdd`/`checkedSub` sum returned a value, this returns the same one. It now throws on
+     * fewer states: a partial sum that leaves `Long` no longer throws, and neither does a retired
+     * child's own term, which the fold keeps exactly. What still throws is a result that does not
+     * fit a `Long`, and an overflow inside one of the other terms (the inbound credit, the transfer
+     * net, a non-retired child's net inflow, the leaf spend). Never a silent wrap (§10.12).
      */
     public fun holdings(group: GroupId, r: ReplicaId): Long {
         val lineage = lineageEdges(group) ?: return 0L
         val f = lineage.lastOrNull()
         val pathKey = if (f == null) PathKey.ROOT else PathKey.of(f)
         val creditIn = if (f == null) mintedHeldBy(group, r) else netInflow(f, r)
-        var acc = checkedAdd(creditIn, transferNet(pathKey, r))
-        for (c in childEdges(group)) {
-            acc = checkedSub(acc, netInflow(c, r))
-        }
-        if (f != null) acc = checkedSub(acc, effLeafSpentSlot(f, r))
-        return acc
+        val idx = index.value
+        val acc = WideSum()
+        acc.add(creditIn)
+        acc.add(transferNet(pathKey, r))
+        for (c in idx.unretired[group].orEmpty()) acc.sub(netInflow(c, r))
+        idx.retiredOutflow[group]?.get(r)?.let(acc::sub)
+        if (f != null) acc.sub(effLeafSpentSlot(f, r))
+        return acc.toLongExact()
     }
 
     /** `effIssued(edge)[r] − returned(edge)[r]` — [r]'s net inflow across one edge. */
@@ -1545,8 +1730,23 @@ public class EntitlementLedger private constructor(
      * prepared/retired is quarantined (holdings `0`) but *silent* — that is the normal window
      * of an honest reshape, and flagging it would fire on healthy traffic. It is the standing
      * exception to §10.11's quarantine ⟺ report correspondence (see [lineageEdges]).
+     *
+     * **It never reads a carried [index].** The report is derived on a copy of this state whose
+     * index is built from scratch, so a defect in how [piece] carries an index cannot hide from
+     * the diagnostic that would show it. The build is one pass over `records`, small next to the
+     * per-group, per-replica holdings loop below.
      */
-    public fun validate(): List<LedgerConflict> {
+    public fun validate(): List<LedgerConflict> = withFreshIndex().diagnose()
+
+    /** These same sixteen components, with no index carried: the copy builds its own on first read. */
+    private fun withFreshIndex(): EntitlementLedger = EntitlementLedger(
+        records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
+        issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
+        transferRelocIn, transferRelocOut,
+    )
+
+    /** The body of [validate], run on [withFreshIndex]'s copy. */
+    private fun diagnose(): List<LedgerConflict> {
         val conflicts = ArrayList<LedgerConflict>()
         for (e in allEdges()) {
             val effLeaf = effLeafSpentTotal(e)
@@ -1753,11 +1953,17 @@ public class EntitlementLedger private constructor(
      * fork silently quarantined with an empty `validate()`.
      */
     private fun liveInboundCount(group: GroupId): Int =
-        records.count { (id, recs) -> recs.any { it.child == group } && isLiveEdge(id) }
+        index.value.inbound[group].orEmpty().count { isLiveEdge(it) }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Enumeration + test-support accessors (internal — used by validate and tests)
     // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Whether this state's index is built, by a read or carried over by [piece]. Test support: it
+     * lets a property test count the histories in which a carry was actually taken.
+     */
+    internal fun isIndexBuilt(): Boolean = index.isInitialized()
 
     /** The record set under [id] (empty if unknown) — [HeddleInternalApi], test support. */
     internal fun recordsOf(id: AttachmentId): Set<AttachmentRecord> = records[id] ?: emptySet()
@@ -1778,12 +1984,10 @@ public class EntitlementLedger private constructor(
      */
     @HeddleInternalApi
     public fun liveInboundEdges(child: GroupId): List<AttachmentId> =
-        allEdges()
-            .filter { e ->
-                recordOf(e)?.child == child &&
-                    lifecycleOf(e).let { it == Lifecycle.ACTIVE || it == Lifecycle.CLOSING }
-            }
-            .sorted()
+        index.value.inbound[child].orEmpty().filter { e ->
+            recordOf(e)?.child == child &&
+                lifecycleOf(e).let { it == Lifecycle.ACTIVE || it == Lifecycle.CLOSING }
+        }
 
     /**
      * The **RETIRED inbound** edges of [child] — every non-divergent edge whose record targets [child]
@@ -1793,7 +1997,7 @@ public class EntitlementLedger private constructor(
      */
     @HeddleInternalApi
     public fun retiredInboundEdges(child: GroupId): List<AttachmentId> =
-        allEdges().filter { recordOf(it)?.child == child && lifecycleOf(it) == Lifecycle.RETIRED }.sorted()
+        index.value.inbound[child].orEmpty().filter { recordOf(it)?.child == child && lifecycleOf(it) == Lifecycle.RETIRED }
 
     /** The edge ids carrying a base `issued` slot — the control plane's reconciliation witness-shape gate. */
     @HeddleInternalApi
@@ -2003,6 +2207,23 @@ public class EntitlementLedger private constructor(
             "leafRelocIn=$leafRelocIn, leafRelocOut=$leafRelocOut, " +
             "rollupRelocIn=$rollupRelocIn, rollupRelocOut=$rollupRelocOut, gauges=$gauges, " +
             "transferRelocIn=$transferRelocIn, transferRelocOut=$transferRelocOut)"
+
+    /**
+     * The derived topology [index] holds. Every list is sorted by [AttachmentId] and every map is
+     * read-only once built; an [EdgeIndex] is shared between ledger states, never copied.
+     *
+     * @property children every edge any of whose records names the group as parent, retired included.
+     * @property inbound every edge any of whose records names the group as child.
+     * @property unretired the [children] whose lifecycle is not [Lifecycle.RETIRED].
+     * @property retiredOutflow per parent and replica, `Σ effIssued − returned` over the retired
+     *   [children], exact. Zero entries are absent.
+     */
+    private class EdgeIndex(
+        val children: Map<GroupId, List<AttachmentId>>,
+        val inbound: Map<GroupId, List<AttachmentId>>,
+        val unretired: Map<GroupId, List<AttachmentId>>,
+        val retiredOutflow: Map<GroupId, Map<ReplicaId, Int128>>,
+    )
 
     public companion object {
         /** The empty ledger: no topology, no supply, no accounting. The lattice bottom. */
@@ -2243,10 +2464,73 @@ private class PendingRow(
     val amount: Long,
 )
 
+/** This map with each group's [adds] merged into its sorted list; `this` itself when there are none. */
+private fun Map<GroupId, List<AttachmentId>>.withSortedAdds(
+    adds: Map<GroupId, List<AttachmentId>>,
+): Map<GroupId, List<AttachmentId>> {
+    if (adds.isEmpty()) return this
+    val out = HashMap<GroupId, List<AttachmentId>>(this)
+    for ((group, added) in adds) out[group] = mergeSorted(this[group].orEmpty(), added)
+    return out
+}
+
+/** [sorted] and [added] as one sorted list. [added] need not be sorted and must not overlap [sorted]. */
+private fun mergeSorted(sorted: List<AttachmentId>, added: List<AttachmentId>): List<AttachmentId> {
+    if (added.isEmpty()) return sorted
+    val extra = added.sorted()
+    val out = ArrayList<AttachmentId>(sorted.size + extra.size)
+    var i = 0
+    var j = 0
+    while (i < sorted.size && j < extra.size) {
+        if (sorted[i] <= extra[j]) out.add(sorted[i++]) else out.add(extra[j++])
+    }
+    while (i < sorted.size) out.add(sorted[i++])
+    while (j < extra.size) out.add(extra[j++])
+    return out
+}
+
+/**
+ * [prior] with these per-group, per-replica deltas applied, zero entries dropped. Returns [prior]
+ * itself when every delta nets to zero, so an unchanged fold is shared rather than copied.
+ */
+private fun Map<GroupId, Map<ReplicaId, WideSum>>.settle(
+    prior: Map<GroupId, Map<ReplicaId, Int128>>,
+): Map<GroupId, Map<ReplicaId, Int128>> {
+    var out: HashMap<GroupId, Map<ReplicaId, Int128>>? = null
+    for ((group, deltas) in this) {
+        val before = prior[group].orEmpty()
+        var row: HashMap<ReplicaId, Int128>? = null
+        for ((r, d) in deltas) {
+            val change = d.toInt128()
+            if (change == Int128.ZERO) continue
+            val target = row ?: HashMap(before)
+            row = target
+            val next = (target[r] ?: Int128.ZERO) + change
+            if (next == Int128.ZERO) target.remove(r) else target[r] = next
+        }
+        if (row == null) continue
+        val target = out ?: HashMap(prior)
+        out = target
+        if (row.isEmpty()) target.remove(group) else target[group] = row
+    }
+    return out ?: prior
+}
+
+/**
+ * [mergeValues], except that an empty side returns the other side itself rather than a copy of it.
+ * Sound only because a ledger never mutates a map once it holds it.
+ */
+private inline fun <K, V> Map<K, V>.joinValues(other: Map<K, V>, combine: (mine: V, theirs: V) -> V): Map<K, V> =
+    when {
+        other.isEmpty() -> this
+        isEmpty() -> other
+        else -> mergeValues(other, combine)
+    }
+
 private fun Map<AttachmentId, GCounter>.mergeEdgeCounters(
     other: Map<AttachmentId, GCounter>,
-): Map<AttachmentId, GCounter> = mergeValues(other) { mine, theirs -> mine.piece(theirs) }
+): Map<AttachmentId, GCounter> = joinValues(other) { mine, theirs -> mine.piece(theirs) }
 
 private fun Map<ReplicaId, GCounter>.mergeRows(
     other: Map<ReplicaId, GCounter>,
-): Map<ReplicaId, GCounter> = mergeValues(other) { mine, theirs -> mine.piece(theirs) }
+): Map<ReplicaId, GCounter> = joinValues(other) { mine, theirs -> mine.piece(theirs) }

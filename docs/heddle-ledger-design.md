@@ -206,9 +206,20 @@ holdings(group, r) =
 
 Every subtracted term reads a slot **only `r` writes**, so `r`'s local `null`-check is
 sound with zero coordination (the `BoundedCounter` exclusive-slot discipline, per path).
-Cost O(fan-out) — asymptotically free next to the EEVDF selection loop, which already scans
-every child `EdgeSummary` per pick (so candidate B's stored-aggregate optimization was
-rejected as buying ~nothing).
+
+**Retired children are pre-summed in a derived index (#3173, Task L0).** A child edge stays in
+`childEdges(group)` after it retires, and its net inflow is its spend, so the sum cannot skip
+it. The fan-out is not free once retired history builds up. At 5,000 active and 50,000 retired
+children, `holdings(lane)` took 7.4 ms on JVM and 165 ms on macOS debug while it scanned every
+edge. With the index it takes 112 µs and 1.7 ms. The ledger keeps the retired children's net
+inflow pre-summed per parent and replica in an index that is **derived and never replicated**:
+it is recomputed from this state's own slots, never encoded, and outside `equals`. The
+non-retired children are still summed one by one. That is why it is not candidate B (see *How
+this was chosen*). B's aggregates were stored lattice slots, shipped in patches, so under honest
+partial delivery they drifted from the sum they defined. This one cannot drift: every state
+derives it from the very slots it sums.
+`validate()` builds its own copy from scratch, so a defect in how `piece` carries the index
+forward cannot hide from the diagnostic.
 
 **Quarantine — narrower than "in the `validate()` conflict set".** An earlier draft of this
 section said `holdings` returns 0 whenever any edge on `group`'s lineage appears in the
@@ -254,7 +265,9 @@ mixed-version pair of peers cannot exchange a mint, and a persisted log or snaps
 older version does not decode. The version handling that implies is a deliberate human call.
 
 `edge(id) = EdgeSummary(effIssued(id), returned(id).value, effLeafSpent(id)+effRollupSpent(id))`
-— a per-edge read, at effective values. `activeChildren(g)` = summaries of `childEdges(g)`.
+— a per-edge read, at effective values. `activeChildren(g)` = summaries of the
+`ACTIVE` edges among `childEdges(g)`, sorted by id. Prepared, closing and retired
+children are not scheduling candidates.
 
 ## `validate(): List<LedgerConflict>` (fix 3)
 
