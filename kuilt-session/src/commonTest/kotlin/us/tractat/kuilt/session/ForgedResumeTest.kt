@@ -289,6 +289,26 @@ class ForgedResumeTest {
             }
         }
 
+    /** A host that leaves drops every secret with its roster, so none outlives the room. */
+    @Test
+    fun `a host that leaves drops every members secret`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val loom = InMemoryLoom()
+            val host = factory(loom, ObservedController()).host(Pattern("Host"), memberName = "Host") as SeamRoom
+            val member = factory(loom).join(InMemoryTag("Member"), memberName = "Member")
+            host.roster.first { it.size == 1 }
+            try {
+                val held = host.heldResumeSecretCount()
+                host.leave()
+                assertAll(
+                    { assertEquals(1, held, "precondition: the admitted member's secret is held") },
+                    { assertEquals(0, host.heldResumeSecretCount(), "a host that leaves must hold no secret") },
+                )
+            } finally {
+                member.leave()
+            }
+        }
+
     /**
      * A token naming another room is refused by the room itself, so even a hold policy that skips
      * the room-id check never sees it (#3165 review). Before, the room let a wrong-room token past
