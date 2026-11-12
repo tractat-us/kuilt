@@ -8,6 +8,21 @@ package us.tractat.kuilt.heddle
  * [Retire] whose edge still has work outstanding — the interpreter stops that child's later steps,
  * and the retires of its ancestors in the same removal, and carries on with every other child.
  * Asking [Topology.diff] again later lists what is left.
+ *
+ * **What an interpreter must hold to.** Three contracts the list cannot enforce on its own:
+ *
+ *  - **The steps are valid only against the ledger they were computed from.** Work charged
+ *    between the diff and the apply can make a [Reconcile] necessary that the list does not hold:
+ *    diff an internal group's reweight, serve seven units beneath it, apply the stale list, and
+ *    the group's holdings read `-7` with a [LedgerConflict.PersistentNegativeHoldings]. So diff and
+ *    apply under one lock, or diff again after any traffic.
+ *  - **Keep the list's order across children.** Re-entrance holds for a prefix of the list, with a
+ *    refused child's later steps skipped. Running one child's steps ahead of another's is not a
+ *    prefix, and a later diff numbers the prepares still to come at a higher generation.
+ *  - **[Reconcile] is licensed by a single writer**, and by one precondition: no open reservation's
+ *    captured path runs through an edge of the retired strand. The move drains those edges, and a
+ *    straggling charge against one afterwards leaves a conflict nothing repairs. An interpreter
+ *    moves open reservations off the old path before it retires the edge.
  */
 public sealed interface TopologyStep {
 
@@ -39,6 +54,10 @@ public sealed interface TopologyStep {
      * Move what [child]'s retired edges still account for onto its new inbound edge. An internal
      * group's children were charged through its old edge, and without this its new edge starts
      * owing them: its holdings read negative and the ledger reports a conflict.
+     *
+     * Only retired edges from the live edge's parent move. A strand under another parent stays
+     * where it is, since moving it would hand that parent authority nobody gave it. The move needs
+     * a single writer and no open reservation on the strand; see [TopologyStep].
      */
     public data class Reconcile(override val child: GroupId) : TopologyStep
 }
@@ -80,8 +99,12 @@ public sealed interface TopologyStep {
  *
  * @param generation a counter, `>= 0`, for the edges this diff prepares. It is raised past every
  *   generation the ledger holds, so a caller that lost its counter still never reuses an id.
- * @throws IllegalArgumentException if [ledger] was minted at a different root — a change of root
- *   is not a reload — or if [generation] is negative.
+ * The list is valid only against this [ledger], and an interpreter applies it in order, under the
+ * same lock as the diff. The contracts are on [TopologyStep].
+ *
+ * @throws IllegalArgumentException if [ledger] belongs to another root — minted at one, or holding
+ *   edges in this grammar and none under [new]'s root — since a change of root is not a reload; or
+ *   if [generation] is negative.
  * @sample us.tractat.kuilt.heddle.sampleTopologyDiff
  */
 public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, generation: Long): List<TopologyStep> {
@@ -91,6 +114,13 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
     require(minted.all { it == root }) {
         "the ledger was minted at ${minted.joinToString { it.value }}, not ${root.value}: a change of root is not a diff"
     }
+    // An unminted ledger has no mint to name its root, so its edges have to.
+    val treeRoots = ledger.allEdges().filter { generationOf(it) != null }
+        .mapNotNull { pathOf(GroupId(it.value.substringBefore('@')))?.names?.first() }
+        .distinct().sorted()
+    require(treeRoots.isEmpty() || new.root in treeRoots) {
+        "the ledger holds a tree under ${treeRoots.joinToString()}, not ${new.root}: a change of root is not a diff"
+    }
 
     val desired = new.declaredChildren()
     val edgesByChild = ledger.ownedEdges(new.root).groupBy { it.record.child }
@@ -98,6 +128,7 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
     val children = (desired.map { it.child } + edgesByChild.keys).distinct().sorted()
     val adoptedByChild = desired.mapNotNull { want -> edgesByChild[want.child].orEmpty().adoptable(want)?.let { want.child to it } }.toMap()
     val prepareGeneration = prepareGeneration(generation, ledger, adoptedByChild.values)
+    val parents = ledger.parentsWithChildEdges()
 
     val planned = ArrayList<Planned>()
     for (child in children) {
@@ -120,7 +151,10 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
             val phase = if (others.isEmpty()) Phase.FRESH_ACTIVATE else Phase.REPLACEMENT_ACTIVATE
             planned += Planned(phase, TopologyStep.Activate(target, child))
         }
-        val internal = want.group || !ledger.isLeaf(child)
+        // Any child edge, in any lifecycle: the set `holdings` subtracts from this group, which is
+        // what reads negative without the move. Read directly, not through `isLeaf`, whose meaning
+        // is a scheduling question and may change.
+        val internal = want.group || child in parents
         if (internal && others.isNotEmpty() && ledger.strandRelocation(target, others.map { it.id }) !is Relocation.Nothing) {
             planned += Planned(Phase.RECONCILE, TopologyStep.Reconcile(child))
         }
@@ -129,15 +163,29 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
 }
 
 /**
- * Re-home what [child]'s retired inbound edges still account for onto its one live inbound edge:
- * the repair a [TopologyStep.Reconcile] names. [Relocation.Nothing] when there is nothing left to
- * move, so applying it twice is harmless.
+ * Re-home what [child]'s retired inbound edges from the live edge's parent still account for onto
+ * its one live inbound edge: the repair a [TopologyStep.Reconcile] names. [Relocation.Nothing] when
+ * there is nothing left to move, so applying it twice is harmless.
+ *
+ * The same-parent gate is the governed `reconcile`'s (#1916): a move conserves only within one
+ * parent, whose subtraction of the strand falls exactly as the child's credit rises. Across parents
+ * the old one would gain spendable authority and the new one would owe it. The governed path
+ * refuses the whole move when any retired edge hangs off another parent. This one leaves those
+ * edges standing and moves the rest: a diff never retires an edge across parents, because a
+ * reparent is a new child, so a foreign edge here was written by someone else, and refusing would
+ * strand the edges the diff did retire.
  */
 internal fun EntitlementLedger.reconcileLocally(child: GroupId): Relocation {
     val live = liveInboundEdges(child).singleOrNull()
         ?: return Relocation.Refused("${child.value} has no single live inbound edge to re-home onto")
-    return strandRelocation(live, retiredInboundEdges(child))
+    val parent = record(live)?.parent
+        ?: return Relocation.Refused("${child.value}'s live edge ${live.value} has no single record")
+    return strandRelocation(live, retiredInboundEdges(child).filter { record(it)?.parent == parent })
 }
+
+/** Every group some edge names as its parent, in any lifecycle, divergent records included. */
+private fun EntitlementLedger.parentsWithChildEdges(): Set<GroupId> =
+    allEdges().flatMapTo(HashSet()) { edge -> recordsOf(edge).map { it.parent } }
 
 /**
  * The move of [strand]'s accounts onto [live], read from this ledger as its single writer.

@@ -298,9 +298,81 @@ class TopologyDiffTest {
     fun differentRootsAreRejected() {
         val ledger = bootFrom(fairness())
         val moved = assertFailsWith<IllegalArgumentException> { Topology.diff(fairness().copy(root = "pool"), ledger, generation = 0) }
+        // An unminted ledger names its root only through its edges, and those count too.
+        val unminted = applyAll(Topology.diff(fairness(), EntitlementLedger.ZERO, 0), EntitlementLedger.ZERO).ledger
+        val bare = assertFailsWith<IllegalArgumentException> { Topology.diff(fairness().copy(root = "pool"), unminted, generation = 0) }
         assertAll(
             { assertTrue("pool" in moved.message.orEmpty() && "root" in moved.message.orEmpty(), moved.message) },
+            { assertTrue("pool" in bare.message.orEmpty() && "root" in bare.message.orEmpty(), bare.message) },
+            { assertEquals(emptyList(), unminted.mintedRoots()) },
+            { assertEquals(emptyList(), Topology.diff(fairness(), unminted, generation = 0)) },
             { assertFailsWith<IllegalArgumentException> { Topology.diff(fairness(), ledger, generation = -1) } },
+        )
+    }
+
+    @Test
+    fun reconcileLeavesARetiredEdgeFromAnotherParentStanding() {
+        // Hand-written history the diff never writes: acme hung off hobby for a while, through an
+        // edge outside the grammar, and work was charged beneath it.
+        val foreign = AttachmentRecord(e("x#1"), hobby, acme, Weight.ONE)
+        var ledger = assertNotNull(delegateDown(bootFrom(fairness()), hobby, 5))
+        for (patch in listOf(
+            { l: EntitlementLedger -> l.prepare(foreign) },
+            { l: EntitlementLedger -> l.close(e("root/acme@3:1#0")) },
+            { l: EntitlementLedger -> l.retire(e("root/acme@3:1#0")) },
+            { l: EntitlementLedger -> l.activate(foreign.id) },
+            { l: EntitlementLedger -> l.delegate(BOOT_HOLDER, foreign.id, 3) },
+            { l: EntitlementLedger -> l.delegate(BOOT_HOLDER, e("root/acme/batch@1:1#0"), 3) },
+            { l: EntitlementLedger -> l.spend(BOOT_HOLDER, batch, 3) },
+            { l: EntitlementLedger -> l.close(foreign.id) },
+            { l: EntitlementLedger -> l.retire(foreign.id) },
+        )) {
+            ledger = ledger.piece(assertNotNull(patch(ledger)))
+        }
+        val applied = applyAll(Topology.diff(fairness(), ledger, generation = 0), ledger)
+        val live = applied.ledger.liveInto(acme).single()
+        val ungated = applied.ledger.relocationPatch(live, applied.ledger.retiredInboundEdges(acme).associateWith { applied.ledger.baseFinalsOn(it) })
+        assertAll(
+            // The rig: the foreign strand is real, and moving it would move something.
+            { assertEquals(listOf(e("root/acme@3:1#0"), foreign.id), applied.ledger.retiredInboundEdges(acme)) },
+            { assertIs<Relocation.Moved>(ungated) },
+            // Moving it would credit hobby with three units nobody gave it back.
+            { assertEquals(emptyList(), applied.reconciled) },
+            { assertIs<Relocation.Nothing>(applied.ledger.reconcileLocally(acme)) },
+            { assertEquals(2L, applied.ledger.holdings(hobby, BOOT_HOLDER)) },
+        )
+    }
+
+    @Test
+    fun aGroupTurnedIntoALaneWithAReweightIsReconciled() {
+        val delegated = assertNotNull(delegateDown(bootFrom(fairness()), hobbyDefault, 7))
+        val ledger = delegated.piece(assertNotNull(delegated.spend(BOOT_HOLDER, hobbyDefault, 7)))
+        val target = Topology("root", listOf(fairness().children.first(), Lane("hobby", Weight.of(2))))
+        val steps = Topology.diff(target, ledger, generation = 1)
+        val applied = applyAll(steps, ledger)
+        val unreconciled = applyAll(steps.filter { it !is Reconcile }, ledger).ledger
+        assertAll(
+            {
+                assertEquals(
+                    listOf(
+                        Prepare(record("root/hobby@2:1#1", hobby, 2)),
+                        Close(e("root/hobby@1:1#0"), hobby),
+                        Close(e("root/hobby/default@1:1#0"), hobbyDefault),
+                        Retire(e("root/hobby/default@1:1#0"), hobbyDefault),
+                        Retire(e("root/hobby@1:1#0"), hobby),
+                        Activate(e("root/hobby@2:1#1"), hobby),
+                        Reconcile(hobby),
+                    ),
+                    steps,
+                )
+            },
+            // The rig: a lane now, but its retired child edge still counts against it.
+            { assertEquals(-7L, unreconciled.holdings(hobby, BOOT_HOLDER)) },
+            { assertTrue(unreconciled.validate().any { it is LedgerConflict.PersistentNegativeHoldings }) },
+            { assertEquals(listOf(hobby), applied.reconciled) },
+            { assertEquals(0L, applied.ledger.holdings(hobby, BOOT_HOLDER)) },
+            { assertEquals(emptyList(), applied.ledger.validate()) },
+            { assertEquals(emptyList(), Topology.diff(target, applied.ledger, generation = 1)) },
         )
     }
 

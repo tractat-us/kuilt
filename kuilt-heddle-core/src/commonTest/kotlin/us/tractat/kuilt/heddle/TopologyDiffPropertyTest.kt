@@ -109,6 +109,8 @@ class TopologyDiffPropertyTest {
         var midDrain = 0
         var refusals = 0
         var moved = 0
+        var cuts = 0
+        var cutsWithRefusal = 0
         var loops = 0
         for (seed in 0 until seeds) {
             val r = Random(seed)
@@ -119,24 +121,30 @@ class TopologyDiffPropertyTest {
                 target = mutate(target, r)
                 // A change that arrives while an earlier one is still draining.
                 if (ledger.hasOutstandingClosingEdge()) midDrain++
-                val steps = Topology.diff(target, ledger, generation = r.nextLong(0, 3))
+                val generation = r.nextLong(0, 3)
+                val steps = Topology.diff(target, ledger, generation)
                 tally.count(steps, ledger, target)
+                // Re-entrance with refusals: apply a prefix the way the interpreter does, skipping a
+                // refused child's later steps, and the diff is exactly the steps it did not apply.
+                for (cut in 0..steps.size) {
+                    val partial = applyAll(steps.take(cut), ledger)
+                    val rest = steps.filterIndexed { i, _ -> i !in partial.applied }
+                    val again = Topology.diff(target, partial.ledger, generation)
+                    if (again != rest) failures += "seed $seed cut $cut: $again != $rest"
+                    if (partial.applied.size < cut) cutsWithRefusal++
+                    cuts++
+                }
                 val applied = applyAll(steps, ledger)
                 refusals += applied.refused.size
                 moved += applied.reconciled.size
                 ledger = applied.ledger
                 if (r.nextBoolean()) ledger = drainAll(ledger)
             }
+            // Drained, one diff finishes the job: nothing is refused and nothing is left over.
             ledger = drainAll(ledger)
-            repeat(3) {
-                val steps = Topology.diff(target, ledger, generation = 0)
-                if (steps.isNotEmpty()) {
-                    val applied = applyAll(steps, ledger)
-                    moved += applied.reconciled.size
-                    ledger = applied.ledger
-                }
-            }
-            failures += checkConverged(seed, target, ledger, refused = emptyList())
+            val last = applyAll(Topology.diff(target, ledger, generation = 0), ledger)
+            moved += last.reconciled.size
+            failures += checkConverged(seed, target, last.ledger, last.refused)
             loops++
         }
         assertAll(
@@ -148,6 +156,10 @@ class TopologyDiffPropertyTest {
             { assertTrue(midDrain >= 60, "mid-drain second changes $midDrain") },
             { assertTrue(refusals >= 300, "refused children $refusals") },
             { assertTrue(moved >= 60, "reconciles that moved $moved") },
+            { assertTrue(tally.laneToGroup >= 80, "lanes turned into groups ${tally.laneToGroup}") },
+            { assertTrue(tally.groupToLane >= 40, "groups turned into lanes ${tally.groupToLane}") },
+            { assertTrue(cuts >= 3_000, "cuts $cuts") },
+            { assertTrue(cutsWithRefusal >= 700, "cuts that hit a refusal $cutsWithRefusal") },
         )
     }
 
@@ -176,9 +188,20 @@ class TopologyDiffPropertyTest {
         var reweights = 0
         var removals = 0
         var additions = 0
+        var laneToGroup = 0
+        var groupToLane = 0
 
         fun count(steps: List<TopologyStep>, ledger: EntitlementLedger, target: Topology) {
-            val wanted = target.lower().map { it.child }
+            val lowered = target.lower()
+            val wanted = lowered.map { it.child }
+            // A group with an active child edge now, against what the target declares.
+            val activeParents = ledger.allEdges().filter { ledger.lifecycle(it) == Lifecycle.ACTIVE }
+                .mapNotNull { ledger.record(it)?.parent }.distinct()
+            val targetGroups = lowered.map { it.parent }.distinct()
+            for (child in wanted.filter { c -> ledger.allEdges().any { ledger.record(it)?.child == c } }) {
+                if (child in targetGroups && child !in activeParents) laneToGroup++
+                if (child !in targetGroups && child in activeParents) groupToLane++
+            }
             val children = steps.map { it.child }.distinct().sorted()
             for (child in children) {
                 val mine = steps.filter { it.child == child }

@@ -50,9 +50,15 @@ internal fun EntitlementLedger.activeTriples(): List<ActiveTriple> =
 
 /**
  * What [applyAll] did: the [ledger] after it, the children whose steps it stopped, sorted, and the
- * children whose [TopologyStep.Reconcile] actually moved something, in step order.
+ * children whose [TopologyStep.Reconcile] actually moved something, in step order, and the indices
+ * of the steps it applied, ascending.
  */
-internal data class Applied(val ledger: EntitlementLedger, val refused: List<GroupId>, val reconciled: List<GroupId>)
+internal data class Applied(
+    val ledger: EntitlementLedger,
+    val refused: List<GroupId>,
+    val reconciled: List<GroupId>,
+    val applied: List<Int>,
+)
 
 /**
  * The reference interpreter for a [Topology.diff]: apply [steps] to [ledger] in order, per child.
@@ -65,8 +71,9 @@ internal fun applyAll(steps: List<TopologyStep>, ledger: EntitlementLedger): App
     var current = ledger
     val refused = ArrayList<GroupId>()
     val reconciled = ArrayList<GroupId>()
+    val applied = ArrayList<Int>()
     fun ancestorOfRefused(child: GroupId) = refused.any { it.value.startsWith(child.value + "/") }
-    for (step in steps) {
+    for ((index, step) in steps.withIndex()) {
         if (step.child in refused) continue
         if (step is TopologyStep.Retire && ancestorOfRefused(step.child)) {
             refused += step.child
@@ -83,9 +90,14 @@ internal fun applyAll(steps: List<TopologyStep>, ledger: EntitlementLedger): App
                 is Relocation.Refused -> null
             }
         }
-        if (patched == null) refused += step.child else current = patched
+        if (patched == null) {
+            refused += step.child
+        } else {
+            current = patched
+            applied += index
+        }
     }
-    return Applied(current, refused.sorted(), reconciled)
+    return Applied(current, refused.sorted(), reconciled, applied)
 }
 
 /**
