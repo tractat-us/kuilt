@@ -32,6 +32,7 @@ internal fun sampleTopologyFromDocument() {
         ),
     )
     val problem = (Topology.from(typo) as TopologyParse.Invalid).problems.single()
-    check(problem.parent == listOf("pool", "acme") && problem.childIndex == 1)
+    // Addressed by child indices: the root's first child, then that child's second.
+    check(problem.path == listOf(0, 1) && problem.names == listOf("pool", "acme", "batch"))
     check(problem.kind == TopologyProblem.Kind.DUPLICATE_NAME)
 }
