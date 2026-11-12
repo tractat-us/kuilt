@@ -93,7 +93,10 @@ path is for display only. A `Topology` that exists is valid: its constructor,
 `copy` and its decoder all throw `TopologyException` on the same problems. Mark a group with
 `runtimeChildren` when the app creates its children while running; their names are opaque to
 heddle. Renaming or moving a child is a delete plus an add, and the new child starts with no
-fairness history.
+fairness history. `Topology.lower(generation)` turns the checked tree into the `AttachmentRecord`s
+a ledger is prepared with, sorted, under ids that are the same on every target and never collide
+however the names are spelt: `root/acme/batch@1:1#0` is `batch` in `acme`, at weight 1,
+generation 0, and `groupId("acme", "batch")` names the group.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyFromDocument -->
 ```kotlin
