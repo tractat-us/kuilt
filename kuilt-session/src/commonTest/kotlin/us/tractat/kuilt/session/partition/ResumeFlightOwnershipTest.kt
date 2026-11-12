@@ -90,6 +90,35 @@ class ResumeFlightOwnershipTest {
             rig.assertResumedOnce()
         }
 
+    /**
+     * A generation that tears with the `Resume` already sent and no verdict back settles the flight
+     * at once, and the loop re-weaves without waiting out `resumeTimeout` (#3151).
+     *
+     * `DrainingGenerationReconnectTest` used to pin this, but since a `Resume` goes to the host alone
+     * (#3165) the draining generation never lists the host, so its flight never gets as far as
+     * sending and that test now exercises the wait before the send instead. Here the host stays
+     * listed, so the frame does go out and only the post-send tear arm can settle it.
+     */
+    @Test
+    fun `a tear with the sent flight still pending settles it at once and re-weaves`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val rig = rig()
+            rig.machine.attemptReconnect(Instant.fromEpochMilliseconds(0))
+            runCurrent()
+            val sentBeforeTear = rig.seam.resumesSent
+            val pendingBeforeTear = rig.machine.hasPendingFlight()
+
+            rig.seam.tear()
+            runCurrent()
+
+            assertAll(
+                { assertEquals(1, sentBeforeTear, "precondition: the Resume went out") },
+                { assertTrue(pendingBeforeTear, "precondition: its verdict had not come back") },
+                { assertEquals(2, rig.reweaves(), "the tear must re-weave at once, not after resumeTimeout") },
+                { assertEquals(2, rig.seam.resumesSent, "and resume again over the healed generation") },
+            )
+        }
+
     private class Rig(
         val seam: FlightSeam,
         val host: FlightResumeHost,
