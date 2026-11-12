@@ -286,8 +286,7 @@ private fun MutableList<TopologyProblem>.walkGroup(
         if (parseWeightText(child.weight) == null) {
             add(at.problem(TopologyProblem.Kind.INVALID_WEIGHT, "weight ${quoted(child.weight)} $NOT_A_WEIGHT"))
         }
-        val addressable = child.name.isNotEmpty() && firstIndexOf[child.name] == index
-        if (addressable && child is TopologyDocument.Group) walkGroup(at, child.children, child.runtimeChildren)
+        if (child is TopologyDocument.Group) walkGroup(at, child.children, child.runtimeChildren)
     }
 }
 
