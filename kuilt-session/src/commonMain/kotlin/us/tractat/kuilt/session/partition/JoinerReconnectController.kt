@@ -19,10 +19,10 @@ import us.tractat.kuilt.session.admit.RejectCode
  * observe `events.filterIsInstance<JoinerReconnectEvent.Resumed>()` and push
  * current application state to `event.peerId`.
  *
- * The leader identity is not part of [ResumeToken]; only [RoomId] is. This
- * preserves forward-compatibility: if a future auto-election protocol promotes a
- * new leader mid-session, [RoomId] survives the transition and joiners can
- * resume against the new host without token renegotiation.
+ * **A resume is good only against the host that admitted the joiner.** The controller holds each
+ * member's [ResumeSecret] and its window in memory, so a host that did not mint them — a newly
+ * elected leader, another server in a cluster — answers a resume with a refusal, and the joiner
+ * re-joins fresh.
  *
  * Partition events ([PartitionEvent]) are produced by the partition-detector layer.
  * Until that wiring lands, callers bridge manually: on transport close, invoke
@@ -58,12 +58,36 @@ public interface JoinerReconnectController {
     )
 
     /**
+     * Records [secret] as the credential [peerId] must present to resume — the host calls this each
+     * time it admits [peerId], before the `Welcome` that hands the secret over is sent (#3165).
+     *
+     * Replaces any secret enrolled for [peerId] before: a member admitted again under the same id
+     * gets a fresh one, and the old token stops working. Enrolling opens no window.
+     *
+     * **The obligation it creates on [tryResume]:** a token whose [ResumeToken.secret] does not
+     * match the one enrolled for [ResumeToken.peerId] — or that names a peer never enrolled — is
+     * [ResumeResult.TokenInvalid], and is refused **without consuming that peer's window**. A check
+     * placed anywhere after the window is spent lets any member who knows the victim's id lock the
+     * victim out, which every member does.
+     */
+    public suspend fun enroll(
+        peerId: PeerId,
+        secret: ResumeSecret,
+    )
+
+    /**
      * Attempts to resume the peer identified by [token].
      *
      * Validation order:
      * 1. Session match — [ResumeToken.roomId] must equal the controller's Room.
-     * 2. Window open — the reconnect window for [token.peerId] must still be active at [at].
-     * 3. Token not yet consumed — a token may only be used once per window.
+     * 2. Secret match — [ResumeToken.secret] must match the one [enroll]ed for [token.peerId],
+     *    compared in constant time ([ResumeSecret.matches]). A mismatch is
+     *    [ResumeResult.TokenInvalid] and leaves the window untouched (#3165).
+     * 3. Window open — the reconnect window for [token.peerId] must still be active at [at].
+     * 4. Token not yet consumed — a token may only be used once per window.
+     *
+     * Steps 2–4 must be one atomic decision: a secret checked outside the section that spends the
+     * window is the bug this order exists to prevent.
      *
      * On success, emits [JoinerReconnectEvent.Resumed] and closes the window so
      * a second [tryResume] with the same token returns [ResumeResult.WindowClosed].
