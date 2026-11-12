@@ -32,4 +32,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun fairShareAllocatorHolds() = sampleFairShareAllocator()
+
+    @Test
+    fun topologyFromDocumentHolds() = sampleTopologyFromDocument()
 }
