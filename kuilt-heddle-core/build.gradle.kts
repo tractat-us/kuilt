@@ -117,3 +117,24 @@ val verifyHeddleCoreDependencies by tasks.registering {
     }
 }
 tasks.named("check") { dependsOn(verifyHeddleCoreDependencies) }
+
+// ── The lease scale probe (#3173, plan Task C) is opt-in ────────────────────────────────────────
+//
+// `LeaseScaleProbe` builds 55,000 edges and times acquires on them: seconds on the JVM, minutes on a
+// Kotlin/Native debug binary, and evidence for one decision rather than a regression gate. So it is
+// excluded from every test task unless `-Pheddle.scale.probe=true`. The exclusion is at the TASK
+// level, on `AbstractTestTask` so the native and wasm tasks are covered too, and an excluded probe
+// is absent from the results XML rather than present and green (`forbidRuntimeSelfSkippingProbe`).
+// With the flag on the exclusion is not added at all, so a `--tests "*LeaseScaleProbe"` include
+// can match. `filter.excludeTestsMatching`, not `filter { … }`: see kuilt-multipeer's build for why
+// the lambda form does not compile on this receiver.
+val runScaleProbe = providers.gradleProperty("heddle.scale.probe").orNull == "true"
+tasks.withType<AbstractTestTask>().configureEach {
+    if (!runScaleProbe) {
+        // Both spellings. The class pattern is what the JVM and Kotlin/Native runners match; the
+        // wasmJs Karma runner matches it against `<class>.<method>` and so needs the second one —
+        // measured: with the class pattern alone the probe still ran in `wasmJsBrowserTest`.
+        filter.excludeTestsMatching("*LeaseScaleProbe")
+        filter.excludeTestsMatching("*LeaseScaleProbe.*")
+    }
+}
