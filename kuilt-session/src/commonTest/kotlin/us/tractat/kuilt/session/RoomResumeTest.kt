@@ -195,6 +195,8 @@ class RoomResumeTest {
         val joinerRoom = makeSeamRoom(loom.join(InMemoryTag("Bob")), SessionRole.Joiner, "Bob", clock)
 
         hostRoom.roster.first { it.size == 1 }
+        // The joiner must have identified its host: a Resume goes to the host alone (#3165).
+        joinerRoom.roster.first { it.isNotEmpty() }
 
         val badToken = ResumeToken(
             peerId = joinerRoom.selfId,

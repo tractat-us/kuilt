@@ -264,31 +264,23 @@ class ForgedResumeTest {
             }
         }
 
-    /** The host holds a secret per current member and no longer: leaving or expiring prunes it. */
+    /** A member that leaves takes its resume secret with it; expiry is pinned in [TransportCloseWindowTest]. */
     @Test
-    fun `a members secret is pruned when it leaves or its window expires`() =
+    fun `a members secret is pruned when it leaves`() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
-            val observed = ObservedController()
-            val host = factory(loom, observed).host(Pattern("Host"), memberName = "Host") as SeamRoom
+            val host = factory(loom, ObservedController()).host(Pattern("Host"), memberName = "Host") as SeamRoom
             val leaver = factory(loom).join(InMemoryTag("Leaver"), memberName = "Leaver")
-            val expirer = factory(loom).join(InMemoryTag("Expirer"), memberName = "Expirer")
-            host.roster.first { it.size == 2 }
+            host.roster.first { it.size == 1 }
             try {
                 val held = host.heldResumeSecretCount()
                 leaver.leave()
-                host.roster.first { it.size == 1 }
-                val afterLeave = host.heldResumeSecretCount()
-                assertNotNull(observed.real).expire(expirer.selfId, testScheduler.currentTime)
                 host.roster.first { it.isEmpty() }
-                val afterExpiry = host.heldResumeSecretCount()
                 assertAll(
-                    { assertEquals(2, held, "precondition: one secret per admitted member") },
-                    { assertEquals(1, afterLeave, "a member that leaves takes its secret with it") },
-                    { assertEquals(0, afterExpiry, "a member whose window expires takes its secret with it") },
+                    { assertEquals(1, held, "precondition: the admitted member's secret is held") },
+                    { assertEquals(0, host.heldResumeSecretCount(), "a member that leaves takes its secret with it") },
                 )
             } finally {
-                expirer.leave()
                 host.leave()
             }
         }

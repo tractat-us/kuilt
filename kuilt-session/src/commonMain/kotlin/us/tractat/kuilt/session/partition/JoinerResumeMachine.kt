@@ -307,6 +307,16 @@ internal class JoinerResumeMachine(
      */
     fun hasPendingFlight(): Boolean = lock.withLock { pendingResume != null }
 
+    /** Guarded by [lock]: how many resume flights this machine has started (not joined). */
+    private var flightsStarted = 0
+
+    /**
+     * Test-visibility (via the room): how many resume flights this machine has started — the
+     * witness that tells "a flight began on that generation" from "none did" now that a `Resume`
+     * the host is not there to receive is never sent at all (#3165).
+     */
+    fun flightsStarted(): Int = lock.withLock { flightsStarted }
+
     /**
      * Takes the pending resume flight (clearing the slot), or null when none is in flight.
      *
@@ -724,6 +734,7 @@ internal class JoinerResumeMachine(
             if (inFlight != null) {
                 inFlight to false
             } else {
+                flightsStarted++
                 CompletableDeferred<ResumeResult.JoinerOutcome>().also { pendingResume = it } to true
             }
         }
@@ -773,12 +784,17 @@ internal class JoinerResumeMachine(
      */
     private suspend fun sendToHost(bytes: ByteArray): Boolean {
         val hostId = host.hostPeer() ?: return false
-        val addressable = withTimeoutOrNull(heartbeatConfig.resumeTimeout) {
-            combine(seam.peers, seam.state) { peers, state -> hostId in peers to (state is SeamState.Torn) }
-                .first { (present, torn) -> present || torn }
-                .first
-        } ?: false
-        if (!addressable) return false
+        // true: the host is addressable; false: the seam tore first; null: the bound elapsed.
+        val addressable: Boolean? = withTimeoutOrNull(heartbeatConfig.resumeTimeout) {
+            combine(seam.peers, seam.state) { peers: Set<PeerId>, state: SeamState ->
+                when {
+                    hostId in peers -> true
+                    state is SeamState.Torn -> false
+                    else -> null
+                }
+            }.first { it != null }
+        }
+        if (addressable != true) return false
         seam.sendTo(hostId, bytes)
         return true
     }

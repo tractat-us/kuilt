@@ -2111,6 +2111,9 @@ internal class SeamRoom(
      */
     internal fun hasPendingResume(): Boolean = resumeMachine?.hasPendingFlight() ?: false
 
+    /** Test-visibility: how many resume flights this joiner has started (#3165). */
+    internal fun resumeFlightsStarted(): Int = resumeMachine?.flightsStarted() ?: 0
+
     /**
      * Test-visibility: the current reconnect episode's most recent host `Reject` of a resume, or
      * null when this joiner has not been refused.

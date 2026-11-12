@@ -18,6 +18,7 @@ import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryConnectionSource
 import us.tractat.kuilt.test.fabric.connectionPair
 import kotlin.coroutines.ContinuationInterceptor
@@ -340,6 +341,7 @@ class TransportCloseWindowTest {
             ).also { it.start() }
 
             hostRoom.roster.first { it.size == 1 }
+            val heldWhileAdmitted = hostRoom.heldResumeSecretCount()
 
             val left = async {
                 hostRoom.events.filterIsInstance<MembershipEvent.Left>().first()
@@ -352,5 +354,11 @@ class TransportCloseWindowTest {
             repeat(8) { clockMs += 100L; advanceTimeBy(100L) }
 
             assertEquals(LeaveReason.PartitionExpired, left.await().reason)
+            // The expired member's resume secret goes with it (#3165): the host holds one per
+            // current member, so a fabric minting a fresh id per connection cannot grow the map.
+            assertAll(
+                { assertEquals(1, heldWhileAdmitted, "precondition: the admitted member's secret is held") },
+                { assertEquals(0, hostRoom.heldResumeSecretCount(), "an expired member's secret must be pruned") },
+            )
         }
 }

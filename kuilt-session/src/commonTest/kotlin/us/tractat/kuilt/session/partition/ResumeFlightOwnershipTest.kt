@@ -106,7 +106,7 @@ class ResumeFlightOwnershipTest {
             scope.runCurrent()
             assertAll(
                 { assertEquals(1, reweaves(), "precondition: one re-weave before the first Resume") },
-                { assertEquals(1, seam.broadcasts, "precondition: the first Resume went out") },
+                { assertEquals(1, seam.resumesSent, "precondition: the first Resume went out") },
                 { assertTrue(machine.hasPendingFlight(), "precondition: the first Resume is in flight") },
             )
             return checkNotNull(machine.takePendingFlight()) { "the flight vanished before the ack took it" }
@@ -114,7 +114,7 @@ class ResumeFlightOwnershipTest {
 
         fun assertResumedOnce() = assertAll(
             { assertEquals(1, reweaves(), "the ack's Success must end the episode with no second re-weave") },
-            { assertEquals(1, seam.broadcasts, "no second Resume may go out after the ack's Success") },
+            { assertEquals(1, seam.resumesSent, "no second Resume may go out after the ack's Success") },
             { assertEquals(1, host.restored, "the episode must end on the success branch") },
             { assertEquals(emptyList(), host.failures, "a resumed room must not go host-lost") },
             { assertFalse(machine.hasPendingFlight(), "no second flight may be in flight") },
@@ -122,7 +122,7 @@ class ResumeFlightOwnershipTest {
     }
 
     private fun TestScope.rig(): Rig {
-        val seam = FlightSeam(joinerId)
+        val seam = FlightSeam(joinerId, hostId)
         val host = FlightResumeHost(hostId)
         var reweaves = 0
         val machine = JoinerResumeMachine(
@@ -166,15 +166,15 @@ private class FlightResumeHost(private val hostPeer: PeerId) : JoinerResumeHost 
 
 /**
  * A seam that starts torn, is healed in place by the re-weave, and can be torn again on demand. It
- * counts broadcasts, which in these tests are only ever the joiner's `Resume`.
+ * counts sends to the host, which in these tests are only ever the joiner's `Resume`.
  */
-private class FlightSeam(override val selfId: PeerId) : Seam {
+private class FlightSeam(override val selfId: PeerId, private val hostId: PeerId) : Seam {
     private val _state = MutableStateFlow<SeamState>(SeamState.Torn(CloseReason.Normal))
     override val state: StateFlow<SeamState> = _state.asStateFlow()
-    override val peers: StateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId)).asStateFlow()
+    override val peers: StateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId, hostId)).asStateFlow()
     override val incoming: Flow<Swatch> = emptyFlow()
 
-    var broadcasts: Int = 0
+    var resumesSent: Int = 0
         private set
 
     fun heal() {
@@ -186,9 +186,11 @@ private class FlightSeam(override val selfId: PeerId) : Seam {
     }
 
     override suspend fun broadcast(payload: ByteArray) {
-        broadcasts++
+        error("a Resume must never be broadcast (#3165)")
     }
 
-    override suspend fun sendTo(peer: PeerId, payload: ByteArray) = Unit
+    override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
+        if (peer == hostId) resumesSent++
+    }
     override suspend fun close(reason: CloseReason) = Unit
 }
