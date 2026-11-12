@@ -59,6 +59,20 @@ These override the task sections below where they differ.
    - **L3 decides which rule wins** when a removed child with open work sits under a reweighted parent: the parent's replacement releases the child's leases, or the removal yields `Draining`.
    - **A reparent is never a replacement** (Iain, 2026-11-12). It is a delete plus an add (Ruling 12), so in-flight leases drain under the old id. Only a reweight re-homes leases (R1).
    - **S1:** a PREPARED edge the diff left because nothing wants it is informational, never "reload pending". The leaf predicate S1 reports follows #3191.
+7. **Before L1: the whole-range review and a consumer review** (2026-11-12, settled with the user). These override the task sections below where they differ.
+   - **Every delegation outside a pick seats first.** `delegate` on an edge with no gauge writes one at the edge's own origin, and `seat` refuses after that. That is #1752's permanent lifetime credit. So `admit` and L3's re-home must not call `delegate` directly. L1 exposes one internal *seat-then-delegate-down-a-path* helper, and `acquire`, `admit` and the L3 re-home all use it. Do not copy the test helper `delegateDown`, which delegates unseated. `reweightRestartsAtTheParentsFront` must hold leases open across the reweight and assert the new edge's gauge floor equals the front. With no lease open it passes vacuously.
+   - **The allocator's memory is a value, decided in L1.** Today `wakeOffsets` and `demandingObserved` are private `HashMap`s mutated inside `settleJoiners`. L1 makes them an `@Serializable AllocatorMemory` with canonically sorted maps, exported by the allocator and accepted by its constructor. `pickChild` takes and returns it, or the allocator offers `copy()`. Choose one, so that `previewPicks` (below) and Task P do not reopen a public class.
+   - **L1's quantum follows Amendment 3, not the L1 bullet.** Use one long-lived allocator with an unbounded `PolicyConfig.quantum`, carrying the reservation through `maximumUsefulGrant`. A per-pick `PolicyConfig(quantum = reservation)` would build a new allocator per pick and lose wake memory. Read `differentialAgainstSchedule`'s "`quantum = reservation`" as the effective, trimmed quantum.
+   - **Descent failure gets a typed arm.** `AcquireOutcome` and `admit`'s outcome share one arm, `NoLiveLineage(path)`, matching the prototype's `DescentFailed(at)`. Never fall through to `NothingEligible`.
+   - **L1 adds `previewPicks(waiting: Map<GroupId, List<Long>>, eligible, count): List<GroupId>`**, a non-mutating "who goes next" computed on `snapshot()` with a *copy* of the allocator memory. Property: it equals the leaves of the same number of real acquires on the same state, wakers included.
+   - **L1 adds `admit(leaf, reservation)`** for work an outside scheduler started. It makes no pick, goes down the leaf's lineage through the seat-then-delegate helper, and returns `NoLiveLineage` when there is none. A charge is never lost or silently `NothingEligible`. Tests and a cookbook line come with it.
+   - **L1 uses no `isLeaf`.** Where it needs "no active child", it reads the L0 index's unretired children, which is cheap. The leaf rule follows #3191.
+   - **P persists the allocator memory and versions the snapshot.** `LocalHeddleSnapshot` gains `allocatorMemory` and `formatVersion: Int`. `LocalHeddle.decode(bytes, format): RestoreResult` returns `Restored`, `UnsupportedVersion(found, supported)` or `Corrupt(reason)`. The policy is that each release reads the previous format, with a golden snapshot from the previous format checked in. New tests: `restoreReplaysIdenticallyWithAWaker` (`restore(persist())` plus the same acquires gives identical leases) and `previousFormatRestores`. §7.2's "never persisted" is about replication; a single writer persists its own memory.
+   - **E adds `entitlement(leaf, waiting, totalSlots): Rational`**: the leaf's GPS share among the same competing set as `front()`, times capacity. A hold reason then agrees with the pick, and it feeds #3184.
+   - **L3's `apply` takes the topology, not steps: `apply(new: Topology, generation: Long)`.** It diffs internally under the one lock (Amendment 6). **The atomic unit is the whole apply, on a working ledger swapped in once.** A per-child unit cannot work: when `acme` and `acme/batch` are both reweighted, a lease under `batch` crosses both edges. `preview` (S2) stays a pure diff. L3 also checks `holdings` on the applied ledger against a decoded copy, so the carried index is pinned under real Retire → Reconcile sequences. L3 decides whether `fromTopology` boots through `diff` against an empty ledger. If it does, `lower` stays a read-only view and is never a second, unfloored way to boot.
+   - **Task 5 has one generation-floor rule and caches it.** `diff`'s private `prepareGeneration` (with its adopted-PREPARED carve-out) and `effectiveGeneration` become one function. The engine caches the floor, or L0's `EdgeIndex` folds in a max generation. Each attach must not re-parse every edge (55k at Task C's scale). Task 5 also adds the lowering test's awkward-name set to the diff property generator: escaped segments, an escaped root, and `a`/`a1` siblings for the child-versus-edge tie-break. It also carries a runtime child through a reload with traffic.
+   - **Ledger growth** from runtime-child churn and abandoned PREPARED edges is #3192 (needs-design). Until that is settled, the docs advise keeping runtime children attached.
+   - **Release.** Maven Central carries `kuilt-heddle-core` only once L1 and P have landed, and the version number is @keddie's call. Until then, `docs/usage.md` documents publishing to Maven Local without an Android SDK: `:kuilt-crdt` and `:kuilt-heddle-core`'s `publishJvmPublicationToMavenLocal` and `publishKotlinMultiplatformPublicationToMavenLocal`.
 
 ## Verified in source (2026-11-12)
 
@@ -82,7 +96,7 @@ These override the task sections below where they differ.
 - `explicitApi()`, no `!!`, no `test` prefix on test names, and `us.tractat.kuilt.test.assertAll` for multi-assert tests.
 - A public API change runs `./gradlew :kuilt-heddle-core:updateKotlinAbi` and commits `kuilt-heddle-core/api/`. The PR body names the change.
 - **The skill and cookbook move in the same PR as the API.**
-  - The `kuilt-primitives` body is at **8,180 of 8,192 bytes**, and the description at 1,535 of 1,536.
+  - The `kuilt-primitives` body is at **8,185 of 8,192 bytes** after #3190, with routes still owed by L1, L2, L3, 5, P and S1, so every route addition trims the same bytes elsewhere, and the description at 1,535 of 1,536.
   - Never touch `description:`. Extend the existing heddle index row, and trim the same number of bytes elsewhere in the body.
   - Route only to symbols that are on `main`.
   - Cookbook: one subsection, `### A fair-share tree in one process`, in `docs/agent-cookbook/heddle.md`, plus its row in `docs/agent-cookbook.md`.
@@ -137,21 +151,21 @@ public sealed interface TopologyParse {
     public data class Valid(public val topology: Topology) : TopologyParse
     public data class Invalid(public val problems: List<TopologyProblem>) : TopologyParse
 }
-/** [parent] = the names from the root to the containing group; [childIndex] = the child's position, or null when the problem is the group at [parent] itself. */
-public data class TopologyProblem(public val parent: List<String>, public val childIndex: Int?, public val kind: Kind, public val detail: String) {
+/** Superseded by Amendment 1 (#3186): [path] = child indices from the root, [names] = display names along it. */
+public data class TopologyProblem(public val path: List<Int>, public val names: List<String>, public val kind: Kind, public val detail: String) {
     public enum class Kind { EMPTY_NAME, DUPLICATE_NAME, EMPTY_GROUP, INVALID_WEIGHT }
 }
 public class TopologyException(public val problems: List<TopologyProblem>) : IllegalArgumentException(/* every problem, one per line */)
 public object TopologyWeightSerializer : KSerializer<Weight>   // a STRING: "3" or "3/2"
 ```
 - `Topology.init` throws `TopologyException` whenever `problems` is non-empty.
-- `from` collects **every** problem, weight text included, and never throws. A config page renders `Invalid.problems` keyed by `(parent, childIndex)`.
+- `from` collects **every** problem, weight text included, and never throws. A config page renders `Invalid.problems` keyed by `path` (Amendment 1).
 - The index is a separate field, so a child literally named `#3` cannot be confused with an index.
 - There is no mint field (D3m).
 
 - [ ] **Step 1: Write the failing tests.**
-  - `fromCollectsEveryProblem`: a duplicate `batch` under `acme`, an empty name at index 1 under `hobby`, an empty group `idle`, and `weight: "0"` on `x`. `Invalid.problems` equals exactly those four, in walk order, each with its `parent` and `childIndex`.
-  - `emptyNameProblemDoesNotCollideWithHashNames`: a sibling named `"#1"` beside an empty name at index 1. The problem is `childIndex = 1`, and `"#1"` raises no problem.
+  - `fromCollectsEveryProblem`: a duplicate `batch` under `acme`, an empty name at index 1 under `hobby`, an empty group `idle`, and `weight: "0"` on `x`. `Invalid.problems` equals exactly those four, in walk order, each with its `path`.
+  - `emptyNameProblemDoesNotCollideWithHashNames`: a sibling named `"#1"` beside an empty name at index 1. The problem's path is `[1]`, and `"#1"` raises no problem.
   - `weightTextAcceptsWholeAndRatio`: `"3/2"` → `Weight.of(3, 2)`. `"0"`, `"-1"`, `"x"` and `"1/0"` each give `INVALID_WEIGHT`.
   - `fromValidDocumentEqualsHandBuiltTopology`.
   - `constructingInvalidTopologyThrowsWithAllProblems`.
@@ -336,7 +350,7 @@ public fun pickChild(parent: GroupId, ledger: EntitlementLedger, waiting: (Attac
 - The writer's `ReplicaId` is fixed and internal (`"local"`). `MintId`s are `"local#<k>"`.
 - **`acquire`**:
   - `require(eligible ⊆ waiting)`.
-  - Descend from the root, and at each group call `pickChild`. `waiting` feeds the seat and wake step. `eligible` defines the candidates. `PolicyConfig(quantum = reservation, perChildOutstandingCap = Long.MAX_VALUE, sleeperCredit)` (R2).
+  - Descend from the root, and at each group call `pickChild`. `waiting` feeds the seat and wake step. `eligible` defines the candidates. `PolicyConfig(quantum = reservation, perChildOutstandingCap = Long.MAX_VALUE, sleeperCredit)` (R2), realised per Amendment 7 as one long-lived allocator with the reservation carried through `maximumUsefulGrant`.
   - Delegate `reservation` down the chosen path.
   - **Compute it all on a local ledger value, and swap it in once** (all-or-nothing). Only the allocator's wake memory may advance on a failed acquire, and the KDoc says so.
 - **`extend`** delegates `amount` more down the lease's path. It is not a new pick.
@@ -534,7 +548,7 @@ Same rules. Commit "heddle-core: explain a waiting leaf and preview a reload (#3
 
 ## Consumer-side, on record (no kuilt task)
 
-- **YAML or another format.** Decode `TopologyDocument`, call `Topology.from`, and render `Invalid.problems` by `(parent, childIndex)`.
+- **YAML or another format.** Decode `TopologyDocument`, call `Topology.from`, and render `Invalid.problems` by `path`, showing `names`.
 - **Rendering.** Render `status`, `explain` and `preview`. Fail open on `!status.healthy`, or on an exception from Task L1's failure surface.
 - **Fallback.** The disable switch and the fallback scheduler.
 - **Concurrency and capacity.** Call `acquire` once per free slot. Call `reconcileCapacity(total)` on each notification and on the periodic tick. Call `reconcileLeases(live)` and complete orphans at their elapsed cost.
