@@ -66,6 +66,7 @@ import us.tractat.kuilt.session.partition.JoinerResumeHost
 import us.tractat.kuilt.session.partition.JoinerResumeMachine
 import us.tractat.kuilt.session.partition.ResumeRefusal
 import us.tractat.kuilt.session.partition.ResumeResult
+import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.time.Clock
@@ -1601,6 +1602,7 @@ internal class SeamRoom(
             existing
         }
 
+        // The roster copy: what every OTHER member is told about the joiner. It carries no secret.
         val welcome = AdmitMessage.Welcome(
             assignedPeerId = joinerPeerId.value,
             displayName = hello.displayName,
@@ -1608,14 +1610,23 @@ internal class SeamRoom(
             deviceId = hello.deviceId,
             roomId = _roomId.value?.value,
         )
-        val welcomeBytes = AdmitMessage.encode(welcome)
+
+        // Mint the joiner's resume secret and enroll it BEFORE the Welcome that hands it over, so
+        // no resume can arrive for a secret the controller has not yet been told (#3165). Only a
+        // host that can answer a resume mints one: without a controller there is nothing to check
+        // it against, and a joiner told nothing simply holds no token.
+        val resumeSecret = reconnectController?.let { ctrl ->
+            ResumeSecret.generate().also { ctrl.enroll(joinerPeerId, it) }
+        }
 
         // All sends below are outside the lock — they are suspend calls.
 
-        // Send welcome directly to the joiner. Stays INLINE — it addresses the joiner, not the
-        // bystanders, so it shares no recipient with any queued fan-out and has no order to keep
-        // against one. Same for the two joiner-directed loops below.
-        runCatchingCancellable { seam.sendTo(joinerPeerId, welcomeBytes) }
+        // Send welcome directly to the joiner — the ONE frame that carries its secret. Stays
+        // INLINE — it addresses the joiner, not the bystanders, so it shares no recipient with any
+        // queued fan-out and has no order to keep against one. Same for the two joiner-directed
+        // loops below.
+        val directWelcomeBytes = AdmitMessage.encode(welcome.copy(resumeSecret = resumeSecret))
+        runCatchingCancellable { seam.sendTo(joinerPeerId, directWelcomeBytes) }
 
         // Tell the existing members about the joiner (roster sync) — through the per-recipient
         // fan-out lanes (#1781/#2048), not a loop of direct sends. This is a host-authoritative
@@ -1628,6 +1639,9 @@ internal class SeamRoom(
         // anti-entropy to correct it. `fanOutToOtherMembers` re-snapshots the same recipient set
         // (`existingMembers` is `admittedById` minus the joiner, taken moments earlier under the same
         // lock) and adds the terminal-room gate, so this is a strict improvement, not a trade.
+        //
+        // `welcome`, NOT the direct copy above: a bystander holding the joiner's secret could
+        // resume as the joiner and spend its window (#3165).
         fanOutToOtherMembers(joinerPeerId, welcome)
 
         // Bootstrap the joiner's view: send welcomes for all pre-existing members
@@ -1676,12 +1690,23 @@ internal class SeamRoom(
      */
     private suspend fun handleResume(sender: PeerId, msg: AdmitMessage.Resume) {
         val ctrl = reconnectController ?: return
-        val token = ResumeToken(
-            peerId = PeerId(msg.tokenPeerId),
-            roomId = RoomId(msg.tokenRoomId),
-            issuedAt = msg.issuedAt,
-        )
-        val reject = when (val result = ctrl.tryResume(token, at = clock().toEpochMilliseconds())) {
+        // A `Resume` without a secret comes from a joiner that predates it (#3165). It cannot prove
+        // it is the member it names, so it is refused as an invalid token — terminal, so that
+        // joiner re-joins fresh — without reaching the controller, and so without touching the
+        // named member's window. Accepting it would reopen the forgery the secret closes.
+        val secret = msg.resumeSecret
+        val verdict = if (secret == null) {
+            ResumeResult.TokenInvalid("missing-secret")
+        } else {
+            val token = ResumeToken(
+                peerId = PeerId(msg.tokenPeerId),
+                roomId = RoomId(msg.tokenRoomId),
+                issuedAt = msg.issuedAt,
+                secret = secret,
+            )
+            ctrl.tryResume(token, at = clock().toEpochMilliseconds())
+        }
+        val reject = when (val result = verdict) {
             // handleReconnectResumed fires via the controller event stream.
             ResumeResult.Success -> null
             // Transient: the host's own detector has not fired yet (fast-reconnect race). The
@@ -1772,16 +1797,17 @@ internal class SeamRoom(
             // [adoptRoomIdIfAbsent] makes every one after the first a no-op.
             adoptRoomIdIfAbsent(welcome.roomId)
 
-            // Self-admission welcome: mint the resume token (once) from the roomId carried here.
+            // Self-admission welcome: mint the resume token (once) from the roomId and the secret
+            // carried here. This is the ONLY shape that mints (#3165): it is the only one carrying
+            // this member's secret. Every other Welcome — another member's roster copy, a
+            // bootstrap, the host intro — carries none, so a token minted from one would be a
+            // token the host refuses.
             if (assignedId == selfId) {
-                resumeMachine?.mintTokenIfAbsent(welcome.roomId)
+                resumeMachine?.mintTokenIfAbsent(welcome.roomId, welcome.resumeSecret)
                 // The host explicitly admitted us — disarm the admit deadline (#1178).
                 admitted.complete(Unit)
                 return@withLock
             }
-
-            // Also mint resume token from host intro welcome if not yet minted.
-            resumeMachine?.mintTokenIfAbsent(welcome.roomId)
 
             if (admittedById.containsKey(assignedId)) return@withLock // already known
             val identity = MemberIdentity(
