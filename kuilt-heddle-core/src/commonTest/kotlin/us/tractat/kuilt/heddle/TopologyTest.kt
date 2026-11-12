@@ -195,6 +195,25 @@ class TopologyTest {
     }
 
     @Test
+    fun aWrongShapeIsTheFormatsCallNotTopologys() {
+        // What `TopologyDocument`'s KDoc and the cookbook promise about JSON: `from` reports wrong
+        // values, but whether a wrong shape decodes at all is decided by the consumer's format.
+        fun document(weight: String) = """{"root":"root","children":[{"type":"lane","name":"batch","weight":$weight}]}"""
+        val quoted = document("\"3\"")
+        val bareNumber = document("3")
+        val misspeltKey = """{"root":"root","children":[{"type":"lane","name":"batch","weigth":"3"}]}"""
+        val lenient = Json { isLenient = true }
+        val expected = TopologyDocument("root", listOf(lane("batch", "3")))
+
+        assertAll(
+            { assertEquals(expected, json.decodeFromString(TopologyDocument.serializer(), quoted)) },
+            { assertFailsWith<SerializationException> { json.decodeFromString(TopologyDocument.serializer(), bareNumber) } },
+            { assertEquals(expected, lenient.decodeFromString(TopologyDocument.serializer(), bareNumber)) },
+            { assertFailsWith<SerializationException> { json.decodeFromString(TopologyDocument.serializer(), misspeltKey) } },
+        )
+    }
+
+    @Test
     fun acceptsAMarkedGroupWithNoDeclaredChildren() {
         val marked = Topology.Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.of(2)))
 

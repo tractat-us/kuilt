@@ -20,9 +20,13 @@ import kotlinx.serialization.encoding.Encoder
  *
  * A `Topology` that exists is valid. Every construction path — the constructor, `copy`, and a
  * decode through the generated serializer — runs the same check, and throws [TopologyException]
- * naming every problem at once. Because the tree is nested, it cannot express a cycle or a child
- * with two parents. What remains to check is that every name is non-empty and unique among its
- * siblings, and that every group has a child to give its share to.
+ * naming every problem at once; problems beneath a child whose name is empty or a duplicate appear
+ * once that name is fixed. Because the tree is nested, it cannot express a cycle or a child with two
+ * parents. What remains to check is that every name is non-empty and unique among its siblings,
+ * and that every group has a child to give its share to.
+ *
+ * The check runs once, at construction, against the lists you pass. Pass lists you will not mutate
+ * afterwards: a list changed after the check is a tree nothing has checked.
  *
  * When the tree comes from an admin, decode a [TopologyDocument] instead and call [from]: that path
  * never throws, and returns every problem with an address a config page can point at.
@@ -123,7 +127,10 @@ public sealed interface TopologyParse {
     /** The document was valid. */
     public data class Valid(public val topology: Topology) : TopologyParse
 
-    /** The document had at least one problem; [problems] lists them all, in walk order. */
+    /**
+     * The document had at least one problem; [problems] lists them all, in walk order. Problems
+     * beneath a child whose name is empty or a duplicate appear once that name is fixed.
+     */
     public data class Invalid(public val problems: List<TopologyProblem>) : TopologyParse
 }
 
@@ -169,7 +176,10 @@ public data class TopologyProblem(
     }
 }
 
-/** Thrown when a [Topology] would hold [problems]; its message lists every one, one per line. */
+/**
+ * Thrown when a [Topology] would hold [problems]; its message lists every one, one per line.
+ * Problems beneath a child whose name is empty or a duplicate appear once that name is fixed.
+ */
 public class TopologyException(public val problems: List<TopologyProblem>) :
     IllegalArgumentException(problems.joinToString("\n") { it.render() })
 
