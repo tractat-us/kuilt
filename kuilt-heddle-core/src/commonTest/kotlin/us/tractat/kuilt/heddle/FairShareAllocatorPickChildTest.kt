@@ -60,6 +60,33 @@ class FairShareAllocatorPickChildTest {
         assertEquals(2_000, edges.count { pick.ledger.gauge(it) != null }, "every newborn carries a gauge")
     }
 
+    /**
+     * A seat patch is a gauge-only ledger built outside `piece`, so the index a pick carries into
+     * its result must still agree with one rebuilt from scratch: the generation floor (#3196) and
+     * the inbound lists the lineage lift reads. The edges are lowered from a real topology, so the
+     * generation top is not the empty one.
+     */
+    @Test
+    fun aSeatedLedgerCarriesTheIndexItWouldRebuild() {
+        val topology = draft("pool") { (0 until 40).forEach { lane("c-$it") } }
+        val records = topology.lower(generation = 5L)
+        val poolRoot = topology.groupId()
+        var start = shapedLedger(poolRoot, records)
+        start = start.piece(start.mint(MintId("m"), poolRoot, LOCAL, 1_000L).delta)
+        start.generationTop() // build the base's index, so the result carries one rather than building its own
+        val pick = assertNotNull(FairShareAllocator(LOCAL, policy).pickChild(poolRoot, start, { wants }, { wants }))
+        val delegated = pick.ledger.piece(assertNotNull(pick.ledger.delegate(LOCAL, pick.grant.attachment, 2L)).delta)
+        val rebuilt = Json.decodeFromString(EntitlementLedger.serializer(), Json.encodeToString(EntitlementLedger.serializer(), delegated))
+        val leaves = records.map { it.child }
+        assertAll(
+            { assertEquals(40, records.count { delegated.gauge(it.id) != null }, "the rig: every newborn was seated by the gauge-only patch") },
+            { assertEquals(GenerationTop(5L, 40), rebuilt.generationTop(), "the rig: a real generation top") },
+            { assertEquals(rebuilt.generationTop(), delegated.generationTop(), "the carried generation top") },
+            { assertEquals(rebuilt.withLiveLineages(leaves), delegated.withLiveLineages(leaves), "the carried inbound lists") },
+            { assertEquals(leaves.map { rebuilt.inboundEdges(it) }, leaves.map { delegated.inboundEdges(it) }) },
+        )
+    }
+
     @Test
     fun anAllocatorResumedFromItsMemoryPicksTheSame() {
         val (start, edges) = flat(3)
