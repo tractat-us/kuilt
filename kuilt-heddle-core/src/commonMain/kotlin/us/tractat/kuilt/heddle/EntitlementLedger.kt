@@ -246,21 +246,25 @@ public class EntitlementLedger private constructor(
         return joined.withIndex(joined.carryIndex(base, delta))
     }
 
-    /** [piece] without the index: the componentwise join of the sixteen lattice components. */
+    /**
+     * [piece] without the index: the componentwise join of the sixteen lattice components. A
+     * component either side leaves empty is taken from the other side as it is, not copied: every
+     * map here is read-only once built, and a patch touches only a few of the sixteen.
+     */
     private fun join(other: EntitlementLedger): EntitlementLedger =
         EntitlementLedger(
-            records = records.mergeValues(other.records) { mine, theirs -> mine + theirs },
-            minted = minted.mergeValues(other.minted) { mine, theirs -> maxOf(mine, theirs) },
+            records = records.joinValues(other.records) { mine, theirs -> mine + theirs },
+            minted = minted.joinValues(other.minted) { mine, theirs -> maxOf(mine, theirs) },
             issued = issued.mergeEdgeCounters(other.issued),
             returned = returned.mergeEdgeCounters(other.returned),
             leafSpent = leafSpent.mergeEdgeCounters(other.leafSpent),
             rollupSpent = rollupSpent.mergeEdgeCounters(other.rollupSpent),
-            transfers = transfers.mergeValues(other.transfers) { mine, theirs ->
+            transfers = transfers.joinValues(other.transfers) { mine, theirs ->
                 mine.mergeRows(theirs)
             },
             // The lifecycle max-register: join = max, so CLOSING/RETIRED dominates a
             // laggard's ACTIVE regardless of merge order (design §5.1, §10.10).
-            lifecycle = lifecycle.mergeValues(other.lifecycle) { mine, theirs -> maxOf(mine, theirs) },
+            lifecycle = lifecycle.joinValues(other.lifecycle) { mine, theirs -> maxOf(mine, theirs) },
             // The relocation families are ordinary GCounter maps, so they join exactly as the
             // base counters do — the product-of-lattices argument is unchanged in shape.
             issuedRelocIn = issuedRelocIn.mergeEdgeCounters(other.issuedRelocIn),
@@ -271,13 +275,13 @@ public class EntitlementLedger private constructor(
             // The virtual-time gauge: a per-edge register joined COMPONENTWISE (max floor, max
             // fold) — never lexicographically by floor, which would keep a stale writer's pair
             // whole and reintroduce the double count (#1752, see [Gauge]).
-            gauges = gauges.mergeValues(other.gauges) { mine, theirs -> mine.join(theirs) },
+            gauges = gauges.joinValues(other.gauges) { mine, theirs -> mine.join(theirs) },
             // The transfer relocation pair: the same per-donor-row matrix `transfers` is, joined by
             // the same rule, so the product-of-lattices argument covers them unchanged.
-            transferRelocIn = transferRelocIn.mergeValues(other.transferRelocIn) { mine, theirs ->
+            transferRelocIn = transferRelocIn.joinValues(other.transferRelocIn) { mine, theirs ->
                 mine.mergeRows(theirs)
             },
-            transferRelocOut = transferRelocOut.mergeValues(other.transferRelocOut) { mine, theirs ->
+            transferRelocOut = transferRelocOut.joinValues(other.transferRelocOut) { mine, theirs ->
                 mine.mergeRows(theirs)
             },
         )
@@ -2487,10 +2491,21 @@ private fun Map<GroupId, Map<ReplicaId, WideSum>>.settle(
     return out ?: prior
 }
 
+/**
+ * [mergeValues], except that an empty side returns the other side itself rather than a copy of it.
+ * Sound only because a ledger never mutates a map once it holds it.
+ */
+private inline fun <K, V> Map<K, V>.joinValues(other: Map<K, V>, combine: (mine: V, theirs: V) -> V): Map<K, V> =
+    when {
+        other.isEmpty() -> this
+        isEmpty() -> other
+        else -> mergeValues(other, combine)
+    }
+
 private fun Map<AttachmentId, GCounter>.mergeEdgeCounters(
     other: Map<AttachmentId, GCounter>,
-): Map<AttachmentId, GCounter> = mergeValues(other) { mine, theirs -> mine.piece(theirs) }
+): Map<AttachmentId, GCounter> = joinValues(other) { mine, theirs -> mine.piece(theirs) }
 
 private fun Map<ReplicaId, GCounter>.mergeRows(
     other: Map<ReplicaId, GCounter>,
-): Map<ReplicaId, GCounter> = mergeValues(other) { mine, theirs -> mine.piece(theirs) }
+): Map<ReplicaId, GCounter> = joinValues(other) { mine, theirs -> mine.piece(theirs) }
