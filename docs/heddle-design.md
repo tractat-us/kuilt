@@ -829,7 +829,8 @@ after its entry applied never resumes, so a gate it moved would stay wrong for g
 A run's own acts are recognised by membership in the set of keys this instance
 issued, with a per-run nonce on the two gate acts, never by the key's
 `self#incarnation#` text — `incarnation` is caller-supplied and nothing detects a
-reused one. Relocation design §13.2 and `HeddleControlPlane`'s KDoc carry the proof.
+reused one. Relocation design §6.5 (residual 3) and §13 (item 2) carry the argument;
+`HeddleControlPlane`'s KDoc carries the mechanism.
 
 **The control log is read in full or not at all** (#1738). The log is the truth
 about supply, topology and the roster, so a peer that cannot read one of its entries
@@ -907,95 +908,26 @@ Carried over from the source intact; each is a named property test (§13).
 13. **Consensus only at the embroidery.** Mint, overlapping reshape, and
     fencing use `:kuilt-raft`; nothing else coordinates, at any frequency.
 
-## 11. Public surface sketch
+## 11. Public surface
 
-`explicitApi`-clean; the house mutator idiom (`Patch<S>?`, caller unchanged on
-`null`); required injection of scope/clock/random. Sketch, not signature-final:
+This section was a signature sketch written before any code, and the code settled
+several of its questions differently. Rather than keep a second copy of signatures
+to drift, it now says where each sketched piece landed. The declarations, their KDoc
+and the compiled samples they cite are the reference; `kuilt-heddle/module.md` walks
+them in order.
 
-```kotlin
-// ── the replicated state ────────────────────────────────────────────────
-public class EntitlementLedger private constructor(/* … */) :
-    Quilted<EntitlementLedger> {
+| Sketched | Shipped | What moved, and why |
+|---|---|---|
+| `EntitlementLedger` with `Patch<S>?` mutators, `holdings`, `edge`, `activeChildren`, `validate`, `bootstrap(root, mint)` | the same, plus `mint`, `seat`, `spendCaptured`, `lifecycle`, `gauge` | No `EntitlementPath` type: `holdings`/`spend`/`transfer` take the leaf `GroupId`, and transfer rows are keyed by `PathKey`. `bootstrap` takes a `nonce` naming the mint act, so two distinct acts union rather than collide. |
+| `class HeddlePolicy(config)` with `pick(parent, children, demand, wake, localHoldings): Allocation?` | `object HeddlePolicy` with `pick(edges, config, localHoldings): Grant?` | Pure and stateless. Each child arrives as one `PolicyEdge` (record, `EdgeSummary`, `Demand`, `Gauge` seat, base issuance, wake offset), so a parent's whole view is one list. |
+| `HeddleNode` with `suspend fun reserve(…): ReservationId?` | `HeddleNode`, whose `reserve` is not suspending and returns `ReserveOutcome` | A `null` could not tell an idle lane from a node that may not spend (#1892). `reserve`/`complete`/`cancel`/`earmarked` are the `FairShareExecution` interface both nodes implement. |
+| `heddleStatic(seam, selfId, mint, clock, config)` | adds `root`, `topology` and a per-boot `epoch` | Every peer passes the same root, mint and tree, so all start from one ledger; `epoch` orders a restarted peer's demand past its dead incarnation's (#1666). |
+| `heddleGoverned(seam, selfId, raft, clock, config): HeddleNode` | returns `GovernedHeddleNode`; adds `root`, `incarnation`, `epoch` | The control verbs suspend and return `ControlOutcome` (`Applied` / `Conflict` / `Indeterminate`), and `schedule` returns `ScheduleOutcome`, so the governed node is its own type rather than a `HeddleNode` with extra methods. No genesis: all supply and topology come from the log. |
 
-    // topology (control-plane; normally invoked via the consensus adapter)
-    public fun prepare(record: AttachmentRecord): Patch<EntitlementLedger>?
-    public fun activate(edge: AttachmentId): Patch<EntitlementLedger>?
-    public fun close(edge: AttachmentId): Patch<EntitlementLedger>?
-    public fun retire(edge: AttachmentId): Patch<EntitlementLedger>?
-
-    // entitlement flow (data-plane; local check, null = insufficient holdings)
-    public fun delegate(
-        replica: ReplicaId, edge: AttachmentId, amount: Long,
-    ): Patch<EntitlementLedger>?
-    public fun release(
-        replica: ReplicaId, edge: AttachmentId, amount: Long,
-    ): Patch<EntitlementLedger>?
-    public fun transfer(
-        path: EntitlementPath, from: ReplicaId, to: ReplicaId, amount: Long,
-    ): Patch<EntitlementLedger>?
-    public fun spend(
-        replica: ReplicaId, path: EntitlementPath, amount: Long,
-    ): Patch<EntitlementLedger>?
-
-    // derived views (pure)
-    public fun holdings(path: EntitlementPath, replica: ReplicaId): Long
-    public fun edge(id: AttachmentId): EdgeSummary?
-    public fun activeChildren(parent: GroupId): List<EdgeSummary>
-    public fun validate(): List<LedgerConflict>
-
-    override fun piece(other: EntitlementLedger): EntitlementLedger
-
-    public companion object {
-        public fun bootstrap(
-            root: GroupId, mint: Map<ReplicaId, Long>,
-        ): EntitlementLedger
-    }
-}
-
-// ── the pure policy ─────────────────────────────────────────────────────
-public class HeddlePolicy(private val config: HeddleConfig) {
-    /** One EEVDF selection at one parent. Pure; null = nothing to allocate. */
-    public fun pick(
-        parent: GroupId,
-        children: List<EdgeSummary>,
-        demand: Map<AttachmentId, Demand>,
-        wake: WakeState,
-        localHoldings: Long,
-    ): Allocation?
-}
-
-// ── the node: ledger + Quilter + demand + liveness, over a Seam ─────────
-public class HeddleNode internal constructor(/* … */) {
-    public val selfId: ReplicaId
-    public val ledger: StateFlow<EntitlementLedger>
-    public suspend fun reserve(leaf: GroupId, maximumCost: Long): ReservationId?
-    public suspend fun complete(id: ReservationId, actualCost: Long)
-    public suspend fun cancel(id: ReservationId)
-    public fun advertise(edge: AttachmentId, demand: Demand)
-}
-
-// ── paired bootstraps (§9) — no nullable consensus parameter ────────────
-public fun CoroutineScope.heddleStatic(
-    seam: Seam,
-    selfId: ReplicaId,
-    mint: Map<ReplicaId, Long>,       // pre-partitioned root supply
-    clock: () -> Instant,             // required — time is a dependency
-    config: HeddleConfig,
-): HeddleNode
-
-public fun CoroutineScope.heddleGoverned(
-    seam: Seam,
-    selfId: ReplicaId,
-    raft: RaftNode,                   // required — the control plane
-    clock: () -> Instant,
-    config: HeddleConfig,
-): HeddleNode
-```
-
-`HeddleConfig` carries the quanta and caps of §8.2 plus an injectable
-`Random`; internals follow the house thread-safety rules (atomicfu lock, no
-`limitedParallelism(1)` confinement) and exception discipline
-(`runCatchingCancellable` on best-effort fabric sends).
+`HeddleConfig` carries the policy caps (`PolicyConfig`), the per-peer holdings cap of
+§8.2, the demand TTL, the `Quilter` and heartbeat settings, and an injectable
+`Random`. Internals follow the house rules as sketched: an atomicfu lock, no
+`limitedParallelism(1)` confinement, and cancellation-safe best-effort sends.
 
 ### 11.1 The fairness draft — a builder over the topology
 
