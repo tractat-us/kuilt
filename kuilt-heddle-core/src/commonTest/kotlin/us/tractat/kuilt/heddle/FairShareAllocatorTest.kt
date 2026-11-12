@@ -137,26 +137,38 @@ class FairShareAllocatorTest {
         )
     }
 
+    /**
+     * The wake detector fires on an observed idle→demand **transition**, never on first sight.
+     *
+     * Peer B seats e3 at the origin and runs e1 and e2 to 100 each on its own holdings; A merges
+     * that and meets all three for the first time, e3 already 100 behind. Treating first sight as a
+     * wake would make e1 and e3 joiners, clamp e3 to the front over the one non-joiner, and split
+     * A's round between them instead of paying e3 its deficit.
+     *
+     * **e2 is load-bearing.** It is the non-joiner that holds that front at 100. Run e1 alone on B
+     * instead, as `HeddleNodeTest.firstObservationOfADemandingEdgeIsNotTreatedAsAWake` does, and
+     * the only non-joiner sits idle at the origin: the wrongly-detected wake clamps e3 to 0, which
+     * moves nothing, and the test stays green with first sight counted as a wake. Measured: that
+     * mutation reds this test and leaves the node-level one green.
+     */
     @Test
     fun aFirstObservationIsNotAWake() {
-        // Peer B seats e3 at the origin and runs e1 to 200 on its own holdings; A merges that and
-        // meets e3 for the first time already 200 behind. Treating first sight as a wake would
-        // clamp e3 level with e1 and split A's round between them.
         val a = ReplicaId("a")
         val b = ReplicaId("b")
         val onB = flatLedger(mapOf(a to 100L, b to 200L))
         val e3 = newborn(onB, "e3")
-        FairShareAllocator(b, policy).schedule(root, onB, earmarked = 0L) { mapOf(e1 to hungry) }
+        FairShareAllocator(b, policy).schedule(root, onB, earmarked = 0L) { mapOf(e1 to hungry, e2 to hungry) }
         val onA = InMemoryLedgerCell(onB.current)
         assertAll(
-            { assertEquals(200L, issued(onA, e1), "A sees e1's run") },
+            { assertEquals(100L, issued(onA, e1), "A sees e1's run") },
+            { assertEquals(100L, issued(onA, e2), "and e2's") },
             { assertEquals(Rational.ZERO, assertNotNull(onA.current.gauge(e3)).floor, "and e3 seated at the origin") },
         )
 
         FairShareAllocator(a, policy).schedule(root, onA, earmarked = 0L) { mapOf(e1 to hungry, e3 to hungry) }
         assertAll(
             { assertEquals(100L, issued(onA, e3), "an unclamped first sight honours e3's deficit in full") },
-            { assertEquals(200L, issued(onA, e1), "and e1, 200 ahead, takes none of A's grants") },
+            { assertEquals(100L, issued(onA, e1), "and e1, 100 ahead, takes none of A's grants") },
         )
     }
 
