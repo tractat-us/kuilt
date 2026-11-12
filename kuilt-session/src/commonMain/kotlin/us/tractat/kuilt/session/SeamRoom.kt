@@ -769,7 +769,8 @@ internal class SeamRoom(
      *
      * The invariant: on a host with a [reconnectController], `resumeSecrets.keys` equals
      * `admittedById.keys` whenever [lock] is free. [admitPeer] mints an entry in the critical
-     * section that admits the member, [removeFromRoster] drops it in the one that removes it, and
+     * section that admits the member (and none on a closed room, which admits nobody),
+     * [removeFromRoster] drops it in the one that removes it, [leave] clears it with the roster, and
      * nothing else writes it. Two consequences the resume path leans on:
      *
      * - **Stable while the member stays.** A same-`PeerId` re-admission (a fresh transport, a fresh
@@ -780,7 +781,9 @@ internal class SeamRoom(
      *   present, so [handleResume] can compare it and *then* call
      *   [JoinerReconnectController.tryResume] with no check-then-act window. That is why the check
      *   lives here and not in the controller: every hold policy, the consumer-written ones included
-     *   (#1614), is protected by construction and never has to know a secret exists.
+     *   (#1614), is protected by construction and never has to know a secret exists. It holds only
+     *   because [handleResume] lets **no** unchecked token through — not a wrong-room one, not one
+     *   for a departed member — so a policy that checks nothing is still safe.
      *
      * Bounded by the live roster, so a fabric that mints a fresh id per connection does not grow it.
      */
@@ -1626,7 +1629,9 @@ internal class SeamRoom(
         val (existingMembers, resumeSecret) = lock.withLock {
             val existing = admittedById.values.toList()
             addToRoster(member)
-            val secret = reconnectController?.let { resumeSecrets.getOrPut(joinerPeerId) { ResumeSecret.generate() } }
+            // `closed`: addToRoster admitted nobody, so there is no member to hold a secret for.
+            val secret = reconnectController?.takeIf { !closed }
+                ?.let { resumeSecrets.getOrPut(joinerPeerId) { ResumeSecret.generate() } }
             existing to secret
         }
 
@@ -1717,20 +1722,25 @@ internal class SeamRoom(
         // (see [resumeSecrets]); checking AFTER `tryResume` would not be — the window is already
         // spent by then.
         //
-        // A `Resume` without any secret comes from a joiner that predates it: it cannot prove it is
-        // the member it names, so it is refused as an invalid token, which that joiner treats as
-        // terminal. Two tokens can spend no window here and so go to the controller unchecked: one
-        // for a peer that is NOT a current member (a genuine late resume after an expiry keeps its
-        // `ResumeWindowExpired` answer), and one naming another room, which the controller refuses as
-        // `session-mismatch` — the reason that actually describes a token minted by another server.
+        // **No token reaches the controller unchecked.** A hold policy may skip the room-id check or
+        // hold a window for a member that has already gone, so every refusal the room can decide
+        // from its own state, it decides here:
+        // - no secret at all: a joiner that predates it, which cannot prove who it is;
+        // - another room's id, against this room's own write-once id: a token minted elsewhere;
+        // - a peer that is not a current member: it has no seat to resume onto. A `Goodbye` or a
+        //   `PeerLost` removes the member while its window may still be open, and a forgery that
+        //   reached the controller would spend that window, cancelling the expiry whose `Farewell`
+        //   is the only eviction a star bystander ever hears (#1557). Answered as an elapsed window,
+        //   which is what a genuine late resume after an expiry has always been told;
+        // - a member whose secret does not match.
         val peer = PeerId(msg.tokenPeerId)
         val presented = msg.resumeSecret
-        val expected = lock.withLock { resumeSecrets[peer] }
-        val namesThisRoom = msg.tokenRoomId == _roomId.value?.value
+        val (thisRoom, expected) = lock.withLock { _roomId.value to resumeSecrets[peer] }
         val verdict = when {
             presented == null -> ResumeResult.TokenInvalid("missing-secret")
-            namesThisRoom && expected != null && !expected.matches(presented) ->
-                ResumeResult.TokenInvalid("secret-mismatch")
+            msg.tokenRoomId != thisRoom?.value -> ResumeResult.TokenInvalid("session-mismatch")
+            expected == null -> ResumeResult.WindowClosed
+            !expected.matches(presented) -> ResumeResult.TokenInvalid("secret-mismatch")
             else -> ctrl.tryResume(
                 ResumeToken(
                     peerId = peer,
@@ -4035,6 +4045,8 @@ internal class SeamRoom(
         lock.withLock {
             admittedById.clear()
             episodeDetectedAtMs.clear()
+            // With the members it belongs to, keeping `resumeSecrets.keys == admittedById.keys`.
+            resumeSecrets.clear()
             _roster.value = emptySet()
             _rosterPeers.value = setOf(selfId)
             memberInboxes.values.toList().also { memberInboxes.clear() }

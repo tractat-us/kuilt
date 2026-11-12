@@ -219,6 +219,19 @@ internal class JoinerResumeMachine(
     private var pendingResume: CompletableDeferred<ResumeResult.JoinerOutcome>? = null
 
     /**
+     * Completes when the current flight's `Resume` has actually gone out (#3165). Installed with
+     * [pendingResume] and guarded by [lock]; a caller that joins the flight reads it there.
+     *
+     * Since a `Resume` goes to the host alone, the flight's owner may wait up to
+     * [HeartbeatConfig.resumeTimeout] for the host to be addressable *before* it sends. A joined
+     * caller that started its reply deadline at the moment it joined could then settle the shared
+     * flight as [ResumeResult.TimedOut] after the host had already spent the window but before its
+     * ack arrived, leaving every later attempt refused. So a joined caller waits for this first, and
+     * starts its reply deadline from the send, exactly as the owner does.
+     */
+    private var pendingSent: CompletableDeferred<Unit>? = null
+
+    /**
      * The most recent host `Reject` for a resume in this episode, or null. Set by [rejectFlight]
      * when a flight was actually pending; read by [runReconnect] to label the terminal event
      * [FailureReason.Refused] instead of [FailureReason.WindowExpired].
@@ -729,18 +742,21 @@ internal class JoinerResumeMachine(
      */
     suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome {
         // Install (or join) the deferred under lock; check terminal flags first.
-        val (deferred, ownsFlight) = lock.withLock {
+        val (deferred, sent, ownsFlight) = lock.withLock {
             if (host.isTerminal()) return ResumeResult.WindowClosed
             val inFlight = pendingResume
-            if (inFlight != null) {
-                inFlight to false
+            val inFlightSent = pendingSent
+            if (inFlight != null && inFlightSent != null) {
+                Triple(inFlight, inFlightSent, false)
             } else {
                 flightsStarted++
-                CompletableDeferred<ResumeResult.JoinerOutcome>().also { pendingResume = it } to true
+                val reply = CompletableDeferred<ResumeResult.JoinerOutcome>().also { pendingResume = it }
+                val went = CompletableDeferred<Unit>().also { pendingSent = it }
+                Triple(reply, went, true)
             }
         }
         // A resume is already in flight — join it (bounded) rather than orphaning its reply slot.
-        if (!ownsFlight) return awaitFlightBounded(deferred)
+        if (!ownsFlight) return awaitJoinedFlight(deferred, sent)
 
         val resumeMsg = AdmitMessage.encode(
             AdmitMessage.Resume(
@@ -755,7 +771,7 @@ internal class JoinerResumeMachine(
         // A host that is not addressable is TimedOut, exactly what an unanswered frame would have
         // become; any other send failure becomes WindowClosed for every caller of this flight.
         val sendResult = try {
-            runCatchingCancellable { sendToHost(resumeMsg) }
+            runCatchingCancellable { sendToHost(resumeMsg, deferred).also { if (it) sent.complete(Unit) } }
         } catch (e: CancellationException) {
             abandonFlight(deferred)
             throw e
@@ -783,7 +799,10 @@ internal class JoinerResumeMachine(
      * first resume implementation, with no recorded reason; the one cost of addressing it is that a
      * just-re-woven seam may not list the host yet, which is what the bounded wait covers.
      */
-    private suspend fun sendToHost(bytes: ByteArray): Boolean {
+    private suspend fun sendToHost(
+        bytes: ByteArray,
+        flight: CompletableDeferred<ResumeResult.JoinerOutcome>,
+    ): Boolean {
         val hostId = host.hostPeer() ?: return false
         // true: the host is addressable; false: the seam tore first; null: the bound elapsed.
         val addressable: Boolean? = withTimeoutOrNull(heartbeatConfig.resumeTimeout) {
@@ -796,8 +815,30 @@ internal class JoinerResumeMachine(
             }.first { it != null }
         }
         if (addressable != true) return false
+        // The flight may have been settled while this waited — `leave()` took it, say. Sending then
+        // would have the host spend the window for a reply nobody is waiting for.
+        if (lock.withLock { pendingResume !== flight }) return false
         seam.sendTo(hostId, bytes)
         return true
+    }
+
+    /**
+     * A joined caller's wait: first for the owner's send (or the flight settling) under the same
+     * bound the owner's own pre-send wait has, then for the verdict under [awaitFlightBounded] —
+     * so its reply deadline starts from the send, as the owner's does (see [pendingSent]).
+     */
+    private suspend fun awaitJoinedFlight(
+        deferred: CompletableDeferred<ResumeResult.JoinerOutcome>,
+        sent: CompletableDeferred<Unit>,
+    ): ResumeResult.JoinerOutcome {
+        val reached = withTimeoutOrNull(heartbeatConfig.resumeTimeout) {
+            select<Unit> {
+                sent.onAwait { }
+                deferred.onAwait { }
+            }
+        }
+        if (reached == null) return settleOrAwait(deferred, ResumeResult.TimedOut)
+        return awaitFlightBounded(deferred)
     }
 
     /**

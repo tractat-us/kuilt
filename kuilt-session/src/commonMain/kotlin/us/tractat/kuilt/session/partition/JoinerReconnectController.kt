@@ -66,10 +66,12 @@ public interface JoinerReconnectController {
      * 2. Window open — the reconnect window for [token.peerId] must still be active at [at].
      * 3. Token not yet consumed — a token may only be used once per window.
      *
-     * **The [ResumeToken.secret] is not this controller's concern.** The room checks it before
-     * calling here, so a token naming a current member reaches [tryResume] only when it carries that
-     * member's secret (#3165). An implementation — a consumer's own hold policy included — is
-     * protected from forged resumes without knowing a secret exists, and must not try to check one.
+     * **The [ResumeToken.secret] is not this controller's concern.** The room checks every token
+     * before calling here and answers the rest itself (#3165): a token reaches [tryResume] only when
+     * it names this room, names a **current member**, and carries that member's secret. An
+     * implementation — a consumer's own hold policy included — is protected from forged resumes
+     * without knowing a secret exists, even one that checks none of steps 1–3 for a departed peer,
+     * and must not try to check the secret itself.
      *
      * On success, emits [JoinerReconnectEvent.Resumed] and closes the window so
      * a second [tryResume] with the same token returns [ResumeResult.WindowClosed].
