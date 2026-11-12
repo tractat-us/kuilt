@@ -28,7 +28,7 @@ the same winner. It serves the eligible child (not running ahead of its fair sha
 next grant finishes soonest in virtual time. Returns `null` when nobody is both eligible
 and demanding.
 
-<!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#samplePolicyPick -->
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#samplePolicyPick -->
 ```kotlin
     // Both start level (no service yet); the heavier-weighted child has the earliest
     // virtual deadline, so it is served first.

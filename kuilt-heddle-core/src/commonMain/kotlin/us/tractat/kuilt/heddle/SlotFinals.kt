@@ -5,7 +5,7 @@ import us.tractat.kuilt.crdt.ReplicaId
 
 /**
  * One replica's **final** authored values on a fenced edge — its four base counter slots and its
- * own transfer row at the edge's [PathKey] — the promise a [ControlCommand.QuiesceAck] carries
+ * own transfer row at the edge's [PathKey] — the promise a `ControlCommand.QuiesceAck` carries
  * (`docs/heddle-ledger-relocation-design.md` §6.2 step 2).
  *
  * Every `(edge, counter, replica)` slot is single-writer, so when replica `r` has marked an edge
@@ -16,7 +16,7 @@ import us.tractat.kuilt.crdt.ReplicaId
  * ## Why the transfer row belongs here (issue #2377)
  *
  * `EntitlementLedger.relocationPatch`'s receiver on the production path is
- * [FenceState.relocations], which accumulates only the relocation patches the control plane itself
+ * `FenceState.relocations` in `:kuilt-heddle`, which accumulates only the relocation patches the control plane itself
  * authored — so it carries no `transfers` rows, ever. A move derived there could neither *see* the
  * strand's hand-offs (to refuse) nor *carry* them (to conserve), and the rows were abandoned on the
  * dead generation's key (#2366).
@@ -41,7 +41,7 @@ import us.tractat.kuilt.crdt.ReplicaId
  *
  * Such a build dates from before the control log carried a header, so it gets no protection from
  * #1738's fail-closed rule. It drops the ack and reads the prefix as fully applied, which leaves a
- * permanent local divergence in a [FenceState] every peer is meant to hold equal, and anti-entropy
+ * permanent local divergence in a `FenceState` every peer is meant to hold equal, and anti-entropy
  * cannot repair that because it is not in the gossip-merged data plane. Two cases reach it: rolling one
  * peer back to a pre-#2377 binary, and booting an old binary on a peer that was offline. Upgrading
  * together is what keeps both away. A build that does have the header stops at an ack it cannot
@@ -66,16 +66,17 @@ import us.tractat.kuilt.crdt.ReplicaId
  *   different road. Nothing in this module detects it; a rejoiner's identity is not evidence about
  *   its state.
  */
+@HeddleInternalApi
 @Serializable
-internal data class SlotFinals(
-    val issued: Long,
-    val returned: Long,
-    val leafSpent: Long,
-    val rollupSpent: Long,
-    val transfers: Map<ReplicaId, Long> = emptyMap(),
+public data class SlotFinals(
+    public val issued: Long,
+    public val returned: Long,
+    public val leafSpent: Long,
+    public val rollupSpent: Long,
+    public val transfers: Map<ReplicaId, Long> = emptyMap(),
 ) {
     /** The per-slot max of two acks for the same `(edge, replica)` — a re-ack never lowers a final. */
-    fun join(other: SlotFinals): SlotFinals = SlotFinals(
+    public fun join(other: SlotFinals): SlotFinals = SlotFinals(
         issued = maxOf(issued, other.issued),
         returned = maxOf(returned, other.returned),
         leafSpent = maxOf(leafSpent, other.leafSpent),
@@ -88,8 +89,8 @@ internal data class SlotFinals(
         },
     )
 
-    companion object {
-        val ZERO: SlotFinals = SlotFinals(0L, 0L, 0L, 0L)
+    public companion object {
+        public val ZERO: SlotFinals = SlotFinals(0L, 0L, 0L, 0L)
     }
 }
 
@@ -98,13 +99,14 @@ internal data class SlotFinals(
  * ([EntitlementLedger.relocationPatch]). Three outcomes, all deterministic functions of the same
  * inputs, so every peer derives the identical one.
  */
-internal sealed interface Relocation {
+@HeddleInternalApi
+public sealed interface Relocation {
     /** The derived patch — drain each fenced edge, credit the live edge. */
-    data class Moved(val patch: EntitlementLedger) : Relocation
+    public data class Moved(public val patch: EntitlementLedger) : Relocation
 
     /** Every fenced edge is already drained: nothing left to move (the idempotence case, §5.4 iii). */
-    data object Nothing : Relocation
+    public data object Nothing : Relocation
 
     /** The move is refused — [reason] is the diagnostic. Fail-closed: the strand stays standing. */
-    data class Refused(val reason: String) : Relocation
+    public data class Refused(public val reason: String) : Relocation
 }

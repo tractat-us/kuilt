@@ -714,9 +714,10 @@ public class EntitlementLedger private constructor(
      * this the published RETIRED patch would carry no witness and a laggard that received RETIRED before
      * the draining `release`/`spend` deltas would transiently false-fire [LedgerConflict.ClosureViolation].
      * Carrying the proposer's observed witness ships the drained counters alongside RETIRED (§5.1, §10.10).
-     * `internal` — control-plane support.
+     * [HeddleInternalApi] — control-plane support.
      */
-    internal fun drainWitnessFor(edge: AttachmentId): EntitlementLedger = drainWitness(edge)
+    @HeddleInternalApi
+    public fun drainWitnessFor(edge: AttachmentId): EntitlementLedger = drainWitness(edge)
 
     /**
      * The **§4 generation-move**: drain each fenced retired edge in [finals] and re-home everything it
@@ -834,9 +835,10 @@ public class EntitlementLedger private constructor(
      * (`heddle-design.md` §8.1). Draining a slot whose owner never promised is precisely the
      * fabricate-beyond-owner violation the fence exists to prevent.
      *
-     * `internal` — the caller is [HeddleControlPlane]'s apply loop, which alone holds log-pure inputs.
+     * [HeddleInternalApi] — the caller is `HeddleControlPlane`'s apply loop, which alone holds log-pure inputs.
      */
-    internal fun relocationPatch(
+    @HeddleInternalApi
+    public fun relocationPatch(
         liveEdge: AttachmentId,
         finals: Map<AttachmentId, Map<ReplicaId, SlotFinals>>,
     ): Relocation {
@@ -1139,8 +1141,9 @@ public class EntitlementLedger private constructor(
     internal fun baseFinalsOn(edge: AttachmentId): Map<ReplicaId, SlotFinals> =
         replicasOnEdge(edge).associateWith { r -> baseFinalsOn(edge, r) }
 
-    /** [r]'s own base slots on [edge] — its [ControlCommand.QuiesceAck] payload. */
-    internal fun baseFinalsOn(edge: AttachmentId, r: ReplicaId): SlotFinals = SlotFinals(
+    /** [r]'s own base slots on [edge] — its `ControlCommand.QuiesceAck` payload. */
+    @HeddleInternalApi
+    public fun baseFinalsOn(edge: AttachmentId, r: ReplicaId): SlotFinals = SlotFinals(
         issued = slot(issued, edge, r),
         returned = slot(returned, edge, r),
         leafSpent = slot(leafSpent, edge, r),
@@ -1771,9 +1774,10 @@ public class EntitlementLedger private constructor(
      * This is the exact predicate [LedgerConflict.DualActiveInbound] fires on. The **H5 control plane**
      * reads it *before* applying an `activate` proposal so the log's serialization can refuse the
      * loser of two overlapping reshapes as a structured conflict — instead of letting both apply and
-     * quarantine the lineage (design §9, §5.2, §10.11). `internal` — control-plane + test support.
+     * quarantine the lineage (design §9, §5.2, §10.11). [HeddleInternalApi] — control-plane + test support.
      */
-    internal fun liveInboundEdges(child: GroupId): List<AttachmentId> =
+    @HeddleInternalApi
+    public fun liveInboundEdges(child: GroupId): List<AttachmentId> =
         allEdges()
             .filter { e ->
                 recordOf(e)?.child == child &&
@@ -1785,9 +1789,10 @@ public class EntitlementLedger private constructor(
      * The **RETIRED inbound** edges of [child] — every non-divergent edge whose record targets [child]
      * and whose lifecycle is [Lifecycle.RETIRED]. These are the edges a raced advisory-retire may have
      * stranded budget on ([reconcileStranded]); the **H5 control plane** reads it on its log-pure
-     * projection to gate a reconciliation witness (§9 #3, §5.4). `internal` — control-plane + test support.
+     * projection to gate a reconciliation witness (§9 #3, §5.4). [HeddleInternalApi] — control-plane + test support.
      */
-    internal fun retiredInboundEdges(child: GroupId): List<AttachmentId> =
+    @HeddleInternalApi
+    public fun retiredInboundEdges(child: GroupId): List<AttachmentId> =
         allEdges().filter { recordOf(it)?.child == child && lifecycleOf(it) == Lifecycle.RETIRED }.sorted()
 
     /** The edge ids carrying a base `issued` slot — the control plane's reconciliation witness-shape gate. */
@@ -1853,7 +1858,8 @@ public class EntitlementLedger private constructor(
      * A zero-amount record counts: it is still evidence of a mint act on a second tree, and
      * excluding it would make the report depend on an amount the fault has nothing to do with.
      */
-    internal fun mintedRoots(): List<GroupId> = minted.values.mapTo(HashSet()) { it.root }.sorted()
+    @HeddleInternalApi
+    public fun mintedRoots(): List<GroupId> = minted.values.mapTo(HashSet()) { it.root }.sorted()
 
     /**
      * Total service charged where an edge is a path's final edge (the conservation term), at
