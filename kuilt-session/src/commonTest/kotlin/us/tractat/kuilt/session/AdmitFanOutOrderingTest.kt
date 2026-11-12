@@ -29,7 +29,6 @@ import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
-import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -497,10 +496,6 @@ class AdmitFanOutOrderingTest {
                 JoinerReconnectEvent.WindowOpened(peerId, expiresAt = expiresAt, detectedAt = at),
             )
         }
-
-        // Never answers `Success`, so there is no window a wrong secret could spend and nothing to
-        // check one against: the enrolment obligation (#3165) is met by refusing every resume.
-        override suspend fun enroll(peerId: PeerId): ResumeSecret = ResumeSecret.generate()
 
         override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
             ResumeResult.WindowNotYetOpen

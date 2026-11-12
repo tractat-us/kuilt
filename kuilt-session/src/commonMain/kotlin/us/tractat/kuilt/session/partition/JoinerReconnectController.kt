@@ -19,10 +19,11 @@ import us.tractat.kuilt.session.admit.RejectCode
  * observe `events.filterIsInstance<JoinerReconnectEvent.Resumed>()` and push
  * current application state to `event.peerId`.
  *
- * **A resume is good only against the host that admitted the joiner.** The controller holds each
- * member's [ResumeSecret] and its window in memory, so a host that did not mint them — a newly
- * elected leader, another server in a cluster — answers a resume with a refusal, and the joiner
- * re-joins fresh.
+ * **A resume is good only against the host that admitted the joiner.** That host holds the member's
+ * [ResumeSecret] and this controller holds its window, both in memory, so a host that did not mint
+ * them — a newly elected leader, another server in a cluster — refuses the resume. The joiner then
+ * ends its episode on the refusal, and only a consumer that reacts to it (`ClusterClient` does)
+ * joins again.
  *
  * Partition events ([PartitionEvent]) are produced by the partition-detector layer.
  * Until that wiring lands, callers bridge manually: on transport close, invoke
@@ -58,38 +59,17 @@ public interface JoinerReconnectController {
     )
 
     /**
-     * Returns the secret [peerId] must present to resume, minting it on the first call for that
-     * peer — the host calls this each time it admits [peerId], before the `Welcome` that hands the
-     * secret over is sent (#3165). The implementation mints it and keeps it; the secret must come
-     * from a cryptographically secure source ([ResumeSecret.generate]).
-     *
-     * **Stable per peer.** A member admitted again under the same id — a fresh transport, a fresh
-     * room instance — gets the same secret back, so a token it already holds keeps working. That
-     * costs nothing: whoever the fabric admits under an id receives that id's secret in its
-     * `Welcome` either way, so the secret binds a resume to *the member admitted under that id*,
-     * and the fabric owns whether the id is authentic. Enrolling opens no window.
-     *
-     * **The obligation it creates on [tryResume]:** a token whose [ResumeToken.secret] does not
-     * match the one enrolled for [ResumeToken.peerId] — or that names a peer never enrolled — is
-     * [ResumeResult.TokenInvalid], and is refused **without consuming that peer's window**. A check
-     * placed anywhere after the window is spent lets any member who knows the victim's id lock the
-     * victim out, which every member does.
-     */
-    public suspend fun enroll(peerId: PeerId): ResumeSecret
-
-    /**
      * Attempts to resume the peer identified by [token].
      *
      * Validation order:
      * 1. Session match — [ResumeToken.roomId] must equal the controller's Room.
-     * 2. Secret match — [ResumeToken.secret] must match the one [enroll]ed for [token.peerId],
-     *    compared in constant time ([ResumeSecret.matches]). A mismatch is
-     *    [ResumeResult.TokenInvalid] and leaves the window untouched (#3165).
-     * 3. Window open — the reconnect window for [token.peerId] must still be active at [at].
-     * 4. Token not yet consumed — a token may only be used once per window.
+     * 2. Window open — the reconnect window for [token.peerId] must still be active at [at].
+     * 3. Token not yet consumed — a token may only be used once per window.
      *
-     * Steps 2–4 must be one atomic decision: a secret checked outside the section that spends the
-     * window is the bug this order exists to prevent.
+     * **The [ResumeToken.secret] is not this controller's concern.** The room checks it before
+     * calling here, so a token naming a current member reaches [tryResume] only when it carries that
+     * member's secret (#3165). An implementation — a consumer's own hold policy included — is
+     * protected from forged resumes without knowing a secret exists, and must not try to check one.
      *
      * On success, emits [JoinerReconnectEvent.Resumed] and closes the window so
      * a second [tryResume] with the same token returns [ResumeResult.WindowClosed].

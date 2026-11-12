@@ -13,7 +13,6 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertTrue
 
 /**
  * Unit tests for [DefaultJoinerReconnectController].
@@ -33,21 +32,17 @@ class JoinerReconnectControllerTest {
     // Clock always returns 0; virtual time is advanced via testScheduler.
     private val fixedClock: () -> Long = { 0L }
 
-    // The secrets the controller minted for peerA and peerB, as the host would hand them over.
-    private lateinit var secretA: ResumeSecret
-    private lateinit var secretB: ResumeSecret
+    // The controller never reads a token's secret (the room checks it first, #3165), so any will do.
+    private val secretA = ResumeSecret.generate()
+    private val secretB = ResumeSecret.generate()
 
-    /** A controller with [peerA] and [peerB] enrolled, as the host enrols each member at admit. */
-    private suspend fun controller(scope: kotlinx.coroutines.CoroutineScope) =
+    private fun controller(scope: kotlinx.coroutines.CoroutineScope) =
         DefaultJoinerReconnectController(
             roomId = sessionId,
             reconnectWindowMs = windowMs,
             clock = fixedClock,
             scope = scope,
-        ).also {
-            secretA = it.enroll(peerA)
-            secretB = it.enroll(peerB)
-        }
+        )
 
     // ── Window opened ─────────────────────────────────────────────────────────
 
@@ -368,65 +363,6 @@ class JoinerReconnectControllerTest {
             val goodToken = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 2L, secret = secretA)
             val result = ctrl.tryResume(goodToken, at = 2L)
             assertIs<ResumeResult.Success>(result)
-        }
-
-    // ── Resume secret (#3165) ─────────────────────────────────────────────────
-
-    /**
-     * A token naming peerA with peerB's secret — the forgery any member can write, since ids and
-     * the room id are on the roster — is refused, and peerA's own resume afterwards still succeeds.
-     * The second half is the point: a check placed after the window is spent refuses the forgery
-     * too, and only the follow-up resume tells the two apart.
-     */
-    @Test
-    fun `a wrong secret is TokenInvalid and leaves the window open`() =
-        runTest {
-            val ctrl = controller(backgroundScope)
-            ctrl.onPeerUnresponsive(peerA, at = 0L)
-            testScheduler.advanceTimeBy(1)
-
-            val forged = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = secretB)
-            val forgedResult = ctrl.tryResume(forged, at = 1L)
-            val genuine = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = secretA)
-            val genuineResult = ctrl.tryResume(genuine, at = 2L)
-
-            assertAll(
-                { assertEquals(ResumeResult.TokenInvalid("secret-mismatch"), forgedResult) },
-                { assertEquals(ResumeResult.Success, genuineResult, "the forgery must not have spent the window") },
-            )
-        }
-
-    @Test
-    fun `a peer that was never enrolled is TokenInvalid even with its window open`() =
-        runTest {
-            val ctrl = controller(backgroundScope)
-            val stranger = PeerId("peer-never-admitted")
-            ctrl.onPeerUnresponsive(stranger, at = 0L)
-            testScheduler.advanceTimeBy(1)
-
-            val token = ResumeToken(peerId = stranger, roomId = sessionId, issuedAt = 1L, secret = secretA)
-            assertEquals(ResumeResult.TokenInvalid("secret-mismatch"), ctrl.tryResume(token, at = 1L))
-        }
-
-    /**
-     * A member re-admitted under the same id gets its existing secret back, so the token it already
-     * holds still resumes — the secret is per member, not per admission.
-     */
-    @Test
-    fun `re-enrolling a peer returns the secret it already holds`() =
-        runTest {
-            val ctrl = controller(backgroundScope)
-            val again = ctrl.enroll(peerA)
-            ctrl.onPeerUnresponsive(peerA, at = 0L)
-            testScheduler.advanceTimeBy(1)
-
-            val token = ResumeToken(peerId = peerA, roomId = sessionId, issuedAt = 1L, secret = secretA)
-            val result = ctrl.tryResume(token, at = 1L)
-            assertAll(
-                { assertEquals(secretA, again, "re-enrolment must not rotate the secret") },
-                { assertTrue(!secretA.matches(secretB), "two members must not share a secret") },
-                { assertEquals(ResumeResult.Success, result) },
-            )
         }
 
     // ── Unknown peer ──────────────────────────────────────────────────────────

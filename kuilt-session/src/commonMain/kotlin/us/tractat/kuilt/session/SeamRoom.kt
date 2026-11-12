@@ -65,6 +65,7 @@ import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.JoinerResumeHost
 import us.tractat.kuilt.session.partition.JoinerResumeMachine
 import us.tractat.kuilt.session.partition.ResumeRefusal
+import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
@@ -761,6 +762,29 @@ internal class SeamRoom(
      * is not partitioned before it consults this map — and the next episode overwrites it.
      */
     private val episodeDetectedAtMs = mutableMapOf<PeerId, Long>()
+
+    /**
+     * **Host only.** Each current member's [ResumeSecret] — the proof that a `Resume` naming that
+     * member is the member's own (#3165). Guarded by [lock].
+     *
+     * The invariant: on a host with a [reconnectController], `resumeSecrets.keys` equals
+     * `admittedById.keys` whenever [lock] is free. [admitPeer] mints an entry in the critical
+     * section that admits the member, [removeFromRoster] drops it in the one that removes it, and
+     * nothing else writes it. Two consequences the resume path leans on:
+     *
+     * - **Stable while the member stays.** A same-`PeerId` re-admission (a fresh transport, a fresh
+     *   room instance) finds the entry and reuses it, so the token that member already holds keeps
+     *   working. Whoever the fabric admits under an id receives that id's secret in its `Welcome`
+     *   either way, so reuse is no weaker than rotation; the fabric owns whether the id is real.
+     * - **Checked before the controller, race-free.** A secret never changes while its member is
+     *   present, so [handleResume] can compare it and *then* call
+     *   [JoinerReconnectController.tryResume] with no check-then-act window. That is why the check
+     *   lives here and not in the controller: every hold policy, the consumer-written ones included
+     *   (#1614), is protected by construction and never has to know a secret exists.
+     *
+     * Bounded by the live roster, so a fabric that mints a fresh id per connection does not grow it.
+     */
+    private val resumeSecrets = mutableMapOf<PeerId, ResumeSecret>()
     private val _roster = MutableStateFlow<Set<Member>>(emptySet())
     override val roster: StateFlow<Set<Member>> = _roster.asStateFlow()
 
@@ -1595,10 +1619,15 @@ internal class SeamRoom(
         )
 
         // Snapshot current members and mutate roster under lock; no I/O inside.
-        val existingMembers = lock.withLock {
+        // The resume secret is minted (or, on a same-id re-admission, reused) in the SAME critical
+        // section that admits the member — see [resumeSecrets] for the invariant this keeps, and
+        // for why only a host that can answer a resume holds one. A joiner told nothing simply
+        // holds no token.
+        val (existingMembers, resumeSecret) = lock.withLock {
             val existing = admittedById.values.toList()
             addToRoster(member)
-            existing
+            val secret = reconnectController?.let { resumeSecrets.getOrPut(joinerPeerId) { ResumeSecret.generate() } }
+            existing to secret
         }
 
         // The roster copy: what every OTHER member is told about the joiner. It carries no secret.
@@ -1609,12 +1638,6 @@ internal class SeamRoom(
             deviceId = hello.deviceId,
             roomId = _roomId.value?.value,
         )
-
-        // Enroll the joiner with the controller BEFORE the Welcome that hands its secret over, so
-        // no resume can arrive for a secret the controller does not hold (#3165). Only a host that
-        // can answer a resume has one: without a controller there is nothing to check it against,
-        // and a joiner told nothing simply holds no token.
-        val resumeSecret = reconnectController?.enroll(joinerPeerId)
 
         // All sends below are outside the lock — they are suspend calls.
 
@@ -1687,21 +1710,33 @@ internal class SeamRoom(
      */
     private suspend fun handleResume(sender: PeerId, msg: AdmitMessage.Resume) {
         val ctrl = reconnectController ?: return
-        // A `Resume` without a secret comes from a joiner that predates it (#3165). It cannot prove
-        // it is the member it names, so it is refused as an invalid token — terminal, so that
-        // joiner re-joins fresh — without reaching the controller, and so without touching the
-        // named member's window. Accepting it would reopen the forgery the secret closes.
-        val secret = msg.resumeSecret
-        val verdict = if (secret == null) {
-            ResumeResult.TokenInvalid("missing-secret")
-        } else {
-            val token = ResumeToken(
-                peerId = PeerId(msg.tokenPeerId),
-                roomId = RoomId(msg.tokenRoomId),
-                issuedAt = msg.issuedAt,
-                secret = secret,
+        // The secret is checked HERE, before the controller is asked anything (#3165). Every member
+        // can write a token's other three fields for any other member, so a forgery that reached
+        // `tryResume` would spend the named member's window and lock it out. Checking before rather
+        // than inside is race-free because a member's secret never changes while it is present
+        // (see [resumeSecrets]); checking AFTER `tryResume` would not be — the window is already
+        // spent by then.
+        //
+        // A `Resume` without any secret comes from a joiner that predates it: it cannot prove it is
+        // the member it names, so it is refused as an invalid token, which that joiner treats as
+        // terminal. A token for a peer that is NOT a current member holds no window of any member's
+        // to spend, so the controller still decides it — a genuine late resume after an expiry
+        // keeps its `ResumeWindowExpired` answer.
+        val peer = PeerId(msg.tokenPeerId)
+        val presented = msg.resumeSecret
+        val expected = lock.withLock { resumeSecrets[peer] }
+        val verdict = when {
+            presented == null -> ResumeResult.TokenInvalid("missing-secret")
+            expected != null && !expected.matches(presented) -> ResumeResult.TokenInvalid("secret-mismatch")
+            else -> ctrl.tryResume(
+                ResumeToken(
+                    peerId = peer,
+                    roomId = RoomId(msg.tokenRoomId),
+                    issuedAt = msg.issuedAt,
+                    secret = presented,
+                ),
+                at = clock().toEpochMilliseconds(),
             )
-            ctrl.tryResume(token, at = clock().toEpochMilliseconds())
         }
         val reject = when (val result = verdict) {
             // handleReconnectResumed fires via the controller event stream.
@@ -3528,6 +3563,8 @@ internal class SeamRoom(
             // Reaped with the member so a long-lived room does not accumulate an entry per peer
             // that ever left. refineWindow's Partitioned gate rejects an announcement for a gone member.
             episodeDetectedAtMs.remove(peerId)
+            // Pruned with the member, keeping `resumeSecrets.keys == admittedById.keys` (#3165).
+            resumeSecrets.remove(peerId)
             // A later admission gets a fresh inbox; close this admission's inbox outside the lock.
             val inbox = memberInboxes.remove(peerId)
             // Keep removal in the same critical section as admission and liveness updates. Otherwise
@@ -3564,6 +3601,9 @@ internal class SeamRoom(
      * room, so it can neither be reached from outside nor answer for a host.
      */
     internal fun hostPeer(): PeerId? = lock.withLock { hostPeerId }
+
+    /** Test-visibility: how many resume secrets this host holds — one per current member (#3165). */
+    internal fun heldResumeSecretCount(): Int = lock.withLock { resumeSecrets.size }
 
     // ── Application frame routing ─────────────────────────────────────────────
 

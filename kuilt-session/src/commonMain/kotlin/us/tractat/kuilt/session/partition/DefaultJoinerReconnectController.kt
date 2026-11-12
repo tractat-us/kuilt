@@ -43,10 +43,6 @@ public class DefaultJoinerReconnectController(
     // Per-peer window state, keyed by PeerId.
     private val windows = mutableMapOf<PeerId, WindowState>()
 
-    // Per-peer resume secret, minted by the host at admit (#3165). Guarded by [mutex] with
-    // [windows], so the secret check and the window spend in [tryResume] are one decision.
-    private val secrets = mutableMapOf<PeerId, ResumeSecret>()
-
     private val _events = MutableSharedFlow<JoinerReconnectEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<JoinerReconnectEvent> = _events.asSharedFlow()
 
@@ -57,9 +53,6 @@ public class DefaultJoinerReconnectController(
         scope.launch { openWindow(peerId, at) }
     }
 
-    override suspend fun enroll(peerId: PeerId): ResumeSecret =
-        mutex.withLock { secrets.getOrPut(peerId) { ResumeSecret.generate() } }
-
     override suspend fun tryResume(
         token: ResumeToken,
         at: Long,
@@ -69,13 +62,6 @@ public class DefaultJoinerReconnectController(
         }
         val result: ResumeResult.HostVerdict =
             mutex.withLock {
-                // The secret is checked FIRST, inside the same critical section that spends the
-                // window, so a forgery can neither consume the window nor learn its state (#3165).
-                // Any member can write the other three fields of a token for any other member.
-                val enrolled = secrets[token.peerId]
-                if (enrolled == null || !enrolled.matches(token.secret)) {
-                    return@withLock ResumeResult.TokenInvalid("secret-mismatch")
-                }
                 val state = windows[token.peerId]
                 when {
                     // No window has been opened for this peer at all — the fast-reconnect race
