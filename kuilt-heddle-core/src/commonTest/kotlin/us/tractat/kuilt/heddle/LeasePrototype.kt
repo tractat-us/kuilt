@@ -6,8 +6,8 @@ import us.tractat.kuilt.crdt.ReplicaId
 /**
  * A **test-only** prototype of the lease model the `LocalHeddle` engine is planned to expose (#3173,
  * plan Task C, ruling R2): one lease per slot, time as the cost. It exists to produce evidence — the
- * fairness and scale numbers `LeaseCharacterizationTest` records — before that engine's API is
- * frozen, and it is deleted when the engine lands.
+ * fairness and scale numbers `LeaseCharacterizationTest` and `LeaseScaleProbe` record — before that
+ * engine's API is frozen, and it is deleted when the engine lands.
  *
  * It runs over the production [EntitlementLedger] and [FairShareAllocator] unchanged:
  * - **acquire** descends from [root], one pick per level among the eligible children, and
@@ -16,8 +16,17 @@ import us.tractat.kuilt.crdt.ReplicaId
  * - **extend** delegates more down the same captured path. It is not a new pick.
  * - **complete** extends inline for any shortfall, spends the actual cost on the captured path, and
  *   releases the rest back up to the root.
- * - **top-up**: before anything is delegated from the root, supply is minted in [mintChunk] units
- *   until the root would still hold at least [watermark] after the delegation.
+ *
+ * ## Supply
+ *
+ * Before an acquire or an extend delegates from the root, **at most one** mint of [mintChunk] is
+ * written, and only when the root holds less than [watermark]. If the root still cannot cover the
+ * amount, the call reports [PrototypeAcquire.SupplyExhausted] / [PrototypeExtend.SupplyExhausted]
+ * and the ledger is unchanged. So exhaustion is reachable, and whether it happens is a property of
+ * how the watermark and chunk are sized against the reservations.
+ *
+ * `complete` is the exception: R2 says a charge is never lost or refused, so its inline shortfall
+ * mints whatever it lacks, uncapped, and counts that in [forcedMints].
  *
  * Every operation is computed on a local ledger value and swapped in once, so a failed acquire leaves
  * [ledger] untouched (only the allocator's wake memory may have moved).
@@ -34,12 +43,13 @@ import us.tractat.kuilt.crdt.ReplicaId
  *   so the split lands exactly where the planned `pickChild(waiting, eligible)` puts it.
  *
  * Both are workarounds that read the allocator's call order. They are the evidence that L1 needs
- * `pickChild`, not a design to copy.
+ * `pickChild`, not a design to copy. The same call order lets [wakes] count what the allocator
+ * actually sampled: an answer given outside a write is the observation its wake detector stores.
  *
  * @param root the tree's root group.
  * @param parentOf the static tree, child → parent. Used only to lift a set of leaves to the interior
  *   groups above them; the ledger's own lineage walk is `O(edges)` and would dominate the timing.
- * @param watermark the root holdings that must remain after a delegation; sized from total capacity.
+ * @param watermark top-up mints only when the root holds less than this.
  * @param mintChunk the units one top-up mint adds.
  */
 internal class LeasePrototype(
@@ -68,15 +78,27 @@ internal class LeasePrototype(
     private val interior: Set<GroupId> = parentOf.values.toSet()
     private val open = ArrayList<PrototypeLease>()
     private var nextSeq = 0L
+    private var mintSeq = 0L
 
-    /** How many mint records top-up has written. */
+    /** The demanding state the allocator last sampled per edge, as this prototype answered it. */
+    private val sampled = HashMap<AttachmentId, Boolean>()
+
+    /** Top-up mints written by acquire and extend: at most one per call. */
     var mints: Int = 0
         private set
 
+    /** Mints `complete` wrote to cover an overrun the root could not, uncapped because a charge is never refused. */
+    var forcedMints: Int = 0
+        private set
+
     /**
-     * The lowest root holdings observed just before a top-up check, once supply exists — how close
-     * supply came to running out. The fresh ledger's zero before the first mint is not counted.
+     * Idle→waiting transitions the allocator **sampled**: an edge it was last told was not demanding,
+     * told now that it is. A flip that opens and closes between two samples is not one.
      */
+    var wakes: Int = 0
+        private set
+
+    /** The lowest root holdings read before any top-up decision, once supply exists. */
     var minUnspent: Long = Long.MAX_VALUE
         private set
 
@@ -91,15 +113,22 @@ internal class LeasePrototype(
         require(reservation >= 1L) { "reservation must be positive, was $reservation" }
         require(waiting.containsAll(eligible)) { "eligible must be a subset of waiting" }
         if (eligible.isEmpty()) return PrototypeAcquire.NothingEligible
+        val funded = topUp(ledger, reservation, force = false) ?: return PrototypeAcquire.SupplyExhausted
 
         val waitingGroups = withAncestors(waiting)
         val eligibleGroups = withAncestors(eligible)
-        val cell = OneGrantCell(topUp(ledger, reservation))
+        val cell = OneGrantCell(funded)
         val wants = Demand(targetOutstanding = UNBOUNDED_TARGET, maximumUsefulGrant = reservation)
         val demand: (AttachmentId) -> Demand = { edge ->
             val child = cell.current.record(edge)?.child
-            val view = if (cell.inPick()) eligibleGroups else waitingGroups
-            if (child != null && child in view) wants else Demand.NONE
+            if (cell.inPick()) {
+                if (child != null && child in eligibleGroups) wants else Demand.NONE
+            } else {
+                val demanding = child != null && child in waitingGroups
+                if (demanding && sampled[edge] == false) wakes++
+                sampled[edge] = demanding
+                if (demanding) wants else Demand.NONE
+            }
         }
 
         val path = ArrayList<AttachmentId>()
@@ -121,25 +150,30 @@ internal class LeasePrototype(
         return PrototypeAcquire.Acquired(lease)
     }
 
-    /** Delegate [amount] more down [lease]'s captured path. */
-    fun extend(lease: Long, amount: Long) {
+    /** Delegate [amount] more down [lease]'s captured path, unless supply cannot cover it. */
+    fun extend(lease: Long, amount: Long): PrototypeExtend {
         require(amount >= 1L) { "extend amount must be positive, was $amount" }
         val index = indexOf(lease)
         val current = open[index]
-        ledger = delegateDown(topUp(ledger, amount), current.path, amount)
+        val funded = topUp(ledger, amount, force = false) ?: return PrototypeExtend.SupplyExhausted
+        ledger = delegateDown(funded, current.path, amount)
         open[index] = current.copy(reserved = current.reserved + amount)
+        return PrototypeExtend.Extended
     }
 
     /**
      * Charge [actual] to [lease] and close it: extend inline for any shortfall, spend [actual] on the
-     * captured path, release the unused remainder back up to the root.
+     * captured path, release the unused remainder back up to the root. Never refused.
      */
     fun complete(lease: Long, actual: Long): PrototypeComplete {
         require(actual >= 0L) { "actual must be non-negative, was $actual" }
         val index = indexOf(lease)
         val current = open[index]
         val overrun = maxOf(0L, actual - current.reserved)
-        var local = if (overrun > 0L) delegateDown(topUp(ledger, overrun), current.path, overrun) else ledger
+        var local = ledger
+        if (overrun > 0L) {
+            local = delegateDown(checkNotNull(topUp(local, overrun, force = true)), current.path, overrun)
+        }
         if (actual > 0L) {
             local = local.piece(checkNotNull(local.spendCaptured(SELF, current.path, actual)) { "spend refused" }.delta)
         }
@@ -167,18 +201,36 @@ internal class LeasePrototype(
         return local
     }
 
-    /** Mint until the root keeps [watermark] after delegating [amount]. */
-    private fun topUp(start: EntitlementLedger, amount: Long): EntitlementLedger {
+    /**
+     * Fund a delegation of [amount] from the root: one [mintChunk] mint if the root is under the
+     * watermark, then `null` if that still does not cover [amount] — unless [force], which mints the
+     * exact shortfall instead. The counters move only for a mint that is returned, so a refused call
+     * counts nothing.
+     */
+    private fun topUp(start: EntitlementLedger, amount: Long, force: Boolean): EntitlementLedger? {
+        val held = start.holdings(root, SELF)
+        if (mints + forcedMints > 0) minUnspent = minOf(minUnspent, held)
+        val chunk = if (held < watermark) mintChunk else 0L
+        val shortfall = maxOf(0L, amount - held - chunk)
+        if (shortfall > 0L && !force) return null
         var local = start
-        var held = local.holdings(root, SELF)
-        if (mints > 0) minUnspent = minOf(minUnspent, held)
-        while (held - amount < watermark) {
-            local = local.piece(local.mint(MintId("local#$mints"), root, SELF, mintChunk).delta)
+        if (chunk > 0L) {
+            local = local.piece(local.mint(nextMintId(), root, SELF, chunk).delta)
             mints++
-            held += mintChunk
+        }
+        if (shortfall > 0L) {
+            local = local.piece(local.mint(nextMintId(), root, SELF, shortfall).delta)
+            forcedMints++
         }
         return local
     }
+
+    /**
+     * A fresh id per mint act. Two acts under one id max-join into one record and the smaller amount
+     * is silently lost: an unreleased draft of this prototype derived the id from two counters, reused
+     * one, and its descent then failed at the root for want of supply it believed it had minted.
+     */
+    private fun nextMintId(): MintId = MintId("local#${mintSeq++}")
 
     private fun withAncestors(leaves: Set<GroupId>): Set<GroupId> {
         val out = HashSet<GroupId>()
@@ -253,8 +305,16 @@ internal data class PrototypeLease(val id: Long, val leaf: GroupId, val path: Li
 internal sealed interface PrototypeAcquire {
     data class Acquired(val lease: PrototypeLease) : PrototypeAcquire
     data object NothingEligible : PrototypeAcquire
+    /** One capped top-up could not cover the reservation; the ledger is unchanged. */
+    data object SupplyExhausted : PrototypeAcquire
     /** The descent found no grantable child under [at]; the ledger is unchanged. */
     data class DescentFailed(val at: GroupId) : PrototypeAcquire
+}
+
+internal sealed interface PrototypeExtend {
+    data object Extended : PrototypeExtend
+    /** One capped top-up could not cover the extension; the ledger and the lease are unchanged. */
+    data object SupplyExhausted : PrototypeExtend
 }
 
 internal data class PrototypeComplete(val charged: Long, val overrun: Long)

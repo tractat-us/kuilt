@@ -5,24 +5,27 @@ import kotlin.math.abs
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.fail
-import kotlin.time.Duration
-import kotlin.time.TimeSource
 
 /**
- * Capacity and scale evidence for the lease model, gathered on [LeasePrototype] before the
+ * Fairness and supply evidence for the lease model, gathered on [LeasePrototype] before the
  * `LocalHeddle` API is frozen (#3173, plan Task C). The numbers here are the deliverable: L1's
- * tolerances are taken from what these tests pin.
+ * tolerances are taken from what these tests pin. The scale row is `LeaseScaleProbe`, gated.
  *
- * ## Fairness
+ * ## The generator
  *
- * 10,000 seeded steps over `root → t → {a:3, b:1, c:1}`. Each step either acquires (while fewer
- * leases are open than the current concurrency target, which churns over 1..8) or completes a seeded
- * open lease. Reservations are 1..5 and actual costs 0..8, so leases overrun; half the overruns are
- * renewed by `extend` in quanta first, half are left to `complete` to extend inline.
+ * 10,000 seeded steps over `root → t → {a:3, b:1, c:1}`. While fewer leases are open than the
+ * concurrency target (re-drawn over 1..8 every 50 steps) a step acquires; otherwise it draws an open
+ * lease and either **extends** it or **completes** it. Each lease is given, at acquire, a reservation
+ * of 1..5, a hidden actual cost of 0..8, and whether it renews. A renewing lease whose actual cost
+ * exceeds what it has reserved is extended by one quantum (its reservation) and **left open**, so
+ * later picks see its virtual service already risen (design §4); any other lease completes, and an
+ * overrun is then extended inline by `complete`.
  *
- * Two arms, read together:
+ * ## Three arms
+ *
  * - **backlogged** — every leaf always waiting and eligible. The ideal is the weights, 3:1:1.
  * - **churn** — each leaf's waiting flag flips with probability 1/10 per step, and every acquire
  *   carries a seeded slot label (`x` or `y`): `a` runs on either, `b` only on `x`, `c` only on `y`.
@@ -30,148 +33,186 @@ import kotlin.time.TimeSource
  *   leaves that were *waiting* when it was acquired. That is heddle's entitlement model — a leaf
  *   waiting but not eligible keeps its claim, an idle one forfeits it at the wake clamp. The
  *   eligible-GPS share is reported beside it, not asserted.
+ * - **starved** — the churn generator with a watermark and chunk of 2, below the largest
+ *   reservation. It must report exhaustion, leave the ledger untouched when it does, and still
+ *   never refuse a charge. A lease whose extend is refused stops renewing and is left to `complete`.
  *
- * The bar was set before the first run, and is asserted:
+ * Supply in the first two arms is a watermark of 40 (capacity 8 × the largest reservation 5) with a
+ * 40-unit chunk and at most one mint per acquire or extend. With those numbers exhaustion is
+ * impossible by construction, since one chunk covers any reservation, so the low `unspent` reading
+ * there is bounded below by `40 − 5` and is reported, not offered as evidence. The starved arm is
+ * where exhaustion is measured.
+ *
+ * ## The bar
+ *
+ * Set before the first run, and asserted:
  * - backlogged: every leaf's overall share within **0.01** of 3:1:1, every 500-step window within **0.05**;
  * - churn: every leaf's overall share within **0.03** of waiting-GPS, every 500-step window within **0.15**.
  *
- * What the churn bar can see, measured on JVM by editing the prototype: feeding the **eligible** set
- * to wake detection moves the overall error from 0.0108 to 0.0737 (red) while the window stays
- * under its bar (0.1234); dropping idle forfeiture altogether moves them to 0.1047 and 0.1661 (both
- * red). So the overall bound is the sharper instrument, and the window bound alone would miss the
- * first mistake.
- *
- * ## Scale
- *
- * 5,000 runtime-style children under one lane plus 50,000 retired edges, built through the ledger's
- * own mutators, then timed acquires and completes. Timing is **printed, never asserted**: it is a
- * property of the box's load, not of the code. Run on JVM, `macosArm64` and `wasmJs` and read the
- * `LEASE-SCALE` lines.
+ * What the churn bar can see was measured on JVM by editing the prototype (on the first revision of
+ * the generator): feeding the **eligible** set to wake detection moved the overall error from 0.0108
+ * to 0.0737 (red) while the window stayed under its bar (0.1234); dropping idle forfeiture moved them
+ * to 0.1047 and 0.1661 (both red). So the overall bound is the sharper instrument.
  */
 class LeaseCharacterizationTest {
 
-    // ── Fairness ────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun backloggedLeasesFollowTheWeights() {
-        val run = runFairness(seed = 3173, churn = false)
+        val run = runFairness(seed = 3173, churn = false, supply = NORMAL_SUPPLY)
         println(run.report("backlogged"))
+        val overall = run.maxOverallError(run.idealWaiting)
+        val window = run.maxWindowError(run.idealWaiting)
         assertAll(
             { assertEquals(STEPS, run.loops, "every step ran") },
-            { assertEquals(STEPS, run.acquires + run.completes + run.nothingEligible, "every step did one thing") },
-            { assertTrue(run.overrunCompletes > 0, "the rig overran: ${run.overrunCompletes}") },
+            { assertEquals(STEPS, run.stepKinds(), "every step did exactly one thing") },
+            { assertTrue(run.acquiresSeeingExtended > 0, "a pick saw an extended open lease: ${run.acquiresSeeingExtended}") },
             { assertTrue(run.extends > 0, "the rig renewed by extend: ${run.extends}") },
             { assertTrue(run.inlineOverruns > 0, "the rig left overruns to complete: ${run.inlineOverruns}") },
             { assertTrue(run.mints > 0, "top-up minted: ${run.mints}") },
-            { assertTrue(run.minUnspent >= 0L, "supply never ran out: ${run.minUnspent}") },
+            { assertEquals(0, run.exhaustedAcquires + run.exhaustedExtends + run.forcedMints, "a capacity-sized watermark never runs dry") },
             { assertEquals(0, run.nothingEligible, "a backlogged leaf is always eligible") },
-            { assertTrue(run.maxOverallError(run.idealWaiting) <= 0.01, "overall share vs 3:1:1: ${run.maxOverallError(run.idealWaiting)}") },
-            { assertTrue(run.maxWindowError(run.idealWaiting) <= 0.05, "500-step window vs 3:1:1: ${run.maxWindowError(run.idealWaiting)}") },
+            { assertTrue(overall <= 0.01, "overall share vs 3:1:1: $overall") },
+            { assertTrue(window <= 0.05, "500-step window vs 3:1:1: $window") },
             // The pins: identical on every target, since the walk is over Lists and the allocator sorts.
             {
                 assertEquals(
-                    "a=12015 b=4006 c=4004 acquires=5001 completes=4999 nothingEligible=0 overruns=2783 extends=3023 " +
-                        "inlineOverruns=1373 filtered=0 wakes=0 mints=502 minUnspent=40",
+                    "a=9199 b=3070 c=3064 acquires=3764 extends=2472 completes=3764 nothingEligible=0 " +
+                        "exhaustedAcquires=0 exhaustedExtends=0 inlineOverruns=1051 filtered=0 seesExtended=2412 wakes=0 " +
+                        "mints=385 forcedMints=0 minUnspent=35",
                     run.fingerprint(),
                 )
             },
-            { assertEquals(0.0225, run.maxWindowError(run.idealWaiting), PIN_TOLERANCE, "pinned window error") },
+            { assertEquals(0.000222, overall, PIN_TOLERANCE, "pinned overall error") },
+            { assertEquals(0.023810, window, PIN_TOLERANCE, "pinned window error") },
         )
     }
 
     @Test
     fun churningLeasesFollowWaitingEntitlement() {
-        val run = runFairness(seed = 3173, churn = true)
+        val run = runFairness(seed = 3173, churn = true, supply = NORMAL_SUPPLY)
         println(run.report("churn"))
+        val overall = run.maxOverallError(run.idealWaiting)
+        val window = run.maxWindowError(run.idealWaiting)
         assertAll(
             { assertEquals(STEPS, run.loops, "every step ran") },
-            { assertEquals(STEPS, run.acquires + run.completes + run.nothingEligible, "every step did one thing") },
-            { assertTrue(run.overrunCompletes > 0, "the rig overran: ${run.overrunCompletes}") },
+            { assertEquals(STEPS, run.stepKinds(), "every step did exactly one thing") },
+            { assertTrue(run.acquiresSeeingExtended > 0, "a pick saw an extended open lease: ${run.acquiresSeeingExtended}") },
             { assertTrue(run.extends > 0, "the rig renewed by extend: ${run.extends}") },
             { assertTrue(run.inlineOverruns > 0, "the rig left overruns to complete: ${run.inlineOverruns}") },
             { assertTrue(run.mints > 0, "top-up minted: ${run.mints}") },
-            { assertTrue(run.minUnspent >= 0L, "supply never ran out: ${run.minUnspent}") },
-            { assertTrue(run.filteredAcquires > 0, "the label excluded a waiting leaf: ${run.filteredAcquires}") },
-            { assertTrue(run.wakes > 0, "a leaf went idle and came back: ${run.wakes}") },
-            { assertTrue(run.maxOverallError(run.idealWaiting) <= 0.03, "overall share vs waiting-GPS: ${run.maxOverallError(run.idealWaiting)}") },
-            { assertTrue(run.maxWindowError(run.idealWaiting) <= 0.15, "500-step window vs waiting-GPS: ${run.maxWindowError(run.idealWaiting)}") },
+            { assertEquals(0, run.exhaustedAcquires + run.exhaustedExtends + run.forcedMints, "a capacity-sized watermark never runs dry") },
+            { assertTrue(run.filteredAcquires > 0, "a successful acquire had a waiting leaf the label excluded: ${run.filteredAcquires}") },
+            { assertTrue(run.wakes > 0, "the allocator sampled a leaf going idle and coming back: ${run.wakes}") },
+            { assertTrue(overall <= 0.03, "overall share vs waiting-GPS: $overall") },
+            { assertTrue(window <= 0.15, "500-step window vs waiting-GPS: $window") },
             {
                 assertEquals(
-                    "a=8334 b=3975 c=4136 acquires=4037 completes=4034 nothingEligible=1929 overruns=2294 extends=2489 " +
-                        "inlineOverruns=1118 filtered=2699 wakes=1511 mints=413 minUnspent=40",
+                    "a=6731 b=2899 c=3172 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
+                        "exhaustedAcquires=0 exhaustedExtends=0 inlineOverruns=878 filtered=1489 seesExtended=1994 wakes=1030 " +
+                        "mints=322 forcedMints=0 minUnspent=33",
                     run.fingerprint(),
                 )
             },
-            { assertEquals(0.0108, run.maxOverallError(run.idealWaiting), PIN_TOLERANCE, "pinned overall error") },
-            { assertEquals(0.0483, run.maxWindowError(run.idealWaiting), PIN_TOLERANCE, "pinned window error") },
+            { assertEquals(0.016677, overall, PIN_TOLERANCE, "pinned overall error") },
+            { assertEquals(0.089246, window, PIN_TOLERANCE, "pinned window error") },
         )
     }
 
-    private fun runFairness(seed: Int, churn: Boolean): FairnessRun {
+    @Test
+    fun starvedSupplyIsReportedAndNeverRefusesACharge() {
+        val run = runFairness(seed = 3173, churn = true, supply = STARVED_SUPPLY)
+        println(run.report("starved"))
+        assertAll(
+            { assertEquals(STEPS, run.loops, "every step ran") },
+            { assertEquals(STEPS, run.stepKinds(), "every step did exactly one thing") },
+            { assertTrue(run.exhaustedAcquires > 0, "an acquire reported exhaustion: ${run.exhaustedAcquires}") },
+            { assertTrue(run.exhaustedExtends > 0, "an extend reported exhaustion: ${run.exhaustedExtends}") },
+            { assertTrue(run.forcedMints > 0, "complete covered an overrun the root could not: ${run.forcedMints}") },
+            { assertTrue(run.acquires > 0 && run.completes > 0, "work still flowed: ${run.acquires} / ${run.completes}") },
+            {
+                assertEquals(
+                    "a=4029 b=1837 c=1874 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
+                        "exhaustedAcquires=2403 exhaustedExtends=40 inlineOverruns=737 filtered=914 seesExtended=1325 wakes=857 " +
+                        "mints=3316 forcedMints=460 minUnspent=0",
+                    run.fingerprint(),
+                )
+            },
+        )
+    }
+
+    private class Supply(val watermark: Long, val mintChunk: Long)
+
+    /** What the generator decided for one lease at acquire. */
+    private class Plan(val reservation: Long, val actual: Long, var renews: Boolean, val waited: List<Int>, val eligible: List<Int>)
+
+    private fun runFairness(seed: Int, churn: Boolean, supply: Supply): FairnessRun {
         val rng = Random(seed)
         val tree = smallTree()
-        val proto = LeasePrototype(tree.ledger, ROOT, tree.parentOf, watermark = CAPACITY * MAX_RESERVATION, mintChunk = CAPACITY * MAX_RESERVATION)
+        val proto = LeasePrototype(tree.ledger, ROOT, tree.parentOf, supply.watermark, supply.mintChunk)
         val run = FairnessRun()
         val waiting = BooleanArray(LEAVES.size) { true }
-        // What each open lease was acquired under, by lease id: the leaves waiting, and those eligible.
-        val acquiredUnder = HashMap<Long, Pair<List<Int>, List<Int>>>()
-        var target = 1 + rng.nextInt(CAPACITY.toInt())
+        val plans = HashMap<Long, Plan>() // looked up by lease id, never iterated
+        var target = 1 + rng.nextInt(CAPACITY)
 
         for (step in 0 until STEPS) {
             run.loops++
-            if (step % 50 == 0) target = 1 + rng.nextInt(CAPACITY.toInt())
+            if (step % 50 == 0) target = 1 + rng.nextInt(CAPACITY)
             if (churn) {
-                for (i in LEAVES.indices) {
-                    if (rng.nextInt(10) == 0) {
-                        if (!waiting[i]) run.wakes++
-                        waiting[i] = !waiting[i]
-                    }
-                }
+                for (i in LEAVES.indices) if (rng.nextInt(10) == 0) waiting[i] = !waiting[i]
             }
             val open = proto.openLeases()
             if (open.size < target) {
                 val waitingIdx = LEAVES.indices.filter { waiting[it] }
                 val label = if (churn) SLOT_LABELS[rng.nextInt(SLOT_LABELS.size)] else null
                 val eligibleIdx = waitingIdx.filter { label == null || label in LEAF_LABELS[it] }
-                if (eligibleIdx.size < waitingIdx.size) run.filteredAcquires++
-                val reservation = 1L + rng.nextInt(MAX_RESERVATION.toInt())
-                val out = proto.acquire(
-                    waitingIdx.mapTo(HashSet()) { LEAVES[it] },
-                    eligibleIdx.mapTo(HashSet()) { LEAVES[it] },
-                    reservation,
-                )
-                when (out) {
+                val reservation = 1L + rng.nextInt(MAX_RESERVATION)
+                val actual = rng.nextInt(MAX_ACTUAL + 1).toLong()
+                val renews = rng.nextBoolean()
+                val seesExtended = open.any { lease -> lease.reserved > (plans[lease.id]?.reservation ?: lease.reserved) }
+                val eligibleLeaves = eligibleIdx.mapTo(HashSet()) { LEAVES[it] }
+                val before = proto.ledger
+                when (val out = proto.acquire(waitingIdx.mapTo(HashSet()) { LEAVES[it] }, eligibleLeaves, reservation)) {
                     is PrototypeAcquire.Acquired -> {
+                        if (out.lease.leaf !in eligibleLeaves) fail("step $step leased ${out.lease.leaf.value}, outside $eligibleLeaves")
                         run.acquires++
-                        acquiredUnder[out.lease.id] = waitingIdx to eligibleIdx
+                        if (eligibleIdx.size < waitingIdx.size) run.filteredAcquires++
+                        if (seesExtended) run.acquiresSeeingExtended++
+                        plans[out.lease.id] = Plan(reservation, actual, renews, waitingIdx, eligibleIdx)
                     }
                     PrototypeAcquire.NothingEligible -> run.nothingEligible++
+                    PrototypeAcquire.SupplyExhausted -> {
+                        run.exhaustedAcquires++
+                        assertSame(before, proto.ledger, "an exhausted acquire on step $step left the ledger unchanged")
+                    }
                     is PrototypeAcquire.DescentFailed -> fail("descent failed at ${out.at.value} on step $step")
                 }
             } else {
                 val lease = open[rng.nextInt(open.size)]
-                val actual = rng.nextInt(MAX_ACTUAL + 1).toLong()
-                if (actual > lease.reserved) run.overrunCompletes++
-                if (actual > lease.reserved && rng.nextBoolean()) {
-                    // Renew in quanta of the original reservation until the lease covers its cost.
-                    var reserved = lease.reserved
-                    while (reserved < actual) {
-                        proto.extend(lease.id, lease.reserved)
-                        reserved += lease.reserved
-                        run.extends++
+                val plan = checkNotNull(plans[lease.id]) { "lease ${lease.id} untracked" }
+                if (plan.renews && plan.actual > lease.reserved) {
+                    when (proto.extend(lease.id, plan.reservation)) {
+                        PrototypeExtend.Extended -> run.extends++
+                        PrototypeExtend.SupplyExhausted -> {
+                            // The work runs on unrenewed and `complete` covers it: a lease that kept
+                            // retrying could hold every slot while supply never came back.
+                            run.exhaustedExtends++
+                            plan.renews = false
+                        }
                     }
+                } else {
+                    val done = proto.complete(lease.id, plan.actual)
+                    if (done.overrun > 0L) run.inlineOverruns++
+                    run.completes++
+                    plans.remove(lease.id)
+                    run.record(step, LEAVES.indexOf(lease.leaf), plan.actual, plan.waited, plan.eligible)
                 }
-                val done = proto.complete(lease.id, actual)
-                if (done.overrun > 0L) run.inlineOverruns++
-                run.completes++
-                val (waitedIdx, eligibleIdx) = checkNotNull(acquiredUnder.remove(lease.id)) { "lease ${lease.id} untracked" }
-                val leaf = LEAVES.indexOf(lease.leaf)
-                run.record(step, leaf, actual, waitedIdx, eligibleIdx)
             }
             if (step % 1000 == 999) assertConserved(proto, "step $step")
         }
         assertConserved(proto, "end")
         run.mints = proto.mints
+        run.forcedMints = proto.forcedMints
+        run.wakes = proto.wakes
         run.minUnspent = proto.minUnspent
         return run
     }
@@ -189,22 +230,30 @@ class LeaseCharacterizationTest {
         )
     }
 
-    /** Per-step service and the two ideals, kept as per-step rows so any 500-step window can be read. */
+    /**
+     * Per-step service and the two ideals as **prefix sums**, so any window is two subtractions and
+     * the worst 500-step window is one pass.
+     */
     private class FairnessRun {
         var loops = 0
         var acquires = 0
         var completes = 0
-        var nothingEligible = 0
-        var overrunCompletes = 0
         var extends = 0
+        var nothingEligible = 0
+        var exhaustedAcquires = 0
+        var exhaustedExtends = 0
         var inlineOverruns = 0
         var filteredAcquires = 0
+        var acquiresSeeingExtended = 0
         var wakes = 0
         var mints = 0
+        var forcedMints = 0
         var minUnspent = 0L
-        val service = Array(STEPS) { LongArray(LEAVES.size) }
+        private val service = Array(STEPS) { LongArray(LEAVES.size) }
         val idealWaiting = Array(STEPS) { DoubleArray(LEAVES.size) }
         val idealEligible = Array(STEPS) { DoubleArray(LEAVES.size) }
+
+        fun stepKinds(): Int = acquires + extends + completes + nothingEligible + exhaustedAcquires + exhaustedExtends
 
         fun record(step: Int, leaf: Int, actual: Long, waited: List<Int>, eligible: List<Int>) {
             service[step][leaf] += actual
@@ -219,47 +268,54 @@ class LeaseCharacterizationTest {
 
         fun totals(): LongArray = LongArray(LEAVES.size) { i -> service.sumOf { it[i] } }
 
-        fun maxOverallError(ideal: Array<DoubleArray>): Double = windowError(ideal, 0, STEPS)
+        private fun prefix(rows: Array<DoubleArray>): Array<DoubleArray> {
+            val out = Array(STEPS + 1) { DoubleArray(LEAVES.size) }
+            for (s in 0 until STEPS) for (i in LEAVES.indices) out[s + 1][i] = out[s][i] + rows[s][i]
+            return out
+        }
 
-        fun maxWindowError(ideal: Array<DoubleArray>): Double =
-            (0..STEPS - WINDOW).maxOf { start -> windowError(ideal, start, start + WINDOW) }
+        private val servicePrefix: Array<DoubleArray> by lazy {
+            prefix(Array(STEPS) { s -> DoubleArray(LEAVES.size) { i -> service[s][i].toDouble() } })
+        }
 
-        private fun windowError(ideal: Array<DoubleArray>, from: Int, to: Int): Double {
-            val got = DoubleArray(LEAVES.size)
-            val want = DoubleArray(LEAVES.size)
-            for (s in from until to) {
-                for (i in LEAVES.indices) {
-                    got[i] += service[s][i].toDouble()
-                    want[i] += ideal[s][i]
-                }
-            }
+        fun maxOverallError(ideal: Array<DoubleArray>): Double {
+            val want = prefix(ideal)
+            return windowError(want, 0, STEPS)
+        }
+
+        fun maxWindowError(ideal: Array<DoubleArray>): Double {
+            val want = prefix(ideal)
+            return (0..STEPS - WINDOW).maxOf { start -> windowError(want, start, start + WINDOW) }
+        }
+
+        private fun windowError(want: Array<DoubleArray>, from: Int, to: Int): Double {
+            val got = DoubleArray(LEAVES.size) { servicePrefix[to][it] - servicePrefix[from][it] }
+            val wanted = DoubleArray(LEAVES.size) { want[to][it] - want[from][it] }
             val gotTotal = got.sum()
-            val wantTotal = want.sum()
+            val wantTotal = wanted.sum()
             if (gotTotal == 0.0 || wantTotal == 0.0) return 0.0
-            return LEAVES.indices.maxOf { abs(got[it] / gotTotal - want[it] / wantTotal) }
+            return LEAVES.indices.maxOf { abs(got[it] / gotTotal - wanted[it] / wantTotal) }
         }
 
         /** Every integer the run produced, in one string, so a pin mismatch shows the whole row. */
         fun fingerprint(): String {
             val totals = totals()
             return LEAVES.indices.joinToString(" ") { "${LEAVES[it].value}=${totals[it]}" } +
-                " acquires=$acquires completes=$completes nothingEligible=$nothingEligible overruns=$overrunCompletes " +
-                "extends=$extends inlineOverruns=$inlineOverruns filtered=$filteredAcquires wakes=$wakes " +
-                "mints=$mints minUnspent=$minUnspent"
+                " acquires=$acquires extends=$extends completes=$completes nothingEligible=$nothingEligible " +
+                "exhaustedAcquires=$exhaustedAcquires exhaustedExtends=$exhaustedExtends inlineOverruns=$inlineOverruns " +
+                "filtered=$filteredAcquires seesExtended=$acquiresSeeingExtended wakes=$wakes " +
+                "mints=$mints forcedMints=$forcedMints minUnspent=$minUnspent"
         }
 
         fun report(arm: String): String {
             val totals = totals()
             val all = totals.sum().toDouble()
-            val shares = LEAVES.indices.joinToString(" ") { "${LEAVES[it].value}=${totals[it]}(${fmt(totals[it] / all)})" }
-            val idealW = idealShares(idealWaiting)
-            val idealE = idealShares(idealEligible)
-            return "LEASE-FAIRNESS arm=$arm service[$shares] waitingGps[$idealW] eligibleGps[$idealE] " +
+            val shares = LEAVES.indices.joinToString(" ") { "${LEAVES[it].value}=${fmt(totals[it] / all)}" }
+            return "LEASE-FAIRNESS arm=$arm shares[$shares] waitingGps[${idealShares(idealWaiting)}] " +
+                "eligibleGps[${idealShares(idealEligible)}] " +
                 "overallErrWaiting=${fmt(maxOverallError(idealWaiting))} windowErrWaiting=${fmt(maxWindowError(idealWaiting))} " +
                 "overallErrEligible=${fmt(maxOverallError(idealEligible))} windowErrEligible=${fmt(maxWindowError(idealEligible))} " +
-                "acquires=$acquires completes=$completes nothingEligible=$nothingEligible overruns=$overrunCompletes " +
-                "extends=$extends inlineOverruns=$inlineOverruns filtered=$filteredAcquires wakes=$wakes " +
-                "mints=$mints minUnspent=$minUnspent"
+                fingerprint()
         }
 
         private fun idealShares(ideal: Array<DoubleArray>): String {
@@ -283,115 +339,15 @@ class LeaseCharacterizationTest {
         return Tree(l, mapOf(LANE to ROOT) + LEAVES.associateWith { LANE })
     }
 
-    // ── Scale ───────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    fun acquireAtFiveThousandChildrenAndFiftyThousandRetiredEdges() {
-        val rows = listOf(
-            scaleRow(active = 5_000, retired = 50_000),
-            scaleRow(active = 5_000, retired = 0),
-            scaleRow(active = 50, retired = 0),
-        )
-        rows.forEach { println(it) }
-    }
-
-    private fun scaleRow(active: Int, retired: Int): String {
-        val clock = TimeSource.Monotonic
-        val built = clock.markNow()
-        val lane = GroupId("lane")
-        val laneEdge = AttachmentRecord(AttachmentId("root>lane"), ROOT, lane, Weight.ONE)
-        val children = (0 until active).map { k ->
-            AttachmentRecord(AttachmentId("lane>c-$k"), lane, GroupId("lane/c-$k"), Weight.ONE)
-        }
-        val gone = (0 until retired).map { k ->
-            AttachmentRecord(AttachmentId("lane>gone-$k"), lane, GroupId("lane/gone-$k"), Weight.ONE)
-        }
-
-        var l = EntitlementLedger.bootstrap(ROOT, emptyMap(), nonce = "genesis")
-        l = l.piece(checkNotNull(l.prepare(laneEdge)).delta)
-        l = l.piece(checkNotNull(l.activate(laneEdge.id)).delta)
-        val prepared = l.piece(joinAll((children + gone).map { checkNotNull(l.prepare(it)).delta }))
-        val shaped = prepared.piece(
-            joinAll(
-                children.map { checkNotNull(prepared.activate(it.id)).delta } +
-                    gone.map { checkNotNull(prepared.close(it.id)).delta },
-            ),
-        )
-        val ledger = shaped.piece(joinAll(gone.map { checkNotNull(shaped.retire(it.id)).delta }))
-        val buildTime = built.elapsedNow()
-
-        val parentOf = HashMap<GroupId, GroupId>().apply {
-            put(lane, ROOT)
-            children.forEach { put(it.child, lane) }
-        }
-        val proto = LeasePrototype(ledger, ROOT, parentOf, watermark = CAPACITY * MAX_RESERVATION, mintChunk = CAPACITY * MAX_RESERVATION)
-        val everyone = children.mapTo(HashSet()) { it.child }
-
-        val seatMark = clock.markNow()
-        val first = proto.acquire(everyone, everyone, reservation = 3L)
-        val seatTime = seatMark.elapsedNow()
-        val acquireTimes = (0 until TIMED).map {
-            val mark = clock.markNow()
-            val out = proto.acquire(everyone, everyone, reservation = 3L)
-            mark.elapsedNow().also { assertTrue(out is PrototypeAcquire.Acquired, "timed acquire $it: $out") }
-        }
-        // Where an acquire's time goes: each ledger primitive it leans on, timed alone on the same ledger.
-        val probe = proto.ledger
-        val someChild = children.first().child
-        val primitives = listOf(
-            "activeChildren" to { probe.activeChildren(lane).size.toLong() },
-            "holdings" to { probe.holdings(lane, LeasePrototype.SELF) },
-            "lineageOf" to { probe.lineageOf(someChild)?.size?.toLong() ?: -1L },
-            "isLeaf" to { if (probe.isLeaf(someChild)) 1L else 0L },
-            "piece" to { probe.piece(probe.mint(MintId("probe"), ROOT, LeasePrototype.SELF, 1L).delta).mintedTotal() },
-        ).joinToString(" ") { (name, call) ->
-            val mark = clock.markNow()
-            repeat(PRIMITIVE_REPS) { call() }
-            "$name=${mark.elapsedNow().inWholeMicroseconds / PRIMITIVE_REPS}"
-        }
-        val completeTimes = proto.openLeases().map { lease ->
-            val mark = clock.markNow()
-            proto.complete(lease.id, actual = 2L)
-            mark.elapsedNow()
-        }
-
-        val after = proto.ledger
-        assertAll(
-            { assertTrue(first is PrototypeAcquire.Acquired, "the seating acquire: $first") },
-            { assertEquals(active, after.activeChildren(lane).size, "active children") },
-            { assertEquals(retired, gone.count { after.lifecycle(it.id) == Lifecycle.RETIRED }, "retired edges") },
-            { assertEquals(active, children.count { after.gauge(it.id) != null }, "the first acquire seated every newborn") },
-            { assertEquals(TIMED + 1, completeTimes.size, "every lease completed") },
-            { assertEquals(TIMED, acquireTimes.size, "timed acquires") },
-            { assertEquals((TIMED + 1) * 2L, after.leafSpentTotal(), "each lease charged its 2 units") },
-        )
-        return "LEASE-SCALE active=$active retired=$retired buildMs=${buildTime.inWholeMilliseconds} " +
-            "firstAcquireMs=${seatTime.inWholeMilliseconds} " +
-            "acquireUs[mean=${acquireTimes.meanUs()} min=${acquireTimes.minOf { it.inWholeMicroseconds }} max=${acquireTimes.maxOf { it.inWholeMicroseconds }}] " +
-            "completeUs[mean=${completeTimes.meanUs()} max=${completeTimes.maxOf { it.inWholeMicroseconds }}] " +
-            "primitiveUs[$primitives] mints=${proto.mints}"
-    }
-
-    /** Join many small deltas pairwise, so building `n` edges costs `n log n` map copies rather than `n²`. */
-    private fun joinAll(deltas: List<EntitlementLedger>): EntitlementLedger {
-        var layer = deltas
-        while (layer.size > 1) {
-            layer = layer.chunked(2).map { pair -> if (pair.size == 2) pair[0].piece(pair[1]) else pair[0] }
-        }
-        return layer.singleOrNull() ?: EntitlementLedger.ZERO
-    }
-
-    private fun List<Duration>.meanUs(): Long = sumOf { it.inWholeMicroseconds } / size
-
     private companion object {
         const val STEPS = 10_000
         const val WINDOW = 500
-        const val TIMED = 10
-        const val PRIMITIVE_REPS = 5
-        const val PIN_TOLERANCE = 1e-4
-        const val CAPACITY = 8L
-        const val MAX_RESERVATION = 5L
+        const val CAPACITY = 8
+        const val MAX_RESERVATION = 5
         const val MAX_ACTUAL = 8
+        const val PIN_TOLERANCE = 1e-4
+        val NORMAL_SUPPLY = Supply(watermark = CAPACITY * MAX_RESERVATION.toLong(), mintChunk = CAPACITY * MAX_RESERVATION.toLong())
+        val STARVED_SUPPLY = Supply(watermark = 2L, mintChunk = 2L)
         val ROOT = GroupId("root")
         val LANE = GroupId("t")
         val LEAVES = listOf(GroupId("a"), GroupId("b"), GroupId("c"))
@@ -399,6 +355,6 @@ class LeaseCharacterizationTest {
         val SLOT_LABELS = listOf("x", "y")
         val LEAF_LABELS = listOf(setOf("x", "y"), setOf("x"), setOf("y"))
 
-        fun fmt(d: Double): String = ((d * 10_000).let { kotlin.math.round(it) } / 10_000).toString()
+        fun fmt(d: Double): String = (kotlin.math.round(d * 10_000) / 10_000).toString()
     }
 }
