@@ -171,10 +171,16 @@ internal fun EntitlementLedger.generationFloor(): Long =
  *
  * @throws IllegalArgumentException if [supplied] is negative.
  */
-internal fun effectiveGeneration(supplied: Long, ledger: EntitlementLedger): Long {
+internal fun effectiveGeneration(supplied: Long, ledger: EntitlementLedger, except: Set<AttachmentId> = emptySet()): Long {
     require(supplied >= 0L) { "a generation is >= 0, was $supplied" }
     return maxOf(supplied, checkedAdd(ledger.generationFloor(), 1L))
 }
+
+/** TASK 5 STUB. */
+internal data class GenerationTop(val generation: Long, val edges: Int)
+
+/** TASK 5 STUB. */
+internal fun EntitlementLedger.generationTop(): GenerationTop = TODO("Task 5")
 
 // ── segments ────────────────────────────────────────────────────────────────────────────────────
 

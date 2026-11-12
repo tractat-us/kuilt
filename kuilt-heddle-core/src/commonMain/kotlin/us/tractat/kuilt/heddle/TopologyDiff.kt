@@ -299,3 +299,10 @@ private val STEP_ORDER: Comparator<Planned> =
         .thenBy { if (it.phase == Phase.RETIRE) -it.depth else it.depth }
         .thenBy { it.step.child }
         .thenBy { it.edge }
+
+/** TASK 5 STUB. */
+public fun Topology.attachRuntimeChild(group: List<String>, name: String, ledger: EntitlementLedger, generation: Long): List<TopologyStep> =
+    TODO("Task 5")
+
+/** TASK 5 STUB. */
+public fun Topology.detachRuntimeChild(group: List<String>, name: String, ledger: EntitlementLedger): List<TopologyStep> = TODO("Task 5")

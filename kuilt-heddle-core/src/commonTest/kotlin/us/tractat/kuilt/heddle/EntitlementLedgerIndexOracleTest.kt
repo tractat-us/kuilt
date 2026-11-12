@@ -57,6 +57,7 @@ class EntitlementLedgerIndexOracleTest {
         val divergent = runs.sumOf { it.divergentRecords }
         val countersFirst = runs.sumOf { it.recordsArrivingAfterTheirCounters }
         val carriedFromOther = runs.sumOf { it.carriesFromTheOtherOperand }
+        val sharedTops = runs.sumOf { it.sharedTops }
         // The rig fired: each arm the KDoc promises was actually reached, counted where it happens.
         assertAll(
             { assertTrue(checks >= SEEDS * STEPS / 2, "oracle checks ran: $checks") },
@@ -72,6 +73,7 @@ class EntitlementLedgerIndexOracleTest {
             { assertTrue(divergent > 0, "a second, divergent record landed under an existing id") },
             { assertTrue(countersFirst > 0, "a merge brought an edge's record to a state that held only its counters") },
             { assertTrue(carriedFromOther > 0, "a merge carried the index from the other operand") },
+            { assertTrue(sharedTops > 0, "several edges shared the top generation") },
         )
     }
 
@@ -93,6 +95,7 @@ class EntitlementLedgerIndexOracleTest {
         var divergentRecords = 0
         var recordsArrivingAfterTheirCounters = 0
         var carriesFromTheOtherOperand = 0
+        var sharedTops = 0
 
         fun step() {
             val i = random.nextInt(REPLICAS.size)
@@ -133,8 +136,18 @@ class EntitlementLedgerIndexOracleTest {
             mutate(i) { l -> l.prepare(record)?.delta }
         }
 
+        /**
+         * Two ids in three are in the topology grammar, four to a generation so that several edges
+         * share the top one; the third is not, and must never count. No draw is spent on it, so the
+         * trajectory is the one the other reads were tuned on.
+         */
+        private fun nextId(): AttachmentId {
+            val n = nextEdge++
+            return AttachmentId(if (n % 3 == 0) "e$n" else "root/e$n@1:1#${n / 4}")
+        }
+
         private fun newRecord(): AttachmentRecord {
-            val id = AttachmentId("e${nextEdge++}")
+            val id = nextId()
             edges += id
             val parent = GROUPS.random(random)
             val child = (GROUPS - parent).random(random)
@@ -146,7 +159,7 @@ class EntitlementLedgerIndexOracleTest {
             val start = states[i]
             val parent = GROUPS.random(random)
             if (start.holdings(parent, me) < 2L || start.lineageOf(parent) == null) return
-            val record = AttachmentRecord(AttachmentId("e${nextEdge++}"), parent, GroupId("leaf-$nextEdge"), Weight.ONE)
+            val record = AttachmentRecord(nextId(), parent, GroupId("leaf-$nextEdge"), Weight.ONE)
             edges += record.id
             val granted = random.nextLong(1L, minOf(start.holdings(parent, me), 6L) + 1L)
             val spent = random.nextLong(0L, granted + 1L)
@@ -271,6 +284,9 @@ class EntitlementLedgerIndexOracleTest {
                 assertEquals(oracle.inbound(g, live = false), l.retiredInboundEdges(g), "$label: retiredInboundEdges($g)")
                 for (r in REPLICAS) assertEquals(oracle.holdings(g, r), l.holdings(g, r), "$label: holdings($g, $r)")
             }
+            val top = oracle.generationTop()
+            assertEquals(top, l.generationTop(), "$label: generationTop")
+            if (top.edges >= 2) sharedTops++
             maxRetiredWithInflow = maxOf(maxRetiredWithInflow, oracle.retiredChildrenWithInflow())
             checks++
         }
@@ -285,6 +301,13 @@ class EntitlementLedgerIndexOracleTest {
         private fun single(e: AttachmentId): AttachmentRecord? = l.recordsOf(e).singleOrNull()
 
         fun children(g: GroupId): List<AttachmentId> = all.filter { e -> l.recordsOf(e).any { it.parent == g } }
+
+        /** The highest topology generation over every edge the ledger mentions, and how many carry it. */
+        fun generationTop(): GenerationTop {
+            val generations = all.mapNotNull { generationOf(it) }
+            val top = generations.maxOrNull() ?: return GenerationTop(-1L, 0)
+            return GenerationTop(top, generations.count { it == top })
+        }
 
         fun isLeaf(g: GroupId): Boolean = children(g).none { l.lifecycle(it) == Lifecycle.ACTIVE }
 
