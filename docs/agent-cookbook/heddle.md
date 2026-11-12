@@ -172,6 +172,42 @@ through the same check and throws `TopologyException` with the problems `from` w
     }
 ```
 
+To schedule work against the tree in one process, `LocalHeddle` (`:kuilt-heddle-core`) hands out
+one **lease** per free slot. When a slot frees, `acquire(waiting, eligible, startedAt)` names the
+leaf whose work runs next and reserves an estimated cost for it; when the work ends,
+`complete(lease, actualCost)` charges what it really cost, hands the unused part back, and reports
+any overrun, which is never refused. Cost is time, in your own unit. `waiting` is every leaf with
+work queued and `eligible` the ones this slot can run: a leaf that is waiting but cannot run here
+keeps its claim, so it is not treated as returning from idle when a slot it can run comes up. A
+new leaf starts level with its siblings rather than owed their whole history. `extend` reserves
+more for a lease that runs long, `cancel` charges nothing, `admit(leaf, startedAt)` charges work
+another scheduler already started, and `previewPicks` answers "who goes next" without changing
+anything. `startedAt` is stored on the lease and never read by a pick. A refusal is a typed
+outcome (`NothingEligible`, `SupplyExhausted`, `NoLiveLineage`, `Unknown`, `Stale`), never an
+exception. The engine reads no clock and no random source, and it is not thread-safe: call it under
+your scheduling lock, and give status and persistence readers `snapshot()`, which is immutable.
+Booting it from a `Topology` and topping up its supply are not public yet, so the sample below
+builds its tree through module seams first.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalLease -->
+```kotlin
+    // Both groups have work queued, and this slot can run either.
+    val queued = setOf(heavy, light)
+    val first = heddle.acquire(waiting = queued, eligible = queued, startedAt = 100L)
+    check(first is AcquireOutcome.Acquired)
+
+    // The job overran its 3-unit estimate: all 5 units are charged, 2 of them as overrun.
+    check(heddle.complete(first.lease.id, actualCost = 5L) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+
+    // Over many slots the shares follow the weights, 2 : 1.
+    val picks = (0 until 30).map {
+        val lease = (heddle.acquire(queued, queued, startedAt = it.toLong()) as AcquireOutcome.Acquired).lease
+        heddle.complete(lease.id, actualCost = 3L)
+        lease.leaf
+    }
+    check(picks.count { it == heavy } in 19..21)
+```
+
 ### Run it over a network — reserve, run, charge once
 
 **Intent:** put the fair-share tally on a live connection between peers — advertise appetite,

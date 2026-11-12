@@ -233,28 +233,57 @@ class LocalHeddleTest {
     }
 
     /**
-     * A config group whose only child is closing is never leased (#3193 review). The sequence it
-     * stands for: `pool` declares runtime children and nothing else, `pool/!c` is attached and
-     * leased, then detached while its lease is open, so its retire is refused and `pool → c` stays
-     * CLOSING with `root → pool` ACTIVE. The ledger then counts `pool` as a leaf. The state is built
-     * directly, since L1 has no `apply`.
+     * A config group whose only child is closing is never leased (#3193 review). `pool` declares
+     * runtime children and nothing else. `pool/!c` is attached and leased, then detached while its
+     * lease is open: the retire is refused, so `pool → c` stays CLOSING with `root → pool` ACTIVE,
+     * and the ledger now reads `pool` as a leaf. The detach is applied through the test seam, since
+     * L1 has no `apply`.
      */
     @Test
     fun aGroupWhoseOnlyChildIsClosingIsNeverLeased() {
         val pool = GroupId("pool")
         val runtime = GroupId("pool/!c")
         val poolC = edgeOf(pool, runtime)
-        var shaped = shapedLedger(root, listOf(edgeOf(root, pool), poolC))
-        shaped = shaped.piece(shaped.mint(MintId("open-lease"), root, LOCAL, 2L).delta)
-        shaped = assertNotNull(delegateDown(shaped, runtime, 2L, LOCAL))
-        shaped = shaped.piece(assertNotNull(shaped.close(poolC.id)).delta)
-        val h = engineOver(shaped, root, supply = 100)
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, pool), poolC)), root, supply = 100)
+        val open = h.lease(setOf(runtime), reservation = 2L)
+        h.reshapeForTest { it.piece(assertNotNull(it.close(poolC.id)).delta) }
         val before = h.snapshot().ledger
-        val out = h.acquire(setOf(runtime), setOf(runtime), startedAt = 0L)
+        val out = h.acquire(setOf(runtime), setOf(runtime), startedAt = 1L)
         assertAll(
+            { assertEquals(runtime, open.leaf, "the rig: the runtime child was leased") },
+            { assertEquals(null, before.retire(poolC.id), "the rig: its retire is refused while the lease is open") },
             { assertTrue(before.activeChildren(pool).isEmpty(), "the rig: pool has no active child, so the ledger reads it as a leaf") },
             { assertEquals(AcquireOutcome.NoLiveLineage(pool), out, "the descent ends only at an eligible group") },
             { assertSame(before, h.snapshot().ledger) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(open.id, 2L), "the open lease still settles") },
+        )
+    }
+
+    /**
+     * A lane that gains a child while a lease is open at it keeps that lease's reservation: the
+     * next pick hands the new child exactly its own reservation, never the open one. Each level
+     * of a descent receives exactly the reservation and grants at most `maximumUsefulGrant`, which
+     * is the reservation, so this holds with no earmark. A re-home that moves units between paths
+     * (L3) does not have that cap, and is where an earmark would be needed.
+     */
+    @Test
+    fun aLaneThatGainsAChildKeepsItsOpenReservation() {
+        val x = GroupId("a/x")
+        val ax = edgeOf(a, x)
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, a)), prepared = listOf(ax)), root, supply = 100)
+        val open = h.lease(setOf(a), reservation = 5L)
+        h.reshapeForTest { it.piece(assertNotNull(it.activate(ax.id)).delta) }
+        val child = h.lease(setOf(x), reservation = 2L)
+        val mid = h.snapshot().ledger
+        val done = h.complete(open.id, 5L)
+        val after = h.snapshot().ledger
+        assertAll(
+            { assertEquals(x, child.leaf) },
+            { assertEquals(2L, mid.holdings(x, LOCAL), "the new child got its own reservation") },
+            { assertEquals(5L, mid.holdings(a, LOCAL), "the open lease's 5 units stayed at the former lane") },
+            { assertEquals(LeaseOutcome.Done(5L, 0L), done) },
+            { assertEquals(0L, after.holdings(a, LOCAL)) },
+            { assertEquals(emptyList(), after.validate()) },
         )
     }
 
