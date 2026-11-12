@@ -1605,6 +1605,67 @@ public class EntitlementLedger private constructor(
     public fun lineageOf(group: GroupId): List<AttachmentId>? = lineageEdges(group)
 
     /**
+     * Every group of [groups] whose lineage is live ([lineageOf] is not `null`), together with every
+     * group on that lineage up to the root: the set a scheduler lifts a set of leaves to, so a parent
+     * edge reads as wanted when some leaf below it is.
+     *
+     * The same answer as calling [lineageOf] on each group, without walking a shared ancestry once
+     * per leaf: a walk stops at the first group an earlier one resolved. Five thousand siblings cost
+     * one hop each rather than a whole walk each. Every group on one walk shares its verdict, since a
+     * quarantine anywhere on a lineage quarantines everything below it.
+     */
+    internal fun withLiveLineages(groups: Collection<GroupId>): Set<GroupId> {
+        val idx = index.value
+        val live = HashMap<GroupId, Boolean>()
+        val chain = ArrayList<GroupId>()
+        val onChain = HashSet<GroupId>()
+        for (start in groups) {
+            if (start in live) continue
+            chain.clear()
+            onChain.clear()
+            var cur = start
+            var verdict: Boolean
+            while (true) {
+                val known = live[cur]
+                if (known != null) {
+                    verdict = known
+                    break
+                }
+                if (!onChain.add(cur)) { // a cycle
+                    verdict = false
+                    break
+                }
+                chain += cur
+                val inboundIds = idx.inbound[cur].orEmpty()
+                if (inboundIds.isEmpty()) { // reached the root
+                    verdict = true
+                    break
+                }
+                // Exactly one live inbound edge, with a single record: otherwise there is no live path,
+                // two live paths, or a divergent record, and every group below is quarantined with it.
+                var only: AttachmentId? = null
+                var count = 0
+                for (e in inboundIds) {
+                    if (isLiveEdge(e)) {
+                        only = e
+                        count++
+                    }
+                }
+                val parent = if (count == 1 && only != null) recordOf(only)?.parent else null
+                if (parent == null) {
+                    verdict = false
+                    break
+                }
+                cur = parent
+            }
+            for (g in chain) live[g] = verdict
+        }
+        val out = HashSet<GroupId>()
+        for ((g, ok) in live) if (ok) out += g
+        return out
+    }
+
+    /**
      * Charge [amount] of completed service by [r] against a **path captured earlier**
      * (design §4.4 / §10.4: "charge every edge of the path captured at reservation; history
      * never moves to a newer generation"). Unlike [spend], this does **not** recompute the

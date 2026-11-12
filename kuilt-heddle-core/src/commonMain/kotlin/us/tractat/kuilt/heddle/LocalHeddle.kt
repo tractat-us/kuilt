@@ -221,8 +221,11 @@ public class LocalHeddle private constructor(
         if (base.holdings(root, SELF) < reservation) return AcquireOutcome.SupplyExhausted
 
         val wants = Demand(targetOutstanding = UNBOUNDED_TARGET, maximumUsefulGrant = reservation)
-        val waitingDemand = demandOver(base, withLineage(base, waiting), wants)
-        val eligibleDemand = demandOver(base, withLineage(base, eligible), wants)
+        val waitingGroups = base.withLiveLineages(waiting)
+        // eligible ⊆ waiting, so equal sizes mean equal sets, and the lift is shared.
+        val eligibleGroups = if (eligible.size == waiting.size) waitingGroups else base.withLiveLineages(eligible)
+        val waitingDemand = demandOver(base, waitingGroups, wants)
+        val eligibleDemand = demandOver(base, eligibleGroups, wants)
 
         var local = base
         val path = ArrayList<AttachmentId>()
@@ -472,17 +475,6 @@ public class LocalHeddle private constructor(
          * [EntitlementLedger.isLeaf] once that reads "no ACTIVE child edge" too (#3193).
          */
         private fun isLeaf(ledger: EntitlementLedger, group: GroupId): Boolean = ledger.activeChildren(group).isEmpty()
-
-        /** Each leaf in [leaves] that has a live lineage, with every group on that lineage. */
-        private fun withLineage(ledger: EntitlementLedger, leaves: Set<GroupId>): Set<GroupId> {
-            val out = HashSet<GroupId>()
-            for (leaf in leaves) {
-                val lineage = ledger.lineageOf(leaf) ?: continue
-                out += leaf
-                for (edge in lineage) ledger.record(edge)?.let { out += it.parent }
-            }
-            return out
-        }
 
         /** [wants] for an edge whose child is in [groups], [Demand.NONE] for every other. */
         private fun demandOver(ledger: EntitlementLedger, groups: Set<GroupId>, wants: Demand): (AttachmentId) -> Demand =
