@@ -220,9 +220,10 @@ public class EntitlementLedger private constructor(
 
     /**
      * The edge index: who each group's child edges and inbound edges are, which children are not
-     * retired, and the folded net inflow of the ones that are. **Derived state**, a function of
-     * `records`, `lifecycle`, `issued`, `issuedRelocIn` and `returned`: it is never encoded and takes
-     * no part in [equals], so the bytes and the lattice are exactly what they were without it.
+     * retired, the folded net inflow of the ones that are, and the highest topology generation any
+     * edge carries. **Derived state**, a function of `records`, `lifecycle`, `issued`,
+     * `issuedRelocIn` and `returned`, and of which edges the counters mention: it is never encoded and
+     * takes no part in [equals], so the bytes and the lattice are exactly what they were without it.
      *
      * Built on first read, in one pass over `records`, unless [piece] carried one over: a join whose
      * operand already has its index built derives the result's index from it, touching only the edges
@@ -619,8 +620,15 @@ public class EntitlementLedger private constructor(
                 for ((r, v) in inflowOf(e)) folds.getOrPut(p) { HashMap() }.getOrPut(r) { WideSum() }.add(v)
             }
         }
-        return EdgeIndex(children, inbound, unretired, folds.settle(emptyMap()))
+        var top = GenerationTop.NONE
+        for (e in allEdges()) top = top.plus(e)
+        return EdgeIndex(children, inbound, unretired, folds.settle(emptyMap()), top)
     }
+
+    /** Whether [allEdges] holds [e]: any component but the gauges names it. */
+    private fun mentions(e: AttachmentId): Boolean =
+        e in records || e in lifecycle || e in issued || e in returned || e in leafSpent || e in rollupSpent ||
+            e in issuedRelocIn || e in leafRelocIn || e in leafRelocOut || e in rollupRelocIn || e in rollupRelocOut
 
     /**
      * This joined state's index, derived from [base]'s built one. An edge [delta] does not name has
@@ -686,12 +694,16 @@ public class EntitlementLedger private constructor(
             }
         }
         val retiredOutflow = foldDeltas.settle(from.retiredOutflow)
+        // An edge, once mentioned, is mentioned for good, so the top only ever takes in new edges:
+        // a retire cannot lower it, and neither can anything else.
+        var top = from.generationTop
+        for (e in delta.allEdges()) if (!base.mentions(e)) top = top.plus(e)
         if (children === from.children && inbound === from.inbound && unretired === from.unretired &&
-            retiredOutflow === from.retiredOutflow
+            retiredOutflow === from.retiredOutflow && top == from.generationTop
         ) {
             return from
         }
-        return EdgeIndex(children, inbound, unretired, retiredOutflow)
+        return EdgeIndex(children, inbound, unretired, retiredOutflow, top)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -2008,6 +2020,18 @@ public class EntitlementLedger private constructor(
     /** The record set under [id] (empty if unknown) — [HeddleInternalApi], test support. */
     internal fun recordsOf(id: AttachmentId): Set<AttachmentRecord> = records[id] ?: emptySet()
 
+    /** The highest topology-grammar generation over [allEdges], and how many edges carry it; from the index. */
+    internal fun generationTop(): GenerationTop = index.value.generationTop
+
+    /** Every edge any of whose records names [child] as its child, in any lifecycle, sorted; from the index. */
+    internal fun inboundEdges(child: GroupId): List<AttachmentId> = index.value.inbound[child].orEmpty()
+
+    /**
+     * Whether any edge, in any lifecycle, names [group] as its parent: the edges [holdings] subtracts
+     * from [group]. Deliberately not [isLeaf], whose meaning is a scheduling question (#3191).
+     */
+    internal fun hasChildEdges(group: GroupId): Boolean = childEdges(group).isNotEmpty()
+
     /** Every edge id mentioned by any component. */
     internal fun allEdges(): Set<AttachmentId> =
         records.keys + lifecycle.keys + allEdgeCounters().flatMapTo(HashSet()) { it.keys }
@@ -2257,12 +2281,16 @@ public class EntitlementLedger private constructor(
      * @property unretired the [children] whose lifecycle is not [Lifecycle.RETIRED].
      * @property retiredOutflow per parent and replica, `Σ effIssued − returned` over the retired
      *   [children], exact. Zero entries are absent.
+     * @property generationTop the highest topology-grammar generation over [allEdges], retired edges
+     *   included, and how many edges carry it: the floor [Topology.diff] and
+     *   [Topology.attachRuntimeChild] number new edges above, read here without a pass over every edge.
      */
     private class EdgeIndex(
         val children: Map<GroupId, List<AttachmentId>>,
         val inbound: Map<GroupId, List<AttachmentId>>,
         val unretired: Map<GroupId, List<AttachmentId>>,
         val retiredOutflow: Map<GroupId, Map<ReplicaId, Int128>>,
+        val generationTop: GenerationTop,
     )
 
     public companion object {

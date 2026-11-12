@@ -41,4 +41,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun topologyDiffHolds() = sampleTopologyDiff()
+
+    @Test
+    fun runtimeChildrenHold() = sampleRuntimeChildren()
 }

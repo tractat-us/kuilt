@@ -106,3 +106,48 @@ internal fun sampleTopologyDiff() {
         ),
     )
 }
+
+/**
+ * Children the app creates while running: [Topology.attachRuntimeChild] names one by any string and
+ * lists the steps that add it, at the weight the group's marker gives, and a reload that keeps the
+ * marker keeps the child.
+ */
+@Suppress("unused")
+internal fun sampleRuntimeChildren() {
+    val pool = draft("pool") {
+        group("tenants") {
+            lane("x")
+            runtimeChildren(Weight.of(2))
+        }
+    }
+    var ledger = EntitlementLedger.bootstrap(pool.groupId(), mapOf(ReplicaId("me") to 100L), "boot")
+    fun apply(steps: List<TopologyStep>) {
+        for (step in steps) {
+            val patch = when (step) {
+                is TopologyStep.Prepare -> ledger.prepare(step.record)
+                is TopologyStep.Activate -> ledger.activate(step.edge)
+                is TopologyStep.Close -> ledger.close(step.edge)
+                is TopologyStep.Retire -> ledger.retire(step.edge)
+                is TopologyStep.Reconcile -> error("nothing here carried work")
+            }
+            ledger = ledger.piece(checkNotNull(patch))
+        }
+    }
+    apply(Topology.diff(pool, ledger, generation = 0))
+
+    // Named like the declared lane `x`, and still its own child: runtime names have their own namespace.
+    val tenant = pool.runtimeChildId(listOf("tenants"), "x")
+    check(tenant != pool.groupId("tenants", "x"))
+    val attach = pool.attachRuntimeChild(listOf("tenants"), "x", ledger, generation = 0)
+    check(attach.map { it::class } == listOf(TopologyStep.Prepare::class, TopologyStep.Activate::class))
+    check((attach.first() as TopologyStep.Prepare).record.weight == Weight.of(2))
+    apply(attach)
+    // Asking again is harmless, and a reload that keeps the marker keeps the child.
+    check(pool.attachRuntimeChild(listOf("tenants"), "x", ledger, generation = 0).isEmpty())
+    check(Topology.diff(pool, ledger, generation = 0).isEmpty())
+
+    // Detached, it is closed and retired; attached again, it gets a fresh edge.
+    apply(pool.detachRuntimeChild(listOf("tenants"), "x", ledger))
+    check(ledger.lineageOf(tenant) == null)
+    check(pool.attachRuntimeChild(listOf("tenants"), "x", ledger, generation = 0).first() is TopologyStep.Prepare)
+}
