@@ -25,7 +25,8 @@ class TopologyLoweringTest {
     /**
      * Names that a naive join would fold together: a slash inside a name against two levels, a
      * pre-escaped slash, the id grammar's own punctuation, the runtime marker, a lone surrogate
-     * against the `?` a JVM encoder substitutes for it, and a runtime `x` beside a declared `x`.
+     * against the `?` a JVM encoder substitutes for it, and a runtime `x` beside a declared `x` and
+     * a declared `!x`.
      */
     private val awkward = Topology(
         "root",
@@ -40,7 +41,7 @@ class TopologyLoweringTest {
             Lane("\uD800"),
             Lane("\uDC00"),
             Lane("😀"),
-            Group("g", Weight.ONE, listOf(Lane("x")), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
+            Group("g", Weight.ONE, listOf(Lane("x"), Lane("!x")), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
         ),
     )
 
@@ -81,7 +82,8 @@ class TopologyLoweringTest {
 
     @Test
     fun flatteningIsInjectiveOverAwkwardNames() {
-        val declared = declaredNames.map { awkward.groupId(it) } + awkward.groupId("a", "b") + awkward.groupId("g", "x")
+        val declared = declaredNames.map { awkward.groupId(it) } +
+            listOf(awkward.groupId("a", "b"), awkward.groupId("g", "x"), awkward.groupId("g", "!x"))
         val runtime = awkward.runtimeChildId(listOf("g"), "x")
         val all = declared + runtime + awkward.groupId()
         val ids = awkward.lower().map { it.id }
@@ -96,6 +98,7 @@ class TopologyLoweringTest {
             { assertEquals(GroupId("root/%F0%9F%98%80"), awkward.groupId("😀")) },
             { assertEquals(GroupId("root/g/!x"), runtime) },
             { assertEquals(GroupId("root/g/x"), awkward.groupId("g", "x")) },
+            { assertEquals(GroupId("root/g/%21x"), awkward.groupId("g", "!x")) },
             // A lone surrogate keeps its own bytes rather than becoming `?` or U+FFFD on some target.
             { assertEquals(GroupId("root/%ED%A0%80"), awkward.groupId("\uD800")) },
             { assertEquals(GroupId("root/%3F"), awkward.groupId("?")) },
@@ -109,7 +112,7 @@ class TopologyLoweringTest {
 
     @Test
     fun pathOfInvertsGroupId() {
-        val declared = declaredNames.map { listOf(it) } + listOf(listOf("a", "b"), listOf("g", "x"))
+        val declared = declaredNames.map { listOf(it) } + listOf(listOf("a", "b"), listOf("g", "x"), listOf("g", "!x"))
         val runtimeNames = listOf("x", "a/b", "!x", "é", "\uD800", "x@1:1#0", "%21x")
         assertAll(
             { assertEquals(ParsedPath(listOf("root"), runtime = false), pathOf(awkward.groupId())) },
