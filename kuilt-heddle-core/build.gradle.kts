@@ -8,6 +8,8 @@ plugins {
 // in the root build fails when any classpath of this module resolves one of the forbidden modules.
 
 kotlin {
+    // The module that declares @HeddleInternalApi is the one place it is not a warning sign.
+    compilerOptions { optIn.add("us.tractat.kuilt.heddle.HeddleInternalApi") }
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-crdt"))
