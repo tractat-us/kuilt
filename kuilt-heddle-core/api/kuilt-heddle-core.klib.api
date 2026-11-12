@@ -1158,6 +1158,9 @@ final object us.tractat.kuilt.heddle/WeightSerializer : kotlinx.serialization/KS
     final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Weight) // us.tractat.kuilt.heddle/WeightSerializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Weight){}[0]
 }
 
+final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/groupId(kotlin/Array<out kotlin/String>...): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/groupId|groupId@us.tractat.kuilt.heddle.Topology(kotlin.Array<out|kotlin.String>...){}[0]
+final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/lower(kotlin/Long = ...): kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentRecord> // us.tractat.kuilt.heddle/lower|lower@us.tractat.kuilt.heddle.Topology(kotlin.Long){}[0]
+final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/runtimeChildId(kotlin.collections/List<kotlin/String>, kotlin/String): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/runtimeChildId|runtimeChildId@us.tractat.kuilt.heddle.Topology(kotlin.collections.List<kotlin.String>;kotlin.String){}[0]
 final fun us.tractat.kuilt.heddle/checkedAdd(kotlin/Long, kotlin/Long): kotlin/Long // us.tractat.kuilt.heddle/checkedAdd|checkedAdd(kotlin.Long;kotlin.Long){}[0]
 final fun us.tractat.kuilt.heddle/checkedMul(kotlin/Long, kotlin/Long): kotlin/Long // us.tractat.kuilt.heddle/checkedMul|checkedMul(kotlin.Long;kotlin.Long){}[0]
 final fun us.tractat.kuilt.heddle/draft(kotlin/String, kotlin/Function1<us.tractat.kuilt.heddle/TopologyDraft, kotlin/Unit>): us.tractat.kuilt.heddle/Topology // us.tractat.kuilt.heddle/draft|draft(kotlin.String;kotlin.Function1<us.tractat.kuilt.heddle.TopologyDraft,kotlin.Unit>){}[0]
