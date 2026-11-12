@@ -1,6 +1,8 @@
 # `:kuilt-heddle` — weighted fair-share scheduling over kuilt
 
-> **Status: design spec, draft (unbuilt, pre-1.0).** A kuilt-native design for a
+> **Status: design spec, built (pre-1.0, Playground).** All six phases of §15 have
+> shipped; where the code settled a question differently from this text, the section
+> says so (§11 maps the sketch onto what shipped). A kuilt-native design for a
 > distributed weighted fair-share scheduler — a hierarchical EEVDF-inspired
 > entitlement scheduler expressed entirely in terms of kuilt's real contract and
 > CRDT zoo. Every concept is grounded in a primitive kuilt already ships; where
@@ -775,8 +777,11 @@ the heddle introduces **no new category of coordination**:
    term; a control-plane operation that revokes a crashed peer's holdings is
    proposed by the leader after a `readIndex()` quorum fence — the same
    deposed-leader-cannot-pass-the-fence mechanism `WarpNode`'s coordinated
-   path already uses. v1 defines the seam and ships only mint + topology;
-   reclamation stays an explicit later feature.
+   path already uses. v1 defines the seam and ships mint, topology, the
+   roster below, and the conserving re-home of budget a raced `retire`
+   stranded (`quiesce`/`reconcile`, relocation design §6.2). Reclaiming a
+   *crashed peer's* holdings stays an explicit later feature: `revocation`
+   answers `RevocationOutcome.NotShipped`.
 
 **The log-known roster** (`Enroll`/`Depart`, `EnrolledRoster`) is the membership
 prerequisite of (3), not a fourth non-monotone question. A barrier that waits for
@@ -809,6 +814,41 @@ what re-attaches its detector and clears it from `unreachable` — and only for 
 peer in the terminal Lost state. A **departure** fires nothing: a departed peer's
 entitlement is stranded exactly like a crashed peer's, so it must keep counting
 toward the §8.2 bound. Re-monitoring reclaims no entitlement; that is still (3).
+
+**Enrolling is what lets a peer spend: the write gate** (#1892, #2921). A governed
+peer boots unable to author entitlement. Its gate opens when the apply loop applies
+*this run's own* `Enroll(self)`, and because Raft applies in index order, a peer that
+has applied its own post-boot enroll has replayed every barrier committed before it,
+so a restart cannot lose a quiesce mark and then charge a fenced edge. Applying this
+run's `Depart(self)` closes it again. While it is closed, `reserve` and `schedule`
+answer `GateClosed` with a `Reason` (`AwaitingEnrollment`, `Departed`,
+`UnreadableControlEntry`) — never the `NoHoldings` / `NothingToDelegate` an idle peer
+gives. The gate moves **in the apply loop**, in the same locked step as the entry,
+not in the proposing caller's continuation: a call that timed out or was cancelled
+after its entry applied never resumes, so a gate it moved would stay wrong for good.
+A run's own acts are recognised by membership in the set of keys this instance
+issued, with a per-run nonce on the two gate acts, never by the key's
+`self#incarnation#` text — `incarnation` is caller-supplied and nothing detects a
+reused one. Relocation design §13.2 and `HeddleControlPlane`'s KDoc carry the proof.
+
+**The control log is read in full or not at all** (#1738). The log is the truth
+about supply, topology and the roster, so a peer that cannot read one of its entries
+no longer knows that truth, and scheduling from whatever happened to decode is a
+conservation break by a second route. Every act is framed — the magic `KHCL`, a
+version byte, then CBOR — and an entry that does not decode, framed or not, halts
+the apply loop there. Nothing past it applies; the reason latches as
+`GateClosed.Reason.UnreadableControlEntry(index, version)`; a call made after the
+halt is refused without proposing (`Conflict` at `NOT_COMMITTED`), and one in flight
+at the halt answers `ControlOutcome.Indeterminate`, because it may still commit. A
+restart replays to the same entry and halts again. Nothing is skipped, and that has
+two accepted costs. The same bytes stop every peer on a build, so one peer on a
+newer build stops the older ones until they upgrade. And bytes heddle never wrote
+stop it too, since a peer cannot tell them from an act it has lost the means to
+read — so the control plane needs a Raft node of its own. That node stays on
+`ClientIdentity.Auto`: the plane replays from index 1 and restarts its request
+serials on every boot, a serial space no `ClientIdentity.Durable` floor can describe
+(#3098). A durable log from v0.7.3 stops at its first `Mint` or `Prepare`; start it
+fresh, as there is no migrator.
 
 **Bootstrap: paired entry points, no nullable consensus.** A `RaftNode?`
 parameter defaulting to `null` would gate a functional code path on an
@@ -846,9 +886,9 @@ Carried over from the source intact; each is a named property test (§13).
    conserving move the recovery would perform, taken at charge time.
 5. **Neutral attachment initialization.** A new generation starts at the
    parent's current virtual time — the front over its *demanding* children,
-   not over all its active ones (§7.2) — never with lifetime credit. Where
-   that virtual time is fractional, the record takes its **exact ceiling**
-   (§7.2): rounding away from credit, never toward it.
+   not over all its active ones (§7.2) — never with lifetime credit. The
+   seat is published on the edge's `Gauge` as an exact `Rational`, not frozen
+   into the record, so there is no rounding rule to state (§7.2).
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
    clamps forward.
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
