@@ -44,4 +44,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun runtimeChildrenHold() = sampleRuntimeChildren()
+
+    @Test
+    fun localLeaseHolds() = sampleLocalLease()
 }
