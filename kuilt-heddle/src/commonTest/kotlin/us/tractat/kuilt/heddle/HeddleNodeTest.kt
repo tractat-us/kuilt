@@ -298,13 +298,13 @@ class HeddleNodeTest {
     }
 
     /**
-     * #3191: a group whose only child retires is a lane, so it can be reserved and charged. The
-     * reserve gate and the allocator read one predicate, so at every step of the reshape exactly
-     * one of them can use g1's holdings: `schedule(g1)` hands them down, or `reserve(g1)` earmarks
-     * them.
+     * #3191: a group whose only child closes is a lane at once, and stays one through the drain and
+     * after the retire, so it can be reserved and charged throughout. The reserve gate and the
+     * allocator read one predicate, so at every step of the reshape exactly one of them can use
+     * g1's holdings: `schedule(g1)` hands them down, or `reserve(g1)` earmarks them.
      */
     @Test
-    fun aGroupWhoseChildRetiredIsReservableAndTheAllocatorAgrees() =
+    fun aGroupWhoseChildClosesAndRetiresIsReservableAndTheAllocatorAgrees() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val ex = AttachmentId("ex")
             val h = harness(
@@ -333,12 +333,34 @@ class HeddleNodeTest {
             val reserved = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L), "g1 is a lane once ex closes")
             node.complete(reserved.id, 6L)
             h.pump()
-            val l = node.ledger.value
+            val draining = node.ledger.value
             assertAll(
-                { assertEquals(Lifecycle.CLOSING, l.lifecycle(ex), "rig: ex is still draining") },
-                { assertEquals(5L, l.edge(ex)?.outstanding, "rig: ex still holds its grant") },
-                { assertEquals(6L, l.edge(e1)?.spent, "the charge landed on g1's inbound edge") },
-                { assertEquals(emptyList(), l.validate(), "validate stays clean") },
+                { assertEquals(Lifecycle.CLOSING, draining.lifecycle(ex), "rig: ex is still draining") },
+                { assertEquals(5L, draining.edge(ex)?.outstanding, "rig: ex still holds its grant") },
+                { assertEquals(6L, draining.edge(e1)?.spent, "the charge landed on g1's inbound edge") },
+                { assertEquals(emptyList(), draining.validate(), "validate is clean mid-drain") },
+            )
+
+            // x spends its whole grant, which drains ex, and ex retires.
+            val atX = assertIs<ReserveOutcome.Reserved>(node.reserve(GroupId("x"), 5L), "x still spends across a closing edge")
+            node.complete(atX.id, 5L)
+            h.pump()
+            assertTrue(node.retire(ex), "rig: ex drained and retires")
+            h.pump()
+            assertEquals(Lifecycle.RETIRED, node.ledger.value.lifecycle(ex), "rig: ex is retired")
+
+            // g1 is still a lane: the allocator hands nothing down, and reserve takes g1.
+            assertEquals(0, node.schedule(g1), "the allocator hands nothing down a retired edge")
+            val again = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L), "g1 is a lane once ex retires")
+            node.complete(again.id, 4L)
+            h.pump()
+            val retired = node.ledger.value
+            assertAll(
+                // g1's 6 and 4 as leaf spend, plus x's 5 rolled up through e1.
+                { assertEquals(15L, retired.edge(e1)?.spent, "every charge reached g1's inbound edge") },
+                { assertEquals(10L, retired.storedSlot(CounterFamily.LEAF_SPENT, e1, node.self), "g1's own charges") },
+                { assertEquals(0L, retired.edge(ex)?.outstanding, "ex drained") },
+                { assertEquals(emptyList(), retired.validate(), "validate stays clean") },
             )
         }
 

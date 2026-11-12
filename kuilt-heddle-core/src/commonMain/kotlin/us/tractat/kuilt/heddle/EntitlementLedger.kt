@@ -541,17 +541,24 @@ public class EntitlementLedger private constructor(
      * True when [group] has no [Lifecycle.ACTIVE] child edge (design §5.2: "leaves have no active
      * outbound edges"). These are the only groups at which [spend] may charge service. Exactly
      * when this is false, [activeChildren] is non-empty and the allocator can hand [group]'s
-     * holdings down, so the holdings at a group are always usable one way and never both.
+     * holdings down. So no group's holdings are usable both ways, and this predicate never refuses
+     * a group the allocator does not descend into. ([spend] can still refuse one for other reasons:
+     * the root has no edge to charge, and a quarantined lineage holds nothing.)
      *
-     * A child edge in any other lifecycle does not count, and each has its reason:
+     * The case that decides the rule is a reload that turns a group into a lane. Its old child
+     * edges close, and they stay closing while their open work drains, which can take as long as
+     * that work runs. The lane must be chargeable **at once**, not when the last child retires: the
+     * allocator hands nothing down a closing edge, so for the whole drain nothing else could use
+     * what the lane holds. Charging it mid-drain is sound because [holdings] subtracts every
+     * child's net inflow whatever its lifecycle, so the lane spends only what it holds, never what
+     * is still out at a child. Each unit a child gives back becomes the lane's to spend.
+     *
+     * So a child edge in any lifecycle but ACTIVE does not count:
+     *  - **CLOSING** — as above. Across peers it matters more still: a crashed peer strands its
+     *    earmarks (§8.1), so a closing child may never drain at all.
+     *  - **RETIRED** — the lane keeps its retired children's records for good, and must still be
+     *    charged.
      *  - **PREPARED** — nothing crosses it yet, and a reverted add may leave it prepared for good.
-     *  - **CLOSING** — no new delegation, so the allocator cannot use [group]'s holdings. If this
-     *    blocked [spend] too, a child that never drains (a crashed peer strands its earmarks, §8.1)
-     *    would freeze [group] for good. Charging [group] mid-drain is sound because [holdings]
-     *    subtracts every child's net inflow whatever its lifecycle: [group] spends only what it
-     *    holds, never what is still out at the child.
-     *  - **RETIRED** — a group a reload turns into a lane keeps its retired children's records, and
-     *    must still be charged.
      *
      * So a group stops being a leaf when its first child edge **activates**, not when the record
      * lands, and becomes one again when its last active child closes. The child edges [holdings]

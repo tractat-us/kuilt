@@ -271,13 +271,16 @@ older version does not decode. The version handling that implies is a deliberate
 children are not scheduling candidates.
 
 `isLeaf(g)` = `activeChildren(g)` is empty: no `ACTIVE` child edge (design §5.2). It reads the
-same edges, so a group the allocator descends into can never also be charged, and a group it
-does not descend into can always be (#3191). It is not `childEdges(g)` is empty. A group a
-reload turns into a lane keeps its retired children's records, a reverted add can leave a
-`PREPARED` child for good, and a `CLOSING` child that never drains (a crashed peer's stranded
-earmarks) would otherwise freeze the group, since nothing can be delegated across it either.
-Charging a group while a child drains is sound because `holdings` subtracts every child's net
-inflow whatever its lifecycle.
+same edges, so a group the allocator descends into can never also be charged, and the leaf
+predicate never refuses one it does not descend into (#3191). Such a group can still be
+uncharged for other reasons: the root has no edge to charge, and a quarantined lineage holds
+nothing. It is not `childEdges(g)` is empty. A reload that turns a group into a lane closes its
+children, and they stay `CLOSING` while their open work drains. The lane must be chargeable at
+once, since nothing can be delegated across a closing edge, so nothing else could use what it
+holds. Afterwards it keeps its retired children's records for good. A reverted add can leave a
+`PREPARED` child for good, and across peers a crashed peer's stranded earmarks can keep a child
+`CLOSING` forever. Charging a group while a child drains is sound because `holdings` subtracts
+every child's net inflow whatever its lifecycle.
 
 ## `validate(): List<LedgerConflict>` (fix 3)
 
