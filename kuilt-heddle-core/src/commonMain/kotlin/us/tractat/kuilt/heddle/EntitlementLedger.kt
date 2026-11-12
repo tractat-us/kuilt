@@ -757,9 +757,9 @@ public class EntitlementLedger private constructor(
      * ## The two inputs, and why neither is read from a gossip view
      *
      *  - **[finals]** — per fenced edge, each replica's log-recorded [SlotFinals] from its
-     *    [ControlCommand.QuiesceAck]. Base slots are single-writer, and the acking replica has
+     *    `ControlCommand.QuiesceAck`. Base slots are single-writer, and the acking replica has
      *    marked the edge locally unwritable, so these values are *final* and consensus-recorded.
-     *  - **`this`** — the control plane's own accumulated relocation state ([FenceState.relocations]).
+     *  - **`this`** — the control plane's own accumulated relocation state (`FenceState.relocations`).
      *    The relocation families and a fenced edge's base slots are control-plane-owned exclusively
      *    (§6.3), so `this` holds their true values with no data-plane read at all.
      *
@@ -781,7 +781,7 @@ public class EntitlementLedger private constructor(
      * at `donor` and a retired `s` is no longer any group's live inbound, so [transfer] can never
      * write that key again: the row is frozen at barrier time at its own writer, which is exactly
      * what makes it declarable. That is also what puts the carry on the H5 control-plane path, whose
-     * receiver ([FenceState.relocations]) is log-pure and holds no data-plane row at all.
+     * receiver (`FenceState.relocations`) is log-pure and holds no data-plane row at all.
      *
      * The carry is **not** a key move into `transfers[key(t)]` — that slot belongs to the donor and
      * ordinary [transfer] writes it concurrently, so two writers on one max-joined slot would erase
@@ -1128,7 +1128,7 @@ public class EntitlementLedger private constructor(
         }
 
     /**
-     * The **base** slots of [edge], by replica — the shape a [ControlCommand.QuiesceAck]
+     * The **base** slots of [edge], by replica — the shape a `ControlCommand.QuiesceAck`
      * declares. Read on the acking peer's own complete state (for its own slot) at the moment it
      * marks [edge] locally unwritable, or over every replica for a test that models a converged view.
      * `internal` — barrier + test support.

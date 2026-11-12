@@ -154,7 +154,7 @@ class NewbornSeatPocTest {
 
     /**
      * **The decisive finding against A.** Under A, `initialVirtualTime` is a constant `0` and the
-     * effective seat lives in `HeddleNode.wakeOffsets` — a per-boot, in-memory `HashMap`, never
+     * effective seat lives in `FairShareAllocator`'s wake offsets — a per-boot, in-memory `HashMap`, never
      * replicated and never persisted. A peer that restarts (or joins late) therefore has *no*
      * seat for any edge and reads `ev = committed / w` for all of them.
      *

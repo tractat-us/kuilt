@@ -248,7 +248,7 @@ public object HeddlePolicy {
      * publish its own front and the readings converge instead of racing (issue #1752). A stale
      * peer's low reading is absorbed; a peer that has seen more wins.
      *
-     * What that does *not* dissolve is intent divergence: two ungoverned [HeddleNode.prepare]
+     * What that does *not* dissolve is intent divergence: two ungoverned `HeddleNode.prepare`
      * calls supplying different *weights* still union to a divergent record set and starve the
      * child. Drive a generation from one proposer for that reason — not for the seat's sake.
      *
