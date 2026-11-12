@@ -89,10 +89,12 @@ class EntitlementLedgerComponentCoverageTest {
         /**
          * Fields that are declared but are **not** lattice components, each with a mandatory reason.
          *
-         * The ledger's two entries are its edge index (#3173, plan Task L0). "Every declared field is
-         * a component" stops being true the first time someone writes a `by lazy` cache: the delegate materialises as a declared field named `x${'$'}delegate`,
+         * The ledger's two entries are its edge index (#3173, plan Task L0): `carried`, the index
+         * [EntitlementLedger.piece] hands to its result, and `index`, the explicit `Lazy` holding it.
+         * Both are derived state. A cache is not a component, and a `by lazy` one would not escape
+         * this guard either: its delegate materialises as a declared field named `x${'$'}delegate`,
          * which `isSynthetic` does **not** cover. Without a place to say "not a component, because
-         * it is a cache", the next author's cheapest way to a green build is to invent a
+         * it is a cache", an author's cheapest way to a green build is to invent a
          * `LedgerComponent("x${'$'}delegate", …)` fixture — a bogus registration that makes the walk
          * assert something meaningless and, worse, teaches the file that the list is a formality.
          *

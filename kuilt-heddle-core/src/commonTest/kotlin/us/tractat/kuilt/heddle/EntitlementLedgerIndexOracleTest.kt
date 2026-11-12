@@ -31,6 +31,10 @@ import kotlin.test.assertTrue
  *   existing id with a different parent and child.
  * - **Merge in both orders** of two replica states, each order checked on its own.
  * - **A JSON round trip**, which rebuilds every derived structure from the bytes.
+ * - **A carry from the other operand**: before half the merges one side is replaced by a freshly
+ *   decoded copy, so the order in which it comes first has to take its index from the other side.
+ *
+ * Each of these is counted where it happens, and the test asserts every count is positive.
  *
  * Reads are made after most steps, but not all: a state that is never read is pieced into the next
  * one without its derived structures ever having been built, and both routes have to agree.
@@ -42,24 +46,32 @@ class EntitlementLedgerIndexOracleTest {
 
     @Test
     fun indexedReadsEqualABruteForceScanOverSeededHistories() {
-        var checks = 0
-        var retiredWithInflow = 0
-        var mergesChecked = 0
-        var roundTrips = 0
-        for (seed in 0 until SEEDS) {
-            val run = Run(Random(seed * 7919 + 3173))
-            repeat(STEPS) { run.step() }
-            checks += run.checks
-            retiredWithInflow = maxOf(retiredWithInflow, run.maxRetiredWithInflow)
-            mergesChecked += run.mergesChecked
-            roundTrips += run.roundTrips
+        val runs = (0 until SEEDS).map { seed ->
+            Run(Random(seed * 7919 + 3173)).also { run -> repeat(STEPS) { run.step() } }
         }
-        // The rig fired: each arm the KDoc promises was actually reached.
+        val checks = runs.sumOf { it.checks }
+        val retiredWithInflow = runs.maxOf { it.maxRetiredWithInflow }
+        val mergesChecked = runs.sumOf { it.mergesChecked }
+        val roundTrips = runs.sumOf { it.roundTrips }
+        val retiredCountersMoved = runs.sumOf { it.retiredCountersMovedUnderABuiltIndex }
+        val divergent = runs.sumOf { it.divergentRecords }
+        val countersFirst = runs.sumOf { it.recordsArrivingAfterTheirCounters }
+        val carriedFromOther = runs.sumOf { it.carriesFromTheOtherOperand }
+        // The rig fired: each arm the KDoc promises was actually reached, counted where it happens.
         assertAll(
             { assertTrue(checks >= SEEDS * STEPS / 2, "oracle checks ran: $checks") },
             { assertTrue(retiredWithInflow > 0, "some retired child carried a nonzero net inflow") },
             { assertTrue(mergesChecked >= SEEDS * 10, "merges checked in both orders: $mergesChecked") },
             { assertTrue(roundTrips >= SEEDS * 5, "JSON round trips: $roundTrips") },
+            {
+                assertTrue(
+                    retiredCountersMoved > 0,
+                    "a counter moved on a RETIRED edge while the index was built (the carry's take-out/put-back)",
+                )
+            },
+            { assertTrue(divergent > 0, "a second, divergent record landed under an existing id") },
+            { assertTrue(countersFirst > 0, "a merge brought an edge's record to a state that held only its counters") },
+            { assertTrue(carriedFromOther > 0, "a merge carried the index from the other operand") },
         )
     }
 
@@ -77,6 +89,10 @@ class EntitlementLedgerIndexOracleTest {
         var maxRetiredWithInflow = 0
         var mergesChecked = 0
         var roundTrips = 0
+        var retiredCountersMovedUnderABuiltIndex = 0
+        var divergentRecords = 0
+        var recordsArrivingAfterTheirCounters = 0
+        var carriesFromTheOtherOperand = 0
 
         fun step() {
             val i = random.nextInt(REPLICAS.size)
@@ -161,6 +177,10 @@ class EntitlementLedgerIndexOracleTest {
                 e,
                 r,
             )
+            val before = states[i]
+            if (before.isIndexBuilt() && before.lifecycle(e) == Lifecycle.RETIRED && before.recordsOf(e).isNotEmpty()) {
+                retiredCountersMovedUnderABuiltIndex++
+            }
             val cell = mapOf(e to GCounter.of(r to current + random.nextLong(1L, 5L)))
             val delta = when (family) {
                 0 -> EntitlementLedger.of(issued = cell)
@@ -173,14 +193,17 @@ class EntitlementLedgerIndexOracleTest {
 
         private fun rawLifecycleOrDivergentRecord(i: Int) {
             val e = edge() ?: return
-            val delta = if (random.nextBoolean()) {
+            val retire = random.nextBoolean()
+            val delta = if (retire) {
                 EntitlementLedger.of(lifecycle = mapOf(e to Lifecycle.RETIRED))
             } else {
                 val parent = GROUPS.random(random)
                 val child = (GROUPS - parent).random(random)
                 EntitlementLedger.of(records = mapOf(e to setOf(AttachmentRecord(e, parent, child, Weight.ONE))))
             }
+            val recordsBefore = states[i].recordsOf(e).size
             states[i] = states[i].piece(delta)
+            if (!retire && recordsBefore > 0 && states[i].recordsOf(e).size > recordsBefore) divergentRecords++
             maybeCheck(i)
         }
 
@@ -194,6 +217,15 @@ class EntitlementLedgerIndexOracleTest {
         private fun merge() {
             val a = random.nextInt(REPLICAS.size)
             val b = (a + 1 + random.nextInt(REPLICAS.size - 1)) % REPLICAS.size
+            // Half the time one side arrives freshly decoded, its index not yet built, so one of the
+            // two orders below has to carry the index from its other operand.
+            if (random.nextBoolean()) {
+                val side = if (random.nextBoolean()) a else b
+                states[side] = decode(encode(states[side]))
+            }
+            if (states[a].isIndexBuilt() != states[b].isIndexBuilt()) carriesFromTheOtherOperand++
+            recordsArrivingAfterTheirCounters += countersBeforeRecords(states[a], states[b]) +
+                countersBeforeRecords(states[b], states[a])
             val ab = states[a].piece(states[b])
             val ba = states[b].piece(states[a])
             val mints = this.mints[a] + this.mints[b]
@@ -206,9 +238,18 @@ class EntitlementLedgerIndexOracleTest {
             this.mints[b] = mints
         }
 
+        /** Edges [mine] knows only by their counters and [theirs] holds the record for. */
+        private fun countersBeforeRecords(mine: EntitlementLedger, theirs: EntitlementLedger): Int {
+            val known = mine.allEdges()
+            return edges.count { it in known && mine.recordsOf(it).isEmpty() && theirs.recordsOf(it).isNotEmpty() }
+        }
+
+        private fun encode(l: EntitlementLedger): String = Json.encodeToString(EntitlementLedger.serializer(), l)
+
+        private fun decode(bytes: String): EntitlementLedger = Json.decodeFromString(EntitlementLedger.serializer(), bytes)
+
         private fun roundTrip(i: Int) {
-            val bytes = Json.encodeToString(EntitlementLedger.serializer(), states[i])
-            val decoded = Json.decodeFromString(EntitlementLedger.serializer(), bytes)
+            val decoded = decode(encode(states[i]))
             check(decoded, mints[i], "decoded")
             assertEquals(states[i].validate(), decoded.validate(), "validate after a round trip")
             roundTrips++

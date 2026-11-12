@@ -10,7 +10,8 @@ package us.tractat.kuilt.heddle
  * throw on one history and not on another for the same state. A 128-bit sum of fewer than 2⁶³ terms
  * cannot overflow, so the order stops mattering, and the one check left is [toLongExact] on the
  * final result, which depends on the state alone. That check still throws rather than wraps
- * (design §10.12).
+ * (design §10.12). So a sum kept here throws on fewer inputs than the same terms folded through
+ * [checkedAdd], never on more, and returns the same value wherever that fold returns one.
  */
 internal data class Int128(val hi: Long, val lo: Long) {
 

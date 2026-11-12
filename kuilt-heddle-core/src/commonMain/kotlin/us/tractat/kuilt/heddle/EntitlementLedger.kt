@@ -170,11 +170,12 @@ import kotlinx.serialization.Transient
  *
  * ## Equal ledgers encode to equal bytes
  *
- * [piece] builds its maps through a `HashMap` and its record sets with `+`, so iteration order follows
- * the merge history. A `Quilter` hashes this encoding for its anti-entropy root, and two peers whose
- * bytes differ would ship the whole ledger to each other on every round, so every unordered field,
- * at every level, goes through a canonical serializer. A new field must too, and it needs its own
- * arm in `EntitlementLedgerCanonicalEncodingTest`, since no test reds on a field it never writes.
+ * [piece] builds its maps through a `HashMap` (or takes one side's map as it is) and its record sets
+ * with `+`, so iteration order follows the merge history. A `Quilter` hashes this encoding for its
+ * anti-entropy root, and two peers whose bytes differ would ship the whole ledger to each other on
+ * every round, so every unordered field, at every level, goes through a canonical serializer. A new
+ * field must too, and it needs its own arm in `EntitlementLedgerCanonicalEncodingTest`, since no
+ * test reds on a field it never writes.
  *
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerMerge
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerLifecycle
@@ -695,9 +696,12 @@ public class EntitlementLedger private constructor(
      * The non-retired children are summed here; the retired ones come pre-summed from the [index]'s
      * per-parent fold, so a group with fifty thousand retired children pays for none of them.
      *
-     * The sum is kept in 128 bits and narrowed once, at the end. So the result is the exact value,
-     * or an [ArithmeticException] when that value does not fit a `Long`, whatever order the terms
-     * arrived in. A single term that overflows on its own still throws, as before.
+     * The sum is kept in 128 bits and narrowed once, at the end. Wherever the old term-by-term
+     * `checkedAdd`/`checkedSub` sum returned a value, this returns the same one. It now throws on
+     * fewer states: a partial sum that leaves `Long` no longer throws, and neither does a retired
+     * child's own term, which the fold keeps exactly. What still throws is a result that does not
+     * fit a `Long`, and an overflow inside one of the other terms (the inbound credit, the transfer
+     * net, a non-retired child's net inflow, the leaf spend). Never a silent wrap (§10.12).
      */
     public fun holdings(group: GroupId, r: ReplicaId): Long {
         val lineage = lineageEdges(group) ?: return 0L
@@ -1726,8 +1730,23 @@ public class EntitlementLedger private constructor(
      * prepared/retired is quarantined (holdings `0`) but *silent* — that is the normal window
      * of an honest reshape, and flagging it would fire on healthy traffic. It is the standing
      * exception to §10.11's quarantine ⟺ report correspondence (see [lineageEdges]).
+     *
+     * **It never reads a carried [index].** The report is derived on a copy of this state whose
+     * index is built from scratch, so a defect in how [piece] carries an index cannot hide from
+     * the diagnostic that would show it. The build is one pass over `records`, small next to the
+     * per-group, per-replica holdings loop below.
      */
-    public fun validate(): List<LedgerConflict> {
+    public fun validate(): List<LedgerConflict> = withFreshIndex().diagnose()
+
+    /** These same sixteen components, with no index carried: the copy builds its own on first read. */
+    private fun withFreshIndex(): EntitlementLedger = EntitlementLedger(
+        records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
+        issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
+        transferRelocIn, transferRelocOut,
+    )
+
+    /** The body of [validate], run on [withFreshIndex]'s copy. */
+    private fun diagnose(): List<LedgerConflict> {
         val conflicts = ArrayList<LedgerConflict>()
         for (e in allEdges()) {
             val effLeaf = effLeafSpentTotal(e)
@@ -1939,6 +1958,12 @@ public class EntitlementLedger private constructor(
     // ─────────────────────────────────────────────────────────────────────────
     // Enumeration + test-support accessors (internal — used by validate and tests)
     // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Whether this state's index is built, by a read or carried over by [piece]. Test support: it
+     * lets a property test count the histories in which a carry was actually taken.
+     */
+    internal fun isIndexBuilt(): Boolean = index.isInitialized()
 
     /** The record set under [id] (empty if unknown) — [HeddleInternalApi], test support. */
     internal fun recordsOf(id: AttachmentId): Set<AttachmentRecord> = records[id] ?: emptySet()
