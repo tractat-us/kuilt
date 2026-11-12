@@ -1,6 +1,8 @@
 # `:kuilt-heddle` — weighted fair-share scheduling over kuilt
 
-> **Status: design spec, draft (unbuilt, pre-1.0).** A kuilt-native design for a
+> **Status: design spec, built (pre-1.0, Playground).** All six phases of §15 have
+> shipped; where the code settled a question differently from this text, the section
+> says so (§11 maps the sketch onto what shipped). A kuilt-native design for a
 > distributed weighted fair-share scheduler — a hierarchical EEVDF-inspired
 > entitlement scheduler expressed entirely in terms of kuilt's real contract and
 > CRDT zoo. Every concept is grounded in a primitive kuilt already ships; where
@@ -775,8 +777,11 @@ the heddle introduces **no new category of coordination**:
    term; a control-plane operation that revokes a crashed peer's holdings is
    proposed by the leader after a `readIndex()` quorum fence — the same
    deposed-leader-cannot-pass-the-fence mechanism `WarpNode`'s coordinated
-   path already uses. v1 defines the seam and ships only mint + topology;
-   reclamation stays an explicit later feature.
+   path already uses. v1 defines the seam and ships mint, topology, the
+   roster below, and the conserving re-home of budget a raced `retire`
+   stranded (`quiesce`/`reconcile`, relocation design §6.2). Reclaiming a
+   *crashed peer's* holdings stays an explicit later feature: `revocation`
+   answers `RevocationOutcome.NotShipped`.
 
 **The log-known roster** (`Enroll`/`Depart`, `EnrolledRoster`) is the membership
 prerequisite of (3), not a fourth non-monotone question. A barrier that waits for
@@ -809,6 +814,42 @@ what re-attaches its detector and clears it from `unreachable` — and only for 
 peer in the terminal Lost state. A **departure** fires nothing: a departed peer's
 entitlement is stranded exactly like a crashed peer's, so it must keep counting
 toward the §8.2 bound. Re-monitoring reclaims no entitlement; that is still (3).
+
+**Enrolling is what lets a peer spend: the write gate** (#1892, #2921). A governed
+peer boots unable to author entitlement. Its gate opens when the apply loop applies
+*this run's own* `Enroll(self)`, and because Raft applies in index order, a peer that
+has applied its own post-boot enroll has replayed every barrier committed before it,
+so a restart cannot lose a quiesce mark and then charge a fenced edge. Applying this
+run's `Depart(self)` closes it again. While it is closed, `reserve` and `schedule`
+answer `GateClosed` with a `Reason` (`AwaitingEnrollment`, `Departed`,
+`UnreadableControlEntry`) — never the `NoHoldings` / `NothingToDelegate` an idle peer
+gives. The gate moves **in the apply loop**, in the same locked step as the entry,
+not in the proposing caller's continuation: a call that timed out or was cancelled
+after its entry applied never resumes, so a gate it moved would stay wrong for good.
+A run's own acts are recognised by membership in the set of keys this instance
+issued, with a per-run nonce on the two gate acts, never by the key's
+`self#incarnation#` text — `incarnation` is caller-supplied and nothing detects a
+reused one. Relocation design §6.5 (residual 3) and §13 (item 2) carry the argument;
+`HeddleControlPlane`'s KDoc carries the mechanism.
+
+**The control log is read in full or not at all** (#1738). The log is the truth
+about supply, topology and the roster, so a peer that cannot read one of its entries
+no longer knows that truth, and scheduling from whatever happened to decode is a
+conservation break by a second route. Every act is framed — the magic `KHCL`, a
+version byte, then CBOR — and an entry that does not decode, framed or not, halts
+the apply loop there. Nothing past it applies; the reason latches as
+`GateClosed.Reason.UnreadableControlEntry(index, version)`; a call made after the
+halt is refused without proposing (`Conflict` at `NOT_COMMITTED`), and one in flight
+at the halt answers `ControlOutcome.Indeterminate`, because it may still commit. A
+restart replays to the same entry and halts again. Nothing is skipped, and that has
+two accepted costs. The same bytes stop every peer on a build, so one peer on a
+newer build stops the older ones until they upgrade. And bytes heddle never wrote
+stop it too, since a peer cannot tell them from an act it has lost the means to
+read — so the control plane needs a Raft node of its own. That node stays on
+`ClientIdentity.Auto`: the plane replays from index 1 and restarts its request
+serials on every boot, a serial space no `ClientIdentity.Durable` floor can describe
+(#3098). A durable log from v0.7.3 stops at its first `Mint` or `Prepare`; start it
+fresh, as there is no migrator.
 
 **Bootstrap: paired entry points, no nullable consensus.** A `RaftNode?`
 parameter defaulting to `null` would gate a functional code path on an
@@ -846,9 +887,9 @@ Carried over from the source intact; each is a named property test (§13).
    conserving move the recovery would perform, taken at charge time.
 5. **Neutral attachment initialization.** A new generation starts at the
    parent's current virtual time — the front over its *demanding* children,
-   not over all its active ones (§7.2) — never with lifetime credit. Where
-   that virtual time is fractional, the record takes its **exact ceiling**
-   (§7.2): rounding away from credit, never toward it.
+   not over all its active ones (§7.2) — never with lifetime credit. The
+   seat is published on the edge's `Gauge` as an exact `Rational`, not frozen
+   into the record, so there is no rounding rule to state (§7.2).
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
    clamps forward.
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
@@ -867,97 +908,33 @@ Carried over from the source intact; each is a named property test (§13).
 13. **Consensus only at the embroidery.** Mint, overlapping reshape, and
     fencing use `:kuilt-raft`; nothing else coordinates, at any frequency.
 
-## 11. Public surface sketch
+## 11. Public surface
 
-`explicitApi`-clean; the house mutator idiom (`Patch<S>?`, caller unchanged on
-`null`); required injection of scope/clock/random. Sketch, not signature-final:
+This section was a signature sketch written before any code, and the code settled
+several of its questions differently. Rather than keep a second copy of signatures
+to drift, it now says where each sketched piece landed. The declarations, their KDoc
+and the compiled samples they cite are the reference; `kuilt-heddle/module.md` walks
+them in order.
 
-```kotlin
-// ── the replicated state ────────────────────────────────────────────────
-public class EntitlementLedger private constructor(/* … */) :
-    Quilted<EntitlementLedger> {
+| Sketched | Shipped | What moved, and why |
+|---|---|---|
+| `EntitlementLedger` with `Patch<S>?` mutators, `holdings`, `edge`, `activeChildren`, `validate`, `bootstrap(root, mint)` | the same, plus `mint`, `seat`, `spendCaptured`, `lifecycle`, `gauge` | No `EntitlementPath` type: `holdings`/`spend`/`transfer` take the leaf `GroupId`, and transfer rows are keyed by `PathKey`. `bootstrap` takes a `nonce` naming the mint act, so two distinct acts union rather than collide. |
+| `class HeddlePolicy(config)` with `pick(parent, children, demand, wake, localHoldings): Allocation?` | `object HeddlePolicy` with `pick(edges, config, localHoldings): Grant?` | Pure and stateless. Each child arrives as one `PolicyEdge` (record, `EdgeSummary`, `Demand`, `Gauge` seat, base issuance, wake offset), so a parent's whole view is one list. |
+| `HeddleNode` with `suspend fun reserve(…): ReservationId?` | `HeddleNode`, whose `reserve` is not suspending and returns `ReserveOutcome` | A `null` could not tell an idle lane from a node that may not spend (#1892). `reserve`/`complete`/`cancel`/`earmarked` are the `FairShareExecution` interface both nodes implement. |
+| `heddleStatic(seam, selfId, mint, clock, config)` | adds `root`, `topology` and a per-boot `epoch` | Every peer passes the same root, mint and tree, so all start from one ledger; `epoch` orders a restarted peer's demand past its dead incarnation's (#1666). |
+| `heddleGoverned(seam, selfId, raft, clock, config): HeddleNode` | returns `GovernedHeddleNode`; adds `root`, `incarnation`, `epoch` | The control verbs suspend and return `ControlOutcome` (`Applied` / `Conflict` / `Indeterminate`), and `schedule` returns `ScheduleOutcome`, so the governed node is its own type rather than a `HeddleNode` with extra methods. No genesis: all supply and topology come from the log. |
 
-    // topology (control-plane; normally invoked via the consensus adapter)
-    public fun prepare(record: AttachmentRecord): Patch<EntitlementLedger>?
-    public fun activate(edge: AttachmentId): Patch<EntitlementLedger>?
-    public fun close(edge: AttachmentId): Patch<EntitlementLedger>?
-    public fun retire(edge: AttachmentId): Patch<EntitlementLedger>?
-
-    // entitlement flow (data-plane; local check, null = insufficient holdings)
-    public fun delegate(
-        replica: ReplicaId, edge: AttachmentId, amount: Long,
-    ): Patch<EntitlementLedger>?
-    public fun release(
-        replica: ReplicaId, edge: AttachmentId, amount: Long,
-    ): Patch<EntitlementLedger>?
-    public fun transfer(
-        path: EntitlementPath, from: ReplicaId, to: ReplicaId, amount: Long,
-    ): Patch<EntitlementLedger>?
-    public fun spend(
-        replica: ReplicaId, path: EntitlementPath, amount: Long,
-    ): Patch<EntitlementLedger>?
-
-    // derived views (pure)
-    public fun holdings(path: EntitlementPath, replica: ReplicaId): Long
-    public fun edge(id: AttachmentId): EdgeSummary?
-    public fun activeChildren(parent: GroupId): List<EdgeSummary>
-    public fun validate(): List<LedgerConflict>
-
-    override fun piece(other: EntitlementLedger): EntitlementLedger
-
-    public companion object {
-        public fun bootstrap(
-            root: GroupId, mint: Map<ReplicaId, Long>,
-        ): EntitlementLedger
-    }
-}
-
-// ── the pure policy ─────────────────────────────────────────────────────
-public class HeddlePolicy(private val config: HeddleConfig) {
-    /** One EEVDF selection at one parent. Pure; null = nothing to allocate. */
-    public fun pick(
-        parent: GroupId,
-        children: List<EdgeSummary>,
-        demand: Map<AttachmentId, Demand>,
-        wake: WakeState,
-        localHoldings: Long,
-    ): Allocation?
-}
-
-// ── the node: ledger + Quilter + demand + liveness, over a Seam ─────────
-public class HeddleNode internal constructor(/* … */) {
-    public val selfId: ReplicaId
-    public val ledger: StateFlow<EntitlementLedger>
-    public suspend fun reserve(leaf: GroupId, maximumCost: Long): ReservationId?
-    public suspend fun complete(id: ReservationId, actualCost: Long)
-    public suspend fun cancel(id: ReservationId)
-    public fun advertise(edge: AttachmentId, demand: Demand)
-}
-
-// ── paired bootstraps (§9) — no nullable consensus parameter ────────────
-public fun CoroutineScope.heddleStatic(
-    seam: Seam,
-    selfId: ReplicaId,
-    mint: Map<ReplicaId, Long>,       // pre-partitioned root supply
-    clock: () -> Instant,             // required — time is a dependency
-    config: HeddleConfig,
-): HeddleNode
-
-public fun CoroutineScope.heddleGoverned(
-    seam: Seam,
-    selfId: ReplicaId,
-    raft: RaftNode,                   // required — the control plane
-    clock: () -> Instant,
-    config: HeddleConfig,
-): HeddleNode
-```
-
-`HeddleConfig` carries the quanta and caps of §8.2 plus an injectable
-`Random`; internals follow the house thread-safety rules (atomicfu lock, no
-`limitedParallelism(1)` confinement) and exception discipline
-(`runCatchingCancellable` on best-effort fabric sends).
+`HeddleConfig` carries the policy caps (`PolicyConfig`), the per-peer holdings cap of
+§8.2, the demand TTL, the `Quilter` and heartbeat settings, and an injectable
+`Random`. Time is a dependency: the scope, the clock and the RNG are required
+injections, never defaults. Internals follow the house rules as sketched: an atomicfu lock, no
+`limitedParallelism(1)` confinement, and cancellation-safe best-effort sends.
 
 ### 11.1 The fairness draft — a builder over the topology
+
+> **Not built.** This is a proposal. Today a tree is a `List<AttachmentRecord>`
+> handed to `heddleStatic`, or a series of `prepare`/`activate` calls on a
+> governed node, which takes no starting topology at all.
 
 Declaring the group tree by hand (`prepare`/`activate` per edge) is correct but
 noisy. A small type-safe builder — the **draft**, in the loom's own word — is
@@ -1160,6 +1137,13 @@ load-smoothing idea completed. Role by role:
 
 ### 14.4 Integration sketch
 
+> **What shipped.** The opaque `Lane` on `TaskDescriptor` (in `:kuilt-warp`) and
+> execution-side enforcement (`HeddleAdmissionControl`, in the
+> `:kuilt-warp-heddle` satellite). A producer tags a descriptor with
+> `TaskDescriptor.inLane("acme/interactive")`. The `Draft` modifier `.lane()` and
+> the scoped `warp.inLane { }` below are not built, and neither is
+> producer-side admission.
+
 Minimal surface change; the envelope already exists to carry it:
 
 ```kotlin
@@ -1194,7 +1178,8 @@ decoration on a `Draft`, consistent with the opaque-tag/satellite decision above
 
 Execution-side enforcement first (no producer API beyond the tag): the ring
 owner of a task must `reserve` from the task's lane before running it —
-`HeddleNode.reserve(leaf, maximumCost)` answering `ReserveOutcome.NoHoldings` defers the task
+`reserve(leaf, maximumCost)` answering `ReserveOutcome.NoHoldings` (or, on a governed
+node, `GateClosed`) defers the task
 until entitlement flows in, throttling each lane to its share while the ring
 still decides placement. Producer-side admission (reserve at `shuttle` time,
 bounding `WorkQueue` growth itself) is the follow-on.
@@ -1304,6 +1289,10 @@ zoo is a small, separate follow-on.)
 
 ## 15. Implementation phasing
 
+> **All six phases have shipped.** The text below is the plan as written, kept
+> because its acceptance lists name the properties the tests pin. Where the
+> outcome differs, a note says so.
+
 Six phases, each independently landable as its own epic sub-issue track;
 small PRs, standard repo cadence; the invariant tests of §10 land **with**
 (never after) each phase. Ordering is a dependency chain — each phase builds
@@ -1395,13 +1384,14 @@ specified but not shipped).
 
 ### Phase 6 — Warp lane integration
 
-**Home:** `:kuilt-warp` (optional dependency on `:kuilt-heddle`), behind
-warp's experimental posture.
+**Home:** as built, the opaque `Lane` lives in `:kuilt-warp` and the
+enforcement in the `:kuilt-warp-heddle` satellite (`HeddleAdmissionControl`),
+since Gradle KMP has no optional dependency; warp core never sees a heddle type.
 **Work:** `Lane` field on `TaskDescriptor` (defaulting to a root lane),
 execution-side `reserve` in the claim path (§14.4), shared liveness/mux
 wiring through `WarpNode`.
 **Acceptance:**
-- Two lanes with weights 3:1 converge to the ratio in completed tasks on a
+- Two lanes with weights 3:1 converge to the ratio in executions (§14.4) on a
   grid simulation; the untagged default lane reproduces today's behavior
   bit-for-bit.
 - Lane exhaustion defers tasks (they stay pending) — never drops them; work

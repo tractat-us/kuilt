@@ -56,7 +56,8 @@ val interactive: TaskDescriptor =
 ```
 
 The adapter reserves allowance before running the job and charges its cost
-afterward. Insufficient allowance defers the job. **Untagged tasks bypass
+afterward. A job that runs twice is charged twice, since both runs used the
+pool. Insufficient allowance defers the job. **Untagged tasks bypass
 this gate**, so label every task whose share you intend to control.
 [Inside Heddle](heddle-accounting.md) follows the accounting.
 

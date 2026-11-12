@@ -16,7 +16,7 @@ The name is a weaver's word: a *heddle* is the part of a loom that lifts one set
 of threads so another can cross. Here it lifts one group's claim so another's can
 pass through — the same fair-share idea, mechanical instead of computational.
 
-## What this phase ships
+## What the ledger keeps
 
 The ledger's data layer — the shared tally and its order-independent merge rule —
 plus the **economics** that ride on top: who may spend what (derived *holdings*),
@@ -102,6 +102,8 @@ whole ledger inherits the three merge laws for free.
   `FrozenCarriedHandoff` (a hand-off frozen on a replaced generation, naming the
   peer whose fence ack the blocked move is waiting on — the one report here that
   names a peer as the *cause* rather than as a party to the fault).
+- `Gauge` — an edge's replicated virtual-time seat: where a new child starts competing, written by
+  the scheduler and merged by taking the larger reading, so no single peer's guess is frozen in.
 - `EdgeSummary` — the parent-facing projection of one edge (`issued`/`returned`/
   `spent` and the derived `outstanding`).
 - `EntitlementLedger` — the replicated `Quilted` state itself.
@@ -117,6 +119,13 @@ whole ledger inherits the three merge laws for free.
 - `Rational` — an exact `numerator/denominator` value over `Long`, the type the policy
   reasons in. Virtual times are compared by exact cross-multiplication (never `Double`),
   which is what makes a scheduling decision bit-identical on every platform.
+- `FairShareExecution` — the spend surface both nodes share (`reserve`/`complete`/`cancel`/
+  `earmarked`), so code that only spends, such as `:kuilt-warp-heddle`'s admission gate, takes
+  either node.
+- `ReserveOutcome` / `ScheduleOutcome` / `GateClosed` — what a spend call did. `reserve` answers
+  `Reserved` or `NoHoldings`; a governed node's `schedule` answers `Delegated` or
+  `NothingToDelegate` (a static node's returns a plain grant count). Only a governed node adds
+  `GateClosed`, with a `Reason`, when this peer may not author entitlement at all.
 - `HeddleNode` / `heddleStatic` — the node that runs the tally, demand board, reservations,
   and liveness over a `Seam`, and its fixed-roster bootstrap (see below).
 - `GovernedHeddleNode` / `heddleGoverned` — the same node with runtime supply creation and
@@ -139,8 +148,8 @@ tally that silently overflowed would be worse than one that stopped.
 
 Fairness state is kept per edge, but the *decision* — which child to hand the next
 quantum to — is a separate, **pure** step: `HeddlePolicy.pick`. It reads only the
-parent's immediate children (their `EdgeSummary`, their advertised `Demand`, and the
-immutable weight/virtual-time origin from the `AttachmentRecord`) and returns a single
+parent's immediate children (their `EdgeSummary`, their advertised `Demand`, the weight from the
+`AttachmentRecord`, and the edge's virtual-time seat from its `Gauge`) and returns a single
 `Grant`, or `null` when nobody is both eligible and demanding.
 
 The rule is *earliest eligible virtual deadline first* (EEVDF): each child has a
@@ -223,12 +232,27 @@ and nothing else does:
 - **The agreed record has to be heddle's alone.** An entry heddle did not write stops the group the
   same way, because a peer cannot tell it from an act it has lost the means to read. So give the
   agreement step a Raft node of its own: one proposal from anything else on that node stops everyone.
+  Leave that node on its default `ClientIdentity.Auto`: heddle replays its record from the start on
+  every boot and restarts its request serials, which a `ClientIdentity.Durable` cannot describe.
 - **A saved record from v0.7.3 does not carry over.** Its `Mint` and `Prepare` entries no longer
   read, so a peer stops at the first one. Start a fresh record. There is no migrator: this is the
   accepted price of a reader that never guesses, not a gap waiting to be filled.
+- **A call that gave up may still land.** Each control call waits for its act to be agreed, and a
+  `timeout` or a cancellation stops only the wait. The act can still be agreed afterwards, and it
+  takes effect when it is — an `enroll` or `depart` included, which opens or closes the spend gate
+  then. So read before you resubmit (a second `mint` is a second mint), and never re-issue `enroll`
+  or `depart` just to repair the gate.
+- **Budget stranded by a race can be brought home.** Retiring an edge checks locally that it has
+  drained, and a peer's grant still in flight can slip past that check, leaving budget stranded on
+  the retired edge. `reconcile(child)` moves it, with the service already charged through it and any
+  hand-offs made on it, onto the child's live edge. First every enrolled peer promises never to write
+  the old edge again (`quiesce`), and the amount is worked out from those recorded promises, so a
+  peer with a stale view cannot move a wrong one. Expect to call it twice; `pendingAcks(edge)` shows
+  who it is still waiting for, and a peer that is down holds it up, on purpose.
 
 `heddleGoverned` returns a `GovernedHeddleNode`: the same data-plane calls as `HeddleNode` plus
-`mint`/`prepare`/`activate`/`close`/`retire` and `enroll`/`depart`, each of which returns a
+`mint`/`prepare`/`activate`/`close`/`retire`, `quiesce`/`reconcile` and `enroll`/`depart`, each of
+which returns a
 `ControlOutcome` — `Applied` when it took effect, `Conflict` carrying the structured reason when it
 was refused, or `Indeterminate` when the peer stopped at an unreadable entry with the call still in
 flight, so the act may yet land and must not be retried blindly (`enrolledReplicas()` reads back the

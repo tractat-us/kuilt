@@ -38,8 +38,9 @@ use them; other peers can spend only their own holdings. Completing at seven
 removes the earmark and leaves three available.
 
 A reservation the leaf cannot cover returns `ReserveOutcome.NoHoldings`.
-A governed node that has not enrolled itself yet returns `GateClosed` instead,
-so it never looks like a team with nothing left. Cost must lie between zero and the
+A governed node that may not spend returns `GateClosed` instead, with a reason,
+so it never looks like a team with nothing left. That happens before it enrolls
+itself and after it departs. Cost must lie between zero and the
 reserved maximum; an invalid cost throws without discarding the reservation.
 Repeated completion on the same node charges once. Reservations are not
 durable receipts across a restart.
@@ -81,6 +82,15 @@ can briefly report a problem that clears when updates arrive.
 
 `heddleGoverned` adds [Consensus](raft.md) for creating supply, changing
 attachments, and enrolling or departing peers. Grants and charges stay local.
+
+Every peer reads the same agreed record of those decisions. A peer that meets
+an entry it cannot read stops spending rather than guess. It answers
+`GateClosed` until a version that reads the entry arrives; a restart stops
+at the same entry. So give
+the record a Raft node of its own, and upgrade peers together.
+
+A decision call that times out can still take effect later. Check before you
+send it again: a second `mint` creates more supply.
 
 Attachments move through **prepared → active → closing → retired**.
 Closing stops new delegation; retirement requires observed allowance to drain.

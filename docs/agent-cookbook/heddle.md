@@ -100,7 +100,10 @@ enrolled can no longer pass for an idle one. **A peer that cannot read a log ent
 refused, and a restart stops at the same entry, so it takes a build that can read the entry or a
 fresh log. The same bytes stop every peer on that build, and one peer on a newer build stops older
 ones, with no way to skip. That includes bytes heddle never wrote, so give the control plane a Raft
-node of its own, with nothing else proposing into it, and upgrade a cluster together. A durable log
+node of its own, with nothing else proposing into it and on the default `ClientIdentity.Auto` (the
+plane replays from index 1 and restarts its serials every boot), and upgrade a cluster together.
+**A `timeout` or cancel stops only the wait**: the act can still apply, and an `enroll`/`depart` that
+does moves the gate then, so read before resubmitting and never re-issue one to repair the gate. A durable log
 from v0.7.3 stops at its first `Mint` or `Prepare`: start it fresh, as there is no migrator. The spend path (`schedule`/`reserve`/`complete`) never touches the log.
 
 <!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleHeddleGoverned -->
@@ -136,7 +139,9 @@ who runs what.
 plus `TaskDescriptor.inLane("...")` on the producer side (`:kuilt-warp-heddle`). A lane maps
 to a fair-share leaf; the task reserves that leaf's entitlement before it runs and is charged
 on completion. Out of entitlement ⇒ the task **defers** (never dropped). An untagged task
-rides the root lane and is admitted for free — warp's fast path stays exactly as cheap.
+rides the root lane and is admitted for free — warp's fast path stays exactly as cheap. It takes
+either node (`FairShareExecution`); a governed node's `GateClosed` defers too, logged with its
+reason. A lane is charged **per execution**, so a task two peers both run under churn costs twice.
 
 <!-- verbatim from kuilt-warp-heddle/src/commonSamples/kotlin/us/tractat/kuilt/warp/heddle/WarpHeddleSamples.kt#sampleHeddleAdmissionControl -->
 ```kotlin
