@@ -8,7 +8,9 @@ import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
@@ -27,12 +29,14 @@ import us.tractat.kuilt.session.partition.JoinerReconnectEvent
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.session.partition.ResumeToken
+import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Instant
 
 /**
@@ -281,6 +285,142 @@ class ForgedResumeTest {
                     { assertEquals(0, host.heldResumeSecretCount(), "a member that leaves takes its secret with it") },
                 )
             } finally {
+                host.leave()
+            }
+        }
+
+    /**
+     * A token naming another room is refused by the room itself, so even a hold policy that skips
+     * the room-id check never sees it (#3165 review). Before, the room let a wrong-room token past
+     * its secret check on the strength of the controller's own room check, and a policy that did
+     * not make one — this one rewrites the room id, the shape of "the room already checked it" —
+     * granted the forgery and locked the victim out.
+     */
+    @Test
+    fun `a wrong-room forgery is refused even by a hold policy that skips the room check`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val loom = InMemoryLoom()
+            var real: DefaultJoinerReconnectController? = null
+            val verdicts = mutableListOf<ResumeResult.HostVerdict>()
+            val trusting: JoinerReconnectControllerFactory = { roomId, scope, clock ->
+                val controller = DefaultJoinerReconnectController(
+                    roomId = roomId,
+                    clock = { clock().toEpochMilliseconds() },
+                    scope = scope,
+                )
+                real = controller
+                object : JoinerReconnectController by controller {
+                    override suspend fun tryResume(token: ResumeToken, at: Long): ResumeResult.HostVerdict =
+                        controller.tryResume(token.copy(roomId = roomId), at).also { verdicts += it }
+                }
+            }
+            val host = SeamRoomFactory(
+                loom = loom,
+                scope = backgroundScope,
+                clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+                reconnectControllerFactory = trusting,
+            ).host(Pattern("Host"), memberName = "Host")
+            val victim = factory(loom).join(InMemoryTag("Victim"), memberName = "Victim")
+            victim.roster.first { it.isNotEmpty() }
+            val attacker = factory(loom).join(InMemoryTag("Attacker"), memberName = "Attacker")
+            attacker.roster.first { it.size == 2 }
+            host.roster.first { it.size == 2 }
+            try {
+                val victimToken = assertNotNull(victim.resumeToken, "the victim must hold its own token")
+                val controller = assertNotNull(real, "the host must have built the trusting policy")
+                val opened = async {
+                    controller.events.filterIsInstance<JoinerReconnectEvent.WindowOpened>().first()
+                }
+                runCurrent()
+                controller.onPeerUnresponsive(victim.selfId, testScheduler.currentTime)
+                runCurrent()
+                val openedFor = opened.await().peerId
+
+                val forged = ResumeToken(victim.selfId, RoomId("not-this-room"), 0L, ResumeSecret.generate())
+                val forgedResult = attacker.resume(forged)
+                val victimResult = victim.resume(victimToken)
+
+                assertAll(
+                    { assertEquals(victim.selfId, openedFor, "precondition: the victim's window must be open") },
+                    {
+                        assertEquals(
+                            ResumeResult.Refused("resume-token-invalid: session-mismatch", RejectCode.ResumeTokenInvalid),
+                            forgedResult,
+                            "a wrong-room forgery must be refused by the room",
+                        )
+                    },
+                    { assertEquals(ResumeResult.Success, victimResult, "the victim's window must be unspent") },
+                    {
+                        assertEquals(
+                            listOf<ResumeResult.HostVerdict>(ResumeResult.Success),
+                            verdicts,
+                            "the wrong-room token must never reach the policy",
+                        )
+                    },
+                )
+            } finally {
+                attacker.leave()
+                victim.leave()
+                host.leave()
+            }
+        }
+
+    /**
+     * A token for a member that has gone is answered by the room as an elapsed window, and never
+     * reaches the controller — so a forgery cannot spend the window the departed member left open,
+     * and the window still expires (#3165 review). A `Goodbye` removes the member while its window
+     * may be open; before, a forgery with any secret then reached the controller, resumed the empty
+     * seat and cancelled the expiry timer, so the `WindowExpired` — and on the `PeerLost`-first path
+     * the only `Farewell(expired = true)` a star bystander hears — never came.
+     */
+    @Test
+    fun `a forgery for a departed member is refused and its window still expires`() =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val loom = InMemoryLoom()
+            val observed = ObservedController()
+            val host = factory(loom, observed).host(Pattern("Host"), memberName = "Host")
+            val victim = factory(loom).join(InMemoryTag("Victim"), memberName = "Victim")
+            victim.roster.first { it.isNotEmpty() }
+            val attacker = factory(loom).join(InMemoryTag("Attacker"), memberName = "Attacker")
+            attacker.roster.first { it.size == 2 }
+            host.roster.first { it.size == 2 }
+            try {
+                val victimId = victim.selfId
+                val roomId = assertNotNull(attacker.roomId.value, "every member learns the room id")
+                val controller = assertNotNull(observed.real)
+                val events = mutableListOf<JoinerReconnectEvent>()
+                backgroundScope.launch { controller.events.collect { events += it } }
+                openWindowFor(victimId, observed)
+
+                victim.leave() // Goodbye: the host removes the member and its secret; the window stays open.
+                host.roster.first { it.size == 1 }
+                val forgedResult = attacker.resume(ResumeToken(victimId, roomId, 0L, ResumeSecret.generate()))
+                advanceTimeBy(DefaultJoinerReconnectController.DEFAULT_RECONNECT_WINDOW_MS + 1_000)
+                runCurrent()
+
+                assertAll(
+                    {
+                        assertEquals(
+                            RejectCode.ResumeWindowExpired,
+                            assertIs<ResumeResult.Refused>(forgedResult, "the forgery must be refused").code,
+                        )
+                    },
+                    { assertEquals(emptyList(), observed.verdicts, "a departed member's token must never reach the controller") },
+                    {
+                        assertTrue(
+                            events.any { it is JoinerReconnectEvent.WindowExpired && it.peerId == victimId },
+                            "the departed member's window must still expire: ${events.map { it::class.simpleName }}",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            events.none { it is JoinerReconnectEvent.Resumed },
+                            "nobody may resume onto the departed member's seat",
+                        )
+                    },
+                )
+            } finally {
+                attacker.leave()
                 host.leave()
             }
         }

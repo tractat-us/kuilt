@@ -4,6 +4,7 @@ package us.tractat.kuilt.session.partition
 
 import kotlinx.atomicfu.locks.ReentrantLock
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,7 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -119,6 +121,55 @@ class ResumeFlightOwnershipTest {
             )
         }
 
+    /**
+     * A caller that joins a flight whose owner is still waiting for its host to be addressable
+     * starts its reply deadline from the send, not from the moment it joined (#3165 review).
+     *
+     * The owner waits up to `resumeTimeout` before it can send at all, so a joined caller timing from
+     * its join could settle the shared flight `TimedOut` after the host had spent the window but
+     * before the ack arrived, and every later attempt would be refused. Here the joined caller's old
+     * deadline (join + `resumeTimeout`) falls between the send and the ack.
+     */
+    @Test
+    fun `a caller joining a flight that waits for its host times its reply from the send`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = FlightSeam(joinerId, hostId, hostListed = false).also { it.heal() }
+            val machine = JoinerResumeMachine(
+                seam = seam,
+                scope = backgroundScope,
+                clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+                heartbeatConfig = config,
+                reweave = null,
+                lock = ReentrantLock(),
+                host = FlightResumeHost(hostId),
+            )
+            machine.mintTokenIfAbsent("room-1", ResumeSecret.generate())
+            val token = assertNotNull(machine.resumeToken)
+            val bound = config.resumeTimeout.inWholeMilliseconds
+
+            val owner = async { machine.resume(token) }
+            runCurrent()
+            advanceTimeBy(bound / 2)
+            val joined = async { machine.resume(token) }
+            runCurrent()
+            advanceTimeBy(bound / 2 - 10)
+            seam.listHost() // the owner sends now, at about one bound in
+            runCurrent()
+            val sent = seam.resumesSent
+            advanceTimeBy(bound / 2 + 20) // past join + bound, short of send + bound
+            runCurrent()
+            val stillPending = machine.hasPendingFlight()
+            machine.takePendingFlight()?.complete(ResumeResult.Success)
+            runCurrent()
+
+            assertAll(
+                { assertEquals(1, sent, "precondition: the owner sent once the host appeared") },
+                { assertTrue(stillPending, "the joined caller must not settle the flight before its send + bound") },
+                { assertEquals(ResumeResult.Success, owner.await()) },
+                { assertEquals(ResumeResult.Success, joined.await()) },
+            )
+        }
+
     private class Rig(
         val seam: FlightSeam,
         val host: FlightResumeHost,
@@ -197,10 +248,20 @@ private class FlightResumeHost(private val hostPeer: PeerId) : JoinerResumeHost 
  * A seam that starts torn, is healed in place by the re-weave, and can be torn again on demand. It
  * counts sends to the host, which in these tests are only ever the joiner's `Resume`.
  */
-private class FlightSeam(override val selfId: PeerId, private val hostId: PeerId) : Seam {
+private class FlightSeam(
+    override val selfId: PeerId,
+    private val hostId: PeerId,
+    hostListed: Boolean = true,
+) : Seam {
     private val _state = MutableStateFlow<SeamState>(SeamState.Torn(CloseReason.Normal))
     override val state: StateFlow<SeamState> = _state.asStateFlow()
-    override val peers: StateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId, hostId)).asStateFlow()
+    private val _peers = MutableStateFlow(if (hostListed) setOf(selfId, hostId) else setOf(selfId))
+    override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
+
+    /** The host becomes addressable on this seam. */
+    fun listHost() {
+        _peers.value = setOf(selfId, hostId)
+    }
     override val incoming: Flow<Swatch> = emptyFlow()
 
     var resumesSent: Int = 0
