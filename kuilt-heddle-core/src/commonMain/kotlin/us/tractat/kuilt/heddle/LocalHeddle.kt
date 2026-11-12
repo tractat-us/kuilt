@@ -230,7 +230,7 @@ public class LocalHeddle private constructor(
         var local = base
         val path = ArrayList<AttachmentId>()
         var group = root
-        while (group == root || group !in eligible || !isLeaf(local, group)) {
+        while (group == root || group !in eligible || !local.isLeaf(group)) {
             val pick = allocator.pickChild(group, local, waitingDemand, eligibleDemand)
                 ?: return AcquireOutcome.NoLiveLineage(group)
             val edge = pick.grant.attachment
@@ -261,7 +261,7 @@ public class LocalHeddle private constructor(
     public fun admit(leaf: GroupId, startedAt: Long, reservation: Long = policy.defaultReservation): AdmitOutcome {
         require(reservation >= 1L) { "reservation must be positive, was $reservation" }
         val base = ledger
-        if (leaf == root || !isLeaf(base, leaf)) return AcquireOutcome.NoLiveLineage(leaf)
+        if (leaf == root || !base.isLeaf(leaf)) return AcquireOutcome.NoLiveLineage(leaf)
         val path = base.lineageOf(leaf) ?: return AcquireOutcome.NoLiveLineage(leaf)
         // An empty lineage is the root's, or a name with no inbound edge at all: never a leaf.
         if (path.isEmpty() || path.any { base.lifecycle(it) != Lifecycle.ACTIVE }) return AcquireOutcome.NoLiveLineage(leaf)
@@ -468,13 +468,6 @@ public class LocalHeddle private constructor(
          */
         private fun policyConfig(policy: LocalPolicy): PolicyConfig =
             PolicyConfig(quantum = Long.MAX_VALUE, perChildOutstandingCap = Long.MAX_VALUE, sleeperCredit = policy.sleeperCredit)
-
-        /**
-         * The leaf predicate, and the only one: the ledger's own ACTIVE-only child view, so a stray
-         * PREPARED or CLOSING child does not stop a group being a leaf (#3191). Swap to
-         * [EntitlementLedger.isLeaf] once that reads "no ACTIVE child edge" too (#3193).
-         */
-        private fun isLeaf(ledger: EntitlementLedger, group: GroupId): Boolean = ledger.activeChildren(group).isEmpty()
 
         /** [wants] for an edge whose child is in [groups], [Demand.NONE] for every other. */
         private fun demandOver(ledger: EntitlementLedger, groups: Set<GroupId>, wants: Demand): (AttachmentId) -> Demand =
