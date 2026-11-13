@@ -78,13 +78,12 @@ public data class Lease(
 )
 
 /**
- * What a [LocalHeddle] needs to resume, as one immutable value: once taken, safe to read, encode or
- * hand to another thread without the caller's scheduling lock.
+ * A [LocalHeddle]'s state, as one immutable value: once taken, safe to read or hand to another
+ * thread without the caller's scheduling lock. What a restart needs is [LocalHeddleSnapshot], taken
+ * by [LocalHeddle.persist]; this is the status view.
  *
- * The counter an engine numbers its leases from is not here, and need not be: a restarted engine
- * takes a new [epoch] and lease ids are scoped by it, so it can count from zero again without
- * reusing one. Mints need no counter at all: each epoch writes one mint record, `local#<epoch>`,
- * whose amount is the epoch's running total, read back off the [ledger].
+ * Mints need no counter: each epoch writes one mint record, `local#<epoch>`, whose amount is the
+ * epoch's running total, read back off the [ledger].
  *
  * @property leases every open lease, in [LeaseId] order.
  * @property allocatorMemory the fair-share allocator's wake memory, which a restart must keep for
@@ -288,6 +287,14 @@ public sealed interface LeaseOutcome {
  * reports both directions: orphans, open leases whose work is gone, each with how long it ran
  * from its `startedAt`; and live ids the engine holds no lease for. It changes nothing. Settle an
  * orphan with [complete], by default at [LeaseReconciliation.Orphan.defaultSettlement].
+ *
+ * ## Persisting
+ *
+ * [persist] takes a [LocalHeddleSnapshot], everything a restart needs, and [restore] starts an
+ * engine from one under a later epoch: every open lease is valid again under its old id, and the
+ * next pick is the one this engine would have made. Encode the snapshot in any format;
+ * [decode] reads it back and names an unsupported version or corrupt bytes rather than throwing.
+ * After a [restore], settle what did not survive the restart with [reconcileLeases].
  *
  * ## A draining path
  *
@@ -948,7 +955,14 @@ public class LocalHeddle private constructor(
      *
      * @sample us.tractat.kuilt.heddle.sampleLocalPersistence
      */
-    public fun persist(): LocalHeddleSnapshot = TODO("Task P")
+    public fun persist(): LocalHeddleSnapshot = LocalHeddleSnapshot(
+        root = root,
+        epoch = epoch,
+        ledger = ledger,
+        allocatorMemory = allocator.memory,
+        totalSlots = capacity.slots,
+        open = open.values.sortedBy { it.lease.id }.map { PersistedLease(it.lease, it.path) },
+    )
 
     /**
      * Replace the ledger with [transform] of it: the test seam for a topology change while leases
@@ -1260,13 +1274,23 @@ public class LocalHeddle private constructor(
          *   when [policy] cannot size [LocalHeddleSnapshot.totalSlots] (see [reconcileCapacity]).
          * @sample us.tractat.kuilt.heddle.sampleLocalPersistence
          */
-        public fun restore(snapshot: LocalHeddleSnapshot, policy: LocalPolicy, epoch: Long): LocalHeddle = TODO("Task P")
+        public fun restore(snapshot: LocalHeddleSnapshot, policy: LocalPolicy, epoch: Long): LocalHeddle {
+            require(epoch > snapshot.epoch) {
+                "a restore must run under an epoch above the snapshot's ${snapshot.epoch}, was $epoch"
+            }
+            val allocator = FairShareAllocator(SELF, policyConfig(policy), snapshot.allocatorMemory)
+            return LocalHeddle(snapshot.root, policy, epoch, snapshot.ledger, allocator).apply {
+                for (persisted in snapshot.open) open[persisted.lease.id] = OpenLease(persisted.lease, persisted.path)
+                reconcileCapacity(snapshot.totalSlots)
+            }
+        }
 
         /**
          * Read a snapshot from [bytes], encoded in [format] from [LocalHeddleSnapshot]'s serializer.
          * Never throws for what the bytes hold: see [RestoreResult].
          */
-        public fun decode(bytes: ByteArray, format: BinaryFormat): RestoreResult = TODO("Task P")
+        public fun decode(bytes: ByteArray, format: BinaryFormat): RestoreResult =
+            decoding { format.decodeFromByteArray(LocalHeddleSnapshot.serializer(), bytes) }
 
         /**
          * Read a snapshot from [text], encoded in [format] from [LocalHeddleSnapshot]'s serializer.
@@ -1274,7 +1298,23 @@ public class LocalHeddle private constructor(
          *
          * @sample us.tractat.kuilt.heddle.sampleLocalPersistence
          */
-        public fun decode(text: String, format: StringFormat): RestoreResult = TODO("Task P")
+        public fun decode(text: String, format: StringFormat): RestoreResult =
+            decoding { format.decodeFromString(LocalHeddleSnapshot.serializer(), text) }
+
+        /**
+         * [read] as a [RestoreResult]. A format's decode errors are [kotlinx.serialization.SerializationException]s,
+         * and a snapshot's own consistency check throws [IllegalArgumentException], which the former
+         * extends, so one arm covers malformed bytes and a well-formed but inconsistent snapshot alike.
+         * Nothing here suspends, so no cancellation passes through it.
+         */
+        private inline fun decoding(read: () -> LocalHeddleSnapshot): RestoreResult =
+            try {
+                RestoreResult.Restored(read())
+            } catch (e: UnsupportedSnapshotFormat) {
+                RestoreResult.UnsupportedVersion(e.found, LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS)
+            } catch (e: IllegalArgumentException) {
+                RestoreResult.Corrupt(e.message ?: e.toString())
+            }
 
         /**
          * The allocator's policy: an unbounded quantum, because each pick's reservation rides in its

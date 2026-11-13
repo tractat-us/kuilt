@@ -308,11 +308,9 @@ class LocalHeddlePersistenceTest {
      */
     @Test
     fun capacitySurvivesRestore() {
+        // Sized for one slot, and nothing minted yet: the next acquire has to top up.
         val h = engineOver(shapedLedger(root, listOf(edgeOf(root, a))), root, supply = 0L, policy = policy)
         h.reconcileCapacity(totalSlots = 1L)
-        // Lease out all the root holds, so the next acquire has to mint.
-        val held = mutableListOf<Lease>()
-        while (h.snapshot().ledger.holdings(root, LOCAL) > 0L) held += h.lease(setOf(a))
         val restored = throughJson(h)
         val uncapacitated = LocalHeddle.restore(
             h.persist().let { LocalHeddleSnapshot(it.root, it.epoch, it.ledger, it.allocatorMemory, totalSlots = 0L, it.open) },
@@ -320,8 +318,8 @@ class LocalHeddlePersistenceTest {
             epoch = 1L,
         )
         assertAll(
-            { assertTrue(held.isNotEmpty(), "the rig: the scenario leased the root dry") },
-            { assertEquals(0L, restored.snapshot().ledger.holdings(root, LOCAL), "the rig: nothing is left at the root") },
+            { assertEquals(1L, h.persist().totalSlots, "the rig: the capacity is in the snapshot") },
+            { assertEquals(0L, restored.snapshot().ledger.holdings(root, LOCAL), "the rig: nothing is held at the root") },
             { assertIs<AcquireOutcome.Acquired>(restored.acquire(setOf(a), setOf(a), startedAt = 0L)) },
             { assertEquals(AcquireOutcome.SupplyExhausted, uncapacitated.acquire(setOf(a), setOf(a), startedAt = 0L), "the control: with no capacity it is refused") },
         )
