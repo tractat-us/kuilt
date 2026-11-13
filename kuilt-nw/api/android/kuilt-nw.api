@@ -247,7 +247,7 @@ public final class us/tractat/kuilt/nw/NwPathStatus : java/lang/Enum {
 }
 
 public final class us/tractat/kuilt/nw/NwRoomHost : us/tractat/kuilt/session/RoomHost {
-	public fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;)V
+	public fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/identity/DeviceKeyStore;)V
 	public fun close ()V
 	public fun start (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
