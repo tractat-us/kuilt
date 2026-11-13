@@ -9,10 +9,10 @@ back its seat without asking anyone to do anything.
 
 ## What is here so far
 
-Nothing public apart from an opt-in marker. This first piece is the module's foundation: the per-platform cryptography it
-will build on, and a check that every platform can do what a device name needs. The key, its name,
-the signed statements a room's admission is made of, and the per-platform key stores arrive in the
-pieces that follow.
+The name. `DidKey` is the public name of one device's key, a string another device can store,
+compare, and check a signature against. Read one from outside with `DidKey.parse`, which checks
+that it really names a key. The key that signs, the signed statements a room's admission is made
+of, and the per-platform key stores arrive in the pieces that follow.
 
 ## Underneath
 
@@ -22,5 +22,12 @@ module's tests check it on JVM and Android's host-JDK unit tests, iOS, macOS and
 compressed import in other browsers is unproven. The primitives come from
 [cryptography-kotlin](https://github.com/whyoleg/cryptography-kotlin), which wraps each platform's
 own implementation: JCA on JVM and Android, CryptoKit on Apple, WebCrypto in the browser. This
-module only composes them and owns no math. It does not depend on `:kuilt-seal`, so a consumer of
+module composes them and owns no cryptographic math beyond one on-curve validation, described
+below. It does not depend on `:kuilt-seal`, so a consumer of
 one inherits nothing of the other.
+
+One check is the module's own. The JDK decoder takes a square root without checking it, so on JVM
+and Android a `did:key` whose `x` has no point on P-256 would decode into a key, while CryptoKit and
+WebCrypto refuse it. `DidKey.parse` and `DidKey.verify` therefore check the point in common code,
+`x < p` and then that `x³ − 3x + b` is a square mod `p`, so every platform gives the same answer.
+That is validation only; computing `y` stays the provider's.

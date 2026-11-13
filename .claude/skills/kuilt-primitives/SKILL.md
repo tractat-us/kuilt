@@ -5,7 +5,7 @@ description: Use BEFORE writing any networking, session, shared-state, telemetry
 
 # kuilt primitives — check before you build
 
-Read the **one** cookbook file your symptom names before building.
+Read the **one** cookbook file your symptom names.
 
 ## Don't build this yourself
 
@@ -15,11 +15,12 @@ and primitive groups in order.
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
 |a rejoin/reconnect loop, a resume token, a grace window; why a rejoin was refused|`Room.resumeToken` + `Room.resume`; `ResumeResult.JoinerOutcome` (`code.retryable`)|`session.md#rejoin--reconnect`|
+|a per-device key, a did:key, recognising a device across sessions|`DidKey`|`session.md#device-identity--return`|
 |a "why did we drop" classifier; a retry/back-off loop; a per-session id every peer agrees on|`MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`); `ExponentialBackoff`; `Room.roomId` or `RoomFactory.host(pattern, roomId = …)`|`session.md#rejoin--reconnect`|
 |a heartbeat, an idle reaper, "is this peer alive"; reaping a room nobody joined; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
 |a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned(since, windowExpiresAt)` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|
-|a per-member reader as `room.incoming.filter { it.sender == peer }`, a member's first frame lost before its collector subscribed|`Room.incomingFrom(member)` (fails with `FramesLost`, never silently; `SeamRoomFactory(memberInboxCapacity = 0)` opts out)|`session.md#per-member-frames`|
-|a `delay` between a last send and `leave`/`close`|`Room.flush`/`Seam.flush` → `FlushOutcome` (hub, mesh, NW: `Unsupported`, keep your delay or ack)|`session.md#a-last-frame-before-leaving`|
+|a per-member reader as `room.incoming.filter { it.sender == peer }`, a member's first frame lost before its collector subscribed|`Room.incomingFrom(member)` (fails with `FramesLost`, never silently)|`session.md#per-member-frames`|
+|a `delay` between a last send and `leave`/`close`|`Room.flush`/`Seam.flush` → `FlushOutcome` (often `Unsupported`: keep your delay or ack)|`session.md#a-last-frame-before-leaving`|
 |a `host == selfId` check, re-electing when the host leaves mid-lobby|`SeamRoomFactory.electLobby` → `ElectionLobby.awaitRoom` → `ElectionOutcome.BecameHost` → `start()`|`session.md#host-election--the-lobby`|
 |a propose→commit turn/session facade, host election with a term|`GameSession` + `TurnSequencer`|`consensus.md#consensus--turns`|
 |a server holding the log clients propose into, a client outliving its server|`ClusterClient` (`clusterClient`/`clusterClientWithNode`) + `ServerCluster` (`serverCluster`)|`consensus.md#when-one-of-the-peers-is-a-server`|
@@ -37,7 +38,7 @@ and primitive groups in order.
 |a 4-byte length prefix, a reassembly loop over a socket|`framed()` → `handshaking()`|`fabrics.md#your-own-transport`|
 |that plumbing over plain TCP|`TcpLoom.host` / `TcpLoom.join`|`fabrics.md#plain-tcp-is-already-assembled`|
 |a bare `webSocketSession`; a socket a cancelled dial left open|`ownedWebSocketSession`|`fabrics.md#a-cancelled-dial`|
-|looping a frame back to yourself, a `peers.forEach { sendTo(it, …) }` fan-out|`broadcast`; `peers` includes `selfId`, and `sendTo(selfId, …)` throws|`fabrics.md#sending-to-yourself`|
+|looping a frame back to yourself, a `peers.forEach { sendTo(it, …) }` fan-out|`broadcast`; `sendTo(selfId, …)` throws|`fabrics.md#sending-to-yourself`|
 |a hard-coded chunk size, a `FrameTooLargeException`|`Room.maxPayloadBytes`/`Seam.maxPayloadBytes`, then `PayloadTooLarge`|`fabrics.md#payload-limits`|
 |a `try` inside `onEach { … }.launchIn(scope)`, a pump that dies silently|`Flow.pumpIn(scope, onFailure, name) { … }` — `PumpFailure.ITEM` vs `UPSTREAM`; `onFailure` returns `PumpVerdict.CONTINUE`/`STOP`|`fabrics.md#long-lived-pumps`|
 |a `MutableStateFlow<SeamState>`, or a `closed`/`tornDown` flag beside one|`SeamStateGate`|`fabrics.md#a-seams-terminal-state`|

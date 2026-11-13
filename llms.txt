@@ -54,6 +54,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Per-member frames](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md#per-member-frames)
 - [A last frame before leaving](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md#a-last-frame-before-leaving)
 - [Host election & the lobby](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md#host-election--the-lobby)
+- [Device identity & return](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md#device-identity--return)
 - [Warp](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/warp.md)
 - [Where a task may run (location eligibility)](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/warp.md#where-a-task-may-run-location-eligibility)
 - [Code mobility](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/warp.md#code-mobility)

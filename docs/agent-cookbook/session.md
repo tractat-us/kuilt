@@ -480,3 +480,31 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
 `awaitRoom` suspends indefinitely while the lobby is simply empty or still weaving in, or while the elected host is alive and has not called `start()` — that is a lobby doing its job, not a collapse, and the weave-in case is why `host == selfId` on its own does **not** mean you were promoted (during weave-in you are momentarily the lowest id you can see). An app that wants a limit sets its own: cancel the call, then `leave()`.
 
 **Abandoning a lobby requires `leave()`.** A lobby left open stays on the mesh, and it answers its peers' heartbeat pings until its own election collapses. So a host's `start()`, which has no overall bound, keeps retrying for an acknowledgement from a member that has walked away without leaving.
+
+## Device identity & return
+
+**Intent:** recognise a device when it comes back — a phone that dropped off the Wi-Fi, an app that was closed and reopened — and you are reaching for a device id the device tells you, a token you mint and hand out, or a hand-rolled public-key fingerprint.
+**Primitive:** `DidKey` (`us.tractat.kuilt.identity`, `:kuilt-identity`). The public name of one device's P-256 key, as a W3C `did:key` (always `did:key:zDn…`). One key has exactly one name, so comparing names compares keys, and `verify` checks a signature against it. Read a name that came from outside with `DidKey.parse`: building one, or decoding one with its serializer, where it travels as a plain string, checks only the syntax, and `parse` also checks the point is on the curve. That check is not optional decoration — the JVM's decoder accepts a point that is not on P-256, so without it a name for no key at all would decode there and be refused elsewhere. `verify` goes through the same check and answers `false` on a bad signature or a bad key; it throws only `IllegalStateException`, when this platform's cryptographic provider cannot run at all.
+
+<!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleParseDidKey -->
+```kotlin
+internal suspend fun sampleParseDidKey() {
+    // A device's name, as it arrives from somewhere you do not control: a peer, a QR code, a saved file.
+    val received = "did:key:zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169"
+    val device = DidKey.parse(received) // syntax, and that the key really is a point on P-256
+    check(device.value == received)
+    check(device.compressedPoint().size == 33)
+
+    // Well-formed but naming no key at all: refused the same way on every platform.
+    val noSuchKey = "did:key:zDnaeQRy3dcKsKa1zmKtVKsTy3m2HYoQnFnfKuxD6HfSTQgYg"
+    val refused = try {
+        DidKey.parse(noSuchKey)
+        false
+    } catch (_: IllegalArgumentException) {
+        true
+    }
+    check(refused)
+}
+```
+
+So far this is the name alone. The key that signs, its per-platform store, and the room exchange that restores a returning device's seat are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
