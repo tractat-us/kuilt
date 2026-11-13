@@ -60,6 +60,28 @@ class HelloVersionWireCompatTest {
         assertEquals(ProtocolVersion.CURRENT, decoded.protocolVersion)
     }
 
+    /**
+     * `AdmitMessage.encode(Hello("Ada", "s-1", targetRoom = "room-7", protocolVersion = 2))` — the wire
+     * a v2 joiner sends, captured from the encoder **before** v3 added the device key and the joiner
+     * nonce (#3210).
+     */
+    private val goldenV2Hello =
+        "619f6568656c6c6fbf6b646973706c61794e616d65634164616973657373696f6e496463732d316a746172676574526f6f6d66726f6f6d2d376f70726f746f636f6c56657273696f6e02ffff"
+
+    /**
+     * The capture receipt for [goldenV2Hello]: a Hello with no key and no nonce still encodes to the
+     * v2 bytes, so a v3 build that omitted them would put nothing new on the wire.
+     */
+    @Test
+    fun `a keyless v2 hello still encodes to the v2 bytes`() {
+        assertEquals(
+            goldenV2Hello,
+            AdmitMessage.encode(
+                AdmitMessage.Hello(displayName = "Ada", sessionId = "s-1", targetRoom = "room-7", protocolVersion = 2),
+            ).toHex(),
+        )
+    }
+
     private fun ByteArray.toHex(): String = joinToString("") { b -> (b.toInt() and 0xFF).toString(16).padStart(2, '0') }
 
     private fun String.hexToBytes(): ByteArray =
