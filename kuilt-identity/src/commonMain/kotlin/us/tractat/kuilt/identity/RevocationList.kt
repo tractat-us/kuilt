@@ -2,6 +2,8 @@ package us.tractat.kuilt.identity
 
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.StoreKey
 
 /**
  * A host's record of the devices it no longer lets back in on an old pass.
@@ -68,7 +70,13 @@ public class RevocationList private constructor() {
     }
 
     public companion object {
+        /** The key [open] keeps the list under unless told otherwise. */
+        public val DEFAULT_STORE_KEY: StoreKey = StoreKey("kuilt.identity.revocations")
+
         /** An empty list held in memory, which forgets every revocation when the process ends. */
         public fun inMemory(): RevocationList = RevocationList()
+
+        /** Not yet persistent: the failing-tests commit. */
+        public suspend fun open(store: DurableStore, key: StoreKey = DEFAULT_STORE_KEY): RevocationList = RevocationList()
     }
 }
