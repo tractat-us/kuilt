@@ -550,7 +550,7 @@ internal suspend fun sampleDeviceKeySigns() {
 }
 ```
 
-**A pass to come back:** `Grant`. Do not hand-roll a "remember this device" cookie or a signed blob that lets an *already-admitted* device back in. A grant is not an invite: it names the key of a device the host has already let in once, so a newcomer has nothing to put in it. `Grant.issue(host, subject, scope, issuedAt, notAfter)` is the host's signed statement that the device with key `subject` may return to `GrantScope.Room(roomId)`, or to `GrantScope.AnyRoomOfIssuer`, until `notAfter` (`Grant.NO_EXPIRY` for never). Times are epoch milliseconds you pass in; a grant never reads a clock. `wire` is what the device keeps and presents, and `Grant.decode(wire)` reads it back, `null` on anything malformed. A grant is not a secret, since it is useless without the subject's key. `isSignedByIssuer` checks the signature and nothing else: whether the issuer, subject, room and expiry are right for this room now is the checker's job, and that checker arrives with the room exchange.
+**A pass to come back:** `Grant`. Do not hand-roll a "remember this device" cookie or a signed blob that lets an *already-admitted* device back in. A grant is not an invite: it names the key of a device the host has already let in once, so a newcomer has nothing to put in it. `Grant.issue(host, subject, scope, issuedAt, notAfter)` is the host's signed statement that the device with key `subject` may return to `GrantScope.Room(roomId)`, or to `GrantScope.AnyRoomOfIssuer`, until `notAfter` (`Grant.NO_EXPIRY` for never). Times are epoch milliseconds you pass in; a grant never reads a clock. `wire` is what the device keeps and presents, and `Grant.decode(wire)` reads it back, `null` on anything malformed. A grant is not a secret, since it is useless without the subject's key. `isSignedByIssuer` checks the signature and nothing else: whether the issuer, subject, room and expiry are right for this room now is `GrantTrust`'s job, below.
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleIssueGrant -->
 ```kotlin
@@ -575,4 +575,34 @@ internal suspend fun sampleIssueGrant() {
 }
 ```
 
-So far this is the store, the key, its name and the pass. The platform stores that keep the key across launches, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
+**Is this pass good here, now:** `GrantTrust`. Do not hand-roll the checks on a presented grant, or a "banned devices" set beside them. `GrantTrust(hostKey, revocations).verify(grant, subject, roomId, now)` answers `GrantVerdict.Valid` or the first thing wrong, always in this order: `UntrustedIssuer` (not this host's key — the only issuer a host trusts, so a pass from before a host change lands here), `BadSignature`, `WrongSubject` (the grant names another key than the one the presenter *proved* it holds — pass the proven key, never a claimed one), `WrongScope` (a `Room` pass for another room; `AnyRoomOfIssuer` is good in every room the host runs), `Revoked`, `Expired` (`now >= notAfter`; a `Grant.NO_EXPIRY` pass never expires). It reads no clock, and never throws on a bad grant. To stop a device coming back, `RevocationList.revoke(subject, notBefore)`: every grant issued to that key before the cutoff is `Revoked`, and a fresh one issued after works. Revoking blocks the next return; it does not remove a device that is in the room now. One cutoff per key, and it only moves later, so a clock that steps back cannot un-revoke anyone. `RevocationList.inMemory()` forgets everything with the process — after a restart a revoked device returns on its old pass, the dangerous direction — while losing the host key is the safe one: every grant becomes `UntrustedIssuer`.
+
+<!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleGrantTrust -->
+```kotlin
+internal suspend fun sampleGrantTrust() {
+    val host = DeviceKey.generate() // the host's own key: the only issuer it trusts
+    val phone = DeviceKey.generate() // a device the host let in once
+    val revocations = RevocationList.inMemory()
+    val trust = GrantTrust(host.id, revocations)
+    val now = 1_700_000_000_000L // epoch ms, from your clock: the check never reads one
+
+    // The phone comes back with the pass the host gave it, having proved it holds `phone`'s key.
+    val pass = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = now, notAfter = now + 3_600_000)
+    check(trust.verify(pass, phone.id, "table-7", now + 60_000) == GrantVerdict.Valid)
+
+    // The first thing wrong is the answer: another room, another device, too late.
+    check(trust.verify(pass, phone.id, "table-8", now + 60_000) == GrantVerdict.WrongScope)
+    check(trust.verify(pass, host.id, "table-7", now + 60_000) == GrantVerdict.WrongSubject)
+    check(trust.verify(pass, phone.id, "table-7", now + 3_600_000) == GrantVerdict.Expired)
+
+    // The phone is lost: revoke it. Every pass issued before the cutoff stops working...
+    revocations.revoke(phone.id, notBefore = now + 120_000)
+    check(trust.verify(pass, phone.id, "table-7", now + 180_000) == GrantVerdict.Revoked)
+
+    // ...and a fresh pass, issued after, works again.
+    val fresh = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = now + 240_000, notAfter = now + 3_840_000)
+    check(trust.verify(fresh, phone.id, "table-7", now + 300_000) == GrantVerdict.Valid)
+}
+```
+
+So far this is the store, the key, its name, the pass and its check. The platform stores that keep the key across launches, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).

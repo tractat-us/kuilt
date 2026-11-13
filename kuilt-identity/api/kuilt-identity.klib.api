@@ -48,6 +48,50 @@ sealed interface us.tractat.kuilt.identity/GrantScope { // us.tractat.kuilt.iden
     }
 }
 
+sealed interface us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.identity/GrantVerdict|null[0]
+    final object BadSignature : us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.identity/GrantVerdict.BadSignature|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/GrantVerdict.BadSignature.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/GrantVerdict.BadSignature.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantVerdict.BadSignature.toString|toString(){}[0]
+    }
+
+    final object Expired : us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.identity/GrantVerdict.Expired|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/GrantVerdict.Expired.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/GrantVerdict.Expired.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantVerdict.Expired.toString|toString(){}[0]
+    }
+
+    final object Revoked : us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.identity/GrantVerdict.Revoked|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/GrantVerdict.Revoked.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/GrantVerdict.Revoked.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantVerdict.Revoked.toString|toString(){}[0]
+    }
+
+    final object UntrustedIssuer : us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.identity/GrantVerdict.UntrustedIssuer|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/GrantVerdict.UntrustedIssuer.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/GrantVerdict.UntrustedIssuer.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantVerdict.UntrustedIssuer.toString|toString(){}[0]
+    }
+
+    final object Valid : us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.identity/GrantVerdict.Valid|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/GrantVerdict.Valid.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/GrantVerdict.Valid.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantVerdict.Valid.toString|toString(){}[0]
+    }
+
+    final object WrongScope : us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.identity/GrantVerdict.WrongScope|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/GrantVerdict.WrongScope.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/GrantVerdict.WrongScope.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantVerdict.WrongScope.toString|toString(){}[0]
+    }
+
+    final object WrongSubject : us.tractat.kuilt.identity/GrantVerdict { // us.tractat.kuilt.identity/GrantVerdict.WrongSubject|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/GrantVerdict.WrongSubject.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/GrantVerdict.WrongSubject.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantVerdict.WrongSubject.toString|toString(){}[0]
+    }
+}
+
 final class us.tractat.kuilt.identity/AdmissionProof { // us.tractat.kuilt.identity/AdmissionProof|null[0]
     final val deviceId // us.tractat.kuilt.identity/AdmissionProof.deviceId|{}deviceId[0]
         final fun <get-deviceId>(): kotlin/String // us.tractat.kuilt.identity/AdmissionProof.deviceId.<get-deviceId>|<get-deviceId>(){}[0]
@@ -137,12 +181,33 @@ final class us.tractat.kuilt.identity/Grant { // us.tractat.kuilt.identity/Grant
     }
 }
 
+final class us.tractat.kuilt.identity/GrantTrust { // us.tractat.kuilt.identity/GrantTrust|null[0]
+    constructor <init>(us.tractat.kuilt.identity/DidKey, us.tractat.kuilt.identity/RevocationList) // us.tractat.kuilt.identity/GrantTrust.<init>|<init>(us.tractat.kuilt.identity.DidKey;us.tractat.kuilt.identity.RevocationList){}[0]
+
+    final val hostKey // us.tractat.kuilt.identity/GrantTrust.hostKey|{}hostKey[0]
+        final fun <get-hostKey>(): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/GrantTrust.hostKey.<get-hostKey>|<get-hostKey>(){}[0]
+    final val revocations // us.tractat.kuilt.identity/GrantTrust.revocations|{}revocations[0]
+        final fun <get-revocations>(): us.tractat.kuilt.identity/RevocationList // us.tractat.kuilt.identity/GrantTrust.revocations.<get-revocations>|<get-revocations>(){}[0]
+
+    final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantTrust.toString|toString(){}[0]
+    final suspend fun verify(us.tractat.kuilt.identity/Grant, us.tractat.kuilt.identity/DidKey, kotlin/String, kotlin/Long): us.tractat.kuilt.identity/GrantVerdict // us.tractat.kuilt.identity/GrantTrust.verify|verify(us.tractat.kuilt.identity.Grant;us.tractat.kuilt.identity.DidKey;kotlin.String;kotlin.Long){}[0]
+}
+
 final class us.tractat.kuilt.identity/InMemoryDeviceKeyStore : us.tractat.kuilt.identity/DeviceKeyStore { // us.tractat.kuilt.identity/InMemoryDeviceKeyStore|null[0]
     constructor <init>() // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.<init>|<init>(){}[0]
 
     final suspend fun deviceKey(): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.deviceKey|deviceKey(){}[0]
     final suspend fun grants(): kotlin.collections/List<us.tractat.kuilt.identity/Grant> // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.grants|grants(){}[0]
     final suspend fun keepGrant(us.tractat.kuilt.identity/Grant) // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.keepGrant|keepGrant(us.tractat.kuilt.identity.Grant){}[0]
+}
+
+final class us.tractat.kuilt.identity/RevocationList { // us.tractat.kuilt.identity/RevocationList|null[0]
+    final fun notBefore(us.tractat.kuilt.identity/DidKey): kotlin/Long? // us.tractat.kuilt.identity/RevocationList.notBefore|notBefore(us.tractat.kuilt.identity.DidKey){}[0]
+    final suspend fun revoke(us.tractat.kuilt.identity/DidKey, kotlin/Long) // us.tractat.kuilt.identity/RevocationList.revoke|revoke(us.tractat.kuilt.identity.DidKey;kotlin.Long){}[0]
+
+    final object Companion { // us.tractat.kuilt.identity/RevocationList.Companion|null[0]
+        final fun inMemory(): us.tractat.kuilt.identity/RevocationList // us.tractat.kuilt.identity/RevocationList.Companion.inMemory|inMemory(){}[0]
+    }
 }
 
 final value class us.tractat.kuilt.identity/DidKey { // us.tractat.kuilt.identity/DidKey|null[0]

@@ -119,6 +119,66 @@ public final class us/tractat/kuilt/identity/GrantScope$Room : us/tractat/kuilt/
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/identity/GrantTrust {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/identity/RevocationList;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getHostKey-UjzFoJQ ()Ljava/lang/String;
+	public final fun getRevocations ()Lus/tractat/kuilt/identity/RevocationList;
+	public fun toString ()Ljava/lang/String;
+	public final fun verify-EJOZgSw (Lus/tractat/kuilt/identity/Grant;Ljava/lang/String;Ljava/lang/String;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/identity/GrantVerdict {
+}
+
+public final class us/tractat/kuilt/identity/GrantVerdict$BadSignature : us/tractat/kuilt/identity/GrantVerdict {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/GrantVerdict$BadSignature;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/GrantVerdict$Expired : us/tractat/kuilt/identity/GrantVerdict {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/GrantVerdict$Expired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/GrantVerdict$Revoked : us/tractat/kuilt/identity/GrantVerdict {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/GrantVerdict$Revoked;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/GrantVerdict$UntrustedIssuer : us/tractat/kuilt/identity/GrantVerdict {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/GrantVerdict$UntrustedIssuer;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/GrantVerdict$Valid : us/tractat/kuilt/identity/GrantVerdict {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/GrantVerdict$Valid;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/GrantVerdict$WrongScope : us/tractat/kuilt/identity/GrantVerdict {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/GrantVerdict$WrongScope;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/GrantVerdict$WrongSubject : us/tractat/kuilt/identity/GrantVerdict {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/GrantVerdict$WrongSubject;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface annotation class us/tractat/kuilt/identity/IdentityInternalApi : java/lang/annotation/Annotation {
 }
 
@@ -127,5 +187,15 @@ public final class us/tractat/kuilt/identity/InMemoryDeviceKeyStore : us/tractat
 	public fun deviceKey (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun grants (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun keepGrant (Lus/tractat/kuilt/identity/Grant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/identity/RevocationList {
+	public static final field Companion Lus/tractat/kuilt/identity/RevocationList$Companion;
+	public final fun notBefore-gv087Q4 (Ljava/lang/String;)Ljava/lang/Long;
+	public final fun revoke-iCRWAGs (Ljava/lang/String;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/identity/RevocationList$Companion {
+	public final fun inMemory ()Lus/tractat/kuilt/identity/RevocationList;
 }
 
