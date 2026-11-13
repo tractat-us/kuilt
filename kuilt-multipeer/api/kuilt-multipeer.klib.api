@@ -42,7 +42,7 @@ final class us.tractat.kuilt.multipeer/MultipeerPeerLinkFactory : us.tractat.kui
 }
 
 final class us.tractat.kuilt.multipeer/MultipeerRoomHost : us.tractat.kuilt.session/RoomHost { // us.tractat.kuilt.multipeer/MultipeerRoomHost|null[0]
-    constructor <init>(us.tractat.kuilt.core/Loom, us.tractat.kuilt.core/Pattern) // us.tractat.kuilt.multipeer/MultipeerRoomHost.<init>|<init>(us.tractat.kuilt.core.Loom;us.tractat.kuilt.core.Pattern){}[0]
+    constructor <init>(us.tractat.kuilt.core/Loom, us.tractat.kuilt.core/Pattern, us.tractat.kuilt.identity/DeviceKeyStore) // us.tractat.kuilt.multipeer/MultipeerRoomHost.<init>|<init>(us.tractat.kuilt.core.Loom;us.tractat.kuilt.core.Pattern;us.tractat.kuilt.identity.DeviceKeyStore){}[0]
 
     final fun close() // us.tractat.kuilt.multipeer/MultipeerRoomHost.close|close(){}[0]
     final suspend fun start(kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.session/Room, kotlin/Unit>) // us.tractat.kuilt.multipeer/MultipeerRoomHost.start|start(kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.session.Room,kotlin.Unit>){}[0]
