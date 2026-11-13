@@ -238,6 +238,16 @@ class AdmitMessageTest {
         )
     }
 
+    /**
+     * The capture receipt for [GOLDEN_V2_WELCOME]: a v2 Welcome encodes to exactly those bytes. Run
+     * against the encoder before #3210, so the vector is evidence, not a re-derivation.
+     */
+    @Test
+    fun `the v2 welcome vector is what a v2 encoder wrote`() {
+        val v2 = AdmitMessage.encode(AdmitMessage.Welcome("peer-1", "Ada", "s-1"))
+        assertEquals(GOLDEN_V2_WELCOME.toList(), v2.toList())
+    }
+
     private companion object {
         /** Captured bytes of `Hello("Alice", "session-123", "device-abc")` in the current wire format. */
         val GOLDEN_HELLO = intArrayOf(
@@ -246,5 +256,10 @@ class AdmitMessageTest {
             100, 107, 115, 101, 115, 115, 105, 111, 110, 45, 49, 50, 51, 104, 100, 101, 118, 105,
             99, 101, 73, 100, 106, 100, 101, 118, 105, 99, 101, 45, 97, 98, 99, 255, 255,
         ).map { it.toByte() }.toByteArray()
+
+        /** `AdmitMessage.encode(Welcome("peer-1", "Ada", "s-1"))`, captured from the v2 encoder. */
+        val GOLDEN_V2_WELCOME =
+            "619f6777656c636f6d65bf6e61737369676e656450656572496466706565722d316b646973706c61794e616d65634164616973657373696f6e496463732d31ffff"
+                .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
 }
