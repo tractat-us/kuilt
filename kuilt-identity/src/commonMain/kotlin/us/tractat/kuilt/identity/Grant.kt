@@ -94,10 +94,7 @@ public class Grant private constructor(
      * Never throws on a bad grant. It throws [IllegalStateException] only when this platform's
      * cryptographic provider cannot run at all.
      */
-    public suspend fun isSignedByIssuer(): Boolean {
-        val (layout, signature) = Layout.split(wireBytes) ?: return false
-        return issuer.verify(layout, signature)
-    }
+    public suspend fun isSignedByIssuer(): Boolean = StatementCodec.isSignedBy(wireBytes, issuer)
 
     override fun equals(other: Any?): Boolean = other is Grant && wireBytes.contentEquals(other.wireBytes)
 
@@ -142,20 +139,16 @@ public class Grant private constructor(
                 TAG,
                 VERSION,
                 listOf(
-                    issuerId.compressedPoint(),
-                    subject.compressedPoint(),
+                    StatementCodec.key(issuerId),
+                    StatementCodec.key(subject),
                     scope.encode(),
-                    issuedAt.toBigEndian(),
-                    notAfter.toBigEndian(),
+                    StatementCodec.time(issuedAt),
+                    StatementCodec.time(notAfter),
                     id,
                     NO_PARENT,
                 ),
             )
-            val signature = issuer.sign(layout)
-            check(signature.size == Layout.SIGNATURE_SIZE) {
-                "a DeviceKey signature is ${Layout.SIGNATURE_SIZE} bytes, not ${signature.size}"
-            }
-            return Grant(issuerId, subject, scope, issuedAt, notAfter, id.copyOf(), layout + signature)
+            return Grant(issuerId, subject, scope, issuedAt, notAfter, id.copyOf(), StatementCodec.signed(issuer, layout))
         }
 
         /**
@@ -171,11 +164,11 @@ public class Grant private constructor(
             val bytes = wire.copyOf()
             val (layout, _) = Layout.split(bytes) ?: return null
             val fields = Layout.decode(layout, TAG, VERSION, FIELD_COUNT) ?: return null
-            val issuer = didKeyOf(fields[0]) ?: return null
-            val subject = didKeyOf(fields[1]) ?: return null
+            val issuer = StatementCodec.keyOrNull(fields[0]) ?: return null
+            val subject = StatementCodec.keyOrNull(fields[1]) ?: return null
             val scope = scopeOf(fields[2]) ?: return null
-            val issuedAt = longOf(fields[3]) ?: return null
-            val notAfter = longOf(fields[4]) ?: return null
+            val issuedAt = StatementCodec.timeOrNull(fields[3]) ?: return null
+            val notAfter = StatementCodec.timeOrNull(fields[4]) ?: return null
             val id = fields[5]
             if (id.size != ID_SIZE || fields[6].isNotEmpty() || notAfter <= issuedAt) return null
             return Grant(issuer, subject, scope, issuedAt, notAfter, id, bytes)
@@ -184,57 +177,20 @@ public class Grant private constructor(
         private const val TAG = "kuilt/grant"
         private const val VERSION = 1
         private const val FIELD_COUNT = 7
-        private const val LONG_SIZE = 8
         private const val SCOPE_ROOM: Byte = 0x01
         private const val SCOPE_ANY_ROOM_OF_ISSUER: Byte = 0x02
         private val NO_PARENT = ByteArray(0)
 
         private fun GrantScope.encode(): ByteArray = when (this) {
-            is GrantScope.Room -> byteArrayOf(SCOPE_ROOM) + strictUtf8(roomId)
+            is GrantScope.Room -> byteArrayOf(SCOPE_ROOM) + StatementCodec.text(roomId)
             GrantScope.AnyRoomOfIssuer -> byteArrayOf(SCOPE_ANY_ROOM_OF_ISSUER)
-        }
-
-        /**
-         * [roomId] as UTF-8, refusing an unpaired surrogate. The lenient encoder would replace it
-         * (`?` on the JVM, `EF BF BD` elsewhere), so the grant would sign another room id than the
-         * one it was given, and a different one on each platform.
-         */
-        private fun strictUtf8(roomId: String): ByteArray = try {
-            roomId.encodeToByteArray(startIndex = 0, endIndex = roomId.length, throwOnInvalidSequence = true)
-        } catch (_: CharacterCodingException) {
-            throw IllegalArgumentException("the room id is not valid Unicode: it holds an unpaired surrogate")
         }
 
         private fun scopeOf(field: ByteArray): GrantScope? = when {
             field.isEmpty() -> null
             field[0] == SCOPE_ANY_ROOM_OF_ISSUER -> if (field.size == 1) GrantScope.AnyRoomOfIssuer else null
-            field[0] == SCOPE_ROOM -> roomIdOf(field)?.let(GrantScope::Room)
+            field[0] == SCOPE_ROOM -> StatementCodec.textOrNull(field, startIndex = 1)?.let(GrantScope::Room)
             else -> null
         }
-
-        /**
-         * The room id after the scope tag, or `null` unless it is well-formed UTF-8. The strict decode
-         * refuses an overlong form or an encoded surrogate, so one room id has one spelling on the
-         * wire and decoding then encoding gives back the same bytes.
-         */
-        private fun roomIdOf(field: ByteArray): String? = try {
-            field.decodeToString(startIndex = 1, endIndex = field.size, throwOnInvalidSequence = true)
-        } catch (_: CharacterCodingException) {
-            null
-        }
-
-        /** The name for a 33-byte compressed point, or `null` when [field] is not one in shape. */
-        private fun didKeyOf(field: ByteArray): DidKey? {
-            if (field.size != COMPRESSED_POINT_SIZE) return null
-            if (field[0] != 0x02.toByte() && field[0] != 0x03.toByte()) return null
-            return DidKey.ofCompressedPoint(field)
-        }
-
-        private fun longOf(field: ByteArray): Long? {
-            if (field.size != LONG_SIZE) return null
-            return field.fold(0L) { acc, byte -> (acc shl 8) or (byte.toLong() and 0xFF) }
-        }
-
-        private fun Long.toBigEndian(): ByteArray = ByteArray(LONG_SIZE) { (this ushr (56 - 8 * it)).toByte() }
     }
 }
