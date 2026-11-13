@@ -731,13 +731,13 @@ conservation or path accounting.
 
 ### 7.4 A wrong estimate: what it may cost, and whom
 
-A lane asks for a slot and says how long its job will take. Too little, and its
-job looks cheap while it runs, so the lane wins slots it should have waited for.
-Too much, and it waits longer than it needed to. This section asks two things:
-can a wrong estimate move shares, and if it can, whose? It also records what to
-do about it. The aim is to be *seen* to be fair, with the simplest rule that
-gets there. A rule that closes every corner pushes gaming into places that are
-harder to explain.
+A lane asks for a slot and says how long its job will take. If it says too
+little, its job looks cheap while it runs, and the lane wins slots it should
+have waited for. If it says too much, it waits longer than it needed to. This
+section asks two things: can a wrong estimate move shares, and if it can, whose?
+It also records what to do about it. The aim is to be *seen* to be fair, with
+the simplest rule that gets there. A rule that tries to close every corner
+pushes gaming into places that are harder to explain.
 
 In short:
 
@@ -745,10 +745,10 @@ In short:
   needs nothing more than the #3238 fix, which is shipping.
 - **A deployment where work vouches for itself can turn on a strict mode.** In
   strict mode the engine charges what a lane has been seen to cost, and the
-  caller's number never moves a charge.
-- Renewing leases as they run, taking the caller's value only as a cap, and
-  flooring the charge at the observed cost were all measured and are not
-  adopted.
+  caller's number never moves a charge. The job's *shape* still can: a lane
+  whose bursts hide one long job among short ones is charged the mean for it.
+- Renewing leases as they run, capping at the caller's value, and flooring the
+  charge at the observed cost were all measured and are not adopted.
 
 #3229, a draft, proposed a §7.4 about how long a request is for *ordering*. If it
 lands, it becomes §7.5. This section is about what a request is *charged*.
@@ -756,18 +756,26 @@ lands, it becomes §7.5. This section is about what a request is *charged*.
 #### As built
 
 - **A pick charges the slot's reservation, and `complete` corrects it.**
-  `acquire` funds the reservation (`fundedBase`, `LocalHeddle.kt:409`). It then
-  delegates the reservation at every level of the descent (`descend`,
-  `:384-401`, the check at `:391`). `complete` extends an overrun, or releases
-  the remainder (`:477-504`), and `cancel` releases everything (`:507-512`).
-- **The wake clamp counts an open lease at its reservation.** It is
-  `max(carried, front − v_raw − sleeperCredit/w)`
-  (`FairShareAllocator.kt:312-331`, `HeddlePolicy.kt:283`). `v_raw` is
-  committed service, `issued − returned`, so it holds every open lease at what
-  that lease reserved (`HeddlePolicy.kt:193`).
+  `acquire` funds the reservation first (`fundedBase`, `LocalHeddle.kt:429`).
+  It then delegates the reservation at every level of the descent (`descend`,
+  `:404-421`, with the check at `:411`). `extend` delegates more down the same
+  path (`:473-482`). `complete` extends an overrun or releases the remainder,
+  and `cancel` releases everything (`:496-532`).
+- **The wake clamp counts an open lease at its reservation.** A waker's offset
+  is `max(carried, front − v_raw − sleeperCredit/w)` (`clampWakers`,
+  `FairShareAllocator.kt:417-430`; `wakeOffset`, `HeddlePolicy.kt:283`). Its
+  front is taken over the siblings that are not joining (`settleJoiners`,
+  `FairShareAllocator.kt:312-331`). `v_raw` is committed service,
+  `issued − returned`, so it holds every open lease at what that lease reserved
+  (`HeddlePolicy.kt:193`). This holds for the waker and for every sibling the
+  front is read from.
 - **A leaf with running leases and an empty queue is idle.** `waiting` means
-  queued work (`LocalHeddle.kt:217-220`). This is right for a pooled
+  queued work (`LocalHeddle.kt:222-226`). This is right for a pooled
   scheduler: such a lane is not asking for the slot being handed out.
+- **Orphans are settled through `complete`.** `reconcileLeases` reports them and
+  changes nothing (`:690-710`). The caller then completes each one, by default
+  at `defaultSettlement = min(elapsed, granted)` (`:164`). `complete` cannot
+  tell that settlement from a finished job.
 - **#3238's fix (PR #3248, shipping in v0.7.4)** records, at each clamp, the
   clamp's own slack and the lease watermark. A later release of a lease that
   was open at that clamp then hands back nothing the clamp denied. The fix
@@ -775,18 +783,31 @@ lands, it becomes §7.5. This section is about what a request is *charged*.
 
 #### Measured
 
-The numbers come from a Python model of `pickChild`, `settleJoiners` and the
-clamp, with #3248's fix added. That model matches all 54 of #3248's engine rows
-to within 0.0002. Its source and tables are in the comment on #3240. Each
-number is a slot-time share, against the same configuration's honest arm, and
-the worst cell is named:
+**The model.** The numbers come from a Python model of `pickChild`,
+`settleJoiners` and the clamp, with #3248's fix added. Its source and tables
+are in the comment on #3240.
 
-- `flat t/b` is `root → {a, b}` with 8 slots, `b` always backlogged at cost 1,
-  and `a` in bursts of `b` jobs, the next burst `t` after the last one starts.
-  The rigs are `t ∈ {4, 7, 12, 20}` and `b ∈ {3, 4, 8}`.
+- **Calibrated.** It matches all 76 of #3248's TODAY and EXPOSURE engine rows
+  to within 0.00016. Two cells outside those rows were later run on the engine
+  for #3248, and match too: the staggered two-level row (7,5,2,2) and the flat
+  honest-noise cell with costs `[6,10,7,9,8]`. JVM and macosArm64 gave
+  byte-identical rows.
+- **Not calibrated.** No engine row checks the model's other staggered starts,
+  thinks of 12 and 20, or two-level bursts of 2. Nor does one check the
+  five-cost cycle elsewhere, unequal weights, sleeper credit, or any part of
+  the observed-cost path. Every strict-mode number below is the model's alone.
+
+**The rigs.** Each number is a slot-time share, measured against the same
+configuration's honest arm. The worst cell is named.
+
+- `flat t/b` is `root → {a, b}` with 8 slots. `b` is always backlogged at
+  cost 1. `a` runs in bursts of `b` jobs, and the next burst arrives `t` after
+  the last one starts. The rigs are `t ∈ {4, 7, 12, 20}` and `b ∈ {3, 4, 8}`.
 - `2L (t1, t2, s2, b2)` is `root → {g, b}` with `g → {a1, a2}`. `a1` runs
-  bursts of 4 jobs of cost 8, `a2` is honest, and the first two rigs are
-  #3248's own.
+  bursts of 4 jobs of cost 8. `a2` is honest, starts at `s2`, and runs bursts
+  of `b2`. The first two rigs are #3248's own.
+- Every lane has weight 1. Both the model and #3248's rig acquire at
+  reservation 1 and apply the estimate with `extend`.
 
 | arm | today | with #3248 | strict mode |
 |---|---|---|---|
@@ -796,31 +817,60 @@ the worst cell is named:
 | flat, cancel that job | +0.056 (4/4) | 0.000 | 0.000 |
 | 2L, `a1` under ×¼: `a1`, and its honest sibling `a2` | +0.081, −0.046 | +0.081, −0.046 | 0.000, 0.000 |
 | 2L, `a1` over ×4: `a1`, `a2` | −0.075, −0.053 | −0.130, +0.055 | 0.000, 0.000 |
-| 2L, `a1` over-reserves the job that empties its queue: `a1`, `a2` | +0.111, −0.100 (7,4,0,4) | **+0.164, −0.135** (7,5,2,2) | 0.000, 0.000 |
-| honest arms against today, flat and 2L | 0 | 0.000 | at most +0.005 (12,9,5,2) |
+| 2L, `a1` over-reserves the job that empties its queue: `a1`, `a2` | +0.111, −0.100 (7,4,0,4) | +0.164, −0.135 (7,5,2,2) | 0.000, 0.000 |
+| 2L, `a1` cancels that job: `a1`, `a2` | +0.128, −0.053 (7,5,2,2) | +0.007, +0.005 (4,7,0,4) | +0.007, +0.005 |
+| honest arms against today, all lanes steady | 0 | 0.000 | at most +0.005 (12,9,5,2) |
+| 2L, honest steady `a2` beside a truthful `a1` with varying costs, against exact estimates | 0 | 0 | −0.029 (7,7,3,2), +0.060 (7,5,2,2) |
 | honest noise against an exact oracle, flat | −0.067 (7/4), +0.044 (20/8) | the same | −0.067 (7/4), +0.017 (12/8) |
 | honest noise against an exact oracle, 2L | −0.065, +0.058 (4,7,0,4) | the same | −0.044 (12,9,5,2), +0.026 (7,5,2,2) |
 
-The honest-noise arm uses the last observed cost as each estimate, with costs
-cycling through `[4,4,4,20]`, `[2,14]` and `[6,10,7,9,8]`. The oracle is the
-same engine with exact estimates.
+In the honest-noise arm, each estimate is the lane's last observed cost, with
+costs cycling through `[4,4,4,20]`, `[2,14]` and `[6,10,7,9,8]`. The oracle is
+the same engine with exact estimates. In those cycles the longest job is at most
+2.5 times the mean. The steady-sibling row cycles `a1` through `[10,10,10,2]`,
+`[2,10,10,10]`, `[4,4,4,20]` and `[20,4,4,4]`.
 
-Three things in the table matter beyond the arms themselves:
+**Strict mode's 0.000 holds by construction.** Its charge never reads the
+estimate, so every estimate arm equals the honest arm. That is what the design
+says, not evidence that it is safe. And the model cannot see the other half of
+the estimate, the ordering: with every weight at 1, all candidates in one pick
+share the slot's request length, so it orders nobody. The Acceptance arms below
+cover that half.
 
-- **Over-reserving at two levels is worse with #3248 than today:** +0.164 for
-  the lane and −0.135 for its honest sibling, against +0.111 and −0.100. The
-  fix raises the over-reserver's offset, which raises the front that a waking
-  sibling is clamped to, so the penalty spills onto the sibling. The model shows
-  this; #3248's 2L rig, which has no staggered sibling, does not. It needs an
-  engine row (Acceptance, below).
+Four things in the table matter beyond the arms themselves:
+
+- **A lease still open, and over-reserved, when its sibling wakes inflates the
+  front that the sibling is clamped to.** The bottom row of the next table is
+  this case. It belongs to today's clamp, and #3248 neither causes it nor cures
+  it. Over 192 staggered two-level rigs, the sibling's mean deviation is −0.052
+  today and −0.052 with #3248. #3248 compensates once in the whole run, by 3.0
+  on `root>g`, and that moves the run onto a different periodic schedule.
+  Adding that one 3.0 to today's engine reproduces #3248's row exactly.
+  - Which rigs land on a bad phase changes. With #3248, 37 are worse by more
+    than 0.01, 24 are better, and 131 are the same.
+  - The worst cell moves. Today's worst is (7,4,0,4) at −0.100, which #3248
+    improves to −0.017. #3248's worst is (7,5,2,2) at −0.135, where today shows
+    −0.069.
+  - The engine confirms (7,5,2,2) on #3248: `main` +0.098 and −0.069, #3248
+    +0.164 and −0.135.
 - **The honest-noise bar is already broken today**, by up to 0.067. The cause
   is cost variance, not anyone's estimate. A job that costs more than its
-  reservation and is still open at a wake pays its overrun after the clamp. No
-  candidate here brings that under 0.03 in every cell. So acceptance is two
+  reservation, and is still open at a wake, pays its overrun after the clamp.
+  No candidate here brings that under 0.03 in every cell. So acceptance is two
   sided against today's envelope (below), not against 0.03.
 - **#3248 also changes one honest-noise cell**: −0.028 at flat 4/4 with costs
-  `[6,10,7,9,8]`, where today shows 0.000. Those costs are not among #3248's
-  rows, so the cell needs an engine row too.
+  `[6,10,7,9,8]`, where today shows 0.000. The engine confirms it on #3248.
+- **The shape of a job is a lever in strict mode.** A lane charged its mean is
+  under-charged for a job far above that mean, and the overrun lands after the
+  clamp. These cases are flat, against exact estimates under `DECLARED`:
+  - Costs `[1,1,1,57,1,1,1,1]` in bursts of 8 gain +0.098 (think 7) to +0.109
+    (think 12).
+  - An honest lane whose bursts end in the long job, `[1,1,1,1,1,1,1,57]`, loses
+    up to −0.089 (think 7).
+  - Under `DECLARED` the same shapes move further when the lane estimates by its
+    last observed cost, +0.171 (think 12). A lane that estimates its mean gets
+    +0.096, close to strict mode. Strict mode gives the lever to every lane;
+    under `DECLARED`, a lane with exact estimates never had it.
 
 #### Where a correction lands, and why each candidate fails or holds
 
@@ -832,15 +882,15 @@ correction does depends on where the lane is at that moment.
 | while the lane competes | exact | exact; a lead, repaid |
 | while the lane sleeps | the next clamp may forfeit it: a penalty | **the next clamp may erase it: a gain** |
 | after a clamp that counted the lease | closed by #3248 | a penalty the clamp did not foresee |
-| at any time, at a parent with a waking sibling | **the sibling is clamped to a front the open lease inflates** | the sibling is clamped to a front the open lease deflates |
+| at any time, at a parent with a waking sibling | **the sibling is clamped to a front the open lease inflates** (today's; #3248 moves the phase) | the sibling is clamped to a front the open lease deflates |
 
 The bold cells are what is left after #3248. Each candidate either removes
 the error at its source or does not:
 
 - **Strict mode removes it.** The charge never depends on the caller's
-  number, so in the estimate arms `R − C` is the same for every caller. Every
-  estimate arm, at both depths, equals the honest arm. What remains is cost
-  variance, which it shares with today.
+  number, so in the estimate arms `R − C` is the same whatever the caller says.
+  No lease is over-reserved on the caller's word, so the sibling spill goes as
+  well. What remains is cost variance, which today has too, and job shape.
 - **Renewing in arrears**, extending a lease to its reported elapsed time as it
   runs, does not reach the bold cells. A burst's picks happen at one instant,
   before there is any progress to report. And a running lease's renewals land
@@ -851,13 +901,19 @@ the error at its source or does not:
 
   With strict mode, renewals make honest noise worse, −0.086 (flat 4/4)
   instead of −0.067.
-- **Taking the caller's value only as a cap**, `min(caller, observed)`, keeps the
-  under side open. Under-reserving gains +0.136 (flat 7/4), the honest sibling
-  loses −0.069 (2L 7,5,2,2), and honest noise reaches +0.107 (flat 12/8).
+- **Renewing in arrears with the caller's value as a cap**,
+  `min(caller, observed)`, keeps the under side open. Measured together with
+  renewing in arrears, never alone. Under-reserving gains +0.136 (flat 7/4), the
+  honest sibling loses −0.069 (2L 7,5,2,2), and honest noise reaches +0.107
+  (flat 12/8).
 - **A pick-time floor at the observed cost**, `max(caller, observed)`, closes
-  the under side: +0.000 flat, and +0.028 with the sibling at −0.017 at two
-  levels. It keeps the over side exactly as #3248 leaves it, +0.164 and
-  −0.135 at two levels. So it is not a strict mode.
+  the under side. The flat gain falls to +0.000, and the two-level gain to
+  +0.028 with the sibling at −0.017. It keeps the over side exactly as #3248
+  leaves it: −0.186 flat, and +0.164 and −0.135 at two levels. So it is not a
+  strict mode.
+- **Honouring `extend` under strict mode** is that floor. An extension adds the
+  caller's excess on top of the observed charge, so the over arms become the
+  floor's rows. (Both rigs apply every estimate through `extend`.)
 - **Not clamping a lane with work in flight** (#3248's rule B) is rejected by
   the engine. One long lease open lets a lane bank idle credit for every slot it
   never asked for: every slot for 1,000 ticks on #3248's long-lease row. The
@@ -870,33 +926,41 @@ the error at its source or does not:
 **Recommended; not built.** Default mode is today's, plus #3248. Strict mode is
 `LocalPolicy.charge = ChargeRule.OBSERVED`, off by default. Nothing in strict
 mode changes the wake clamp, so it holds whatever #3248 ships: rule A as
-measured, or A with a composition fix.
+measured, or A with a fix to the front.
 
 - **Default mode, `ChargeRule.DECLARED`.** A lease is charged the slot's
-  reservation, as today. An estimate's effect on shares is bounded per level,
-  by the table's numbers:
+  reservation plus its extensions, as today. An estimate's effect on shares is
+  bounded per level by the table's numbers:
   - under-reserving gains up to +0.111 at one level;
   - over-reserving costs up to −0.186;
-  - over-reserving at a parent shared with a waking sibling moves both lanes by
-    up to 0.16.
+  - an over-reserved lease open across a sibling's wake moves the sibling by up
+    to −0.135, and moves itself by up to +0.164. Today's worst is −0.100, and
+    the mean over 192 rigs is −0.052 with or without #3248.
 
   These are the costs of trusting the caller. An operator who sets the
   estimates bears them on its own lanes. They are documented, not fixed.
 - **Strict mode, `ChargeRule.OBSERVED`.** A lease is charged its lane's
   observed cost. The caller's `reservation` still orders the pick, as the
-  slot's request length (Amendment 9), and moves no charge. Every estimate arm
-  is 0.000 at both depths.
-  - *Honest lanes with steady costs* change by at most +0.005 against today.
-  - *Honest lanes with varying costs* stay inside today's envelope:
-    −0.067 to +0.017 flat, and −0.044 to +0.026 at two levels. The mean
-    absolute deviation is 0.014 against today's 0.014 flat, and 0.022 against
-    0.028 at two levels.
-  - *Its one real cost:* an operator whose estimates are exact gives that up.
-    The worst cell is flat 4/4 with `[4,4,4,20]`: −0.056 against today's 0.000.
-    That is why strict mode is off by default.
-- **Not adopted:** renewing in arrears, the caller's value as a cap, a
-  pick-time floor, and not clamping work in flight. The measurements are above;
-  the reasons are under Settled.
+  slot's request length (Amendment 9). It moves no charge, and neither does
+  `extend` (API, below). Every estimate arm is 0.000 at both depths, by
+  construction. The one exception is cancel-last at two levels: +0.007 and
+  +0.005, as with #3248 alone.
+  - *Honest lanes, all steady,* change by at most +0.005 against today.
+  - *An honest steady lane beside a truthful one with varying costs* moves by
+    −0.029 to +0.060 against exact estimates.
+  - *Honest lanes with varying costs* stay inside today's envelope, for cost
+    cycles whose longest job is at most 2.5 times the mean: −0.067 to +0.017
+    flat, and −0.044 to +0.026 at two levels. The mean absolute deviation is
+    0.014, against today's 0.014, flat. At two levels it is 0.022 against
+    0.028. More skewed shapes are outside that bound, from +0.109 to −0.089
+    (above).
+  - *Its real cost:* an operator whose estimates are exact gives that up. On
+    the measured cycles the worst cell is flat 4/4 with `[4,4,4,20]`: −0.056
+    against today's 0.000. On skewed shapes it is up to −0.089. That is why
+    strict mode is off by default.
+- **Not adopted:** renewing in arrears, alone or with a cap; a pick-time floor;
+  honouring `extend` under strict mode; and not clamping work in flight. The
+  measurements are above, and the reasons are under Settled.
 
 **The observed cost, precisely.** The engine keeps a mean per leaf `GroupId`, in
 fixed point with 16 fractional bits:
@@ -910,8 +974,10 @@ charge for ℓ:              ⌈m(ℓ) / 2^16⌉, clamped to 1..MAX_RESERVATION,
 
 - **The shift is a floor shift.** A truncating division never comes down to `C`
   once it has overshot, and sticks one unit high.
-- **`s = 3` is the default,** about the last 8 completions. Measured with
-  strict mode for `s ∈ {0, 1, 3, 5}`, the honest-noise ranges were:
+- **`s = 3` is the default,** about the last 8 completions. The measurement
+  rules out `s ≤ 1` and nothing more: `s = 3` and `s = 5` cannot be told apart
+  on these rigs, and 3 is the shorter memory. The honest-noise ranges with
+  strict mode were:
 
   | `s` | flat | two levels |
   |---|---|---|
@@ -920,23 +986,36 @@ charge for ℓ:              ⌈m(ℓ) / 2^16⌉, clamped to 1..MAX_RESERVATION,
   | 3 | −0.067 to +0.017 | −0.044 to +0.026 |
   | 5 | −0.067 to +0.021 | −0.044 to +0.026 |
 
-  `s = 0`, "the last observed cost", follows noise.
 - **What teaches it.**
   - It learns at `complete`, from the cost the caller reports. Heddle reads no
     clock, so the mean moves with completions, not with time.
   - `cancel` teaches nothing; otherwise cancelling would lower a lane's charge.
-  - An orphan settled through `reconcileLeases` may **raise** `m` but never
-    lower it (provisionally, per the owner's answer on #3240). An orphan settles
-    at most at `granted`, which in strict mode is `m` itself, so a lane whose
-    jobs crash cannot learn a shorter cost from its crashes.
+  - **An orphan may raise `m`, but never lower it** (provisionally, per the
+    owner's answer on #3240). The documented settlement is
+    `min(elapsed, granted)`, and in strict mode `granted` is the charge. So a
+    default settlement can only pull `m` down, and a crashed job would teach
+    the engine that the lane's jobs are short. Because `complete` cannot tell an
+    orphan's settlement from a finished job, the engine marks the lease instead.
+    In strict mode, `reconcileLeases` records each orphan it reports in
+    `CostMemory`. A later `complete` of a marked lease updates `m` only when
+    the update would raise it. A `complete` or `cancel` drops the mark. A lease reported orphaned
+    whose work was in fact alive is therefore learned only upward. That is the
+    conservative error.
 - **Keyed by leaf `GroupId`, not by edge.** It survives a reweight (R1). L3
   drops a removed leaf's entry. A rename or a move starts over (Ruling 12).
 - **What can still be gamed, and whether it is closed.**
   - A caller that misreports `actualCost` breaks every guarantee in this
-    document, as it does today.
-  - A runtime child created fresh is charged `defaultReservation` until its
-    first completion. That works once per child, and only with a low
-    `defaultReservation`. This is not closed.
+    document, as it does today. Cancelling a job that ran is the same lie:
+    +0.007 at two levels.
+  - **Job shape.** A lane that hides one long job among short ones gains up to
+    +0.109 (above). This is the same overrun-after-the-clamp that sets today's
+    honest-noise envelope, and it is not closed (Open).
+  - **Cold start.** A runtime child created fresh is charged
+    `defaultReservation` until its first completion. Every pick in its first
+    burst lands before any of those jobs completes, so a whole burst goes at
+    that charge. Detaching the leaf and attaching it again drops its entry (L3),
+    so the trick repeats. It pays only with a low `defaultReservation`, and it
+    is not closed.
 
 #### API
 
@@ -954,9 +1033,19 @@ LocalHeddleState(…, costMemory: CostMemory)                       // new trail
 CostMemory                                                        // new: @Serializable, contents internal, EMPTY
 ```
 
-- `acquire`, `admit`, `explain`, `previewPicks`, `complete` and `cancel` keep
-  their signatures. Under `OBSERVED` a lease's `Lease.reserved` is its charge,
-  not the `reservation` passed.
+- `acquire`, `admit`, `explain`, `previewPicks`, `extend`, `complete`,
+  `cancel` and `reconcileLeases` keep their signatures. Under `DECLARED` every
+  one of them behaves as today, and `CostMemory` stays `EMPTY`.
+- **Under `OBSERVED`:**
+  - A lease's `Lease.reserved` is its charge, not the `reservation` passed.
+  - **`extend` is accepted and changes nothing.** It returns
+    `LeaseOutcome.Done(0, 0)` and delegates nothing, so it never reports
+    `PathDraining` or `SupplyExhausted`. A lease that does not exist is still
+    reported as missing. `complete` charges an overrun inline and is never
+    refused, so a strict-mode lease never needs more reserved to keep running.
+  - **`reconcileLeases` marks each orphan it reports** in `CostMemory`, and
+    `complete` reads the mark (above). Its KDoc's "changes nothing" becomes
+    "changes nothing but that mark".
 - Changes to the binary interface: one enum, two `LocalPolicy` components, and
   one `LocalHeddleState` component. `LocalPolicy` loses another JVM constructor
   shape, as L2's `supply` did.
@@ -964,19 +1053,25 @@ CostMemory                                                        // new: @Seria
 #### `explain`, `fundedBase` and `previewPicks`
 
 - **Funding happens before the descent.** Under `OBSERVED`, `fundedBase` funds
-  `max(reservation, max charge over the eligible leaves)`, ahead of any pick.
-  So a supply refusal still happens before the descent, and the
-  wake-memory exception (`LocalHeddle.kt:247-250`) stays the only side effect
-  of a refused `acquire`. `explain` calls the same `fundedBase` with the same
-  eligible set, so its `SupplyExhausted` arm agrees with `acquire`.
+  `max(reservation, max charge over the eligible leaves)`, before any pick.
+  - A supply refusal therefore still happens before the descent. The
+    wake-memory exception (`LocalHeddle.kt:263-266`) stays the only side effect
+    of a refused `acquire`.
+  - `explain` calls the same `fundedBase` with the same eligible set, so its
+    `SupplyExhausted` arm agrees with `acquire`.
+  - **The cost:** with no capacity reconciled, the root funds only from what it
+    holds. An `acquire` can then be refused when another eligible leaf's charge
+    does not fit, even though the picked leaf's own charge would. An engine
+    told its slot count tops up below the low watermark and is never refused
+    this way.
 - **The descent is unchanged.** It orders and delegates the slot's
   reservation, as now. Once the leaf is known, the same operation extends the
   difference down the whole path from the root, or releases it up that path.
   That release is part of the pick, not a settlement, so #3248 does not
   compensate it. `explain`'s `BehindAtLevel` is read from the descent, so it is
   unchanged.
-- **The scratch engine copies `CostMemory`** as well as the wake memory and
-  capacity. Then `previewPicks` and `explain` charge as the acquires they
+- **The scratch engine copies `CostMemory`**, as well as the wake memory and
+  the capacity. Then `previewPicks` and `explain` charge as the acquires they
   stand for would.
 
 #### Task P and v0.7.4
@@ -984,24 +1079,20 @@ CostMemory                                                        // new: @Seria
 **v0.7.4 carries #3248 and nothing from this section.** P's format 1 already
 nests `AllocatorMemory` as one value, so #3248's `WakeExposure` rides in it.
 
-Strict mode adds exactly one thing to persist, `CostMemory`. Two ways to land
-it:
-
-- **Format 2.** Format 2 reads a format-1 snapshot with an empty `CostMemory`,
-  so a restored engine starts cold. P's rule, each release reading the previous
-  format, already covers this.
-- **Format 1.** If the owner wants `CostMemory` in format 1, it must land before
-  v0.7.4 freezes that format, as an empty value that `DECLARED` never writes.
-
-Nothing else here is persisted. The charge rule is policy, which is passed in
-at restore, and renewals are not adopted.
+**`CostMemory` goes in format 2** (decided). It is the one thing strict mode
+persists: the means and the orphan marks. Reading a format-1 snapshot gives an
+empty `CostMemory`, so a restored engine starts cold, and P's rule, that each
+release reads the previous format, already covers this. A cold start loses the
+orphan marks, so `reconcileLeases` should run again after a restore. Nothing
+else here is persisted: the charge rule is policy, passed in at restore, and
+renewals are not adopted.
 
 #### What must still hold
 
 | invariant | after this design |
 |---|---|
-| `minted == Σ holdings + spent`, and `Σ leaf holdings == Σ open reserved` | holds: the charge correction is a delegation or release through the existing helpers, and `Lease.reserved` follows it |
-| every operation all-or-nothing | holds: `CostMemory` is updated after the swap, at `complete` only |
+| `minted == Σ holdings + spent`, and `Σ leaf holdings == Σ open reserved` | holds: the charge correction is a delegation or release through the existing helpers, `Lease.reserved` follows it, and a no-op `extend` moves neither side |
+| every operation all-or-nothing | holds: `CostMemory` is updated after the swap, at `complete`, and at `reconcileLeases` for the marks |
 | one leaf predicate, with demand lifted by the descent's terminal predicate | unchanged: the charge is set after the descent |
 | `previewPicks` equals the acquires it previews | holds if the scratch engine copies `CostMemory` |
 | a pick never reads `startedAt` | unchanged |
@@ -1019,33 +1110,47 @@ the honest penalty as well as on the gain.
 - **`DECLARED` is today plus #3248, exactly.** Every honest and honest-noise
   row matches #3248's rows within 0.000. This pins that strict mode, switched
   off, changes nothing.
-- **Under `OBSERVED`**, on the probe's rigs (flat 4/4 and 7/4) and on #3248's
+- **Under `OBSERVED`**, on the probe's rigs (flat 4/4 and 7/4), and on #3248's
   2L rigs plus two staggered ones (`a2` in bursts of 2, starting at 2 or 5):
-  - Every estimate arm is within ±0.03 of the honest arm: under, over, under-last,
-    over-last and cancel-last, at one level and at two, for both `a1` and its
-    sibling `a2`. The model says 0.000.
+  - Every estimate arm is within ±0.03 of the honest arm. That covers under,
+    over, under-last, over-last and cancel-last, at one level and at two, for
+    both `a1` and its sibling `a2`. The model says 0.000, and +0.007 for
+    cancel-last at two levels.
   - Every honest arm is within ±0.01 of `DECLARED`'s.
-  - Every honest-noise cell is within 0.06 of `DECLARED`'s same cell, and the
-    mean absolute deviation from the exact oracle is no higher than
-    `DECLARED`'s. The model gives 0.014 against 0.014 flat, and 0.022 against
-    0.028 at two levels.
-- **Engine rows the model asked for, which #3248 should record:**
-  - 2L with `a1` over-reserving the job that empties its queue, `a2` honest in
-    bursts of 2, thinks 7 and 5, `a2` starting at 2. The model gives `a2`
-    0.100, against 0.167 today and 0.235 for the honest arm.
-  - Flat 4/4 with costs `[6,10,7,9,8]`, last-observed estimates. The model gives
-    −0.028 with #3248 and 0.000 today.
+  - Every honest-noise cell is within 0.06 of `DECLARED`'s same cell. The mean
+    absolute deviation from the exact oracle is no higher than `DECLARED`'s.
+    The model gives 0.014 against 0.014 flat, and 0.022 against 0.028 at two
+    levels.
+- **New arms under `OBSERVED`, for what the model cannot vouch for:**
+  - *Unequal weights.* `a1` at weight 2 and `a2` at weight 1, with every
+    estimate passed as `acquire`'s `reservation` rather than through `extend`.
+    Only then does the caller's number order anything. Same bar: ±0.03 of the
+    honest arm. The model has not measured this, so a miss is a finding against
+    the decision, not a bar to loosen.
+  - *Job shape.* Flat, think 7 and 12, costs `[1,1,1,57,1,1,1,1]` and
+    `[1,1,1,1,1,1,1,57]` in bursts of 8. The rows must match the model within
+    0.01: +0.098 and +0.109, then −0.089 and −0.030. They are the documented
+    exposure, so they are recorded, not hidden.
+  - *A steady sibling beside a varying lane.* 2L, `a1` truthful with the four
+    varying orders in the Measured section, and `a2` steady. Within 0.01 of the model's
+    −0.029 to +0.060.
 - **Mutations, recorded in the implementing PR.**
   - Charge the declared value under `OBSERVED`: the strict estimate arms red.
+  - Honour `extend` under `OBSERVED`: the strict over and over-last arms red.
+    They become the floor's rows: −0.186 flat, and +0.164 and −0.135 at
+    (7,5,2,2).
   - Fund after the descent: `explainAgreesWithAcquireOnSupply` reds.
-  - Let an orphan lower `m`: `anOrphanNeverLowersTheObservedCost` reds.
+  - Let an orphan lower `m`, or ignore the mark: `anOrphanNeverLowersTheObservedCost` reds.
   - Use truncating division: `costMemoryGoldenValues` reds.
 - **Unit tests.**
   - `coldStartChargesDefaultReservation`
   - `costMemoryLearnsFromCompleteNotCancel`
   - `costMemoryGoldenValues`: a fixed sequence gives the same `m` on every
     target.
-  - `anOrphanNeverLowersTheObservedCost`
+  - `anOrphanNeverLowersTheObservedCost`: settled at `defaultSettlement`, and
+    at a cost above `m`.
+  - `orphanMarkSurvivesASnapshotRoundTrip`
+  - `extendChangesNothingUnderObserved`
   - `explainAgreesWithAcquireOnSupply`
   - `previewPicksEqualsAcquiresUnderObserved`
   - `observedChargeSurvivesAReweight`
@@ -1061,10 +1166,17 @@ the honest penalty as well as on the gain.
 - **Renewing leases in arrears.** Under-reserving then gains +0.136, an honest
   sibling loses up to −0.100, and with strict mode honest noise worsens to
   −0.086 (#3239).
-- **The caller's value as a cap on an observed charge.** The under side stays
-  open, at +0.136 and a sibling at −0.069 (#3239).
+- **Renewing in arrears with the caller's value as a cap.** The under side stays
+  open, at +0.136, with a sibling at −0.069 (#3239).
 - **A pick-time floor at the observed cost as the strict mode.** It leaves the
-  over side at two levels at +0.164, and its sibling at −0.135 (#3239).
+  over side at two levels at +0.164, with its sibling at −0.135 (#3239).
+- **Honouring `extend` under strict mode.** It turns strict mode into that floor.
+  Refusing `extend` instead would need a new `LeaseOutcome` arm. That would
+  break every exhaustive `when` on it, and tell a caller that renews by habit
+  that it erred, when under `OBSERVED` there is nothing to reserve (#3240).
+- **A separate `settleOrphan` operation.** It leaves `complete` teaching
+  downward for every caller who settles an orphan through `complete`, which
+  `reconcileLeases`' KDoc tells them to do (#3240).
 - **The first draft's `owed` (debt carried to the next wake) and the per-lease
   `atRisk`.** `owed` fails below depth 1, and the pair cost honest estimators
   8–14% in the Fable review (#3240). #3248's exposure replaces `atRisk`.
@@ -1074,19 +1186,25 @@ the honest penalty as well as on the gain.
 - **Keeping the observed cost in `AllocatorMemory`.** The allocator never sees a
   lease or a leaf, `HeddleNode` would carry it unused, and keyed by edge it
   would be lost at every reweight (#3239).
+- **`CostMemory` in format 1.** It goes in format 2, and reading format 1
+  cold-starts it (#3240).
 
 #### Open
 
-- **The two-level spill in #3248** (+0.164, sibling −0.135 in the model). Should
-  the front a sibling is clamped to leave out an exposure's compensation, or the
-  open over-reserved lease? This changes the clamp, so it is #3248's or a
-  follow-up's. It needs the engine row above first (#3238).
-- **Cost variance under 0.03.** Today's honest-noise envelope is ±0.067, from
-  overruns that land after a clamp. No candidate here closes it. A two-sided
+- **The front a sibling is clamped to counts an open lease at its
+  reservation.** An over-reserved lease open across a sibling's wake pulls the
+  sibling's share down: a mean of −0.052 over 192 rigs, worst −0.100 today and
+  −0.135 with #3248. Should that front leave out an open lease's unspent
+  reservation? Strict mode avoids it, but this is a question about today's
+  clamp, so it belongs to #3248 or a follow-up (#3238).
+- **Cost variance under 0.03, and job shape with it.** Today's honest-noise
+  envelope is ±0.067, from overruns that land after a clamp. Job shaping in
+  strict mode uses the same gap. No candidate here closes it. A two-sided
   correction, which lowers an offset when an overrun lands after its clamp,
   made other cells worse in the model, up to +0.107 (#3239).
-- **Whether strict mode should become the default** once it has run in a
-  deployment that does not control its estimates (#3239).
+- **Whether strict mode should ship at all, and whether it should become the
+  default** once it has run in a deployment that does not control its
+  estimates (#3239).
 - **Whether the model is committed** beside this document, so that its numbers
   can be re-run, or kept in the PR comment (#3240).
 
