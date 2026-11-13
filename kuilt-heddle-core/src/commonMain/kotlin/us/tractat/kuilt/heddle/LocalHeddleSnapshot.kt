@@ -161,7 +161,6 @@ internal data class PersistedLease(val lease: Lease, val path: List<AttachmentId
             require(ledger.lifecycle(edge) != Lifecycle.RETIRED) { "lease $id crosses ${edge.value}, which is retired" }
             at = record.child
         }
-        require(at == lease.leaf) { "lease $id's path ends at ${at.value}, not its leaf ${lease.leaf.value}" }
         val lineage = ledger.lineageOf(lease.leaf)
         require(lineage == path) {
             "lease $id's path ${path.map { it.value }} is not ${lease.leaf.value}'s live lineage ${lineage?.map { it.value }}"

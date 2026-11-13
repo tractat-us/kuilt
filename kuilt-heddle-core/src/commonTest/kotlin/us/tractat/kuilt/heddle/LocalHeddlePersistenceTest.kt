@@ -357,13 +357,33 @@ class LocalHeddlePersistenceTest {
             "an element past the state" to golden.dropLast(1) + ",1]",
             "a lease on an edge the ledger lacks" to golden.replace(pathToA, "\"path\":[\"root/z@1:1#0\"]"),
             "a lease from a later epoch" to golden.replaceFirst("\"leases\":[{\"epoch\":0,", "\"leases\":[{\"epoch\":5,"),
-            "negative capacity" to golden.replace("\"totalSlots\":2,", "\"totalSlots\":-2,"),
             "a topology rooted elsewhere" to golden.replace("\"lastApplied\":{\"root\":\"root\"", "\"lastApplied\":{\"root\":\"elsewhere\""),
             "an invalid topology" to golden.replace("\"lastApplied\":{\"root\":\"root\"", "\"lastApplied\":{\"root\":\"\""),
         )
-        val checks: List<() -> Unit> =
-            cases.map { (name, text) -> { assertTrue(text != golden, "the rig: $name changed the text") } } +
-                cases.map { (name, text) -> { assertIs<RestoreResult.Corrupt>(LocalHeddle.decode(text, Json), name) } }
+        // One per `require` a decoded snapshot runs, each pinned to its own reason.
+        val requires = listOf(
+            Triple("a negative epoch", golden.replaceFirst("[1,{\"epoch\":0,", "[1,{\"epoch\":-1,"), "epoch must be non-negative"),
+            Triple("a negative sequence number", golden.replaceFirst("\"seq\":50,", "\"seq\":-50,"), "negative sequence number"),
+            Triple("ids not strictly increasing", golden.replaceFirst("\"seq\":51,", "\"seq\":50,"), "strictly increasing id order"),
+            Triple("a reservation of 0", golden.replaceFirst("\"reserved\":1,", "\"reserved\":0,"), "not a positive amount"),
+            Triple("an empty path", golden.replace(pathToA, "\"path\":[]"), "empty path"),
+            Triple("a broken path", golden.replace(pathToA, "\"path\":[\"${edgeTo(b).value}\",\"${edgeTo(a).value}\"]"), "path is broken"),
+            Triple("a path across a retired edge", golden.replaceFirst("\"lifecycle\":{\"${edgeTo(a).value}\":\"ACTIVE\"", "\"lifecycle\":{\"${edgeTo(a).value}\":\"RETIRED\""), "which is retired"),
+            Triple("negative capacity", golden.replace("\"totalSlots\":2,", "\"totalSlots\":-2,"), "totalSlots must be non-negative"),
+        )
+        val checks = buildList<() -> Unit> {
+            for ((name, text) in cases) {
+                add { assertTrue(text != golden, "the rig: $name changed the text") }
+                add { assertIs<RestoreResult.Corrupt>(LocalHeddle.decode(text, Json), name) }
+            }
+            for ((name, text, reason) in requires) {
+                add { assertTrue(text != golden, "the rig: $name changed the text") }
+                add {
+                    val out = LocalHeddle.decode(text, Json)
+                    assertTrue(out is RestoreResult.Corrupt && reason in out.reason, "$name: expected Corrupt naming \"$reason\", got $out")
+                }
+            }
+        }
         assertAll(*checks.toTypedArray())
     }
 
