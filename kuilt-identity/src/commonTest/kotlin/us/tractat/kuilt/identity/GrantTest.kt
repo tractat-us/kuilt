@@ -87,18 +87,14 @@ class GrantTest {
     fun issueRequiresNotAfterAfterIssuedAt() = runTest {
         val issuer = DeviceKey.generate()
         val control = Grant.issue(issuer, SUBJECT, GrantScope.AnyRoomOfIssuer, ISSUED_AT, ISSUED_AT + 1)
+        assertFailsWith<IllegalArgumentException>("notAfter == issuedAt") {
+            Grant.issue(issuer, SUBJECT, GrantScope.AnyRoomOfIssuer, ISSUED_AT, ISSUED_AT)
+        }
+        assertFailsWith<IllegalArgumentException>("notAfter < issuedAt") {
+            Grant.issue(issuer, SUBJECT, GrantScope.AnyRoomOfIssuer, ISSUED_AT, ISSUED_AT - 1)
+        }
         assertAll(
             { assertEquals(ISSUED_AT + 1, control.notAfter, "control: one millisecond of life is enough") },
-            {
-                assertFailsWith<IllegalArgumentException>("notAfter == issuedAt") {
-                    Grant.issue(issuer, SUBJECT, GrantScope.AnyRoomOfIssuer, ISSUED_AT, ISSUED_AT)
-                }
-            },
-            {
-                assertFailsWith<IllegalArgumentException>("notAfter < issuedAt") {
-                    Grant.issue(issuer, SUBJECT, GrantScope.AnyRoomOfIssuer, ISSUED_AT, ISSUED_AT - 1)
-                }
-            },
             { assertNotNull(Grant.decode(wireOf(issuedAt = ISSUED_AT, notAfter = ISSUED_AT + 1)), "control: decodes") },
             { assertNull(Grant.decode(wireOf(issuedAt = ISSUED_AT, notAfter = ISSUED_AT)), "a zero-length life does not decode") },
             { assertNull(Grant.decode(wireOf(issuedAt = ISSUED_AT, notAfter = ISSUED_AT - 1)), "a negative life does not decode") },
@@ -115,16 +111,18 @@ class GrantTest {
         val swappedIssuer = grant.wire.replacing(issuer.id.compressedPoint(), stranger.compressedPoint())
         val tampered = assertNotNull(Grant.decode(swappedSubject), "a swapped subject is still a well-formed layout")
         val relabelled = assertNotNull(Grant.decode(swappedIssuer), "a swapped issuer is still a well-formed layout")
+        val flipped = assertNotNull(Grant.decode(grant.wire.flipLowBit(grant.wire.size - 1)))
+        val untouchedVerifies = grant.isSignedByIssuer()
+        val tamperedVerifies = tampered.isSignedByIssuer()
+        val relabelledVerifies = relabelled.isSignedByIssuer()
+        val flippedVerifies = flipped.isSignedByIssuer()
         assertAll(
-            { assertTrue(grant.isSignedByIssuer(), "control: the untouched grant verifies") },
+            { assertTrue(untouchedVerifies, "control: the untouched grant verifies") },
             { assertEquals(stranger, tampered.subject, "precondition: the subject really was swapped") },
-            { assertFalse(tampered.isSignedByIssuer(), "a swapped subject fails the issuer's signature") },
+            { assertFalse(tamperedVerifies, "a swapped subject fails the issuer's signature") },
             { assertEquals(stranger, relabelled.issuer, "precondition: the issuer really was swapped") },
-            { assertFalse(relabelled.isSignedByIssuer(), "a signature does not verify under another key") },
-            {
-                val flipped = assertNotNull(Grant.decode(grant.wire.flipLowBit(grant.wire.size - 1)))
-                assertFalse(flipped.isSignedByIssuer(), "a flipped signature bit fails")
-            },
+            { assertFalse(relabelledVerifies, "a signature does not verify under another key") },
+            { assertFalse(flippedVerifies, "a flipped signature bit fails") },
         )
     }
 
@@ -138,8 +136,9 @@ class GrantTest {
             reachedVerification++
             decoded.isSignedByIssuer()
         }
+        val untouchedVerifies = grant.isSignedByIssuer()
         assertAll(
-            { assertTrue(grant.isSignedByIssuer(), "control: the untouched grant verifies") },
+            { assertTrue(untouchedVerifies, "control: the untouched grant verifies") },
             // Most flips leave a well-formed layout, so the signature, not the decoder, has to refuse them.
             { assertTrue(reachedVerification > layoutSize / 2, "precondition: $reachedVerification of $layoutSize flips reached verification") },
             { assertEquals(emptyList(), accepted, "layout bytes whose flip still verified") },
@@ -150,11 +149,12 @@ class GrantTest {
     fun noExpiryRoundTrips() = runTest {
         val grant = Grant.issue(DeviceKey.generate(), SUBJECT, GrantScope.AnyRoomOfIssuer, ISSUED_AT, Grant.NO_EXPIRY)
         val decoded = assertNotNull(Grant.decode(grant.wire))
+        val decodedVerifies = decoded.isSignedByIssuer()
         assertAll(
             { assertEquals(Long.MAX_VALUE, Grant.NO_EXPIRY) },
             { assertEquals(Long.MAX_VALUE, decoded.notAfter) },
             { assertEquals(grant, decoded) },
-            { assertTrue(decoded.isSignedByIssuer()) },
+            { assertTrue(decodedVerifies) },
             { assertTrue("0008" + "7fffffffffffffff" in grant.wire.toHexString(), "notAfter is Long.MAX_VALUE on the wire") },
         )
     }
@@ -172,9 +172,9 @@ class GrantTest {
     @Test
     fun idOtherThanSixteenBytesIsRefused() = runTest {
         val issuer = DeviceKey.generate()
+        assertFailsWith<IllegalArgumentException>("15 bytes") { issue(issuer, ByteArray(15)) }
+        assertFailsWith<IllegalArgumentException>("17 bytes") { issue(issuer, ByteArray(17)) }
         assertAll(
-            { assertFailsWith<IllegalArgumentException>("15 bytes") { issue(issuer, ByteArray(15)) } },
-            { assertFailsWith<IllegalArgumentException>("17 bytes") { issue(issuer, ByteArray(17)) } },
             { assertNull(Grant.decode(wireOf(id = ByteArray(15))), "a 15-byte id does not decode") },
             { assertNotNull(Grant.decode(wireOf(id = ByteArray(16))), "control: a 16-byte id decodes") },
         )
