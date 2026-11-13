@@ -13,7 +13,6 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.assertAll
@@ -169,7 +168,7 @@ class JoinWindowHostIdentityTest {
                         assignedPeerId = coJoiner.selfId.value,
                         displayName = "forged",
                         sessionId = "forged",
-                        key = DeviceKey.generate().id,
+                        key = TEST_KEY_B,
                     ),
                 ),
             )

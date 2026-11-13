@@ -7,7 +7,6 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.assertAll
@@ -52,7 +51,7 @@ class JoinerWelcomeGateTest {
                         assignedPeerId = foreign.selfId.value,
                         displayName = "Foreign",
                         sessionId = foreign.selfId.value,
-                        key = DeviceKey.generate().id,
+                        key = TEST_KEY_B,
                     ),
                 ),
             )

@@ -153,7 +153,7 @@ class ConcurrentResumeHangTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -181,7 +181,7 @@ class ConcurrentResumeHangTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
                 reweave = { muxClient.join(tag) },
@@ -234,7 +234,7 @@ class ConcurrentResumeHangTest {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private fun TestScope.makeSeamRoom(
+    private suspend fun TestScope.makeSeamRoom(
         seam: Seam,
         role: SessionRole,
         displayName: String,
@@ -247,7 +247,7 @@ class ConcurrentResumeHangTest {
             memberName = displayName,
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = keyedStore(),
             heartbeatConfig = fastConfig,
             roomId = roomId,
         ).also { it.start() }

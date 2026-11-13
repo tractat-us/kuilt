@@ -480,7 +480,7 @@ class RoomResumeTest {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private fun TestScope.makeSeamRoom(
+    private suspend fun TestScope.makeSeamRoom(
         seam: Seam,
         role: SessionRole,
         displayName: String,
@@ -493,7 +493,7 @@ class RoomResumeTest {
             memberName = displayName,
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = keyedStore(),
             heartbeatConfig = fastConfig,
             roomId = roomId,
         ).also { it.start() }

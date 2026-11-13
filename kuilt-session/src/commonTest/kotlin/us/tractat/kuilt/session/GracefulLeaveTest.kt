@@ -56,7 +56,7 @@ class GracefulLeaveTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -71,7 +71,7 @@ class GracefulLeaveTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }

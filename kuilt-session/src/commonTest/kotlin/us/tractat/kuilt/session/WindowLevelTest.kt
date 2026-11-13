@@ -899,7 +899,7 @@ class WindowLevelTest {
             memberName = "table-7",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = keyedStore(),
             heartbeatConfig = fastConfig,
             roomId = RoomId("room-1"),
         ).also { it.start() }
@@ -924,7 +924,7 @@ class WindowLevelTest {
             memberName = "client",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = keyedStore(),
             heartbeatConfig = fastConfig,
             roomId = null,
             reweave = { gate.await(); muxClient.join(tag) },

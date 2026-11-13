@@ -99,7 +99,7 @@ class JoinerHostTimeoutRecoveryTest {
             memberName = "table-7",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = keyedStore(),
             heartbeatConfig = fastConfig,
             roomId = RoomId("room-1"),
         ).also { it.start() }
@@ -125,7 +125,7 @@ class JoinerHostTimeoutRecoveryTest {
             memberName = "client",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = keyedStore(),
             heartbeatConfig = fastConfig,
             roomId = null,
             reweave = { reweaveCount++; muxClient.join(tag) },

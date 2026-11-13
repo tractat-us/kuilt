@@ -226,7 +226,7 @@ class LocalFabricTest {
                 memberName = "self",
                 scope = backgroundScope,
                 clock = { AT },
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = HeartbeatConfig(),
             ).also { it.start() }
             val seen = mutableListOf<MembershipEvent>()
@@ -302,7 +302,7 @@ class LocalFabricTest {
                 memberName = "self",
                 scope = backgroundScope,
                 clock = { AT },
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = HeartbeatConfig(),
             )
             capability.value = TransportCapability(emptySet(), FabricAvailability.Unavailable("radio off"))
@@ -550,7 +550,7 @@ class LocalFabricTest {
      * constant precisely because the fold must run for a joiner too; see
      * [aJoinerGetsItsOwnFabricEdgesToo].
      */
-    private fun TestScope.roomOverCapability(
+    private suspend fun TestScope.roomOverCapability(
         capability: StateFlow<TransportCapability>,
         role: SessionRole = SessionRole.Host,
     ): SeamRoom =
@@ -560,7 +560,7 @@ class LocalFabricTest {
             memberName = "self",
             scope = backgroundScope,
             clock = { AT },
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = keyedStore(),
             heartbeatConfig = HeartbeatConfig(),
         ).also { it.start() }
 }

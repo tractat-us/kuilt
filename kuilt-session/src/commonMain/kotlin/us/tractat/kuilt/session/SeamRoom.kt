@@ -190,6 +190,7 @@ public class SeamRoomFactory(
     }
 
     override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room {
+        resolveDeviceKey()
         val seam = loom.host(pattern)
         val resolvedRoomId = roomId ?: mintRoomId(seam)
         return SeamRoom(
@@ -215,6 +216,7 @@ public class SeamRoomFactory(
     }
 
     override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room {
+        resolveDeviceKey()
         val seam = loom.join(tag)
         return SeamRoom(
             seam = seam,
@@ -297,6 +299,7 @@ public class SeamRoomFactory(
         require(roomId == null || role == SessionRole.Host) {
             "roomId applies to a host adopt; a joiner learns it from the host's Welcome"
         }
+        resolveDeviceKey()
         val resolvedRoomId = if (role == SessionRole.Host) roomId ?: mintRoomId(seam) else null
         return SeamRoom(
             seam = seam,
@@ -314,6 +317,23 @@ public class SeamRoomFactory(
             reweave = reweave,
             reconnectControllerFactory = reconnectControllerFactory,
         ).also { room -> room.start() }
+    }
+
+    /**
+     * Reads this device's key once, before a room is built, so the room's own reads — the joiner's
+     * `Hello`, the host's intro `Welcome` — find it already made (#3210).
+     *
+     * Two reasons, both about the **first** read, which is the one that makes the key:
+     * - On wasmJs, making a key is a WebCrypto promise. Made inside a running room it would
+     *   suspend the admit path on something outside the room's dispatcher, and under a virtual-time
+     *   test every timer in the room (the admit deadline among them) fires while it waits.
+     * - A store whose platform provider cannot run throws here, to the caller of
+     *   [host]/[join]/[adopt], instead of inside a launched room loop where nothing catches it.
+     *
+     * The store owes this: "created on first call, the same on every call after".
+     */
+    private suspend fun resolveDeviceKey() {
+        deviceKeyStore.deviceKey()
     }
 
     /**

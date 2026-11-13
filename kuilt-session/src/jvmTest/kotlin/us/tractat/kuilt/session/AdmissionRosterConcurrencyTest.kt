@@ -73,7 +73,7 @@ class AdmissionRosterConcurrencyTest {
                     memberName = "host",
                     scope = scope,
                     clock = { Instant.fromEpochMilliseconds(0) },
-                    deviceKeyStore = InMemoryDeviceKeyStore(),
+                    deviceKeyStore = keyedStore(),
                     heartbeatConfig = HeartbeatConfig(),
                 )
                 val events = scope.launch(start = CoroutineStart.UNDISPATCHED) {
