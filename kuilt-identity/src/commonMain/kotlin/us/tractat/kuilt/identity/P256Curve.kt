@@ -44,3 +44,6 @@ internal fun isOnCurve(compressed: ByteArray): Boolean {
 }
 
 internal const val COMPRESSED_POINT_SIZE: Int = 33
+
+/** Not yet implemented: the failing-test commit's stub. */
+internal fun decompress(compressed: ByteArray): ByteArray? = null
