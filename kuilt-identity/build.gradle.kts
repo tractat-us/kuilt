@@ -24,6 +24,15 @@ val assembleKarmaWebkitConfig = tasks.register<Sync>("assembleKarmaWebkitConfig"
 }
 
 kotlin {
+    // PROBE ONLY (#3225): simulator entitlements embedded the way Xcode embeds them. Takes effect
+    // only when the test binary runs in a BOOTED simulator (simctl spawn <udid>), not KGP's default
+    // standalone spawn, which has no securityd and answers -25291.
+    iosSimulatorArm64 {
+        binaries.getTest("DEBUG").linkerOpts(
+            "-sectcreate", "__TEXT", "__entitlements",
+            layout.projectDirectory.file("keychain-probe.entitlements").asFile.absolutePath,
+        )
+    }
     if (runWebkitTests) {
         @OptIn(ExperimentalWasmDsl::class)
         wasmJs { browser { testRuns.create("webkit") } }
@@ -38,6 +47,10 @@ kotlin {
         val iosArm64Main by getting { dependsOn(appleMain) }
         val iosSimulatorArm64Main by getting { dependsOn(appleMain) }
         val macosArm64Main by getting { dependsOn(appleMain) }
+        val appleTest by creating { dependsOn(commonTest.get()) }
+        val iosArm64Test by getting { dependsOn(appleTest) }
+        val iosSimulatorArm64Test by getting { dependsOn(appleTest) }
+        val macosArm64Test by getting { dependsOn(appleTest) }
 
         commonMain.dependencies {
             // `api`: `RevocationList.open` takes a `DurableStore` and a `StoreKey`, so a caller names
