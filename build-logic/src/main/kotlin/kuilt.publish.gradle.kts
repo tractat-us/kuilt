@@ -119,6 +119,9 @@ fun moduleDescription(module: String): String = when (module) {
     "kuilt-seal" ->
         "Sealed boxes for Kotlin Multiplatform: encrypt bytes to a recipient's public key so only " +
             "its holder can read them, on each platform's own cryptography."
+    "kuilt-identity" ->
+        "Device identity for Kotlin Multiplatform: one key per device, did:key names, and signed " +
+            "grants that let a device come back to a room."
     "kuilt-bolt" ->
         "Write-only history archive kept beside a live CRDT replica, so a server can keep a " +
             "year of edits while the phone feeding it keeps an hour."
