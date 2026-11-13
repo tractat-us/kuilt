@@ -53,8 +53,14 @@ class KuiltMetricExporterTest {
     private fun doublePoint(value: Double, attrs: Attributes = Attributes.empty(), epoch: Long = 1_000L): DoublePointData =
         ImmutableDoublePointData.create(0L, epoch, attrs, value)
 
-    private fun <T : io.opentelemetry.sdk.metrics.data.PointData> sum(monotonic: Boolean, points: Collection<T>) =
-        ImmutableSumData.create(monotonic, AggregationTemporality.DELTA, points)
+    // The temporality defaults to what the bridge asks the SDK for: delta for a monotonic
+    // sum, cumulative for an UpDownCounter's.
+    private fun <T : io.opentelemetry.sdk.metrics.data.PointData> sum(
+        monotonic: Boolean,
+        points: Collection<T>,
+        temporality: AggregationTemporality =
+            if (monotonic) AggregationTemporality.DELTA else AggregationTemporality.CUMULATIVE,
+    ) = ImmutableSumData.create(monotonic, temporality, points)
 
     private fun <T : io.opentelemetry.sdk.metrics.data.PointData> gauge(points: Collection<T>) =
         ImmutableGaugeData.create(points)
@@ -239,7 +245,7 @@ class KuiltMetricExporterTest {
     }
 
     @Test
-    fun nonMonotonicSumBecomesGauge() = runTest {
+    fun cumulativeNonMonotonicSumBecomesGaugeLevel() = runTest {
         val exp = buffer()
         val bridge = KuiltMetricExporter(exp, backgroundScope)
         val md = metric("queue.depth", MetricDataType.LONG_SUM, sum(monotonic = false, points = listOf(longPoint(7L, epoch = 9L))))
