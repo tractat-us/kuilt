@@ -798,7 +798,7 @@ public enum class GrantReach { ThisRoom, AnyRoomOfIssuer }
 public data class GrantTerms(public val readmitFor: Duration, public val reach: GrantReach = GrantReach.ThisRoom) {  // init: readmitFor > 0; INFINITE = no expiry
     public fun notAfter(issuedAt: Long): Long   // issuedAt + readmitFor, or Grant.NO_EXPIRY when INFINITE (saturating)
 }
-public class HostAdmission(public val policy: AdmissionPolicy, public val trust: GrantTrust)
+public class HostAdmission(public val policy: AdmissionPolicy, public val revocations: RevocationList)  // Decided 17: the room builds GrantTrust from its own store key
 ```
 - [ ] **Step 1: Write the failing tests.**
   - `openAdmitsEveryoneWithTheRoomDefault`.
@@ -811,7 +811,7 @@ public class HostAdmission(public val policy: AdmissionPolicy, public val trust:
 > **Amended — read Amendment A § 2.4 first; it overrides this task where they differ.**
 
 **Files:**
-- Modify: `SeamRoom.kt` (`SeamRoomFactory.host`, `adopt(role: AdoptRole, …)`, `electLobby`, and the `Ordinary` arm), `Room.kt` (`RoomFactory.host(…, admission: HostAdmission)`), `SessionRole.kt` or a new `AdoptRole.kt`, `election/SeamElectionLobby.kt`, `KtorRoomHost`, `ServerCluster`, the `kuilt-nw` sites, `kuilt-game` samples, `kuilt-conformance`, `FakeRoomFactory`, and every host-side test (pass `HostAdmission(AdmissionPolicy.open(), GrantTrust(key, RevocationList.inMemory()))`). Also `api/` everywhere.
+- Modify: `SeamRoom.kt` (`SeamRoomFactory.host`, `adopt(role: AdoptRole, …)`, `electLobby`, and the `Ordinary` arm), `Room.kt` (`RoomFactory.host(…, admission: HostAdmission)`), `SessionRole.kt` or a new `AdoptRole.kt`, `election/SeamElectionLobby.kt`, `KtorRoomHost`, `ServerCluster`, the `kuilt-nw` sites, `kuilt-game` samples, `kuilt-conformance`, `FakeRoomFactory`, and every host-side test (pass `HostAdmission(AdmissionPolicy.open(), RevocationList.inMemory())` (Decided 17)). Also `api/` everywhere.
 
 **Interfaces (produced):** `public sealed interface AdoptRole { public data class Host(public val admission: HostAdmission, public val roomId: RoomId? = null) : AdoptRole; public data object Joiner : AdoptRole }`. The old `require(roomId == null || role == Host)` goes, because the type now carries it.
 
