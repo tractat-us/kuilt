@@ -157,6 +157,12 @@ public sealed interface LeaseOutcome {
  * (design §10.5): when it can be reached again, say because a new child under it activates, it is
  * clamped as a waker rather than owed the slots it could not have used.
  *
+ * ## Asking why
+ *
+ * [explain] says why a leaf is not what the next [acquire] picks, or that it is, by running that
+ * very pick on a throwaway copy of the engine. [entitlement] says what share of the slots the leaf
+ * is owed while the waiting set holds still. Neither changes anything.
+ *
  * ## Every delegation is seated first
  *
  * Delegating down an edge that has no virtual-time gauge yet would seat it at its own origin, for
@@ -445,6 +451,7 @@ public class LocalHeddle private constructor(
      *
      * @throws IllegalArgumentException as [acquire] does: [reservation] out of range, or [eligible]
      *   not a subset of [waiting].
+     * @sample us.tractat.kuilt.heddle.sampleExplainWait
      */
     public fun explain(
         leaf: GroupId,
@@ -506,6 +513,7 @@ public class LocalHeddle private constructor(
      *
      * @throws IllegalArgumentException when [totalSlots] is negative.
      * @throws ArithmeticException when the exact share does not fit in `Long` numerators.
+     * @sample us.tractat.kuilt.heddle.sampleExplainWait
      */
     public fun entitlement(leaf: GroupId, waiting: Set<GroupId>, totalSlots: Long): Rational {
         require(totalSlots >= 0L) { "totalSlots must be non-negative, was $totalSlots" }

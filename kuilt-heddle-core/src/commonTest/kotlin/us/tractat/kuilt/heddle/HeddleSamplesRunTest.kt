@@ -47,4 +47,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun localLeaseHolds() = sampleLocalLease()
+
+    @Test
+    fun explainWaitHolds() = sampleExplainWait()
 }
