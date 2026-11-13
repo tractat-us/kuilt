@@ -19,6 +19,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.partition.JoinerReconnectController
@@ -202,7 +203,7 @@ class StarTopologyPresenceFanoutTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-            val factory = SeamRoomFactory(loom, backgroundScope, clock, hostConfig)
+            val factory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), hostConfig)
 
             val hostRoom = factory.host(Pattern("Host"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
@@ -543,10 +544,11 @@ class StarTopologyPresenceFanoutTest {
             loom,
             backgroundScope,
             clock,
+            InMemoryDeviceKeyStore(),
             hostConfig,
             reconnectControllerFactory = hostReconnectController?.let { build -> { _, _, _ -> build() } },
         )
-        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, joinerConfig)
+        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), joinerConfig)
 
         val hostRoom = hostFactory.host(Pattern("Host"))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)

@@ -19,6 +19,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.FakeSeam
@@ -225,6 +226,7 @@ class LocalFabricTest {
                 memberName = "self",
                 scope = backgroundScope,
                 clock = { AT },
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = HeartbeatConfig(),
             ).also { it.start() }
             val seen = mutableListOf<MembershipEvent>()
@@ -300,6 +302,7 @@ class LocalFabricTest {
                 memberName = "self",
                 scope = backgroundScope,
                 clock = { AT },
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = HeartbeatConfig(),
             )
             capability.value = TransportCapability(emptySet(), FabricAvailability.Unavailable("radio off"))
@@ -331,7 +334,7 @@ class LocalFabricTest {
     fun ourOwnRadioDyingTagsBothPartitionedAndHostLostAsSelfAttributed() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
-            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), dropConfig)
+            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), InMemoryDeviceKeyStore(), dropConfig)
             factory.host(Pattern("Table"))
 
             val capability = MutableStateFlow(
@@ -382,7 +385,7 @@ class LocalFabricTest {
     fun aPeerDroppingWhileOurOwnFabricIsUpIsNotSelfAttributed() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
-            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), dropConfig)
+            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), InMemoryDeviceKeyStore(), dropConfig)
 
             val capability = MutableStateFlow(
                 TransportCapability(emptySet(), FabricAvailability.Available),
@@ -430,7 +433,7 @@ class LocalFabricTest {
             // Detection an order of magnitude beyond this test's advancement budget: no detector can
             // fire on its own, so the only Partitioned is the one the Paused frame drives, at the
             // instant we choose.
-            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), inertConfig)
+            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), InMemoryDeviceKeyStore(), inertConfig)
 
             // Adopting the host's seam keeps a handle on it, so the authoritative Paused can be sent
             // by hand rather than waiting for a detector inside an advanceTimeBy.
@@ -477,7 +480,7 @@ class LocalFabricTest {
     fun aFabricWithNoPathObserverTagsTheEventsUnknown() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
-            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), dropConfig)
+            val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), InMemoryDeviceKeyStore(), dropConfig)
             factory.host(Pattern("Table"))
 
             val radio = FaultySeam(loom.join(InMemoryTag("Table")), backgroundScope)
@@ -557,6 +560,7 @@ class LocalFabricTest {
             memberName = "self",
             scope = backgroundScope,
             clock = { AT },
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = HeartbeatConfig(),
         ).also { it.start() }
 }

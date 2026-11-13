@@ -21,6 +21,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
@@ -79,6 +80,7 @@ class ForgedResumeTest {
             loom = loom,
             scope = backgroundScope,
             clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             reconnectControllerFactory = observed?.factory,
         )
 
@@ -338,6 +340,7 @@ class ForgedResumeTest {
                 loom = loom,
                 scope = backgroundScope,
                 clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 reconnectControllerFactory = trusting,
             ).host(Pattern("Host"), memberName = "Host")
             val victim = factory(loom).join(InMemoryTag("Victim"), memberName = "Victim")

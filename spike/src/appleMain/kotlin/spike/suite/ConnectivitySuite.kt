@@ -33,6 +33,7 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.nw.NwLoom
 import us.tractat.kuilt.nw.appleNwLoom
@@ -351,7 +352,7 @@ public class ConnectivitySuite {
         scenario(3, "Election establish", onLog) { hop ->
             hop("electLobby svc=$SVC3")
             val loom = appleNwLoom(SVC3, ROOM_KEY, weaveTimeout = WEAVE_TIMEOUT)
-            val factory = SeamRoomFactory.systemClock(loom, scope)
+            val factory = SeamRoomFactory.systemClock(loom, scope, InMemoryDeviceKeyStore())
             val lobby = factory.electLobby(pattern())
             // weave already awaited the first peer; confirm the 2-peer lobby is live.
             withTimeout(WEAVE_TIMEOUT) { lobby.peers.first { it.size >= 2 } }
@@ -700,7 +701,7 @@ public class ConnectivitySuite {
         // elected — minus the election. `reweave = { seam }` on the joiner is what lets a path that
         // returns inside the window resume THIS room instead of collapsing it (the recovery half of the
         // same work); the host needs none, it never resumes against itself.
-        val factory = SeamRoomFactory.systemClock(loom, scope, heartbeatConfig = S6_HEARTBEAT)
+        val factory = SeamRoomFactory.systemClock(loom, scope, InMemoryDeviceKeyStore(), heartbeatConfig = S6_HEARTBEAT)
         val heal: (suspend () -> Seam)? = if (amHost) null else ({ seam })
         val room = factory.adopt(
             seam = seam,
@@ -1244,7 +1245,7 @@ public class ConnectivitySuite {
         // Identical wiring to scenario 6, and deliberately so: `reweave = { seam }` on the joiner is
         // what puts the adopt-path resume machine in the loop at all, and #1637 is a defect of that
         // machine. Change this and the scenario stops reproducing the bug.
-        val factory = SeamRoomFactory.systemClock(loom, scope, heartbeatConfig = S7_HEARTBEAT)
+        val factory = SeamRoomFactory.systemClock(loom, scope, InMemoryDeviceKeyStore(), heartbeatConfig = S7_HEARTBEAT)
         val heal: (suspend () -> Seam)? = if (amHost) null else ({ seam })
         val room = factory.adopt(
             seam = seam,

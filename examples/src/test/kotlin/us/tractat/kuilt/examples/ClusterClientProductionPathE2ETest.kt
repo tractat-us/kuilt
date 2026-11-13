@@ -16,6 +16,7 @@ import us.tractat.kuilt.cluster.clusterClient
 import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
@@ -95,6 +96,7 @@ class ClusterClientProductionPathE2ETest {
                 path = pathA,
                 serverPeerId = serverPeerIdA,
                 pattern = roomPattern,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
             )
 
             // Pin the loom's selfPeerId to match clientNodeId — this is the key fix from #544.
@@ -132,6 +134,7 @@ class ClusterClientProductionPathE2ETest {
                     clientNodeId = clientNodeId,
                     clusterConfig = clusterConfig,
                     raftConfig = raftCfg,
+                    deviceKeyStore = InMemoryDeviceKeyStore(),
                     clock = { Clock.System.now() },
                 )
 

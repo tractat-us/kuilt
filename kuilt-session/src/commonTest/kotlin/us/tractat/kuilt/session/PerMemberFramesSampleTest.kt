@@ -8,6 +8,7 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -26,8 +27,18 @@ class PerMemberFramesSampleTest {
         runTest {
             val loom = InMemoryLoom()
             val clock = { Instant.fromEpochMilliseconds(0L) }
-            val host = SeamRoomFactory(loom, backgroundScope, clock = clock).host(Pattern("Alice"))
-            val joiner = SeamRoomFactory(loom, backgroundScope, clock = clock).join(InMemoryTag("Bob"))
+            val host = SeamRoomFactory(
+                loom,
+                backgroundScope,
+                clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
+            ).host(Pattern("Alice"))
+            val joiner = SeamRoomFactory(
+                loom,
+                backgroundScope,
+                clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
+            ).join(InMemoryTag("Bob"))
             val joinerId = host.roster.first { it.size == 1 }.single().id
 
             joiner.broadcast("hello".encodeToByteArray())

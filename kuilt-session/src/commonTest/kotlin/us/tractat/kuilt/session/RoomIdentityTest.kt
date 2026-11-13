@@ -8,6 +8,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.FakeLoom
 import us.tractat.kuilt.test.FakeSeam
@@ -42,7 +43,7 @@ import kotlin.time.Instant
  */
 class RoomIdentityTest {
     private fun factory(loom: Loom, scope: CoroutineScope) =
-        SeamRoomFactory(loom, scope, clock = { FROZEN })
+        SeamRoomFactory(loom, scope, clock = { FROZEN }, deviceKeyStore = InMemoryDeviceKeyStore())
 
     // ── The bug: one device, two rooms, one id ────────────────────────────────
 
@@ -183,7 +184,7 @@ class RoomIdentityTest {
     fun `rooms minted at different instants carry different timestamps`() =
         runTest {
             var now = FROZEN
-            val f = SeamRoomFactory(FakeLoom(), backgroundScope, clock = { now })
+            val f = SeamRoomFactory(FakeLoom(), backgroundScope, clock = { now }, deviceKeyStore = InMemoryDeviceKeyStore())
 
             val first = assertNotNull(f.host(Pattern(DEVICE)).roomId.value).value
             now = FROZEN + 5.seconds

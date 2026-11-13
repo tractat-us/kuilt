@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.test.FakeSeam
@@ -42,7 +43,7 @@ class LobbyHeartbeatTest {
         val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         return SeamElectionLobby(
             seam = seam,
-            factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock = clock),
+            factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock = clock, deviceKeyStore = InMemoryDeviceKeyStore()),
             scope = backgroundScope,
             clock = clock,
             roomKey = null,

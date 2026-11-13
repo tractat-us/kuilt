@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
@@ -75,8 +76,8 @@ class TwoPeerEagerPushTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, clock).host(Pattern("agree"))
-            val joinerRoom = SeamRoomFactory(loom, backgroundScope, clock).join(InMemoryTag("agree"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore()).host(Pattern("agree"))
+            val joinerRoom = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore()).join(InMemoryTag("agree"))
             testScheduler.runCurrent()
 
             val onHost = replicator(hostRoom, backgroundScope)

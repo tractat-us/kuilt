@@ -22,6 +22,7 @@ import us.tractat.kuilt.cluster.clusterClient
 import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.raft.ClientId
 import us.tractat.kuilt.raft.AutoSerialRefusedException
 import us.tractat.kuilt.raft.ClientIdCollisionException
@@ -106,6 +107,7 @@ class ClusterClientDurableRestartE2ETest {
             path = path,
             serverPeerId = serverPeerId,
             pattern = Pattern("durable-restart-room"),
+            deviceKeyStore = InMemoryDeviceKeyStore(),
         )
         coroutineScope {
             val serverScope = CoroutineScope(coroutineContext + Job())
@@ -159,6 +161,7 @@ class ClusterClientDurableRestartE2ETest {
         clientNodeId = clientNodeId,
         clusterConfig = clusterConfig,
         raftConfig = raftCfg,
+        deviceKeyStore = InMemoryDeviceKeyStore(),
         identity = ClientIdentity.Durable(clientId, issuedThrough = floor),
         clock = { Clock.System.now() },
     )

@@ -17,6 +17,7 @@ import us.tractat.kuilt.cluster.clusterClient
 import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.raft.ClientSessionTable
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
@@ -203,8 +204,8 @@ class ClusterClientFailoverE2ETest {
             val clientNodeId = NodeId("cluster-client-failover")
 
             // Two relay front-ends on the same test application, distinct paths + identities.
-            val hostA = KtorRoomHost(application, pathA, serverPeerIdA, roomPattern)
-            val hostB = KtorRoomHost(application, pathB, serverPeerIdB, roomPattern)
+            val hostA = KtorRoomHost(application, pathA, serverPeerIdA, roomPattern, InMemoryDeviceKeyStore())
+            val hostB = KtorRoomHost(application, pathB, serverPeerIdB, roomPattern, InMemoryDeviceKeyStore())
 
             // Pin the loom's selfPeerId to clientNodeId so the client keeps a stable wire
             // identity across the failover reconnect (the #544 prerequisite).
@@ -268,6 +269,7 @@ class ClusterClientFailoverE2ETest {
                     clientNodeId = clientNodeId,
                     clusterConfig = clusterConfig,
                     raftConfig = raftCfg,
+                    deviceKeyStore = InMemoryDeviceKeyStore(),
                     clock = { Clock.System.now() },
                 )
 

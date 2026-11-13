@@ -19,6 +19,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.Principal
 import us.tractat.kuilt.session.PrincipalAttested
 import us.tractat.kuilt.session.Room
@@ -48,6 +49,7 @@ class KtorRoomHostTest {
                     path = serverPath,
                     serverPeerId = serverPeerId,
                     pattern = serverPattern,
+                    deviceKeyStore = InMemoryDeviceKeyStore(),
                 )
             val clientLoom = KtorClientLoom(createClient { install(ClientWebSockets) })
             val firstRoom = CompletableDeferred<Room>()
@@ -99,7 +101,7 @@ class KtorRoomHostTest {
     @Test
     fun `start a second time on same host throws IllegalStateException`() =
         testApplication {
-            val host = KtorRoomHost(application, serverPath, serverPeerId, serverPattern)
+            val host = KtorRoomHost(application, serverPath, serverPeerId, serverPattern, InMemoryDeviceKeyStore())
             coroutineScope {
                 val job = launch { host.start { awaitCancellation() } }
                 // Yield twice so the launched coroutine reaches `withLock`.
@@ -118,7 +120,7 @@ class KtorRoomHostTest {
     @Test
     fun `accept loop tears down cleanly when scope is cancelled`() =
         testApplication {
-            val host = KtorRoomHost(application, serverPath, serverPeerId, serverPattern)
+            val host = KtorRoomHost(application, serverPath, serverPeerId, serverPattern, InMemoryDeviceKeyStore())
             coroutineScope {
                 val job = launch { host.start { awaitCancellation() } }
                 yield()
@@ -148,6 +150,7 @@ class KtorRoomHostTest {
             val host = KtorRoomHost(
                 path = serverPath,
                 pattern = serverPattern,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 loom = FailingLoom(error),
             )
             val result = runCatchingCancellable {
@@ -190,7 +193,12 @@ class KtorRoomHostTest {
     fun `cancelling the accept scope still leaves a room already handed to onRoom`() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val seam = SuspendingCloseSeam(FakeSeam(selfId = serverPeerId))
-            val host = KtorRoomHost(path = serverPath, pattern = serverPattern, loom = SoleSeamLoom(seam))
+            val host = KtorRoomHost(
+                path = serverPath,
+                pattern = serverPattern,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
+                loom = SoleSeamLoom(seam),
+            )
             val accepted = CompletableDeferred<Unit>()
 
             val hostJob = backgroundScope.launch {

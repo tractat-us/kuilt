@@ -10,6 +10,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -55,6 +56,7 @@ internal suspend fun adopt3PeerMeshRoom(
         loom = faulty,
         scope = scope,
         clock = clock,
+        deviceKeyStore = InMemoryDeviceKeyStore(),
         heartbeatConfig = heartbeat,
     )
 
