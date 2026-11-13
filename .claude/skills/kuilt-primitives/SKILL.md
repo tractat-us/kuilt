@@ -53,7 +53,7 @@ Rows pair `;`-separated groups in order.
 `<path>`: `docs/agent-cookbook/<jump-to file>` or the index `docs/agent-cookbook.md`.
 In kuilt, read it directly; consumers take the first working rung:
 
-1. `git -C ../kuilt fetch -q origin main && git -C ../kuilt show origin/main:<path>`
+1. `git -C ../kuilt fetch -q origin main && git -C ../kuilt show origin/main:<path>` (not the checkout)
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
