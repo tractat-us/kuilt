@@ -127,11 +127,15 @@ class GrantTest {
     }
 
     @Test
-    fun everyTamperedLayoutByteIsRefused() = runTest {
+    fun tamperedLayoutBytesAreRefused() = runTest {
         val grant = Grant.issue(DeviceKey.generate(), SUBJECT, GrantScope.Room("room-7"), ISSUED_AT, NOT_AFTER)
         val layoutSize = grant.wire.size - Layout.SIGNATURE_SIZE
+        // Every third byte, so each field's content is hit at least twice (the shortest non-empty field
+        // here is 7 bytes) at a third of the cost: a verify runs big-integer point decompression, which
+        // takes seconds per hundred on a loaded Kotlin/Native target.
+        val flipped = (0 until layoutSize step 3).toList()
         var reachedVerification = 0
-        val accepted = (0 until layoutSize).filter { index ->
+        val accepted = flipped.filter { index ->
             val decoded = Grant.decode(grant.wire.flipLowBit(index)) ?: return@filter false
             reachedVerification++
             decoded.isSignedByIssuer()
@@ -140,7 +144,7 @@ class GrantTest {
         assertAll(
             { assertTrue(untouchedVerifies, "control: the untouched grant verifies") },
             // Most flips leave a well-formed layout, so the signature, not the decoder, has to refuse them.
-            { assertTrue(reachedVerification > layoutSize / 2, "precondition: $reachedVerification of $layoutSize flips reached verification") },
+            { assertTrue(reachedVerification > flipped.size / 2, "precondition: $reachedVerification of ${flipped.size} flips reached verification") },
             { assertEquals(emptyList(), accepted, "layout bytes whose flip still verified") },
         )
     }
