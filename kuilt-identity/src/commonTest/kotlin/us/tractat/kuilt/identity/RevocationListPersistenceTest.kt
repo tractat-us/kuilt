@@ -1,6 +1,7 @@
 package us.tractat.kuilt.identity
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
@@ -108,6 +109,7 @@ class RevocationListPersistenceTest {
             "truncated entry" to HEADER + entry.copyOf(entry.size - 1),
             "uncompressed lead byte" to HEADER + byteArrayOf(0x04) + POINT.copyOfRange(1, POINT.size) + CUTOFF_BYTES,
             "one subject twice" to HEADER + entry + entry,
+            "out of order" to HEADER + HIGH_POINT + CUTOFF_BYTES + LOW_POINT + CUTOFF_BYTES,
         )
         val outcomes = corrupt.map { (name, bytes) ->
             val store = InMemoryDurableStore()
@@ -186,6 +188,36 @@ class RevocationListPersistenceTest {
     }
 
     @Test
+    fun aCancelledRevokesLateWriteCannotBuryALaterOne() = runTest {
+        // `DurableStore.write` may commit after its caller stops waiting. If a cancelled revoke let go
+        // of the list while its write was still in flight, the next revoke could commit a newer list,
+        // and the orphaned older one would land on top of it. This store's first write carries on
+        // after its caller is cancelled and commits only when released, after the second revoke.
+        val store = OrphaningFirstWriteStore(backgroundScope)
+        val list = RevocationList.open(store)
+
+        val first = launch { list.revoke(PHONE, notBefore = 1_000) }
+        runCurrent()
+        val firstHeld = store.writesStarted
+        first.cancel()
+        runCurrent()
+        val second = launch { list.revoke(LAPTOP, notBefore = 2_000) }
+        runCurrent()
+
+        store.release()
+        runCurrent()
+        joinAll(first, second)
+        val restarted = RevocationList.open(store.inner)
+        assertAll(
+            { assertEquals(1, firstHeld, "the rig: the first revoke's write is held in the store") },
+            { assertTrue(store.heldWriteCommitted, "the rig: the held write committed after its caller was cancelled") },
+            { assertTrue(first.isCancelled, "the rig: the first revoke was cancelled") },
+            { assertEquals(1_000L, restarted.notBefore(PHONE), "the cancelled revocation reached the store") },
+            { assertEquals(2_000L, restarted.notBefore(LAPTOP), "and the later one was not buried under it") },
+        )
+    }
+
+    @Test
     fun theLaterCutoffSurvivesARestart() = runTest {
         // `revoke` is monotone, and what reaches the store is the merged cutoff, never the argument.
         val store = InMemoryDurableStore()
@@ -235,6 +267,11 @@ class RevocationListPersistenceTest {
             { assertEquals(GOLDEN, encoded.toHex()) },
             { assertEquals(mapOf(SUBJECT to CUTOFF), assertNotNull(RevocationListLayout.decode(encoded))) },
             { assertEquals(emptyMap(), assertNotNull(RevocationListLayout.decode(HEADER)), "a header alone is an empty list") },
+            {
+                // The control for "out of order": the same two entries in the order the encoder writes them.
+                val inOrder = HEADER + LOW_POINT + CUTOFF_BYTES + HIGH_POINT + CUTOFF_BYTES
+                assertEquals(2, assertNotNull(RevocationListLayout.decode(inOrder), "two sorted entries decode").size)
+            },
         )
     }
 
@@ -264,6 +301,40 @@ class RevocationListPersistenceTest {
             if (writesStarted++ == 0) gate.await()
             inner.write(key, bytes)
             writesCommitted++
+        }
+
+        override suspend fun delete(key: StoreKey) = inner.delete(key)
+    }
+
+    /**
+     * A store whose first write commits in [scope], on its own, once [release]d; its caller only waits
+     * for it, so cancelling the caller orphans the write rather than stopping it. `DurableStore.write`
+     * allows exactly this. Every later write goes straight through.
+     */
+    private class OrphaningFirstWriteStore(private val scope: CoroutineScope) : DurableStore {
+        val inner = InMemoryDurableStore()
+        private val gate = CompletableDeferred<Unit>()
+        var writesStarted = 0
+            private set
+        var heldWriteCommitted = false
+            private set
+
+        fun release() {
+            gate.complete(Unit)
+        }
+
+        override suspend fun read(key: StoreKey): ByteArray? = inner.read(key)
+
+        override suspend fun write(key: StoreKey, bytes: ByteArray) {
+            if (writesStarted++ == 0) {
+                scope.launch {
+                    gate.await()
+                    inner.write(key, bytes)
+                    heldWriteCommitted = true
+                }.join()
+            } else {
+                inner.write(key, bytes)
+            }
         }
 
         override suspend fun delete(key: StoreKey) = inner.delete(key)
@@ -303,6 +374,12 @@ class RevocationListPersistenceTest {
 
         val POINT = ByteArray(33) { if (it == 0) 0x02 else 0x11 }
         val SUBJECT = DidKey.ofCompressedPoint(POINT)
+
+        /** Two entries' points in the order the encoder sorts them: by the subject's name. */
+        private val TWO_POINTS = listOf(POINT, ByteArray(33) { if (it == 0) 0x02 else 0x22 })
+            .sortedBy { DidKey.ofCompressedPoint(it).value }
+        val LOW_POINT = TWO_POINTS[0]
+        val HIGH_POINT = TWO_POINTS[1]
         const val CUTOFF = 0x0102030405060708L
         val CUTOFF_BYTES = byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8)
         val MAGIC = "KRL".encodeToByteArray()
