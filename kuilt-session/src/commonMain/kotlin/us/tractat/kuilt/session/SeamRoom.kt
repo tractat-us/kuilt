@@ -52,8 +52,9 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.validFirstHop
 import org.kotlincrypto.random.CryptoRand
 import us.tractat.kuilt.identity.DeviceKeyStore
-import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.session.admit.AdmitMessage
+import us.tractat.kuilt.session.admit.KeyedHello
+import us.tractat.kuilt.session.admit.keyed
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.election.ElectionLobby
@@ -134,7 +135,9 @@ public typealias JoinerReconnectControllerFactory =
  * recognised when the app comes back, or `InMemoryDeviceKeyStore()` to be a new device every run
  * (tests, and apps that choose not to be remembered). Every room this factory makes shares it, since
  * they are all the same device. Its key travels in every `Hello` and on every [Member]; until the
- * key-proving exchange of #3159 lands, that key is a claim nobody checks.
+ * key-proving exchange of #3159 lands, that key is a claim nobody checks. [host], [join] and [adopt]
+ * each read the key from it once, before the room exists, and throw to their caller when the store
+ * cannot produce one; a room never reads the store for its key (see [RoomDevice]).
  *
  * [heartbeatConfig] controls partition-detection timing.
  *
@@ -190,7 +193,7 @@ public class SeamRoomFactory(
     }
 
     override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room {
-        resolveDeviceKey()
+        val device = RoomDevice.of(deviceKeyStore)
         val seam = loom.host(pattern)
         val resolvedRoomId = roomId ?: mintRoomId(seam)
         return SeamRoom(
@@ -202,7 +205,7 @@ public class SeamRoomFactory(
             memberName = memberName,
             scope = scope,
             clock = clock,
-            deviceKeyStore = deviceKeyStore,
+            device = device,
             heartbeatConfig = heartbeatConfig,
             admitTimeout = admitTimeout,
             roomId = resolvedRoomId,
@@ -216,7 +219,7 @@ public class SeamRoomFactory(
     }
 
     override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room {
-        resolveDeviceKey()
+        val device = RoomDevice.of(deviceKeyStore)
         val seam = loom.join(tag)
         return SeamRoom(
             seam = seam,
@@ -228,7 +231,7 @@ public class SeamRoomFactory(
             deviceId = deviceId,
             scope = scope,
             clock = clock,
-            deviceKeyStore = deviceKeyStore,
+            device = device,
             heartbeatConfig = heartbeatConfig,
             admitTimeout = admitTimeout,
             roomId = null,
@@ -299,7 +302,7 @@ public class SeamRoomFactory(
         require(roomId == null || role == SessionRole.Host) {
             "roomId applies to a host adopt; a joiner learns it from the host's Welcome"
         }
-        resolveDeviceKey()
+        val device = RoomDevice.of(deviceKeyStore)
         val resolvedRoomId = if (role == SessionRole.Host) roomId ?: mintRoomId(seam) else null
         return SeamRoom(
             seam = seam,
@@ -308,7 +311,7 @@ public class SeamRoomFactory(
             deviceId = deviceId,
             scope = scope,
             clock = clock,
-            deviceKeyStore = deviceKeyStore,
+            device = device,
             heartbeatConfig = heartbeatConfig,
             admitTimeout = admitTimeout,
             roomId = resolvedRoomId,
@@ -317,23 +320,6 @@ public class SeamRoomFactory(
             reweave = reweave,
             reconnectControllerFactory = reconnectControllerFactory,
         ).also { room -> room.start() }
-    }
-
-    /**
-     * Reads this device's key once, before a room is built, so the room's own reads — the joiner's
-     * `Hello`, the host's intro `Welcome` — find it already made (#3210).
-     *
-     * Two reasons, both about the **first** read, which is the one that makes the key:
-     * - On wasmJs, making a key is a WebCrypto promise. Made inside a running room it would
-     *   suspend the admit path on something outside the room's dispatcher, and under a virtual-time
-     *   test every timer in the room (the admit deadline among them) fires while it waits.
-     * - A store whose platform provider cannot run throws here, to the caller of
-     *   [host]/[join]/[adopt], instead of inside a launched room loop where nothing catches it.
-     *
-     * The store owes this: "created on first call, the same on every call after".
-     */
-    private suspend fun resolveDeviceKey() {
-        deviceKeyStore.deviceKey()
     }
 
     /**
@@ -649,12 +635,12 @@ internal class SeamRoom(
     private val scope: CoroutineScope,
     private val clock: () -> Instant,
     /**
-     * This device's key store, shared by every room its [SeamRoomFactory] makes. Required, so a test
-     * that builds a room directly chooses its device just as a factory's caller does. Read for this
-     * device's key: a joiner names it in every [AdmitMessage.Hello], and a host names its own in the
-     * host-intro [AdmitMessage.Welcome] (#3210).
+     * This device: its key store, and the key already read from it (see [RoomDevice] for why the room
+     * never reads the store for its key). Required, so a test that builds a room directly chooses its
+     * device just as a factory's caller does. A joiner names [RoomDevice.key] in every
+     * [AdmitMessage.Hello], and a host names it in the host-intro [AdmitMessage.Welcome] (#3210).
      */
-    private val deviceKeyStore: DeviceKeyStore,
+    private val device: RoomDevice,
     private val heartbeatConfig: HeartbeatConfig,
     /**
      * **Joiner only.** Admit deadline: if no [AdmitMessage.Welcome] admits this joiner within
@@ -1551,7 +1537,7 @@ internal class SeamRoom(
             is AdmitMessage.Hello -> {
                 if (_role.value == SessionRole.Host) {
                     val target = msg.targetRoom
-                    val key = msg.key
+                    val keyed = msg.keyed()
                     // Protocol-version gate (#1569, tightened for #1994). A joiner declaring a
                     // version outside this build's supported range is refused at admit time with a
                     // terminal ProtocolMismatch — better than completing the handshake and failing
@@ -1573,7 +1559,7 @@ internal class SeamRoom(
                             )
                             runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
                         }
-                    } else if (key == null || msg.joinerNonce == null) {
+                    } else if (keyed == null) {
                         // The v3 half of the same gate (#3210). The key and nonce are optional on
                         // the wire only so that a v2 Hello still decodes and reaches the version
                         // check above; a Hello that declares v3 carries both, or it does not speak
@@ -1606,7 +1592,7 @@ internal class SeamRoom(
                             runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
                         }
                     } else {
-                        scope.launch { admitPeer(sender, msg, key) }
+                        scope.launch { admitPeer(sender, keyed) }
                     }
                 }
             }
@@ -1679,14 +1665,15 @@ internal class SeamRoom(
      *
      * State mutation is under lock; all seam sends happen outside the lock.
      *
-     * [key] is the device key the [hello] named (the caller has checked it is present). It becomes
-     * the member's [Member.key] and rides every Welcome that names the joiner; each bootstrap Welcome
-     * carries an existing member's recorded key, and the host intro carries this host's own (#3210).
+     * [keyed] is the Hello the gate let through, with its key and nonce no longer optional. The key
+     * becomes the member's [Member.key] and rides every Welcome that names the joiner; each bootstrap
+     * Welcome carries an existing member's recorded key, and the host intro carries this host's own
+     * (#3210).
      */
-    private suspend fun admitPeer(joinerPeerId: PeerId, hello: AdmitMessage.Hello, key: DidKey) {
-        // Read before the roster changes, so a store that cannot produce the key admits nobody
-        // rather than leaving a member admitted whose host intro was never sent.
-        val hostKey = deviceKeyStore.deviceKey().id
+    private suspend fun admitPeer(joinerPeerId: PeerId, keyed: KeyedHello) {
+        val hello = keyed.hello
+        val key = keyed.key
+        val hostKey = device.key.id
         val identity = MemberIdentity(
             displayName = hello.displayName,
             sessionId = hello.sessionId,
@@ -1785,7 +1772,7 @@ internal class SeamRoom(
             deviceId = deviceId,
             targetRoom = roomKey,
             protocolVersion = ProtocolVersion.CURRENT,
-            key = deviceKeyStore.deviceKey().id,
+            key = device.key.id,
             // Fresh on every Hello, from the platform CSPRNG: the challenge built over it is
             // single-use only if the nonce is never reused (#3210).
             joinerNonce = CryptoRand.Default.nextBytes(ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE)),

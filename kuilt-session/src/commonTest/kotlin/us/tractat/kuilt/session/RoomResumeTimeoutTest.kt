@@ -129,7 +129,7 @@ class RoomResumeTimeoutTest {
             memberName = displayName,
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = config,
             roomId = roomId,
         ).also { it.start() }

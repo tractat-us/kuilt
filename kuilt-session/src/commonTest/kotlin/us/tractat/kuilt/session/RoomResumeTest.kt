@@ -493,7 +493,7 @@ class RoomResumeTest {
             memberName = displayName,
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
             roomId = roomId,
         ).also { it.start() }

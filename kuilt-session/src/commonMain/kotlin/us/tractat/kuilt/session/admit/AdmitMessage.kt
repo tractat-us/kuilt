@@ -363,8 +363,10 @@ public sealed interface AdmitMessage {
          * `alwaysUseByteString = true` writes every `ByteArray` — [Hello.joinerNonce], the
          * [Challenge] and [Proof] statements, each grant — as a CBOR byte string rather than an array
          * of integers (#3210). The `@ByteString` annotation cannot reach a list's elements, so the
-         * setting is codec-wide. It changes no earlier frame: before v3 no admit message had a
-         * `ByteArray` field, and the golden Hello vectors pin that.
+         * setting is codec-wide. It changes no earlier frame because the codec takes the byte-string
+         * path only for a field whose serial descriptor is a `ByteArray`'s, and before v3 no admit
+         * message had one. The golden Hello vectors check that for the Hello alone; no other message
+         * has an encoding vector.
          */
         @OptIn(ExperimentalSerializationApi::class)
         private val cbor = Cbor {

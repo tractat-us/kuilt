@@ -41,6 +41,11 @@ class TransportCloseWindowTest {
     @Test
     fun `host opens reconnect window on joiner transport close`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            // Both devices are made before the first room starts: on wasmJs making a key is a
+            // WebCrypto promise, and virtual time runs on while the test body waits for one.
+            // A joiner that reconnects is the same device, so it reuses joinerDevice.
+            val hostDevice = keyedDevice()
+            val joinerDevice = keyedDevice()
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 
@@ -60,7 +65,7 @@ class TransportCloseWindowTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = hostDevice,
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -75,7 +80,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = joinerDevice,
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -95,6 +100,11 @@ class TransportCloseWindowTest {
     @Test
     fun `host reconnect window honors heartbeatConfig reconnectWindow`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            // Both devices are made before the first room starts: on wasmJs making a key is a
+            // WebCrypto promise, and virtual time runs on while the test body waits for one.
+            // A joiner that reconnects is the same device, so it reuses joinerDevice.
+            val hostDevice = keyedDevice()
+            val joinerDevice = keyedDevice()
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(0L) }
 
@@ -114,7 +124,7 @@ class TransportCloseWindowTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = hostDevice,
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -129,7 +139,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = joinerDevice,
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -151,6 +161,11 @@ class TransportCloseWindowTest {
     @Test
     fun `joiner resumes within the window after transport close`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            // Both devices are made before the first room starts: on wasmJs making a key is a
+            // WebCrypto promise, and virtual time runs on while the test body waits for one.
+            // A joiner that reconnects is the same device, so it reuses joinerDevice.
+            val hostDevice = keyedDevice()
+            val joinerDevice = keyedDevice()
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
@@ -171,7 +186,7 @@ class TransportCloseWindowTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = hostDevice,
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -187,7 +202,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = joinerDevice,
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -210,7 +225,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = joinerDevice,
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -227,6 +242,11 @@ class TransportCloseWindowTest {
     @Test
     fun `reconnect does not re-emit Joined for an already-admitted peer`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            // Both devices are made before the first room starts: on wasmJs making a key is a
+            // WebCrypto promise, and virtual time runs on while the test body waits for one.
+            // A joiner that reconnects is the same device, so it reuses joinerDevice.
+            val hostDevice = keyedDevice()
+            val joinerDevice = keyedDevice()
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
@@ -247,7 +267,7 @@ class TransportCloseWindowTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = hostDevice,
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -263,7 +283,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = joinerDevice,
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -290,7 +310,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = joinerDevice,
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -313,6 +333,11 @@ class TransportCloseWindowTest {
     @Test
     fun `window expires to Left PartitionExpired when no resume`() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            // Both devices are made before the first room starts: on wasmJs making a key is a
+            // WebCrypto promise, and virtual time runs on while the test body waits for one.
+            // A joiner that reconnects is the same device, so it reuses joinerDevice.
+            val hostDevice = keyedDevice()
+            val joinerDevice = keyedDevice()
             val dispatcher = coroutineContext[ContinuationInterceptor]!!
             var clockMs = 0L
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
@@ -333,7 +358,7 @@ class TransportCloseWindowTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = hostDevice,
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -348,7 +373,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = joinerDevice,
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }

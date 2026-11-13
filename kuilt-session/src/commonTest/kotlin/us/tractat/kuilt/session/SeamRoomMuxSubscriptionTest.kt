@@ -67,7 +67,7 @@ class SeamRoomMuxSubscriptionTest {
             memberName = "Joiner",
             scope = backgroundScope,
             clock = { Instant.fromEpochMilliseconds(0L) },
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = HeartbeatConfig(),
         )
         try {

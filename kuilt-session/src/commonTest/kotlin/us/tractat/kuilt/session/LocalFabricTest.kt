@@ -226,7 +226,7 @@ class LocalFabricTest {
                 memberName = "self",
                 scope = backgroundScope,
                 clock = { AT },
-                deviceKeyStore = keyedStore(),
+                device = keyedDevice(),
                 heartbeatConfig = HeartbeatConfig(),
             ).also { it.start() }
             val seen = mutableListOf<MembershipEvent>()
@@ -302,7 +302,7 @@ class LocalFabricTest {
                 memberName = "self",
                 scope = backgroundScope,
                 clock = { AT },
-                deviceKeyStore = keyedStore(),
+                device = keyedDevice(),
                 heartbeatConfig = HeartbeatConfig(),
             )
             capability.value = TransportCapability(emptySet(), FabricAvailability.Unavailable("radio off"))
@@ -560,7 +560,7 @@ class LocalFabricTest {
             memberName = "self",
             scope = backgroundScope,
             clock = { AT },
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = HeartbeatConfig(),
         ).also { it.start() }
 }
