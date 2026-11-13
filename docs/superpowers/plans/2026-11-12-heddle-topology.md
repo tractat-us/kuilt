@@ -123,6 +123,22 @@ These override the task sections below where they differ.
      - Capacity is not in `LocalHeddleState`, so a restore calls `reconcileCapacity` again. P confirms or changes that.
    - **Release (@keddie, 2026-11-13):** `v0.7.4` is cut once this plan's work through P has landed, coordinated with the identity track so that main is non-breaking at the tag.
 
+11. **What L3 settled, and the shapes P and #3238 bring** (from #3249's spec review, #3247 and #3248, 2026-11-13). These override the task sections and Amendments 6, 9 and 10 where they differ.
+   - **One leasable predicate.** A group is leasable when it `isLeaf` and the last applied `Topology` declares it: a Lane, or a runtime child of a marked group, attached through an ACTIVE lineage. A group that is not leasable answers `NoLiveLineage(at)`. No `Kind` arm is added.
+   - **Boot is an `apply`.** `fromTopology` applies onto an empty ledger at generation 0, and `fresh` is removed. `attachRuntimeChild` and `detachRuntimeChild` are the engine entry points for Task 5's lists. The engine needs its last applied topology, so P's `lastApplied` is a **non-null** `Topology`. Only the internal, test-only `over` builds an engine without one.
+   - **One swap, with refusals per child (the leave-out model).** A child that is left out drops all of its steps and blocks its ancestors' retires. A draining removal keeps its steps up to the retire that was refused. `TopologyStep`'s KDoc says so.
+   - **A replacement is a child whose list both retires one edge and activates another**: a reweight, a new weight on a runtime marker, or a re-add mid-drain, whether declared or runtime. Its open leases move, draining ones included. Amendment 6's rule narrows to "only a new edge for the same `GroupId` re-homes". A reparent or a rename changes the `GroupId`, so it never re-homes (R12). *Confirmed by @keddie, 2026-11-13.*
+   - **R1 as built.** Release up the old path, run the steps in order, re-delegate down the new lineage seat-first, check every path against its lineage, then swap. Step 4's "re-delegate before the retire" cannot be written; "before the reconcile" and "keep the old path" stand in for it. `releaseIdleBelow` is removed.
+   - **The removal wins.** Under a reweighted group, a removed child with open leases is Draining, and so is the reweight. D7 narrows to "an orphan holds only the changes it lies under, until `reconcileLeases` settles it". Review Focus 2 still holds for siblings and unrelated children. *Confirmed by @keddie, 2026-11-13.*
+   - A replacement the ledger refuses after the engine has released all of its units is `Refused`, never `Draining`.
+   - **An overrun under a draining top-level group** is reported in `Done`, recorded on no edge, and mints nothing. It is the one exception to R2's "never lost".
+   - **S2:** `preview` predicts by running the same attempt `apply` runs on a scratch copy, not by reading the bare diff.
+   - **P's snapshot shape.** `SnapshotFormat1` holds `root`, `epoch`, `totalSlots`, `ledger`, `allocatorMemory`, the open leases with their paths, and `lastApplied`, in that order.
+     - Capacity is persisted as `totalSlots`, which settles Amendment 10's open question.
+     - `nextSeq` is not persisted. A restore must run under an epoch above the snapshot's, and lease ids carry the epoch, so a restored engine numbers from zero without a collision.
+     - `formatVersion` lives only in the envelope, ahead of `state`, and is read first.
+   - **#3238's fix adds allocator state.** `AllocatorMemory` gains `wakeExposures`, so P's `GOLDEN_FORMAT_1` is re-pinned after #3248 lands, and the format it freezes is `v0.7.4`'s.
+
 ## Verified in source (2026-11-12)
 
 - **A single writer is already serialized, so local `mint` is sound.** This holds only while one process writes. Two processes would each keep their own ledger, and persistence would become last-writer-wins on the stored bytes. Excluding a second writer is the consumer's job.
