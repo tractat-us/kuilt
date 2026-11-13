@@ -63,6 +63,19 @@ public final class us/tractat/kuilt/heddle/AllocatorMemory$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class us/tractat/kuilt/heddle/ApplyResult {
+	public fun <init> (Ljava/util/List;Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;Ljava/util/List;)Lus/tractat/kuilt/heddle/ApplyResult;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ApplyResult;Ljava/util/List;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ApplyResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getApplied ()Ljava/util/List;
+	public final fun getRefusals ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/heddle/AttachmentId : java/lang/Comparable {
 	public static final field Companion Lus/tractat/kuilt/heddle/AttachmentId$Companion;
 	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/heddle/AttachmentId;
@@ -704,8 +717,11 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public static synthetic fun acquire$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/util/Set;Ljava/util/Set;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AcquireOutcome;
 	public final fun admit-lUmtw0Q (Ljava/lang/String;JJ)Lus/tractat/kuilt/heddle/AdmitOutcome;
 	public static synthetic fun admit-lUmtw0Q$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AdmitOutcome;
+	public final fun apply (Lus/tractat/kuilt/heddle/Topology;J)Lus/tractat/kuilt/heddle/ApplyResult;
+	public final fun attachRuntimeChild (Ljava/util/List;Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ApplyResult;
 	public final fun cancel (Lus/tractat/kuilt/heddle/LeaseId;)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun complete (Lus/tractat/kuilt/heddle/LeaseId;J)Lus/tractat/kuilt/heddle/LeaseOutcome;
+	public final fun detachRuntimeChild (Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/ApplyResult;
 	public final fun entitlement-lUmtw0Q (Ljava/lang/String;Ljava/util/Set;J)Lus/tractat/kuilt/heddle/Rational;
 	public final fun explain-mLLTQY0 (Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;J)Lus/tractat/kuilt/heddle/WaitExplanation;
 	public static synthetic fun explain-mLLTQY0$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/WaitExplanation;
@@ -719,7 +735,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 }
 
 public final class us/tractat/kuilt/heddle/LocalHeddle$Companion {
-	public final fun fresh-lUmtw0Q (Ljava/lang/String;Lus/tractat/kuilt/heddle/LocalPolicy;J)Lus/tractat/kuilt/heddle/LocalHeddle;
+	public final fun fromTopology (Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/LocalPolicy;J)Lus/tractat/kuilt/heddle/LocalHeddle;
 }
 
 public final class us/tractat/kuilt/heddle/LocalHeddleState {
@@ -1033,6 +1049,42 @@ public final synthetic class us/tractat/kuilt/heddle/SlotFinals$$serializer : ko
 public final class us/tractat/kuilt/heddle/SlotFinals$Companion {
 	public final fun getZERO ()Lus/tractat/kuilt/heddle/SlotFinals;
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/StepRefusal {
+	public abstract fun getChild-urUY4Jo ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/StepRefusal$Draining : us/tractat/kuilt/heddle/StepRefusal {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;JLjava/util/List;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun component2-i0YUZAc ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun component4 ()Ljava/util/List;
+	public final fun copy-kSoHiuo (Ljava/lang/String;Ljava/lang/String;JLjava/util/List;)Lus/tractat/kuilt/heddle/StepRefusal$Draining;
+	public static synthetic fun copy-kSoHiuo$default (Lus/tractat/kuilt/heddle/StepRefusal$Draining;Ljava/lang/String;Ljava/lang/String;JLjava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/StepRefusal$Draining;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBlockingLeases ()Ljava/util/List;
+	public fun getChild-urUY4Jo ()Ljava/lang/String;
+	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
+	public final fun getOutstanding ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/StepRefusal$Refused : us/tractat/kuilt/heddle/StepRefusal {
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/TopologyStep;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun component2 ()Lus/tractat/kuilt/heddle/TopologyStep;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy-lUmtw0Q (Ljava/lang/String;Lus/tractat/kuilt/heddle/TopologyStep;Ljava/lang/String;)Lus/tractat/kuilt/heddle/StepRefusal$Refused;
+	public static synthetic fun copy-lUmtw0Q$default (Lus/tractat/kuilt/heddle/StepRefusal$Refused;Ljava/lang/String;Lus/tractat/kuilt/heddle/TopologyStep;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/StepRefusal$Refused;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getChild-urUY4Jo ()Ljava/lang/String;
+	public final fun getReason ()Ljava/lang/String;
+	public final fun getStep ()Lus/tractat/kuilt/heddle/TopologyStep;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class us/tractat/kuilt/heddle/SupplyPolicy {

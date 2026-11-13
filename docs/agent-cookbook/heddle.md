@@ -101,14 +101,17 @@ generation 0, and `groupId("acme", "batch")` names the group. On a reload,
 `new`, reading which edges exist from the ledger rather than from the old tree, so it works after
 a restart, retires what an earlier reload left draining, and after a partial apply lists exactly
 the rest; a new weight is a new edge, so the group's fairness history restarts at its parent's
-front. Nothing public applies the steps yet: the single-writer engine's `apply` (Task L3 of #3173)
-will, under one lock, against the ledger it diffed.
+front. You do not apply the steps yourself: `LocalHeddle.apply(new, generation)` diffs and applies
+them in one call, under your lock, against the ledger it diffed (see
+[A fair-share tree in one process](#a-fair-share-tree-in-one-process)). The list is what it runs,
+and what a preview would show.
 
-Children the app creates while running go under a group marked `runtimeChildren`.
-`Topology.attachRuntimeChild(group, name, ledger, generation)` and
-`detachRuntimeChild(group, name, ledger)` list the steps for one child, at the marker's weight,
-under a name of any spelling that never collides with a declared child. A reload that keeps the
-marker keeps the child and its history; one that drops the marker closes it. Every detach leaves a
+Children the app creates while running go under a group marked `runtimeChildren`. On an engine,
+`LocalHeddle.attachRuntimeChild(group, name, generation)` and `detachRuntimeChild(group, name)`
+attach and detach one child, at the marker's weight, under a name of any spelling that never
+collides with a declared child; a detach drains like a removal. `Topology.attachRuntimeChild` and
+`detachRuntimeChild` list the same steps without applying them. A reload that keeps the marker
+keeps the child and its history; one that drops the marker closes it. Every detach leaves a
 retired edge in the ledger for good, so keep a child that comes back often attached between uses.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleRuntimeChildren -->
@@ -210,10 +213,10 @@ watermark is also the headroom for an overrun or an `admit`, which are never ref
 themselves past it. Every mint in an epoch rewrites one record, so the ledger never grows with
 service.
 
-**Today's public surface cannot yet seat a tree.** `LocalHeddle.fresh` is the only public way to
-make an engine, and it has no topology, so every `acquire` on it finds no lineage. Booting from a
-`Topology` is not public yet. The samples below build their tree through a module-internal seam,
-which a consumer cannot call.
+Start an engine with `LocalHeddle.fromTopology(topology, policy, epoch)`. A lease only ever ends at
+a lane, or at a runtime child of a marked group: a group that happens to have nothing attached,
+such as a marked group before its first runtime child, is never leased, and `admit` and `explain`
+treat it as `NoLiveLineage`.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalLease -->
 ```kotlin
@@ -281,6 +284,37 @@ that will resume belongs in `live`, so it never becomes an orphan.
     // It ran 9 units against the 3 it was granted, which a dead job cannot prove: charge 3.
     check(heddle.complete(orphan.lease.id, orphan.defaultSettlement) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
     check(heddle.reconcileLeases(live = setOf(kept.id), now = 110L).orphaned.isEmpty())
+```
+
+To change the tree while work runs, call `apply(newTopology, generation)` under the same lock.
+It diffs and applies the whole reload as one unit, swapped in once, so nothing is leased against
+a half-applied tree. Open leases survive it and are still charged once, at `complete`. A reweight
+gives the group a new edge and moves the leases open under it onto that edge, keeping their ids.
+**The reweighted group's fairness history resets**: it restarts at its parent's front, neither
+owed for its past nor charged for it. A removal closes the group at once and retires it when its
+leases finish. Until then `ApplyResult.refusals` holds a `StepRefusal.Draining` naming the edge
+and the blocking leases, and every other child's change still lands. Apply the same topology
+again later and only what is left runs. A removal under a reweighted group wins: the reweight
+waits too, and changes nothing until those leases finish. Settle a dead job's lease through
+`reconcileLeases` so it never holds a reload up. **A rename or a move is a delete plus an add**:
+the new group starts with no history, and the old one drains under its old name.
+`attachRuntimeChild` and `detachRuntimeChild` run the same way. Re-attaching a child whose detach
+is still draining moves its leases onto the new edge.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalReload -->
+```kotlin
+    // While both leases are open, heavy goes to weight 3 and spare is removed.
+    val after = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(3)), Topology.Lane("light")))
+    val reload = heddle.apply(after, generation = 1L)
+
+    // Spare is closed to new work and waits for its lease; heavy's lease moved onto its new edge.
+    val waiting = reload.refusals.single()
+    check(waiting is StepRefusal.Draining && waiting.child == spare && waiting.blockingLeases == listOf(leftover))
+    check(heddle.complete(running.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.complete(leftover.id, actualCost = 2L) == LeaseOutcome.Done(charged = 2L, overrun = 0L))
+
+    // Once the drain is over, the same reload finishes the job.
+    check(heddle.apply(after, generation = 1L).refusals.isEmpty())
 ```
 
 ### Run it over a network — reserve, run, charge once
