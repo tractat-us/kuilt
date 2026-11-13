@@ -42,8 +42,20 @@ internal fun SpanKind.toOtlp(): Int = when (this) {
 private fun attrs(m: Map<String, String>): List<KeyValue> =
     m.map { KeyValue(it.key, AnyValue(it.value)) }
 
+/** The envelope's resource as OTLP/JSON, or null (field omitted) when it has no attributes. */
+private fun OtlpEnvelope.jsonResource(): OtlpResource? =
+    if (resource.isEmpty()) null else OtlpResource(attrs(resource))
+
+/** The envelope's scope as OTLP/JSON, or null (field omitted) when name and version are both empty. */
+private fun OtlpEnvelope.jsonScope(): OtlpScope? =
+    if (scopeIsEmpty) null else OtlpScope(scopeName, scopeVersion)
+
 /** Render spans (with their inferred causal links) into an OTLP/JSON traces request. */
-internal fun tracesRequestOf(spans: Set<SpanRecord>, links: List<SpanLink>): TracesRequest {
+internal fun tracesRequestOf(
+    spans: Set<SpanRecord>,
+    links: List<SpanLink>,
+    envelope: OtlpEnvelope,
+): TracesRequest {
     val linksByFrom = links.groupBy { it.fromSpanId }
     val otlpSpans = spans.map { s ->
         OtlpSpan(
@@ -60,11 +72,13 @@ internal fun tracesRequestOf(spans: Set<SpanRecord>, links: List<SpanLink>): Tra
             },
         )
     }
-    return TracesRequest(listOf(ResourceSpans(listOf(ScopeSpans(otlpSpans)))))
+    return TracesRequest(
+        listOf(ResourceSpans(envelope.jsonResource(), listOf(ScopeSpans(envelope.jsonScope(), otlpSpans)))),
+    )
 }
 
 /** Render log records into an OTLP/JSON logs request. */
-internal fun logsRequestOf(logs: Set<LogRecord>): LogsRequest {
+internal fun logsRequestOf(logs: Set<LogRecord>, envelope: OtlpEnvelope): LogsRequest {
     val recs = logs.map { r ->
         OtlpLogRecord(
             timeUnixNano = r.timestampEpochNanos?.toString(),
@@ -77,14 +91,14 @@ internal fun logsRequestOf(logs: Set<LogRecord>): LogsRequest {
             spanId = r.spanId?.toHex(),
         )
     }
-    return LogsRequest(listOf(ResourceLogs(listOf(ScopeLogs(recs)))))
+    return LogsRequest(listOf(ResourceLogs(envelope.jsonResource(), listOf(ScopeLogs(envelope.jsonScope(), recs)))))
 }
 
 /**
  * Render metric points into an OTLP/JSON metrics request (Sum for sums, Gauge for
  * gauge/cardinality, ExponentialHistogram for histograms).
  */
-internal fun metricsRequestOf(points: Set<MetricPoint>): MetricsRequest {
+internal fun metricsRequestOf(points: Set<MetricPoint>, envelope: OtlpEnvelope): MetricsRequest {
     val metrics = points.map { p ->
         when (p) {
             is MetricPoint.Sum -> OtlpMetric(
@@ -157,7 +171,9 @@ internal fun metricsRequestOf(points: Set<MetricPoint>): MetricsRequest {
             )
         }
     }
-    return MetricsRequest(listOf(ResourceMetrics(listOf(ScopeMetrics(metrics)))))
+    return MetricsRequest(
+        listOf(ResourceMetrics(envelope.jsonResource(), listOf(ScopeMetrics(envelope.jsonScope(), metrics)))),
+    )
 }
 
 /** A sign's bucket array as OTLP/JSON, or null (field omitted) when no buckets are populated. */

@@ -12,6 +12,12 @@ the more compact OTLP/protobuf that many collectors expect by default. Both carr
 same data and reconcile the same way — set `wire = OtlpWireFormat.PROTOBUF` on
 `OtlpHttpEdge` to switch, and the requests go out as `application/x-protobuf`.
 
+Tell the collector who is sending. Pass `resource = mapOf("service.name" to "checkout")`,
+plus anything else that tells one producer from another, and every request carries it as
+its OTLP resource, so a dashboard files the records under your service rather than an
+unknown one. `scopeName` and `scopeVersion` name the library that recorded them in the same
+way. Leave them out and the requests carry neither, exactly as before.
+
 `OtlpHttpEdge` is the `OtlpEdge` a `WarpOtlpBridge` drains into. Point it at a
 collector URL and call `drain` on each reconnect.
 

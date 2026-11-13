@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class, ExperimentalVersionOverloading::class)
 
 package us.tractat.kuilt.otel.otlp
 
@@ -73,6 +73,16 @@ public enum class OtlpWireFormat {
  * @param maxSentIds cap on the span/log sent-set size (drop-oldest). Metrics are
  *   naturally bounded by series count.
  * @param wire OTLP wire encoding to emit. Defaults to [OtlpWireFormat.JSON].
+ * @param resource this producer's resource attributes, sent as the `resource` of every
+ *   request on both wires — `service.name` and whatever else tells one producer from
+ *   another, so a collector or backend files its records under their own service rather
+ *   than one unknown one. Fixed for the edge's life, as a producer's resource is. Empty,
+ *   the default, sends no `resource` at all.
+ * @param scopeName the instrumentation scope's name, sent as the `scope` of every request
+ *   on both wires: the library that recorded the telemetry.
+ * @param scopeVersion the instrumentation scope's version. When both [scopeName] and
+ *   [scopeVersion] are empty, the default, no `scope` is sent; OTLP reads an empty name as
+ *   an unknown scope either way.
  */
 public class OtlpHttpEdge(
     private val client: HttpClient,
@@ -80,9 +90,15 @@ public class OtlpHttpEdge(
     private val store: DurableStore,
     private val maxSentIds: Int = DEFAULT_MAX_SENT_IDS,
     private val wire: OtlpWireFormat = OtlpWireFormat.JSON,
+    @IntroducedAt("0.7.5") resource: Map<String, String> = emptyMap(),
+    @IntroducedAt("0.7.5") scopeName: String = "",
+    @IntroducedAt("0.7.5") scopeVersion: String = "",
 ) : OtlpEdge {
 
     private val base: String = endpoint.trimEnd('/')
+
+    // Copied, so a caller mutating the map it passed cannot change what later requests say.
+    private val envelope = OtlpEnvelope(resource.toMap(), scopeName, scopeVersion)
     private val json = Json { encodeDefaults = false }
 
     // Per-endpoint sent-set keys, tagged by a 128-bit SHA-256 of the *trimmed* base —
@@ -129,9 +145,9 @@ public class OtlpHttpEdge(
             "/v1/traces",
             when (wire) {
                 OtlpWireFormat.JSON ->
-                    json.encodeToString(TracesRequest.serializer(), tracesRequestOf(spans, links))
+                    json.encodeToString(TracesRequest.serializer(), tracesRequestOf(spans, links, envelope))
                 OtlpWireFormat.PROTOBUF ->
-                    protobuf.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(spans, links))
+                    protobuf.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(spans, links, envelope))
             },
         )
         recordIds(spanKey, spans.map { it.spanId.toHex() })
@@ -142,9 +158,9 @@ public class OtlpHttpEdge(
             "/v1/logs",
             when (wire) {
                 OtlpWireFormat.JSON ->
-                    json.encodeToString(LogsRequest.serializer(), logsRequestOf(logs))
+                    json.encodeToString(LogsRequest.serializer(), logsRequestOf(logs, envelope))
                 OtlpWireFormat.PROTOBUF ->
-                    protobuf.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(logs))
+                    protobuf.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(logs, envelope))
             },
         )
         recordIds(logKey, logs.map { it.recordId.toHex() })
@@ -155,9 +171,9 @@ public class OtlpHttpEdge(
             "/v1/metrics",
             when (wire) {
                 OtlpWireFormat.JSON ->
-                    json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(points))
+                    json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(points, envelope))
                 OtlpWireFormat.PROTOBUF ->
-                    protobuf.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(points))
+                    protobuf.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(points, envelope))
             },
         )
         recordVersions(points.associate { it.key to it.valueHash() })

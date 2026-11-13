@@ -22,8 +22,9 @@ import kotlinx.serialization.protobuf.ProtoType
 // in OtlpProtoEncodingTest. `oneof`s (AnyValue.value, Metric.data, NumberDataPoint.value)
 // are modelled as nullable-field-per-branch: proto3 oneof is wire-identical to a set of
 // optional fields where at most one is present, so setting exactly one nullable branch
-// produces the canonical oneof bytes. `resource`/`scope`/`schema_url` fields are omitted
-// (optional; a collector tolerates their absence).
+// produces the canonical oneof bytes. `resource` and `scope` are nullable and left off the
+// wire when the edge has none, so an edge configured with neither emits the same bytes it
+// did before they existed; `schema_url` is never sent.
 
 // ── Common ─────────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,22 @@ internal data class ProtoAnyValue(
     @ProtoNumber(1) val stringValue: String,
 )
 
+/** OTLP `Resource` (resource.proto): `repeated KeyValue attributes = 1`. */
+@Serializable
+internal data class ProtoResource(
+    @ProtoNumber(1) val attributes: List<ProtoKeyValue> = emptyList(),
+)
+
+/**
+ * OTLP `InstrumentationScope` (common.proto): `string name = 1; string version = 2`.
+ * An empty string is the proto3 default, so it is omitted from the wire.
+ */
+@Serializable
+internal data class ProtoScope(
+    @ProtoNumber(1) val name: String = "",
+    @ProtoNumber(2) val version: String = "",
+)
+
 // ── Traces ───────────────────────────────────────────────────────────────────
 
 @Serializable
@@ -48,11 +65,13 @@ internal data class ProtoTracesRequest(
 
 @Serializable
 internal data class ProtoResourceSpans(
+    @ProtoNumber(1) val resource: ProtoResource? = null,
     @ProtoNumber(2) val scopeSpans: List<ProtoScopeSpans>,
 )
 
 @Serializable
 internal data class ProtoScopeSpans(
+    @ProtoNumber(1) val scope: ProtoScope? = null,
     @ProtoNumber(2) val spans: List<ProtoSpan>,
 )
 
@@ -85,11 +104,13 @@ internal data class ProtoLogsRequest(
 
 @Serializable
 internal data class ProtoResourceLogs(
+    @ProtoNumber(1) val resource: ProtoResource? = null,
     @ProtoNumber(2) val scopeLogs: List<ProtoScopeLogs>,
 )
 
 @Serializable
 internal data class ProtoScopeLogs(
+    @ProtoNumber(1) val scope: ProtoScope? = null,
     @ProtoNumber(2) val logRecords: List<ProtoLogRecord>,
 )
 
@@ -114,11 +135,13 @@ internal data class ProtoMetricsRequest(
 
 @Serializable
 internal data class ProtoResourceMetrics(
+    @ProtoNumber(1) val resource: ProtoResource? = null,
     @ProtoNumber(2) val scopeMetrics: List<ProtoScopeMetrics>,
 )
 
 @Serializable
 internal data class ProtoScopeMetrics(
+    @ProtoNumber(1) val scope: ProtoScope? = null,
     @ProtoNumber(2) val metrics: List<ProtoMetric>,
 )
 
