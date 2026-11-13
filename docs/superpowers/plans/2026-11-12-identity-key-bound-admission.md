@@ -138,6 +138,14 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
   opt-in-marked tests-only, refusing wrong key / message / tampered signature. Real P-256 coverage stays
   in identity's tests, the signature vectors and the WebKit nightly. Lands on main; 1.3 adopts it, and
   every 1.4–2.7 room test uses it.
+  From #3273's review: the seam must cover key *generation* and `DidKey.parse` (both WebCrypto), export
+  fixed non-suspending test keys (`FakeRoom`/`fakeRoomPair` and `ServerClusterSim` have no factory), and
+  keep injectable *suspending* and *throwing* fakes so 1.4–2.4 can force the Goodbye-between-Challenge-
+  and-Proof, re-Hello-during-decision and re-decide-under-lock gaps, and a store/signer failure on the
+  admit path. 1.4: the room holds its `DeviceKey` as a value (1.3 fix), so `Challenge.sign` on the
+  launched admit path is the remaining throw site — catch it into a `Reject`, never let it escape
+  `scope.launch`. The joiner must keep its latest Hello's nonce to check the Challenge's echo (1.7's
+  re-Hello replaces it).
 - **1.4**
   - `PendingChallenges` has already landed (above); 1.4 wires it.
   - From #3264's review: `take` returns null for never-opened, expired **and already-taken**. A
@@ -154,7 +162,7 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
     verified** — today the first Welcome of any shape from anyone sets it.
   - `Member(` sites: `FakeRoomFactory.kt` (`seedRoster`), `FakeRoomTest.kt`'s helper,
     `kuilt-session-test/README.md`, `kuilt-cluster` jvmTest `ServerClusterSim.kt`. Not `FakeRoom.kt`.
-    Non-suspend helpers become suspend (keys come from `DidKey.parse` / `DeviceKey.generate()`).
+    ~~Non-suspend helpers become suspend (keys come from `DidKey.parse` / `DeviceKey.generate()`).~~ **Superseded by the test crypto seam (#3280):** room tests use the seam's fixed, non-suspending test keys and fake store; never real `generate`/`parse` (WebCrypto on wasm).
   - Session opts in to `@IdentityInternalApi` via `compilerOptions.optIn`.
 - **1.5**
   - From #3251's re-review: the host-key check (compare `provenKey` to the room's own store key, under
