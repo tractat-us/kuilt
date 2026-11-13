@@ -77,14 +77,17 @@ Read `WarpTelemetry.health` to see whether each buffer is making progress. Logs 
 record counts (`ExporterHealth`); spans and metrics expose `PersistenceHealth` through
 observable `health` flows. Its `acknowledged` counter advances once a complete local
 persistence turn succeeds, even if that turn needs several store calls. Reads and calls
-that do no store IO do not advance it.
+that do no store IO do not advance it. For metrics a turn is one metric kind's write, so a
+`WarpMetricExporter.record` batch counts one turn per kind it touched. A batch the store
+partly refuses moves both `acknowledged` and `failed`.
 
 `failed` counts failed turns. `outstandingFailures` stays nonzero until the same work
 succeeds: a healthy sum write cannot hide a failing histogram, and a successful metric
 clear cannot prove writes work. A failed startup read or decode sets `recoveryFailed`
 for the instance's lifetime; `lastFailure` retains the latest cause after recovery.
 A failed turn may still have saved its data, and a cancelled turn counts as neither
-acknowledged nor failed. These are local persistence signals, not confirmation of delivery to a backend.
+acknowledged nor failed; a cancelled metric batch keeps the turns of the kinds it had
+already written. These are local persistence signals, not confirmation of delivery to a backend.
 The combined getter reads each exporter in turn, so it is not an atomic snapshot
 across signals during concurrent activity.
 
@@ -135,10 +138,13 @@ A `Failure` means "not yet on disk", not "not counted". The change stays in memo
 and the next successful write of that metric kind carries it, so retrying a failed
 increment counts it twice.
 
-The promise has a price. Each recorded change re-encodes every series of its kind
-and writes the result once. `KuiltMetricExporter` applies an SDK export point by
-point, so an export of N points is N writes, and every UpDownCounter series is in
-every export, moved or not. That is why kuilt-otel belongs behind
+The promise has a price. Each write re-encodes every series of its kind. A single
+call such as `incrementSum` is one write. Hand many changes over at once with
+`WarpMetricExporter.record`, a list of `MetricUpdate`s, and you pay one write per
+metric kind the list touches, under the same promise (#3284). `KuiltMetricExporter`
+records each SDK export that way, so an export of N counter points is one write of
+the sums, not N. Every UpDownCounter series is still in every export, moved or not.
+That is why kuilt-otel belongs behind
 the SDK's periodic reader, which hands it one batch every few seconds, and not in
 a request's hot path.
 

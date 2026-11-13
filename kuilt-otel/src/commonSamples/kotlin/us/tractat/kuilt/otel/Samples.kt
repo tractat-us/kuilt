@@ -208,6 +208,32 @@ internal suspend fun sampleWarpMetricExporter() {
     check(exporter.histogramQuantile(latency, 0.5) != null)
 }
 
+/**
+ * Hand a [WarpMetricExporter] many updates at once: [WarpMetricExporter.record] applies them in order
+ * and writes each metric kind once, instead of once per update.
+ */
+internal suspend fun sampleWarpMetricExporterBatch() {
+    val exporter = WarpMetricExporter(
+        replica = us.tractat.kuilt.crdt.ReplicaId("server-1"),
+        store = InMemoryDurableStore(),
+    )
+    val ok = MetricKey("http.requests", MetricKind.SUM, mapOf("status" to "200"))
+    val notFound = MetricKey("http.requests", MetricKind.SUM, mapOf("status" to "404"))
+    val inFlight = MetricKey("http.in_flight", MetricKind.GAUGE)
+
+    // Three updates over two kinds: one write of the sums, one of the gauges.
+    val result = exporter.record(
+        listOf(
+            MetricUpdate.IncrementSum(ok, by = 40L),
+            MetricUpdate.IncrementSum(notFound, by = 2L),
+            MetricUpdate.SetGauge(inFlight, value = 7.0, timestamp = 1_000L),
+        ),
+    )
+    check(result == MetricExportResult.Success) // every kind it touched is on disk
+    check(exporter.sumValue(ok) == 40L)
+    check(exporter.gaugeValue(inFlight) == 7.0)
+}
+
 /** @suppress — sample only */
 internal suspend fun sampleWarpSpanExporter() {
     val replica = ReplicaId("device-uuid-abc123")

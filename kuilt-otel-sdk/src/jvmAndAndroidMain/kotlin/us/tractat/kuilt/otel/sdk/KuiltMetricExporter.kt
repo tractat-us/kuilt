@@ -18,6 +18,7 @@ import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.otel.MetricExportResult
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricKind
+import us.tractat.kuilt.otel.MetricUpdate
 import us.tractat.kuilt.otel.WarpMetricExporter
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetricExporter")
@@ -53,7 +54,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *
  * `export`/`flush`/`shutdown` return a [CompletableResultCode]. [export] enqueues the raw
  * batch on an unbounded [Channel] and returns immediately; a single scope-bound drain
- * coroutine maps and applies each [MetricData], then completes the batch's code.
+ * coroutine maps every point of the batch to a [MetricUpdate] and hands them to
+ * `WarpMetricExporter.record` as **one** batch — one durable write per metric kind the export
+ * touched, not one per point (#3284) — then completes the batch's code: success only once every
+ * touched kind is durably written.
  *
  * ## Mapping
  * - monotonic `LONG_SUM` → `incrementSum`; monotonic `DOUBLE_SUM` → `incrementSumDouble`.
@@ -63,7 +67,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *   `WarpMetricExporter` does keep histograms (a `DDSketch` per series), but it takes them one
  *   raw value at a time through `recordHistogram`; the SDK hands over buckets already counted,
  *   and `mergeHistogram` is a join, so adding one interval's buckets to the last has no entry point.
- * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it).
+ * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it), and so is a
+ *   NaN delta (WARN). Either is one dropped point, never a failed export: the export is one
+ *   batch, so a point it could not apply would otherwise take every other point with it.
  * - a sum whose own temporality is not the one asked for above — a cumulative counter, or a
  *   delta UpDownCounter, from a reader with its own temporality selector — is **dropped**
  *   (WARN). Added, the first would count its running total again each collection; stored,
@@ -84,7 +90,9 @@ public class KuiltMetricExporter(
     private val drain = scope.launch {
         for (batch in queue) {
             val ok = runCatchingCancellable {
-                batch.metrics.map { applyMetric(it) }.all { it }
+                val updates = ArrayList<MetricUpdate>()
+                batch.metrics.forEach { collectUpdates(it, updates) }
+                exporter.record(updates) is MetricExportResult.Success
             }.getOrDefault(false)
             if (ok) batch.code.succeed() else batch.code.fail()
         }
@@ -121,35 +129,36 @@ public class KuiltMetricExporter(
             else -> AggregationTemporality.DELTA
         }
 
-    /** Apply one metric's points; return whether every point-write succeeded (drop = success). */
-    private suspend fun applyMetric(md: MetricData): Boolean {
+    /**
+     * Append one metric's points to [into] as [MetricUpdate]s. A dropped metric — unsupported, or a
+     * sum with the wrong temporality — adds none, which is not a failure.
+     */
+    private fun collectUpdates(md: MetricData, into: MutableList<MetricUpdate>) {
         val name = md.name
-        return when (md.type) {
+        when (md.type) {
             MetricDataType.LONG_SUM -> {
                 val s = md.longSumData
-                if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return true
-                s.points.map { p ->
-                    if (s.isMonotonic) incLong(name, p) else setGaugeOk(name, p.attributes, p.value.toDouble(), p.epochNanos)
-                }.all { it }
+                if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return
+                s.points.forEach { p ->
+                    if (s.isMonotonic) incLong(name, p, into) else gauge(name, p.attributes, p.value.toDouble(), p.epochNanos, into)
+                }
             }
             MetricDataType.DOUBLE_SUM -> {
                 val s = md.doubleSumData
-                if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return true
-                s.points.map { p ->
-                    if (s.isMonotonic) incDouble(name, p) else setGaugeOk(name, p.attributes, p.value, p.epochNanos)
-                }.all { it }
+                if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return
+                s.points.forEach { p ->
+                    if (s.isMonotonic) incDouble(name, p, into) else gauge(name, p.attributes, p.value, p.epochNanos, into)
+                }
             }
             MetricDataType.LONG_GAUGE ->
-                md.longGaugeData.points.map { setGaugeOk(name, it.attributes, it.value.toDouble(), it.epochNanos) }.all { it }
+                md.longGaugeData.points.forEach { gauge(name, it.attributes, it.value.toDouble(), it.epochNanos, into) }
             MetricDataType.DOUBLE_GAUGE ->
-                md.doubleGaugeData.points.map { setGaugeOk(name, it.attributes, it.value, it.epochNanos) }.all { it }
-            MetricDataType.HISTOGRAM, MetricDataType.EXPONENTIAL_HISTOGRAM, MetricDataType.SUMMARY -> {
+                md.doubleGaugeData.points.forEach { gauge(name, it.attributes, it.value, it.epochNanos, into) }
+            MetricDataType.HISTOGRAM, MetricDataType.EXPONENTIAL_HISTOGRAM, MetricDataType.SUMMARY ->
                 logger.warn {
                     "KuiltMetricExporter: dropping unsupported metric '$name' (${md.type}) — the SDK sends " +
                         "pre-bucketed deltas, and WarpMetricExporter records histograms one value at a time"
                 }
-                true
-            }
         }
     }
 
@@ -169,18 +178,35 @@ public class KuiltMetricExporter(
         return false
     }
 
-    private suspend fun incLong(name: String, p: LongPointData): Boolean {
-        if (p.value <= 0L) return true // grow-only rejects ≤0; a delta of 0/negative is a no-op
-        return exporter.incrementSum(MetricKey(name, MetricKind.SUM, attrs(p.attributes)), p.value) is MetricExportResult.Success
+    private fun incLong(name: String, p: LongPointData, into: MutableList<MetricUpdate>) {
+        if (p.value <= 0L) return // grow-only rejects ≤0; a delta of 0/negative is a no-op
+        into += MetricUpdate.IncrementSum(MetricKey(name, MetricKind.SUM, attrs(p.attributes)), p.value)
     }
 
-    private suspend fun incDouble(name: String, p: DoublePointData): Boolean {
-        if (p.value <= 0.0) return true
-        return exporter.incrementSumDouble(MetricKey(name, MetricKind.SUM, attrs(p.attributes)), p.value) is MetricExportResult.Success
+    /**
+     * Written `!(value > 0.0)` rather than `value <= 0.0` so a NaN is skipped too: the SDK lets one
+     * through `DoubleCounter.add` and through an observable callback computing 0/0, a grow-only
+     * counter cannot take it, and [MetricUpdate.IncrementSumDouble] would reject it while the
+     * export is being collected — failing the whole export, every valid point with it.
+     */
+    private fun incDouble(name: String, p: DoublePointData, into: MutableList<MetricUpdate>) {
+        if (!(p.value > 0.0)) {
+            if (p.value.isNaN()) {
+                logger.warn { "KuiltMetricExporter: dropping a NaN point of monotonic sum '$name' — a counter cannot add it" }
+            }
+            return
+        }
+        into += MetricUpdate.IncrementSumDouble(MetricKey(name, MetricKind.SUM, attrs(p.attributes)), p.value)
     }
 
-    private suspend fun setGaugeOk(name: String, attributes: Attributes, value: Double, epochNanos: Long): Boolean =
-        exporter.setGauge(MetricKey(name, MetricKind.GAUGE, attrs(attributes)), value, epochNanos) is MetricExportResult.Success
+    /**
+     * A gauge takes any value, NaN included: `LWWRegister` holds it and [MetricUpdate.SetGauge]
+     * does not reject it, so a NaN gauge point cannot take the rest of the export down. It is
+     * stored as given, as it was before batching.
+     */
+    private fun gauge(name: String, attributes: Attributes, value: Double, epochNanos: Long, into: MutableList<MetricUpdate>) {
+        into += MetricUpdate.SetGauge(MetricKey(name, MetricKind.GAUGE, attrs(attributes)), value, epochNanos)
+    }
 
     private fun attrs(a: Attributes): Map<String, String> = buildMap { a.forEach { k, v -> put(k.key, v.toString()) } }
 }

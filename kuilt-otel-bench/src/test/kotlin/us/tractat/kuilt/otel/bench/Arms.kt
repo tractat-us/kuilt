@@ -47,11 +47,14 @@ fun recordingTable(arm: String, rows: List<RecordingRow>) = report(
 
 fun bridgeTable(rows: List<BridgeRow>) = report(
     "bridge-export",
-    listOf("series", "points/export", "ms/export", "µs/point", "store ms/export", "alloc MiB/export", "timed exports"),
+    listOf(
+        "series", "points/export", "writes/export", "ms/export", "µs/point", "store ms/export",
+        "alloc MiB/export", "timed exports",
+    ),
     rows.map { r ->
         listOf(
-            r.series.toString(), r.writesPerExport.toString(), millis(r.sample.nanosPerOp),
-            micros(r.sample.nanosPerOp / r.writesPerExport), millis(r.storeNanosPerExport),
+            r.series.toString(), r.series.toString(), r.writesPerExport.toString(), millis(r.sample.nanosPerOp),
+            micros(r.sample.nanosPerOp / r.series), millis(r.storeNanosPerExport),
             kib(r.sample.allocatedBytesPerOp / 1024.0), r.sample.executed.toString(),
         )
     },

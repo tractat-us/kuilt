@@ -47,7 +47,8 @@ class OtelBenchSmokeTest {
         val row = bridgeExportArm(series = 10, rounds = 2, warmUpExports = 1)
         assertAll(
             { assertEquals(2L, row.sample.executed) },
-            { assertEquals(10L, row.writesPerExport) },
+            // Ten points of one kind: one durable write per export, not one per point (#3284).
+            { assertEquals(1L, row.writesPerExport) },
         )
     }
 

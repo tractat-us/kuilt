@@ -182,6 +182,47 @@ class PersistenceHealthTest {
     }
 
     @Test
+    fun aMetricBatchCountsOneTurnPerKindItTouched() = runTest {
+        // For metrics a turn is one kind's write, so a batch is as many turns as kinds it
+        // touched — and a partial refusal is acknowledged for the kinds that landed and failed
+        // for the one that did not, rather than one failed turn for the lot (#3284).
+        val store = HealthStore()
+        val exporter = WarpMetricExporter(replica, store)
+        val sum = MetricKey("sum", MetricKind.SUM)
+        val gauge = MetricKey("gauge", MetricKind.GAUGE)
+        val histogram = MetricKey("histogram", MetricKind.EXPONENTIAL_HISTOGRAM)
+        val batch = listOf(
+            MetricUpdate.IncrementSum(sum),
+            MetricUpdate.SetGauge(gauge, 1.0, 1L),
+            MetricUpdate.IncrementSum(sum, 2L),
+            MetricUpdate.RecordHistogram(histogram, 3.0),
+            MetricUpdate.SetGauge(gauge, 2.0, 2L),
+        )
+
+        assertEquals(MetricExportResult.Success, exporter.record(batch))
+        val afterClean = exporter.health.value
+
+        val gaugeKey = metricKeys[2]
+        store.refusedWrites = setOf(gaugeKey)
+        assertIs<MetricExportResult.Failure>(exporter.record(batch))
+        val afterPartial = exporter.health.value
+        val writesAfterPartial = store.writes
+
+        store.refusedWrites = emptySet()
+        assertEquals(MetricExportResult.Success, exporter.record(listOf(MetricUpdate.SetGauge(gauge, 3.0, 3L))))
+        assertAll(
+            { assertEquals(3L, afterClean.acknowledged, "five updates over three kinds: three turns") },
+            { assertEquals(0L, afterClean.failed) },
+            { assertEquals(1, store.writeFailures, "the partial batch reached the refused gauge write") },
+            { assertEquals(6, writesAfterPartial, "precondition: each batch wrote each of its three kinds once") },
+            { assertEquals(5L, afterPartial.acknowledged, "the sum and histogram turns landed") },
+            { assertEquals(1L, afterPartial.failed, "only the gauge turn failed") },
+            { assertEquals(1L, afterPartial.outstandingFailures) },
+            { assertEquals(0L, exporter.health.value.outstandingFailures, "a later gauge write clears it") },
+        )
+    }
+
+    @Test
     fun metricClearIsOneSeparateTurnEvenWhenOnlyItsLastDeleteFails() = runTest {
         val store = HealthStore()
         val exporter = WarpMetricExporter(replica, store)

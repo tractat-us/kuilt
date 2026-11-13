@@ -53,6 +53,9 @@ class OtelSamplesRunTest {
     fun warpMetricExporterHolds(): TestResult = runTest { sampleWarpMetricExporter() }
 
     @Test
+    fun warpMetricExporterBatchHolds(): TestResult = runTest { sampleWarpMetricExporterBatch() }
+
+    @Test
     fun warpSpanExporterHolds(): TestResult = runTest { sampleWarpSpanExporter() }
 
     @Test
