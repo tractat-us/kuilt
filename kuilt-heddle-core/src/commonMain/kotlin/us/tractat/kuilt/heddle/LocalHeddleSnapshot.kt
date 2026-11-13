@@ -315,21 +315,20 @@ internal object LocalHeddleSnapshotSerializer : KSerializer<LocalHeddleSnapshot>
         val version = decodeIntElement(descriptor, VERSION).also(::requireSupported)
         if (!hasNextElement()) throw SerializationException("a snapshot of format $version has no state")
         val state = decodeState(this, version)
-        if (hasNextElement()) throw SerializationException("a snapshot has an element past its state")
+        // CBOR looks up an element's annotations in the descriptor before it hands back the
+        // element's index, so an element past the state asks about an index the descriptor does not
+        // describe, and it throws: that, too, is an element past the state.
+        val pastState = try {
+            hasNextElement()
+        } catch (_: IndexOutOfBoundsException) {
+            true
+        }
+        if (pastState) throw SerializationException("a snapshot has an element past its state")
         state
     }
 
-    /**
-     * Whether the sequence holds another element. CBOR looks up an element's annotations in
-     * [descriptor] before it hands back the element's index, so an element past the state reaches
-     * the descriptor at an index it does not describe, which throws [IndexOutOfBoundsException]:
-     * that too is another element.
-     */
-    private fun CompositeDecoder.hasNextElement(): Boolean = try {
-        decodeElementIndex(descriptor) != CompositeDecoder.DECODE_DONE
-    } catch (_: IndexOutOfBoundsException) {
-        true
-    }
+    /** Whether the sequence holds another element. */
+    private fun CompositeDecoder.hasNextElement(): Boolean = decodeElementIndex(descriptor) != CompositeDecoder.DECODE_DONE
 
     private fun requireSupported(found: Int) {
         if (found !in LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS) throw UnsupportedSnapshotFormat(found)

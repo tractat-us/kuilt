@@ -426,6 +426,50 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
+     * Format 1 is frozen in CBOR too, both ways: the JSON golden's snapshot encodes to the CBOR
+     * golden byte for byte, and the CBOR golden decodes to that snapshot. The same choice as
+     * [formatOneStillEncodesToTheGolden] applies when it reds.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun formatOneStillEncodesToTheCborGolden() {
+        val snapshot = decoded(GOLDEN_FORMAT_1)
+        val hex = hexOf(Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), snapshot))
+        assertAll(
+            { assertEquals(GOLDEN_FORMAT_1_CBOR, hex, "format 1 changed in CBOR; the encoding is now:\n$hex\n") },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_1_CBOR), Cbor)) },
+        )
+    }
+
+    /**
+     * A CBOR writer that states each array's length up front (`82`, not `9f … ff`) is read too, and
+     * a definite-length array of three, `83 01 S S`, is refused by its stated size before anything
+     * past the version is read.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun definiteLengthCborRoundTripsAndAThreeElementArrayIsCorrupt() {
+        val definite = Cbor { useDefiniteLengthEncoding = true }
+        val snapshot = decoded(GOLDEN_FORMAT_1)
+        val bytes = definite.encodeToByteArray(LocalHeddleSnapshot.serializer(), snapshot)
+        val state = bytes.copyOfRange(2, bytes.size)
+        val three = byteArrayOf(0x83.toByte(), 0x01) + state + state
+        assertAll(
+            { assertEquals(listOf(0x82, 0x01), bytes.take(2).map { it.toInt() and 0xFF }, "the rig: a definite-length array of two, version 1 first") },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytes, definite)) },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytes, Cbor), "a default reader reads it as well") },
+            {
+                val out = LocalHeddle.decode(three, definite)
+                assertTrue(out is RestoreResult.Corrupt && "has 3" in out.reason, "expected Corrupt naming the size, got $out")
+            },
+        )
+    }
+
+    private fun hexOf(bytes: ByteArray): String = bytes.joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+
+    private fun bytesOf(hex: String): ByteArray = ByteArray(hex.length / 2) { hex.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
+
+    /**
      * The tree the rich scenario runs: `acme` (a nested group at a fractional weight, holding a group
      * and a lane), `tenants` (marked for runtime children), and, while [withSpare], a lane `spare`.
      */
