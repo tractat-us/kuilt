@@ -12,7 +12,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
-import kotlin.test.assertNull
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.microseconds
@@ -103,6 +102,9 @@ class AdmissionPolicyTest {
             { assertEquals(1L, GrantTerms(1.milliseconds).notAfter(0)) },
             // A part millisecond is dropped, never rounded up: the grant runs no longer than asked.
             { assertEquals(1L, GrantTerms(1_500.microseconds).notAfter(0)) },
+            // Before the epoch: a sum below zero is a plain sum, not an overflow.
+            { assertEquals(-1L, GrantTerms(1.milliseconds).notAfter(-2)) },
+            { assertEquals(Long.MIN_VALUE + 1.hours.inWholeMilliseconds, GrantTerms(1.hours).notAfter(Long.MIN_VALUE)) },
         )
     }
 
@@ -142,22 +144,28 @@ class AdmissionPolicyTest {
     }
 
     @Test
-    fun samplePolicyRefusesThenBefriendsThenDefaults() = keysTest { a, b ->
+    fun samplePolicyRefusesTheRevokedThenBefriendsThenDefaults() = keysTest { a, b ->
         val stranger = DeviceKey.generate().id
-        val admission = hostAdmissionSample(friends = setOf(a, b), refused = setOf(b))
+        val admission = hostAdmissionSample(friends = setOf(a, b))
+        val forever = AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
+        // Before the revocation b is a friend like a, so the refusal below is the revocation's doing.
+        val bBefore = admission.policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
+        admission.revocations.revoke(b, notBefore = 1_700_000_000_001L)
         val friend = admission.policy.decide(AdmissionRequest(a, "Ada", deviceId = null))
         val refused = admission.policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
         val other = admission.policy.decide(AdmissionRequest(stranger, "Cy", deviceId = "laptop"))
         assertAll(
-            { assertEquals(AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer)), friend) },
+            { assertEquals(forever, bBefore) },
+            { assertEquals(forever, friend) },
             {
-                // Refused wins over friend: b is in both sets.
+                // The joiner's view of the refusal is the wire's: the id alone, rebuilt as Unknown, retryable.
                 val code = assertIs<AdmissionDecision.Reject>(refused).code
+                val seenByJoiner = AdmitMessage.Reject("not welcome", code).code
                 assertEquals("not-welcome", code.id)
-                assertEquals(false, code.retryable)
+                assertEquals(RejectCode.Unknown("not-welcome"), seenByJoiner)
+                assertEquals(true, seenByJoiner.retryable)
             },
             { assertEquals(AdmissionDecision.Admit(GrantTerms(1.hours, GrantReach.ThisRoom)), other) },
-            { assertNull(admission.revocations.notBefore(a)) },
         )
     }
 }

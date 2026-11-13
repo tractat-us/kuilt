@@ -629,26 +629,29 @@ internal suspend fun sampleDurableRevocations() {
 }
 ```
 
-**Who gets in, and for how long:** `AdmissionPolicy` (`us.tractat.kuilt.session.admit`). Do not hand-roll an "is this joiner allowed" callback, an allow-list check, or a per-member expiry map beside the room. A policy answers `AdmissionDecision.Admit(GrantTerms(readmitFor, reach))` — the pass the newcomer gets: back within `readmitFor` of last contact (`Duration.INFINITE` for never expiring), in `GrantReach.ThisRoom` or `AnyRoomOfIssuer` — or `AdmissionDecision.Reject(code)`, where `code` can be your own `RejectCode`. It sees newcomers only: a device whose seat is held, or that returns inside its pass, gets back in without asking it, and revoking a key voids its passes but not its next ordinary admission, so refuse it in the policy too. Decide on `request.key`, the key the joiner proved; `displayName` is unverified. `AdmissionPolicy.open(readmitFor = 1.hours)` admits everyone, and checks its term when built rather than on a joiner's admission. `HostAdmission(policy, revocations)` is what a host will hold; it takes no host key, since the room checks passes against its own. No room entry point takes one yet.
+**Who gets in, and for how long:** `AdmissionPolicy` (`us.tractat.kuilt.session.admit`). Do not hand-roll an "is this joiner allowed" callback, an allow-list check, or a per-member expiry map beside the room. A policy answers `AdmissionDecision.Admit(GrantTerms(readmitFor, reach))` — the pass the newcomer gets: back within `readmitFor` of last contact (`Duration.INFINITE` for never expiring), in `GrantReach.ThisRoom` or `AnyRoomOfIssuer` — or `AdmissionDecision.Reject(code)`. **The joiner sees only `code.id`:** your own `RejectCode` arrives as `RejectCode.Unknown(id)` and is treated as retryable, whatever its `retryable` says. It sees newcomers only: a device whose seat is held, or that returns inside its pass, gets back in without asking it, and revoking a key voids its passes but not its next ordinary admission, so have the policy read the same `RevocationList` the host holds rather than keep a second list beside it. Decide on `request.key`, the key the joiner proved; `displayName` is unverified. `AdmissionPolicy.open(readmitFor = 1.hours)` admits everyone, and checks its term when built rather than on a joiner's admission. `HostAdmission(policy, revocations)` is what a host will hold; it takes no host key, since the room checks passes against its own. No room entry point takes one yet; that is tracked by #3220.
 
 <!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#hostAdmissionSample -->
 ```kotlin
-public fun hostAdmissionSample(friends: Set<DidKey>, refused: Set<DidKey>): HostAdmission {
-    // RejectCode is open: a code of your own sits beside kuilt's, and says whether retrying helps.
+public fun hostAdmissionSample(friends: Set<DidKey>): HostAdmission {
+    // RejectCode is open, but the joiner sees only the id: this arrives as RejectCode.Unknown("not-welcome"),
+    // which is treated as retryable.
     val notWelcome = object : RejectCode {
         override val id: String = "not-welcome"
-        override val retryable: Boolean = false
     }
+    // One list: the room checks returning passes against it, and the policy refuses newcomers on it.
+    val revocations = RevocationList.inMemory()
     val policy = AdmissionPolicy { request ->
         // `key` is the device key the joiner proved it holds. `displayName` is only its say-so.
-        when (request.key) {
-            in refused -> AdmissionDecision.Reject(notWelcome)
-            in friends -> AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
+        when {
+            // Revoking voids a key's passes, not its next ordinary admission, so refuse it here too.
+            // A key revoked once is then refused for good, friend or not.
+            revocations.notBefore(request.key) != null -> AdmissionDecision.Reject(notWelcome)
+            request.key in friends -> AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
             else -> AdmissionDecision.Admit(GrantTerms(readmitFor = 1.hours))
         }
     }
-    // Revoking a key voids the passes it holds, not its next ordinary admission: refuse it above too.
-    return HostAdmission(policy, RevocationList.inMemory())
+    return HostAdmission(policy, revocations)
 }
 ```
 

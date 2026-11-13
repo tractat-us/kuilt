@@ -349,22 +349,25 @@ public suspend fun flushThenLeaveSample(
 /**
  * Decide who gets into a room you host, and for how long each may come back without being asked
  * again. A friend's pass is good in any room you host and never runs out; a stranger's is good in
- * this room for an hour after last contact; a device you refuse gets your own refusal code.
+ * this room for an hour after last contact; a device you have revoked gets your own refusal code.
  */
-public fun hostAdmissionSample(friends: Set<DidKey>, refused: Set<DidKey>): HostAdmission {
-    // RejectCode is open: a code of your own sits beside kuilt's, and says whether retrying helps.
+public fun hostAdmissionSample(friends: Set<DidKey>): HostAdmission {
+    // RejectCode is open, but the joiner sees only the id: this arrives as RejectCode.Unknown("not-welcome"),
+    // which is treated as retryable.
     val notWelcome = object : RejectCode {
         override val id: String = "not-welcome"
-        override val retryable: Boolean = false
     }
+    // One list: the room checks returning passes against it, and the policy refuses newcomers on it.
+    val revocations = RevocationList.inMemory()
     val policy = AdmissionPolicy { request ->
         // `key` is the device key the joiner proved it holds. `displayName` is only its say-so.
-        when (request.key) {
-            in refused -> AdmissionDecision.Reject(notWelcome)
-            in friends -> AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
+        when {
+            // Revoking voids a key's passes, not its next ordinary admission, so refuse it here too.
+            // A key revoked once is then refused for good, friend or not.
+            revocations.notBefore(request.key) != null -> AdmissionDecision.Reject(notWelcome)
+            request.key in friends -> AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
             else -> AdmissionDecision.Admit(GrantTerms(readmitFor = 1.hours))
         }
     }
-    // Revoking a key voids the passes it holds, not its next ordinary admission: refuse it above too.
-    return HostAdmission(policy, RevocationList.inMemory())
+    return HostAdmission(policy, revocations)
 }

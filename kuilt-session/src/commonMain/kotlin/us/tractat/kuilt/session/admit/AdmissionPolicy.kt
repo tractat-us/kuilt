@@ -89,8 +89,12 @@ public sealed interface AdmissionDecision {
     ) : AdmissionDecision
 
     /**
-     * Turn the newcomer away. The joiner sees [code], and its [RejectCode.retryable] says whether
-     * trying again could help. [RejectCode] is open, so an app can refuse with a code of its own.
+     * Turn the newcomer away with [code].
+     *
+     * The joiner sees only [RejectCode.id]: the wire carries the id, and the joiner rebuilds the code
+     * with [RejectCode.fromId]. So kuilt's own codes arrive whole, but an app's own code — [RejectCode]
+     * is open, so a policy may refuse with one — arrives as [RejectCode.Unknown] with the same id, and
+     * that is treated as retryable whatever the app's code says.
      */
     public data class Reject(
         /** Why, as the joiner will see it. */
