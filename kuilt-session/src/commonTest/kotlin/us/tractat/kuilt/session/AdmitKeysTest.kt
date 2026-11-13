@@ -47,10 +47,11 @@ class AdmitKeysTest {
         val bob = factory(loom, backgroundScope, bobStore).join(InMemoryTag("Bob"), memberName = "Bob")
 
         val bobOnHost = host.roster.first { it.size == 1 }.single()
+        val (hostKey, bobKey) = hostStore.deviceKey().id to bobStore.deviceKey().id
 
         assertAll(
-            { assertEquals(bobStore.deviceKey().id, bobOnHost.key, "the host's entry for Bob carries Bob's key") },
-            { assertNotEquals(hostStore.deviceKey().id, bobOnHost.key, "rig: the two devices hold different keys") },
+            { assertEquals(bobKey, bobOnHost.key, "the host's entry for Bob carries Bob's key") },
+            { assertNotEquals(hostKey, bobOnHost.key, "rig: the two devices hold different keys") },
         )
         bob.leave()
         host.leave()
@@ -64,10 +65,11 @@ class AdmitKeysTest {
         val bob = factory(loom, backgroundScope, InMemoryDeviceKeyStore()).join(InMemoryTag("Bob"), memberName = "Bob")
 
         val hostOnBob = bob.roster.first { it.isNotEmpty() }.single()
+        val hostKey = hostStore.deviceKey().id
 
         assertAll(
             { assertEquals(host.selfId, hostOnBob.id, "rig: the entry is the host's") },
-            { assertEquals(hostStore.deviceKey().id, hostOnBob.key, "the host intro carries the host's key") },
+            { assertEquals(hostKey, hostOnBob.key, "the host intro carries the host's key") },
         )
         bob.leave()
         host.leave()
@@ -89,10 +91,11 @@ class AdmitKeysTest {
 
         val carolOnBob = bob.roster.first { roster -> roster.any { it.id == carol.selfId } }.single { it.id == carol.selfId }
         val bobOnCarol = carol.roster.first { roster -> roster.any { it.id == bob.selfId } }.single { it.id == bob.selfId }
+        val (bobKey, carolKey) = bobStore.deviceKey().id to carolStore.deviceKey().id
 
         assertAll(
-            { assertEquals(carolStore.deviceKey().id, carolOnBob.key, "the roster copy carries Carol's key") },
-            { assertEquals(bobStore.deviceKey().id, bobOnCarol.key, "the bootstrap Welcome carries Bob's key") },
+            { assertEquals(carolKey, carolOnBob.key, "the roster copy carries Carol's key") },
+            { assertEquals(bobKey, bobOnCarol.key, "the bootstrap Welcome carries Bob's key") },
         )
         carol.leave()
         bob.leave()
@@ -125,11 +128,12 @@ class AdmitKeysTest {
         }
         val hellos = firstHelloPerSender.await()
         val (first, second) = hellos
+        val deviceKey = store.deviceKey().id
 
         assertAll(
             { assertEquals(2, hellos.size, "rig: both Hellos reached the listener") },
             { assertEquals(ProtocolVersion.CURRENT, first.protocolVersion) },
-            { assertEquals(store.deviceKey().id, first.key, "the Hello names this device's key") },
+            { assertEquals(deviceKey, first.key, "the Hello names this device's key") },
             { assertEquals(first.key, second.key, "one device, one key") },
             { assertEquals(AdmitMessage.Hello.JOINER_NONCE_SIZE, first.joinerNonce?.size) },
             { assertEquals(AdmitMessage.Hello.JOINER_NONCE_SIZE, second.joinerNonce?.size) },
