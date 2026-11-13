@@ -575,7 +575,7 @@ internal suspend fun sampleIssueGrant() {
 }
 ```
 
-**Is this pass good here, now:** `GrantTrust`. Do not hand-roll the checks on a presented grant, or a "banned devices" set beside them. `GrantTrust(hostKey, revocations).verify(grant, subject, roomId, now)` answers `GrantVerdict.Valid` or the first thing wrong, always in this order: `UntrustedIssuer` (not this host's key — the only issuer a host trusts, so a pass from before a host change lands here), `BadSignature`, `WrongSubject` (the grant names another key than the one the presenter *proved* it holds — pass the proven key, never a claimed one), `WrongScope` (a `Room` pass for another room; `AnyRoomOfIssuer` is good in every room the host runs), `Revoked`, `Expired` (`now >= notAfter`; a `Grant.NO_EXPIRY` pass never expires). It reads no clock, and never throws on a bad grant. To stop a device coming back, `RevocationList.revoke(subject, notBefore)`: every grant issued to that key before the cutoff is `Revoked`, and a fresh one issued after works. Revoking blocks the next return; it does not remove a device that is in the room now. One cutoff per key, and it only moves later, so a clock that steps back cannot un-revoke anyone. `RevocationList.inMemory()` forgets everything with the process — after a restart a revoked device returns on its old pass, the dangerous direction — while losing the host key is the safe one: every grant becomes `UntrustedIssuer`.
+**Is this pass good here, now:** `GrantTrust`. Do not hand-roll the checks on a presented grant, or a "banned devices" set beside them. `GrantTrust(hostKey, revocations).verify(grant, subject, roomId, now)` answers `GrantVerdict.Valid` or the first thing wrong, always in this order: `UntrustedIssuer` (not this host's key — the only issuer a host trusts, so a pass from before a host change lands here), `BadSignature`, `WrongSubject` (the grant names another key than the one the presenter *proved* it holds — pass the proven key, never a claimed one), `WrongScope` (a `Room` pass for another room; `AnyRoomOfIssuer` is good in every room the host runs), `Revoked`, `Expired` (`now >= notAfter`; a `Grant.NO_EXPIRY` pass never expires). It reads no clock, and never throws on a bad grant. To stop a device coming back, `RevocationList.revoke(subject, notBefore)`: every grant issued to that key before the cutoff is `Revoked`, and one issued at or after it works. **Pick a cutoff later than every grant you mean to stop, not the clock now:** a grant issued in the same millisecond has `issuedAt == notBefore` and stays good, which under virtual time is the usual case. Use `now + 1`, or the later of that and the latest `issuedAt` you gave the device plus one, which also catches a grant issued while the clock ran ahead and was then set back; with only the clock, a backward step is not handled. Revoking blocks the next return; it does not remove a device that is in the room now. One cutoff per key, and `revoke` keeps the later one, so a replayed or reordered call cannot move it earlier. `RevocationList.inMemory()` forgets everything with the process — after a restart a revoked device returns on its old pass, the dangerous direction — while losing the host key is the safe one: every grant becomes `UntrustedIssuer`.
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleGrantTrust -->
 ```kotlin
@@ -595,13 +595,17 @@ internal suspend fun sampleGrantTrust() {
     check(trust.verify(pass, host.id, "table-7", now + 60_000) == GrantVerdict.WrongSubject)
     check(trust.verify(pass, phone.id, "table-7", now + 3_600_000) == GrantVerdict.Expired)
 
-    // The phone is lost: revoke it. Every pass issued before the cutoff stops working...
-    revocations.revoke(phone.id, notBefore = now + 120_000)
-    check(trust.verify(pass, phone.id, "table-7", now + 180_000) == GrantVerdict.Revoked)
+    // The phone is lost: revoke it. A pass issued exactly at the cutoff stays good, so the cutoff is
+    // one past the clock, or one issued in this same millisecond would slip through.
+    val lostAt = now + 120_000
+    val sameMillisecond = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = lostAt, notAfter = lostAt + 3_600_000)
+    revocations.revoke(phone.id, notBefore = lostAt + 1)
+    check(trust.verify(pass, phone.id, "table-7", lostAt + 60_000) == GrantVerdict.Revoked)
+    check(trust.verify(sameMillisecond, phone.id, "table-7", lostAt + 60_000) == GrantVerdict.Revoked)
 
-    // ...and a fresh pass, issued after, works again.
-    val fresh = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = now + 240_000, notAfter = now + 3_840_000)
-    check(trust.verify(fresh, phone.id, "table-7", now + 300_000) == GrantVerdict.Valid)
+    // A fresh pass, issued after the cutoff, works again.
+    val fresh = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = lostAt + 120_000, notAfter = lostAt + 3_720_000)
+    check(trust.verify(fresh, phone.id, "table-7", lostAt + 180_000) == GrantVerdict.Valid)
 }
 ```
 

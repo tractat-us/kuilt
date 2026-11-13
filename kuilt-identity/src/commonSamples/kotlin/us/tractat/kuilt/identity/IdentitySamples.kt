@@ -92,11 +92,15 @@ internal suspend fun sampleGrantTrust() {
     check(trust.verify(pass, host.id, "table-7", now + 60_000) == GrantVerdict.WrongSubject)
     check(trust.verify(pass, phone.id, "table-7", now + 3_600_000) == GrantVerdict.Expired)
 
-    // The phone is lost: revoke it. Every pass issued before the cutoff stops working...
-    revocations.revoke(phone.id, notBefore = now + 120_000)
-    check(trust.verify(pass, phone.id, "table-7", now + 180_000) == GrantVerdict.Revoked)
+    // The phone is lost: revoke it. A pass issued exactly at the cutoff stays good, so the cutoff is
+    // one past the clock, or one issued in this same millisecond would slip through.
+    val lostAt = now + 120_000
+    val sameMillisecond = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = lostAt, notAfter = lostAt + 3_600_000)
+    revocations.revoke(phone.id, notBefore = lostAt + 1)
+    check(trust.verify(pass, phone.id, "table-7", lostAt + 60_000) == GrantVerdict.Revoked)
+    check(trust.verify(sameMillisecond, phone.id, "table-7", lostAt + 60_000) == GrantVerdict.Revoked)
 
-    // ...and a fresh pass, issued after, works again.
-    val fresh = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = now + 240_000, notAfter = now + 3_840_000)
-    check(trust.verify(fresh, phone.id, "table-7", now + 300_000) == GrantVerdict.Valid)
+    // A fresh pass, issued after the cutoff, works again.
+    val fresh = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = lostAt + 120_000, notAfter = lostAt + 3_720_000)
+    check(trust.verify(fresh, phone.id, "table-7", lostAt + 180_000) == GrantVerdict.Valid)
 }
