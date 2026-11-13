@@ -484,7 +484,7 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
 ## Device identity & return
 
 **Intent:** recognise a device when it comes back — a phone that dropped off the Wi-Fi, an app that was closed and reopened — and you are reaching for a device id the device tells you, a token you mint and hand out, or a hand-rolled public-key fingerprint.
-**Primitive:** `DeviceKeyStore` (`us.tractat.kuilt.identity`, `:kuilt-identity`). A device is recognised only if it comes back with the same key, so the key has to outlive the app; this is where it lives. `deviceKey()` makes the key on the first call and returns the same one on every call after, concurrent first calls included. `keepGrant` keeps the newest grant from each host — an older one from the same host is ignored, one from another host sits beside it — and `grants()` reads them back. Do not hand-roll a key file or a "remember this device" token beside it. Take the store as a parameter: `InMemoryDeviceKeyStore()` keeps everything in memory and forgets it with the process, which is right for tests and for an app that has chosen not to be recognised; the platform stores that keep the key across launches are still to come.
+**Primitive:** `DeviceKeyStore` (`us.tractat.kuilt.identity`, `:kuilt-identity`). A device is recognised only if it comes back with the same key, so the key has to outlive the app; this is where it lives. `deviceKey()` makes the key on the first call and returns the same one on every call after, concurrent first calls included. `keepGrant` keeps the newest grant per host and scope — an older one from the same host for the same scope is ignored, while a pass into another room from the same host, or one from another host, sits beside it — and `grants()` reads them back. A grant issued at the same instant as the held one is ignored too, so a replayed or reordered copy cannot displace it. Do not hand-roll a key file or a "remember this device" token beside it. Take the store as a parameter: `InMemoryDeviceKeyStore()` keeps everything in memory and forgets it with the process, which is right for tests and for an app that has chosen not to be recognised; the platform stores that keep the key across launches are still to come.
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleDeviceKeyStore -->
 ```kotlin
@@ -496,7 +496,7 @@ internal suspend fun sampleDeviceKeyStore() {
     val me = store.deviceKey()
     check(store.deviceKey().id == me.id)
 
-    // A host lets this device back in; the device keeps the newest pass from each host.
+    // A host lets this device back in; the device keeps the newest pass per host and scope.
     val host = DeviceKey.generate()
     val now = 1_700_000_000_000L
     val first = Grant.issue(host, me.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 3_600_000)

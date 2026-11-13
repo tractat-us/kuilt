@@ -65,7 +65,7 @@ internal suspend fun sampleDeviceKeyStore() {
     val me = store.deviceKey()
     check(store.deviceKey().id == me.id)
 
-    // A host lets this device back in; the device keeps the newest pass from each host.
+    // A host lets this device back in; the device keeps the newest pass per host and scope.
     val host = DeviceKey.generate()
     val now = 1_700_000_000_000L
     val first = Grant.issue(host, me.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 3_600_000)
