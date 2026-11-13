@@ -6,6 +6,10 @@
 // - Show declarations: true
 
 // Library unique name: <us.tractat.kuilt:kuilt-session-test>
+open annotation class us.tractat.kuilt.session.test/AdmissionTestApi : kotlin/Annotation { // us.tractat.kuilt.session.test/AdmissionTestApi|null[0]
+    constructor <init>() // us.tractat.kuilt.session.test/AdmissionTestApi.<init>|<init>(){}[0]
+}
+
 final class us.tractat.kuilt.session.test/FakeRoom : us.tractat.kuilt.session/Room { // us.tractat.kuilt.session.test/FakeRoom|null[0]
     constructor <init>(us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.session/SessionRole = ..., kotlin.collections/Set<us.tractat.kuilt.session/Member> = ..., us.tractat.kuilt.session.partition/ResumeToken? = ..., us.tractat.kuilt.core/DeliveryPolicy = ..., us.tractat.kuilt.session.partition/RoomId? = ..., kotlin/Int = ...) // us.tractat.kuilt.session.test/FakeRoom.<init>|<init>(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.session.SessionRole;kotlin.collections.Set<us.tractat.kuilt.session.Member>;us.tractat.kuilt.session.partition.ResumeToken?;us.tractat.kuilt.core.DeliveryPolicy;us.tractat.kuilt.session.partition.RoomId?;kotlin.Int){}[0]
 
@@ -93,4 +97,5 @@ final class us.tractat.kuilt.session.test/FakeRoomFactory : us.tractat.kuilt.ses
     final suspend fun join(us.tractat.kuilt.core/Tag, kotlin/String?): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.test/FakeRoomFactory.join|join(us.tractat.kuilt.core.Tag;kotlin.String?){}[0]
 }
 
+final fun us.tractat.kuilt.session.test/admissionRequest(us.tractat.kuilt.identity/DidKey, kotlin/String = ..., kotlin/String? = ...): us.tractat.kuilt.session.admit/AdmissionRequest // us.tractat.kuilt.session.test/admissionRequest|admissionRequest(us.tractat.kuilt.identity.DidKey;kotlin.String;kotlin.String?){}[0]
 final suspend fun us.tractat.kuilt.session.test/fakeRoomPair(us.tractat.kuilt.core/PeerId = ..., us.tractat.kuilt.core/PeerId = ...): kotlin/Pair<us.tractat.kuilt.session.test/FakeRoom, us.tractat.kuilt.session.test/FakeRoom> // us.tractat.kuilt.session.test/fakeRoomPair|fakeRoomPair(us.tractat.kuilt.core.PeerId;us.tractat.kuilt.core.PeerId){}[0]

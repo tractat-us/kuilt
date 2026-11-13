@@ -1,3 +1,11 @@
+public final class us/tractat/kuilt/session/test/AdmissionRequestsKt {
+	public static final fun admissionRequest-iCRWAGs (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/session/admit/AdmissionRequest;
+	public static synthetic fun admissionRequest-iCRWAGs$default (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/session/admit/AdmissionRequest;
+}
+
+public abstract interface annotation class us/tractat/kuilt/session/test/AdmissionTestApi : java/lang/annotation/Annotation {
+}
+
 public final class us/tractat/kuilt/session/test/FakeRoom : us/tractat/kuilt/session/Room {
 	public fun <init> ()V
 	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/session/SessionRole;Ljava/util/Set;Lus/tractat/kuilt/session/partition/ResumeToken;Lus/tractat/kuilt/core/DeliveryPolicy;Ljava/lang/String;IILkotlin/jvm/internal/DefaultConstructorMarker;)V

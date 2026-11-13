@@ -430,6 +430,9 @@ public final class us/tractat/kuilt/session/SeamRoomFactory$Companion {
 	public static synthetic fun systemClock-gwCluXo$default (Lus/tractat/kuilt/session/SeamRoomFactory$Companion;Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;ILjava/lang/Object;)Lus/tractat/kuilt/session/SeamRoomFactory;
 }
 
+public abstract interface annotation class us/tractat/kuilt/session/SessionInternalApi : java/lang/annotation/Annotation {
+}
+
 public final class us/tractat/kuilt/session/SessionRole : java/lang/Enum {
 	public static final field Host Lus/tractat/kuilt/session/SessionRole;
 	public static final field Joiner Lus/tractat/kuilt/session/SessionRole;
@@ -474,6 +477,7 @@ public final class us/tractat/kuilt/session/admit/AdmissionPolicy$Companion {
 }
 
 public final class us/tractat/kuilt/session/admit/AdmissionRequest {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun getDeviceId ()Ljava/lang/String;
 	public final fun getDisplayName ()Ljava/lang/String;
 	public final fun getKey-UjzFoJQ ()Ljava/lang/String;

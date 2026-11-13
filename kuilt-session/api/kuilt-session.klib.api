@@ -6,6 +6,10 @@
 // - Show declarations: true
 
 // Library unique name: <us.tractat.kuilt:kuilt-session>
+open annotation class us.tractat.kuilt.session/SessionInternalApi : kotlin/Annotation { // us.tractat.kuilt.session/SessionInternalApi|null[0]
+    constructor <init>() // us.tractat.kuilt.session/SessionInternalApi.<init>|<init>(){}[0]
+}
+
 final enum class us.tractat.kuilt.session.admit/GrantReach : kotlin/Enum<us.tractat.kuilt.session.admit/GrantReach> { // us.tractat.kuilt.session.admit/GrantReach|null[0]
     enum entry AnyRoomOfIssuer // us.tractat.kuilt.session.admit/GrantReach.AnyRoomOfIssuer|null[0]
     enum entry ThisRoom // us.tractat.kuilt.session.admit/GrantReach.ThisRoom|null[0]
@@ -1038,6 +1042,8 @@ sealed interface us.tractat.kuilt.session/ReconnectReason { // us.tractat.kuilt.
 }
 
 final class us.tractat.kuilt.session.admit/AdmissionRequest { // us.tractat.kuilt.session.admit/AdmissionRequest|null[0]
+    constructor <init>(us.tractat.kuilt.identity/DidKey, kotlin/String, kotlin/String?) // us.tractat.kuilt.session.admit/AdmissionRequest.<init>|<init>(us.tractat.kuilt.identity.DidKey;kotlin.String;kotlin.String?){}[0]
+
     final val deviceId // us.tractat.kuilt.session.admit/AdmissionRequest.deviceId|{}deviceId[0]
         final fun <get-deviceId>(): kotlin/String? // us.tractat.kuilt.session.admit/AdmissionRequest.deviceId.<get-deviceId>|<get-deviceId>(){}[0]
     final val displayName // us.tractat.kuilt.session.admit/AdmissionRequest.displayName|{}displayName[0]
