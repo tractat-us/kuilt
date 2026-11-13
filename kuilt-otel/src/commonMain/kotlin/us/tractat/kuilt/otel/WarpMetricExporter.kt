@@ -431,6 +431,24 @@ public class WarpMetricExporter(
         )
     }
 
+    // ── Batch ─────────────────────────────────────────────────────────────────
+
+    /** Apply [updates] in order. */
+    public suspend fun record(updates: List<MetricUpdate>): MetricExportResult {
+        var firstFailure: MetricExportResult.Failure? = null
+        updates.forEach { update ->
+            val result = when (update) {
+                is MetricUpdate.IncrementSum -> incrementSum(update.key, update.by)
+                is MetricUpdate.IncrementSumDouble -> incrementSumDouble(update.key, update.by)
+                is MetricUpdate.SetGauge -> setGauge(update.key, update.value, update.timestamp)
+                is MetricUpdate.AddCardinality -> addCardinality(update.key, update.element)
+                is MetricUpdate.RecordHistogram -> recordHistogram(update.key, update.value)
+            }
+            if (firstFailure == null && result is MetricExportResult.Failure) firstFailure = result
+        }
+        return firstFailure ?: MetricExportResult.Success
+    }
+
     // ── Sum (GCounter) ─────────────────────────────────────────────────────────
 
     /**
