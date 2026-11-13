@@ -33,8 +33,9 @@ data class BridgeRow(val series: Int, val sample: Sample, val writesPerExport: L
  *
  * Rig checks: the exporter recovers exactly [series] series and still holds exactly that many after
  * the run (so every point landed on an existing series rather than minting a new one); every export
- * completes successfully; the store takes one write per point; and the counters total
- * `series × (1 + exports)`.
+ * completes successfully; the store takes one write per export — the whole batch is sums, one
+ * metric kind, and `WarpMetricExporter.record` writes each kind it touched once (#3284); and the
+ * counters total `series × (1 + exports)`.
  */
 suspend fun bridgeExportArm(series: Int, rounds: Int, warmUpExports: Int): BridgeRow {
     val timing = TimingStore(InMemoryDurableStore())
@@ -58,7 +59,7 @@ suspend fun bridgeExportArm(series: Int, rounds: Int, warmUpExports: Int): Bridg
 
     val exports = warmUpExports.toLong() + sample.executed
     check(exporter.metricCount() == series) { "the bridge minted series: ${exporter.metricCount()} != $series" }
-    check(timing.writes == series * sample.executed) {
+    check(timing.writes == sample.executed) {
         "store took ${timing.writes} writes for ${sample.executed} exports of $series points"
     }
     val total = (0 until series).sumOf { exporter.sumValue(sumKey(it)) }

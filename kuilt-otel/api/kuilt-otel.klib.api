@@ -330,6 +330,94 @@ sealed interface us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/Me
     }
 }
 
+sealed interface us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate|null[0]
+    abstract val key // us.tractat.kuilt.otel/MetricUpdate.key|{}key[0]
+        abstract fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.key.<get-key>|<get-key>(){}[0]
+
+    final class AddCardinality : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.AddCardinality|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/String) // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.String){}[0]
+
+        final val element // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.element|{}element[0]
+            final fun <get-element>(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.element.<get-element>|<get-element>(){}[0]
+        final val key // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.key.<get-key>|<get-key>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/String = ...): us.tractat.kuilt.otel/MetricUpdate.AddCardinality // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.toString|toString(){}[0]
+    }
+
+    final class IncrementSum : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.IncrementSum|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Long = ...) // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
+
+        final val by // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.by|{}by[0]
+            final fun <get-by>(): kotlin/Long // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.by.<get-by>|<get-by>(){}[0]
+        final val key // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.key.<get-key>|<get-key>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Long = ...): us.tractat.kuilt.otel/MetricUpdate.IncrementSum // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.toString|toString(){}[0]
+    }
+
+    final class IncrementSumDouble : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Double) // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
+
+        final val by // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble.by|{}by[0]
+            final fun <get-by>(): kotlin/Double // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble.by.<get-by>|<get-by>(){}[0]
+        final val key // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble.key.<get-key>|<get-key>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble.component1|component1(){}[0]
+        final fun component2(): kotlin/Double // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Double = ...): us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.IncrementSumDouble.toString|toString(){}[0]
+    }
+
+    final class RecordHistogram : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Double) // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
+
+        final val key // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram.key.<get-key>|<get-key>(){}[0]
+        final val value // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram.value|{}value[0]
+            final fun <get-value>(): kotlin/Double // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram.value.<get-value>|<get-value>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram.component1|component1(){}[0]
+        final fun component2(): kotlin/Double // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Double = ...): us.tractat.kuilt.otel/MetricUpdate.RecordHistogram // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.RecordHistogram.toString|toString(){}[0]
+    }
+
+    final class SetGauge : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.SetGauge|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Double, kotlin/Long) // us.tractat.kuilt.otel/MetricUpdate.SetGauge.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Double;kotlin.Long){}[0]
+
+        final val key // us.tractat.kuilt.otel/MetricUpdate.SetGauge.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.SetGauge.key.<get-key>|<get-key>(){}[0]
+        final val timestamp // us.tractat.kuilt.otel/MetricUpdate.SetGauge.timestamp|{}timestamp[0]
+            final fun <get-timestamp>(): kotlin/Long // us.tractat.kuilt.otel/MetricUpdate.SetGauge.timestamp.<get-timestamp>|<get-timestamp>(){}[0]
+        final val value // us.tractat.kuilt.otel/MetricUpdate.SetGauge.value|{}value[0]
+            final fun <get-value>(): kotlin/Double // us.tractat.kuilt.otel/MetricUpdate.SetGauge.value.<get-value>|<get-value>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.SetGauge.component1|component1(){}[0]
+        final fun component2(): kotlin/Double // us.tractat.kuilt.otel/MetricUpdate.SetGauge.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.otel/MetricUpdate.SetGauge.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Double = ..., kotlin/Long = ...): us.tractat.kuilt.otel/MetricUpdate.SetGauge // us.tractat.kuilt.otel/MetricUpdate.SetGauge.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Double;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.SetGauge.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.SetGauge.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.SetGauge.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.otel/SpanStatus { // us.tractat.kuilt.otel/SpanStatus|null[0]
     final class Error : us.tractat.kuilt.otel/SpanStatus { // us.tractat.kuilt.otel/SpanStatus.Error|null[0]
         constructor <init>(kotlin/String) // us.tractat.kuilt.otel/SpanStatus.Error.<init>|<init>(kotlin.String){}[0]
@@ -773,6 +861,7 @@ final class us.tractat.kuilt.otel/WarpMetricExporter { // us.tractat.kuilt.otel/
     final suspend fun mergeHistogram(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/DDSketch): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeHistogram|mergeHistogram(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.DDSketch){}[0]
     final suspend fun mergeSum(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounter): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeSum|mergeSum(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.GCounter){}[0]
     final suspend fun mergeSumDouble(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounterDouble): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeSumDouble|mergeSumDouble(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.GCounterDouble){}[0]
+    final suspend fun record(kotlin.collections/List<us.tractat.kuilt.otel/MetricUpdate>): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.record|record(kotlin.collections.List<us.tractat.kuilt.otel.MetricUpdate>){}[0]
     final suspend fun recordHistogram(us.tractat.kuilt.otel/MetricKey, kotlin/Double): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.recordHistogram|recordHistogram(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
     final suspend fun recover() // us.tractat.kuilt.otel/WarpMetricExporter.recover|recover(){}[0]
     final suspend fun setGauge(us.tractat.kuilt.otel/MetricKey, kotlin/Double, kotlin/Long): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.setGauge|setGauge(us.tractat.kuilt.otel.MetricKey;kotlin.Double;kotlin.Long){}[0]

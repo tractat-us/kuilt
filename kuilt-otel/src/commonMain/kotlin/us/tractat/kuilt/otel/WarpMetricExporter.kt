@@ -61,13 +61,20 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * ## Key inversion
  *
  * Every mutating method — [incrementSum], [incrementSumDouble], [setGauge], [addCardinality],
- * [recordHistogram] and their `merge*` twins — returns [MetricExportResult.Success] only once
+ * [recordHistogram], their `merge*` twins, and the batch form [record] — returns [MetricExportResult.Success] only once
  * the updated CRDT is **durably written to [DurableStore]**, never when it is delivered to any
  * backend. Delivery is asynchronous and eventually consistent.
  *
  * A [MetricExportResult.Failure] means "not yet durable", not "not counted": the in-memory
  * CRDT keeps the change, and the next successful write of that kind persists it. Retrying a
  * failed [incrementSum] therefore adds it twice.
+ *
+ * ## Batches
+ *
+ * Every write re-encodes the whole map of its kind, so a caller holding many updates at once — an
+ * SDK export, say — hands them to [record] as a list of [MetricUpdate]s. That is one encode and one
+ * write per kind the batch touches instead of one per update, under the same contract; the
+ * single-point mutators above are [record] with one update.
  *
  * ## Buffer cap
  *
@@ -196,8 +203,8 @@ public class WarpMetricExporter(
      *
      * ## Why it holds a SET of keys rather than a boolean
      *
-     * Because a store may refuse **one** key while accepting the others, and each mutating call
-     * writes exactly one key. A boolean latch alternates under that workload: `recordHistogram`
+     * Because a store may refuse **one** key while accepting the others, and each write is to
+     * exactly one key ([record] writes each kind it touched separately). A boolean latch alternates under that workload: `recordHistogram`
      * fails and opens it, `incrementSum` succeeds and clears it, the next `recordHistogram` fails
      * and reports again — one line per failing call, unbounded, which is the defect this latch
      * exists to prevent, back at a workload-dependent constant.
@@ -433,20 +440,119 @@ public class WarpMetricExporter(
 
     // ── Batch ─────────────────────────────────────────────────────────────────
 
-    /** Apply [updates] in order. */
+    /**
+     * Apply a **batch** of [updates] in order, then make one durable write per metric kind the
+     * batch touched — rather than one per update.
+     *
+     * Each mutator on this exporter re-encodes **every** series of its kind and writes the result,
+     * so N single-point calls cost N whole-map encodes and N writes, and an SDK export of N points
+     * through `KuiltMetricExporter` grew quadratically in the series count (#3284). A batch pays that
+     * fixed cost once per kind: a batch of a thousand sum increments is one encode of the sums and
+     * one write.
+     *
+     * **The durability contract is unchanged** — it is the single-point mutators' contract, stated
+     * for a batch, and those mutators are now this method with one update:
+     *
+     * - Returns [MetricExportResult.Success] only once **every** kind the batch touched is durably
+     *   written. Nothing is held back waiting for more updates; the batch is whatever the caller
+     *   had in hand, and it is on disk before this returns.
+     * - Every touched kind's write is **attempted**, even after one is refused, and the **first**
+     *   [MetricExportResult.Failure] (in the fixed kind order sums, double sums, gauges,
+     *   cardinalities, histograms) is returned. Stopping at the first refusal would leave the later
+     *   kinds off disk, which applying the updates one by one never does.
+     * - A [MetricExportResult.Failure] means "not yet durable", not "not counted": every update in
+     *   the batch stays in memory, and the next successful write of a refused kind persists it. So
+     *   the batch is **not atomic** on disk — a kind the store took is durable even when another
+     *   kind was refused — and retrying a failed batch counts its increments twice, exactly as
+     *   retrying a failed [incrementSum] does.
+     *
+     * In memory the exporter ends where applying [updates] one by one through [incrementSum],
+     * [incrementSumDouble], [setGauge], [addCardinality] and [recordHistogram] would leave it,
+     * eviction included: the [maxMetrics] cap is decided per update, in order. On disk, a touched
+     * kind holds its state as of the **end** of the batch. The one place that differs from the
+     * single-point sequence is a kind whose series a *later* update of another kind evicted: written
+     * one by one, the evicted series lingers on disk until that kind's next write; here it is
+     * already gone. A kind the batch never touched is not rewritten, as before.
+     *
+     * An empty [updates] is [MetricExportResult.Success] and touches neither memory nor the store.
+     * Each [MetricUpdate] validates its own arguments at construction, so a batch that was built
+     * cannot fail half-way through being applied.
+     *
+     * @sample us.tractat.kuilt.otel.sampleWarpMetricExporterBatch
+     */
     public suspend fun record(updates: List<MetricUpdate>): MetricExportResult {
-        var firstFailure: MetricExportResult.Failure? = null
-        updates.forEach { update ->
-            val result = when (update) {
-                is MetricUpdate.IncrementSum -> incrementSum(update.key, update.by)
-                is MetricUpdate.IncrementSumDouble -> incrementSumDouble(update.key, update.by)
-                is MetricUpdate.SetGauge -> setGauge(update.key, update.value, update.timestamp)
-                is MetricUpdate.AddCardinality -> addCardinality(update.key, update.element)
-                is MetricUpdate.RecordHistogram -> recordHistogram(update.key, update.value)
+        if (updates.isEmpty()) return MetricExportResult.Success
+        return writeMutex.withLock {
+            val writes = lock.withLock {
+                // The last series each kind's updates named — only for the failure log line.
+                val touched = LinkedHashMap<StoredKind, MetricKey>()
+                updates.forEach { update -> touched[applyLocked(update)] = update.key }
+                StoredKind.entries.mapNotNull { kind ->
+                    touched[kind]?.let { lastKey -> PendingWrite(kind, encode(kind), lastKey) }
+                }
             }
-            if (firstFailure == null && result is MetricExportResult.Failure) firstFailure = result
+            var firstFailure: MetricExportResult.Failure? = null
+            writes.forEach { write ->
+                val result = persist(write.kind.storeKey, write.encoded, write.lastKey)
+                if (firstFailure == null && result is MetricExportResult.Failure) firstFailure = result
+            }
+            firstFailure ?: MetricExportResult.Success
         }
-        return firstFailure ?: MetricExportResult.Success
+    }
+
+    /** One kind's encoded map, ready to write outside [lock]. */
+    private class PendingWrite(val kind: StoredKind, val encoded: ByteArray, val lastKey: MetricKey)
+
+    /** The five persisted maps, in the fixed order a batch writes them. */
+    private enum class StoredKind(val storeKey: StoreKey) {
+        SUMS(SUM_STORE_KEY),
+        SUMS_DOUBLE(SUM_DOUBLE_STORE_KEY),
+        GAUGES(GAUGE_STORE_KEY),
+        CARDINALITIES(CARDINALITY_STORE_KEY),
+        HISTOGRAMS(HISTOGRAM_STORE_KEY),
+    }
+
+    /** Apply one update to its map, evicting first if it opens a new series. Called inside [lock]. */
+    private fun applyLocked(update: MetricUpdate): StoredKind = when (update) {
+        is MetricUpdate.IncrementSum -> {
+            maybeEvictForNewKey(update.key, sums)
+            val current = sums.getOrPut(update.key) { GCounter.ZERO }
+            sums[update.key] = current.piece(current.inc(replica, update.by).delta)
+            StoredKind.SUMS
+        }
+        is MetricUpdate.IncrementSumDouble -> {
+            maybeEvictForNewKey(update.key, sumsDouble)
+            val current = sumsDouble.getOrPut(update.key) { GCounterDouble.ZERO }
+            sumsDouble[update.key] = current.piece(current.inc(replica, update.by).delta)
+            StoredKind.SUMS_DOUBLE
+        }
+        is MetricUpdate.SetGauge -> {
+            maybeEvictForNewKey(update.key, gauges)
+            val current = gauges.getOrPut(update.key) { LWWRegister.empty<Double>() }
+            gauges[update.key] = current.piece(current.set(replica, update.timestamp, update.value))
+            StoredKind.GAUGES
+        }
+        is MetricUpdate.AddCardinality -> {
+            maybeEvictForNewKey(update.key, cardinalities)
+            val current = cardinalities.getOrPut(update.key) { HyperLogLog.empty() }
+            cardinalities[update.key] = current.piece(current.add(update.element).delta)
+            StoredKind.CARDINALITIES
+        }
+        is MetricUpdate.RecordHistogram -> {
+            maybeEvictForNewKey(update.key, histograms)
+            val current = histograms.getOrPut(update.key) { histogramPrototype }
+            histograms[update.key] = current.piece(current.add(replica, update.value).delta)
+            StoredKind.HISTOGRAMS
+        }
+    }
+
+    /** Encode one kind's whole map. Called inside [lock]. */
+    private fun encode(kind: StoredKind): ByteArray = when (kind) {
+        StoredKind.SUMS -> encodeSums()
+        StoredKind.SUMS_DOUBLE -> encodeSumsDouble()
+        StoredKind.GAUGES -> encodeGauges()
+        StoredKind.CARDINALITIES -> encodeCardinalities()
+        StoredKind.HISTOGRAMS -> encodeHistograms()
     }
 
     // ── Sum (GCounter) ─────────────────────────────────────────────────────────
@@ -461,15 +567,7 @@ public class WarpMetricExporter(
      * is the correct cumulative semantics.
      */
     public suspend fun incrementSum(key: MetricKey, by: Long = 1L): MetricExportResult =
-        writeMutex.withLock {
-            val encoded = lock.withLock {
-                maybeEvictForNewKey(key, sums)
-                val current = sums.getOrPut(key) { GCounter.ZERO }
-                sums[key] = current.piece(current.inc(replica, by).delta)
-                encodeSums()
-            }
-            persistSums(encoded, key)
-        }
+        record(listOf(MetricUpdate.IncrementSum(key, by)))
 
     /**
      * Merge a remote [GCounter] snapshot into this exporter's sum for [key].
@@ -506,15 +604,7 @@ public class WarpMetricExporter(
      * Returns [MetricExportResult.Success] after the durable write.
      */
     public suspend fun incrementSumDouble(key: MetricKey, by: Double): MetricExportResult =
-        writeMutex.withLock {
-            val encoded = lock.withLock {
-                maybeEvictForNewKey(key, sumsDouble)
-                val current = sumsDouble.getOrPut(key) { GCounterDouble.ZERO }
-                sumsDouble[key] = current.piece(current.inc(replica, by).delta)
-                encodeSumsDouble()
-            }
-            persistSumsDouble(encoded, key)
-        }
+        record(listOf(MetricUpdate.IncrementSumDouble(key, by)))
 
     /**
      * Merge a remote [GCounterDouble] snapshot into this exporter's double-sum for [key].
@@ -556,16 +646,7 @@ public class WarpMetricExporter(
         key: MetricKey,
         value: Double,
         timestamp: Long,
-    ): MetricExportResult = writeMutex.withLock {
-        val encoded = lock.withLock {
-            maybeEvictForNewKey(key, gauges)
-            val current = gauges.getOrPut(key) { LWWRegister.empty<Double>() }
-            val write = current.set(replica, timestamp, value)
-            gauges[key] = current.piece(write)
-            encodeGauges()
-        }
-        persistGauges(encoded, key)
-    }
+    ): MetricExportResult = record(listOf(MetricUpdate.SetGauge(key, value, timestamp)))
 
     /**
      * Merge a remote [LWWRegister] snapshot into this exporter's gauge for [key].
@@ -606,16 +687,7 @@ public class WarpMetricExporter(
      * [MetricExportResult.Success] after the durable write.
      */
     public suspend fun addCardinality(key: MetricKey, element: String): MetricExportResult =
-        writeMutex.withLock {
-            val encoded = lock.withLock {
-                maybeEvictForNewKey(key, cardinalities)
-                val current = cardinalities.getOrPut(key) { HyperLogLog.empty() }
-                val patch = current.add(element)
-                cardinalities[key] = current.piece(patch.delta)
-                encodeCardinalities()
-            }
-            persistCardinalities(encoded, key)
-        }
+        record(listOf(MetricUpdate.AddCardinality(key, element)))
 
     /**
      * Merge a remote [HyperLogLog] snapshot into this exporter's sketch for [key].
@@ -661,15 +733,7 @@ public class WarpMetricExporter(
      * @throws IllegalArgumentException if [value] is NaN or infinite.
      */
     public suspend fun recordHistogram(key: MetricKey, value: Double): MetricExportResult =
-        writeMutex.withLock {
-            val encoded = lock.withLock {
-                maybeEvictForNewKey(key, histograms)
-                val current = histograms.getOrPut(key) { histogramPrototype }
-                histograms[key] = current.piece(current.add(replica, value).delta)
-                encodeHistograms()
-            }
-            persistHistograms(encoded, key)
-        }
+        record(listOf(MetricUpdate.RecordHistogram(key, value)))
 
     /**
      * Merge a remote [DDSketch] snapshot into this exporter's histogram for [key].
