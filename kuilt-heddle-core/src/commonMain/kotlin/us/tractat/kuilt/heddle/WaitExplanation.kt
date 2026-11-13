@@ -33,8 +33,9 @@ public sealed interface WaitExplanation {
     }
 
     /**
-     * No pick can end at the leaf [at]: it is the root, it has an ACTIVE child, or the edges from
-     * the root down to it are not all ACTIVE (a reload is removing or reshaping it). While this
+     * No pick can end at the leaf [at]: it is the root, it has an ACTIVE child, the topology does not
+     * declare it leasable (a group with nothing attached, not a lane), or the edges from the root
+     * down to it are not all ACTIVE (a reload is removing or reshaping it). While this
      * holds its work counts as idle, so it banks no credit (see [LocalHeddle]). The same arm as
      * [AcquireOutcome.NoLiveLineage], with [at] the leaf, as from [LocalHeddle.admit].
      */
