@@ -109,6 +109,8 @@ internal class PendingChallenges(private val clock: () -> Instant) {
         lock.withLock { entries.remove(sender) }
     }
 
+    fun retire(sender: PeerId, generation: Long): Boolean = TODO()
+
     /** [sender]'s entry if it has not expired; an expired one is removed. Call under [lock]. */
     private fun liveEntry(sender: PeerId, now: Instant): Entry? {
         val entry = entries[sender] ?: return null

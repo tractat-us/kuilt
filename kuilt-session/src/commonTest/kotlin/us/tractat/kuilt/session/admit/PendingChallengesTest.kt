@@ -53,7 +53,7 @@ class PendingChallengesTest {
         val deadline = now + 30.seconds
         table.open(alice, hello("alice"), byteArrayOf(7), deadline)
 
-        // Precondition: one millisecond before the deadline the entry is live, so the null below is
+        // Precondition: one millisecond before the deadline the entry exists, so the null below is
         // the deadline's doing and not an entry that was never there.
         now = deadline - 1.milliseconds
         assertEquals(1, table.retained)
@@ -149,6 +149,7 @@ class PendingChallengesTest {
     @Test
     fun dropRemovesTheEntryAndAReopenDoesNotRevalidateTheOldGeneration() {
         table.open(alice, hello("first"), byteArrayOf(1), now + 30.seconds)
+        table.open(bob, hello("bob"), byteArrayOf(9), now + 30.seconds)
         val first = assertNotNull(table.take(alice))
         assertTrue(table.isCurrent(alice, first.generation))
 
@@ -162,7 +163,74 @@ class PendingChallengesTest {
             // Generations are unique across the table, not counted per sender, so a sender that is
             // dropped and opens again never hands a stale decision the number it was waiting on.
             { assertFalse(afterReopen) },
-            { assertNull(table.take(bob), "dropping alice touched nobody else") },
+            { assertNotNull(table.take(bob), "dropping alice touched nobody else") },
+        )
+    }
+
+    @Test
+    fun retireOnTheCurrentGenerationRemovesTheEntry() {
+        table.open(alice, hello("alice"), byteArrayOf(1), now + 30.seconds)
+        val pending = assertNotNull(table.take(alice))
+        // Precondition: the entry is held and current, so a `true` below is a removal, not a no-op.
+        assertAll(
+            { assertEquals(1, table.retained) },
+            { assertTrue(table.isCurrent(alice, pending.generation)) },
+        )
+
+        val retired = table.retire(alice, pending.generation)
+
+        assertAll(
+            { assertTrue(retired) },
+            { assertEquals(0, table.retained) },
+            { assertFalse(table.isCurrent(alice, pending.generation)) },
+        )
+    }
+
+    @Test
+    fun retireOnASupersededGenerationLeavesTheNewerEntryTakeable() {
+        // The race retire exists for: a decision on generation 1 finishes after a re-Hello opened
+        // generation 2. Retiring generation 1 must not cost the joiner its second challenge.
+        table.open(alice, hello("first"), byteArrayOf(1), now + 30.seconds)
+        val first = assertNotNull(table.take(alice))
+        table.open(alice, hello("second"), byteArrayOf(2), now + 30.seconds)
+
+        val retired = table.retire(alice, first.generation)
+        val second = table.take(alice)
+
+        assertAll(
+            { assertFalse(retired) },
+            { assertNotNull(second, "generation 2 survives the stale retire") },
+            { assertEquals(hello("second"), second?.hello) },
+        )
+    }
+
+    @Test
+    fun retireOnAnExpiredGenerationReturnsFalse() {
+        val deadline = now + 30.seconds
+        table.open(alice, hello("alice"), byteArrayOf(1), deadline)
+        val pending = assertNotNull(table.take(alice))
+        now = deadline
+        // Precondition: the expired entry is still held, so the false below is about expiry.
+        assertEquals(1, table.retained)
+
+        assertAll(
+            // A decision that outlived its deadline is stale: the joiner has already timed out.
+            { assertFalse(table.retire(alice, pending.generation)) },
+            { assertEquals(0, table.retained, "the expired entry is removed all the same") },
+        )
+    }
+
+    @Test
+    fun openCopiesTheHostNonce() {
+        val nonce = byteArrayOf(1, 2, 3)
+        table.open(alice, hello("alice"), nonce, now + 30.seconds)
+        nonce[0] = 99
+
+        val pending = assertNotNull(table.take(alice))
+
+        assertAll(
+            { assertEquals(99, nonce[0], "precondition: the caller's array was mutated") },
+            { assertContentEquals(byteArrayOf(1, 2, 3), pending.hostNonce) },
         )
     }
 
