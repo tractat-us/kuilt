@@ -15,14 +15,14 @@ import kotlinx.serialization.encoding.encodeStructure
 /**
  * Everything a [LocalHeddle] needs to carry on after a restart, as one value you can encode in any
  * kotlinx.serialization format and store: the books, the open leases, how many slots the engine
- * was sized for, and what the fair-share allocator remembers. Take one with [LocalHeddle.persist],
+ * was sized for, what the fair-share allocator remembers, and the topology it last applied. Take one with [LocalHeddle.persist],
  * and start an engine from it with [LocalHeddle.restore].
  *
  * A snapshot that exists is consistent. The engine is the only thing that builds one, and decoding
  * one runs the same check, so a snapshot whose leases name an edge the ledger lacks, a path that
  * does not lead from [root] to the lease's leaf, a path across a retired edge, or a lease from a
- * later epoch than [epoch] never decodes: [LocalHeddle.decode] reports it as
- * [RestoreResult.Corrupt].
+ * later epoch than [epoch], or a [lastApplied] rooted somewhere other than [root] never decodes:
+ * [LocalHeddle.decode] reports it as [RestoreResult.Corrupt].
  *
  * ## What is kept, and why
  *
@@ -36,6 +36,12 @@ import kotlinx.serialization.encoding.encodeStructure
  * - **The capacity last reconciled, [totalSlots].** So a restored engine tops up its own supply from
  *   its first operation, exactly as the one it replaces did. Calling
  *   [LocalHeddle.reconcileCapacity] again after a restore is harmless.
+ * - **The topology last applied, [lastApplied].** Only the topology tells a lane from a group that
+ *   has nothing attached right now, such as one marked for runtime children before the first
+ *   arrives: both read as leaves in the ledger. A restored engine leases exactly what the persisted
+ *   one did, and [LocalHeddle.attachRuntimeChild] and a later [LocalHeddle.apply] diff against it.
+ *   It is the topology of the last [LocalHeddle.apply], even one with refusals: applying it again
+ *   after a restore lands what was left.
  *
  * What is **not** kept: the policy, which [LocalHeddle.restore] takes afresh, and the counter lease
  * ids are numbered from. A restored engine runs under a later epoch, and lease ids are scoped by
@@ -59,6 +65,8 @@ import kotlinx.serialization.encoding.encodeStructure
  * @property ledger the books: every edge, every grant, every charge.
  * @property allocatorMemory the fair-share allocator's wake memory.
  * @property totalSlots the capacity last given to [LocalHeddle.reconcileCapacity], `0` when none was.
+ * @property lastApplied the topology the engine last applied: the one it booted from, or the last
+ *   one passed to [LocalHeddle.apply].
  * @sample us.tractat.kuilt.heddle.sampleLocalPersistence
  */
 @Serializable(with = LocalHeddleSnapshotSerializer::class)
@@ -69,6 +77,7 @@ public class LocalHeddleSnapshot internal constructor(
     public val allocatorMemory: AllocatorMemory,
     public val totalSlots: Long,
     internal val open: List<PersistedLease>,
+    public val lastApplied: Topology,
 ) {
     init {
         require(epoch >= 0L) { "epoch must be non-negative, was $epoch" }
@@ -79,6 +88,9 @@ public class LocalHeddleSnapshot internal constructor(
             }
         }
         for (persisted in open) persisted.requireConsistent(root, epoch, ledger)
+        require(lastApplied.groupId() == root) {
+            "the topology last applied is rooted at ${lastApplied.groupId().value}, not ${root.value}"
+        }
     }
 
     /** Every open lease, in [LeaseId] order. */
@@ -91,6 +103,7 @@ public class LocalHeddleSnapshot internal constructor(
             totalSlots == other.totalSlots &&
             open == other.open &&
             allocatorMemory == other.allocatorMemory &&
+            lastApplied == other.lastApplied &&
             ledger == other.ledger
 
     override fun hashCode(): Int {
@@ -99,11 +112,12 @@ public class LocalHeddleSnapshot internal constructor(
         h = 31 * h + totalSlots.hashCode()
         h = 31 * h + open.hashCode()
         h = 31 * h + allocatorMemory.hashCode()
+        h = 31 * h + lastApplied.hashCode()
         return 31 * h + ledger.hashCode()
     }
 
     override fun toString(): String =
-        "LocalHeddleSnapshot(root=${root.value}, epoch=$epoch, totalSlots=$totalSlots, leases=${open.size}, $allocatorMemory)"
+        "LocalHeddleSnapshot(root=${root.value}, epoch=$epoch, totalSlots=$totalSlots, leases=${open.size}, $allocatorMemory, lastApplied=$lastApplied)"
 
     public companion object {
         /** The format this release writes. */
@@ -163,8 +177,8 @@ public sealed interface RestoreResult {
 /**
  * Format 1, field for field and in wire order. Each format keeps its own surrogate, so changing
  * [LocalHeddleSnapshot] cannot change what an earlier format's bytes mean, and the next format adds
- * a surrogate beside this one rather than editing it. The ledger and the allocator memory are
- * nested as one value each, through their own serializers.
+ * a surrogate beside this one rather than editing it. The ledger, the allocator memory and the
+ * topology are nested as one value each, through their own serializers.
  */
 @Serializable
 private class SnapshotFormat1(
@@ -174,9 +188,10 @@ private class SnapshotFormat1(
     val ledger: EntitlementLedger,
     val allocatorMemory: AllocatorMemory,
     val leases: List<LeaseFormat1>,
+    val lastApplied: Topology,
 ) {
     fun toSnapshot(): LocalHeddleSnapshot =
-        LocalHeddleSnapshot(root, epoch, ledger, allocatorMemory, totalSlots, leases.map { it.toPersisted() })
+        LocalHeddleSnapshot(root, epoch, ledger, allocatorMemory, totalSlots, leases.map { it.toPersisted() }, lastApplied)
 
     companion object {
         fun of(snapshot: LocalHeddleSnapshot): SnapshotFormat1 = SnapshotFormat1(
@@ -186,6 +201,7 @@ private class SnapshotFormat1(
             ledger = snapshot.ledger,
             allocatorMemory = snapshot.allocatorMemory,
             leases = snapshot.open.map(LeaseFormat1::of),
+            lastApplied = snapshot.lastApplied,
         )
     }
 }

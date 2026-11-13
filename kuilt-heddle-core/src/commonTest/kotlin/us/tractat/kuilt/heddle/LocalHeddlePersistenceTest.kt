@@ -22,9 +22,11 @@ import kotlin.test.fail
  */
 class LocalHeddlePersistenceTest {
 
-    private val root = GroupId("root")
-    private val a = GroupId("a")
-    private val b = GroupId("b")
+    /** `root → {a, b}` at equal weight. */
+    private val pair = Topology("root", listOf(Topology.Lane("a"), Topology.Lane("b")))
+    private val root = pair.groupId()
+    private val a = pair.groupId("a")
+    private val b = pair.groupId("b")
     private val policy = LocalPolicy(defaultReservation = 1L)
 
     private fun encode(snapshot: LocalHeddleSnapshot): String = Json.encodeToString(LocalHeddleSnapshot.serializer(), snapshot)
@@ -66,7 +68,7 @@ class LocalHeddlePersistenceTest {
      * persisted wake offset is the one the clamp just wrote.
      */
     private fun wakerScenario(epoch: Long = 0L): Pair<LocalHeddle, List<Lease>> {
-        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, a), edgeOf(root, b))), root, supply = 0L, policy = policy, epoch = epoch)
+        val h = LocalHeddle.fromTopology(pair, policy, epoch)
         h.reconcileCapacity(totalSlots = 2L)
         repeat(50) {
             val lease = h.lease(setOf(a), startedAt = it.toLong())
@@ -90,7 +92,11 @@ class LocalHeddlePersistenceTest {
     }
 
     private fun wakeOffsetOf(memory: AllocatorMemory, leaf: GroupId): Rational =
-        memory.wakeOffsets[AttachmentId("root>${leaf.value}")] ?: Rational.ZERO
+        memory.wakeOffsets[edgeTo(leaf)] ?: Rational.ZERO
+
+    /** The edge `root → leaf` of [pair] as [LocalHeddle.fromTopology] boots it, at generation 0. */
+    private fun edgeTo(leaf: GroupId): AttachmentId =
+        checkNotNull(LocalHeddle.fromTopology(pair, policy, 0L).snapshot().ledger.lineageOf(leaf)).single()
 
     @Test
     fun snapshotRoundTripsThroughJson() {
@@ -150,6 +156,40 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
+     * The topology comes back with the engine, so the restored one leases exactly what the persisted
+     * one did. The draft marks `pool` for runtime children and attaches none, so `pool` reads as a
+     * leaf in the ledger and only the topology says it is not leasable. An engine that leased every
+     * leaf after a restore would admit work there. The lane is the control: it is still leasable, so
+     * the refusal is about `pool`, not a restored engine that leases nothing.
+     */
+    @Test
+    fun lastAppliedSurvivesRestore() {
+        val draft = Topology(
+            "root",
+            listOf(
+                Topology.Lane("lane"),
+                Topology.Group("pool", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
+            ),
+        )
+        val pool = draft.groupId("pool")
+        val original = LocalHeddle.fromTopology(draft, policy, epoch = 0L)
+        val before = original.admit(pool, startedAt = 0L)
+        val restored = throughJson(original)
+        assertAll(
+            { assertEquals(draft, original.persist().lastApplied, "the rig: the snapshot holds the draft") },
+            { assertEquals(draft, restored.persist().lastApplied, "and so does the restored engine's") },
+            {
+                assertEquals(
+                    listOf<Any>(AcquireOutcome.NoLiveLineage(pool), AcquireOutcome.NoLiveLineage(pool)),
+                    listOf(before, restored.admit(pool, startedAt = 1L)),
+                    "a marked group with nothing attached is refused before the restore and after it",
+                )
+            },
+            { assertIs<AcquireOutcome.Acquired>(restored.admit(draft.groupId("lane"), startedAt = 2L), "the control: the lane still leases") },
+        )
+    }
+
+    /**
      * Restore under the next epoch, with the wake offset `b`'s clamp just wrote, then the same calls
      * as an engine that never persisted. Picks, outcomes and books all match. The control arm
      * restores the same snapshot with the wake memory forgotten, and picks differently, so the
@@ -163,7 +203,9 @@ class LocalHeddlePersistenceTest {
 
         val restored = LocalHeddle.restore(decoded(encode(persisted)), policy, epoch = 1L)
         val forgetful = LocalHeddle.restore(
-            LocalHeddleSnapshot(persisted.root, persisted.epoch, persisted.ledger, AllocatorMemory.EMPTY, persisted.totalSlots, persisted.open),
+            LocalHeddleSnapshot(
+                persisted.root, persisted.epoch, persisted.ledger, AllocatorMemory.EMPTY, persisted.totalSlots, persisted.open, persisted.lastApplied,
+            ),
             policy,
             epoch = 1L,
         )
@@ -173,7 +215,7 @@ class LocalHeddlePersistenceTest {
         val bPicks = { picks: List<Any> -> picks.count { it == b } }
         assertAll(
             { assertTrue(offset > Rational.ZERO, "the rig: b's wake offset is non-zero at persist time, $offset") },
-            { assertEquals(true, persisted.allocatorMemory.demandingObserved[AttachmentId("root>b")], "and b was last seen waiting") },
+            { assertEquals(true, persisted.allocatorMemory.demandingObserved[edgeTo(b)], "and b was last seen waiting") },
             { assertEquals(20, expected.count { it is GroupId }, "the rig: 20 picks ran after the restore") },
             { assertEquals(expected, actual, "the same picks and outcomes as the engine that never persisted") },
             { assertEquals(books(reference), books(restored), "and the same books") },
@@ -234,15 +276,18 @@ class LocalHeddlePersistenceTest {
     @Test
     fun corruptBytesAreNamedNotThrown() {
         val golden = GOLDEN_FORMAT_1
+        val pathToA = "\"path\":[\"${edgeTo(a).value}\"]"
         val cases = listOf(
             "not json" to "x",
             "truncated" to golden.substring(0, golden.length / 2),
             "no version" to """{"state":{}}""",
             "state before version" to golden.replaceFirst("{\"formatVersion\":1,", "{").dropLast(1) + ",\"formatVersion\":1}",
-            "a lease on an edge the ledger lacks" to golden.replace("\"path\":[\"root>a\"]", "\"path\":[\"root>z\"]"),
-            "a lease whose path ends elsewhere" to golden.replace("\"path\":[\"root>a\"]", "\"path\":[\"root>b\"]"),
+            "a lease on an edge the ledger lacks" to golden.replace(pathToA, "\"path\":[\"root/z@1:1#0\"]"),
+            "a lease whose path ends elsewhere" to golden.replace(pathToA, "\"path\":[\"${edgeTo(b).value}\"]"),
             "a lease from a later epoch" to golden.replaceFirst("\"leases\":[{\"epoch\":0,", "\"leases\":[{\"epoch\":5,"),
             "negative capacity" to golden.replace("\"totalSlots\":2,", "\"totalSlots\":-2,"),
+            "a topology rooted elsewhere" to golden.replace("\"lastApplied\":{\"root\":\"root\"", "\"lastApplied\":{\"root\":\"elsewhere\""),
+            "an invalid topology" to golden.replace("\"lastApplied\":{\"root\":\"root\"", "\"lastApplied\":{\"root\":\"\""),
         )
         val checks: List<() -> Unit> =
             cases.map { (name, text) -> { assertTrue(text != golden, "the rig: $name changed the text") } } +
@@ -287,7 +332,7 @@ class LocalHeddlePersistenceTest {
         val (h, open) = wakerScenario()
         val settled = h.lease(setOf(a, b))
         h.complete(settled.id, 1L)
-        val reset = LocalHeddle.over(h.snapshot().ledger, root, policy, epoch = 1L, Leasable.EveryGroup)
+        val reset = LocalHeddle.fromTopology(pair, policy, epoch = 1L)
         val resetBefore = reset.snapshot().ledger
         val restored = throughJson(h)
         val restoredBefore = restored.snapshot().ledger
@@ -310,11 +355,11 @@ class LocalHeddlePersistenceTest {
     @Test
     fun capacitySurvivesRestore() {
         // Sized for one slot, and nothing minted yet: the next acquire has to top up.
-        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, a))), root, supply = 0L, policy = policy)
+        val h = LocalHeddle.fromTopology(Topology("root", listOf(Topology.Lane("a"))), policy, epoch = 0L)
         h.reconcileCapacity(totalSlots = 1L)
         val restored = throughJson(h)
         val uncapacitated = LocalHeddle.restore(
-            h.persist().let { LocalHeddleSnapshot(it.root, it.epoch, it.ledger, it.allocatorMemory, totalSlots = 0L, it.open) },
+            h.persist().let { LocalHeddleSnapshot(it.root, it.epoch, it.ledger, it.allocatorMemory, totalSlots = 0L, it.open, it.lastApplied) },
             policy,
             epoch = 1L,
         )
@@ -334,17 +379,14 @@ class LocalHeddlePersistenceTest {
      */
     @Test
     fun aRestoreAnywhereIsInvisible() {
-        val p = GroupId("p")
-        val q = GroupId("q")
-        val leaves = listOf(GroupId("a/b"), GroupId("#3"), GroupId("c-7f3a"), GroupId("é#%@"))
-        val ledger = shapedLedger(
-            root,
+        val tree = Topology(
+            "root",
             listOf(
-                edgeOf(root, p, 2), edgeOf(root, q, 1),
-                edgeOf(p, leaves[0], 3), edgeOf(p, leaves[1], 1),
-                edgeOf(q, leaves[2], 1), edgeOf(q, leaves[3], 2),
+                Topology.Group("p", Weight.of(2), listOf(Topology.Lane("a/b", Weight.of(3)), Topology.Lane("#3"))),
+                Topology.Group("q", Weight.ONE, listOf(Topology.Lane("c-7f3a"), Topology.Lane("é#%@", Weight.of(2)))),
             ),
         )
+        val leaves = listOf(tree.groupId("p", "a/b"), tree.groupId("p", "#3"), tree.groupId("q", "c-7f3a"), tree.groupId("q", "é#%@"))
         val wide = LocalPolicy(defaultReservation = 3L)
         var restores = 0
         var withLeasesOpen = 0
@@ -352,8 +394,8 @@ class LocalHeddlePersistenceTest {
         var compared = 0
         for (seed in 0 until SEEDS) {
             val rng = Random(seed)
-            val reference = engineOver(ledger, root, supply = 0L, policy = wide).also { it.reconcileCapacity(2L) }
-            var subject = engineOver(ledger, root, supply = 0L, policy = wide).also { it.reconcileCapacity(2L) }
+            val reference = LocalHeddle.fromTopology(tree, wide, epoch = 0L).also { it.reconcileCapacity(2L) }
+            var subject = LocalHeddle.fromTopology(tree, wide, epoch = 0L).also { it.reconcileCapacity(2L) }
             val cut = rng.nextInt(STEPS)
             repeat(STEPS) { step ->
                 if (step == cut) {

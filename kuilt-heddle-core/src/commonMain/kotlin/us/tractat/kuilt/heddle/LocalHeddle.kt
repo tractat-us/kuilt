@@ -291,8 +291,9 @@ public sealed interface LeaseOutcome {
  * ## Persisting
  *
  * [persist] takes a [LocalHeddleSnapshot], everything a restart needs, and [restore] starts an
- * engine from one under a later epoch: every open lease is valid again under its old id, and the
- * next pick is the one this engine would have made. Encode the snapshot in any format;
+ * engine from one under a later epoch: every open lease is valid again under its old id, the
+ * topology last applied is the one it leases by, and the next pick is the one this engine would
+ * have made. Encode the snapshot in any format;
  * [decode] reads it back and names an unsupported version or corrupt bytes rather than throwing.
  * After a [restore], settle what did not survive the restart with [reconcileLeases].
  *
@@ -962,6 +963,7 @@ public class LocalHeddle private constructor(
         allocatorMemory = allocator.memory,
         totalSlots = capacity.slots,
         open = open.values.sortedBy { it.lease.id }.map { PersistedLease(it.lease, it.path) },
+        lastApplied = topology(),
     )
 
     /**
@@ -1262,7 +1264,8 @@ public class LocalHeddle private constructor(
          *
          * Every lease open in [snapshot] is open again under its own id, from whatever epoch issued
          * it, and charges down the path it was delegated on. The wake memory and the capacity come
-         * back too, so the next picks and top-ups are the ones the persisted engine would have made.
+         * back too, so the next picks and top-ups are the ones the persisted engine would have made,
+         * and so does the topology it last applied, so it leases exactly the groups that one did.
          * [policy] is taken afresh: pass the one the persisted engine ran with for that to hold.
          *
          * [epoch] must be above [snapshot]'s. Treat it as a boot counter you persist and only ever
@@ -1279,7 +1282,8 @@ public class LocalHeddle private constructor(
                 "a restore must run under an epoch above the snapshot's ${snapshot.epoch}, was $epoch"
             }
             val allocator = FairShareAllocator(SELF, policyConfig(policy), snapshot.allocatorMemory)
-            return LocalHeddle(snapshot.root, policy, epoch, snapshot.ledger, allocator).apply {
+            val leasable = Leasable.ByTopology(snapshot.lastApplied)
+            return LocalHeddle(snapshot.root, policy, epoch, snapshot.ledger, allocator, leasable).apply {
                 for (persisted in snapshot.open) open[persisted.lease.id] = OpenLease(persisted.lease, persisted.path)
                 reconcileCapacity(snapshot.totalSlots)
             }
