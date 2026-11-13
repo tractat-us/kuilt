@@ -39,3 +39,38 @@ internal fun sampleLocalLease() {
     }
     check(picks.count { it == heavy } in 19..21)
 }
+
+/**
+ * Ask why a group is waiting, and what share it is owed. Explaining moves nothing: the next
+ * acquire picks exactly the group explain said it would.
+ */
+@Suppress("unused")
+internal fun sampleExplainWait() {
+    val root = GroupId("pool")
+    val heavy = GroupId("heavy")
+    val light = GroupId("light")
+    // As in sampleLocalLease, the tree and its supply come through the module's own seams for now.
+    var tree = EntitlementLedger.bootstrap(root, emptyMap(), nonce = "genesis")
+    for (record in listOf(
+        AttachmentRecord(AttachmentId("pool>heavy"), root, heavy, Weight.of(2)),
+        AttachmentRecord(AttachmentId("pool>light"), root, light, Weight.ONE),
+    )) {
+        tree = tree.piece(checkNotNull(tree.prepare(record)).delta)
+        tree = tree.piece(checkNotNull(tree.activate(record.id)).delta)
+    }
+    val heddle = LocalHeddle.over(tree, root, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    heddle.mintSupply(1_000L)
+
+    val queued = setOf(heavy, light)
+    // Light is behind at the pool: at twice the weight, heavy's turn comes due sooner.
+    val why = heddle.explain(light, waiting = queued, eligible = queued)
+    check(why is WaitExplanation.BehindAtLevel && why.parent == root && why.nextChild == heavy)
+    check(heddle.explain(heavy, waiting = queued, eligible = queued) == WaitExplanation.WouldBePickedNext)
+    check((heddle.acquire(queued, queued, startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf == heavy)
+
+    // While both stay queued, heavy is owed 2 slots of every 3 and light 1.
+    check(heddle.entitlement(heavy, waiting = queued, totalSlots = 3L) == Rational.of(2L))
+    check(heddle.entitlement(light, waiting = queued, totalSlots = 3L) == Rational.ONE)
+    // A group with nothing queued is simply not waiting.
+    check(heddle.explain(light, waiting = setOf(heavy), eligible = setOf(heavy)) == WaitExplanation.NotWaiting)
+}

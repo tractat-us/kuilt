@@ -678,6 +678,9 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public static synthetic fun admit-lUmtw0Q$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AdmitOutcome;
 	public final fun cancel (Lus/tractat/kuilt/heddle/LeaseId;)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun complete (Lus/tractat/kuilt/heddle/LeaseId;J)Lus/tractat/kuilt/heddle/LeaseOutcome;
+	public final fun entitlement-lUmtw0Q (Ljava/lang/String;Ljava/util/Set;J)Lus/tractat/kuilt/heddle/Rational;
+	public final fun explain-mLLTQY0 (Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;J)Lus/tractat/kuilt/heddle/WaitExplanation;
+	public static synthetic fun explain-mLLTQY0$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/WaitExplanation;
 	public final fun extend (Lus/tractat/kuilt/heddle/LeaseId;J)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun getEpoch ()J
 	public final fun getRoot-urUY4Jo ()Ljava/lang/String;
@@ -1397,6 +1400,86 @@ public final class us/tractat/kuilt/heddle/TopologyWeightSerializer : kotlinx/se
 	public fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
 	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
 	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/Weight;)V
+}
+
+public abstract interface class us/tractat/kuilt/heddle/WaitExplanation {
+	public abstract fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+}
+
+public final class us/tractat/kuilt/heddle/WaitExplanation$BehindAtLevel : us/tractat/kuilt/heddle/WaitExplanation {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun component2-urUY4Jo ()Ljava/lang/String;
+	public final fun component3 ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun component4 ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun component5 ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun copy-WmD6BgY (Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;)Lus/tractat/kuilt/heddle/WaitExplanation$BehindAtLevel;
+	public static synthetic fun copy-WmD6BgY$default (Lus/tractat/kuilt/heddle/WaitExplanation$BehindAtLevel;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/WaitExplanation$BehindAtLevel;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEligibleFront ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun getFront ()Lus/tractat/kuilt/heddle/Rational;
+	public fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public final fun getLeafSideVirtualService ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun getNextChild-urUY4Jo ()Ljava/lang/String;
+	public final fun getParent-urUY4Jo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/WaitExplanation$Kind : java/lang/Enum {
+	public static final field BEHIND_AT_LEVEL Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public static final field NOT_ELIGIBLE Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public static final field NOT_WAITING Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public static final field NO_LIVE_LINEAGE Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public static final field SUPPLY_EXHAUSTED Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public static final field WOULD_BE_PICKED_NEXT Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public static fun values ()[Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+}
+
+public final class us/tractat/kuilt/heddle/WaitExplanation$NoLiveLineage : us/tractat/kuilt/heddle/WaitExplanation {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/WaitExplanation$NoLiveLineage;
+	public static synthetic fun copy-9eHOidQ$default (Lus/tractat/kuilt/heddle/WaitExplanation$NoLiveLineage;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/WaitExplanation$NoLiveLineage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAt-urUY4Jo ()Ljava/lang/String;
+	public fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/WaitExplanation$NotEligible : us/tractat/kuilt/heddle/WaitExplanation {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/WaitExplanation$NotEligible;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/WaitExplanation$NotWaiting : us/tractat/kuilt/heddle/WaitExplanation {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/WaitExplanation$NotWaiting;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/WaitExplanation$SupplyExhausted : us/tractat/kuilt/heddle/WaitExplanation {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/WaitExplanation$SupplyExhausted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/WaitExplanation$WouldBePickedNext : us/tractat/kuilt/heddle/WaitExplanation {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/WaitExplanation$WouldBePickedNext;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class us/tractat/kuilt/heddle/Weight : java/lang/Comparable {

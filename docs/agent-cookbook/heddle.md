@@ -224,6 +224,32 @@ through module-internal seams, which a consumer cannot call.
     check(picks.count { it == heavy } in 19..21)
 ```
 
+To show someone why their work is waiting, `explain(leaf, waiting, eligible)` gives one
+`WaitExplanation`: `NotWaiting`, `NotEligible`, `NoLiveLineage(at)` (no pick can end there, the
+same test `acquire` applies), `SupplyExhausted`, `BehindAtLevel(parent, nextChild, …)` at the first
+group where another child goes first, or `WouldBePickedNext`. It runs the real pick on a throwaway
+copy, wake memory included, so it agrees with the next `acquire` on the same arguments and changes
+nothing. `BehindAtLevel` carries the leaf side's virtual service beside two lines: `eligibleFront`,
+the line this pick drew over the children it could run (above it, the side was not a candidate;
+at or below, it lost on its deadline), and `front`, the share line over everyone waiting (above
+it, the side has had more than its share). Log `kind`, a stable ordered enum, and the group ids,
+not the rationals, which move every pick. `entitlement(leaf, waiting, totalSlots)` is the leaf's fair share of the slots, as an exact
+fraction, over the same competing set: work no pick can reach is owed nothing and takes nothing.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleExplainWait -->
+```kotlin
+    val queued = setOf(heavy, light)
+    // Light is behind at the pool: at twice the weight, heavy's turn comes due sooner.
+    val why = heddle.explain(light, waiting = queued, eligible = queued)
+    check(why is WaitExplanation.BehindAtLevel && why.parent == root && why.nextChild == heavy)
+    check(heddle.explain(heavy, waiting = queued, eligible = queued) == WaitExplanation.WouldBePickedNext)
+    check((heddle.acquire(queued, queued, startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf == heavy)
+
+    // While both stay queued, heavy is owed 2 slots of every 3 and light 1.
+    check(heddle.entitlement(heavy, waiting = queued, totalSlots = 3L) == Rational.of(2L))
+    check(heddle.entitlement(light, waiting = queued, totalSlots = 3L) == Rational.ONE)
+```
+
 ### Run it over a network — reserve, run, charge once
 
 **Intent:** put the fair-share tally on a live connection between peers — advertise appetite,

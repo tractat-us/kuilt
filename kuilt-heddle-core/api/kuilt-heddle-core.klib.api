@@ -482,6 +482,104 @@ sealed interface us.tractat.kuilt.heddle/TopologyStep { // us.tractat.kuilt.hedd
     }
 }
 
+sealed interface us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation|null[0]
+    abstract val kind // us.tractat.kuilt.heddle/WaitExplanation.kind|{}kind[0]
+        abstract fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.kind.<get-kind>|<get-kind>(){}[0]
+
+    final enum class Kind : kotlin/Enum<us.tractat.kuilt.heddle/WaitExplanation.Kind> { // us.tractat.kuilt.heddle/WaitExplanation.Kind|null[0]
+        enum entry BEHIND_AT_LEVEL // us.tractat.kuilt.heddle/WaitExplanation.Kind.BEHIND_AT_LEVEL|null[0]
+        enum entry NOT_ELIGIBLE // us.tractat.kuilt.heddle/WaitExplanation.Kind.NOT_ELIGIBLE|null[0]
+        enum entry NOT_WAITING // us.tractat.kuilt.heddle/WaitExplanation.Kind.NOT_WAITING|null[0]
+        enum entry NO_LIVE_LINEAGE // us.tractat.kuilt.heddle/WaitExplanation.Kind.NO_LIVE_LINEAGE|null[0]
+        enum entry SUPPLY_EXHAUSTED // us.tractat.kuilt.heddle/WaitExplanation.Kind.SUPPLY_EXHAUSTED|null[0]
+        enum entry WOULD_BE_PICKED_NEXT // us.tractat.kuilt.heddle/WaitExplanation.Kind.WOULD_BE_PICKED_NEXT|null[0]
+
+        final val entries // us.tractat.kuilt.heddle/WaitExplanation.Kind.entries|#static{}entries[0]
+            final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.heddle/WaitExplanation.Kind> // us.tractat.kuilt.heddle/WaitExplanation.Kind.entries.<get-entries>|<get-entries>#static(){}[0]
+
+        final fun valueOf(kotlin/String): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.Kind.valueOf|valueOf#static(kotlin.String){}[0]
+        final fun values(): kotlin/Array<us.tractat.kuilt.heddle/WaitExplanation.Kind> // us.tractat.kuilt.heddle/WaitExplanation.Kind.values|values#static(){}[0]
+    }
+
+    final class BehindAtLevel : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Rational) // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.<init>|<init>(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational){}[0]
+
+        final val eligibleFront // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.eligibleFront|{}eligibleFront[0]
+            final fun <get-eligibleFront>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.eligibleFront.<get-eligibleFront>|<get-eligibleFront>(){}[0]
+        final val front // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.front|{}front[0]
+            final fun <get-front>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.front.<get-front>|<get-front>(){}[0]
+        final val kind // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.kind|{}kind[0]
+            final fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.kind.<get-kind>|<get-kind>(){}[0]
+        final val leafSideVirtualService // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.leafSideVirtualService|{}leafSideVirtualService[0]
+            final fun <get-leafSideVirtualService>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.leafSideVirtualService.<get-leafSideVirtualService>|<get-leafSideVirtualService>(){}[0]
+        final val nextChild // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.nextChild|{}nextChild[0]
+            final fun <get-nextChild>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.nextChild.<get-nextChild>|<get-nextChild>(){}[0]
+        final val parent // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.parent.<get-parent>|<get-parent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component2|component2(){}[0]
+        final fun component3(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component3|component3(){}[0]
+        final fun component4(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component4|component4(){}[0]
+        final fun component5(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component5|component5(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/Rational = ..., us.tractat.kuilt.heddle/Rational = ..., us.tractat.kuilt.heddle/Rational = ...): us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.copy|copy(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.toString|toString(){}[0]
+    }
+
+    final class NoLiveLineage : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val at // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.at|{}at[0]
+            final fun <get-at>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.at.<get-at>|<get-at>(){}[0]
+        final val kind // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.kind|{}kind[0]
+            final fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.kind.<get-kind>|<get-kind>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.toString|toString(){}[0]
+    }
+
+    final object NotEligible : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.NotEligible|null[0]
+        final val kind // us.tractat.kuilt.heddle/WaitExplanation.NotEligible.kind|{}kind[0]
+            final fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.NotEligible.kind.<get-kind>|<get-kind>(){}[0]
+
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.NotEligible.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.NotEligible.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.NotEligible.toString|toString(){}[0]
+    }
+
+    final object NotWaiting : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.NotWaiting|null[0]
+        final val kind // us.tractat.kuilt.heddle/WaitExplanation.NotWaiting.kind|{}kind[0]
+            final fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.NotWaiting.kind.<get-kind>|<get-kind>(){}[0]
+
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.NotWaiting.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.NotWaiting.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.NotWaiting.toString|toString(){}[0]
+    }
+
+    final object SupplyExhausted : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.SupplyExhausted|null[0]
+        final val kind // us.tractat.kuilt.heddle/WaitExplanation.SupplyExhausted.kind|{}kind[0]
+            final fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.SupplyExhausted.kind.<get-kind>|<get-kind>(){}[0]
+
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.SupplyExhausted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.SupplyExhausted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.SupplyExhausted.toString|toString(){}[0]
+    }
+
+    final object WouldBePickedNext : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.WouldBePickedNext|null[0]
+        final val kind // us.tractat.kuilt.heddle/WaitExplanation.WouldBePickedNext.kind|{}kind[0]
+            final fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.WouldBePickedNext.kind.<get-kind>|<get-kind>(){}[0]
+
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.WouldBePickedNext.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.WouldBePickedNext.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.WouldBePickedNext.toString|toString(){}[0]
+    }
+}
+
 final class us.tractat.kuilt.heddle/AllocatorMemory { // us.tractat.kuilt.heddle/AllocatorMemory|null[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AllocatorMemory.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AllocatorMemory.hashCode|hashCode(){}[0]
@@ -798,6 +896,8 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
     final fun admit(us.tractat.kuilt.heddle/GroupId, kotlin/Long, kotlin/Long = ...): us.tractat.kuilt.heddle/AdmitOutcome // us.tractat.kuilt.heddle/LocalHeddle.admit|admit(us.tractat.kuilt.heddle.GroupId;kotlin.Long;kotlin.Long){}[0]
     final fun cancel(us.tractat.kuilt.heddle/LeaseId): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/LocalHeddle.cancel|cancel(us.tractat.kuilt.heddle.LeaseId){}[0]
     final fun complete(us.tractat.kuilt.heddle/LeaseId, kotlin/Long): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/LocalHeddle.complete|complete(us.tractat.kuilt.heddle.LeaseId;kotlin.Long){}[0]
+    final fun entitlement(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/LocalHeddle.entitlement|entitlement(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
+    final fun explain(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long = ...): us.tractat.kuilt.heddle/WaitExplanation // us.tractat.kuilt.heddle/LocalHeddle.explain|explain(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
     final fun extend(us.tractat.kuilt.heddle/LeaseId, kotlin/Long): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/LocalHeddle.extend|extend(us.tractat.kuilt.heddle.LeaseId;kotlin.Long){}[0]
     final fun previewPicks(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin/Int>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/List<kotlin/Long>): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LocalHeddle.previewPicks|previewPicks(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.Int>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.List<kotlin.Long>){}[0]
     final fun snapshot(): us.tractat.kuilt.heddle/LocalHeddleState // us.tractat.kuilt.heddle/LocalHeddle.snapshot|snapshot(){}[0]
