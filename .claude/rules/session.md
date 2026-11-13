@@ -4,6 +4,7 @@ paths:
   - "kuilt-liveness/**"
   - "kuilt-session-test/**"
   - "kuilt-identity/**"
+  - "kuilt-identity-test/**"
 ---
 # Session
 
