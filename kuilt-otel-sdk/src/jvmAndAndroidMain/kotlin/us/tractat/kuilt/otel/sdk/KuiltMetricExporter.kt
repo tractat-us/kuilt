@@ -30,13 +30,24 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  * monotonic counter and gauge also lands in kuilt's offline-first buffer, extractable via
  * the metric tap — without adopting kuilt's own instrumentation. Purely additive.
  *
- * ## Delta temporality (load-bearing)
+ * ## Temporality (load-bearing)
  *
- * [getAggregationTemporality] returns [AggregationTemporality.DELTA] for every instrument
- * type. `WarpMetricExporter.incrementSum(by)` **adds** `by`, i.e. it is a delta operation;
- * a cumulative point (running total) would double-count on every collection. Requesting
- * delta makes each sum point exactly the increment to add — and a delta is inherently
- * additive, so two replicas' counters merge to the true total with no coordination.
+ * [getAggregationTemporality] picks, per instrument type, the temporality the mapping below
+ * needs — the same split as the SDK's own `AggregationTemporalitySelector.deltaPreference()`:
+ *
+ * - **Counters** (`COUNTER`, `OBSERVABLE_COUNTER`) → [AggregationTemporality.DELTA].
+ *   `WarpMetricExporter.incrementSum(by)` **adds** `by`; a cumulative point (running total)
+ *   would be added again on every collection. A delta is exactly the increment to add, and
+ *   it is additive, so two replicas' counters merge to the true total with no coordination.
+ * - **UpDownCounters** (`UP_DOWN_COUNTER`, `OBSERVABLE_UP_DOWN_COUNTER`) →
+ *   [AggregationTemporality.CUMULATIVE]. One becomes a gauge, which holds a level; under
+ *   delta its point would be the change over the interval, and a queue going 10 → 12 would
+ *   read 2. The cost: a cumulative series is re-sent on every collection whether or not it
+ *   moved, so each one is a `setGauge` write per collection.
+ * - **Gauges and histograms** → [AggregationTemporality.DELTA]. A gauge's point is a level
+ *   either way; under delta the SDK sends it only when it was recorded in the interval, so
+ *   an unchanged gauge is not rewritten with a fresh timestamp each collection. Histograms
+ *   are dropped, so theirs only sets how much the SDK holds between collections.
  *
  * ## Non-blocking bridge
  *
@@ -46,14 +57,17 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *
  * ## Mapping
  * - monotonic `LONG_SUM` → `incrementSum`; monotonic `DOUBLE_SUM` → `incrementSumDouble`.
- * - non-monotonic sums (UpDownCounter) and gauges → `setGauge`. Under delta temporality an
- *   UpDownCounter's point is its change over the collection interval, not its current level,
- *   so the gauge it becomes holds that change.
+ * - non-monotonic sums (UpDownCounter) and gauges → `setGauge`. An UpDownCounter arrives
+ *   cumulative (above), so the gauge it becomes holds its current level.
  * - histograms / exponential histograms / summaries → **dropped** (WARN), never a failure.
  *   `WarpMetricExporter` does keep histograms (a `DDSketch` per series), but it takes them one
  *   raw value at a time through `recordHistogram`; the SDK hands over buckets already counted,
  *   and `mergeHistogram` is a join, so adding one interval's buckets to the last has no entry point.
  * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it).
+ * - a sum whose own temporality is not the one asked for above — a cumulative counter, or a
+ *   delta UpDownCounter, from a reader with its own temporality selector — is **dropped**
+ *   (WARN). Added, the first would count its running total again each collection; stored,
+ *   the second would be a change read as a level.
  *
  * @param exporter the durable kuilt buffer points are written into.
  * @param scope the drain coroutine's scope (required — never a real-dispatcher default).
@@ -97,9 +111,15 @@ public class KuiltMetricExporter(
         return code
     }
 
-    /** Delta so each sum point maps onto incrementSum(by); gauges ignore temporality. */
+    /**
+     * Cumulative for an UpDownCounter, whose point becomes a gauge level; delta for everything
+     * else, so a counter's point is the increment `incrementSum` adds. See the class KDoc.
+     */
     override fun getAggregationTemporality(instrumentType: InstrumentType): AggregationTemporality =
-        AggregationTemporality.DELTA
+        when (instrumentType) {
+            InstrumentType.UP_DOWN_COUNTER, InstrumentType.OBSERVABLE_UP_DOWN_COUNTER -> AggregationTemporality.CUMULATIVE
+            else -> AggregationTemporality.DELTA
+        }
 
     /** Apply one metric's points; return whether every point-write succeeded (drop = success). */
     private suspend fun applyMetric(md: MetricData): Boolean {
@@ -107,12 +127,14 @@ public class KuiltMetricExporter(
         return when (md.type) {
             MetricDataType.LONG_SUM -> {
                 val s = md.longSumData
+                if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return true
                 s.points.map { p ->
                     if (s.isMonotonic) incLong(name, p) else setGaugeOk(name, p.attributes, p.value.toDouble(), p.epochNanos)
                 }.all { it }
             }
             MetricDataType.DOUBLE_SUM -> {
                 val s = md.doubleSumData
+                if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return true
                 s.points.map { p ->
                     if (s.isMonotonic) incDouble(name, p) else setGaugeOk(name, p.attributes, p.value, p.epochNanos)
                 }.all { it }
@@ -129,6 +151,22 @@ public class KuiltMetricExporter(
                 true
             }
         }
+    }
+
+    /**
+     * Whether a sum arrived with the temporality its mapping needs: delta for a counter's
+     * increment, cumulative for an UpDownCounter's level. A reader that consults
+     * [getAggregationTemporality] always delivers that; one with its own selector may not,
+     * and either mismatch would be silently wrong, so the sum is dropped with a WARN instead.
+     */
+    private fun sumTemporalityFits(name: String, monotonic: Boolean, temporality: AggregationTemporality): Boolean {
+        val needed = if (monotonic) AggregationTemporality.DELTA else AggregationTemporality.CUMULATIVE
+        if (temporality == needed) return true
+        logger.warn {
+            "KuiltMetricExporter: dropping ${if (monotonic) "monotonic" else "non-monotonic"} sum '$name' — it " +
+                "arrived $temporality and the bridge needs $needed; register it on a reader that asks the exporter"
+        }
+        return false
     }
 
     private suspend fun incLong(name: String, p: LongPointData): Boolean {

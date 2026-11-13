@@ -14,11 +14,11 @@ Three optional, additive pieces, all for apps that already run OpenTelemetry:
   extractable buffer — without adopting kuilt's own capture edge.
 - `KuiltMetricExporter` is its metric twin: register it on a metric reader of
   its own and every counter and gauge also lands in the same durable buffer. It
-  asks the SDK for **delta** temporality, because kuilt adds each point to a
-  running total; your own OTLP exporter, on its own reader, keeps whatever it
-  asked for. One consequence: an UpDownCounter arrives as a delta too, so the
-  gauge it becomes holds the change over the last interval, not the current level.
-  Histograms and summaries are dropped with a warning. kuilt does store
+  asks the SDK for **delta** temporality on counters, because kuilt adds each
+  point to a running total, and for **cumulative** on UpDownCounters, so the
+  gauge each becomes holds the current level rather than the last interval's
+  change. Your own OTLP exporter, on its own reader, keeps whatever it asked
+  for. Histograms and summaries are dropped with a warning. kuilt does store
   histograms, but one raw value at a time, and the SDK sends buckets already
   counted.
 
