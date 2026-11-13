@@ -64,14 +64,9 @@ public value class DidKey internal constructor(
      */
     public suspend fun verify(message: ByteArray, signature: ByteArray): Boolean {
         if (signature.size != SIGNATURE_SIZE) return false
-        val point = compressedPoint()
-        if (!isOnCurve(point)) return false
-        val ecdsa = algorithms().ecdsa
+        val key = decodeOnCurve(compressedPoint()) ?: return false
         return try {
-            ecdsa.publicKeyDecoder(EC.Curve.P256)
-                .decodeFromByteArray(EC.PublicKey.Format.RAW.Compressed, point)
-                .signatureVerifier(SHA256, ECDSA.SignatureFormat.RAW)
-                .tryVerifySignature(message, signature)
+            key.signatureVerifier(SHA256, ECDSA.SignatureFormat.RAW).tryVerifySignature(message, signature)
         } catch (e: CancellationException) {
             currentCoroutineContext().ensureActive()
             false
@@ -93,12 +88,7 @@ public value class DidKey internal constructor(
          */
         public suspend fun parse(value: String): DidKey {
             val key = DidKey(value)
-            val point = key.compressedPoint()
-            require(isOnCurve(point)) { "not a P-256 did:key: the point is not on the curve" }
-            val ecdsa = algorithms().ecdsa
-            providerCall({ IllegalArgumentException("not a P-256 did:key: the provider refused the point ($it)") }) {
-                ecdsa.publicKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PublicKey.Format.RAW.Compressed, point)
-            }
+            requireNotNull(decodeOnCurve(key.compressedPoint())) { "not a P-256 did:key: the point is not on the curve, or this platform's provider refused it" }
             return key
         }
 
@@ -114,6 +104,30 @@ public value class DidKey internal constructor(
         override fun serialize(encoder: Encoder, value: DidKey): Unit = encoder.encodeString(value.value)
 
         override fun deserialize(decoder: Decoder): DidKey = DidKey(decoder.decodeString())
+    }
+}
+
+/**
+ * The provider's key for [point], or `null` when the point is not on P-256 or the provider refuses it.
+ *
+ * The one path from a compressed point to a provider key: [DidKey.parse] and [DidKey.verify] both
+ * come through here, so the on-curve check cannot drop out of either. It runs before the provider
+ * sees the point, because the JDK provider would accept an off-curve one (#3201). A provider that
+ * cannot run here at all still throws [IllegalStateException] from [algorithms].
+ */
+internal suspend fun decodeOnCurve(point: ByteArray): ECDSA.PublicKey? {
+    if (!isOnCurve(point)) return null
+    val ecdsa = algorithms().ecdsa
+    return try {
+        ecdsa.publicKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PublicKey.Format.RAW.Compressed, point)
+    } catch (e: CancellationException) {
+        currentCoroutineContext().ensureActive()
+        null
+    } catch (e: Error) {
+        throw e
+    } catch (e: Throwable) {
+        // Throwable, not Exception: a WebCrypto rejection arrives on wasmJs as a bare JsException.
+        null
     }
 }
 

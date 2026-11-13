@@ -2,6 +2,8 @@ package us.tractat.kuilt.identity
 
 import com.ionspin.kotlin.bignum.integer.BigInteger
 import dev.whyoleg.cryptography.algorithms.EC
+import dev.whyoleg.cryptography.algorithms.ECDSA
+import dev.whyoleg.cryptography.algorithms.SHA256
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.runTest
@@ -132,13 +134,43 @@ class DidKeyTest {
         val fromTheWire = Cbor.decodeFromByteArray<DidKey>(Cbor.encodeToByteArray(String.serializer(), did))
         val verdict = fromTheWire.verify("anything".encodeToByteArray(), ByteArray(SIGNATURE_SIZE) { 1 })
         val parsed = parseRefusal(did)
+        // The one path parse and verify share. A positive control first, so null below means the check.
+        val onCurve = decodeOnCurve(EVEN_COMPRESSED.hexToByteArray())
+        val offCurve = decodeOnCurve(compressed)
         assertAll(
+            { assertTrue(onCurve != null, "precondition: decodeOnCurve decodes a point that is on the curve") },
+            { assertEquals(null, offCurve, "decodeOnCurve refuses x = 1, on every target") },
             // On the JDK the decoder accepts it: the defect this check exists for. Elsewhere, recorded above.
             { if (provider == "JDK") assertEquals("accepted", rawDecode, "control: the JDK decodes an off-curve x") },
             { assertEquals(did, DidKey(did).value, "precondition: the name is well-formed, so parse's refusal is the curve check") },
             { assertTrue(parsed is IllegalArgumentException, "parse refuses an off-curve point: $parsed") },
             { assertEquals(did, fromTheWire.value, "the serializer checks syntax only") },
             { assertFalse(verdict, "an off-curve key verifies nothing") },
+        )
+    }
+
+    @Test
+    fun verifyAcceptsTheKeysOwnSignatureAndNothingElse() = runTest {
+        val ecdsa = algorithms().ecdsa
+        val pair = ecdsa.keyPairGenerator(EC.Curve.P256).generateKey()
+        val key = DidKey.ofCompressedPoint(pair.publicKey.encodeToByteArray(EC.PublicKey.Format.RAW.Compressed))
+        val other = DidKey.ofCompressedPoint(
+            ecdsa.keyPairGenerator(EC.Curve.P256).generateKey().publicKey.encodeToByteArray(EC.PublicKey.Format.RAW.Compressed),
+        )
+        val message = "a device comes back".encodeToByteArray()
+        val signature = pair.privateKey.signatureGenerator(SHA256, ECDSA.SignatureFormat.RAW).generateSignature(message)
+        val flippedSignature = signature.copyOf().also { it[it.size / 2] = (it[it.size / 2].toInt() xor 0x01).toByte() }
+        val flippedMessage = message.copyOf().also { it[0] = (it[0].toInt() xor 0x01).toByte() }
+        val good = key.verify(message, signature)
+        val badSignature = key.verify(message, flippedSignature)
+        val badMessage = key.verify(flippedMessage, signature)
+        val wrongKey = other.verify(message, signature)
+        assertAll(
+            { assertEquals(SIGNATURE_SIZE, signature.size, "precondition: a raw r‖s signature") },
+            { assertTrue(good, "the key's own signature verifies") },
+            { assertFalse(badSignature, "one flipped signature bit") },
+            { assertFalse(badMessage, "one flipped message bit") },
+            { assertFalse(wrongKey, "another key's name") },
         )
     }
 
@@ -203,8 +235,8 @@ class DidKeyTest {
         const val EVEN_COMPRESSED = "02bb5e9f71cd43e4452723479973d0326f901ed963fee59f419bba6cd8649ffb17"
         const val ODD_COMPRESSED = "0339a9e222559fa1d3da385b00368b9d29258895752e83e3f9d34dfd29d957e296"
 
-        // SEC 2 v2.0 § 2.4.2, secp256r1's base point G.
-        const val GENERATOR_COMPRESSED = "026b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
+        // SEC 2 v2.0 § 2.4.2, secp256r1's base point G. Gy ends in …51f5, so it is odd: the lead byte is 0x03.
+        const val GENERATOR_COMPRESSED = "036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
 
         // x = 1, which has no point on P-256 (x³ − 3x + b is not a square mod p). Measured by #3201.
         const val OFF_CURVE_COMPRESSED = "020000000000000000000000000000000000000000000000000000000000000001"

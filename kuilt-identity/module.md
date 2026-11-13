@@ -22,7 +22,8 @@ module's tests check it on JVM and Android's host-JDK unit tests, iOS, macOS and
 compressed import in other browsers is unproven. The primitives come from
 [cryptography-kotlin](https://github.com/whyoleg/cryptography-kotlin), which wraps each platform's
 own implementation: JCA on JVM and Android, CryptoKit on Apple, WebCrypto in the browser. This
-module only composes them and owns no math. It does not depend on `:kuilt-seal`, so a consumer of
+module composes them and owns no cryptographic math beyond one on-curve validation, described
+below. It does not depend on `:kuilt-seal`, so a consumer of
 one inherits nothing of the other.
 
 One check is the module's own. The JDK decoder takes a square root without checking it, so on JVM

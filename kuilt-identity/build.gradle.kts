@@ -17,8 +17,8 @@ kotlin {
 
         commonMain.dependencies {
             // No kuilt module yet. The primitives are cryptography-kotlin's; this module composes
-            // them and owns no math. `implementation`, not `api`: no cryptography-kotlin type
-            // appears in the public surface.
+            // them and owns no cryptographic math beyond one on-curve validation (ionspin, below).
+            // `implementation`, not `api`: no cryptography-kotlin type appears in the public surface.
             implementation(libs.cryptography.core)
             // `api`: the device's `DidKey` name is `@Serializable` in the public surface.
             api(libs.kotlinx.serialization.core)
