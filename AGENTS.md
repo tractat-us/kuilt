@@ -89,6 +89,7 @@ and `docs/usage.md` for how to consume it.
 | `:kuilt-otel-log4j2` | JVM, Android | The same for Log4j2. |
 | `:kuilt-otel-sdk` | JVM, Android | Bridges an app's *existing* OpenTelemetry SDK setup into the offline-first buffer — trace-context propagation and export, both additive and optional. |
 | `:kuilt-otel-otlp` | all | Forwards the buffered spans/logs/metrics to any OTLP/HTTP collector when the network returns, sending only what the endpoint has not already received. |
+| `:kuilt-otel-bench` | JVM | Cost measurements for the telemetry buffer on a server: what one `incrementSum`/`setGauge` costs as the series count grows, what each durable write costs, what the OpenTelemetry SDK bridge and an OTLP drain cost. **Not published** — plain `kotlinJvm`, no `kuilt.publish`, excluded from the BOM. The default build runs each arm once at small sizes; the measured runs are opt-in via `-Pkuilt.benchmark.tests=true`. |
 
 **Warp** — the coordination-free distributed scheduler. Pre-1.0 playground: outside the stability surface, API may change.
 

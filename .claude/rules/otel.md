@@ -8,6 +8,7 @@ paths:
   - "kuilt-otel-log4j2/**"
   - "kuilt-otel-sdk/**"
   - "kuilt-otel-otlp/**"
+  - "kuilt-otel-bench/**"
 ---
 # Otel
 

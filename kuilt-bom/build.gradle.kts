@@ -52,6 +52,7 @@ if (guardProbeModule != null) {
 // build does not enable.)
 val deliberatelyUnpublished = setOf(
     ":kuilt-scale", // JVM-only scaling/bench harness (plain kotlinJvm)
+    ":kuilt-otel-bench", // JVM-only kuilt-otel cost measurements (plain kotlinJvm)
     ":examples", // test-only usage examples (plain kotlinJvm)
     ":demo-shared", // Patchwork demo app core (plain KMP jvm+wasmJs, never published)
     ":demo-relay", // Patchwork demo relay process (plain kotlinJvm application, never published)
