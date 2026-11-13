@@ -905,8 +905,10 @@ public class LocalHeddle private constructor(
      * whose list both retires an edge and activates another.
      */
     private fun replacedEdges(steps: List<TopologyStep>, leftOut: Set<GroupId>): Map<AttachmentId, GroupId> {
-        // Not yet: the interpreter applies per child and moves no lease (#3176, re-home to follow).
-        return emptyMap<AttachmentId, GroupId>().also { steps.size + leftOut.size }
+        val activated = steps.filterIsInstance<TopologyStep.Activate>().mapTo(HashSet()) { it.child }
+        return steps.filterIsInstance<TopologyStep.Retire>()
+            .filter { it.child in activated && it.child !in leftOut }
+            .associate { it.edge to it.child }
     }
 
     /**
