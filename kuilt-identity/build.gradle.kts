@@ -1,9 +1,33 @@
+import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
+import org.jetbrains.kotlin.gradle.targets.js.testing.KotlinJsTest
+
 plugins {
     id("kuilt.kmp-library")
     alias(libs.plugins.kotlinSerialization)
 }
 
+// The wasmJs tests again, in Playwright's WebKit (#3246). Safari and WebKit refuse a compressed
+// P-256 `importKey("raw")` (#3232), and every other target accepts it — the JDK, CryptoKit and
+// ChromeHeadless — so if `decodeOnCurve` went back to importing the compressed form, only a WebKit
+// run would notice. The task exists only under -Pidentity.webkit.tests=true: no WebKit build is
+// installed on the Linux runners, and an absent task cannot report a green it never earned.
+// Without the flag `:kuilt-identity:wasmJsBrowserWebkitTest` is "task not found", not a skip.
+// apple-nightly.yml runs it on macOS after installing the WebKit build the pinned playwright-core
+// names.
+val runWebkitTests = providers.gradleProperty("identity.webkit.tests").orNull == "true"
+
+// The convention plugin's timeout and orphan-guard files, plus the one that swaps the browser.
+val assembleKarmaWebkitConfig = tasks.register<Sync>("assembleKarmaWebkitConfig") {
+    from(tasks.named("generateKarmaTimeouts"), tasks.named("generateKarmaOrphanGuard"))
+    from(layout.projectDirectory.dir("karma-webkit.d"))
+    into(layout.buildDirectory.dir("karma-webkit.d"))
+}
+
 kotlin {
+    if (runWebkitTests) {
+        @OptIn(ExperimentalWasmDsl::class)
+        wasmJs { browser { testRuns.create("webkit") } }
+    }
     sourceSets {
         // MANUAL appleMain, as in :kuilt-seal, :kuilt-otel-tap and :kuilt-store. The default
         // hierarchy template's appleMain compiles, but Dokka's source-set discovery never registers
@@ -46,6 +70,12 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.serialization.cbor)
         }
+        // For the WebKit run above, declared whatever the flag so the shared yarn.lock does not
+        // change with it. playwright-core downloads no browser on install; its version fixes which
+        // WebKit build `playwright-core install webkit` fetches and karma-webkit.d/webkit.js runs.
+        wasmJsTest.dependencies {
+            implementation(devNpm("playwright-core", "1.65.0"))
+        }
     }
 }
 
@@ -58,6 +88,30 @@ dependencies {
         // kotlinx-io itself, and the constraint is published, so consumers get the fixed one too.
         add("commonMainImplementation", libs.kotlinx.io.core) {
             because("kotlinx-io 0.9.0's wasmJs import.meta breaks browser bundles")
+        }
+    }
+}
+
+if (runWebkitTests) {
+    tasks.named<KotlinJsTest>("wasmJsBrowserWebkitTest") {
+        dependsOn(assembleKarmaWebkitConfig)
+        // The build-wide browser-test mutex the convention plugin gives wasmJsBrowserTest. Beyond
+        // load, both tasks write the same karma.conf.js into the module's npm package directory,
+        // so run side by side one reads the other's: measured, ChromeHeadless's task ran in WebKit.
+        usesService(gradle.sharedServices.registrations.getByName("browserTestSerializer").service)
+        useKarma {
+            // A placeholder Karma insists on; karma-webkit.d/webkit.js replaces the browser list.
+            useChromeHeadless()
+            useConfigDirectory(layout.buildDirectory.dir("karma-webkit.d").get().asFile)
+        }
+        filter.apply {
+            // These arms ask the PROVIDER to import a compressed point directly, to record which
+            // engines can. WebKit cannot (#3232): that is the finding the module was rebuilt around,
+            // not a regression. This run guards the module's own import path, which the other tests
+            // here go through.
+            excludeTestsMatching("*CompressedPointProbeTest.compressedImportRoundTripsToTheSamePoint")
+            excludeTestsMatching("*CompressedPointProbeTest.importedCompressedKeyVerifies")
+            excludeTestsMatching("*CompressedPointProbeTest.knownCompressedPointDecodesOnEveryTarget")
         }
     }
 }
