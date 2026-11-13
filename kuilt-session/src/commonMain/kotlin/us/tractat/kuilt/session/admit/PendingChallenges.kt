@@ -22,14 +22,14 @@ import kotlin.time.Instant
  *   held — invisible to [take] and [isCurrent], counted only by [retained].
  * - **Every [open] mints a fresh generation**, unique across the whole table rather than counted per
  *   sender. A host that suspends between taking an entry and acting on it (a policy decision) checks
- *   [isCurrent] afterwards and discards its result if a later open, a [drop] or the deadline overtook
- *   it. Because generations are never reused, a sender dropped and then opened again cannot hand a
- *   stale decision the number it was waiting on.
+ *   [isCurrent] afterwards, or finishes with [retire], and discards its result if a later open, a
+ *   [drop] or the deadline overtook it. Because generations are never reused, a sender dropped and then
+ *   opened again cannot hand a stale decision the number it was waiting on.
  *
  * A [take] answers a challenge once: it hands out the entry and marks it taken, so a second Proof for
  * the same challenge finds nothing. The taken entry stays in the table — still current — so that the
- * decision in flight can tell whether it was superseded, until a later open replaces it, [drop] removes
- * it or its deadline passes.
+ * decision in flight can tell whether it was superseded, until a later open replaces it, [retire] or
+ * [drop] removes it, or its deadline passes.
  *
  * Thread-safe: every operation runs under one lock and none suspends, so a room on a multi-threaded
  * dispatcher may call it from anywhere.
@@ -104,12 +104,37 @@ internal class PendingChallenges(private val clock: () -> Instant) {
         return lock.withLock { liveEntry(sender, now)?.pending?.generation == generation }
     }
 
-    /** Removes [sender]'s entry, whatever its generation — for a sender that left or said Goodbye. */
+    /**
+     * Removes [sender]'s entry, whatever its generation — for a sender that said Goodbye or whose peer
+     * was lost.
+     *
+     * Unconditional is correct there because those events arrive in order on the sender's own link: a
+     * Goodbye is handled after every Hello the sender sent before it, so there is no newer entry the
+     * drop could wrongly remove. It is **not** correct after a decision that suspended — use [retire].
+     */
     fun drop(sender: PeerId) {
         lock.withLock { entries.remove(sender) }
     }
 
-    fun retire(sender: PeerId, generation: Long): Boolean = TODO()
+    /**
+     * Removes [sender]'s entry only if it is still [generation] and has not expired, as one step under
+     * the table's lock, and returns whether it did.
+     *
+     * For finishing a decision that suspended between [take] and here, such as a policy call on another
+     * coroutine. `isCurrent` followed by [drop] is two separate lock acquisitions: a re-Hello's [open]
+     * can land between them, and the drop would then delete the newer generation, so the joiner's next
+     * Proof finds nothing and is refused. `false` means the decision is stale — a later open replaced
+     * the entry, a drop removed it, or its deadline passed (an expired entry is removed regardless).
+     */
+    fun retire(sender: PeerId, generation: Long): Boolean {
+        val now = clock()
+        return lock.withLock {
+            val entry = liveEntry(sender, now)
+            if (entry?.pending?.generation != generation) return@withLock false
+            entries.remove(sender)
+            true
+        }
+    }
 
     /** [sender]'s entry if it has not expired; an expired one is removed. Call under [lock]. */
     private fun liveEntry(sender: PeerId, now: Instant): Entry? {
