@@ -103,7 +103,10 @@ public sealed interface AcquireOutcome {
     /** No leaf was eligible for this slot. Nothing changed. */
     public data object NothingEligible : AcquireOutcome
 
-    /** The root holds less than the reservation. Nothing changed. */
+    /**
+     * The root holds less than the reservation, and no capacity is reconciled to top it up
+     * ([LocalHeddle.reconcileCapacity]). Nothing changed.
+     */
     public data object SupplyExhausted : AcquireOutcome
 
     /**
@@ -157,7 +160,7 @@ public data class LeaseReconciliation(
          * than it was granted, since a dead piece of work's overrun cannot be verified. A caller
          * with evidence of a longer run may [LocalHeddle.complete] it at more.
          */
-        public val defaultSettlement: Long get() = elapsed
+        public val defaultSettlement: Long get() = minOf(elapsed, granted)
     }
 }
 
@@ -169,7 +172,10 @@ public sealed interface LeaseOutcome {
      */
     public data class Done(public val charged: Long, public val overrun: Long) : LeaseOutcome
 
-    /** An extend the root could not fund. The lease and the ledger are unchanged. */
+    /**
+     * An extend the root could not fund, with no capacity reconciled to top it up
+     * ([LocalHeddle.reconcileCapacity]). The lease and the ledger are unchanged.
+     */
     public data object SupplyExhausted : LeaseOutcome
 
     /**
@@ -245,9 +251,25 @@ public sealed interface LeaseOutcome {
  *
  * ## Supply
  *
- * Supply is minted at [root]. [acquire] and [extend] are refused with a `SupplyExhausted` outcome
- * when the root holds less than they need. [complete] and [admit] are never refused: work that
- * already ran or already started is charged, so when the root is short they mint the shortfall.
+ * Supply is minted at [root], and the engine mints its own: tell it how many slots you run with
+ * [reconcileCapacity], and [acquire] and [extend] top the root up inside the same operation
+ * whenever it would fall below [LocalPolicy.supply]'s low watermark, so supply never runs out
+ * between calls to it. The top-up is part of the operation: one that is refused leaves none
+ * behind. Until a capacity is reconciled nothing is minted ahead, and [acquire] and [extend] are
+ * refused with a `SupplyExhausted` outcome when the root holds less than they need. [complete]
+ * and [admit] are never refused: work that already ran or already started is charged, so when
+ * the root is short they mint the shortfall. The low watermark is the headroom that keeps them
+ * from needing to.
+ *
+ * Every mint of an epoch, top-ups included, rewrites one record carrying the epoch's running
+ * total, so the ledger keeps one mint record per epoch however much it serves.
+ *
+ * ## Reconciling leases
+ *
+ * [reconcileLeases] compares the open leases with the work the caller still has running and
+ * reports both directions: orphans, open leases whose work is gone, each with how long it ran
+ * from its `startedAt`; and live ids the engine holds no lease for. It changes nothing. Settle an
+ * orphan with [complete], by default at [LeaseReconciliation.Orphan.defaultSettlement].
  *
  * ## A draining path
  *
@@ -306,6 +328,8 @@ public class LocalHeddle private constructor(
     private val open = HashMap<LeaseId, OpenLease>()
     private var nextSeq = 0L
 
+    /** The capacity last reconciled, and the supply levels it sizes. */
+    private var capacity = Capacity.NONE
 
     /** Mints [complete] and [admit] wrote to cover a shortfall at the root. */
     internal var forcedMints: Int = 0
@@ -322,9 +346,10 @@ public class LocalHeddle private constructor(
      * A pick never reads [startedAt]; it is stored on the lease for the caller's own reconciling.
      *
      * Returns [AcquireOutcome.NothingEligible] when [eligible] is empty,
-     * [AcquireOutcome.SupplyExhausted] when the root holds less than [reservation], and
-     * [AcquireOutcome.NoLiveLineage] when no eligible leaf can be reached. In each of those cases the
-     * ledger is unchanged; only the allocator's wake memory may have moved (see the class KDoc).
+     * [AcquireOutcome.SupplyExhausted] when the root holds less than [reservation] and no capacity
+     * is reconciled, and [AcquireOutcome.NoLiveLineage] when no eligible leaf can be reached. In
+     * each of those cases the ledger is unchanged, with no top-up either; only the allocator's wake
+     * memory may have moved (see the class KDoc).
      *
      * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION], or
      *   [eligible] is not a subset of [waiting].
@@ -338,6 +363,7 @@ public class LocalHeddle private constructor(
         requireReservation("reservation", reservation)
         require(waiting.containsAll(eligible)) { "eligible must be a subset of waiting" }
         if (eligible.isEmpty()) return AcquireOutcome.NothingEligible
+        // Topped up on the working value only: a descent that then fails discards the mint with it.
         val base = fundedBase(reservation) ?: return AcquireOutcome.SupplyExhausted
         return when (val descent = descend(base, Demands.of(base, waiting, eligible, reservation), eligible, reservation)) {
             is Descent.Refused -> AcquireOutcome.NoLiveLineage(descent.at)
@@ -377,14 +403,18 @@ public class LocalHeddle private constructor(
     /**
      * The ledger a pick of [reservation] runs on, or `null` when the root cannot fund it. The one
      * supply check [acquire] and [explain] share, so the two cannot disagree about it. It reads the
-     * engine and writes nothing: whatever it returns is only committed by the caller.
+     * engine and writes nothing: whatever it returns is only committed by the caller. It is topped
+     * up below the low watermark ([supplied]), so an [explain] sees the supply the [acquire] would.
      */
-    private fun fundedBase(reservation: Long): EntitlementLedger? =
-        ledger.takeIf { it.holdings(root, SELF) >= reservation }
+    private fun fundedBase(reservation: Long): EntitlementLedger? = supplied(ledger, reservation)
 
-    /** An engine over [over] with a copy of this one's wake memory: it picks as this one would next, and moving it moves nothing here. */
+    /**
+     * An engine over [over] with a copy of this one's wake memory and its capacity: it picks, and
+     * tops up, as this one would next, and moving it moves nothing here.
+     */
     private fun scratch(over: EntitlementLedger): LocalHeddle =
         LocalHeddle(root, policy, epoch, over, FairShareAllocator(SELF, policyConfig(policy), allocator.memory))
+            .also { it.capacity = capacity }
 
     /**
      * Charge work another scheduler already started at [leaf]: open a lease for it with no pick,
@@ -416,7 +446,8 @@ public class LocalHeddle private constructor(
      * Reserve [amount] more for [lease], down the path it was opened on. Not a new pick.
      *
      * Returns [LeaseOutcome.PathDraining] when an edge of that path is no longer ACTIVE, and
-     * [LeaseOutcome.SupplyExhausted] when the root holds less than [amount]. Neither changes anything.
+     * [LeaseOutcome.SupplyExhausted] when the root holds less than [amount] and no capacity is
+     * reconciled. Neither changes anything.
      *
      * @throws IllegalArgumentException when [amount] is not in `1..`[MAX_RESERVATION].
      */
@@ -425,8 +456,8 @@ public class LocalHeddle private constructor(
         val current = open[lease] ?: return missing(lease)
         val base = ledger
         base.firstNotActive(current.path)?.let { return LeaseOutcome.PathDraining(it) }
-        if (base.holdings(root, SELF) < amount) return LeaseOutcome.SupplyExhausted
-        ledger = delegateOrFail(base, current.path, amount)
+        val funded = supplied(base, amount) ?: return LeaseOutcome.SupplyExhausted
+        ledger = delegateOrFail(funded, current.path, amount)
         open[lease] = current.copy(lease = current.lease.copy(reserved = checkedAdd(current.lease.reserved, amount)))
         return LeaseOutcome.Done(charged = 0L, overrun = 0L)
     }
@@ -618,6 +649,15 @@ public class LocalHeddle private constructor(
      *   `totalSlots × defaultReservation × targetSlots`, is above `Long.MAX_VALUE / 4`.
      */
     public fun reconcileCapacity(totalSlots: Long) {
+        require(totalSlots >= 0L) { "totalSlots must be non-negative, was $totalSlots" }
+        val rounds = policy.supply
+        val perRound = policy.defaultReservation
+        // n × r × t ≤ limit, by floor division so the check itself cannot overflow.
+        require(rounds.targetSlots == 0L || totalSlots <= SUPPLY_TARGET_LIMIT / perRound / rounds.targetSlots) {
+            "totalSlots $totalSlots × defaultReservation $perRound × targetSlots ${rounds.targetSlots} is above $SUPPLY_TARGET_LIMIT"
+        }
+        val round = totalSlots * perRound
+        capacity = Capacity(totalSlots, low = round * rounds.lowWatermarkSlots, target = round * rounds.targetSlots)
     }
 
     /**
@@ -630,8 +670,16 @@ public class LocalHeddle private constructor(
      *
      * @throws ArithmeticException when `now − startedAt` is positive and does not fit in a `Long`.
      */
-    public fun reconcileLeases(live: Set<LeaseId>, now: Long): LeaseReconciliation =
-        LeaseReconciliation(emptyList(), emptyList())
+    public fun reconcileLeases(live: Set<LeaseId>, now: Long): LeaseReconciliation {
+        val orphaned = open.values.asSequence()
+            .map { it.lease }
+            .filter { it.id !in live }
+            .sortedBy { it.id }
+            .map { LeaseReconciliation.Orphan(it, elapsed = if (now <= it.startedAt) 0L else checkedSub(now, it.startedAt)) }
+            .toList()
+        val unknown = live.filter { it !in open }.sorted()
+        return LeaseReconciliation(orphaned, unknown)
+    }
 
     /**
      * Replace the ledger with [transform] of it: the test seam for a topology change while leases
@@ -641,7 +689,7 @@ public class LocalHeddle private constructor(
         ledger = transform(ledger)
     }
 
-    /** Mint [amount] at the root, as one act. L2's top-up replaces this; tests fund through it now. */
+    /** Mint [amount] at the root, as one act: the test seam for supply laid down ahead of any top-up. */
     internal fun mintSupply(amount: Long) {
         ledger = mintAt(ledger, amount)
     }
@@ -705,6 +753,22 @@ public class LocalHeddle private constructor(
             local = local.piece(patch.delta)
         }
         return local
+    }
+
+    /**
+     * [start] with the root able to fund [need] for an [acquire] or [extend], topped up when needed;
+     * `null` when it cannot. When the operation would leave the root below the low watermark, this
+     * mints enough that the target is left after it, so the operation is funded whatever its size.
+     * With no capacity reconciled both levels are zero and nothing is minted ahead: the root funds
+     * [need] from what it holds, or the operation is refused.
+     */
+    private fun supplied(start: EntitlementLedger, need: Long): EntitlementLedger? {
+        val held = start.holdings(root, SELF)
+        return when {
+            capacity.slots > 0L && held - need < capacity.low -> mintAt(start, checkedSub(checkedAdd(capacity.target, need), held))
+            held >= need -> start
+            else -> null
+        }
     }
 
     /** [start] with the root holding at least [amount], minting the shortfall; and how many mints that took. */
@@ -776,6 +840,13 @@ public class LocalHeddle private constructor(
     /** One level of a [Descent]: the pick at [parent] chose [edge], on [seated], the ledger with [parent]'s children seated. */
     private class Level(val parent: GroupId, val seated: EntitlementLedger, val edge: AttachmentId)
 
+    /** [slots] as last reconciled, and the root holdings it sizes: the [low] watermark and the [target] a top-up leaves. */
+    private data class Capacity(val slots: Long, val low: Long, val target: Long) {
+        companion object {
+            val NONE = Capacity(slots = 0L, low = 0L, target = 0L)
+        }
+    }
+
     public companion object {
         /** The one writer. Internal: a consumer never needs to name it. */
         internal val SELF: ReplicaId = ReplicaId("local")
@@ -801,6 +872,13 @@ public class LocalHeddle private constructor(
          */
         private const val UNBOUNDED_TARGET: Long = Long.MAX_VALUE / 4
 
+        /**
+         * The largest supply target [reconcileCapacity] sizes, `Long.MAX_VALUE / 4`: room above it
+         * for the operation a top-up funds, at most [MAX_RESERVATION], and for the epoch's running
+         * mint total, which carries every unit ever charged.
+         */
+        private const val SUPPLY_TARGET_LIMIT: Long = Long.MAX_VALUE / 4
+
         private fun requireReservation(name: String, amount: Long) =
             require(amount in 1L..MAX_RESERVATION) { "$name must be in 1..$MAX_RESERVATION, was $amount" }
 
@@ -820,7 +898,10 @@ public class LocalHeddle private constructor(
         private fun EntitlementLedger.firstNotActive(path: List<AttachmentId>): AttachmentId? =
             firstNotActiveIndex(path)?.let(path::get)
 
-        /** An engine with no topology and no supply, issuing lease ids under [epoch]. */
+        /**
+         * An engine with no topology and no supply, issuing lease ids under [epoch]. It mints its
+         * own supply once [reconcileCapacity] is called.
+         */
         public fun fresh(root: GroupId, policy: LocalPolicy, epoch: Long): LocalHeddle =
             over(EntitlementLedger.ZERO, root, policy, epoch)
 

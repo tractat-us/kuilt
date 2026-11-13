@@ -115,6 +115,23 @@ class LocalHeddleSupplyTest {
         )
     }
 
+    /** A preview tops up where the acquires it previews would, so it does not stop at an empty root. */
+    @Test
+    fun previewPicksTopUpLikeTheAcquiresTheyPreview() {
+        val h = engineOver(threeLeaves, root, supply = 0L, policy = policy(reservation = 2L))
+        h.reconcileCapacity(1L)
+        val reservations = List(12) { 2L }
+        val before = h.snapshot()
+        val preview = h.previewPicks(mapOf(a to 20, b to 20, c to 20), setOf(a, b, c), reservations)
+        val previewChanged = h.snapshot() != before
+        val leased = reservations.map { h.lease(setOf(a, b, c), reservation = it).leaf }
+        assertAll(
+            { assertEquals(false, previewChanged, "the preview minted nothing for real") },
+            { assertEquals(12, preview.size, "the preview ran past the empty root") },
+            { assertEquals(leased, preview) },
+        )
+    }
+
     /** Before any capacity is reconciled nothing is minted ahead, so supply runs out and is named. */
     @Test
     fun withoutCapacitySupplyIsExhausted() {
