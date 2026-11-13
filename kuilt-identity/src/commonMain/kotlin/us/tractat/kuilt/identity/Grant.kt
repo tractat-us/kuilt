@@ -191,18 +191,14 @@ public class Grant private constructor(
         }
 
         /**
-         * The room id after the scope tag, or `null` unless it is UTF-8 that encodes back to the same
-         * bytes — so an overlong or otherwise non-canonical sequence, which a lenient decoder could
-         * read as the same id, is refused rather than given a second spelling.
+         * The room id after the scope tag, or `null` unless it is well-formed UTF-8. The strict decode
+         * refuses an overlong form or an encoded surrogate, so one room id has one spelling on the
+         * wire and decoding then encoding gives back the same bytes.
          */
-        private fun roomIdOf(field: ByteArray): String? {
-            val bytes = field.copyOfRange(1, field.size)
-            val roomId = try {
-                bytes.decodeToString(throwOnInvalidSequence = true)
-            } catch (_: CharacterCodingException) {
-                return null
-            }
-            return if (roomId.encodeToByteArray().contentEquals(bytes)) roomId else null
+        private fun roomIdOf(field: ByteArray): String? = try {
+            field.decodeToString(startIndex = 1, endIndex = field.size, throwOnInvalidSequence = true)
+        } catch (_: CharacterCodingException) {
+            null
         }
 
         /** The name for a 33-byte compressed point, or `null` when [field] is not one in shape. */

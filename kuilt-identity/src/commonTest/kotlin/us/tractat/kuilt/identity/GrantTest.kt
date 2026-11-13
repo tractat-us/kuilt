@@ -60,6 +60,7 @@ class GrantTest {
             "AnyRoomOfIssuer with a trailing byte" to byteArrayOf(0x02, 0x00),
             "a room id that is not UTF-8" to byteArrayOf(0x01, 0xff.toByte()),
             "a room id in overlong UTF-8" to byteArrayOf(0x01, 0xc0.toByte(), 0x80.toByte()),
+            "a room id holding an encoded surrogate" to byteArrayOf(0x01, 0xed.toByte(), 0xa0.toByte(), 0x80.toByte()),
         )
         assertAll(
             { assertEquals(GrantScope.AnyRoomOfIssuer, Grant.decode(wireOf(scope = byteArrayOf(0x02)))?.scope, "control: 0x02") },
@@ -212,7 +213,7 @@ class GrantTest {
         assertAll(
             { assertEquals(grant, decoded) },
             { assertEquals(grant.hashCode(), decoded.hashCode()) },
-            { assertNotEquals(grant, twin, "same terms, fresh id: another grant") },
+            { assertNotEquals(grant, twin, "the same terms issued twice are two grants") },
             { assertContentEquals(id, grant.id, "id hands out a copy") },
             { assertContentEquals(decoded.wire, grant.wire, "wire hands out a copy") },
         )
