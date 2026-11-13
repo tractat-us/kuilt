@@ -686,4 +686,27 @@ public suspend fun hostAdmissionSample(friends: Set<DidKey>, store: DurableStore
 }
 ```
 
+**Testing your policy without a room:** `admissionRequest(key, displayName, deviceId)` (`us.tractat.kuilt.session.test`, in `:kuilt-session-test`). In production only the room builds an `AdmissionRequest`, after the joiner has proved it holds `key`, so its constructor is kept for kuilt's own modules behind `@SessionInternalApi`. Do not stand up a room, or a fake handshake, to unit-test `decide`. This factory builds the request the room would build, with no proof checked, so it is gated by `@AdmissionTestApi` (`RequiresOptIn` at `ERROR`, no stability promise): opt in on the test class, never module-wide in production code.
+
+<!-- verbatim from kuilt-session-test/src/commonSamples/kotlin/us/tractat/kuilt/session/test/AdmissionSamples.kt#admissionPolicyTestSample -->
+```kotlin
+@OptIn(AdmissionTestApi::class)
+public suspend fun admissionPolicyTestSample(blocked: DidKey, stranger: DidKey): List<AdmissionDecision> {
+    // Your policy, as your app would hand it to the room. Decide on the key; the name is say-so.
+    val blockedList = setOf(blocked)
+    val policy = AdmissionPolicy { request ->
+        if (request.key in blockedList) {
+            AdmissionDecision.Reject(RejectCode.Unknown("blocked"))
+        } else {
+            AdmissionDecision.Admit(GrantTerms(readmitFor = 1.hours))
+        }
+    }
+    // The requests the room would build once each joiner had proved its key.
+    return listOf(
+        policy.decide(admissionRequest(blocked, displayName = "Mallory")),
+        policy.decide(admissionRequest(stranger, displayName = "Ada", deviceId = "phone-1")),
+    )
+}
+```
+
 So far this is the store (in memory, and on the desktop JVM), the key, its name, the pass, its check, the revocations and the policy's types. The other platforms' stores, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
