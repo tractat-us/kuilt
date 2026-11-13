@@ -53,4 +53,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun reconcileLeasesHolds() = sampleReconcileLeases()
+
+    @Test
+    fun localReloadHolds() = sampleLocalReload()
 }

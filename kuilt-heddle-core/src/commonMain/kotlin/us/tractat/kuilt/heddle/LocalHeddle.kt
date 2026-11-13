@@ -205,6 +205,10 @@ public sealed interface LeaseOutcome {
  * the caller counts in. A lease that runs long is [extend]ed, or charged its overrun at the end;
  * a charge is never refused. Work another scheduler already started is [admit]ted, with no pick.
  *
+ * Start one with [fromTopology], and change the tree while it runs with [apply]: a reload is one
+ * unit, a reweight moves the leases open under it onto the new edge, and a removal drains (see
+ * [apply]). Runtime children come and go with [attachRuntimeChild] and [detachRuntimeChild].
+ *
  * ## How a pick works
  *
  * [acquire] walks down from [root], and at each group makes one EEVDF pick among the children
@@ -255,7 +259,8 @@ public sealed interface LeaseOutcome {
  * ## All or nothing
  *
  * Each operation runs on a local ledger value and is swapped in once at the end, so an outcome
- * that changes nothing leaves [snapshot]'s ledger the very same object. **The one exception is the
+ * that changes nothing leaves [snapshot]'s ledger the very same object. A whole reload is one
+ * operation, however many children it changes. **The one exception is the
  * allocator's wake memory, which a failed [acquire] may still advance:** the pick it tried at the
  * root observed who was waiting, and forgetting that would treat the next observation as the
  * first.
@@ -318,7 +323,9 @@ public sealed interface LeaseOutcome {
  *
  * A state the engine's own invariants rule out throws [IllegalStateException]: that is a bug in
  * the engine, or a ledger conflict the engine did not create, such as two live inbound edges into
- * one group, a divergent record, or a cycle on a lease's path (#1737).
+ * one group, a divergent record, or a cycle on a lease's path (#1737). [apply] never leaves one on
+ * an open lease's path: before it swaps a reload in, it checks that every open lease's path is its
+ * leaf's one live lineage.
  *
  * @sample us.tractat.kuilt.heddle.sampleLocalLease
  */
@@ -1221,7 +1228,7 @@ public class LocalHeddle private constructor(
 
         /**
          * An engine over [ledger] as it stands, with a fresh allocator, leasing what [leasable]
-         * declares. For tests until L3 boots one from a topology.
+         * declares. For tests over a hand-built ledger; [fromTopology] is the public way to boot.
          */
         internal fun over(ledger: EntitlementLedger, root: GroupId, policy: LocalPolicy, epoch: Long, leasable: Leasable): LocalHeddle =
             LocalHeddle(root, policy, epoch, ledger, FairShareAllocator(SELF, policyConfig(policy)), leasable)

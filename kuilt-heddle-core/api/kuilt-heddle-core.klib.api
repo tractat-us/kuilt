@@ -373,6 +373,52 @@ sealed interface us.tractat.kuilt.heddle/Relocation { // us.tractat.kuilt.heddle
     }
 }
 
+sealed interface us.tractat.kuilt.heddle/StepRefusal { // us.tractat.kuilt.heddle/StepRefusal|null[0]
+    abstract val child // us.tractat.kuilt.heddle/StepRefusal.child|{}child[0]
+        abstract fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/StepRefusal.child.<get-child>|<get-child>(){}[0]
+
+    final class Draining : us.tractat.kuilt.heddle/StepRefusal { // us.tractat.kuilt.heddle/StepRefusal.Draining|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/AttachmentId, kotlin/Long, kotlin.collections/List<us.tractat.kuilt.heddle/Lease>) // us.tractat.kuilt.heddle/StepRefusal.Draining.<init>|<init>(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.AttachmentId;kotlin.Long;kotlin.collections.List<us.tractat.kuilt.heddle.Lease>){}[0]
+
+        final val blockingLeases // us.tractat.kuilt.heddle/StepRefusal.Draining.blockingLeases|{}blockingLeases[0]
+            final fun <get-blockingLeases>(): kotlin.collections/List<us.tractat.kuilt.heddle/Lease> // us.tractat.kuilt.heddle/StepRefusal.Draining.blockingLeases.<get-blockingLeases>|<get-blockingLeases>(){}[0]
+        final val child // us.tractat.kuilt.heddle/StepRefusal.Draining.child|{}child[0]
+            final fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/StepRefusal.Draining.child.<get-child>|<get-child>(){}[0]
+        final val edge // us.tractat.kuilt.heddle/StepRefusal.Draining.edge|{}edge[0]
+            final fun <get-edge>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/StepRefusal.Draining.edge.<get-edge>|<get-edge>(){}[0]
+        final val outstanding // us.tractat.kuilt.heddle/StepRefusal.Draining.outstanding|{}outstanding[0]
+            final fun <get-outstanding>(): kotlin/Long // us.tractat.kuilt.heddle/StepRefusal.Draining.outstanding.<get-outstanding>|<get-outstanding>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/StepRefusal.Draining.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/StepRefusal.Draining.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.heddle/StepRefusal.Draining.component3|component3(){}[0]
+        final fun component4(): kotlin.collections/List<us.tractat.kuilt.heddle/Lease> // us.tractat.kuilt.heddle/StepRefusal.Draining.component4|component4(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/AttachmentId = ..., kotlin/Long = ..., kotlin.collections/List<us.tractat.kuilt.heddle/Lease> = ...): us.tractat.kuilt.heddle/StepRefusal.Draining // us.tractat.kuilt.heddle/StepRefusal.Draining.copy|copy(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.AttachmentId;kotlin.Long;kotlin.collections.List<us.tractat.kuilt.heddle.Lease>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/StepRefusal.Draining.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/StepRefusal.Draining.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/StepRefusal.Draining.toString|toString(){}[0]
+    }
+
+    final class Refused : us.tractat.kuilt.heddle/StepRefusal { // us.tractat.kuilt.heddle/StepRefusal.Refused|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/TopologyStep, kotlin/String) // us.tractat.kuilt.heddle/StepRefusal.Refused.<init>|<init>(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.TopologyStep;kotlin.String){}[0]
+
+        final val child // us.tractat.kuilt.heddle/StepRefusal.Refused.child|{}child[0]
+            final fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/StepRefusal.Refused.child.<get-child>|<get-child>(){}[0]
+        final val reason // us.tractat.kuilt.heddle/StepRefusal.Refused.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.heddle/StepRefusal.Refused.reason.<get-reason>|<get-reason>(){}[0]
+        final val step // us.tractat.kuilt.heddle/StepRefusal.Refused.step|{}step[0]
+            final fun <get-step>(): us.tractat.kuilt.heddle/TopologyStep // us.tractat.kuilt.heddle/StepRefusal.Refused.step.<get-step>|<get-step>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/StepRefusal.Refused.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/TopologyStep // us.tractat.kuilt.heddle/StepRefusal.Refused.component2|component2(){}[0]
+        final fun component3(): kotlin/String // us.tractat.kuilt.heddle/StepRefusal.Refused.component3|component3(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/TopologyStep = ..., kotlin/String = ...): us.tractat.kuilt.heddle/StepRefusal.Refused // us.tractat.kuilt.heddle/StepRefusal.Refused.copy|copy(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.TopologyStep;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/StepRefusal.Refused.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/StepRefusal.Refused.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/StepRefusal.Refused.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.heddle/TopologyParse { // us.tractat.kuilt.heddle/TopologyParse|null[0]
     final class Invalid : us.tractat.kuilt.heddle/TopologyParse { // us.tractat.kuilt.heddle/TopologyParse.Invalid|null[0]
         constructor <init>(kotlin.collections/List<us.tractat.kuilt.heddle/TopologyProblem>) // us.tractat.kuilt.heddle/TopologyParse.Invalid.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.heddle.TopologyProblem>){}[0]
@@ -601,6 +647,22 @@ final class us.tractat.kuilt.heddle/AllocatorMemory { // us.tractat.kuilt.heddle
 
         final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/AllocatorMemory> // us.tractat.kuilt.heddle/AllocatorMemory.Companion.serializer|serializer(){}[0]
     }
+}
+
+final class us.tractat.kuilt.heddle/ApplyResult { // us.tractat.kuilt.heddle/ApplyResult|null[0]
+    constructor <init>(kotlin.collections/List<us.tractat.kuilt.heddle/TopologyStep>, kotlin.collections/List<us.tractat.kuilt.heddle/StepRefusal>) // us.tractat.kuilt.heddle/ApplyResult.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.heddle.TopologyStep>;kotlin.collections.List<us.tractat.kuilt.heddle.StepRefusal>){}[0]
+
+    final val applied // us.tractat.kuilt.heddle/ApplyResult.applied|{}applied[0]
+        final fun <get-applied>(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyStep> // us.tractat.kuilt.heddle/ApplyResult.applied.<get-applied>|<get-applied>(){}[0]
+    final val refusals // us.tractat.kuilt.heddle/ApplyResult.refusals|{}refusals[0]
+        final fun <get-refusals>(): kotlin.collections/List<us.tractat.kuilt.heddle/StepRefusal> // us.tractat.kuilt.heddle/ApplyResult.refusals.<get-refusals>|<get-refusals>(){}[0]
+
+    final fun component1(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyStep> // us.tractat.kuilt.heddle/ApplyResult.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/List<us.tractat.kuilt.heddle/StepRefusal> // us.tractat.kuilt.heddle/ApplyResult.component2|component2(){}[0]
+    final fun copy(kotlin.collections/List<us.tractat.kuilt.heddle/TopologyStep> = ..., kotlin.collections/List<us.tractat.kuilt.heddle/StepRefusal> = ...): us.tractat.kuilt.heddle/ApplyResult // us.tractat.kuilt.heddle/ApplyResult.copy|copy(kotlin.collections.List<us.tractat.kuilt.heddle.TopologyStep>;kotlin.collections.List<us.tractat.kuilt.heddle.StepRefusal>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ApplyResult.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ApplyResult.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ApplyResult.toString|toString(){}[0]
 }
 
 final class us.tractat.kuilt.heddle/AttachmentRecord { // us.tractat.kuilt.heddle/AttachmentRecord|null[0]
@@ -930,8 +992,11 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
 
     final fun acquire(kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long, kotlin/Long = ...): us.tractat.kuilt.heddle/AcquireOutcome // us.tractat.kuilt.heddle/LocalHeddle.acquire|acquire(kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long;kotlin.Long){}[0]
     final fun admit(us.tractat.kuilt.heddle/GroupId, kotlin/Long, kotlin/Long = ...): us.tractat.kuilt.heddle/AdmitOutcome // us.tractat.kuilt.heddle/LocalHeddle.admit|admit(us.tractat.kuilt.heddle.GroupId;kotlin.Long;kotlin.Long){}[0]
+    final fun apply(us.tractat.kuilt.heddle/Topology, kotlin/Long): us.tractat.kuilt.heddle/ApplyResult // us.tractat.kuilt.heddle/LocalHeddle.apply|apply(us.tractat.kuilt.heddle.Topology;kotlin.Long){}[0]
+    final fun attachRuntimeChild(kotlin.collections/List<kotlin/String>, kotlin/String, kotlin/Long): us.tractat.kuilt.heddle/ApplyResult // us.tractat.kuilt.heddle/LocalHeddle.attachRuntimeChild|attachRuntimeChild(kotlin.collections.List<kotlin.String>;kotlin.String;kotlin.Long){}[0]
     final fun cancel(us.tractat.kuilt.heddle/LeaseId): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/LocalHeddle.cancel|cancel(us.tractat.kuilt.heddle.LeaseId){}[0]
     final fun complete(us.tractat.kuilt.heddle/LeaseId, kotlin/Long): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/LocalHeddle.complete|complete(us.tractat.kuilt.heddle.LeaseId;kotlin.Long){}[0]
+    final fun detachRuntimeChild(kotlin.collections/List<kotlin/String>, kotlin/String): us.tractat.kuilt.heddle/ApplyResult // us.tractat.kuilt.heddle/LocalHeddle.detachRuntimeChild|detachRuntimeChild(kotlin.collections.List<kotlin.String>;kotlin.String){}[0]
     final fun entitlement(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/LocalHeddle.entitlement|entitlement(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
     final fun explain(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long = ...): us.tractat.kuilt.heddle/WaitExplanation // us.tractat.kuilt.heddle/LocalHeddle.explain|explain(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
     final fun extend(us.tractat.kuilt.heddle/LeaseId, kotlin/Long): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/LocalHeddle.extend|extend(us.tractat.kuilt.heddle.LeaseId;kotlin.Long){}[0]
@@ -944,7 +1009,7 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
         final const val MAX_RESERVATION // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION|{}MAX_RESERVATION[0]
             final fun <get-MAX_RESERVATION>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION.<get-MAX_RESERVATION>|<get-MAX_RESERVATION>(){}[0]
 
-        final fun fresh(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/LocalPolicy, kotlin/Long): us.tractat.kuilt.heddle/LocalHeddle // us.tractat.kuilt.heddle/LocalHeddle.Companion.fresh|fresh(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.LocalPolicy;kotlin.Long){}[0]
+        final fun fromTopology(us.tractat.kuilt.heddle/Topology, us.tractat.kuilt.heddle/LocalPolicy, kotlin/Long): us.tractat.kuilt.heddle/LocalHeddle // us.tractat.kuilt.heddle/LocalHeddle.Companion.fromTopology|fromTopology(us.tractat.kuilt.heddle.Topology;us.tractat.kuilt.heddle.LocalPolicy;kotlin.Long){}[0]
     }
 }
 

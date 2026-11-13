@@ -49,7 +49,7 @@ internal sealed interface Leasable {
 
     /**
      * Every group: the seam for a hand-built ledger, whose ids no topology prints, and for an engine
-     * that has applied none. A lease then ends at any leaf, the rule before L3.
+     * built over one. A lease then ends at any leaf. Tests only: every public engine has a topology.
      */
     data object EveryGroup : Leasable {
         override fun declares(group: GroupId): Boolean = true

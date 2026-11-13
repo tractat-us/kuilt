@@ -9,8 +9,7 @@ Read the **one** cookbook file your symptom names.
 
 ## Don't build this yourself
 
-In a row, pair `;`-separated symptom
-and primitive groups in order.
+Each row pairs its `;`-separated groups in order.
 
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
@@ -44,14 +43,14 @@ and primitive groups in order.
 |a `MutableStateFlow<SeamState>`, or a `closed`/`tornDown` flag beside one|`SeamStateGate`|`fabrics.md#a-seams-terminal-state`|
 |bytes outliving the process — an `fsync`-rename dance, an IndexedDB wrapper|`DurableStore` + `StoreKey` (`InMemoryDurableStore`, one per platform)|`fabrics.md#durable-storage`|
 |encrypting to a public key, bytes only one recipient can open|`SealedBox.seal`/`open` + `SealPublicKey`/`SealPrivateKey`|`replication.md#sealed-boxes`|
-|a fair-share scheduler, "3× the share"; a quota ledger, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane; config trees, a lease per slot or why it waits, orphaned leases|`HeddlePolicy.pick` + `HeddleNode`, offline `FairShareAllocator`; `EntitlementLedger` + `HeddleNode.reserve`/`complete`; `heddleGoverned`; `HeddleAdmissionControl` + `TaskDescriptor.inLane`; `Topology.from`/`lower`/`diff`/`attachRuntimeChild`, `LocalHeddle`, `reconcileLeases`|`heddle.md#fair-share--placement`|
+|a fair-share scheduler, "3× the share"; a quota ledger, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane; config trees, live reloads, a lease per slot or why it waits, orphaned leases|`HeddlePolicy.pick` + `HeddleNode`, offline `FairShareAllocator`; `EntitlementLedger` + `HeddleNode.reserve`/`complete`; `heddleGoverned`; `HeddleAdmissionControl` + `TaskDescriptor.inLane`; `Topology.from`/`lower`/`diff`/`attachRuntimeChild`, `LocalHeddle.apply`, `LocalHeddle`, `reconcileLeases`|`heddle.md#fair-share--placement`|
 |"only run on a GPU / in-region peer", a placement predicate|`Affinity` + `TaskDescriptor.where` + `CapSet`|`warp.md#where-a-task-may-run-location-eligibility`|
 |a content-hash blob cache; running code another peer sent you, an `eval`|`Creel` + `BobbinExchange`; `WasmRuntime` + `WasmSandboxConfig` + `WarpLazyFetch`|`warp.md#code-mobility`|
 |a flush-per-line log exporter, "logging stalls the app"; stamping a line's session/game; resetting a telemetry store; is telemetry still landing|`WarpLogRecordExporter.export(records)` + `installLogCapture`; `withLogContext(attributes) { … }`, **not** `CaptureConfig.attributeMapper`; `WarpTelemetry.clear()`; `WarpTelemetry.health` + `LogCaptureInstallation.health` (`CaptureHealth.droppedEvents`)|`otel.md#telemetry--log-capture`|
 
 ## Fetching a route
 
-`<path>` is `docs/agent-cookbook/<jump-to file>` or the index, `docs/agent-cookbook.md`.
+`<path>` is `docs/agent-cookbook/<Jump to>` or the index `docs/agent-cookbook.md`.
 Inside kuilt, read it directly; consumers take the first working rung:
 
 1. `git -C ../kuilt fetch -q origin main && git -C ../kuilt show origin/main:<path>`

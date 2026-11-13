@@ -7,10 +7,10 @@ package us.tractat.kuilt.heddle
  */
 @Suppress("unused")
 internal fun sampleLocalLease() {
-    val root = GroupId("pool")
-    val heavy = GroupId("heavy")
-    val light = GroupId("light")
-    val heddle = twoGroupEngine(root, heavy, light)
+    val tree = twoLanes()
+    val heavy = tree.groupId("heavy")
+    val light = tree.groupId("light")
+    val heddle = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 3L), epoch = 0L)
     // Four slots: the engine mints its own supply ahead of them.
     heddle.reconcileCapacity(totalSlots = 4L)
 
@@ -37,10 +37,11 @@ internal fun sampleLocalLease() {
  */
 @Suppress("unused")
 internal fun sampleExplainWait() {
-    val root = GroupId("pool")
-    val heavy = GroupId("heavy")
-    val light = GroupId("light")
-    val heddle = twoGroupEngine(root, heavy, light)
+    val tree = twoLanes()
+    val root = tree.groupId()
+    val heavy = tree.groupId("heavy")
+    val light = tree.groupId("light")
+    val heddle = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 3L), epoch = 0L)
     heddle.reconcileCapacity(totalSlots = 2L)
 
     val queued = setOf(heavy, light)
@@ -63,10 +64,10 @@ internal fun sampleExplainWait() {
  */
 @Suppress("unused")
 internal fun sampleReconcileLeases() {
-    val root = GroupId("pool")
-    val heavy = GroupId("heavy")
-    val light = GroupId("light")
-    val heddle = twoGroupEngine(root, heavy, light)
+    val tree = twoLanes()
+    val heavy = tree.groupId("heavy")
+    val light = tree.groupId("light")
+    val heddle = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 3L), epoch = 0L)
     heddle.reconcileCapacity(totalSlots = 2L)
     val queued = setOf(heavy, light)
     val kept = (heddle.acquire(queued, queued, startedAt = 100L) as AcquireOutcome.Acquired).lease
@@ -85,18 +86,32 @@ internal fun sampleReconcileLeases() {
 }
 
 /**
- * A two-group tree, `heavy` at weight 2 beside `light`, with a 3-unit default reservation. The
- * public surface cannot yet boot an engine from a `Topology`, so the samples build the tree
- * through the module's own seam.
+ * Change the tree while work is running. A reweight moves the leases open under it onto the new
+ * edge, so they complete as if nothing happened; a removal waits for its own leases to finish.
  */
-private fun twoGroupEngine(root: GroupId, heavy: GroupId, light: GroupId): LocalHeddle {
-    var tree = EntitlementLedger.bootstrap(root, emptyMap(), nonce = "genesis")
-    for (record in listOf(
-        AttachmentRecord(AttachmentId("pool>heavy"), root, heavy, Weight.of(2)),
-        AttachmentRecord(AttachmentId("pool>light"), root, light, Weight.ONE),
-    )) {
-        tree = tree.piece(checkNotNull(tree.prepare(record)).delta)
-        tree = tree.piece(checkNotNull(tree.activate(record.id)).delta)
-    }
-    return LocalHeddle.over(tree, root, LocalPolicy(defaultReservation = 3L), epoch = 0L, Leasable.EveryGroup)
+@Suppress("unused")
+internal fun sampleLocalReload() {
+    val before = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light"), Topology.Lane("spare")))
+    val heddle = LocalHeddle.fromTopology(before, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 4L)
+    val heavy = before.groupId("heavy")
+    val spare = before.groupId("spare")
+    val running = (heddle.acquire(setOf(heavy), setOf(heavy), startedAt = 0L) as AcquireOutcome.Acquired).lease
+    val leftover = (heddle.acquire(setOf(spare), setOf(spare), startedAt = 0L) as AcquireOutcome.Acquired).lease
+
+    // While both leases are open, heavy goes to weight 3 and spare is removed.
+    val after = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(3)), Topology.Lane("light")))
+    val reload = heddle.apply(after, generation = 1L)
+
+    // Spare is closed to new work and waits for its lease; heavy's lease moved onto its new edge.
+    val waiting = reload.refusals.single()
+    check(waiting is StepRefusal.Draining && waiting.child == spare && waiting.blockingLeases == listOf(leftover))
+    check(heddle.complete(running.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.complete(leftover.id, actualCost = 2L) == LeaseOutcome.Done(charged = 2L, overrun = 0L))
+
+    // Once the drain is over, the same reload finishes the job.
+    check(heddle.apply(after, generation = 1L).refusals.isEmpty())
 }
+
+/** Two lanes under `pool`, `heavy` at weight 2 beside `light`. */
+private fun twoLanes(): Topology = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light")))
