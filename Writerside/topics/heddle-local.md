@@ -9,11 +9,10 @@ It keeps the promise over time, not build by build. A team that sat idle
 does not come back owed a pile of turns. A build that ran long pays for
 every minute.
 
-> **Playground.** This engine works today, and its API can change. One piece
-> is still landing: loading your tree into the engine. The examples below show
-> where it fits.
+> **Playground.** This engine works today, and its API can change.
 
-This page follows one farm from its first build to a crash. Every example is
+This page follows one farm from its first build, through a change to its tree,
+to a crash. Every example is
 one compiled sample, `sampleBuildFarm`, quoted in order. Every result the page
 shows is a check in that sample, so the page cannot drift from what the engine
 does.
@@ -55,28 +54,27 @@ an admin's file rather than code, decode a `TopologyDocument` and call
 its place in the tree. Rename it, or move it under another group, and the engine
 retires the old child and starts a new one with no fairness history.
 
-<!-- TODO(L3): loading a Topology into an engine, reloading it (`apply`), attaching
-runtime children to a running engine, and how open leases move across a reweight. Replace the Playground note's "still landing"
-sentence and this paragraph's lead-in once L3 merges; until then the samples load
-the tree through a test-only seam (`farmEngine`). -->
+The tree is not fixed. You can change it while builds run, and
+[Change the tree while builds run](#change-the-tree-while-builds-run) shows how.
 
-Today `LocalHeddle.fresh` starts an engine with an empty tree, and no public call
-loads yours into it yet. The sample loads the farm into an engine named `heddle`
-through a test-only door, so the rest of this page runs against the real engine.
-
-## Tell it how many agents you have
+## Start the engine
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleBuildFarm -->
 
 ```kotlin
 // A build takes about 3 minutes, so a lease reserves 3 when the caller knows no better.
 val policy = LocalPolicy(defaultReservation = 3L)
-// …
+// Load the tree into an engine. Lease ids it hands out carry the epoch, 0 here.
+val heddle = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+
 // Nothing to hand out until the engine knows how many agents there are.
 val both = setOf(web, mobile)
 check(heddle.acquire(waiting = both, eligible = both, startedAt = 0L) == AcquireOutcome.SupplyExhausted)
 heddle.reconcileCapacity(totalSlots = 4L)
 ```
+
+`LocalHeddle.fromTopology` loads the tree into an engine called `heddle`, which
+the rest of this page uses. Every lease id it hands out is stamped with `epoch`.
 
 Heddle counts in whatever unit your program counts time in. Here it is minutes.
 It never reads a clock: every time is a number you pass in, so a replay of the
@@ -255,6 +253,86 @@ check(heddle.complete(byHand.lease.id, actualCost = 4L) == LeaseOutcome.Done(cha
 - **`admit`** charges work that started without a pick, such as a build someone
   ran by hand. It is never refused for lack of supply, because the work is already
   running.
+
+## Change the tree while builds run
+
+Shares get renegotiated, and teams come and go. A web build is running when the
+farm's admin saves a new tree: web drops from three parts to two, and a new
+`forks` group takes one part, shared by the contributors' forks:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleBuildFarm -->
+
+```kotlin
+// A web build is running when the admin saves a new tree: web drops to two parts, and a new
+// group shares one part among contributors' forks, which the program names as they open.
+val running = heddle.acquire(setOf(web), setOf(web), startedAt = 100L)
+check(running is AcquireOutcome.Acquired)
+val grown = draft("farm") {
+    group("web", Weight.of(2)) { lane("builds") }
+    group("mobile") { lane("builds") }
+    group("forks") { runtimeChildren() }
+}
+check(heddle.apply(grown, generation = 1L).refusals.isEmpty())
+// The running build moved onto web's new weight, and finishes as if nothing happened.
+check(heddle.complete(running.lease.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+```
+
+`apply` takes the whole new tree, works out what changed, and makes every change
+in one step, so no pick ever sees a tree halfway through. `generation` counts
+your reloads, and the engine uses it to name the parts a reload adds. Reusing a
+number is safe, because the engine moves it past any it already holds.
+
+A build that was running when its team's weight changed carries on. It keeps
+its lease, and `complete` charges it once, as usual. From your side, nothing
+changed. The team itself starts again at its new weight, level with the line,
+the way a team does when it comes back from a quiet spell. It is neither owed
+for its past nor charged for it.
+
+Forks open and close while the farm runs, so the tree cannot list them. A group
+marked with `runtimeChildren()` takes children your program names as it goes:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleBuildFarm -->
+
+```kotlin
+// A contributor opens a fork. Attach it, and it can be leased like any lane.
+check(heddle.attachRuntimeChild(listOf("forks"), "ana", generation = 2L).refusals.isEmpty())
+val ana = grown.runtimeChildId(listOf("forks"), "ana")
+val forkBuild = heddle.acquire(setOf(ana), setOf(ana), startedAt = 103L)
+check(forkBuild is AcquireOutcome.Acquired && forkBuild.lease.leaf == ana)
+// The fork closes while its build runs. It takes no new builds, and waits for this one.
+val closing = heddle.detachRuntimeChild(listOf("forks"), "ana").refusals.single()
+check(closing is StepRefusal.Draining && closing.child == ana && closing.blockingLeases == listOf(forkBuild.lease))
+check(heddle.acquire(setOf(ana), setOf(ana), startedAt = 104L) is AcquireOutcome.NoLiveLineage)
+check(heddle.complete(forkBuild.lease.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+// Its last build is done, so the same detach now finishes.
+check(heddle.detachRuntimeChild(listOf("forks"), "ana").refusals.isEmpty())
+```
+
+A group is named by its path from the top, here `listOf("forks")`, and the
+child by its own name. `runtimeChildId` turns the pair into the id you lease
+with. Every child of `forks` gets the weight its marker gives, 1 by default.
+
+**Taking something out waits for its builds.** A fork you detach, or a lane a
+reload leaves out, closes at once: nothing new is leased there, and `acquire`
+answers `NoLiveLineage`. Builds already running on it finish normally. Until
+they do, the change comes back in `refusals` as `Draining`, naming the leases it
+waits for. Once they finish, make the same call again and the removal completes.
+If a build's work is gone, [`reconcileLeases`](#after-a-crash) finds it, so a
+lost build holds a removal up only until you settle it.
+
+Each child's change lands on its own. A child that is still draining holds up
+its own change, and a reweight of any group above it, but every other change in
+the same reload still lands. Call `apply` with the same tree later, and only
+what is left is done.
+
+Two finer points:
+
+- **`Refused` is the other answer.** It means the engine could not make a
+  change for a reason that waiting on its own leases will not cure, and its
+  `reason` says why. That child is left as it was.
+- **An overrun nobody pays for.** While a team at the top of the tree drains
+  away, one of its last builds may run long. `complete` reports the overrun in
+  `Done`, but it is counted against no one.
 
 ## After a crash
 
