@@ -527,4 +527,29 @@ internal suspend fun sampleDeviceKeySigns() {
 }
 ```
 
-So far this is the key and its name. The per-platform store that keeps the key, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
+**A pass to come back:** `Grant`. Do not hand-roll a "remember this device" cookie or a signed blob that lets an *already-admitted* device back in. A grant is not an invite: it names the key of a device the host has already let in once, so a newcomer has nothing to put in it. `Grant.issue(host, subject, scope, issuedAt, notAfter)` is the host's signed statement that the device with key `subject` may return to `GrantScope.Room(roomId)`, or to `GrantScope.AnyRoomOfIssuer`, until `notAfter` (`Grant.NO_EXPIRY` for never). Times are epoch milliseconds you pass in; a grant never reads a clock. `wire` is what the device keeps and presents, and `Grant.decode(wire)` reads it back, `null` on anything malformed. A grant is not a secret, since it is useless without the subject's key. `isSignedByIssuer` checks the signature and nothing else: whether the issuer, subject, room and expiry are right for this room now is the checker's job, and that checker arrives with the room exchange.
+
+<!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleIssueGrant -->
+```kotlin
+internal suspend fun sampleIssueGrant() {
+    val host = DeviceKey.generate() // the host's own key
+    val phone = DeviceKey.generate() // the device being let in
+    val now = 1_700_000_000_000L // epoch ms, from your clock: a grant never reads one
+
+    // On admitting the phone, the host signs it a pass back into this room for the next hour.
+    val grant = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = now, notAfter = now + 3_600_000)
+    val kept: ByteArray = grant.wire // what the phone stores, and presents when it returns
+
+    // When the phone comes back, the host reads the pass and checks it signed exactly these terms.
+    val presented = checkNotNull(Grant.decode(kept))
+    check(presented.isSignedByIssuer() && presented.issuer == host.id)
+    check(presented.subject == phone.id && presented.scope == GrantScope.Room("table-7"))
+    check(now + 60_000 < presented.notAfter) // a minute later, still good
+
+    // Damage it — here the last byte of the signature — and it is no longer the host's pass.
+    val edited = kept.copyOf().also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }
+    check(Grant.decode(edited)?.isSignedByIssuer() == false)
+}
+```
+
+So far this is the key, its name and the pass. The per-platform store that keeps the key and its grants, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).

@@ -15,9 +15,14 @@ that it really names a key.
 
 The key. `DeviceKey` signs, and its `id` is the `DidKey` that checks those signatures. It has no
 accessor for the private half, so a key that a hardware or browser store will not hand out is
-still a `DeviceKey`. `DeviceKey.generate()` makes one in memory. The signed statements a room's
-admission is made of, and the per-platform stores that keep a key across launches, arrive in the
-pieces that follow.
+still a `DeviceKey`. `DeviceKey.generate()` makes one in memory.
+
+The pass. A `Grant` is a host's signed promise that one device may come back: to one room, or to
+any room that host runs, until a time the host picks, or for good. The device keeps it and shows it
+when it returns, and `isSignedByIssuer` checks the host really signed it. It is not a secret,
+because it names the device's key and is useless without it. The statements a room's admission
+exchange is made of, the checks that decide whether a grant is good in this room now, and the
+per-platform stores that keep a key across launches arrive in the pieces that follow.
 
 ## Underneath
 

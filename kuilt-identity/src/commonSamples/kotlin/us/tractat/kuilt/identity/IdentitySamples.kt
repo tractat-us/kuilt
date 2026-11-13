@@ -34,3 +34,24 @@ internal suspend fun sampleDeviceKeySigns() {
     check(!someoneElse.id.verify(challenge, signature))
     check(!key.id.verify("a different message".encodeToByteArray(), signature))
 }
+
+/** @suppress — sample only */
+internal suspend fun sampleIssueGrant() {
+    val host = DeviceKey.generate() // the host's own key
+    val phone = DeviceKey.generate() // the device being let in
+    val now = 1_700_000_000_000L // epoch ms, from your clock: a grant never reads one
+
+    // On admitting the phone, the host signs it a pass back into this room for the next hour.
+    val grant = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = now, notAfter = now + 3_600_000)
+    val kept: ByteArray = grant.wire // what the phone stores, and presents when it returns
+
+    // When the phone comes back, the host reads the pass and checks it signed exactly these terms.
+    val presented = checkNotNull(Grant.decode(kept))
+    check(presented.isSignedByIssuer() && presented.issuer == host.id)
+    check(presented.subject == phone.id && presented.scope == GrantScope.Room("table-7"))
+    check(now + 60_000 < presented.notAfter) // a minute later, still good
+
+    // Damage it — here the last byte of the signature — and it is no longer the host's pass.
+    val edited = kept.copyOf().also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }
+    check(Grant.decode(edited)?.isSignedByIssuer() == false)
+}

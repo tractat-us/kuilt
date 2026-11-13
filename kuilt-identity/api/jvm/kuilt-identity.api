@@ -29,6 +29,49 @@ public final class us/tractat/kuilt/identity/DidKey$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class us/tractat/kuilt/identity/Grant {
+	public static final field Companion Lus/tractat/kuilt/identity/Grant$Companion;
+	public static final field ID_SIZE I
+	public static final field NO_EXPIRY J
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()[B
+	public final fun getIssuedAt ()J
+	public final fun getIssuer-UjzFoJQ ()Ljava/lang/String;
+	public final fun getNotAfter ()J
+	public final fun getScope ()Lus/tractat/kuilt/identity/GrantScope;
+	public final fun getSubject-UjzFoJQ ()Ljava/lang/String;
+	public final fun getWire ()[B
+	public fun hashCode ()I
+	public final fun isSignedByIssuer (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/Grant$Companion {
+	public final fun decode ([B)Lus/tractat/kuilt/identity/Grant;
+	public final fun issue-Q3QKj_8 (Lus/tractat/kuilt/identity/DeviceKey;Ljava/lang/String;Lus/tractat/kuilt/identity/GrantScope;JJLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/identity/GrantScope {
+}
+
+public final class us/tractat/kuilt/identity/GrantScope$AnyRoomOfIssuer : us/tractat/kuilt/identity/GrantScope {
+	public static final field INSTANCE Lus/tractat/kuilt/identity/GrantScope$AnyRoomOfIssuer;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/GrantScope$Room : us/tractat/kuilt/identity/GrantScope {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/identity/GrantScope$Room;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/identity/GrantScope$Room;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/identity/GrantScope$Room;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRoomId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface annotation class us/tractat/kuilt/identity/IdentityInternalApi : java/lang/annotation/Annotation {
 }
 

@@ -21,6 +21,59 @@ abstract interface us.tractat.kuilt.identity/DeviceKey { // us.tractat.kuilt.ide
     }
 }
 
+sealed interface us.tractat.kuilt.identity/GrantScope { // us.tractat.kuilt.identity/GrantScope|null[0]
+    final class Room : us.tractat.kuilt.identity/GrantScope { // us.tractat.kuilt.identity/GrantScope.Room|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.identity/GrantScope.Room.<init>|<init>(kotlin.String){}[0]
+
+        final val roomId // us.tractat.kuilt.identity/GrantScope.Room.roomId|{}roomId[0]
+            final fun <get-roomId>(): kotlin/String // us.tractat.kuilt.identity/GrantScope.Room.roomId.<get-roomId>|<get-roomId>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.identity/GrantScope.Room.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.identity/GrantScope.Room // us.tractat.kuilt.identity/GrantScope.Room.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/GrantScope.Room.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/GrantScope.Room.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantScope.Room.toString|toString(){}[0]
+    }
+
+    final object AnyRoomOfIssuer : us.tractat.kuilt.identity/GrantScope { // us.tractat.kuilt.identity/GrantScope.AnyRoomOfIssuer|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/GrantScope.AnyRoomOfIssuer.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/GrantScope.AnyRoomOfIssuer.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity/GrantScope.AnyRoomOfIssuer.toString|toString(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.identity/Grant { // us.tractat.kuilt.identity/Grant|null[0]
+    final val id // us.tractat.kuilt.identity/Grant.id|{}id[0]
+        final fun <get-id>(): kotlin/ByteArray // us.tractat.kuilt.identity/Grant.id.<get-id>|<get-id>(){}[0]
+    final val issuedAt // us.tractat.kuilt.identity/Grant.issuedAt|{}issuedAt[0]
+        final fun <get-issuedAt>(): kotlin/Long // us.tractat.kuilt.identity/Grant.issuedAt.<get-issuedAt>|<get-issuedAt>(){}[0]
+    final val issuer // us.tractat.kuilt.identity/Grant.issuer|{}issuer[0]
+        final fun <get-issuer>(): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/Grant.issuer.<get-issuer>|<get-issuer>(){}[0]
+    final val notAfter // us.tractat.kuilt.identity/Grant.notAfter|{}notAfter[0]
+        final fun <get-notAfter>(): kotlin/Long // us.tractat.kuilt.identity/Grant.notAfter.<get-notAfter>|<get-notAfter>(){}[0]
+    final val scope // us.tractat.kuilt.identity/Grant.scope|{}scope[0]
+        final fun <get-scope>(): us.tractat.kuilt.identity/GrantScope // us.tractat.kuilt.identity/Grant.scope.<get-scope>|<get-scope>(){}[0]
+    final val subject // us.tractat.kuilt.identity/Grant.subject|{}subject[0]
+        final fun <get-subject>(): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/Grant.subject.<get-subject>|<get-subject>(){}[0]
+    final val wire // us.tractat.kuilt.identity/Grant.wire|{}wire[0]
+        final fun <get-wire>(): kotlin/ByteArray // us.tractat.kuilt.identity/Grant.wire.<get-wire>|<get-wire>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/Grant.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/Grant.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.identity/Grant.toString|toString(){}[0]
+    final suspend fun isSignedByIssuer(): kotlin/Boolean // us.tractat.kuilt.identity/Grant.isSignedByIssuer|isSignedByIssuer(){}[0]
+
+    final object Companion { // us.tractat.kuilt.identity/Grant.Companion|null[0]
+        final const val ID_SIZE // us.tractat.kuilt.identity/Grant.Companion.ID_SIZE|{}ID_SIZE[0]
+            final fun <get-ID_SIZE>(): kotlin/Int // us.tractat.kuilt.identity/Grant.Companion.ID_SIZE.<get-ID_SIZE>|<get-ID_SIZE>(){}[0]
+        final const val NO_EXPIRY // us.tractat.kuilt.identity/Grant.Companion.NO_EXPIRY|{}NO_EXPIRY[0]
+            final fun <get-NO_EXPIRY>(): kotlin/Long // us.tractat.kuilt.identity/Grant.Companion.NO_EXPIRY.<get-NO_EXPIRY>|<get-NO_EXPIRY>(){}[0]
+
+        final fun decode(kotlin/ByteArray): us.tractat.kuilt.identity/Grant? // us.tractat.kuilt.identity/Grant.Companion.decode|decode(kotlin.ByteArray){}[0]
+        final suspend fun issue(us.tractat.kuilt.identity/DeviceKey, us.tractat.kuilt.identity/DidKey, us.tractat.kuilt.identity/GrantScope, kotlin/Long, kotlin/Long): us.tractat.kuilt.identity/Grant // us.tractat.kuilt.identity/Grant.Companion.issue|issue(us.tractat.kuilt.identity.DeviceKey;us.tractat.kuilt.identity.DidKey;us.tractat.kuilt.identity.GrantScope;kotlin.Long;kotlin.Long){}[0]
+    }
+}
+
 final value class us.tractat.kuilt.identity/DidKey { // us.tractat.kuilt.identity/DidKey|null[0]
     final val value // us.tractat.kuilt.identity/DidKey.value|{}value[0]
         final fun <get-value>(): kotlin/String // us.tractat.kuilt.identity/DidKey.value.<get-value>|<get-value>(){}[0]
