@@ -138,6 +138,8 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [The compiler node](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/warp-compiler.md): Warp
 - [Fair share with Heddle](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle.md)
 - [Inside Heddle](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle-accounting.md): Fair share with Heddle
+- [Fair share in one program](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle-local.md): Fair share with Heddle
+- [How the next turn is chosen](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle-local-turns.md): Fair share with Heddle › Fair share in one program
 
 ## Modules: Contract & core
 

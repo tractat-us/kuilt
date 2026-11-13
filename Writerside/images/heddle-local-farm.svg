@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 260" role="img" aria-labelledby="title desc">
+  <title id="title">The build farm's tree</title>
+  <desc id="desc">The farm splits between two teams. Web has weight 3 and mobile weight 1, and each team has one lane called builds, where its work is charged.</desc>
+  <rect width="800" height="260" rx="16" fill="#111827"/>
+  <g fill="none" stroke="#8ec5ff" stroke-width="2">
+    <path d="M400 76 V100 H220 V124"/>
+    <path d="M400 100 H580 V124"/>
+    <path d="M220 172 V196"/>
+    <path d="M580 172 V196"/>
+  </g>
+  <g fill="#1e293b" stroke="#475569">
+    <rect x="320" y="28" width="160" height="48" rx="10"/>
+    <rect x="130" y="124" width="180" height="48" rx="10"/>
+    <rect x="490" y="124" width="180" height="48" rx="10"/>
+  </g>
+  <g fill="#14532d" stroke="#4ade80">
+    <rect x="150" y="196" width="140" height="44" rx="10"/>
+    <rect x="510" y="196" width="140" height="44" rx="10"/>
+  </g>
+  <g font-family="system-ui, sans-serif" text-anchor="middle" fill="#f1f5f9">
+    <text x="400" y="59" font-size="21">farm</text>
+    <text x="220" y="155" font-size="20">web · weight 3</text>
+    <text x="580" y="155" font-size="20">mobile · weight 1</text>
+    <text x="220" y="224" font-size="18">builds</text>
+    <text x="580" y="224" font-size="18">builds</text>
+  </g>
+  <g font-family="system-ui, sans-serif" fill="#cbd5e1" font-size="15">
+    <text x="40" y="224">lane</text>
+    <text x="40" y="155">group</text>
+    <text x="680" y="59" text-anchor="end">four build agents</text>
+  </g>
+</svg>

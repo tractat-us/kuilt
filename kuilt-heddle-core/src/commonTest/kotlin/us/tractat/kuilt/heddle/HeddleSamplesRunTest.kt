@@ -59,4 +59,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun localPersistenceHolds() = sampleLocalPersistence()
+
+    @Test
+    fun buildFarmHolds() = sampleBuildFarm()
 }

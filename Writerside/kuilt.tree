@@ -111,6 +111,9 @@
         </toc-element>
         <toc-element topic="heddle.md">
             <toc-element topic="heddle-accounting.md"/>
+            <toc-element topic="heddle-local.md">
+                <toc-element topic="heddle-local-turns.md"/>
+            </toc-element>
         </toc-element>
     </toc-element>
 
