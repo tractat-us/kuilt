@@ -64,6 +64,11 @@ kotlin {
             // `fakeKeyStore(n)`: rooms in tests sign and check with a scheme that never waits on
             // WebCrypto, so wasmJs room tests stay on virtual time (#3280).
             implementation(project(":kuilt-identity-test"))
+            // The WireCodecConformanceSuite TCK, for the Hello's fixed-width joiner nonce (#3210).
+            // `:kuilt-conformance` api's THIS module in its main source set, so the edge is
+            // :kuilt-session main -> :kuilt-conformance main -> :kuilt-session test, with no cycle:
+            // the same shape as `:kuilt-core`'s test dependency on it.
+            implementation(project(":kuilt-conformance"))
             implementation(project(":kuilt-crdt"))
             implementation(project(":kuilt-quilter"))
             implementation(libs.kotlinx.coroutines.test)

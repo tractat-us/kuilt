@@ -1,7 +1,10 @@
 package us.tractat.kuilt.session.admit
 
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
@@ -79,6 +82,28 @@ class HelloVersionWireCompatTest {
             AdmitMessage.encode(
                 AdmitMessage.Hello(displayName = "Ada", sessionId = "s-1", targetRoom = "room-7", protocolVersion = 2),
             ).toHex(),
+        )
+    }
+
+    /**
+     * The hazard v3 must not walk into (#3210): a v2 Hello carries no key and no joiner nonce, and it
+     * must still **decode**, with both `null`. If either field were required on the wire, the CBOR
+     * decode would fail, [AdmitMessage.decode] would turn that into `null`, the host would drop the
+     * frame without a word, and the version gate — which needs a decoded Hello to read the version
+     * from — would never fire. The v2 joiner would wait out its admit deadline instead of being told
+     * [RejectCode.ProtocolMismatch].
+     */
+    @Test
+    fun `a v2 hello decodes with no key and no nonce so the version gate can refuse it`() {
+        val decoded = AdmitMessage.decode(goldenV2Hello.hexToBytes())
+
+        assertNotNull(decoded, "a v2 hello must decode, or the version gate never sees it")
+        val hello = decoded as AdmitMessage.Hello
+        assertAll(
+            { assertEquals(2, hello.protocolVersion) },
+            { assertNull(hello.key, "a v2 hello names no key") },
+            { assertNull(hello.joinerNonce, "a v2 hello carries no nonce") },
+            { assertFalse(ProtocolVersion.isSupported(hello.protocolVersion), "and the gate refuses v2") },
         )
     }
 
