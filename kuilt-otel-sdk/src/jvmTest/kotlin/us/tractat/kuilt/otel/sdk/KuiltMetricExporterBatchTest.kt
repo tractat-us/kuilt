@@ -119,6 +119,37 @@ class KuiltMetricExporterBatchTest {
     }
 
     @Test
+    fun aNanCounterPointIsDroppedAndTheRestOfTheExportLands() = runTest {
+        // SDK 1.68.0 lets a NaN through `DoubleCounter.add` and through an observable callback
+        // that computes 0/0. A grow-only counter cannot take it, so that one point is dropped;
+        // it must not take the other points of the same export down with it.
+        val store = CountingStore()
+        val exp = WarpMetricExporter(replica = ReplicaId("dev"), store = store)
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val withNan = deltaCounter(listOf(doublePoint(0.5, "/a"), doublePoint(Double.NaN, "/b"), doublePoint(0.25, "/c")))
+        val nanExport = listOf(
+            metric("requests", MetricDataType.LONG_SUM, deltaCounter(listOf(longPoint(3L, "/a")))),
+            metric("cpu.seconds", MetricDataType.DOUBLE_SUM, withNan),
+            metric("temp", MetricDataType.DOUBLE_GAUGE, ImmutableGaugeData.create(listOf(doublePoint(21.5, "/a")))),
+        )
+
+        val code = bridge.export(nanExport)
+        runCurrent()
+
+        val recovered = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
+        assertAll(
+            { assertTrue(withNan.points.any { it.value.isNaN() }, "precondition: the export carries a NaN point") },
+            { assertTrue(code.isSuccess, "a dropped point is not an export failure") },
+            { assertEquals(3L, exp.sumValue(sumKey("requests", "/a"))) },
+            { assertEquals(0.5, exp.doubleSumValue(sumKey("cpu.seconds", "/a"))) },
+            { assertEquals(0.25, exp.doubleSumValue(sumKey("cpu.seconds", "/c"))) },
+            { assertEquals(0.0, exp.doubleSumValue(sumKey("cpu.seconds", "/b")), "the NaN point opened no series") },
+            { assertEquals(21.5, exp.gaugeValue(gaugeKey("temp", "/a"))) },
+            { assertEquals(0.25, recovered.doubleSumValue(sumKey("cpu.seconds", "/c")), "and it is on disk") },
+        )
+    }
+
+    @Test
     fun aRefusedKindFailsTheExportAndTheOtherKindsStillLand() = runTest {
         val store = CountingStore(refuse = "otel.metrics.sums")
         val exp = WarpMetricExporter(replica = ReplicaId("dev"), store = store)

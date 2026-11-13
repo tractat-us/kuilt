@@ -127,6 +127,28 @@ class WarpMetricExporterBatchTest {
     }
 
     @Test
+    fun twoRefusedKindsReturnTheEarlierKindsFailure() = runTest {
+        // The batch names histograms first, but kinds are written in a fixed order, so the
+        // double-sum refusal is the first failure — whatever order the updates arrived in.
+        val refused = setOf("otel.metrics.sums.double", "otel.metrics.histograms")
+        val store = WriteRefusingStore(InMemoryDurableStore()) { it.name in refused }.also { it.refuseWrites() }
+        val result = exporter(store).record(
+            listOf(
+                MetricUpdate.RecordHistogram(latency, 1.0),
+                MetricUpdate.SetGauge(queue, 1.0, timestamp = 1L),
+                MetricUpdate.IncrementSumDouble(cpuSeconds, 1.0),
+            ),
+        )
+        assertAll(
+            { assertEquals(2, store.refusedWrites(), "precondition: both refused kinds were attempted") },
+            {
+                val failure = assertIs<MetricExportResult.Failure>(result)
+                assertEquals("store refused otel.metrics.sums.double", failure.cause.message)
+            },
+        )
+    }
+
+    @Test
     fun aRefusedWriteInABatchKeepsTheSingleUpdateContract() = runTest {
         // The store refuses the sums key and takes every other one. Sums is the first kind a batch
         // writes, so a batch that stopped at its first failure would also leave the four later
