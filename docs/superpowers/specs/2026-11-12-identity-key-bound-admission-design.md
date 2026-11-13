@@ -96,6 +96,15 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
 20. **The resume-only reject codes go with the `Resume` frame (Iain, 2026-11-12, slice 1–2 audit).**
     `ResumeTokenInvalid`, `ResumeWindowNotYetOpen` and `ResumeWindowExpired` are removed when
     `Resume` is retired, together with their readers.
+21. **The store keeps the newest grant per issuer and scope, not per issuer (controller ruling,
+    2026-11-13, #3253's review; for Iain to confirm).** One host key serves many rooms, so
+    `Room(A)` and `Room(B)` from one issuer are both kept; keyed by issuer alone, B's refresh evicts
+    A's and the device loses its pass back into A — Decided 1's middle tier. A tie on `issuedAt` keeps
+    the held grant, so a replayed or reordered copy cannot displace it.
+22. **Statement text is strict UTF-8 on encode as well as decode (controller ruling, 2026-11-13,
+    #3252's review).** An unpaired surrogate is refused with `IllegalArgumentException` rather than
+    replaced (`?` on the JVM, U+FFFD elsewhere), so a statement never signs a value other than the one
+    it was given, and the signed bytes are the same on every target.
 
 ## Goals
 
@@ -274,7 +283,7 @@ The check must re-read the seat under the room lock **at Proof time**, not at Ch
 
 A grant is issued in the Welcome and **re-issued every `readmitFor / 2`** on the member's direct
 lane while it stays connected, so "one hour" means one hour since last contact. The joiner keeps the
-newest grant per issuer in its `DeviceKeyStore`.
+newest grant per issuer **and scope** in its `DeviceKeyStore` (Decided 21).
 
 ### The host's decision point
 

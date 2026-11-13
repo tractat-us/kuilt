@@ -8,7 +8,7 @@
 
 **Tech Stack:** Kotlin Multiplatform (JVM, Android, iOS, macOS, wasmJs). cryptography-kotlin 0.6.0 (JDK, CryptoKit and WebCrypto providers, as in `:kuilt-seal`). kotlinx-serialization (CBOR on the admit wire). `:kuilt-store` for durable revocations and grants. `:kuilt-test` (`assertAll`).
 
-**Spec:** `docs/superpowers/specs/2026-11-12-identity-key-bound-admission-design.md`, approved by Iain on 2026-11-12. Decided 1–20 there are binding. The calls Iain approved alongside the spec are listed under *Approved with the spec* below.
+**Spec:** `docs/superpowers/specs/2026-11-12-identity-key-bound-admission-design.md`, approved by Iain on 2026-11-12. Decided 1–22 there are binding. The calls Iain approved alongside the spec are listed under *Approved with the spec* below.
 
 ## Approved with the spec (binding, from the dispatch arguments)
 
@@ -453,7 +453,7 @@ public class Grant internal constructor(
 ```kotlin
 public interface DeviceKeyStore {
     public suspend fun deviceKey(): DeviceKey      // created on first call, the same on every call after
-    public suspend fun grants(): List<Grant>       // the newest per issuer
+    public suspend fun grants(): List<Grant>       // the newest per issuer and scope (Decided 21)
     public suspend fun keepGrant(grant: Grant)     // replaces an OLDER (issuedAt) grant from the same issuer; ignores an older one
 }
 public class InMemoryDeviceKeyStore : DeviceKeyStore    // lock-guarded; KDoc: forgets everything with the process
