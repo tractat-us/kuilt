@@ -201,6 +201,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [kuilt-test](https://tractat-us.github.io/kuilt/api/kuilt-test/index.html): Shared test utilities and fakes for kuilt, built on kuilt-core.
 - [kuilt-session-test](https://tractat-us.github.io/kuilt/api/kuilt-session-test/index.html): Session test support (FakeRoomFactory, …) for kuilt.
 - [kuilt-raft-test](https://tractat-us.github.io/kuilt/api/kuilt-raft-test/index.html): Raft test harness (FakeRaftNode, …) for kuilt.
+- [kuilt-identity-test](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-identity-test/module.md): Test support for kuilt-identity: a fake key scheme that never waits on WebCrypto, for room tests on virtual time.
 - [kuilt-deal-test](https://tractat-us.github.io/kuilt/api/kuilt-deal-test/index.html): Conformance TCK for kuilt CommutativeScheme implementations.
 - [kuilt-gossip-test](https://tractat-us.github.io/kuilt/api/kuilt-gossip-test/index.html): Gossip test support for kuilt: a started in-memory star of GossipSeams, with a handle for admitting a fresh client mid-test.
 - [kuilt-warp-test](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-warp-test/module.md): Warp test infrastructure: the sandboxed-WASM conformance TCK and a deterministic virtual-time multi-node simulator.

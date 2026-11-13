@@ -22,11 +22,25 @@ abstract interface us.tractat.kuilt.identity/DeviceKey { // us.tractat.kuilt.ide
 }
 
 abstract interface us.tractat.kuilt.identity/DeviceKeyStore { // us.tractat.kuilt.identity/DeviceKeyStore|null[0]
+    open val keyScheme // us.tractat.kuilt.identity/DeviceKeyStore.keyScheme|{}keyScheme[0]
+        open fun <get-keyScheme>(): us.tractat.kuilt.identity/KeyScheme // us.tractat.kuilt.identity/DeviceKeyStore.keyScheme.<get-keyScheme>|<get-keyScheme>(){}[0]
+
     abstract suspend fun deviceKey(): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity/DeviceKeyStore.deviceKey|deviceKey(){}[0]
     abstract suspend fun grants(): kotlin.collections/List<us.tractat.kuilt.identity/Grant> // us.tractat.kuilt.identity/DeviceKeyStore.grants|grants(){}[0]
     abstract suspend fun keepGrant(us.tractat.kuilt.identity/Grant) // us.tractat.kuilt.identity/DeviceKeyStore.keepGrant|keepGrant(us.tractat.kuilt.identity.Grant){}[0]
 
     final object Companion // us.tractat.kuilt.identity/DeviceKeyStore.Companion|null[0]
+}
+
+abstract interface us.tractat.kuilt.identity/KeyScheme { // us.tractat.kuilt.identity/KeyScheme|null[0]
+    abstract suspend fun generate(): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity/KeyScheme.generate|generate(){}[0]
+    abstract suspend fun parse(kotlin/String): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/KeyScheme.parse|parse(kotlin.String){}[0]
+    abstract suspend fun verify(us.tractat.kuilt.identity/DidKey, kotlin/ByteArray, kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.identity/KeyScheme.verify|verify(us.tractat.kuilt.identity.DidKey;kotlin.ByteArray;kotlin.ByteArray){}[0]
+
+    final object Companion { // us.tractat.kuilt.identity/KeyScheme.Companion|null[0]
+        final val P256 // us.tractat.kuilt.identity/KeyScheme.Companion.P256|{}P256[0]
+            final fun <get-P256>(): us.tractat.kuilt.identity/KeyScheme // us.tractat.kuilt.identity/KeyScheme.Companion.P256.<get-P256>|<get-P256>(){}[0]
+    }
 }
 
 sealed interface us.tractat.kuilt.identity/GrantScope { // us.tractat.kuilt.identity/GrantScope|null[0]
@@ -114,6 +128,7 @@ final class us.tractat.kuilt.identity/AdmissionProof { // us.tractat.kuilt.ident
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/AdmissionProof.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.identity/AdmissionProof.toString|toString(){}[0]
     final suspend fun isSignedBy(us.tractat.kuilt.identity/DidKey): kotlin/Boolean // us.tractat.kuilt.identity/AdmissionProof.isSignedBy|isSignedBy(us.tractat.kuilt.identity.DidKey){}[0]
+    final suspend fun isSignedBy(us.tractat.kuilt.identity/DidKey, us.tractat.kuilt.identity/KeyScheme): kotlin/Boolean // us.tractat.kuilt.identity/AdmissionProof.isSignedBy|isSignedBy(us.tractat.kuilt.identity.DidKey;us.tractat.kuilt.identity.KeyScheme){}[0]
 
     final object Companion { // us.tractat.kuilt.identity/AdmissionProof.Companion|null[0]
         final fun decode(kotlin/ByteArray): us.tractat.kuilt.identity/AdmissionProof? // us.tractat.kuilt.identity/AdmissionProof.Companion.decode|decode(kotlin.ByteArray){}[0]
@@ -141,6 +156,7 @@ final class us.tractat.kuilt.identity/Challenge { // us.tractat.kuilt.identity/C
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/Challenge.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.identity/Challenge.toString|toString(){}[0]
     final suspend fun isSignedByHost(): kotlin/Boolean // us.tractat.kuilt.identity/Challenge.isSignedByHost|isSignedByHost(){}[0]
+    final suspend fun isSignedByHost(us.tractat.kuilt.identity/KeyScheme): kotlin/Boolean // us.tractat.kuilt.identity/Challenge.isSignedByHost|isSignedByHost(us.tractat.kuilt.identity.KeyScheme){}[0]
 
     final object Companion { // us.tractat.kuilt.identity/Challenge.Companion|null[0]
         final const val NONCE_SIZE // us.tractat.kuilt.identity/Challenge.Companion.NONCE_SIZE|{}NONCE_SIZE[0]
@@ -171,6 +187,7 @@ final class us.tractat.kuilt.identity/Grant { // us.tractat.kuilt.identity/Grant
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/Grant.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.identity/Grant.toString|toString(){}[0]
     final suspend fun isSignedByIssuer(): kotlin/Boolean // us.tractat.kuilt.identity/Grant.isSignedByIssuer|isSignedByIssuer(){}[0]
+    final suspend fun isSignedByIssuer(us.tractat.kuilt.identity/KeyScheme): kotlin/Boolean // us.tractat.kuilt.identity/Grant.isSignedByIssuer|isSignedByIssuer(us.tractat.kuilt.identity.KeyScheme){}[0]
 
     final object Companion { // us.tractat.kuilt.identity/Grant.Companion|null[0]
         final const val ID_SIZE // us.tractat.kuilt.identity/Grant.Companion.ID_SIZE|{}ID_SIZE[0]
@@ -185,6 +202,7 @@ final class us.tractat.kuilt.identity/Grant { // us.tractat.kuilt.identity/Grant
 
 final class us.tractat.kuilt.identity/GrantTrust { // us.tractat.kuilt.identity/GrantTrust|null[0]
     constructor <init>(us.tractat.kuilt.identity/DidKey, us.tractat.kuilt.identity/RevocationList) // us.tractat.kuilt.identity/GrantTrust.<init>|<init>(us.tractat.kuilt.identity.DidKey;us.tractat.kuilt.identity.RevocationList){}[0]
+    constructor <init>(us.tractat.kuilt.identity/DidKey, us.tractat.kuilt.identity/RevocationList, us.tractat.kuilt.identity/KeyScheme) // us.tractat.kuilt.identity/GrantTrust.<init>|<init>(us.tractat.kuilt.identity.DidKey;us.tractat.kuilt.identity.RevocationList;us.tractat.kuilt.identity.KeyScheme){}[0]
 
     final val hostKey // us.tractat.kuilt.identity/GrantTrust.hostKey|{}hostKey[0]
         final fun <get-hostKey>(): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/GrantTrust.hostKey.<get-hostKey>|<get-hostKey>(){}[0]
@@ -197,6 +215,10 @@ final class us.tractat.kuilt.identity/GrantTrust { // us.tractat.kuilt.identity/
 
 final class us.tractat.kuilt.identity/InMemoryDeviceKeyStore : us.tractat.kuilt.identity/DeviceKeyStore { // us.tractat.kuilt.identity/InMemoryDeviceKeyStore|null[0]
     constructor <init>() // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.<init>|<init>(){}[0]
+    constructor <init>(us.tractat.kuilt.identity/KeyScheme) // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.<init>|<init>(us.tractat.kuilt.identity.KeyScheme){}[0]
+
+    final val keyScheme // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.keyScheme|{}keyScheme[0]
+        final fun <get-keyScheme>(): us.tractat.kuilt.identity/KeyScheme // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.keyScheme.<get-keyScheme>|<get-keyScheme>(){}[0]
 
     final suspend fun deviceKey(): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.deviceKey|deviceKey(){}[0]
     final suspend fun grants(): kotlin.collections/List<us.tractat.kuilt.identity/Grant> // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.grants|grants(){}[0]
@@ -227,6 +249,8 @@ final value class us.tractat.kuilt.identity/DidKey { // us.tractat.kuilt.identit
     final suspend fun verify(kotlin/ByteArray, kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.identity/DidKey.verify|verify(kotlin.ByteArray;kotlin.ByteArray){}[0]
 
     final object Companion { // us.tractat.kuilt.identity/DidKey.Companion|null[0]
+        final fun ofSyntax(kotlin/ByteArray): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/DidKey.Companion.ofSyntax|ofSyntax(kotlin.ByteArray){}[0]
+        final fun ofSyntax(kotlin/String): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/DidKey.Companion.ofSyntax|ofSyntax(kotlin.String){}[0]
         final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.identity/DidKey> // us.tractat.kuilt.identity/DidKey.Companion.serializer|serializer(){}[0]
         final suspend fun parse(kotlin/String): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/DidKey.Companion.parse|parse(kotlin.String){}[0]
     }
