@@ -95,7 +95,7 @@ These override the task sections below where they differ.
      - What this rests on: no open lease's path ever crosses a RETIRED edge.
    - **Supply.** `LeaseOutcome.SupplyExhausted` answers an `extend` the root cannot fund. `admit`, and an overrun at `complete`, mint the shortfall as a forced mint. L2's `mintRecordsGrowPerRefillNotPerAcquire` also asserts that a capacity-sized watermark makes no forced mint.
    - **Bounds.** `LocalHeddle.MAX_RESERVATION = 2^44` applies to every reservation and extension, and the internal outstanding target is `Long.MAX_VALUE / 4`.
-   - **Mint ids carry the epoch: `"local#<epoch>#<k>"`.** This replaces Task L1's `"local#<k>"`. Two mints under one id max-join, so after a restart a restarted counter would lose supply.
+   - **Mint ids carry the epoch** — *corrected by Amendment 10:* one record per epoch, `"local#<epoch>"`, carrying the epoch's cumulative total read off the working ledger. This replaces Task L1's `"local#<k>"`.
    - **`snapshot()` is taken under the caller's lock; the value it returns is read without it.** D6 and P's `persist()` mean that the *value* is lock-free, not the call.
    - **No earmark in L1.** Each level of an operation hands down exactly what it receives, and a pick is capped at the reservation, so a former lane's open reservation is never handed to its new child (`aLaneThatGainsAChildKeepsItsOpenReservation`). L3's re-home moves units without that cap, so L3 Step 1 adds `rehomeKeepsAFormerLanesOpenReservationsEarmarked`.
    - **Only a declared Lane or an attached runtime child is leasable. That is L3's rule, because only the `Topology` can tell a Lane from a Group whose children are all inactive.** L3 adds one predicate, `isLeaf` and (Lane or attached runtime child), and uses it for both `acquire`'s terminal and `admit`, never for one alone. L3 Step 1 adds `admitRefusesAGroupThatIsNotALaneOrRuntimeChild` and `acquireNeverEndsAtAGroupThatIsNotALaneOrRuntimeChild`.
@@ -103,6 +103,25 @@ These override the task sections below where they differ.
    - **Deferred to #3199: one `piece` per operation, and the cut in `pickChild`'s scan of active children** (Amendment 3, bullets 5 and 6). Each L1 operation is all-or-nothing through one swap, but it pieces once per mutator. Batching needs an internal ledger mutator. That is a change inside `EntitlementLedger`, with no change to ledger semantics or the public API, and it is all Amendment 3's "not a ledger change" means. #3199 lands before P, or records a decision not to. Scale is recorded, not asserted: the served and unserved rows are reported from the same run.
    - **Retracted:** an earlier follow-up proposed deleting the private `childEdges` and `EdgeIndex.children` as dead. They are not dead: `childEdges` backs `hasChildEdges`, which `Topology.diff` calls (`TopologyDiff.kt` lines 263 and 391), and `buildIndex`/`carryIndex` maintain `EdgeIndex.children` for it. Answering `hasChildEdges` some other way would be a design change, not a deletion.
    - Until L2 and L3 land, `LocalHeddle.fresh` cannot seat a topology or supply, and the cookbook says so. `sampleLocalLease` uses the module's internal `over` and `mintSupply`.
+
+10. **What E and L2 settled** (from #3235's and #3234's reviews, 2026-11-13). These override the task sections and Amendment 9 where they differ.
+   - **Mint records: one per epoch.** The id is `"local#<epoch>"`, and its amount is the epoch's cumulative total, read from the working ledger rather than an engine counter. A refused operation therefore cannot leave a phantom total. Mint records join by max, so the newest total wins. One record per mint act made every acquire slower as mints accumulated (8.8 ms at 50k records). Task L2's `mintRecordsGrowPerRefillNotPerAcquire` is now `mintRecordsStayOnePerEpochAndACapacitySizedWatermarkForcesNoMint`.
+   - **E: `explain` returns `WaitExplanation`, with an ordered `kind`.**
+     - `BehindAtLevel(parent, nextChild, leafSideVirtualService, front, eligibleFront)` and `NoLiveLineage(at)` use `GroupId`, not S2's paths, as Amendment 9 does for `AcquireOutcome`.
+     - `front` is the share line over everyone waiting, the same set `entitlement` uses. `eligibleFront` is the pick's own eligibility mean. Only the pair says whether a leaf lost on eligibility or on deadline.
+     - `explain(…, reservation = defaultReservation)` takes the reservation, because deadlines depend on it.
+     - A `SupplyExhausted` arm exists so that "picked next" is never wrong when `acquire` would refuse for supply.
+     - Checks run in this order: NotWaiting, NotEligible, NoLiveLineage, SupplyExhausted, then the pick.
+     - O1 compares `kind` plus group ids, never full values, because the rationals change every pick.
+     - Inserting a `Kind` arm shifts ordinals. Any later arm says how it handles that.
+   - **One supply path.** The private `fundedBase(reservation)` holds the L2 top-up, and both `acquire` and `explain` call it. It reads the engine and writes nothing; the caller commits. `extend` tops up after its `PathDraining` check. `scratch(over)` copies capacity, so `previewPicks` and `explain` see the same top-up as `acquire`.
+   - **L2's watermark** compares the root's holdings minus the operation's need with `totalSlots × defaultReservation × lowWatermarkSlots`. It does not use Task L2's `minted − leafSpent`, which counts open reservations as headroom while the root is empty, and costs O(edges) per acquire. A top-up funds the need plus the target, so a reservation above the target still leases. A low watermark of 0 mints just in time.
+   - **L2's other shapes.**
+     - `LeaseReconciliation.unknown` is a sorted `List`.
+     - `Orphan.granted` and `defaultSettlement` are derived from the lease.
+     - `LocalPolicy.supply` is a trailing defaulted property, which removes the `LocalPolicy(JJ)` JVM constructor. The type has shipped only on snapshots.
+     - Capacity is not in `LocalHeddleState`, so a restore calls `reconcileCapacity` again. P confirms or changes that.
+   - **Release (@keddie, 2026-11-13):** `v0.7.4` is cut once this plan's work through P has landed, coordinated with the identity track so that main is non-breaking at the tag.
 
 ## Verified in source (2026-11-12)
 
