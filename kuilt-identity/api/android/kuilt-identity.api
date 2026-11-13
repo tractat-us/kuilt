@@ -1,3 +1,44 @@
+public final class us/tractat/kuilt/identity/AdmissionProof {
+	public static final field Companion Lus/tractat/kuilt/identity/AdmissionProof$Companion;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDeviceId ()Ljava/lang/String;
+	public final fun getHostKey-UjzFoJQ ()Ljava/lang/String;
+	public final fun getHostNonce ()[B
+	public final fun getHostPeerId ()Ljava/lang/String;
+	public final fun getJoinerPeerId ()Ljava/lang/String;
+	public final fun getRoomId ()Ljava/lang/String;
+	public final fun getWire ()[B
+	public fun hashCode ()I
+	public final fun isSignedBy-LkGo-BE (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/AdmissionProof$Companion {
+	public final fun decode ([B)Lus/tractat/kuilt/identity/AdmissionProof;
+	public final fun sign-mz3NijM (Lus/tractat/kuilt/identity/DeviceKey;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/identity/Challenge {
+	public static final field Companion Lus/tractat/kuilt/identity/Challenge$Companion;
+	public static final field NONCE_SIZE I
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHostKey-UjzFoJQ ()Ljava/lang/String;
+	public final fun getHostNonce ()[B
+	public final fun getHostPeerId ()Ljava/lang/String;
+	public final fun getJoinerNonce ()[B
+	public final fun getJoinerPeerId ()Ljava/lang/String;
+	public final fun getRoomId ()Ljava/lang/String;
+	public final fun getWire ()[B
+	public fun hashCode ()I
+	public final fun isSignedByHost (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/identity/Challenge$Companion {
+	public final fun decode ([B)Lus/tractat/kuilt/identity/Challenge;
+	public final fun sign (Lus/tractat/kuilt/identity/DeviceKey;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public abstract interface class us/tractat/kuilt/identity/DeviceKey {
 	public static final field Companion Lus/tractat/kuilt/identity/DeviceKey$Companion;
 	public abstract fun getId-UjzFoJQ ()Ljava/lang/String;

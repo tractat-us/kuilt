@@ -102,6 +102,37 @@ class LayoutTest {
             { assertFailsWith<IllegalArgumentException>("version 256") { Layout.encode(TAG, 256, emptyList()) } },
             { assertFailsWith<IllegalArgumentException>("version -1") { Layout.encode(TAG, -1, emptyList()) } },
             { assertEquals(HEADER_SIZE, Layout.encode(TAG, 255, emptyList()).size, "version 255 is the largest byte") },
+            {
+                assertFailsWith<IllegalArgumentException>("a 65 536-character tag") {
+                    Layout.encode("a".repeat(Layout.MAX_FIELD_SIZE + 1), 1, emptyList())
+                }
+            },
+            // The control: the longest tag a u16 prefix can carry still encodes, so the refusal above is the length.
+            {
+                assertEquals(
+                    2 + Layout.MAX_FIELD_SIZE + 1,
+                    Layout.encode("a".repeat(Layout.MAX_FIELD_SIZE), 1, emptyList()).size,
+                    "a 65 535-character tag",
+                )
+            },
+        )
+    }
+
+    @Test
+    fun decodeRefusesArgumentsItCouldNotHaveEncoded() {
+        // Each of these is the caller's mistake, not the input's, so it throws rather than reading as
+        // "these bytes are not that statement".
+        val bytes = Layout.encode(TAG, 1, emptyList())
+        assertAll(
+            {
+                // The message, not just the type: without decode's own require, ArrayList(-1) throws an
+                // IllegalArgumentException of its own on the JVM, so the type alone passes either way.
+                val refusal = assertFailsWith<IllegalArgumentException>("a negative field count") { Layout.decode(bytes, TAG, 1, -1) }
+                assertEquals("fieldCount -1 is negative", refusal.message, "decode's own refusal, not ArrayList's")
+            },
+            { assertFailsWith<IllegalArgumentException>("a non-ASCII tag") { Layout.decode(bytes, "kuilt/é", 1, 0) } },
+            // The control: the same bytes with a field count of zero and the ASCII tag decode.
+            { assertEquals(0, assertNotNull(Layout.decode(bytes, TAG, 1, 0), "the control decodes").size) },
         )
     }
 
