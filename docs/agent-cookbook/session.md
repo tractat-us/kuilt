@@ -507,4 +507,24 @@ internal suspend fun sampleParseDidKey() {
 }
 ```
 
-So far this is the name alone. The key that signs, its per-platform store, and the room exchange that restores a returning device's seat are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
+**The key behind the name:** `DeviceKey`. Its `id` is the `DidKey`, and `sign` makes the signature that `id.verify` accepts — ECDSA on P-256 over SHA-256, as 64 raw `r ‖ s` bytes. It is an interface with no accessor for the private half, so a key a hardware or browser store will not hand out still fits. `DeviceKey.generate()` makes one in memory, which is gone with the process: do not hand-roll keeping it, since the per-platform key stores that keep it are coming next.
+
+<!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleDeviceKeySigns -->
+```kotlin
+internal suspend fun sampleDeviceKeySigns() {
+    // This device's key. A real app gets it from a key store, so it is the same key tomorrow.
+    val key = DeviceKey.generate()
+
+    // The device signs something fresh; anyone holding only its public name can check the signature.
+    val challenge = "a fresh challenge from the room".encodeToByteArray()
+    val signature = key.sign(challenge)
+    check(key.id.verify(challenge, signature))
+
+    // A signature proves this key and this message, nothing else.
+    val someoneElse = DeviceKey.generate()
+    check(!someoneElse.id.verify(challenge, signature))
+    check(!key.id.verify("a different message".encodeToByteArray(), signature))
+}
+```
+
+So far this is the key and its name. The per-platform store that keeps the key, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
