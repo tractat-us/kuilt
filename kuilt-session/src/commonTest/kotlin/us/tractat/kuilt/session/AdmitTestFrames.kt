@@ -44,6 +44,11 @@ private fun syntaxCheckedDidKey(value: String): DidKey =
  * that calls the constructor itself has to do the same, because on wasmJs making a key is a WebCrypto
  * promise, and while a room waits on one under `runTest` virtual time runs on and the room's admit
  * deadline fires. Call it from the test body, before the room exists.
+ *
+ * It does not make a wasmJs test whole. Measured on #3210: one `InMemoryDeviceKeyStore().deviceKey()`
+ * at the top of an unchanged `RoomChannelTest` body, before any room exists, reds that test on wasmJs
+ * and only there. A WebCrypto await anywhere in a `runTest` body changes what the virtual-time calls
+ * after it see.
  */
 internal suspend fun keyedStore(): DeviceKeyStore = InMemoryDeviceKeyStore().also { it.deviceKey() }
 
