@@ -66,8 +66,8 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
 13. **`DidKey` checks syntax in `init`; the point is decoded in `suspend DidKey.parse` (Iain,
     planning R1).** A constructor cannot suspend and WebCrypto's decoders are async, so `init`
     checks prefix, multicodec, length and the `0x02`/`0x03` lead byte only. `parse` and `verify`
-    both run an **explicit on-curve check** (`x < p` and `y² ≡ x³ − 3x + b (mod p)`) on the decoded
-    point (Iain, 2026-11-12): cryptography-kotlin 0.6.0's JDK decoder takes a square root without
+    both run an **explicit on-curve check** (`x < p`, then Euler's criterion that `x³ − 3x + b` is a
+    square mod p, which for p ≡ 3 mod 4 is exactly when the provider's root is correct) (Iain, 2026-11-12): cryptography-kotlin 0.6.0's JDK decoder takes a square root without
     checking it, so an off-curve x decodes there (found by #3201's probe). The check is validation,
     not decompression; decompression stays the library's.
 14. **A revoked present member gets no refresh and no held-seat restore (Iain, planning R2).** The
