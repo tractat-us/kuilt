@@ -19,13 +19,16 @@ import dev.whyoleg.cryptography.algorithms.SHA256
  * @sample us.tractat.kuilt.identity.sampleDeviceKeySigns
  */
 public interface DeviceKey {
-    /** This key's public name. [DidKey.verify] accepts exactly the signatures [sign] makes. */
+    /** This key's public name. [DidKey.verify] on it accepts every signature [sign] makes. */
     public val id: DidKey
 
     /**
-     * Signs [message]: ECDSA on P-256 over SHA-256 of [message], as the 64-byte raw `r ‖ s` form.
-     * Each call draws a fresh random nonce, so signing the same message twice gives two different
-     * signatures, and both verify.
+     * Signs [message]: ECDSA on P-256 over SHA-256 of [message], as the 64-byte raw `r ‖ s` form
+     * that [id]'s [DidKey.verify] accepts.
+     *
+     * An implementation must never reuse a nonce across different messages, since two signatures
+     * sharing one give the private key away. Random nonces and deterministic ones (RFC 6979) both
+     * meet that, so signing the same message twice may give two signatures or the same one.
      *
      * @throws IllegalStateException when this platform's cryptographic provider cannot sign here.
      */
@@ -46,10 +49,13 @@ public interface DeviceKey {
  * The software [DeviceKey]: a cryptography-kotlin ECDSA private key held in memory, with its name
  * computed once from the public half when the key is generated.
  *
- * No persistent encoding yet. PKCS#8 cannot be it on the JVM and Android: the JDK provider writes
- * PKCS#8 without the public key, and reading the key back then needs the public half, which the JDK
- * provider derives only with BouncyCastle present. Which form a key store keeps is decided with the
- * first store that keeps one.
+ * Each [sign] draws a fresh random nonce from the platform's provider, so signing the same message
+ * twice gives two different signatures, and both verify.
+ *
+ * No persistent encoding yet; the desktop key file (plan Task 3.1) will keep it as a JWK and run a
+ * sign-then-verify self-test on decode. PKCS#8 cannot be it on the JVM and Android: the JDK provider
+ * writes PKCS#8 without the public key, and reading the key back then needs the public half, which
+ * the JDK provider derives only with BouncyCastle present.
  *
  * Immutable after construction, so it is safe to share across threads: each [sign] builds its own
  * signature generator.
