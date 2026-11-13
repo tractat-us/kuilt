@@ -100,7 +100,7 @@ class HostReconnectControllerInjectionTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = keyedDevice(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
                 reconnectControllerFactory = { _, _, _ -> spy },
@@ -116,7 +116,7 @@ class HostReconnectControllerInjectionTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = keyedDevice(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }

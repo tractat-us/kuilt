@@ -104,7 +104,7 @@ class PartitionRoleTest {
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -117,7 +117,7 @@ class PartitionRoleTest {
             memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -168,7 +168,7 @@ class PartitionRoleTest {
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -178,7 +178,7 @@ class PartitionRoleTest {
             memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -233,7 +233,7 @@ class PartitionRoleTest {
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -243,7 +243,7 @@ class PartitionRoleTest {
             memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -310,7 +310,7 @@ class PartitionRoleTest {
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -320,7 +320,7 @@ class PartitionRoleTest {
             memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 

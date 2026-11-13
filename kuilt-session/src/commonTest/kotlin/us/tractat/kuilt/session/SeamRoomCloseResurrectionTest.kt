@@ -80,7 +80,7 @@ class SeamRoomCloseResurrectionTest {
                     memberName = "host",
                     scope = backgroundScope,
                     clock = { Instant.fromEpochMilliseconds(0L) },
-                    deviceKeyStore = keyedStore(),
+                    device = keyedDevice(),
                     heartbeatConfig = HeartbeatConfig(),
                 )
             room.start()
