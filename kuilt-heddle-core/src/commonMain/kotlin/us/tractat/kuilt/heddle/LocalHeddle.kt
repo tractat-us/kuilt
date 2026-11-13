@@ -422,6 +422,15 @@ public class LocalHeddle private constructor(
         return picks
     }
 
+    public fun explain(
+        leaf: GroupId,
+        waiting: Set<GroupId>,
+        eligible: Set<GroupId>,
+        reservation: Long = policy.defaultReservation,
+    ): WaitExplanation = TODO("Task E")
+
+    public fun entitlement(leaf: GroupId, waiting: Set<GroupId>, totalSlots: Long): Rational = TODO("Task E")
+
     /**
      * Replace the ledger with [transform] of it: the test seam for a topology change while leases
      * are open, until L3's `apply` is the way one arrives.
