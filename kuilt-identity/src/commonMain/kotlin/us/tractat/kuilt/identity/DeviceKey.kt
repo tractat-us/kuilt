@@ -5,7 +5,11 @@ import dev.whyoleg.cryptography.algorithms.ECDSA
 import dev.whyoleg.cryptography.algorithms.SHA256
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.io.encoding.Base64
 
 /**
  * One device's own key: it signs, and its [id] is the public name other devices check those
@@ -91,23 +95,30 @@ internal class SoftwareDeviceKey private constructor(
         /**
          * The key in [jwk], or why it cannot be used.
          *
-         * Decodes the JWK, names the key from its public half, then signs [SELF_TEST] with its private
-         * half and verifies that signature under the name, through [DidKey.verify] and so through the
-         * same on-curve check and decompression every other device applies to that name. A key that
-         * passes signs for the name every room will check it against. Anything else is [StoredKey.Refused]:
-         * bytes that are not a P-256 JWK, a point that is not on the curve, a `d` out of range, and a
-         * `d` that belongs to some other key.
+         * Names the key from the JWK's own `x` and `y`, decodes its `d` with the platform's private
+         * decoder, then signs [SELF_TEST] with `d` and verifies that signature under the name, through
+         * [DidKey.verify] and so through the same on-curve check and decompression every other device
+         * applies to that name. A key that passes signs for the name every room will check it
+         * against. Anything else is [StoredKey.Refused]: bytes that are not a P-256 JWK, a point that
+         * is not on the curve, a `d` out of range, and a `d` that belongs to some other key.
+         *
+         * The name is read here rather than through a provider, because the three disagree about a
+         * JWK's public half (all measured on #3224): the JDK keeps the file's `x` and `y`; CryptoKit's
+         * private decoder reads `d` alone and derives the public half from it, so a name taken from
+         * there always matches `d` and a mismatched pair would pass; and WebCrypto refuses a JWK
+         * carrying `d` through its public decoder. WebCrypto also checks the pair itself on import,
+         * so there a mismatched pair is refused by the decoder before the self-test runs.
          *
          * @throws IllegalStateException when this platform's cryptographic provider cannot run at all,
          *   which says nothing about [jwk] and so must not be read as a reason to replace it.
          */
         suspend fun readBack(jwk: ByteArray): StoredKey {
             val ecdsa = algorithms().ecdsa
-            var failing = "it does not decode as a P-256 JWK"
+            var failing = "its x and y do not name a P-256 key"
             val (privateKey, name, signature) = try {
+                val name = nameInJwk(jwk)
+                failing = "it does not decode as a P-256 JWK"
                 val privateKey = ecdsa.privateKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PrivateKey.Format.JWK, jwk)
-                failing = "its public half does not name a key"
-                val name = nameOf(privateKey.getPublicKey())
                 failing = "its private half cannot sign"
                 val signature = privateKey.signatureGenerator(SHA256, ECDSA.SignatureFormat.RAW).generateSignature(SELF_TEST)
                 Triple(privateKey, name, signature)
@@ -126,6 +137,24 @@ internal class SoftwareDeviceKey private constructor(
             }
             return StoredKey.Usable(SoftwareDeviceKey(privateKey, name))
         }
+
+        /**
+         * The name the JWK's own `x` and `y` give: `x`, behind the lead byte `y`'s parity picks. Only
+         * the syntax is checked here; whether `x` is on the curve is [DidKey.verify]'s question.
+         */
+        private fun nameInJwk(jwk: ByteArray): DidKey {
+            val fields = Json.parseToJsonElement(jwk.decodeToString()).jsonObject
+            fun coordinate(field: String): ByteArray =
+                JWK_BASE64.decode(fields.getValue(field).jsonPrimitive.content).also {
+                    require(it.size == COORDINATE_BYTES) { "'$field' is not $COORDINATE_BYTES bytes" }
+                }
+            val x = coordinate("x")
+            val lead: Byte = if (coordinate("y").last().toInt() and 1 == 1) 0x03 else 0x02
+            return DidKey.ofCompressedPoint(byteArrayOf(lead) + x)
+        }
+
+        private const val COORDINATE_BYTES = 32
+        private val JWK_BASE64 = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL)
 
         suspend fun generate(): SoftwareDeviceKey {
             val ecdsa = algorithms().ecdsa

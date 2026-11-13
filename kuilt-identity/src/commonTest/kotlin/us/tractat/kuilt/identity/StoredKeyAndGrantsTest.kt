@@ -38,11 +38,16 @@ class StoredKeyAndGrantsTest {
     }
 
     /**
-     * A JWK whose `d` is another key's decodes on every provider and fails only the self-test. The
-     * precondition is that the spliced JWK still decodes, which is what makes the refusal the self-test's.
+     * A JWK whose `d` is another key's is refused on every target — and *where* it is refused differs,
+     * which is why this runs on all of them. The JDK and CryptoKit decode the pair and the self-test
+     * refuses it; WebCrypto checks the pair itself on import, so there the decoder refuses it first.
+     * CryptoKit is the one that made this a cross-target property: its private decoder derives the
+     * public half from `d`, so a self-test against the provider's public half passed there, and only
+     * `iosSimulatorArm64` saw it (#3224). [FileDeviceKeyStoreTest] pins the self-test's own reason on
+     * the JVM.
      */
     @Test
-    fun halvesOfDifferentKeysAreRefusedByTheSelfTest() = runTest {
+    fun halvesOfDifferentKeysAreRefused() = runTest {
         val named = SoftwareDeviceKey.generate().encodeJwk().decodeToString()
         val signer = SoftwareDeviceKey.generate().encodeJwk().decodeToString()
         val d = Regex("\"d\"\\s*:\\s*\"([^\"]+)\"")
@@ -53,8 +58,7 @@ class StoredKeyAndGrantsTest {
 
         val read = SoftwareDeviceKey.readBack(spliced.encodeToByteArray())
 
-        val refused = assertIs<StoredKey.Refused>(read)
-        assertTrue("does not sign" in refused.reason, "refused by the self-test, not the decoder: ${refused.reason}")
+        assertIs<StoredKey.Refused>(read, "a pair whose halves belong to different keys is refused: $read")
     }
 
     @Test

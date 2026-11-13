@@ -64,6 +64,10 @@ kotlin {
             // (#3201), so it runs here, in common code, and every provider gets the same answer.
             // Pure Kotlin on every target, as in :kuilt-deal.
             implementation(libs.ionspin.bignum)
+            // Reading a stored JWK's own x and y (SoftwareDeviceKey.readBack): the providers disagree
+            // about a private JWK's public half, so the name is read here. Already on every runtime
+            // classpath through cryptography-kotlin's JWK codec.
+            implementation(libs.kotlinx.serialization.json)
         }
         // One provider per platform, each a thin wrapper over the platform's own implementation.
         // Chosen explicitly in `platformProvider()` rather than via `CryptographyProvider.Default`,
