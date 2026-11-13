@@ -273,8 +273,7 @@ public class LocalHeddle private constructor(
         requireReservation("reservation", reservation)
         require(waiting.containsAll(eligible)) { "eligible must be a subset of waiting" }
         if (eligible.isEmpty()) return AcquireOutcome.NothingEligible
-        val base = ledger
-        if (base.holdings(root, SELF) < reservation) return AcquireOutcome.SupplyExhausted
+        val base = fundedBase(reservation) ?: return AcquireOutcome.SupplyExhausted
         return when (val descent = descend(base, Demands.of(base, waiting, eligible, reservation), eligible, reservation)) {
             is Descent.Refused -> AcquireOutcome.NoLiveLineage(descent.at)
             is Descent.Reached -> {
@@ -310,9 +309,17 @@ public class LocalHeddle private constructor(
         return Descent.Reached(local, group, levels)
     }
 
-    /** An engine over this one's ledger with a copy of its wake memory: it picks as this one would next, and moving it moves nothing here. */
-    private fun scratch(): LocalHeddle =
-        LocalHeddle(root, policy, epoch, ledger, FairShareAllocator(SELF, policyConfig(policy), allocator.memory))
+    /**
+     * The ledger a pick of [reservation] runs on, or `null` when the root cannot fund it. The one
+     * supply check [acquire] and [explain] share, so the two cannot disagree about it. It reads the
+     * engine and writes nothing: whatever it returns is only committed by the caller.
+     */
+    private fun fundedBase(reservation: Long): EntitlementLedger? =
+        ledger.takeIf { it.holdings(root, SELF) >= reservation }
+
+    /** An engine over [over] with a copy of this one's wake memory: it picks as this one would next, and moving it moves nothing here. */
+    private fun scratch(over: EntitlementLedger): LocalHeddle =
+        LocalHeddle(root, policy, epoch, over, FairShareAllocator(SELF, policyConfig(policy), allocator.memory))
 
     /**
      * Charge work another scheduler already started at [leaf]: open a lease for it with no pick,
@@ -421,7 +428,7 @@ public class LocalHeddle private constructor(
      */
     public fun previewPicks(waiting: Map<GroupId, Int>, eligible: Set<GroupId>, reservations: List<Long>): List<GroupId> {
         require(waiting.values.all { it >= 0 }) { "a queued count must be non-negative" }
-        val scratch = scratch()
+        val scratch = scratch(ledger)
         val remaining = HashMap(waiting)
         val picks = ArrayList<GroupId>(reservations.size)
         for (reservation in reservations) {
@@ -463,11 +470,10 @@ public class LocalHeddle private constructor(
         require(waiting.containsAll(eligible)) { "eligible must be a subset of waiting" }
         if (leaf !in waiting) return WaitExplanation.NotWaiting
         if (leaf !in eligible) return WaitExplanation.NotEligible
-        val base = ledger
-        if (!base.canEndAt(leaf)) return WaitExplanation.NoLiveLineage(leaf)
-        if (base.holdings(root, SELF) < reservation) return WaitExplanation.SupplyExhausted
+        if (!ledger.canEndAt(leaf)) return WaitExplanation.NoLiveLineage(leaf)
+        val base = fundedBase(reservation) ?: return WaitExplanation.SupplyExhausted
 
-        val trial = scratch()
+        val trial = scratch(base)
         val demands = Demands.of(base, waiting, eligible, reservation)
         val descent = trial.descend(base, demands, eligible, reservation)
         // An eligible leaf the pick can end at, with the root funded: the root's pick has a candidate
@@ -491,6 +497,12 @@ public class LocalHeddle private constructor(
                 "${lineage[level].value} is not an active child of ${at.parent.value}"
             },
             front = checkNotNull(trial.allocator.virtualTime(at.seated, at.parent, demands.waiting)) {
+                "${at.parent.value} has no active children, though a pick was made there"
+            },
+            // Over the children the pick saw as candidates: every one is seated by now, and each is
+            // granted the whole reservation, so the set the pick averaged is exactly the set
+            // `eligible` wants.
+            eligibleFront = checkNotNull(trial.allocator.virtualTime(at.seated, at.parent, demands.eligible)) {
                 "${at.parent.value} has no active children, though a pick was made there"
             },
         )

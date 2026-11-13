@@ -68,11 +68,11 @@ class LocalHeddleExplainTest {
         val second = (h.acquire(all, all, startedAt = 1L) as AcquireOutcome.Acquired).lease.leaf
         assertAll(
             { assertEquals(WaitExplanation.WouldBePickedNext, fresh[b]) },
-            { assertEquals(WaitExplanation.BehindAtLevel(p, b, Rational.ZERO, Rational.ZERO), fresh[a], "a/b is behind under p, not at the root") },
-            { assertEquals(WaitExplanation.BehindAtLevel(root, p, Rational.ZERO, Rational.ZERO), fresh[c]) },
+            { assertEquals(WaitExplanation.BehindAtLevel(p, b, Rational.ZERO, Rational.ZERO, Rational.ZERO), fresh[a], "a/b is behind under p, not at the root") },
+            { assertEquals(WaitExplanation.BehindAtLevel(root, p, Rational.ZERO, Rational.ZERO, Rational.ZERO), fresh[c]) },
             { assertEquals(b, first, "the acquire took the one it was told") },
-            { assertEquals(WaitExplanation.BehindAtLevel(root, q, Rational.ONE, Rational.of(1L, 2L)), after[a]) },
-            { assertEquals(WaitExplanation.BehindAtLevel(root, q, Rational.ONE, Rational.of(1L, 2L)), after[b], "the first level, not p") },
+            { assertEquals(WaitExplanation.BehindAtLevel(root, q, Rational.ONE, Rational.of(1L, 2L), Rational.of(1L, 2L)), after[a]) },
+            { assertEquals(WaitExplanation.BehindAtLevel(root, q, Rational.ONE, Rational.of(1L, 2L), Rational.of(1L, 2L)), after[b], "the first level, not p") },
             { assertEquals(WaitExplanation.WouldBePickedNext, after[c]) },
             { assertEquals(c, second) },
         )
@@ -93,7 +93,7 @@ class LocalHeddleExplainTest {
         val next = (h.acquire(both, both, startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf
         assertAll(
             { assertEquals(false, before.allocatorMemory.demandingObserved[AttachmentId("root>y")], "the rig: y was observed idle") },
-            { assertEquals(WaitExplanation.BehindAtLevel(root, x, Rational.of(50L), Rational.of(50L)), forY) },
+            { assertEquals(WaitExplanation.BehindAtLevel(root, x, Rational.of(50L), Rational.of(50L), Rational.of(50L)), forY) },
             { assertEquals(WaitExplanation.WouldBePickedNext, forX) },
             { assertEquals(x, next) },
             { assertSame(before.ledger, after.ledger, "explain left the ledger alone") },
@@ -185,11 +185,34 @@ class LocalHeddleExplainTest {
             val lease = (h.acquire(waiting, setOf(x, y), startedAt = 0L) as AcquireOutcome.Acquired).lease
             h.complete(lease.id, lease.reserved)
         }
-        // y ties x and loses on id. Its side is at 2, above the front of the three waiting (4/3),
-        // which is what tells it that z is owed: the mean of the eligible two alone would be 2.
+        // y ties x and loses on id: its side is at 2, not above the eligible front of x and y (2), so
+        // it was a candidate. It is above the front of all three waiting (4/3), which says z is owed.
         assertEquals(
-            WaitExplanation.BehindAtLevel(root, x, leafSideVirtualService = Rational.of(2L), front = Rational.of(4L, 3L)),
+            WaitExplanation.BehindAtLevel(
+                root, x, leafSideVirtualService = Rational.of(2L), front = Rational.of(4L, 3L), eligibleFront = Rational.of(2L),
+            ),
             h.explain(y, waiting, setOf(x, y)),
+        )
+    }
+
+    @Test
+    fun explainSeparatesTheShareLineFromThePicksLine() {
+        val x = GroupId("x")
+        val y = GroupId("y")
+        val z = GroupId("z")
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, x), edgeOf(root, y, 10), edgeOf(root, z))), root, supply = 100)
+        val waiting = setOf(x, y, z)
+        // Everyone waits throughout; z runs ten slots, then y ten, so ev(x) = 0, ev(y) = 10/10, ev(z) = 10.
+        for (only in listOf(z, y)) repeat(10) {
+            val lease = (h.acquire(waiting, setOf(only), startedAt = 0L) as AcquireOutcome.Acquired).lease
+            h.complete(lease.id, lease.reserved)
+        }
+        val why = h.explain(y, waiting, setOf(x, y), reservation = 5L)
+        // y's side (1) is below the share line of all three (20/12), yet above the line the pick drew
+        // over x and y (10/11): it was not a candidate, so it lost on eligibility, not on its deadline.
+        assertAll(
+            { assertEquals(WaitExplanation.BehindAtLevel(root, x, Rational.ONE, Rational.of(5L, 3L), Rational.of(10L, 11L)), why) },
+            { assertEquals(x, (h.acquire(waiting, setOf(x, y), startedAt = 0L, reservation = 5L) as AcquireOutcome.Acquired).lease.leaf) },
         )
     }
 

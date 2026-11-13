@@ -52,16 +52,25 @@ public sealed interface WaitExplanation {
      * pick leaves it: [nextChild] is the child it picks there instead.
      *
      * [leafSideVirtualService] is the effective virtual service of the leaf's own child of
-     * [parent], wake clamp included, and [front] is [parent]'s current virtual time over the
-     * children competing there ([FairShareAllocator.virtualTime]). Above the front, that side is
-     * running ahead of its share. At or below it, it is within its share, and [nextChild]'s
-     * earlier virtual deadline decided the pick.
+     * [parent], wake clamp included. The two fronts are weighted means of the same quantity, wake
+     * clamps included, over two different sets of [parent]'s children
+     * ([FairShareAllocator.virtualTime]):
+     * - [eligibleFront] is over the children leading to a leaf of the eligible set: the line the
+     *   pick itself draws. Above it, the leaf's side was not a candidate this slot. At or below it,
+     *   it was one, and [nextChild]'s earlier virtual deadline (or, on a tie, its smaller edge id)
+     *   decided the pick.
+     * - [front] is over the children leading to a leaf of the waiting set: the share line, the
+     *   front a newborn is seated at and the set [LocalHeddle.entitlement] shares over. Above it,
+     *   the leaf's side has had more than its share of everyone waiting; at or below it, less. It
+     *   says nothing about why this pick went elsewhere: a side below [front] can still be above
+     *   [eligibleFront], when the children this slot cannot run are the ones pulling [front] up.
      */
     public data class BehindAtLevel(
         public val parent: GroupId,
         public val nextChild: GroupId,
         public val leafSideVirtualService: Rational,
         public val front: Rational,
+        public val eligibleFront: Rational,
     ) : WaitExplanation {
         override val kind: Kind get() = Kind.BEHIND_AT_LEVEL
     }

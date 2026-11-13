@@ -502,8 +502,10 @@ sealed interface us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.h
     }
 
     final class BehindAtLevel : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel|null[0]
-        constructor <init>(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Rational) // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.<init>|<init>(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational){}[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Rational) // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.<init>|<init>(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational){}[0]
 
+        final val eligibleFront // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.eligibleFront|{}eligibleFront[0]
+            final fun <get-eligibleFront>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.eligibleFront.<get-eligibleFront>|<get-eligibleFront>(){}[0]
         final val front // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.front|{}front[0]
             final fun <get-front>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.front.<get-front>|<get-front>(){}[0]
         final val kind // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.kind|{}kind[0]
@@ -519,7 +521,8 @@ sealed interface us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.h
         final fun component2(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component2|component2(){}[0]
         final fun component3(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component3|component3(){}[0]
         final fun component4(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component4|component4(){}[0]
-        final fun copy(us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/Rational = ..., us.tractat.kuilt.heddle/Rational = ...): us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.copy|copy(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational){}[0]
+        final fun component5(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component5|component5(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/Rational = ..., us.tractat.kuilt.heddle/Rational = ..., us.tractat.kuilt.heddle/Rational = ...): us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.copy|copy(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.toString|toString(){}[0]
