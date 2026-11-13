@@ -575,7 +575,7 @@ internal suspend fun sampleIssueGrant() {
 }
 ```
 
-**Is this pass good here, now:** `GrantTrust`. Do not hand-roll the checks on a presented grant, or a "banned devices" set beside them. `GrantTrust(hostKey, revocations).verify(grant, subject, roomId, now)` answers `GrantVerdict.Valid` or the first thing wrong, always in this order: `UntrustedIssuer` (not this host's key — the only issuer a host trusts, so a pass from before a host change lands here), `BadSignature`, `WrongSubject` (the grant names another key than the one the presenter *proved* it holds — pass the proven key, never a claimed one), `WrongScope` (a `Room` pass for another room; `AnyRoomOfIssuer` is good in every room the host runs), `Revoked`, `Expired` (`now >= notAfter`; a `Grant.NO_EXPIRY` pass never expires). It reads no clock, and never throws on a bad grant. To stop a device coming back, `RevocationList.revoke(subject, notBefore)`: every grant issued to that key before the cutoff is `Revoked`, and one issued at or after it works. **Pick a cutoff later than every grant you mean to stop, not the clock now:** a grant issued in the same millisecond has `issuedAt == notBefore` and stays good, which under virtual time is the usual case. Use `now + 1`, or the later of that and the latest `issuedAt` you gave the device plus one, which also catches a grant issued while the clock ran ahead and was then set back; with only the clock, a backward step is not handled. Revoking blocks the next return; it does not remove a device that is in the room now. One cutoff per key, and `revoke` keeps the later one, so a replayed or reordered call cannot move it earlier. `RevocationList.inMemory()` forgets everything with the process — after a restart a revoked device returns on its old pass, the dangerous direction — while losing the host key is the safe one: every grant becomes `UntrustedIssuer`.
+**Is this pass good here, now:** `GrantTrust`. Do not hand-roll the checks on a presented grant, or a "banned devices" set beside them. `GrantTrust(hostKey, revocations).verify(grant, subject, roomId, now)` answers `GrantVerdict.Valid` or the first thing wrong, always in this order: `UntrustedIssuer` (not this host's key — the only issuer a host trusts, so a pass from before a host change lands here), `BadSignature`, `WrongSubject` (the grant names another key than the one the presenter *proved* it holds — pass the proven key, never a claimed one), `WrongScope` (a `Room` pass for another room; `AnyRoomOfIssuer` is good in every room the host runs), `Revoked`, `Expired` (`now >= notAfter`; a `Grant.NO_EXPIRY` pass never expires). It reads no clock, and never throws on a bad grant. To stop a device coming back, `RevocationList.revoke(subject, notBefore)`: every grant issued to that key before the cutoff is `Revoked`, and one issued at or after it works. **Pick a cutoff later than every grant you mean to stop, not the clock now:** a grant issued in the same millisecond has `issuedAt == notBefore` and stays good, which under virtual time is the usual case. Use `now + 1`, or the later of that and the latest `issuedAt` you gave the device plus one, which also catches a grant issued while the clock ran ahead and was then set back; with only the clock, a backward step is not handled. Revoking blocks the next return; it does not remove a device that is in the room now. One cutoff per key, and `revoke` keeps the later one, so a replayed or reordered call cannot move it earlier. `RevocationList.inMemory()` forgets everything with the process — after a restart a revoked device returns on its old pass, the dangerous direction — while losing the host key is the safe one: every grant becomes `UntrustedIssuer`. A real host keeps them with `RevocationList.open(store)`, below.
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleGrantTrust -->
 ```kotlin
@@ -609,4 +609,24 @@ internal suspend fun sampleGrantTrust() {
 }
 ```
 
-So far this is the store, the key, its name, the pass and its check. The platform stores that keep the key across launches, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
+**Revocations that survive a restart:** `RevocationList.open(store, key)`. Do not hand-roll a "banned devices" file beside an in-memory list. `open` reads the list the host last wrote under `key` (`RevocationList.DEFAULT_STORE_KEY` by default) from a `DurableStore` the app supplies, and every `revoke` on it writes the whole list back and returns once the write is committed. Concurrent revokes write one at a time, and a cancelled one still waits for its write to return, so an older list cannot land on a newer one, unless a write that *threw* commits later anyway; only a later revoke whose write commits after it repairs that. The price is that `revoke` is not cancellable while its write runs. If a write throws, `revoke` throws, the cutoff still holds in this process, and calling `revoke` again writes it. Open one list per key per process. Nothing under the key opens an empty list, which is also what a lost store looks like: every revocation is forgotten. Damaged bytes under the key make `open` throw `IllegalStateException` naming the key, rather than start from nothing.
+
+<!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleDurableRevocations -->
+```kotlin
+internal suspend fun sampleDurableRevocations() {
+    // The host app's store: a file, a directory, IndexedDB. In memory here.
+    val store: DurableStore = InMemoryDurableStore()
+    val lostPhone = DeviceKey.generate().id
+    val now = 1_700_000_000_000L
+
+    // Revoke through a list opened on the store: `revoke` returns once the list is written.
+    val revocations = RevocationList.open(store)
+    revocations.revoke(lostPhone, notBefore = now + 1) // one past the clock, as for any revocation
+
+    // The host restarts. The list it opens holds the revocation, so the lost phone stays out.
+    val afterRestart = RevocationList.open(store)
+    check(afterRestart.notBefore(lostPhone) == now + 1)
+}
+```
+
+So far this is the store, the key, its name, the pass, its check and the revocations. The platform stores that keep the key across launches, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).

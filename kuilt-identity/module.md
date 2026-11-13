@@ -29,10 +29,17 @@ host that no longer wants a device back on an old pass revokes it in its `Revoca
 grant issued to that key before the cutoff stops working, and a fresh one issued after works again.
 Revoking blocks the next return; it does not remove a device that is in the room now.
 
-Two losses go in opposite directions. Lose the revocations, and revoked devices come back on their
-old passes: `RevocationList.inMemory()` loses them whenever the process ends. Lose the host's key,
-and every grant it issued is from an issuer it no longer trusts, so those devices are vetted again,
-which is safe.
+A host keeps its revocations across a restart with `RevocationList.open(store)`, over a
+`DurableStore` from `:kuilt-store` that the app supplies. Each `revoke` writes the whole list and
+returns once the write is committed. `RevocationList.inMemory()` keeps nothing, so every restart
+forgets every revocation.
+
+The design names two ways to lose state, and they go in opposite directions: "losing the store
+forgets every revocation (revoked friends return); losing the host key is the safe direction (every
+grant becomes `UntrustedIssuer`)." A store that comes back empty looks exactly like a host that
+never revoked anyone, so `open` cannot tell and opens an empty list. A store that comes back
+damaged is different: `open` throws an `IllegalStateException` naming the store key, rather than
+quietly starting from nothing, and leaves the bytes where they are.
 
 The statements a room's admission exchange is made of, and the per-platform stores that keep a key
 across launches, arrive in the pieces that follow.

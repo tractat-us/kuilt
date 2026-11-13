@@ -206,7 +206,11 @@ final class us.tractat.kuilt.identity/RevocationList { // us.tractat.kuilt.ident
     final suspend fun revoke(us.tractat.kuilt.identity/DidKey, kotlin/Long) // us.tractat.kuilt.identity/RevocationList.revoke|revoke(us.tractat.kuilt.identity.DidKey;kotlin.Long){}[0]
 
     final object Companion { // us.tractat.kuilt.identity/RevocationList.Companion|null[0]
+        final val DEFAULT_STORE_KEY // us.tractat.kuilt.identity/RevocationList.Companion.DEFAULT_STORE_KEY|{}DEFAULT_STORE_KEY[0]
+            final fun <get-DEFAULT_STORE_KEY>(): us.tractat.kuilt.store/StoreKey // us.tractat.kuilt.identity/RevocationList.Companion.DEFAULT_STORE_KEY.<get-DEFAULT_STORE_KEY>|<get-DEFAULT_STORE_KEY>(){}[0]
+
         final fun inMemory(): us.tractat.kuilt.identity/RevocationList // us.tractat.kuilt.identity/RevocationList.Companion.inMemory|inMemory(){}[0]
+        final suspend fun open(us.tractat.kuilt.store/DurableStore, us.tractat.kuilt.store/StoreKey = ...): us.tractat.kuilt.identity/RevocationList // us.tractat.kuilt.identity/RevocationList.Companion.open|open(us.tractat.kuilt.store.DurableStore;us.tractat.kuilt.store.StoreKey){}[0]
     }
 }
 

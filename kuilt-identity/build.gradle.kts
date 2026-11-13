@@ -40,8 +40,12 @@ kotlin {
         val macosArm64Main by getting { dependsOn(appleMain) }
 
         commonMain.dependencies {
-            // No kuilt module yet. The primitives are cryptography-kotlin's; this module composes
-            // them and owns no cryptographic math beyond decompressing a point (ionspin, below).
+            // `api`: `RevocationList.open` takes a `DurableStore` and a `StoreKey`, so a caller names
+            // both. The one kuilt module this depends on; it brings only coroutines and atomicfu,
+            // which this module already uses.
+            api(project(":kuilt-store"))
+            // The primitives are cryptography-kotlin's; this module composes them and owns no
+            // cryptographic math beyond decompressing a point (ionspin, below).
             // `implementation`, not `api`: no cryptography-kotlin type appears in the public surface.
             implementation(libs.cryptography.core)
             // `api`: the device's `DidKey` name is `@Serializable` in the public surface.

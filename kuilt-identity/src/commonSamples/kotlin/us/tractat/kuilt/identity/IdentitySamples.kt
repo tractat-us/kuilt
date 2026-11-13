@@ -1,5 +1,8 @@
 package us.tractat.kuilt.identity
 
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.InMemoryDurableStore
+
 /** @suppress — sample only */
 internal suspend fun sampleParseDidKey() {
     // A device's name, as it arrives from somewhere you do not control: a peer, a QR code, a saved file.
@@ -103,4 +106,20 @@ internal suspend fun sampleGrantTrust() {
     // A fresh pass, issued after the cutoff, works again.
     val fresh = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = lostAt + 120_000, notAfter = lostAt + 3_720_000)
     check(trust.verify(fresh, phone.id, "table-7", lostAt + 180_000) == GrantVerdict.Valid)
+}
+
+/** @suppress — sample only */
+internal suspend fun sampleDurableRevocations() {
+    // The host app's store: a file, a directory, IndexedDB. In memory here.
+    val store: DurableStore = InMemoryDurableStore()
+    val lostPhone = DeviceKey.generate().id
+    val now = 1_700_000_000_000L
+
+    // Revoke through a list opened on the store: `revoke` returns once the list is written.
+    val revocations = RevocationList.open(store)
+    revocations.revoke(lostPhone, notBefore = now + 1) // one past the clock, as for any revocation
+
+    // The host restarts. The list it opens holds the revocation, so the lost phone stays out.
+    val afterRestart = RevocationList.open(store)
+    check(afterRestart.notBefore(lostPhone) == now + 1)
 }

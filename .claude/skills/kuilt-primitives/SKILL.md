@@ -14,7 +14,7 @@ Rows pair `;`-separated groups in order.
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
 |a rejoin/reconnect loop, a resume token, a grace window; why a rejoin was refused|`Room.resumeToken` + `Room.resume`; `ResumeResult.JoinerOutcome` (`code.retryable`)|`session.md#rejoin--reconnect`|
-|a device key/did:key, recognising a returning device; a "remember this device" pass, revoking it|`DeviceKeyStore` → `DeviceKey` + `DidKey`; `Grant` + `GrantTrust`/`RevocationList`|`session.md#device-identity--return`|
+|a device key/did:key, recognising a returning device; a "remember this device" pass, revoking it across restarts|`DeviceKeyStore` → `DeviceKey` + `DidKey`; `Grant` + `GrantTrust`/`RevocationList.open`|`session.md#device-identity--return`|
 |a "why did we drop" classifier; a retry/back-off loop; a per-session id every peer agrees on|`MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`); `ExponentialBackoff`; `Room.roomId`/`RoomFactory.host(…, roomId = …)`|`session.md#rejoin--reconnect`|
 |a heartbeat, an idle reaper, "is this peer alive"; reaping a room nobody joined; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
 |a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned(since, windowExpiresAt)` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|
@@ -53,8 +53,7 @@ Rows pair `;`-separated groups in order.
 `<path>`: `docs/agent-cookbook/<jump-to file>` or the index `docs/agent-cookbook.md`.
 In kuilt, read it directly; consumers take the first working rung:
 
-1. `git -C ../kuilt fetch -q origin main && git -C ../kuilt show origin/main:<path>`
-   Read `origin/main`, not its working tree.
+1. `git -C ../kuilt fetch -q origin main && git -C ../kuilt show origin/main:<path>` (not the checkout)
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
