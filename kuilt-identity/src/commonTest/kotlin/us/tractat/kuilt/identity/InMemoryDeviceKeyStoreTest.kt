@@ -24,7 +24,7 @@ class InMemoryDeviceKeyStoreTest {
         var callersInside = 0
         var callersInsideWhileGenerating = -1
         var generated = 0
-        val store = InMemoryDeviceKeyStore {
+        val store = InMemoryDeviceKeyStore.generatingWith {
             generated++
             yield() // let every other caller reach the store while this key is still being made
             callersInsideWhileGenerating = callersInside

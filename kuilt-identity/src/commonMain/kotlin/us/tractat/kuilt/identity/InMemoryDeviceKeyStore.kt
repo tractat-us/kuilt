@@ -15,7 +15,7 @@ import kotlinx.coroutines.sync.withLock
  * across the first key's generation, so concurrent first calls wait for that one key rather than
  * each making their own.
  */
-public class InMemoryDeviceKeyStore internal constructor(
+public class InMemoryDeviceKeyStore private constructor(
     private val generate: suspend () -> DeviceKey,
 ) : DeviceKeyStore {
     /** A store whose key, made on first use, is [DeviceKey.generate]'s. */
@@ -32,4 +32,9 @@ public class InMemoryDeviceKeyStore internal constructor(
     override suspend fun grants(): List<Grant> = mutex.withLock { held }
 
     override suspend fun keepGrant(grant: Grant): Unit = mutex.withLock { held = held.keeping(grant) }
+
+    internal companion object {
+        /** A store whose first key comes from [generate], so a test can force interleavings with it. */
+        fun generatingWith(generate: suspend () -> DeviceKey): InMemoryDeviceKeyStore = InMemoryDeviceKeyStore(generate)
+    }
 }
