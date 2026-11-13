@@ -68,8 +68,9 @@ public class RevocationList private constructor(
      * Monotone: a cutoff earlier than the one already held changes nothing.
      *
      * A list from [open] returns only once the whole list, this cutoff included, is written to its
-     * store. The cutoff holds in this process from the moment `revoke` is called, written or not. If
-     * the write throws, so does `revoke`, and what the store holds is unknown; calling `revoke` again
+     * store. The cutoff holds in this process before its write starts, so a write that fails or never
+     * returns does not let the device in here. If the write throws, so does `revoke`, and what the
+     * store holds is unknown; calling `revoke` again
      * writes the whole list again, so a retry makes it good. Concurrent calls write one at a time, in
      * the order they merged, so an older list can never land on top of a newer one.
      */

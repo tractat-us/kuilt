@@ -117,9 +117,9 @@ internal suspend fun sampleDurableRevocations() {
 
     // Revoke through a list opened on the store: `revoke` returns once the list is written.
     val revocations = RevocationList.open(store)
-    revocations.revoke(lostPhone, notBefore = now)
+    revocations.revoke(lostPhone, notBefore = now + 1) // one past the clock, as for any revocation
 
     // The host restarts. The list it opens holds the revocation, so the lost phone stays out.
     val afterRestart = RevocationList.open(store)
-    check(afterRestart.notBefore(lostPhone) == now)
+    check(afterRestart.notBefore(lostPhone) == now + 1)
 }
