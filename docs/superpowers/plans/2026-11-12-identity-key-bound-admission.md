@@ -8,7 +8,7 @@
 
 **Tech Stack:** Kotlin Multiplatform (JVM, Android, iOS, macOS, wasmJs). cryptography-kotlin 0.6.0 (JDK, CryptoKit and WebCrypto providers, as in `:kuilt-seal`). kotlinx-serialization (CBOR on the admit wire). `:kuilt-store` for durable revocations and grants. `:kuilt-test` (`assertAll`).
 
-**Spec:** `docs/superpowers/specs/2026-11-12-identity-key-bound-admission-design.md`, approved by Iain on 2026-11-12. Decided 1–12 there are binding. The calls Iain approved alongside the spec are listed under *Approved with the spec* below.
+**Spec:** `docs/superpowers/specs/2026-11-12-identity-key-bound-admission-design.md`, approved by Iain on 2026-11-12. Decided 1–20 there are binding. The calls Iain approved alongside the spec are listed under *Approved with the spec* below.
 
 ## Approved with the spec (binding, from the dispatch arguments)
 
@@ -49,8 +49,115 @@ The spec leaves these to the builder. Each one is fixed by a golden vector or a 
   - Welcome marks: `ReturnKind { Restored, Returning }` on the Welcome. `Farewell.supersededBy`.
   - Session types: `LeaveReason.Superseded(by: PeerId)`, `MembershipEvent.Joined(member, returning: ReturningMark? = null)`, `ReturningMark(previousId: PeerId?)`.
   - Reject codes: `RejectCode.BadProof` (`"bad-proof"`), `RejectCode.KeyConflict` (`"key-conflict"`), `RejectCode.AdmissionPolicyFailed` (`"admission-policy-failed"`, retryable).
-  - Policy types: `HostAdmission(policy, trust)`, `GrantTerms(readmitFor, reach)`, `GrantReach { ThisRoom, AnyRoomOfIssuer }`.
+  - Policy types: `HostAdmission(policy, revocations)` (Decided 17), `GrantTerms(readmitFor, reach)`, `GrantReach { ThisRoom, AnyRoomOfIssuer }`.
   - `AdoptRole.Host(admission, roomId)` / `AdoptRole.Joiner` replaces `adopt(role: SessionRole, roomId)`. This makes "host entry points only" a type rather than a `require`.
+
+## Amendment A — the slice 1–2 audit (2026-11-12, before any slice-1 task started)
+
+A read-only pass checked Tasks 1.1–2.7 against `origin/main` at `492cdab7d`. Each task below carries a
+pointer here; **the bullets override the task text where they differ.** Full findings, with file:line:
+`slice12-audit-2026-11-12.md` in the epic worktree (uncommitted notes). Rulings: spec Decided 17–20.
+
+**Shared files.** 1.2, 2.1, 2.3 and every 1.x task share `kuilt-session/api/*`, `SKILL.md` (and its
+8,192-byte body budget), `docs/agent-cookbook/session.md` and `llms.txt`. They rebase on each other;
+they are not independent. 1.2 adds `implementation(project(":kuilt-identity"))` to `:kuilt-session`;
+1.1 promotes it to `api`.
+
+**Graph.** 2.3 is after **2.1** (and after 0.6 and the session → identity edge), not after 0.7 alone.
+Split option: policy types after 0.6; `HostAdmission` after 2.1.
+
+**Lands early, additively, on main:** `admit/PendingChallenges.kt` (its own file, not
+`KeyAdmission.kt`) with `PendingChallengesTest` — needs only today's `Hello`, `PeerId` and a clock;
+give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent(sender, gen)`) for
+2.4's stale-decision discard; expire lazily against `clock` and sweep on `open`, no timer job.
+
+- **1.1**
+  - Also thread: `LoomRoomHost` (`RoomHost.kt`), `NwRoomHost`, `MultipeerRoomHost` (+ their tests,
+    `:kuilt-multipeer` dumps and an `api(project(":kuilt-identity"))` edge there), both `KtorRoomHost`
+    constructors, `examples/src/test/**`, all four `RoomFactory` implementers (`SeamRoomFactory`,
+    `FakeRoomFactory`, two anonymous objects in `ReferenceResumeHarness`).
+  - **Drop `ServerCluster.kt`** and the `(PeerId) -> DeviceKeyStore` idea: it takes a `RoomHost`.
+    Multi-server tests pass distinct `InMemoryDeviceKeyStore()`s per `KtorRoomHost`.
+  - Count: ~145 sites in ~69 files (62 test, 7 main), not ~50.
+  - Docs with constructor snippets: `docs/usage.md`, `Writerside/topics/fabrics.md`,
+    `Writerside/topics/cluster-server-client.md`, `kuilt-cluster/module.md`, `kuilt-test/README.md`.
+  - `spike/` (`ConnectivitySuite.kt`): fix it, or say in the PR it is knowingly left.
+  - Run `updateKotlinAbi` and record whatever moves (`:kuilt-game` likely does not; multipeer does).
+- **1.3**
+  - **`Hello.key` and `Hello.joinerNonce` are nullable on the wire** (`= null`). Non-null fields make a
+    v2 Hello fail CBOR decode, which `AdmitMessage.decode` turns into a silent drop, so the version
+    gate never fires (`HelloVersionWireCompatTest` pins that hazard). A v3+ Hello missing either is
+    refused (`ProtocolMismatch` or `BadProof`).
+  - Bootstrap Welcomes need each member's key, which the host does not store until `Member.key`:
+    **move `Member.key` into 1.3** (or fill only direct/host-intro keys here and bootstrap keys in 1.4).
+  - Every admit DTO with a `ByteArray` gets content-based `equals`/`hashCode` (the `RoomFrame`
+    precedent); round-trip tests compare with `assertEquals`.
+  - `handleAdmitFrame`'s `when` is exhaustive: `Challenge`/`Proof` need arms in `SeamRoom.kt`.
+  - The test file is `admit/AdmitMessageTest.kt`. Also update `HelloVersionWireCompatTest`, the golden
+    Hello vectors in `AdmitMessageTest`, and the 10 test files with raw `Hello(`/`Welcome(`.
+  - **Every version bump edits `admit/ProtocolVersionTest.kt`** (1.3, 1.4, 1.5, 1.6, 1.8, 2.5, 2.6).
+  - Nonces from `org.kotlincrypto.random.CryptoRand`, which session already uses; keep that
+    dependency when 1.8 deletes `ResumeSecret`.
+- **1.4**
+  - `PendingChallenges` has already landed (above); 1.4 wires it.
+  - A pending sender is not an admitted member, so `handlePeerLost` never fires for it. Drop pending
+    entries for senders that leave `seam.peers`, or rely on the `admitTimeout` sweep.
+  - **A `Goodbye` from the sender drops its pending entry** (needed by
+    `seatIsReReadAtProofTimeNotChallengeTime`), or that test moves to 1.5.
+  - Joiner: gate the `hostPeerId` capture on the first Welcome **from a sender whose Challenge it
+    verified** — today the first Welcome of any shape from anyone sets it.
+  - `Member(` sites: `FakeRoomFactory.kt` (`seedRoster`), `FakeRoomTest.kt`'s helper,
+    `kuilt-session-test/README.md`, `kuilt-cluster` jvmTest `ServerClusterSim.kt`. Not `FakeRoom.kt`.
+    Non-suspend helpers become suspend (keys come from `DidKey.parse` / `DeviceKey.generate()`).
+  - Session opts in to `@IdentityInternalApi` via `compilerOptions.optIn`.
+- **1.5**
+  - `handleResume` also constructs `ProvenResume` (after its secret check) until 1.8 retires it.
+  - A successful `tryResume` emits `Resumed`, fans out `Unpaused` and sends `ResumeAck`. On the Proof
+    path: **no Welcome/Farewell fan-out, but the existing `Unpaused` still goes**; say which path sends
+    `ResumeAck` (1.8 deletes it).
+  - A connected-seat Restore skips `tryResume` (it would return `WindowNotYetOpen`).
+  - `healedLinkSameIdRestoresWithResumed` would pass through the old `Resume` path until 1.7: drive
+    the re-Hello with raw frames here, or move the test to 1.7.
+  - Same id + different key: `KeyConflict` only against a **connected** seat (Decided 18).
+  - `tryResume` users to update: see the audit list. `RoomId` lives in `partition/ResumeToken.kt`.
+- **1.6**
+  - A **connected** old seat under a new id is superseded directly, without `tryResume`
+    (`supersededJoinerDoesNotReHello` has a connected seat).
+  - Send `Farewell(previous, supersededBy)` **directly to `previous`** before removing it, plus the
+    bystander fan-out (Decided 19).
+  - The partitioned-seat path must not emit a stray `Resumed(previous)`/`ResumeAck` (it races the
+    `Left`): use a different controller call, or skip already-removed peers.
+  - New joiner arm for a self-`Farewell`: emit `Left(selfId, Superseded(by))` and close (Decided 19).
+  - `SeamRoom.leave`'s `when` over `LeaveReason` needs a `Superseded` arm.
+- **1.7**
+  - **Move the `ResumeHarness` reshape (`RoomConformanceSuite`, `ReferenceResumeHarness`,
+    `RoomResumeHarnessTest`, `RoomConformanceGapDeclarationTest`) here from 1.9**: after 1.7 the joiner
+    sends no `Resume`, so the suite's `resumeRequests()` counts go red. Public conformance ABI change.
+  - Re-Hello with `sendTo(hostPeer)`, not broadcast (a broadcast is admitted by foreign hosts on a
+    flat loom).
+  - Tests to change: `ResumeTokenFailoverTest` (examples), `RoomResumeTest`, `RoomResumeTimeoutTest`,
+    `ConcurrentResumeHangTest`, `DrainingGenerationReconnectTest`, and in `partition/`
+    `ResumeFlightOwnershipTest`, `ThrowawaySeamCloseCancellationTest`, `SubTimeoutBlipResumeTest`,
+    `ResumeRefusalReportingTest`. There is no `JoinerResumeMachine*` test file.
+  - Remove the now-unreachable `WindowNotYetOpen` dwell/retry in `runReconnect`.
+- **1.8**
+  - Remove `ResumeTokenInvalid`, `ResumeWindowNotYetOpen`, `ResumeWindowExpired` (Decided 20) and
+    their readers: `AgentCookbookSamples.classifyRejectCodeSample` (quoted verbatim in
+    `session.md`), `ClusterClient` KDoc, `EndpointRotationTest`, `ResumeTokenFailoverTest`.
+  - `ResumeToken.secret` users: `EndpointRotationTest`, `FakeRoomTest`, `ServerClusterReconnectTest`,
+    `TransportCloseWindowTest`, `ResumeSecretTest`, `JoinerResumeMachine.mintTokenIfAbsent`, and
+    `spike/.../ResumeLaneProbe.kt` (the "expect no hits" grep will hit spike).
+  - `ResumeToken` is `@Serializable` and apps persist it: say so in the PR body.
+- **1.9** — the harness reshape is already done in 1.7; the rest stands.
+- **2.3** — after 2.1 (graph above). `AdmissionRequest.key: DidKey` needs the `api` edge.
+- **2.4**
+  - `HostAdmission(policy, revocations)`; the room builds `GrantTrust` from its own store key
+    (Decided 17). Tests no longer need a suspend `store.deviceKey().id` to build the trust.
+  - Same missed sites as 1.1 (`LoomRoomHost`, `NwRoomHost`, `MultipeerRoomHost`, `:examples`); drop
+    `ServerCluster`. `adopt(…, SessionRole…)` callers: `SeamElectionLobby.adoptAfterCommit`, ~20
+    session test files, `kuilt-game`'s `RoomGameHarness`, `kuilt-nw`'s `NwMeshRoomPartitionTest`, spike.
+  - The stale-decision discard uses `PendingChallenges`' generation.
+- **2.5** — `Welcome.grant` and `GrantRenewal` carry `ByteArray`: content-based `equals`/`hashCode`.
 
 ## Global Constraints
 
@@ -367,6 +474,8 @@ Session code lives in `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/sess
 
 ### Task 1.1: Thread `DeviceKeyStore` and `deviceId` through every factory [after 0.7; mechanical]
 
+> **Amended — read Amendment A § 1.1 first; it overrides this task where they differ.**
+
 **Files:**
 - Modify: `kuilt-session/build.gradle.kts` (add `api(project(":kuilt-identity"))`) and `SeamRoom.kt` (`SeamRoomFactory`, `SeamRoomFactory.systemClock`, `join`, `adopt`, and the `SeamRoom` constructor).
 - Modify: `Room.kt` (`RoomFactory.join`), `kuilt-websocket/.../KtorRoomHost.kt`, `kuilt-cluster/.../ClusterClient.kt` and `ServerCluster.kt`, the `kuilt-nw` call sites, `kuilt-game/src/commonSamples/.../GameSamples.kt`, `kuilt-conformance`, and `kuilt-session-test/.../FakeRoomFactory.kt`.
@@ -384,6 +493,8 @@ Session code lives in `kuilt-session/src/commonMain/kotlin/us/tractat/kuilt/sess
 - [ ] **Step 4: Full verification, then commit.** Run `./gradlew clean && ./gradlew build --rerun-tasks`. Commit: "session: rooms take a DeviceKeyStore and send a deviceId (#3159)".
 
 ### Task 1.2: The key → seat decision, as a pure function [after 0.3; parallel with slice 0's tail]
+
+> **Amended — read Amendment A § Shared files first; it overrides this task where they differ.**
 
 **Files:**
 - Create: `admit/SeatDecision.kt`.
@@ -411,6 +522,8 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 
 ### Task 1.3: Admit wire v3: Challenge, Proof, and keys on Hello and Welcome [after 1.1, 0.5]
 
+> **Amended — read Amendment A § 1.3 first; it overrides this task where they differ.**
+
 **Files:**
 - Modify: `admit/AdmitMessage.kt`, `admit/ProtocolVersion.kt` (`CURRENT` = `MIN_SUPPORTED` = `MAX_SUPPORTED` = 3), and `SeamRoom.kt` (only `sendHello` and the three Welcome constructions fill the new fields).
 - Test: `admit/AdmitMessageCodecTest.kt` (extend it or create it).
@@ -431,6 +544,8 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 - [ ] **Step 3: `api/`, full build, then commit.** Commit: "session: admit protocol v3 carries device keys and the challenge frames (#3159)".
 
 ### Task 1.4: Admission requires a verified proof of the key [after 1.3] — riskiest task
+
+> **Amended — read Amendment A § 1.4 first; it overrides this task where they differ.**
 
 **Files:**
 - Create: `admit/KeyAdmission.kt`, the internal pending-challenge table plus the host and joiner checks, so that `SeamRoom.kt` grows only by its call sites.
@@ -469,6 +584,8 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 
 ### Task 1.5: Same id, same key restores the held seat, and a different key is refused [after 1.2, 1.4]
 
+> **Amended — read Amendment A § 1.5 first; it overrides this task where they differ.**
+
 **Files:**
 - Create: `partition/ProvenResume.kt`.
 - Modify: `partition/JoinerReconnectController.kt`, `partition/DefaultJoinerReconnectController.kt`, `SeamRoom.kt` (the Proof handler consults `decideSeat` under `lock` at Proof time), `admit/AdmitMessage.kt` (`Welcome.returnKind: ReturnKind? = null`, `ReturnKind`), `ProtocolVersion` (to 5), `kuilt-conformance/.../ReferenceResumeHarness.kt`, and every `tryResume` test.
@@ -494,6 +611,8 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 
 ### Task 1.6: A known key under a new id restores, and the old membership is superseded [after 1.5]
 
+> **Amended — read Amendment A § 1.6 first; it overrides this task where they differ.**
+
 **Files:**
 - Modify: `LeaveReason.kt` (`Superseded(by: PeerId)`), `admit/AdmitMessage.kt` (`Farewell.supersededBy: String? = null`), `ProtocolVersion` (to 6), and `SeamRoom.kt` (the `RestoreUnderNewId` arm, the bystander handling of `Farewell.supersededBy`, and the joiner's handling of its own supersession).
 
@@ -508,6 +627,8 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 - [ ] **Step 2: Watch them fail, implement, update `api/`, run the full build, then commit.** Commit: "session: a known key under a new peer id supersedes its old membership (#3159)".
 
 ### Task 1.7: The joiner's reconnect re-Hellos instead of sending `Resume` [after 1.6]
+
+> **Amended — read Amendment A § 1.7 first; it overrides this task where they differ.**
 
 **Files:**
 - Modify: `partition/JoinerResumeMachine.kt` (`resume` and `runReconnect` send a fresh Hello and answer the Challenge, and the flight completes on the self Welcome), `SeamRoom.kt` (`Room.resume` and the self-Welcome handler), and the tests in `partition/` and `JoinerResumeMachine*`.
@@ -526,6 +647,8 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 
 ### Task 1.8: Retire `Resume`, `ResumeAck` and `ResumeSecret` [after 1.7]
 
+> **Amended — read Amendment A § 1.8 first; it overrides this task where they differ.**
+
 **Files:**
 - Delete: `partition/ResumeSecret.kt` and its tests.
 - Modify:
@@ -540,6 +663,8 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 - [ ] **Step 2: Run the full build.** The PR body records each ABI removal. Commit: "session: retire ResumeSecret and the Resume frame (#3159)".
 
 ### Task 1.9: Slice-1 conformance rows and the rejoin route [after 1.8]
+
+> **Amended — read Amendment A § 1.9 first; it overrides this task where they differ.**
 
 **Files:**
 - Modify: `kuilt-conformance/src/commonMain/.../RoomConformanceSuite.kt` (new cases, and `ResumeHarness` reshaped around keys), `InMemoryRoomConformanceTest.kt`, `RoomResumeHarnessTest.kt`, the skill's rejoin row, and `docs/agent-cookbook/session.md` (`## Rejoin & reconnect` and `## Device identity & return`).
@@ -608,6 +733,8 @@ public class RevocationList {   // lock-guarded
 
 ### Task 2.3: `AdmissionPolicy` and its types [after 0.7; may run during slice 1]
 
+> **Amended — read Amendment A § 2.3 first; it overrides this task where they differ.**
+
 **Files:**
 - Create: `kuilt-session/.../admit/AdmissionPolicy.kt`.
 - Test: `admit/AdmissionPolicyTest.kt`.
@@ -638,6 +765,8 @@ public class HostAdmission(public val policy: AdmissionPolicy, public val trust:
 
 ### Task 2.4: Host entry points require `HostAdmission`, and the policy decides ordinary admissions [after 1.9, 2.1, 2.3]
 
+> **Amended — read Amendment A § 2.4 first; it overrides this task where they differ.**
+
 **Files:**
 - Modify: `SeamRoom.kt` (`SeamRoomFactory.host`, `adopt(role: AdoptRole, …)`, `electLobby`, and the `Ordinary` arm), `Room.kt` (`RoomFactory.host(…, admission: HostAdmission)`), `SessionRole.kt` or a new `AdoptRole.kt`, `election/SeamElectionLobby.kt`, `KtorRoomHost`, `ServerCluster`, the `kuilt-nw` sites, `kuilt-game` samples, `kuilt-conformance`, `FakeRoomFactory`, and every host-side test (pass `HostAdmission(AdmissionPolicy.open(), GrantTrust(key, RevocationList.inMemory()))`). Also `api/` everywhere.
 
@@ -659,6 +788,8 @@ public class HostAdmission(public val policy: AdmissionPolicy, public val trust:
 - [ ] **Step 2: Watch them fail, implement, thread the call sites, update `api/` (the PR body names `AdoptRole` and the host parameter), run the full build, then commit.** Commit: "session: hosts decide ordinary admissions through an AdmissionPolicy (#3159)".
 
 ### Task 2.5: Grants are issued on Welcome and refreshed while connected [after 2.4]
+
+> **Amended — read Amendment A § 2.5 first; it overrides this task where they differ.**
 
 **Files:**
 - Create: `admit/GrantIssuer.kt` (internal: per-member terms, issue, the refresh schedule, the R2(i) check).

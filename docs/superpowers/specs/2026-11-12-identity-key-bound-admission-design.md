@@ -82,6 +82,20 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     "decompression stays the library's" and takes the JDK's unchecked decoder out of the path.
 15. **Android's platform default takes a `Context` (Iain, planning R3):**
     `DeviceKeyStore.platform(appId, context)`, grants under `context.noBackupFilesDir`.
+17. **One source for the host's key (Iain, 2026-11-12, slice 1–2 audit).** Host entry points take
+    `HostAdmission(policy, revocations)`; the room builds its `GrantTrust` from its own
+    `DeviceKeyStore` key. A caller-supplied trust key could differ from the store's and silently turn
+    every grant into `UntrustedIssuer`.
+18. **A key conflict needs a connected seat (Iain, 2026-11-12, slice 1–2 audit).** "Live" in the
+    key → seat table means **connected**. The same peer id with a different key against a
+    *partitioned* held seat releases that seat and is admitted as a new member — this is how a device
+    whose key store was cleared, and whose peer id is durable, keeps working with no prompt.
+19. **A superseded joiner sees `Left(self, LeaveReason.Superseded(by))`, then the room closes (Iain,
+    2026-11-12, slice 1–2 audit).** The host sends that `Farewell` directly to the superseded peer, not
+    only through `fanOutToOtherMembers`, which excludes its subject.
+20. **The resume-only reject codes go with the `Resume` frame (Iain, 2026-11-12, slice 1–2 audit).**
+    `ResumeTokenInvalid`, `ResumeWindowNotYetOpen` and `ResumeWindowExpired` are removed when
+    `Resume` is retired, together with their readers.
 
 ## Goals
 
@@ -243,7 +257,8 @@ The host keeps, for each member, its key. On a verified Proof:
 | same | same | held (partitioned or still connected) | **Restored**: the same membership, `MembershipEvent.Resumed`; a still-connected seat's old link is superseded |
 | new | same | held | **Restored under the new id**: the old member leaves with a dedicated `LeaveReason` (superseded), the new one inherits the membership; one event pair, ordered through `fanOutToOtherMembers` |
 | any | same | gone, grant `Valid` | **Returning**: admitted without calling vetting; the roster Welcome carries a `returning` mark |
-| same | **different** | live | **Rejected**, terminal — a different device claiming a live member's id |
+| same | **different** | connected | **Rejected**, terminal — a different device claiming a connected member's id (Decided 18) |
+| same | **different** | partitioned | old seat released; **ordinary admission** as a new member (Decided 18) |
 | any | — | none, no valid grant | ordinary admission through `AdmissionPolicy` |
 
 This retires `ResumeSecret`, the `Resume` frame and the token-presentation problem in #1593: a
@@ -293,11 +308,12 @@ needs a `Pending` frame that extends the joiner's deadline — not in this slice
 
 ### Configuration and call sites
 
-- `SeamRoomFactory` gains `DeviceKeyStore` (all roles), and `AdmissionPolicy` + `GrantTrust` on host
-  entry points.
-- Thread them through `KtorRoomHost`, `ServerCluster` and `ClusterClient`. Each cluster server has its
-  own key, so a grant from one server is `UntrustedIssuer` at another; `ClusterClient` joins fresh
-  after rotating anyway.
+- `SeamRoomFactory` gains `DeviceKeyStore` (all roles), and `HostAdmission` (policy + revocations;
+  Decided 17) on host entry points.
+- Thread them through `LoomRoomHost` (and so `NwRoomHost` and `MultipeerRoomHost`), `KtorRoomHost`
+  and `ClusterClient`. `ServerCluster` takes a `RoomHost` and builds no factory, so each server's key
+  comes from the `KtorRoomHost` it is given. Each cluster server has its own key, so a grant from one
+  server is `UntrustedIssuer` at another; `ClusterClient` joins fresh after rotating anyway.
 
 ## Consequences
 
