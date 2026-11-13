@@ -99,12 +99,14 @@ class InMemoryDeviceKeyStoreTest {
 
         store.keepGrant(held)
         store.keepGrant(sameInstant)
+        val afterSameInstant = store.grants()
         store.keepGrant(held)
-        val kept = store.grants()
+        val afterKeptTwice = store.grants()
 
         assertAll(
             { assertNotEquals(held, sameInstant, "precondition: two different grants") },
-            { assertEquals(listOf(held), kept, "only a strictly newer grant replaces; keeping one twice is a no-op") },
+            { assertEquals(listOf(held), afterSameInstant, "only a strictly newer grant replaces the held one") },
+            { assertEquals(listOf(held), afterKeptTwice, "keeping the held grant again is a no-op") },
         )
     }
 
