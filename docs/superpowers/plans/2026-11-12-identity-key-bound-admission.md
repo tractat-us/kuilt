@@ -28,6 +28,10 @@
 
 ## Plan decisions
 
+- **`GrantTerms.readmitFor` ≥ 1 ms** (not the earlier `> 0`; #3270): a grant is dated in whole
+  milliseconds and `Grant` requires `notAfter > issuedAt`, so a sub-millisecond term could not be issued.
+  A part millisecond is dropped, never rounded up. 2.5/2.6 rebuilding terms from `notAfter − issuedAt` see ≥ 1.
+
 The spec leaves these to the builder. Each one is fixed by a golden vector or a test once it lands. Reviewers may challenge them. Workers do not change them.
 
 - **The statement layout.**
@@ -197,6 +201,12 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
 - **1.9** — the harness reshape is already done in 1.7; the rest stands.
 - **2.3** — after 2.1 (graph above). `AdmissionRequest.key: DidKey` needs the `api` edge.
 - **2.4**
+  - From #3270's review: build `AdmissionRequest` only from the `SeatDecision` ordinary arm (an internal
+    factory taking the verdict and the verified proof), so calling the policy on a restore is a type
+    error rather than a counting test. `AdmissionProof` signs a null `deviceId` as `""`: say so where
+    the request is built (a joiner sending `""` and one sending nothing sign the same bytes).
+  - Remove 2.3's "No room … yet; tracked by #3220" lines (KDoc and `session.md`) and the present-tense
+    `HostAdmission` KDoc claims that only become true here.
   - Retire a decided challenge with `PendingChallenges.retire(sender, generation)` (compare-and-remove,
     added in #3264), never `isCurrent` + `drop`: the decision completes on the `admitPeer` coroutine,
     so a re-Hello's `open` can land between the two and the `drop` deletes the newer challenge.
@@ -208,6 +218,12 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
     session test files, `kuilt-game`'s `RoomGameHarness`, `kuilt-nw`'s `NwMeshRoomPartitionTest`, spike.
   - The stale-decision discard uses `PendingChallenges`' generation.
 - **2.5** — `Welcome.grant` and `GrantRenewal` carry `ByteArray`: content-based `equals`/`hashCode`.
+  - **Refresh period**: compute `(notAfter − issuedAt) / 2` as a `Duration` or clamp it to ≥ 1 ms.
+    `GrantTerms` admits a 1 ms term (2.3's floor), so `Long` `1 / 2 = 0` would spin a `delay(0)` refresh
+    loop signing a grant per member — and freeze virtual time under `runTest`.
+  - **Custom reject codes** (from #3270's review): the wire `Reject` carries only `code.id`, so an app's
+    own `RejectCode` arrives as `Unknown(id)`, retryable. If 2.5's protocol bump carries `retryable`, see
+    the issue filed for it; otherwise 1.7's re-Hello retries a refused returning device to its deadline.
 
 ## Global Constraints
 
