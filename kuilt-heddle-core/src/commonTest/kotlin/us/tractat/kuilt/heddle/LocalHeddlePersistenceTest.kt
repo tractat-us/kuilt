@@ -145,6 +145,64 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
+     * A CBOR array with an element past the state is corrupt, and named so rather than thrown. CBOR
+     * looks up each element's annotations in the envelope's descriptor before it hands back the
+     * element's index, so this is the one input that asks the descriptor about an index it does not
+     * describe.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun aCborElementPastTheStateIsCorrupt() {
+        val bytes = Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), wakerScenario().first.persist())
+        // `9F 01 <state> FF`: an indefinite-length array, the version, the state, the break.
+        val state = bytes.copyOfRange(2, bytes.size - 1)
+        val extra = bytes.copyOfRange(0, bytes.size - 1) + state + bytes.copyOfRange(bytes.size - 1, bytes.size)
+        assertAll(
+            { assertEquals(listOf(0x9F, 0x01), bytes.take(2).map { it.toInt() and 0xFF }, "the rig: an indefinite-length array, version 1 first") },
+            { assertEquals(0xFF, bytes.last().toInt() and 0xFF, "the rig: closed by a break") },
+            { assertIs<RestoreResult.Restored>(LocalHeddle.decode(bytes, Cbor), "the rig: the untouched bytes decode") },
+            {
+                val out = LocalHeddle.decode(extra, Cbor)
+                assertTrue(out is RestoreResult.Corrupt && "past its state" in out.reason, "expected Corrupt naming the element past the state, got $out")
+            },
+        )
+    }
+
+    /**
+     * A format that writes each collection's size before its elements and reads sequentially reads
+     * the envelope too. Read without its size, the `2` in front is taken for the version, and every
+     * snapshot comes back as `UnsupportedVersion(2)`.
+     */
+    @Test
+    fun snapshotRoundTripsThroughASizePrefixedFormat() {
+        val snapshot = richScenario().first.persist()
+        val bytes = SizePrefixedFormat.encodeToByteArray(LocalHeddleSnapshot.serializer(), snapshot)
+        assertAll(
+            { assertEquals(listOf<Byte>(0, 0, 0, 2), bytes.take(4), "the rig: the format wrote the envelope's size first") },
+            { assertEquals(listOf<Byte>(0, 0, 0, 1), bytes.slice(4..7), "the rig: and the version after it") },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytes, SizePrefixedFormat)) },
+        )
+    }
+
+    /** A size-prefixed envelope that says it holds other than two elements is corrupt, whatever follows. */
+    @Test
+    fun aSizePrefixedEnvelopeOfTheWrongSizeIsCorrupt() {
+        val bytes = SizePrefixedFormat.encodeToByteArray(LocalHeddleSnapshot.serializer(), wakerScenario().first.persist())
+        val checks = listOf(0, 1, 3).map { size ->
+            val resized = byteArrayOf(0, 0, 0, size.toByte()) + bytes.copyOfRange(4, bytes.size)
+            val check: () -> Unit = {
+                val out = LocalHeddle.decode(resized, SizePrefixedFormat)
+                assertTrue(out is RestoreResult.Corrupt && "has $size" in out.reason, "size $size: expected Corrupt naming it, got $out")
+            }
+            check
+        }
+        assertAll(
+            { assertIs<RestoreResult.Restored>(LocalHeddle.decode(bytes, SizePrefixedFormat), "the rig: the untouched bytes decode") },
+            *checks.toTypedArray(),
+        )
+    }
+
+    /**
      * A snapshot taken mid-drain restores, and the drain finishes after it. A removal with a lease
      * open leaves its edge CLOSING; the lease's path crosses that edge. Restored, the lease completes,
      * and applying the same topology again retires the edge.
