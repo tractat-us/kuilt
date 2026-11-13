@@ -12,10 +12,9 @@ every minute.
 > **Playground.** This engine works today, and its API can change.
 
 This page follows one farm from its first build, through a change to its tree,
-to a crash. Every example is
-one compiled sample, `sampleBuildFarm`, quoted in order. Every result the page
-shows is a check in that sample, so the page cannot drift from what the engine
-does.
+to a crash and a restart. Every example is one compiled sample,
+`sampleBuildFarm`, quoted in order. Every result a code block shows is a check
+in that sample, so the examples cannot drift from what the engine does.
 
 ## Draw the tree
 
@@ -74,7 +73,8 @@ heddle.reconcileCapacity(totalSlots = 4L)
 ```
 
 `LocalHeddle.fromTopology` loads the tree into an engine called `heddle`, which
-the rest of this page uses. Every lease id it hands out is stamped with `epoch`.
+the rest of this page uses. Every lease id it hands out is stamped with `epoch`,
+which [a restart](#when-the-engine-restarts-too) raises.
 
 Heddle counts in whatever unit your program counts time in. Here it is minutes.
 It never reads a clock: every time is a number you pass in, so a replay of the
@@ -284,9 +284,8 @@ number is safe, because the engine moves it past any it already holds.
 
 A build that was running when its team's weight changed carries on. It keeps
 its lease, and `complete` charges it once, as usual. From your side, nothing
-changed. The team itself starts again at its new weight, level with the line,
-the way a team does when it comes back from a quiet spell. It is neither owed
-for its past nor charged for it.
+changed. The team itself starts again at its new weight, level with the line.
+It is neither owed for its past nor charged for it.
 
 Forks open and close while the farm runs, so the tree cannot list them. A group
 marked with `runtimeChildren()` takes children your program names as it goes:
@@ -320,9 +319,11 @@ waits for. Once they finish, make the same call again and the removal completes.
 If a build's work is gone, [`reconcileLeases`](#after-a-crash) finds it, so a
 lost build holds a removal up only until you settle it.
 
-Each child's change lands on its own. A child that is still draining holds up
-its own change, and a reweight of any group above it, but every other change in
-the same reload still lands. Call `apply` with the same tree later, and only
+Each child's change lands on its own. When one child's change cannot land yet,
+because it is draining or was refused, that child is held back. So is any group
+above it whose change must retire an old part, such as a reweight or a removal,
+and that group is listed in `refusals` too. Every other change in the same
+reload still lands. Call `apply` with the same tree later, and only
 what is left is done.
 
 Two finer points:
@@ -365,10 +366,81 @@ time but no more than the lease was given, since a lost build cannot show that
 it really ran long. If you have evidence that it did, pass more. Work that will
 resume belongs in `live`, so it never becomes an orphan.
 
-<!-- TODO(P): persist and restore — continue the farm across a restart of the
-engine itself (`snapshot` → bytes → restore), lease ids from an older epoch
-answering `Stale`, and whether a restore must call `reconcileCapacity` again.
-Add once P merges; extend `sampleBuildFarm` rather than starting a new story. -->
+## When the engine restarts too
+
+So far only the agent host went down. If the program that runs the engine
+restarts as well, save the engine first and load it back after. Three rules
+keep that safe:
+
+- **Store the saved form exactly as it comes.** Do not edit it, or rebuild it
+  from parts. The engine reads it back whole, and checks it on the way in.
+- **Restore under a higher epoch.** Keep a boot counter on disk and raise it on
+  every start. Lease ids are numbered afresh in each epoch, so a reused epoch
+  could hand out an id that an earlier run already used.
+- **Upgrade one release at a time.** Each release reads the format the release
+  before it wrote, as well as its own.
+
+The farm's engine restarts while `kept` is still running:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleBuildFarm -->
+
+```kotlin
+// Now the engine's own program restarts, with `kept` still running. Under your scheduling
+// lock, take a snapshot, then encode it and store the text exactly as it comes.
+val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
+
+// After the restart, decode it and restore under a higher epoch: keep a boot counter, raise it.
+val decoded = LocalHeddle.decode(stored, Json)
+check(decoded is RestoreResult.Restored && decoded.snapshot.epoch == 0L)
+val restored = LocalHeddle.restore(decoded.snapshot, policy, epoch = 1L)
+// It would pick exactly as the old engine would have.
+val ahead = mapOf(web to 8, mobile to 8)
+check(restored.previewPicks(ahead, both, List(8) { 3L }) == heddle.previewPicks(ahead, both, List(8) { 3L }))
+// The build that was running finishes on the new engine, charged as it would have been.
+check(restored.complete(kept.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+// A lease settled before the restart is named as one from an older epoch.
+check(restored.complete(lost.id, actualCost = 3L) == LeaseOutcome.Stale(currentEpoch = 1L))
+// The agent count came back too, so it leases at once, and new ids carry the new epoch.
+val next = restored.acquire(both, both, startedAt = 130L)
+check(next is AcquireOutcome.Acquired && next.lease.id.epoch == 1L)
+```
+
+`persist` takes a **snapshot**: one value holding everything the engine needs
+to carry on. Take it from the same place you call the engine from, since the
+engine is not thread-safe. The value itself never changes, so encoding and
+writing it can happen anywhere.
+
+`restore` starts an engine from it. Every lease that was open is open again
+under its old id, so `complete` works on it as before. The agent count comes
+back, so there is no need to call `reconcileCapacity` again, though doing so is
+harmless. The engine also keeps what it needs to pick in the same order, and
+the tree it last loaded. The one thing not saved is the policy, so pass the same
+`LocalPolicy` the old engine ran with.
+
+An old lease id that is no longer open now answers `Stale`, not `Unknown`, so
+you can tell "from before the restart" apart from "never heard of it". Builds
+that died with the old program are still leases on the new one. Find and settle
+them with [`reconcileLeases`](#after-a-crash), as above.
+
+### What the saved form looks like
+
+Encoded, a snapshot is a two-item list, `[formatVersion, state]`, as a JSON
+array or a CBOR array. Both formats work; ProtoBuf cannot carry the books. It
+is a list rather than an object so that a store that reorders an object's keys,
+as Postgres `jsonb` does, cannot move `state` ahead of the version. Equal snapshots encode to equal bytes.
+
+`decode` reads the version first and never throws for what the bytes hold.
+It gives one of three answers:
+
+- **`Restored`** holds the snapshot, ready for `restore`.
+- **`UnsupportedVersion`** means this release does not read the format the
+  bytes were written in. It names the format it found and the formats it reads.
+  Either a newer release wrote them, or they skipped a release on the way up.
+  The engine reads nothing past the version, so nothing is half-loaded.
+- **`Corrupt`** means the bytes are not a snapshot, or hold one that does not add
+  up, such as a lease on a part of the tree the books do not hold. Its `reason`
+  says which. A snapshot the engine built always adds up, so one that does not
+  was damaged or changed after it was written.
 
 ## How fair is it?
 

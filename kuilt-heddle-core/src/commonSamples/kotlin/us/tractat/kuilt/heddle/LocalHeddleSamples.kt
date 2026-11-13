@@ -276,6 +276,25 @@ internal fun sampleBuildFarm() {
     check(heddle.complete(orphan.lease.id, orphan.defaultSettlement) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
     // Settled once, it is gone: a second settlement changes nothing.
     check(heddle.complete(orphan.lease.id, actualCost = 14L) == LeaseOutcome.Unknown)
+
+    // Now the engine's own program restarts, with `kept` still running. Under your scheduling
+    // lock, take a snapshot, then encode it and store the text exactly as it comes.
+    val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
+
+    // After the restart, decode it and restore under a higher epoch: keep a boot counter, raise it.
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored && decoded.snapshot.epoch == 0L)
+    val restored = LocalHeddle.restore(decoded.snapshot, policy, epoch = 1L)
+    // It would pick exactly as the old engine would have.
+    val ahead = mapOf(web to 8, mobile to 8)
+    check(restored.previewPicks(ahead, both, List(8) { 3L }) == heddle.previewPicks(ahead, both, List(8) { 3L }))
+    // The build that was running finishes on the new engine, charged as it would have been.
+    check(restored.complete(kept.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    // A lease settled before the restart is named as one from an older epoch.
+    check(restored.complete(lost.id, actualCost = 3L) == LeaseOutcome.Stale(currentEpoch = 1L))
+    // The agent count came back too, so it leases at once, and new ids carry the new epoch.
+    val next = restored.acquire(both, both, startedAt = 130L)
+    check(next is AcquireOutcome.Acquired && next.lease.id.epoch == 1L)
 }
 
 /** Two lanes under `pool`, `heavy` at weight 2 beside `light`. */
