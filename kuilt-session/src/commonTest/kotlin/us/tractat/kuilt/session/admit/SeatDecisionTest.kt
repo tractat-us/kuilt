@@ -2,6 +2,7 @@ package us.tractat.kuilt.session.admit
 
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -10,11 +11,12 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 
 /**
- * The key → seat table as a pure function: one test per row of the spec's table, the two precedence
- * cases the rows leave open, and the whole truth table at once.
+ * The key → seat table as a pure function: one test per row of the spec's table, the cases where two
+ * rows meet (Decided 23), and the whole truth table at once.
  *
- * Keys are the two W3C CCG P-256 `did:key` vectors, parsed through the public entry point, so each is
- * a real key on every target rather than a string that merely looks like one.
+ * Keys A and B are the two W3C CCG P-256 `did:key` vectors, parsed through the public entry point, so
+ * each is a real key on every target rather than a string that merely looks like one. A bystander
+ * holds a third, generated key C, so no fixture puts two seats under one key unless it means to.
  */
 class SeatDecisionTest {
 
@@ -24,49 +26,110 @@ class SeatDecisionTest {
 
     private fun live(key: DidKey) = Seat(key, SeatLiveness.Connected)
 
-    private fun seatTest(body: (a: DidKey, b: DidKey) -> Unit) = runTest {
+    private fun away(key: DidKey) = Seat(key, SeatLiveness.Partitioned)
+
+    private fun seatTest(body: (a: DidKey, b: DidKey, c: DidKey) -> Unit) = runTest {
         val a = DidKey.parse("did:key:zDnaerx9CtbPJ1q36T5Ln5wYt3MQYeGRG5ehnPAmxcf5mDZpv")
         val b = DidKey.parse("did:key:zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169")
+        val c = DeviceKey.generate().id
         // Every "different key" case below rests on this.
-        assertNotEquals(a, b)
-        body(a, b)
+        assertAll(
+            { assertNotEquals(a, b) },
+            { assertNotEquals(a, c) },
+            { assertNotEquals(b, c) },
+        )
+        body(a, b, c)
     }
 
     @Test
-    fun sameIdSameKeyRestores() = seatTest { a, b ->
-        assertEquals(
-            SeatDecision.Restore(p1),
-            decideSeat(p1, a, held = mapOf(p1 to live(a), p2 to live(b)), holdsValidGrant = false),
+    fun sameIdSameKeyRestores() = seatTest { a, b, _ ->
+        // Connected or partitioned, the same membership comes back.
+        assertAll(
+            { assertEquals(SeatDecision.Restore(p1), decideSeat(p1, a, held = mapOf(p1 to live(a), p2 to live(b)), holdsValidGrant = false)) },
+            { assertEquals(SeatDecision.Restore(p1), decideSeat(p1, a, held = mapOf(p1 to away(a), p2 to live(b)), holdsValidGrant = false)) },
         )
     }
 
     @Test
-    fun newIdSameKeyRestoresUnderNewId() = seatTest { a, b ->
-        assertEquals(
-            SeatDecision.RestoreUnderNewId(previous = p1),
-            decideSeat(p3, a, held = mapOf(p1 to live(a), p2 to live(b)), holdsValidGrant = false),
+    fun newIdSameKeyRestoresUnderNewId() = seatTest { a, b, _ ->
+        assertAll(
+            {
+                assertEquals(
+                    SeatDecision.RestoreUnderNewId(previous = p1),
+                    decideSeat(p3, a, held = mapOf(p1 to live(a), p2 to live(b)), holdsValidGrant = false),
+                )
+            },
+            {
+                assertEquals(
+                    SeatDecision.RestoreUnderNewId(previous = p1),
+                    decideSeat(p3, a, held = mapOf(p1 to away(a), p2 to live(b)), holdsValidGrant = false),
+                )
+            },
         )
     }
 
     @Test
-    fun noSeatValidGrantReturns() = seatTest { a, b ->
+    fun noSeatValidGrantReturns() = seatTest { a, _, c ->
         // A seat held by someone else is in the table, so "no seat" is about this id and this key.
         assertEquals(
             SeatDecision.Returning,
-            decideSeat(p1, a, held = mapOf(p2 to live(b)), holdsValidGrant = true),
+            decideSeat(p1, a, held = mapOf(p2 to live(c)), holdsValidGrant = true),
         )
     }
 
     @Test
-    fun sameIdDifferentKeyConflicts() = seatTest { a, b ->
-        assertEquals(
-            SeatDecision.KeyConflict,
-            decideSeat(p1, a, held = mapOf(p1 to live(b)), holdsValidGrant = false),
+    fun sameIdDifferentKeyConflictsWhileTheSeatIsConnected() = seatTest { a, b, _ ->
+        assertAll(
+            { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held = mapOf(p1 to live(b)), holdsValidGrant = false)) },
+            { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held = mapOf(p1 to live(b)), holdsValidGrant = true)) },
         )
     }
 
     @Test
-    fun noSeatNoGrantIsOrdinary() = seatTest { a, b ->
+    fun sameIdDifferentKeyReleasesAPartitionedSeat() = seatTest { a, b, _ ->
+        // Decided 18: a device whose key store was cleared, and whose peer id is durable, gets back in
+        // as a new member. Decided 23: with a valid grant that new member is returning.
+        assertAll(
+            {
+                assertEquals(
+                    SeatDecision.ReleaseAndAdmit(released = p1, admission = SeatDecision.Ordinary),
+                    decideSeat(p1, a, held = mapOf(p1 to away(b)), holdsValidGrant = false),
+                )
+            },
+            {
+                assertEquals(
+                    SeatDecision.ReleaseAndAdmit(released = p1, admission = SeatDecision.Returning),
+                    decideSeat(p1, a, held = mapOf(p1 to away(b)), holdsValidGrant = true),
+                )
+            },
+        )
+    }
+
+    @Test
+    fun aReleasedSeatIsDecidedAgainWithoutIt() = seatTest { a, b, c ->
+        // Decided 23's "decide again without the seat", stated as the caller would compute it.
+        val helds = listOf(
+            mapOf(p1 to away(b)),
+            mapOf(p1 to away(b), p3 to live(c)),
+            mapOf(p1 to away(b), p3 to away(c)),
+        )
+        val checks = helds.flatMap { held ->
+            listOf(false, true).map { grant ->
+                {
+                    val decision = decideSeat(p1, a, held, grant)
+                    assertEquals(
+                        SeatDecision.ReleaseAndAdmit(released = p1, admission = decideSeat(p1, a, held - p1, grant) as SeatDecision.NewMember),
+                        decision,
+                        "held=$held grant=$grant",
+                    )
+                }
+            }
+        }
+        assertAll(*checks.toTypedArray())
+    }
+
+    @Test
+    fun noSeatNoGrantIsOrdinary() = seatTest { a, b, _ ->
         assertAll(
             { assertEquals(SeatDecision.Ordinary, decideSeat(p1, a, held = emptyMap(), holdsValidGrant = false)) },
             { assertEquals(SeatDecision.Ordinary, decideSeat(p1, a, held = mapOf(p2 to live(b)), holdsValidGrant = false)) },
@@ -74,19 +137,27 @@ class SeatDecisionTest {
     }
 
     @Test
-    fun idConflictBeatsKeyMatchElsewhere() = seatTest { a, b ->
-        // p1 is held by key B; the joiner proved key A, which holds p2. Restoring p2 would reward a
-        // joiner that lied about which seat it is. Both orders, so the verdict is not a scan order.
-        val forward = mapOf(p1 to live(b), p2 to live(a))
-        assertAll(
-            { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held = forward, holdsValidGrant = false)) },
-            { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held = forward.entries.reversed().associate { it.toPair() }, holdsValidGrant = false)) },
-            { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held = forward, holdsValidGrant = true)) },
-        )
+    fun idConflictBeatsKeyMatchElsewhereWhateverTheLiveness() = seatTest { a, b, _ ->
+        // p1 is held by key B; the joiner proved key A, which holds p2. Releasing p1 would leave key A
+        // holding two seats, and restoring p2 would reward a joiner that lied about which seat it is
+        // (Decided 23). Every liveness pair, the grant both ways, and both map orders.
+        val seats = listOf(::live, ::away)
+        val checks = seats.flatMap { idSeat ->
+            seats.flatMap { keySeat ->
+                val forward = mapOf(p1 to idSeat(b), p2 to keySeat(a))
+                val reversed = mapOf(p2 to keySeat(a), p1 to idSeat(b))
+                listOf(forward, reversed).flatMap { held ->
+                    listOf(false, true).map { grant ->
+                        { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held, grant), "held=$held grant=$grant") }
+                    }
+                }
+            }
+        }
+        assertAll(*checks.toTypedArray())
     }
 
     @Test
-    fun validGrantNeverOverridesAHeldSeat() = seatTest { a, b ->
+    fun validGrantNeverOverridesAHeldSeat() = seatTest { a, b, _ ->
         assertAll(
             { assertEquals(SeatDecision.Restore(p1), decideSeat(p1, a, held = mapOf(p1 to live(a)), holdsValidGrant = true)) },
             {
@@ -100,42 +171,47 @@ class SeatDecisionTest {
     }
 
     /**
-     * Every combination of the three inputs that matter — what the claimed id holds, whether the
-     * proven key holds another seat, and the grant — against expectations written out by hand.
+     * Every combination of the inputs that matter — what the claimed id holds and how live it is,
+     * whether the proven key holds another seat and how live that is, and the grant — against
+     * expectations written out by hand. Two seats under one key are left to their own tests.
      *
      * [label]'s `when` has no `else`, so a new [SeatDecision] variant does not compile here until this
      * table says what it should be.
      */
     @Test
-    fun everyCombinationOfTheInputsReachesItsRow() = seatTest { a, b ->
-        // The claimed id is always p1. What p1 holds, and whether key A holds p2.
-        val idHoldsSameKey = mapOf(p1 to live(a))
-        val idHoldsOtherKey = mapOf(p1 to live(b))
-        val idHoldsOtherKeyAndKeyHoldsP2 = mapOf(p1 to live(b), p2 to live(a))
-        val keyHoldsP2 = mapOf(p2 to live(a))
-        val bystanderOnly = mapOf(p3 to live(b))
-        val nothing = emptyMap<PeerId, Seat>()
-
+    fun everyCombinationOfTheInputsReachesItsRow() = seatTest { a, b, c ->
+        // The claimed id is always p1 and the proven key always A. A bystander p3 holds key C in every
+        // row, so "no seat" is about this id and this key, never an empty table.
         val rows = listOf(
-            Triple(idHoldsSameKey, false, "restore p1"),
-            Triple(idHoldsSameKey, true, "restore p1"),
-            Triple(idHoldsOtherKey, false, "key conflict"),
-            Triple(idHoldsOtherKey, true, "key conflict"),
-            Triple(idHoldsOtherKeyAndKeyHoldsP2, false, "key conflict"),
-            Triple(idHoldsOtherKeyAndKeyHoldsP2, true, "key conflict"),
-            Triple(keyHoldsP2, false, "restore under new id, previous p2"),
-            Triple(keyHoldsP2, true, "restore under new id, previous p2"),
-            Triple(bystanderOnly, false, "ordinary"),
-            Triple(bystanderOnly, true, "returning"),
-            Triple(nothing, false, "ordinary"),
-            Triple(nothing, true, "returning"),
+            Triple(mapOf(p3 to live(c)), false, "ordinary"),
+            Triple(mapOf(p3 to live(c)), true, "returning"),
+            Triple(mapOf(p3 to live(c), p2 to live(a)), false, "restore under new id, previous p2"),
+            Triple(mapOf(p3 to live(c), p2 to live(a)), true, "restore under new id, previous p2"),
+            Triple(mapOf(p3 to live(c), p2 to away(a)), false, "restore under new id, previous p2"),
+            Triple(mapOf(p3 to live(c), p2 to away(a)), true, "restore under new id, previous p2"),
+            Triple(mapOf(p3 to live(c), p1 to live(a)), false, "restore p1"),
+            Triple(mapOf(p3 to live(c), p1 to live(a)), true, "restore p1"),
+            Triple(mapOf(p3 to live(c), p1 to away(a)), false, "restore p1"),
+            Triple(mapOf(p3 to live(c), p1 to away(a)), true, "restore p1"),
+            Triple(mapOf(p3 to live(c), p1 to live(b)), false, "key conflict"),
+            Triple(mapOf(p3 to live(c), p1 to live(b)), true, "key conflict"),
+            Triple(mapOf(p3 to live(c), p1 to live(b), p2 to live(a)), false, "key conflict"),
+            Triple(mapOf(p3 to live(c), p1 to live(b), p2 to live(a)), true, "key conflict"),
+            Triple(mapOf(p3 to live(c), p1 to live(b), p2 to away(a)), false, "key conflict"),
+            Triple(mapOf(p3 to live(c), p1 to live(b), p2 to away(a)), true, "key conflict"),
+            Triple(mapOf(p3 to live(c), p1 to away(b)), false, "release p1, then ordinary"),
+            Triple(mapOf(p3 to live(c), p1 to away(b)), true, "release p1, then returning"),
+            Triple(mapOf(p3 to live(c), p1 to away(b), p2 to live(a)), false, "key conflict"),
+            Triple(mapOf(p3 to live(c), p1 to away(b), p2 to live(a)), true, "key conflict"),
+            Triple(mapOf(p3 to live(c), p1 to away(b), p2 to away(a)), false, "key conflict"),
+            Triple(mapOf(p3 to live(c), p1 to away(b), p2 to away(a)), true, "key conflict"),
         )
         val actual = rows.map { (held, grant, _) -> label(decideSeat(p1, a, held, grant)) }
         assertEquals(rows.map { it.third }, actual)
     }
 
     @Test
-    fun twoSeatsSharingAKeyAreRefused() = seatTest { a, _ ->
+    fun twoSeatsSharingAKeyAreRefused() = seatTest { a, _, _ ->
         assertFailsWith<IllegalArgumentException> {
             decideSeat(p3, a, held = mapOf(p1 to live(a), p2 to live(a)), holdsValidGrant = false)
         }
