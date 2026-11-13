@@ -629,4 +629,27 @@ internal suspend fun sampleDurableRevocations() {
 }
 ```
 
-So far this is the store, the key, its name, the pass, its check and the revocations. The platform stores that keep the key across launches, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
+**Who gets in, and for how long:** `AdmissionPolicy` (`us.tractat.kuilt.session.admit`). Do not hand-roll an "is this joiner allowed" callback, an allow-list check, or a per-member expiry map beside the room. A policy answers `AdmissionDecision.Admit(GrantTerms(readmitFor, reach))` — the pass the newcomer gets: back within `readmitFor` of last contact (`Duration.INFINITE` for never expiring), in `GrantReach.ThisRoom` or `AnyRoomOfIssuer` — or `AdmissionDecision.Reject(code)`, where `code` can be your own `RejectCode`. It sees newcomers only: a device whose seat is held, or that returns inside its pass, gets back in without asking it, and revoking a key voids its passes but not its next ordinary admission, so refuse it in the policy too. Decide on `request.key`, the key the joiner proved; `displayName` is unverified. `AdmissionPolicy.open(readmitFor = 1.hours)` admits everyone, and checks its term when built rather than on a joiner's admission. `HostAdmission(policy, revocations)` is what a host will hold; it takes no host key, since the room checks passes against its own. No room entry point takes one yet.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#hostAdmissionSample -->
+```kotlin
+public fun hostAdmissionSample(friends: Set<DidKey>, refused: Set<DidKey>): HostAdmission {
+    // RejectCode is open: a code of your own sits beside kuilt's, and says whether retrying helps.
+    val notWelcome = object : RejectCode {
+        override val id: String = "not-welcome"
+        override val retryable: Boolean = false
+    }
+    val policy = AdmissionPolicy { request ->
+        // `key` is the device key the joiner proved it holds. `displayName` is only its say-so.
+        when (request.key) {
+            in refused -> AdmissionDecision.Reject(notWelcome)
+            in friends -> AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
+            else -> AdmissionDecision.Admit(GrantTerms(readmitFor = 1.hours))
+        }
+    }
+    // Revoking a key voids the passes it holds, not its next ordinary admission: refuse it above too.
+    return HostAdmission(policy, RevocationList.inMemory())
+}
+```
+
+So far this is the store, the key, its name, the pass, its check, the revocations and the policy's types. The platform stores that keep the key across launches, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
