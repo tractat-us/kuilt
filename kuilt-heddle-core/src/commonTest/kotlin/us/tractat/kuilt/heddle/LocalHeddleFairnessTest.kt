@@ -12,9 +12,18 @@ import kotlin.test.fail
 /**
  * Task C's fairness and supply evidence, re-run on [LocalHeddle] (#3173, plan Task L1). Task C
  * gathered it on a test-only prototype before the engine's API was frozen, and pinned every
- * integer the runs produced in one `fingerprint()` string. The pins below are those strings,
- * unchanged: the engine makes exactly the picks, extensions, overruns and wakes the prototype did,
- * on every target. The prototype is gone; this is what it proved.
+ * integer the runs produced in one `fingerprint()` string. The pins below are those strings: the
+ * engine made exactly the picks, extensions, overruns and wakes the prototype did, on every target.
+ * The prototype is gone; this is what it proved.
+ *
+ * **The churn and starved pins moved once, with #3238, and the backlogged pin did not.** Their
+ * leases reserve 1..5 against costs of 0..8 and their leaves go idle, so some lease open at a wake
+ * later hands part of its reservation back, and since #3238 that release no longer hands back the
+ * idle credit the wake clamp denied. Churn went from `a=6731 b=2899 c=3172` to
+ * `a=6736 b=2913 c=3153`, its overall error from 0.016677 to 0.017068 and its window error from
+ * 0.089246 to 0.090851, both still inside their bars; starved went from `a=4029 b=1837` to
+ * `a=4026 b=1840`. Every other field is unchanged. The backlogged arm never wakes, so nothing
+ * there could move.
  *
  * ## The generator
  *
@@ -39,7 +48,7 @@ import kotlin.test.fail
  *
  * ## Which fields the engine decides
  *
- * The fingerprints are a differential against the prototype, so they stay byte-identical; but not
+ * The fingerprints are a differential, so they move only with a deliberate change; but not
  * every field in them is the engine's.
  * - **Engine-decided:** the per-leaf totals (which leaf each pick chose), `acquires`, `filtered`,
  *   `seesExtended`, and `wakes`, which the harness counts but reads off the engine's own wake memory.
@@ -123,14 +132,14 @@ class LocalHeddleFairnessTest {
             { assertTrue(window <= 0.15, "500-step window vs waiting-GPS: $window") },
             {
                 assertEquals(
-                    "a=6731 b=2899 c=3172 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
+                    "a=6736 b=2913 c=3153 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
                         "exhaustedAcquires=0 exhaustedExtends=0 inlineOverruns=878 filtered=1489 seesExtended=1994 wakes=1030 " +
                         "mints=322 forcedMints=0 minUnspent=33",
                     run.fingerprint(),
                 )
             },
-            { assertEquals(0.016677, overall, PIN_TOLERANCE, "pinned overall error") },
-            { assertEquals(0.089246, window, PIN_TOLERANCE, "pinned window error") },
+            { assertEquals(0.017068, overall, PIN_TOLERANCE, "pinned overall error") },
+            { assertEquals(0.090851, window, PIN_TOLERANCE, "pinned window error") },
         )
     }
 
@@ -147,7 +156,7 @@ class LocalHeddleFairnessTest {
             { assertTrue(run.acquires > 0 && run.completes > 0, "work still flowed: ${run.acquires} / ${run.completes}") },
             {
                 assertEquals(
-                    "a=4029 b=1837 c=1874 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
+                    "a=4026 b=1840 c=1874 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
                         "exhaustedAcquires=2403 exhaustedExtends=40 inlineOverruns=737 filtered=914 seesExtended=1325 wakes=857 " +
                         "mints=3316 forcedMints=460 minUnspent=0",
                     run.fingerprint(),

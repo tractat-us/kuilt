@@ -46,6 +46,11 @@ public interface LedgerCell {
  * under some other peer's scheduling would be a penalty this peer has no standing to impose.
  * Seating a genuinely new generation is the seat bump's job ([schedule]), not the clamp's.
  *
+ * For a lease engine it also remembers what each edge's latest clamp left at risk, a
+ * [WakeExposure], so that a lease which was open at the clamp and later hands back part of its
+ * reservation cannot hand back the idle credit the clamp denied (#3238). [schedule] and the public
+ * [pickChild] never record one: their caller never releases.
+ *
  * That memory is a value too: [memory] exports it as an [AllocatorMemory] and the secondary
  * constructor takes one back, so a single-process caller can persist it beside its ledger, and can
  * ask "who would go next" of a throwaway allocator built over a copy without moving this one.
@@ -74,6 +79,7 @@ public class FairShareAllocator(
 ) {
     private val wakeOffsets = HashMap<AttachmentId, Rational>()
     private val demandingObserved = HashMap<AttachmentId, Boolean>()
+    private val wakeExposures = HashMap<AttachmentId, WakeExposure>()
 
     /**
      * An allocator that resumes from [memory], as if it were the allocator [memory] was exported
@@ -83,6 +89,7 @@ public class FairShareAllocator(
     public constructor(self: ReplicaId, policy: PolicyConfig, memory: AllocatorMemory) : this(self, policy) {
         wakeOffsets.putAll(memory.wakeOffsets)
         demandingObserved.putAll(memory.demandingObserved)
+        wakeExposures.putAll(memory.wakeExposures)
     }
 
     /**
@@ -94,6 +101,7 @@ public class FairShareAllocator(
         get() = AllocatorMemory(
             wakeOffsets = wakeOffsets.entries.sortedBy { it.key }.associate { it.key to it.value },
             demandingObserved = demandingObserved.entries.sortedBy { it.key }.associate { it.key to it.value },
+            wakeExposures = wakeExposures.entries.sortedBy { it.key }.associate { it.key to it.value },
         )
 
     /** The demanding state [edge] was last observed in, or `null` when it has never been observed. */
@@ -125,7 +133,7 @@ public class FairShareAllocator(
         earmarked: Long,
         demand: (AttachmentId) -> Demand,
     ): Int {
-        settleJoiners(parent, ledger, demand)
+        settleJoiners(parent, ledger, demand, ClampObserver.NONE)
         var grants = 0
         while (grants < MAX_ROUNDS_PER_CALL) {
             // One pick, inside the cell's write step, on the state the grant lands on. Nothing
@@ -173,12 +181,62 @@ public class FairShareAllocator(
         ledger: EntitlementLedger,
         waiting: (AttachmentId) -> Demand,
         eligible: (AttachmentId) -> Demand,
+    ): ChildPick? = pickChild(parent, ledger, waiting, eligible, ClampObserver.NONE)
+
+    /**
+     * [pickChild] for a lease engine, whose leases may later release part of what they reserved:
+     * each wake clamp this pick makes also records the edge's [WakeExposure], what a release by a
+     * lease open at the clamp could hand back, so that [settleRelease] can add it back (#3238).
+     */
+    internal fun pickChild(
+        parent: GroupId,
+        ledger: EntitlementLedger,
+        waiting: (AttachmentId) -> Demand,
+        eligible: (AttachmentId) -> Demand,
+        leases: LeaseHorizon,
+    ): ChildPick? = pickChild(parent, ledger, waiting, eligible, ClampObserver.Leases(leases))
+
+    private fun pickChild(
+        parent: GroupId,
+        ledger: EntitlementLedger,
+        waiting: (AttachmentId) -> Demand,
+        eligible: (AttachmentId) -> Demand,
+        observer: ClampObserver,
     ): ChildPick? {
         val cell = ValueCell(ledger)
-        settleJoiners(parent, cell, waiting)
+        settleJoiners(parent, cell, waiting, observer)
         val seated = cell.current
         val grant = pickOne(seated, parent, earmarked = 0L, eligible) ?: return null
         return ChildPick(seated, grant)
+    }
+
+    /**
+     * A release of [amount] across [edge], of weight [weight], by [lease]: if the edge's latest
+     * clamp read [lease] open, add back to the wake offset the part of [amount] that clamp removed,
+     * so the release hands back no idle credit (#3238). The release first uses up the clamp's
+     * slack, the lead the edge already had; past the clamp's budget nothing more is counted.
+     *
+     * Only ever raises the offset. A release by a lease opened after the clamp, or on an edge with
+     * no exposure, changes nothing.
+     */
+    internal fun settleRelease(edge: AttachmentId, weight: Weight, amount: Long, lease: LeaseId) {
+        if (amount <= 0L) return
+        val exposure = wakeExposures[edge] ?: return
+        if (lease >= exposure.openedBefore) return
+        val counted = minOf(amount, exposure.budget)
+        val fromSlack = minOf(counted, exposure.slack)
+        val slack = exposure.slack - fromSlack
+        val budget = exposure.budget - counted
+        if (budget > slack) {
+            wakeExposures[edge] = exposure.copy(slack = slack, budget = budget)
+        } else {
+            wakeExposures.remove(edge)
+        }
+        val handedBack = counted - fromSlack
+        if (handedBack > 0L) {
+            val carried = wakeOffsets[edge] ?: Rational.ZERO
+            wakeOffsets[edge] = carried + Rational.of(checkedMul(handedBack, weight.denominator), weight.numerator)
+        }
     }
 
     /**
@@ -309,7 +367,12 @@ public class FairShareAllocator(
      *
      * Publishes at most one patch.
      */
-    private fun settleJoiners(parent: GroupId, ledger: LedgerCell, demand: (AttachmentId) -> Demand) {
+    private fun settleJoiners(
+        parent: GroupId,
+        ledger: LedgerCell,
+        demand: (AttachmentId) -> Demand,
+        observer: ClampObserver,
+    ) {
         val s = ledger.current
         val edges = policyEdges(s, parent, demand)
         forgetDepartedChildren(edges, s, parent)
@@ -326,7 +389,7 @@ public class FairShareAllocator(
             val seatAt = front ?: Rational.ZERO
             ledger.mutateOrSkip { state -> seatPatch(state, unseated, seatAt) }
         }
-        if (front != null) clampWakers(edges, wakers, front)
+        if (front != null) clampWakers(edges, wakers, front, observer)
         for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
     }
 
@@ -364,6 +427,7 @@ public class FairShareAllocator(
         }
         demandingObserved.keys.removeAll(departed)
         wakeOffsets.keys.removeAll(departed)
+        wakeExposures.keys.removeAll(departed)
     }
 
     /**
@@ -391,10 +455,24 @@ public class FairShareAllocator(
      * — handing back credit the earlier clamp forfeited and dropping its effective virtual service.
      * Joining keeps the promise made two paragraphs up (a forward offset can only give a turn up)
      * across every wake, and it is the same invariant CFS/EEVDF hold by materialising vruntime so
-     * it never decreases. The join is a high-water mark, not a sum, so a long-lived child cannot
-     * accumulate an unbounded penalty; and the one-directional stance of §10.5 — credit forbidden,
+     * it never decreases. The join alone is a high-water mark, not a sum, so clamps by themselves
+     * cannot accumulate a penalty; and the one-directional stance of §10.5 — credit forbidden,
      * a sliver of penalty merely undesirable — is what makes keeping the larger offset the safe
-     * side when the front genuinely regresses. Nothing else lowers a stored offset: an edge is
+     * side when the front genuinely regresses.
+     *
+     * **One thing adds to the offset rather than joining it** (#3238): a release by a lease this
+     * edge's latest clamp read open, through [settleRelease]. The clamp counted that lease at its
+     * reservation, so the release would land the edge behind the front the clamp put it on; the
+     * part of it the clamp actually removed goes back onto the offset. So the offset is the clamps'
+     * high-water mark **plus** those additions, and they are bounded: after a clamp, the additions
+     * on one edge total at most its outstanding at that clamp less its slack, over its weight, and
+     * each comes out of units its own leases reserved and handed back. A lane pays it only by
+     * reserving more than it uses on a lease that runs across its own wake. It pays at least the
+     * credit that release would otherwise hand back, and more only in three small ways: the slack
+     * is rounded down, by less than one unit per clamp; while two clamps overlap, the tighter of
+     * their slacks covers every lease either read; and the budget is shared by the edge's leases,
+     * so releasing an extension made after the clamp can count against it ([recordExposure] has
+     * the argument). Nothing lowers a stored offset: an edge is
      * forgotten only when it leaves the active set, which
      * [EntitlementLedger.activate][EntitlementLedger.activate] makes permanent (closure dominance,
      * §10.10), so a cleared clamp can never come back to an edge that will compete again.
@@ -414,18 +492,63 @@ public class FairShareAllocator(
      * and the §8.2 caps, any peer that did observe the window clamps independently, and wake
      * offsets are scheduler-local anyway, so divergence between peers is already tolerated.
      */
-    private fun clampWakers(edges: List<PolicyEdge>, wakers: Set<AttachmentId>, front: Rational) {
+    private fun clampWakers(edges: List<PolicyEdge>, wakers: Set<AttachmentId>, front: Rational, observer: ClampObserver) {
         for (edge in edges) {
             if (edge.record.id !in wakers) continue
+            val vRaw = HeddlePolicy.virtualService(edge)
             val computed = HeddlePolicy.wakeOffset(
                 front = front,
-                vRaw = HeddlePolicy.virtualService(edge),
+                vRaw = vRaw,
                 weight = edge.record.weight,
                 sleeperCredit = policy.sleeperCredit,
             )
             // Join, never replace: the front is not monotone across wake cycles (#1714).
             val carried = wakeOffsets[edge.record.id] ?: Rational.ZERO
-            wakeOffsets[edge.record.id] = Rational.max(carried, computed)
+            val stored = Rational.max(carried, computed)
+            wakeOffsets[edge.record.id] = stored
+            if (observer is ClampObserver.Leases) {
+                val floor = front - perWeight(policy.sleeperCredit, edge.record.weight)
+                recordExposure(edge, lead = vRaw + stored - floor, raised = stored - carried, observer.leases)
+            }
+        }
+    }
+
+    /**
+     * Record what the clamp just made on [edge] leaves at risk (#3238): the edge now sits [lead]
+     * ahead of the clamp's floor (in virtual time, never negative), the clamp raised its offset by
+     * [raised], and every lease open now is at risk, up to the edge's outstanding.
+     *
+     * **Why adding back `max(0, min(Σx, O) − s)` never hands back credit.** Write `g` for the
+     * clamp's gap, `front − sleeperCredit/w − vRaw`, `c` for the carried offset and `X` for what
+     * the leases open at the clamp will release, each counted at most up to what it then held, in
+     * virtual time. The clamp stores `max(c, g)`. Had those leases reserved their actual cost,
+     * `vRaw` would have read `X` lower and the clamp would have stored `max(c, g + X)`, so the
+     * credit a release hands back is `max(c, g + X) − max(c, g) = max(0, X − s)`, where
+     * `s = max(c, g) − g` is exactly the [lead]. Each lease's count is at most its reservation at
+     * the clamp, and those reservations sum to at most the outstanding `O`, so `X·w ≤ min(Σx, O)`
+     * and the addition covers the credit. [lead] is rounded down to whole units, which can only
+     * add back more.
+     *
+     * **The exposure an earlier clamp left is not simply replaced.** For a lease open at both
+     * clamps the same algebra gives `max(0, X − min(s₂, s₁′ + Δ))`, with `s₂` this clamp's [lead],
+     * `s₁′` the earlier clamp's slack after what releases since used of it, and `Δ` what this clamp
+     * added to the offset ([raised]). Replacing the earlier exposure with [lead] alone would let a
+     * second clamp that did not bind, one with a large lead, write off the risk the first one left.
+     * So while a lease the earlier exposure counted is still open on this edge, the slack kept is
+     * the smaller of the two, which is conservative for a lease opened between the clamps that only
+     * this clamp read. Once none is open, [lead] alone is right again.
+     */
+    private fun recordExposure(edge: PolicyEdge, lead: Rational, raised: Rational, leases: LeaseHorizon) {
+        val id = edge.record.id
+        val weight = edge.record.weight
+        val budget = edge.summary.outstanding
+        val earlier = wakeExposures[id]?.takeIf { leases.openThrough(id, it.openedBefore) }
+        val ownSlack = costUnitsAtMost(lead, weight, budget)
+        val slack = if (earlier == null) ownSlack else minOf(ownSlack, checkedAdd(earlier.slack, costUnitsAtMost(raised, weight, budget)))
+        if (budget > slack) {
+            wakeExposures[id] = WakeExposure(slack, budget, leases.next.epoch, leases.next.seq)
+        } else {
+            wakeExposures.remove(id)
         }
     }
 
@@ -438,11 +561,39 @@ public class FairShareAllocator(
         }
     }
 
+    /** Who hears about a wake clamp: nobody, for [schedule] and the public [pickChild], or a lease engine. */
+    private sealed interface ClampObserver {
+        data object NONE : ClampObserver
+
+        class Leases(val leases: LeaseHorizon) : ClampObserver
+    }
+
     private companion object {
         /** A backstop against a policy that never runs dry; one call never applies more grants. */
         const val MAX_ROUNDS_PER_CALL: Int = 100_000
+
+        /**
+         * [virtual], a non-negative virtual time, as cost units at [weight], rounded down, and never
+         * more than [cap]. Rounding down keeps a slack on the side that adds back more, never less.
+         * The cap is compared before multiplying, so an edge far ahead of its front cannot overflow.
+         */
+        fun costUnitsAtMost(virtual: Rational, weight: Weight, cap: Long): Long {
+            if (cap <= 0L || virtual <= Rational.ZERO) return 0L
+            if (virtual >= perWeight(cap, weight)) return cap
+            val cost = virtual * Rational.of(weight.numerator, weight.denominator)
+            return cost.numerator / cost.denominator
+        }
     }
 }
+
+/**
+ * Which leases a lease engine's clamp reads as open: every lease issued before [next], and
+ * [openThrough] says whether one issued before a given id is still open on a path through an edge.
+ */
+internal class LeaseHorizon(
+    val next: LeaseId,
+    val openThrough: (edge: AttachmentId, before: LeaseId) -> Boolean,
+)
 
 /**
  * One [FairShareAllocator.pickChild] result: the [grant] to delegate, and the [ledger] it must be

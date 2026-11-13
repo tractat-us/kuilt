@@ -188,7 +188,10 @@ keeps its claim, so it is not treated as returning from idle when a slot it can 
 no pick could reach counts as idle, even when you list it as waiting: a leaf behind an edge a
 reload is closing, or a group that has gained a child. Its subtree builds up no credit while it is
 cut off, so when it can be reached again it starts level with its siblings. A new leaf starts level
-with its siblings too, rather than owed their whole history. `extend` reserves
+with its siblings too, rather than owed their whole history. A group counts as idle while it has
+nothing queued, even with work still running, and a lease running across its return from idle
+cannot buy a head start: what that lease hands back at `complete`, or all of it at `cancel`, is
+not refunded as idle credit. `extend` reserves
 more for a lease that runs long, `cancel` charges nothing, `admit(leaf, startedAt)` charges work
 another scheduler already started, and `previewPicks` answers "who goes next" without changing
 anything. `startedAt` is stored on the lease and never read by a pick. A pick only goes down a

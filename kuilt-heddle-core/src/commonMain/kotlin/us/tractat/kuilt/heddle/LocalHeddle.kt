@@ -419,8 +419,9 @@ public class LocalHeddle private constructor(
         var local = base
         val levels = ArrayList<Level>()
         var group = root
+        val leases = LeaseHorizon(LeaseId(epoch, nextSeq), ::anyOpenThrough)
         while (group !in eligible || !local.isLeasable(group)) {
-            val pick = allocator.pickChild(group, local, demands.waiting, demands.eligible) ?: return Descent.Refused(group)
+            val pick = allocator.pickChild(group, local, demands.waiting, demands.eligible, leases) ?: return Descent.Refused(group)
             val edge = pick.grant.attachment
             check(pick.grant.amount == reservation) {
                 "picked ${edge.value} for ${pick.grant.amount}, not the reservation $reservation"
@@ -532,10 +533,12 @@ public class LocalHeddle private constructor(
         val atLeafCharged = if (toLeaf) actualCost else reserved
         local = spendOrFail(local, path, atLeafCharged)
         if (!toLeaf && reach.isNotEmpty()) local = spendOrFail(local, reach, overrun)
-        local = releaseUp(local, path, checkedSub(atLeafHeld, atLeafCharged))
+        val released = checkedSub(atLeafHeld, atLeafCharged)
+        local = releaseUp(local, path, released)
         ledger = local
         forcedMints += minted
         open.remove(lease)
+        settleWakes(current, released)
         return LeaseOutcome.Done(charged = actualCost, overrun = overrun)
     }
 
@@ -548,8 +551,26 @@ public class LocalHeddle private constructor(
         val current = open[lease] ?: return missing(lease)
         ledger = releaseUp(ledger, current.path, current.lease.reserved)
         open.remove(lease)
+        settleWakes(current, current.lease.reserved)
         return LeaseOutcome.Done(charged = 0L, overrun = 0L)
     }
+
+    /**
+     * Tell the allocator that [lease] handed [released] back up every edge of its path, so that an
+     * edge whose wake clamp read the lease open gets back the credit the release would hand out
+     * (#3238). After the ledger swap, since `complete` and `cancel` are never refused.
+     */
+    private fun settleWakes(lease: OpenLease, released: Long) {
+        if (released == 0L) return
+        for (edge in lease.path) {
+            val weight = ledger.record(edge)?.weight ?: continue
+            allocator.settleRelease(edge, weight, released, lease.lease.id)
+        }
+    }
+
+    /** Whether a lease issued before [before] is still open on a path through [edge]. */
+    private fun anyOpenThrough(edge: AttachmentId, before: LeaseId): Boolean =
+        open.values.any { it.lease.id < before && edge in it.path }
 
     /**
      * Who would go next: the leaves `reservations.size` calls to [acquire] would pick, in order,
