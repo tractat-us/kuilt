@@ -5,11 +5,15 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 
 /**
- * Executes the documentation sample on every target, so the snippet the cookbook quotes verbatim
- * cannot drift from code that runs. Its `check`s are the assertions: a real name parses, and a
- * well-formed name for an off-curve point is refused.
+ * Executes the documentation samples on every target, so the snippets the cookbook quotes verbatim
+ * cannot drift from code that runs. Their `check`s are the assertions: a real name parses, a
+ * well-formed name for an off-curve point is refused, and a key's signature verifies under its own
+ * name and no other.
  */
 class IdentitySamplesRunTest {
     @Test
     fun parseDidKeySampleRuns(): TestResult = runTest { sampleParseDidKey() }
+
+    @Test
+    fun deviceKeySignsSampleRuns(): TestResult = runTest { sampleDeviceKeySigns() }
 }

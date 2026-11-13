@@ -15,7 +15,7 @@ and primitive groups in order.
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
 |a rejoin/reconnect loop, a resume token, a grace window; why a rejoin was refused|`Room.resumeToken` + `Room.resume`; `ResumeResult.JoinerOutcome` (`code.retryable`)|`session.md#rejoin--reconnect`|
-|a per-device key, a did:key, recognising a device across sessions|`DidKey`|`session.md#device-identity--return`|
+|a device key or did:key, recognising a returning device|`DeviceKey` + `DidKey`|`session.md#device-identity--return`|
 |a "why did we drop" classifier; a retry/back-off loop; a per-session id every peer agrees on|`MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`); `ExponentialBackoff`; `Room.roomId` or `RoomFactory.host(pattern, roomId = …)`|`session.md#rejoin--reconnect`|
 |a heartbeat, an idle reaper, "is this peer alive"; reaping a room nobody joined; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
 |a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned(since, windowExpiresAt)` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|

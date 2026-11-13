@@ -11,8 +11,13 @@ back its seat without asking anyone to do anything.
 
 The name. `DidKey` is the public name of one device's key, a string another device can store,
 compare, and check a signature against. Read one from outside with `DidKey.parse`, which checks
-that it really names a key. The key that signs, the signed statements a room's admission is made
-of, and the per-platform key stores arrive in the pieces that follow.
+that it really names a key.
+
+The key. `DeviceKey` signs, and its `id` is the `DidKey` that checks those signatures. It has no
+accessor for the private half, so a key that a hardware or browser store will not hand out is
+still a `DeviceKey`. `DeviceKey.generate()` makes one in memory. The signed statements a room's
+admission is made of, and the per-platform stores that keep a key across launches, arrive in the
+pieces that follow.
 
 ## Underneath
 
