@@ -19,8 +19,10 @@ data class Plan(val opsPerRound: Int, val rounds: Int, val warmUpOps: Int)
  * - [sample] — the whole call, as a caller sees it.
  * - [storeNanosPerOp] — the part spent inside `DurableStore.write`.
  * - [encodeNanos] — one whole-map CBOR encode of the same map, timed on its own, outside the
- *   exporter. What is left of the call after the store and the encode is the CRDT mutation, the
- *   two locks and the bookkeeping.
+ *   exporter, in rounds alternating with the call's. What is left of the call after the store and
+ *   the encode is the CRDT mutation, the two locks and the bookkeeping.
+ * - [encodeOverCall] — the median per-round ratio of the two, which survives a busy box better
+ *   than [encodeNanos] divided by the call's median: each pair of rounds sees the same load.
  * - [bytesPerWrite] — the size of each durable write: the whole encoded map.
  */
 data class RecordingRow(
@@ -30,6 +32,7 @@ data class RecordingRow(
     val sample: Sample,
     val storeNanosPerOp: Double,
     val encodeNanos: Double,
+    val encodeOverCall: Double,
     val bytesPerWrite: Long,
 )
 
@@ -75,9 +78,21 @@ suspend fun recordingArm(
         check(result == MetricExportResult.Success) { "$op returned $result" }
     }
 
+    // The standalone encode prices the same map the exporter holds. Its SIZE does not change while
+    // the clock runs (no series is added), so one snapshot serves every round.
+    val catalog = exporter.snapshotAll()
+    var encodedBytes = 0L
+    val encode: () -> ByteArray = when (op) {
+        RecordingOp.INCREMENT_SUM -> { -> MetricEncoding.cbor.encodeToByteArray(MetricEncoding.sums, catalog.sums) }
+        RecordingOp.SET_GAUGE -> { -> MetricEncoding.cbor.encodeToByteArray(MetricEncoding.gauges, catalog.gauges) }
+    }
+
     warmUp(plan.warmUpOps) { call(it) }
+    warmUp(plan.warmUpOps) { encodedBytes += encode().size }
     timing.reset()
-    val sample = measureRounds(plan.opsPerRound, plan.rounds) { call(it) }
+    val paired = measurePaired(plan.opsPerRound, plan.rounds, first = { call(it) }, second = { encodedBytes += encode().size })
+    val sample = paired.first
+    check(encodedBytes > 0L) { "the standalone encode produced no bytes" }
 
     val totalCalls = plan.warmUpOps.toLong() + sample.executed
     check(timing.writes == sample.executed) { "store took ${timing.writes} writes for ${sample.executed} calls" }
@@ -96,24 +111,9 @@ suspend fun recordingArm(
         series = series,
         sample = sample,
         storeNanosPerOp = timing.nanosInWrite.toDouble() / timing.writes,
-        encodeNanos = encodeAlone(op, exporter, plan),
+        encodeNanos = paired.second.nanosPerOp,
+        encodeOverCall = paired.secondOverFirst,
         bytesPerWrite = timing.bytesWritten / timing.writes,
     )
 }
 
-/**
- * One whole-map encode of the exporter's current map of [op]'s kind, with no store and no lock —
- * the median over the same round shape as the call it is compared against.
- */
-private suspend fun encodeAlone(op: RecordingOp, exporter: WarpMetricExporter, plan: Plan): Double {
-    val catalog = exporter.snapshotAll()
-    val encode: () -> ByteArray = when (op) {
-        RecordingOp.INCREMENT_SUM -> { -> MetricEncoding.cbor.encodeToByteArray(MetricEncoding.sums, catalog.sums) }
-        RecordingOp.SET_GAUGE -> { -> MetricEncoding.cbor.encodeToByteArray(MetricEncoding.gauges, catalog.gauges) }
-    }
-    var bytes = 0L
-    warmUp(plan.warmUpOps) { bytes += encode().size }
-    val sample = measureRounds(plan.opsPerRound, plan.rounds) { bytes += encode().size }
-    check(bytes > 0L) { "the encode produced no bytes" }
-    return sample.nanosPerOp
-}

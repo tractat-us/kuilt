@@ -32,14 +32,14 @@ fun recordingTable(arm: String, rows: List<RecordingRow>) = report(
     arm,
     listOf(
         "op", "store", "series", "µs/op", "store µs/op", "encode µs", "rest µs",
-        "encode share", "KiB/write", "alloc KiB/op", "timed ops",
+        "encode/call (paired)", "KiB/write", "alloc KiB/op", "timed ops",
     ),
     rows.map { r ->
         val total = r.sample.nanosPerOp
         val rest = total - r.storeNanosPerOp - r.encodeNanos
         listOf(
             r.op.name, r.store.lowercase(), r.series.toString(), micros(total), micros(r.storeNanosPerOp),
-            micros(r.encodeNanos), micros(rest), percent(r.encodeNanos, total),
+            micros(r.encodeNanos), micros(rest), percent(r.encodeOverCall, 1.0),
             kib(r.bytesPerWrite.toDouble()), kib(r.sample.allocatedBytesPerOp), r.sample.executed.toString(),
         )
     },

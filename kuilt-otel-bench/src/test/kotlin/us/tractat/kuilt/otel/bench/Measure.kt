@@ -53,6 +53,39 @@ suspend fun measureRounds(opsPerRound: Int, rounds: Int, op: suspend (index: Int
     return Sample(opsPerRound, rounds, executed, nanos.median(), alloc.median())
 }
 
+/** Two operations measured in alternating rounds, and the median of their per-round ratio. */
+data class PairedSample(val first: Sample, val second: Sample, val secondOverFirst: Double)
+
+/**
+ * Measures [first] and [second] in ALTERNATING rounds of [opsPerRound] each, so a change in machine
+ * load lands on both rather than on whichever ran second. [PairedSample.secondOverFirst] is the
+ * median of the per-round ratios, which is the number to quote when the box is busy: two rounds
+ * taken a few hundred milliseconds apart see nearly the same contention, where two runs taken a
+ * minute apart need not.
+ */
+suspend fun measurePaired(
+    opsPerRound: Int,
+    rounds: Int,
+    first: suspend (index: Int) -> Unit,
+    second: suspend (index: Int) -> Unit,
+): PairedSample {
+    val firstRounds = ArrayList<Sample>(rounds)
+    val secondRounds = ArrayList<Sample>(rounds)
+    repeat(rounds) {
+        firstRounds += measureRounds(opsPerRound, 1, first)
+        secondRounds += measureRounds(opsPerRound, 1, second)
+    }
+    fun List<Sample>.combine() = Sample(
+        opsPerRound = opsPerRound,
+        rounds = rounds,
+        executed = sumOf { it.executed },
+        nanosPerOp = map { it.nanosPerOp }.toDoubleArray().median(),
+        allocatedBytesPerOp = map { it.allocatedBytesPerOp }.toDoubleArray().median(),
+    )
+    val ratios = firstRounds.indices.map { secondRounds[it].nanosPerOp / firstRounds[it].nanosPerOp }
+    return PairedSample(firstRounds.combine(), secondRounds.combine(), ratios.toDoubleArray().median())
+}
+
 /**
  * Runs an untimed [setup] then a timed [op], [rounds] times, and reports the median [op]. For
  * millisecond-scale operations that need state changed between them — an edge drain needs fresh
