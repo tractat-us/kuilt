@@ -7,7 +7,10 @@ import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.IdentityInternalApi
 import us.tractat.kuilt.session.RoomFramePrefix
+import us.tractat.kuilt.identity.Challenge as ChallengeStatement
 import us.tractat.kuilt.session.partition.ResumeSecret
 
 /**
@@ -30,6 +33,10 @@ import us.tractat.kuilt.session.partition.ResumeSecret
  * ```
  * The host-side runs this passively for incoming [Hello]s. The joiner
  * sends [Hello] immediately upon transport connection and waits for [Welcome] or [Reject].
+ *
+ * Since protocol v3 (#3210) every [Hello] and [Welcome] names a member's device key, and the wire
+ * has the [Challenge] and [Proof] frames of the key-proving exchange. Nothing sends those two yet,
+ * and admission does not depend on the key.
  */
 @Serializable
 @OptIn(ExperimentalSerializationApi::class)
@@ -54,6 +61,19 @@ public sealed interface AdmitMessage {
      *   exactly like [targetRoom]: nullable + defaulted, so a peer that predates the field decodes
      *   as `null` and is admitted as legacy (kotlinx omits the defaulted null, so a version-less
      *   `Hello` is byte-identical to the pre-#1569 wire form).
+     * [key] — the joiner's device key, from its [us.tractat.kuilt.identity.DeviceKeyStore] (v3, #3210).
+     *   In this version it is the joiner's claim: nothing yet checks that the joiner holds the key.
+     * [joinerNonce] — [JOINER_NONCE_SIZE] fresh random bytes, drawn for every Hello (v3, #3210). The
+     *   host's signed Challenge will echo it, which is what makes each answer single-use. Its width is
+     *   checked here, in the constructor, so a wrong-width nonce is refused on every decode path and a
+     *   [decode] of one returns `null`.
+     *
+     * **[key] and [joinerNonce] are nullable on the wire, though a v3 Hello must carry both.** A v2
+     * Hello has neither. Were they required, a v2 Hello would fail to decode, [decode] would drop it as
+     * malformed, and the version gate — which needs a decoded Hello to read [protocolVersion] from —
+     * would never answer: the v2 joiner would wait out its admit deadline instead of hearing
+     * [RejectCode.ProtocolMismatch]. So the requirement is the host's, enforced next to the version
+     * gate, and a v3 Hello missing either is refused with that same code.
      */
     @Serializable
     @SerialName("hello")
@@ -63,7 +83,46 @@ public sealed interface AdmitMessage {
         val deviceId: String? = null,
         val targetRoom: String? = null,
         val protocolVersion: Int? = null,
-    ) : AdmitMessage
+        val key: DidKey? = null,
+        val joinerNonce: ByteArray? = null,
+    ) : AdmitMessage {
+        init {
+            require(joinerNonce == null || joinerNonce.size == JOINER_NONCE_SIZE) {
+                "the joiner nonce is ${joinerNonce?.size} bytes, not $JOINER_NONCE_SIZE"
+            }
+        }
+
+        /** Compares [joinerNonce] by content: a decoded Hello equals the one that was encoded. */
+        override fun equals(other: Any?): Boolean =
+            other is Hello &&
+                displayName == other.displayName &&
+                sessionId == other.sessionId &&
+                deviceId == other.deviceId &&
+                targetRoom == other.targetRoom &&
+                protocolVersion == other.protocolVersion &&
+                key == other.key &&
+                joinerNonce.contentEquals(other.joinerNonce)
+
+        override fun hashCode(): Int {
+            var result = displayName.hashCode()
+            result = 31 * result + sessionId.hashCode()
+            result = 31 * result + (deviceId?.hashCode() ?: 0)
+            result = 31 * result + (targetRoom?.hashCode() ?: 0)
+            result = 31 * result + (protocolVersion ?: 0)
+            result = 31 * result + (key?.hashCode() ?: 0)
+            result = 31 * result + joinerNonce.contentHashCode()
+            return result
+        }
+
+        public companion object {
+            /**
+             * Width of [joinerNonce], in bytes: the width the signed Challenge requires of the nonce it
+             * echoes, so a Hello this constructor accepts is always one a host can challenge.
+             */
+            @OptIn(IdentityInternalApi::class)
+            public const val JOINER_NONCE_SIZE: Int = ChallengeStatement.NONCE_SIZE
+        }
+    }
 
     /**
      * Sent by the host to confirm admission.
@@ -79,6 +138,12 @@ public sealed interface AdmitMessage {
      *   bootstrap and host-intro Welcomes, carry `null`: a bystander holding it could resume as that
      *   member. Additive — nullable and defaulted, so an older joiner ignores it and a secretless
      *   Welcome encodes byte-identically to the pre-#3165 form.
+     * [key] — the device key of the member [assignedPeerId] names (v3, #3210), on all three shapes:
+     *   the direct Welcome and its roster copy carry the joiner's key from its [Hello]; a bootstrap
+     *   Welcome carries an existing member's key as the host recorded it; the host intro carries the
+     *   host's own key. Every one is the host's assertion. **Required on the wire**, unlike
+     *   [Hello.key]: a v2 host, the only sender of a keyless Welcome, refuses a v3 Hello before it
+     *   admits anyone, so a v3 joiner never receives one.
      */
     @Serializable
     @SerialName("welcome")
@@ -86,6 +151,7 @@ public sealed interface AdmitMessage {
         val assignedPeerId: String,
         val displayName: String,
         val sessionId: String,
+        val key: DidKey,
         val deviceId: String? = null,
         val roomId: String? = null,
         val resumeSecret: ResumeSecret? = null,
@@ -238,6 +304,50 @@ public sealed interface AdmitMessage {
     @SerialName("unpaused")
     public data class Unpaused(val peerId: String) : AdmitMessage
 
+    /**
+     * Sent by the host to a joiner whose [Hello] it received: a signed challenge the joiner answers
+     * with a [Proof] (v3, #3210). **Nothing sends this frame yet**; the exchange that does is the next
+     * step of #3159.
+     *
+     * [statement] is the wire form of a signed `us.tractat.kuilt.identity.Challenge` — its layout
+     * followed by the host's signature — carried opaque here. The session layer never re-encodes it:
+     * a statement is verified over exactly the bytes that were signed. Compared by content.
+     */
+    @Serializable
+    @SerialName("challenge")
+    public class Challenge(public val statement: ByteArray) : AdmitMessage {
+        override fun equals(other: Any?): Boolean = other is Challenge && statement.contentEquals(other.statement)
+
+        override fun hashCode(): Int = statement.contentHashCode()
+
+        override fun toString(): String = "Challenge(statement=${statement.size} bytes)"
+    }
+
+    /**
+     * Sent by a joiner to answer a [Challenge] (v3, #3210). **Nothing sends this frame yet.**
+     *
+     * [statement] is the wire form of a signed `us.tractat.kuilt.identity.AdmissionProof`, carried
+     * opaque like [Challenge.statement]. [grants] are the wire forms of the grants this device holds
+     * from the challenging host, each a signed `us.tractat.kuilt.identity.Grant`; empty when it holds
+     * none, and nothing reads them yet. Compared by content, element by element.
+     */
+    @Serializable
+    @SerialName("proof")
+    public class Proof(
+        public val statement: ByteArray,
+        public val grants: List<ByteArray> = emptyList(),
+    ) : AdmitMessage {
+        override fun equals(other: Any?): Boolean =
+            other is Proof &&
+                statement.contentEquals(other.statement) &&
+                grants.size == other.grants.size &&
+                grants.indices.all { grants[it].contentEquals(other.grants[it]) }
+
+        override fun hashCode(): Int = grants.fold(statement.contentHashCode()) { hash, grant -> 31 * hash + grant.contentHashCode() }
+
+        override fun toString(): String = "Proof(statement=${statement.size} bytes, grants=${grants.size})"
+    }
+
     public companion object {
         /** First byte of every admit frame. Reserved by [RoomFramePrefix.Admit] (#2007). */
         public val PREFIX_BYTE: Byte = RoomFramePrefix.Admit.byte
@@ -249,9 +359,18 @@ public sealed interface AdmitMessage {
          * throwing — which, given [decode]'s malformed-frame guard, would otherwise silently drop
          * the frame and hang the handshake (there is no admit timeout). Leniency affects decode
          * only; encoding output is byte-identical to the default codec, so the wire is unchanged.
+         *
+         * `alwaysUseByteString = true` writes every `ByteArray` — [Hello.joinerNonce], the
+         * [Challenge] and [Proof] statements, each grant — as a CBOR byte string rather than an array
+         * of integers (#3210). The `@ByteString` annotation cannot reach a list's elements, so the
+         * setting is codec-wide. It changes no earlier frame: before v3 no admit message had a
+         * `ByteArray` field, and the golden Hello vectors pin that.
          */
         @OptIn(ExperimentalSerializationApi::class)
-        private val cbor = Cbor { ignoreUnknownKeys = true }
+        private val cbor = Cbor {
+            ignoreUnknownKeys = true
+            alwaysUseByteString = true
+        }
 
         /** Encode an [AdmitMessage] to bytes with the [PREFIX_BYTE] framing prefix. */
         @OptIn(ExperimentalSerializationApi::class)
