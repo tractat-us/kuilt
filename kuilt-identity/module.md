@@ -54,9 +54,12 @@ be recognised.
 
 On the desktop, `DeviceKeyStore.platform("my-app", directory)` keeps the key in a file under that
 directory, so the app is the same device after a restart. Only this user can read the file. If the
-file is damaged — cut short, edited, or holding two halves of different keys — the store makes a new
-key and logs a warning: the app keeps working, as a new device, and never crashes over it. The
-Apple, Android and browser stores follow, one at a time. Every store, including one you write
+file is damaged — cut short, edited, or holding two halves of different keys — the store moves it
+aside, makes a new key and logs a warning: the app keeps working, as a new device, and never
+crashes over it. A file it cannot read at all is different: that throws, because becoming a new
+device over a passing fault would be worse. Give it a folder that stays on this computer, one that
+backups, migration and roaming profiles do not copy to another: a copied key makes two computers one
+device. The Apple, Android and browser stores follow, one at a time. Every store, including one you write
 yourself, proves it keeps its promises by passing `DeviceKeyStoreConformanceSuite` from
 `:kuilt-conformance`.
 

@@ -40,7 +40,7 @@ import kotlin.test.assertTrue
  *     override suspend fun newFixture(): DeviceKeyStoreFixture {
  *         val place = freshKeychainService()
  *         return DeviceKeyStoreFixture.Durable(
- *             open = { beforeKeyIsMade -> SecureEnclaveDeviceKeyStore(place, beforeKeyIsMade) },
+ *             reopen = { beforeKeyIsMade -> SecureEnclaveDeviceKeyStore(place, beforeKeyIsMade) },
  *             corruptKey = { place.overwriteKeyItem(byteArrayOf(1, 2, 3)) },
  *             // …one hook per failure the store must survive
  *         )

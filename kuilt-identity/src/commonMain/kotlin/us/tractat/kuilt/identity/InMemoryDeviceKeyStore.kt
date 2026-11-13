@@ -40,8 +40,7 @@ public class InMemoryDeviceKeyStore private constructor(
     internal companion object {
         /**
          * A store that calls [beforeKeyIsMade] each time it is about to make a key: the conformance
-         * suite's gate. A factory rather than an `internal` primary constructor, because beside one the
-         * JVM ABI dump drops the public no-argument constructor (measured on #3224).
+         * suite's gate.
          */
         fun gatedBy(beforeKeyIsMade: suspend () -> Unit): InMemoryDeviceKeyStore = InMemoryDeviceKeyStore(beforeKeyIsMade)
     }

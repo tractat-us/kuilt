@@ -1,5 +1,7 @@
 package us.tractat.kuilt.identity
 
+import com.ionspin.kotlin.bignum.integer.BigInteger
+import com.ionspin.kotlin.bignum.integer.Sign
 import dev.whyoleg.cryptography.algorithms.EC
 import dev.whyoleg.cryptography.algorithms.ECDSA
 import dev.whyoleg.cryptography.algorithms.SHA256
@@ -99,8 +101,11 @@ internal class SoftwareDeviceKey private constructor(
          * decoder, then signs [SELF_TEST] with `d` and verifies that signature under the name, through
          * [DidKey.verify] and so through the same on-curve check and decompression every other device
          * applies to that name. A key that passes signs for the name every room will check it
-         * against. Anything else is [StoredKey.Refused]: bytes that are not a P-256 JWK, a point that
-         * is not on the curve, a `d` out of range, and a `d` that belongs to some other key.
+         * against. Only the bytes can make it [StoredKey.Refused]: bytes that are not a P-256 JWK, a
+         * point that is not on the curve, a `d` out of range, and a `d` that belongs to some other key.
+         * A provider that fails while it signs throws instead, since that says nothing about the
+         * bytes and a store must not replace a sound key over it. A decoder's exception is the one
+         * case that cannot be told apart, and is read as the bytes' fault.
          *
          * The name is read here rather than through a provider, because the three disagree about a
          * JWK's public half (all measured on #3224): the JDK keeps the file's `x` and `y`; CryptoKit's
@@ -110,31 +115,34 @@ internal class SoftwareDeviceKey private constructor(
          * so there a mismatched pair is refused by the decoder before the self-test runs.
          *
          * @throws IllegalStateException when this platform's cryptographic provider cannot run at all,
-         *   which says nothing about [jwk] and so must not be read as a reason to replace it.
+         *   fails while signing, or mints a cancellation while decoding: none of which says anything
+         *   about [jwk], so none may be read as a reason to replace it.
          */
         suspend fun readBack(jwk: ByteArray): StoredKey = readBack(jwk, ::selfTestSignature)
 
         /** [readBack] with the self-test's signing step injected, so a test can make the provider fail there. */
         suspend fun readBack(jwk: ByteArray, sign: suspend (ECDSA.PrivateKey, ByteArray) -> ByteArray): StoredKey {
             val ecdsa = algorithms().ecdsa
-            var failing = "its x and y do not name a P-256 key"
-            val (privateKey, name, signature) = try {
+            var failing = "its x, y and d are not a P-256 key"
+            // Only reading the bytes can condemn them: the JSON, the coordinates, the scalar's range and
+            // the provider's decoder. Signing below is the provider's own work on a key already read, so
+            // a failure there says nothing about the bytes and throws instead.
+            val (privateKey, name) = try {
                 val name = nameInJwk(jwk)
                 failing = "it does not decode as a P-256 JWK"
-                val privateKey = ecdsa.privateKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PrivateKey.Format.JWK, jwk)
-                failing = "its private half cannot sign"
-                val signature = sign(privateKey, SELF_TEST)
-                Triple(privateKey, name, signature)
+                ecdsa.privateKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PrivateKey.Format.JWK, jwk) to name
             } catch (e: CancellationException) {
-                // One the provider minted while this job is alive is a failure on these bytes like any other.
+                // My own cancellation propagates; one the provider minted while this job is alive is the
+                // provider failing, not the bytes, so it is not a reason to replace the key either.
                 currentCoroutineContext().ensureActive()
-                return StoredKey.Refused("$failing (${e::class.simpleName})")
+                throw decodingFailed(e::class.simpleName ?: "CancellationException")
             } catch (e: Error) {
                 throw e
             } catch (e: Throwable) {
                 // The class only: a provider's message is text this module does not control.
                 return StoredKey.Refused("$failing (${e::class.simpleName})")
             }
+            val signature = providerCall(::signingFailed) { sign(privateKey, SELF_TEST) }
             if (!name.verify(SELF_TEST, signature)) {
                 return StoredKey.Refused("its private half does not sign for the name its public half gives, ${name.value}")
             }
@@ -142,17 +150,21 @@ internal class SoftwareDeviceKey private constructor(
         }
 
         /**
-         * The name the JWK's own `x` and `y` give: `x`, behind the lead byte `y`'s parity picks. Only
-         * the syntax is checked here; whether `x` is on the curve is [DidKey.verify]'s question.
+         * The name the JWK's own `x` and `y` give: `x`, behind the lead byte `y`'s parity picks, after
+         * checking that `d` is a P-256 scalar (`0 < d < n`). Whether `x` is on the curve is
+         * [DidKey.verify]'s question. The scalar is checked here so that every bad `d` is refused as
+         * damage, whatever a provider would do with it when asked to sign.
          */
         private fun nameInJwk(jwk: ByteArray): DidKey {
             val fields = Json.parseToJsonElement(jwk.decodeToString()).jsonObject
-            fun coordinate(field: String): ByteArray =
+            fun fixedWidth(field: String): ByteArray =
                 JWK_BASE64.decode(fields.getValue(field).jsonPrimitive.content).also {
                     require(it.size == COORDINATE_BYTES) { "'$field' is not $COORDINATE_BYTES bytes" }
                 }
-            val x = coordinate("x")
-            val lead: Byte = if (coordinate("y").last().toInt() and 1 == 1) 0x03 else 0x02
+            val d = BigInteger.fromByteArray(fixedWidth("d"), Sign.POSITIVE)
+            require(d > BigInteger.ZERO && d < P256.N) { "'d' is not a P-256 scalar" }
+            val x = fixedWidth("x")
+            val lead: Byte = if (fixedWidth("y").last().toInt() and 1 == 1) 0x03 else 0x02
             return DidKey.ofCompressedPoint(byteArrayOf(lead) + x)
         }
 
@@ -171,6 +183,9 @@ internal class SoftwareDeviceKey private constructor(
         private suspend fun nameOf(publicKey: ECDSA.PublicKey): DidKey = providerCall(::encodingFailed) {
             publicKey.encodeToByteArray(EC.PublicKey.Format.RAW.Compressed)
         }.let(DidKey::ofCompressedPoint)
+
+        private fun decodingFailed(failureClass: String) =
+            IllegalStateException("kuilt-identity: the platform provider failed while decoding a stored key ($failureClass)")
 
         private fun signingFailed(failureClass: String) =
             IllegalStateException("kuilt-identity: the platform provider failed to sign ($failureClass)")

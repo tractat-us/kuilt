@@ -4,12 +4,14 @@ import com.ionspin.kotlin.bignum.integer.BigInteger
 import com.ionspin.kotlin.bignum.integer.Sign
 
 /**
- * The two P-256 constants point decompression needs, from SEC 2 v2.0 § 2.4.2 (secp256r1): the field
- * prime `p` and the curve coefficient `b`. The curve is `y² = x³ − 3x + b` over the integers mod `p`.
+ * The P-256 constants this module needs, from SEC 2 v2.0 § 2.4.2 (secp256r1): the field prime `p` and
+ * the curve coefficient `b` for point decompression, and the group order `n` that bounds a private
+ * scalar. The curve is `y² = x³ − 3x + b` over the integers mod `p`.
  */
 internal object P256 {
     val P: BigInteger = BigInteger.parseString("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff", 16)
     val B: BigInteger = BigInteger.parseString("5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b", 16)
+    val N: BigInteger = BigInteger.parseString("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551", 16)
 
     private val EULER_EXPONENT: BigInteger = (P - BigInteger.ONE) / BigInteger.TWO
 
