@@ -75,7 +75,7 @@ class SeamRoomJoinerHelloRaceTest {
                     memberName = "joiner",
                     scope = backgroundScope,
                     clock = { Instant.fromEpochMilliseconds(0L) },
-                    deviceKeyStore = InMemoryDeviceKeyStore(),
+                    deviceKeyStore = keyedStore(),
                     heartbeatConfig = HeartbeatConfig(),
                 )
             room.start()

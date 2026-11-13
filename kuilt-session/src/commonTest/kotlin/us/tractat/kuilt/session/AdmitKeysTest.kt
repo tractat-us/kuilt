@@ -110,6 +110,9 @@ class AdmitKeysTest {
     fun `every hello names the device key and a fresh nonce`() = runTest {
         val loom = InMemoryLoom()
         val store = InMemoryDeviceKeyStore()
+        // Made before the virtual-time deadline below is armed: on wasmJs making a key is a
+        // WebCrypto promise, and virtual time runs on while the test body waits for one.
+        val deviceKey = store.deviceKey().id
         val listener = loom.host(Pattern("Listener"))
         // One collection of the single-collection `incoming`: the first Hello from each of two senders.
         val firstHelloPerSender = async {
@@ -128,7 +131,6 @@ class AdmitKeysTest {
         }
         val hellos = firstHelloPerSender.await()
         val (first, second) = hellos
-        val deviceKey = store.deviceKey().id
 
         assertAll(
             { assertEquals(2, hellos.size, "rig: both Hellos reached the listener") },

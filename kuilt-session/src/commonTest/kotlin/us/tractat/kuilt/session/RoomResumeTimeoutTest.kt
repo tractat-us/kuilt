@@ -116,7 +116,7 @@ class RoomResumeTimeoutTest {
         return Triple(joinerRoom, token, joinerSeam)
     }
 
-    private fun TestScope.makeSeamRoom(
+    private suspend fun TestScope.makeSeamRoom(
         seam: Seam,
         role: SessionRole,
         displayName: String,
@@ -129,7 +129,7 @@ class RoomResumeTimeoutTest {
             memberName = displayName,
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = keyedStore(),
             heartbeatConfig = config,
             roomId = roomId,
         ).also { it.start() }
