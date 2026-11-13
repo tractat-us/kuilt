@@ -4,17 +4,29 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.identity.DidKey
 
 /**
- * A seat the host is still holding: a member that was admitted and has not left, whether it is
- * connected right now or partitioned inside its reconnect window. [key] is the device key that member
- * proved when it was admitted.
+ * A seat the host is still holding for a joiner: a member that was admitted and has not left. [key]
+ * is the device key that member proved when it was admitted. The peer id is not a field: seats are
+ * held in a `Map<PeerId, Seat>`, which is what makes "one seat per id" a property of the type.
  */
-internal data class Seat(val peerId: PeerId, val key: DidKey)
+internal data class Seat(val key: DidKey, val liveness: SeatLiveness)
+
+/** Whether a held seat's member is reachable right now. */
+internal enum class SeatLiveness {
+    /** The member's link is up. */
+    Connected,
+
+    /** The member's link is down and the host is holding its seat inside the reconnect window. */
+    Partitioned,
+}
 
 /**
  * What the host does with a joiner that has just proved its device key: the spec's key → seat table,
- * one variant per row.
+ * one variant per outcome.
  */
 internal sealed interface SeatDecision {
+    /** The verdicts that admit the joiner as a new membership rather than restoring a held one. */
+    sealed interface NewMember : SeatDecision
+
     /** The claimed id holds a seat under the proven key: the same membership comes back. */
     data class Restore(val peerId: PeerId) : SeatDecision
 
@@ -24,58 +36,40 @@ internal sealed interface SeatDecision {
      */
     data class RestoreUnderNewId(val previous: PeerId) : SeatDecision
 
+    /**
+     * The claimed id's seat is released, then the joiner is admitted as [admission].
+     */
+    data class ReleaseAndAdmit(val released: PeerId, val admission: NewMember) : SeatDecision
+
     /** Neither the id nor the key holds a seat, and the joiner presented a valid grant. */
-    data object Returning : SeatDecision
+    data object Returning : NewMember
 
     /** The claimed id holds a seat under a different key: another device claiming a member's id. */
     data object KeyConflict : SeatDecision
 
     /** Neither the id nor the key holds a seat, and no valid grant: ordinary admission. */
-    data object Ordinary : SeatDecision
+    data object Ordinary : NewMember
 }
 
 /**
  * The key → seat decision for a joiner that claimed [claimedId] and proved [provenKey], against the
  * seats the host holds at Proof time.
  *
- * Pure: no clock, no lock, no I/O. The caller reads [held] under the room lock **when the Proof
- * arrives**, not when the Challenge went out, since a `Goodbye` or a window expiry can land between
- * the two. Whether the grant is valid is decided before this is called, so [holdsValidGrant] is the
- * verdict, not the grant.
- *
- * The precedence, first match wins:
- * 1. the claimed id holds a seat → [SeatDecision.Restore] under the same key,
- *    [SeatDecision.KeyConflict] under any other — whatever else the proven key holds;
- * 2. the proven key holds a seat → [SeatDecision.RestoreUnderNewId];
- * 3. [holdsValidGrant] → [SeatDecision.Returning];
- * 4. otherwise → [SeatDecision.Ordinary].
- *
- * So a grant never overrides a held seat, and an id held under another key is refused even when the
- * joiner's own key holds a seat elsewhere: the joiner is lying about which seat it is, and restoring
- * the other seat would reward the lie.
- *
- * **The decision keeps its own precondition.** Each id holds at most one seat, and so does each key.
- * Every verdict preserves that, as long as the caller carries it out: [SeatDecision.RestoreUnderNewId]
- * moves the key's one seat to the new id, and the two admitting verdicts are reached only when the key
- * holds no seat. A second seat for one key therefore means a caller admitted against the decision, so
- * this function refuses it rather than choose between the two.
- *
- * @throws IllegalArgumentException when two seats in [held] share a peer id or a key.
+ * @throws IllegalArgumentException when two seats in [held] share a key.
  */
 internal fun decideSeat(
     claimedId: PeerId,
     provenKey: DidKey,
-    held: Collection<Seat>,
+    held: Map<PeerId, Seat>,
     holdsValidGrant: Boolean,
 ): SeatDecision {
-    require(held.distinctBy { it.peerId }.size == held.size) { "two held seats share a peer id: $held" }
-    require(held.distinctBy { it.key }.size == held.size) { "two held seats share a key: $held" }
-    val byId = held.firstOrNull { it.peerId == claimedId }
-    val byKey = held.firstOrNull { it.key == provenKey }
+    require(held.values.distinctBy { it.key }.size == held.size) { "two held seats share a key: $held" }
+    val byId = held[claimedId]
+    val byKey = held.entries.firstOrNull { it.value.key == provenKey }
     return when {
         byId != null && byId.key == provenKey -> SeatDecision.Restore(claimedId)
         byId != null -> SeatDecision.KeyConflict
-        byKey != null -> SeatDecision.RestoreUnderNewId(previous = byKey.peerId)
+        byKey != null -> SeatDecision.RestoreUnderNewId(previous = byKey.key)
         holdsValidGrant -> SeatDecision.Returning
         else -> SeatDecision.Ordinary
     }

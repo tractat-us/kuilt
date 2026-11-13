@@ -22,6 +22,8 @@ class SeatDecisionTest {
     private val p2 = PeerId("p2")
     private val p3 = PeerId("p3")
 
+    private fun live(key: DidKey) = Seat(key, SeatLiveness.Connected)
+
     private fun seatTest(body: (a: DidKey, b: DidKey) -> Unit) = runTest {
         val a = DidKey.parse("did:key:zDnaerx9CtbPJ1q36T5Ln5wYt3MQYeGRG5ehnPAmxcf5mDZpv")
         val b = DidKey.parse("did:key:zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169")
@@ -34,7 +36,7 @@ class SeatDecisionTest {
     fun sameIdSameKeyRestores() = seatTest { a, b ->
         assertEquals(
             SeatDecision.Restore(p1),
-            decideSeat(p1, a, held = listOf(Seat(p1, a), Seat(p2, b)), holdsValidGrant = false),
+            decideSeat(p1, a, held = mapOf(p1 to live(a), p2 to live(b)), holdsValidGrant = false),
         )
     }
 
@@ -42,7 +44,7 @@ class SeatDecisionTest {
     fun newIdSameKeyRestoresUnderNewId() = seatTest { a, b ->
         assertEquals(
             SeatDecision.RestoreUnderNewId(previous = p1),
-            decideSeat(p3, a, held = listOf(Seat(p1, a), Seat(p2, b)), holdsValidGrant = false),
+            decideSeat(p3, a, held = mapOf(p1 to live(a), p2 to live(b)), holdsValidGrant = false),
         )
     }
 
@@ -51,7 +53,7 @@ class SeatDecisionTest {
         // A seat held by someone else is in the table, so "no seat" is about this id and this key.
         assertEquals(
             SeatDecision.Returning,
-            decideSeat(p1, a, held = listOf(Seat(p2, b)), holdsValidGrant = true),
+            decideSeat(p1, a, held = mapOf(p2 to live(b)), holdsValidGrant = true),
         )
     }
 
@@ -59,15 +61,15 @@ class SeatDecisionTest {
     fun sameIdDifferentKeyConflicts() = seatTest { a, b ->
         assertEquals(
             SeatDecision.KeyConflict,
-            decideSeat(p1, a, held = listOf(Seat(p1, b)), holdsValidGrant = false),
+            decideSeat(p1, a, held = mapOf(p1 to live(b)), holdsValidGrant = false),
         )
     }
 
     @Test
     fun noSeatNoGrantIsOrdinary() = seatTest { a, b ->
         assertAll(
-            { assertEquals(SeatDecision.Ordinary, decideSeat(p1, a, held = emptyList(), holdsValidGrant = false)) },
-            { assertEquals(SeatDecision.Ordinary, decideSeat(p1, a, held = listOf(Seat(p2, b)), holdsValidGrant = false)) },
+            { assertEquals(SeatDecision.Ordinary, decideSeat(p1, a, held = emptyMap(), holdsValidGrant = false)) },
+            { assertEquals(SeatDecision.Ordinary, decideSeat(p1, a, held = mapOf(p2 to live(b)), holdsValidGrant = false)) },
         )
     }
 
@@ -75,10 +77,10 @@ class SeatDecisionTest {
     fun idConflictBeatsKeyMatchElsewhere() = seatTest { a, b ->
         // p1 is held by key B; the joiner proved key A, which holds p2. Restoring p2 would reward a
         // joiner that lied about which seat it is. Both orders, so the verdict is not a scan order.
-        val forward = listOf(Seat(p1, b), Seat(p2, a))
+        val forward = mapOf(p1 to live(b), p2 to live(a))
         assertAll(
             { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held = forward, holdsValidGrant = false)) },
-            { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held = forward.reversed(), holdsValidGrant = false)) },
+            { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held = forward.entries.reversed().associate { it.toPair() }, holdsValidGrant = false)) },
             { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held = forward, holdsValidGrant = true)) },
         )
     }
@@ -86,14 +88,14 @@ class SeatDecisionTest {
     @Test
     fun validGrantNeverOverridesAHeldSeat() = seatTest { a, b ->
         assertAll(
-            { assertEquals(SeatDecision.Restore(p1), decideSeat(p1, a, held = listOf(Seat(p1, a)), holdsValidGrant = true)) },
+            { assertEquals(SeatDecision.Restore(p1), decideSeat(p1, a, held = mapOf(p1 to live(a)), holdsValidGrant = true)) },
             {
                 assertEquals(
                     SeatDecision.RestoreUnderNewId(previous = p1),
-                    decideSeat(p2, a, held = listOf(Seat(p1, a)), holdsValidGrant = true),
+                    decideSeat(p2, a, held = mapOf(p1 to live(a)), holdsValidGrant = true),
                 )
             },
-            { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held = listOf(Seat(p1, b)), holdsValidGrant = true)) },
+            { assertEquals(SeatDecision.KeyConflict, decideSeat(p1, a, held = mapOf(p1 to live(b)), holdsValidGrant = true)) },
         )
     }
 
@@ -107,12 +109,12 @@ class SeatDecisionTest {
     @Test
     fun everyCombinationOfTheInputsReachesItsRow() = seatTest { a, b ->
         // The claimed id is always p1. What p1 holds, and whether key A holds p2.
-        val idHoldsSameKey = listOf(Seat(p1, a))
-        val idHoldsOtherKey = listOf(Seat(p1, b))
-        val idHoldsOtherKeyAndKeyHoldsP2 = listOf(Seat(p1, b), Seat(p2, a))
-        val keyHoldsP2 = listOf(Seat(p2, a))
-        val bystanderOnly = listOf(Seat(p3, b))
-        val nothing = emptyList<Seat>()
+        val idHoldsSameKey = mapOf(p1 to live(a))
+        val idHoldsOtherKey = mapOf(p1 to live(b))
+        val idHoldsOtherKeyAndKeyHoldsP2 = mapOf(p1 to live(b), p2 to live(a))
+        val keyHoldsP2 = mapOf(p2 to live(a))
+        val bystanderOnly = mapOf(p3 to live(b))
+        val nothing = emptyMap<PeerId, Seat>()
 
         val rows = listOf(
             Triple(idHoldsSameKey, false, "restore p1"),
@@ -133,16 +135,16 @@ class SeatDecisionTest {
     }
 
     @Test
-    fun twoSeatsSharingAnIdOrAKeyAreRefused() = seatTest { a, b ->
-        assertAll(
-            { assertFailsWith<IllegalArgumentException> { decideSeat(p3, a, held = listOf(Seat(p1, a), Seat(p1, b)), holdsValidGrant = false) } },
-            { assertFailsWith<IllegalArgumentException> { decideSeat(p3, a, held = listOf(Seat(p1, a), Seat(p2, a)), holdsValidGrant = false) } },
-        )
+    fun twoSeatsSharingAKeyAreRefused() = seatTest { a, _ ->
+        assertFailsWith<IllegalArgumentException> {
+            decideSeat(p3, a, held = mapOf(p1 to live(a), p2 to live(a)), holdsValidGrant = false)
+        }
     }
 
     private fun label(decision: SeatDecision): String = when (decision) {
         is SeatDecision.Restore -> "restore ${decision.peerId.value}"
         is SeatDecision.RestoreUnderNewId -> "restore under new id, previous ${decision.previous.value}"
+        is SeatDecision.ReleaseAndAdmit -> "release ${decision.released.value}, then ${label(decision.admission)}"
         SeatDecision.Returning -> "returning"
         SeatDecision.KeyConflict -> "key conflict"
         SeatDecision.Ordinary -> "ordinary"
