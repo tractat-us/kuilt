@@ -56,11 +56,13 @@ class LocalHeddleApplyPropertyTest {
         println("APPLY-PROPERTY matches $tally")
         assertAll(
             { assertEquals(seeds, loops) },
-            // Floors sit below the counts measured on every target (JVM: 179, 52, 19, 15).
-            { assertTrue(tally.moved >= 120, "leases moved by a reweight ${tally.moved}") },
-            { assertTrue(tally.drained >= 35, "removals that drained ${tally.drained}") },
-            { assertTrue(tally.runtimeMoved >= 10, "runtime-child leases moved ${tally.runtimeMoved}") },
-            { assertTrue(tally.reconciled >= 10, "reconciles that moved spend ${tally.reconciled}") },
+            // Floors sit below the counts measured on every target (202, 43, 36, 16, 139, 26).
+            { assertTrue(tally.moved >= 140, "leases moved by a reweight ${tally.moved}") },
+            { assertTrue(tally.drained >= 30, "removals that drained ${tally.drained}") },
+            { assertTrue(tally.runtimeMoved >= 20, "runtime-child leases moved ${tally.runtimeMoved}") },
+            { assertTrue(tally.reconcilesThatMoved >= 10, "reconciles that moved spend ${tally.reconcilesThatMoved}") },
+            { assertTrue(tally.replacements >= 100, "replacements the liveness oracle checked ${tally.replacements}") },
+            { assertTrue(tally.undeclaredLeaf >= 15, "leaves explained NoLiveLineage only for being undeclared ${tally.undeclaredLeaf}") },
         )
     }
 
@@ -92,16 +94,18 @@ class LocalHeddleApplyPropertyTest {
         assertAll(
             { assertEquals(seeds, loops) },
             { assertEquals(seeds * 4, reloads) },
-            // Floors sit below the counts measured on every target (JVM: 620, 198, 12, 22, 2, 66, 140, 15539).
+            // Floors sit below the counts measured on every target (626, 215, 19, 30, 1, 92, 154, 527, 13010, 59).
             // A former lane's re-home is rare here; `rehomeKeepsAFormerLanesOpenReservationsEarmarked` pins it.
-            { assertTrue(tally.moved >= 400, "leases moved by a reweight ${tally.moved}") },
-            { assertTrue(tally.drained >= 120, "removals that drained ${tally.drained}") },
-            { assertTrue(tally.removalWon >= 8, "reweights that waited on a removal below ${tally.removalWon}") },
-            { assertTrue(tally.readdMidDrain >= 12, "children put back while still draining ${tally.readdMidDrain}") },
+            { assertTrue(tally.moved >= 450, "leases moved by a reweight ${tally.moved}") },
+            { assertTrue(tally.drained >= 150, "removals that drained ${tally.drained}") },
+            { assertTrue(tally.removalWon >= 12, "reweights that waited on a removal below ${tally.removalWon}") },
+            { assertTrue(tally.readdMidDrain >= 20, "children put back while still draining ${tally.readdMidDrain}") },
             { assertTrue(tally.formerLaneMoved >= 1, "leases at a former lane moved by a reweight ${tally.formerLaneMoved}") },
-            { assertTrue(tally.runtimeMoved >= 40, "runtime-child leases moved ${tally.runtimeMoved}") },
-            { assertTrue(tally.reconciled >= 90, "reconciles that moved spend ${tally.reconciled}") },
-            { assertTrue(tally.explained >= 10_000, "explanations checked against an acquire ${tally.explained}") },
+            { assertTrue(tally.runtimeMoved >= 60, "runtime-child leases moved ${tally.runtimeMoved}") },
+            { assertTrue(tally.reconcilesThatMoved >= 100, "reconciles that moved spend ${tally.reconcilesThatMoved}") },
+            { assertTrue(tally.replacements >= 400, "replacements the liveness oracle checked ${tally.replacements}") },
+            { assertTrue(tally.undeclaredLeaf >= 40, "leaves explained NoLiveLineage only for being undeclared ${tally.undeclaredLeaf}") },
+            { assertTrue(tally.explained >= 9_000, "explanations checked against an acquire ${tally.explained}") },
         )
     }
 
@@ -167,6 +171,8 @@ class LocalHeddleApplyPropertyTest {
             val runtime = attached.map { (g, name) -> topology.runtimeChildId(g, name) }
             // Half the leases go to a runtime child when one is attached, so its re-homes are reached.
             val leaves = if (runtime.isNotEmpty() && r.nextBoolean()) runtime else declared()
+            // A tree of marked groups with nothing attached yet declares no leaf at all.
+            if (leaves.isEmpty()) return@repeat
             val leaf = leaves[r.nextInt(leaves.size)]
             h.acquire(setOf(leaf), setOf(leaf), startedAt = step++, reservation = 1L + r.nextInt(4))
         }
@@ -188,6 +194,7 @@ class LocalHeddleApplyPropertyTest {
             val before = h.snapshot()
             val paths = before.leases.associate { it.id to h.capturedPath(it.id) }
             val formerLanes = before.leases.filter { !before.ledger.isLeaf(it.leaf) }.map { it.id }.toSet()
+            val expectedToWait = replacementsThatMustWait(Topology.diff(to, before.ledger, generation), before)
             val result = h.apply(to, generation)
             topology = to
             attached.retainAll { (g, _) -> markerAt(to, g) != null }
@@ -204,10 +211,37 @@ class LocalHeddleApplyPropertyTest {
             tally.removalWon += result.refusals.count { refusal ->
                 refusal is StepRefusal.Draining && refusal.child !in activated && after.ledger.lifecycle(refusal.edge) == Lifecycle.ACTIVE
             }
-            tally.reconciled += result.applied.count { it is TopologyStep.Reconcile && before.ledger.hasChildEdges(it.child) }
+            // A reconcile that moved spend onto the new edge: nothing else charges an edge during a reload.
+            tally.reconcilesThatMoved += result.applied.count { step ->
+                step is TopologyStep.Reconcile && (after.ledger.lineageOf(step.child)?.lastOrNull()?.let { after.ledger.edge(it)?.spent } ?: 0L) > 0L
+            }
+            // Liveness: a replacement waits exactly when a lease across its old edge cannot move.
+            val waited = expectedToWait.second.filter { child -> result.refusals.any { it.child == child } }.toSet()
+            if (waited != expectedToWait.first) fail("replacements that waited $waited, expected ${expectedToWait.first}, at $at: ${result.refusals}")
+            tally.replacements += expectedToWait.second.size
             countReaddsMidDrain(before.ledger, result)
             if (result.refusals.any { it is StepRefusal.Refused }) fail("a reload refused outright at $at: ${result.refusals}")
             checkInvariants(at)
+        }
+
+        /**
+         * The replacements [steps] holds (a child whose list retires an edge and activates another),
+         * and those that must wait: an open lease crossing its old edge also crosses an edge the list
+         * closes for a child that gets no new edge, or one already not ACTIVE. Read from the diff and
+         * the snapshot alone, not from the engine.
+         */
+        private fun replacementsThatMustWait(steps: List<TopologyStep>, before: LocalHeddleState): Pair<Set<GroupId>, Set<GroupId>> {
+            val activated = steps.filterIsInstance<TopologyStep.Activate>().map { it.child }.toSet()
+            val retiredBy = steps.filterIsInstance<TopologyStep.Retire>().filter { it.child in activated }.groupBy({ it.child }, { it.edge })
+            val replacedEdges = retiredBy.values.flatten().toSet()
+            val closed = steps.filterIsInstance<TopologyStep.Close>().map { it.edge }.toSet()
+            val paths = before.leases.map { checkNotNull(h.capturedPath(it.id)) }
+            val mustWait = retiredBy.filter { (_, edges) ->
+                paths.any { path ->
+                    path.any { it in edges } && path.any { e -> e !in replacedEdges && (e in closed || before.ledger.lifecycle(e) != Lifecycle.ACTIVE) }
+                }
+            }.keys
+            return mustWait to retiredBy.keys
         }
 
         fun explainThenAcquire(r: Random) {
@@ -226,6 +260,8 @@ class LocalHeddleApplyPropertyTest {
                 val pickable = g in declared && l.isLeaf(g) && lineage != null && lineage.isNotEmpty() &&
                     lineage.all { l.lifecycle(it) == Lifecycle.ACTIVE }
                 val reason = reasons.getValue(g)
+                val reachable = l.isLeaf(g) && lineage != null && lineage.isNotEmpty() && lineage.all { l.lifecycle(it) == Lifecycle.ACTIVE }
+                if (g in eligible && reachable && g !in declared) tally.undeclaredLeaf++
                 val where = "${g.value} told $reason, acquire gave $out"
                 when {
                     g !in waiting -> if (reason != WaitExplanation.NotWaiting) fail(where)
@@ -285,12 +321,15 @@ class LocalHeddleApplyPropertyTest {
         var drained = 0
         var removalWon = 0
         var readdMidDrain = 0
-        var reconciled = 0
+        var reconcilesThatMoved = 0
+        var replacements = 0
         var explained = 0
+        var undeclaredLeaf = 0
 
         override fun toString(): String =
             "moved=$moved runtimeMoved=$runtimeMoved formerLaneMoved=$formerLaneMoved drained=$drained removalWon=$removalWon " +
-                "readdMidDrain=$readdMidDrain reconciled=$reconciled explained=$explained"
+                "readdMidDrain=$readdMidDrain reconcilesThatMoved=$reconcilesThatMoved replacements=$replacements " +
+                "explained=$explained undeclaredLeaf=$undeclaredLeaf"
     }
 
     // ── generators ──────────────────────────────────────────────────────────────────────────────
@@ -302,6 +341,9 @@ class LocalHeddleApplyPropertyTest {
     private fun randomNode(r: Random, name: String, depth: Int): Node {
         val weight = Weight.of(1L + r.nextInt(4))
         return if (depth < 3 && r.nextInt(3) == 0) {
+            // A quarter of the groups are marked and declare nothing: a leaf the ledger cannot tell
+            // from a lane until a runtime child attaches, which is what the leasable predicate decides.
+            if (r.nextInt(4) == 0) return Group(name, weight, emptyList(), runtimeChildren = RuntimeChildren(Weight.of(1L + r.nextInt(3))))
             Group(name, weight, randomChildren(r, depth + 1), runtimeChildren = if (r.nextBoolean()) RuntimeChildren(Weight.of(1L + r.nextInt(3))) else null)
         } else {
             Lane(name, weight)
@@ -321,7 +363,8 @@ class LocalHeddleApplyPropertyTest {
         val node = nodeAt(t.children, path)
         return when (r.nextInt(8)) {
             0, 1, 2 -> t.update(path) { it.withWeight(Weight.of(it.weight.numerator % 4 + 1)) }
-            3 -> if (siblingsOf(t, path).size > 1) t.update(path) { null } else t
+            // A marked group may lose its last declared child; any other group keeps one.
+            3 -> if (siblingsOf(t, path).size > 1 || (path.size > 1 && markerAt(t, path.dropLast(1)) != null)) t.update(path) { null } else t
             4 -> {
                 val parent = if (node is Group) path else path.dropLast(1)
                 val taken = (if (parent.isEmpty()) t.children else (nodeAt(t.children, parent) as Group).children).map { it.name }
@@ -336,7 +379,8 @@ class LocalHeddleApplyPropertyTest {
             5 -> if (node is Lane && path.size < 3) t.update(path) { Group(it.name, it.weight, listOf(Lane(names[r.nextInt(names.size)]))) } else t
             6 -> if (node is Group) t.update(path) { Lane(it.name, it.weight) } else t
             else -> if (node is Group) {
-                t.update(path) { (it as Group).copy(runtimeChildren = if (it.runtimeChildren == null) RuntimeChildren(Weight.ONE) else null) }
+                // Unmarking a group that declares nothing would leave it empty, so it stays marked.
+                t.update(path) { (it as Group).copy(runtimeChildren = if (it.runtimeChildren == null || it.children.isEmpty()) RuntimeChildren(Weight.ONE) else null) }
             } else {
                 t
             }

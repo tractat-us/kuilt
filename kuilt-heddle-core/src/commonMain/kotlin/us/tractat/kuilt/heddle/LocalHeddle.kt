@@ -813,12 +813,15 @@ public class LocalHeddle private constructor(
      * otherwise it names the children to leave out.
      *
      * A **replacement** is a child whose list retires an edge and activates another. The open leases
-     * across its old edges are released up their paths first, then its subtree's idle holdings, so
-     * the old edges retire with nothing outstanding. Once every step has run, reconciles included,
-     * each moved lease is delegated down its leaf's new lineage through [seatThenDelegate]. A
-     * replacement is all or nothing: if any part fails it is left out. So is a child any of whose
-     * steps the ledger refuses outright. Only a removal waiting on a drain keeps its steps up to the
-     * refused retire, since its close is what stops new work going there.
+     * across its old edges are released up their paths first, which is every unit this engine holds
+     * there, so the old edges retire with nothing outstanding. Once every step has run, reconciles
+     * included, each moved lease is delegated down its leaf's new lineage through [seatThenDelegate].
+     * A replacement is all or nothing: if any part fails it is left out, as [StepRefusal.Refused]
+     * unless a lease that cannot move is what holds it ([StepRefusal.Draining]). A retire refused
+     * after those releases is refused for units that are not this engine's, which waiting will not
+     * cure. A child any of whose steps the ledger refuses outright is left out too. Only a removal
+     * waiting on a drain keeps its steps up to the refused retire, since its close is what stops new
+     * work going there.
      */
     private fun attempt(steps: List<TopologyStep>, leftOut: Set<GroupId>): Trial {
         val base = ledger
@@ -847,7 +850,6 @@ public class LocalHeddle private constructor(
 
         var local = base
         for (lease in moving) local = releaseUp(local, lease.path, lease.lease.reserved)
-        local = releaseIdleBelow(local, replaced.keys)
 
         val movingIds = moving.mapTo(HashSet()) { it.lease.id }
         fun refusal(step: TopologyStep, reason: String): StepRefusal {
@@ -863,16 +865,25 @@ public class LocalHeddle private constructor(
         for (step in steps) {
             val child = step.child
             if (child in leftOut || child in stopped) continue
-            // A removal retires bottom-up, so a group's retire waits on every group below it.
-            val below = stopped.firstOrNull { it.value.startsWith(child.value + "/") }
+            // Retires run bottom-up, so a group's retire waits on every group below it whose change did
+            // not land: one stopped in this attempt, or one left out of it.
+            val below = (stopped.asSequence() + leftOut.asSequence()).filter { it.value.startsWith(child.value + "/") }.minOrNull()
             val next = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
             if (next != null) {
                 local = next
                 applied += step
                 continue
             }
-            val why = refusal(step, if (below != null) "${below.value}, below it, did not retire" else "the ledger refused it")
-            if (child in replaced.values || why is StepRefusal.Refused) leaveOut += why else draining += why
+            val reason = if (below != null) "${below.value}, below it, did not retire" else "the ledger refused it"
+            if (child in replaced.values) {
+                // Every unit this engine held across the old edge was released above, so what is
+                // still outstanding there is another writer's, or an engine bug: not a drain.
+                val outstanding = (step as? TopologyStep.Retire)?.let { local.outstanding(it.edge) } ?: 0L
+                leaveOut += StepRefusal.Refused(child, step, if (outstanding > 0L) "outstanding units this engine does not hold: $outstanding" else reason)
+            } else {
+                val why = refusal(step, reason)
+                if (why is StepRefusal.Refused) leaveOut += why else draining += why
+            }
             // The child's first refusal is its answer: its later steps do not run.
             stopped += child
         }
@@ -919,23 +930,10 @@ public class LocalHeddle private constructor(
     }
 
     /**
-     * [start] with every unit this engine holds idle at a group beneath one of [edges] handed back
-     * up, deepest group first. Run after the open leases there are released, so what is left is idle
-     * by construction, and the edges then carry nothing of this engine's.
+     * [steps] applied as [apply] applies a diff, for tests: the seam for a list no diff writes, such
+     * as one with a step the ledger refuses outright.
      */
-    private fun releaseIdleBelow(start: EntitlementLedger, edges: Collection<AttachmentId>): EntitlementLedger {
-        if (edges.isEmpty()) return start
-        val below = start.allGroups().mapNotNull { g -> start.lineageOf(g)?.takeIf { p -> p.any { it in edges } }?.let { g to it } }
-            .sortedWith(compareByDescending<Pair<GroupId, List<AttachmentId>>> { it.second.size }.thenBy { it.first })
-        var local = start
-        for ((group, lineage) in below) {
-            val held = local.holdings(group, SELF)
-            if (held <= 0L) continue
-            val patch = checkNotNull(local.release(SELF, lineage.last(), held)) { "the release of $held idle units at ${group.value} was refused" }
-            local = local.piece(patch.delta)
-        }
-        return local
-    }
+    internal fun applyStepsForTest(steps: List<TopologyStep>): ApplyResult = run(steps)
 
     /** The path [lease] charges, for tests: what it was opened on, or what a reweight moved it onto. */
     internal fun capturedPath(lease: LeaseId): List<AttachmentId>? = open[lease]?.path

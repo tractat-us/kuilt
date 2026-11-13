@@ -174,7 +174,8 @@ class LocalHeddleApplyTest {
         val result = h.apply(tree(acmeW = 4), generation = 1L)
         val after = h.snapshot()
         assertAll(
-            { assertEquals(listOf(StepRefusal.Draining(acme, oldAcme, outstanding = 1L, blockingLeases = emptyList())), result.refusals) },
+            // No lease of this engine's holds it, and waiting will not cure it: refused, not draining.
+            { assertEquals(listOf(StepRefusal.Refused(acme, Retire(oldAcme, acme), "outstanding units this engine does not hold: 1")), result.refusals) },
             { assertEquals(emptyList(), result.applied, "nothing of the reweight landed") },
             { assertSame(before.ledger, after.ledger, "the ledger is the very same value") },
             { assertEquals(before, after) },
@@ -478,22 +479,36 @@ class LocalHeddleApplyTest {
         )
     }
 
-    /** Units this engine holds idle under a replaced edge are handed back before the retire, so they do not block it. */
+    /**
+     * A group's retire waits on every group below it whose change did not land: a child left out
+     * of the unit by an earlier attempt, not only one stopped in this one. Here `default`'s change is
+     * refused outright (an activate of an edge the ledger does not know) after `hobby`'s retire has
+     * run, so the first attempt leaves only `default` out. In the next attempt `default` is not
+     * stopped, only left out, and its edge stays ACTIVE: retiring `hobby` above it would leave that
+     * edge under a retired one, so `hobby` is left out too, untouched. No diff writes such a list,
+     * so it goes in through the test seam.
+     */
     @Test
-    fun rehomeReturnsIdleHoldingsBelowTheOldEdge() {
+    fun aRetireWaitsOnAChildLeftOutBelowIt() {
         val h = engine()
-        h.serve(setOf(batch), 2)
-        h.reshapeForTest { l ->
-            var r = l
-            for (edge in assertNotNull(l.lineageOf(batch))) r = r.piece(assertNotNull(r.delegate(LOCAL, edge, 3L)).delta)
-            r
-        }
-        val result = h.apply(tree(acmeW = 4), generation = 1L)
+        val hobbyEdge = h.edgeInto(hobby)
+        val defaultEdge = h.edgeInto(default)
+        val bogus = AttachmentId("root/hobby/default@9:1#9")
+        val steps = listOf(
+            TopologyStep.Close(hobbyEdge, hobby),
+            TopologyStep.Close(defaultEdge, default),
+            Retire(hobbyEdge, hobby),
+            Activate(bogus, default),
+        )
+        val before = h.snapshot().ledger
+        val result = h.applyStepsForTest(steps)
         val l = h.snapshot().ledger
         assertAll(
-            { assertEquals(emptyList(), result.refusals) },
-            { assertEquals(0L, l.holdings(batch, LOCAL)) },
-            { assertEquals(0L, l.holdings(acme, LOCAL)) },
+            { assertEquals(listOf(hobby, default), result.refusals.map { it.child }) },
+            { assertTrue(result.refusals.all { it is StepRefusal.Refused }, "neither waits on a lease: ${result.refusals}") },
+            { assertEquals(Lifecycle.ACTIVE, l.lifecycle(hobbyEdge), "hobby is untouched") },
+            { assertEquals(Lifecycle.ACTIVE, l.lifecycle(defaultEdge), "default is untouched") },
+            { assertSame(before, l) },
             { assertEquals(emptyList(), l.validate()) },
         )
     }

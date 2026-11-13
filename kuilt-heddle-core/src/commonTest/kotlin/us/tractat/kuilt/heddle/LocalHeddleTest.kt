@@ -478,7 +478,9 @@ class LocalHeddleTest {
     @Test
     fun anOverrunBelowAClosingRootEdgeIsReportedButRecordedNowhere() {
         val rootC = edgeOf(root, c)
-        val h = engineOver(shapedLedger(root, listOf(rootC)), root, supply = 100)
+        // Supply for the reservation alone, so the root is short of the overrun: were it delegated
+        // anywhere, the shortfall would be minted.
+        val h = engineOver(shapedLedger(root, listOf(rootC)), root, supply = 2)
         val open = h.lease(setOf(c), reservation = 2L)
         h.reshapeForTest { it.piece(assertNotNull(it.close(rootC.id)).delta) }
         val done = h.complete(open.id, 5L)
@@ -488,7 +490,7 @@ class LocalHeddleTest {
             { assertEquals(emptyList(), h.snapshot().leases) },
             { assertEquals(2L, l.leafSpentTotal(), "only the reservation reached an edge") },
             { assertEquals(0, h.forcedMints) },
-            { assertEquals(100L, l.mintedTotal()) },
+            { assertEquals(2L, l.mintedTotal(), "nothing was minted for the overrun") },
             { assertEquals(l.mintedTotal(), l.holdings(root, LOCAL) + l.leafSpentTotal()) },
             { assertEquals(emptyList(), l.validate()) },
         )

@@ -9,7 +9,7 @@ Read the **one** cookbook file your symptom names.
 
 ## Don't build this yourself
 
-Each row pairs its `;`-separated groups in order.
+Rows pair `;`-separated groups in order.
 
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
@@ -50,7 +50,7 @@ Each row pairs its `;`-separated groups in order.
 
 ## Fetching a route
 
-`<path>` is `docs/agent-cookbook/<Jump to>` or the index `docs/agent-cookbook.md`.
+`<path>`: `docs/agent-cookbook/<jump-to file>` or the index `docs/agent-cookbook.md`.
 Inside kuilt, read it directly; consumers take the first working rung:
 
 1. `git -C ../kuilt fetch -q origin main && git -C ../kuilt show origin/main:<path>`

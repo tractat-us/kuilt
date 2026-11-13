@@ -4,10 +4,14 @@ package us.tractat.kuilt.heddle
  * One step of moving a ledger to a new [Topology]. [Topology.diff] lists them in the order they
  * must run, and an interpreter applies them one at a time.
  *
- * Every step names the [child] group it belongs to. When a step is refused — most often a
- * [Retire] whose edge still has work outstanding — the interpreter stops that child's later steps,
- * and the retires of its ancestors in the same removal, and carries on with every other child.
- * Asking [Topology.diff] again later lists what is left.
+ * Every step names the [child] group it belongs to, so an interpreter can refuse one child's
+ * change and carry on with every other child. [LocalHeddle.apply] does it by **leaving the child
+ * out**: when one of a child's steps is refused, it drops every step of that child, earlier ones
+ * included, and applies the rest of the list again from the same ledger, so the child is left
+ * exactly as it was. The one exception is a removal whose [Retire] waits for work outstanding on
+ * its edge: its [Close] stands, since that is what stops new work going there. Either way, the
+ * retire of every group above a child whose change did not land waits too. Asking
+ * [Topology.diff] again later lists what is left.
  *
  * **What an interpreter must hold to.** Four contracts the list cannot enforce on its own:
  *
@@ -16,7 +20,7 @@ package us.tractat.kuilt.heddle
  *    against: when a runtime child is detached, or its marker goes, while it still has a prepared
  *    edge, that edge is closed before it is retired, and every prefix between the two holds two
  *    live inbound edges into the child — a [LedgerConflict.DualActiveInbound] that quarantines it.
- *    A refused step does not break the unit: it is skipped as below, and the rest of the list
+ *    A refused child does not break the unit: it is left out as above, and the rest of the list
  *    still applies. Re-entrance is what makes a prefix recoverable, since asking again lists
  *    exactly the steps that did not land.
  *  - **The steps are valid only against the ledger they were computed from.** Work charged
@@ -24,9 +28,9 @@ package us.tractat.kuilt.heddle
  *    diff an internal group's reweight, serve seven units beneath it, apply the stale list, and
  *    the group's holdings read `-7` with a [LedgerConflict.PersistentNegativeHoldings]. So diff and
  *    apply under one lock, or diff again after any traffic.
- *  - **Keep the list's order across children.** Re-entrance holds for a prefix of the list, with a
- *    refused child's later steps skipped. Running one child's steps ahead of another's is not a
- *    prefix, and a later diff numbers the prepares still to come at a higher generation.
+ *  - **Keep the list's order across children.** Re-entrance holds for a prefix of the list with
+ *    some children's steps left out. Running one child's steps ahead of another's is not that,
+ *    and a later diff numbers the prepares still to come at a higher generation.
  *  - **[Reconcile] is licensed by a single writer**, and by one precondition: no open reservation's
  *    captured path runs through an edge of the retired strand. The move drains those edges, and a
  *    straggling charge against one afterwards leaves a conflict nothing repairs. An interpreter

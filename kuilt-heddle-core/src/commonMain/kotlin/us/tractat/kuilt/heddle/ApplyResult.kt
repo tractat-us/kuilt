@@ -26,7 +26,8 @@ public sealed interface StepRefusal {
      *
      * A removal that waits has already closed [edge], so nothing new is leased across it. A
      * reweight that waits, because a lease beneath it sits under a child the same reload removes,
-     * has changed nothing: the old edge stays ACTIVE and keeps its history until it can move.
+     * has changed nothing: [edge] stays as it was, ACTIVE for a reweight, or still CLOSING for a
+     * child put back before its removal drained, and keeps its history until its leases can move.
      */
     public data class Draining(
         override val child: GroupId,
@@ -36,8 +37,10 @@ public sealed interface StepRefusal {
     ) : StepRefusal
 
     /**
-     * The ledger refused [step] for a reason waiting will not cure, described by [reason]: a
-     * record the ledger holds twice, say. [child] is left as it was before this apply.
+     * The ledger refused [step] for a reason waiting on this engine's leases will not cure,
+     * described by [reason]: a record the ledger holds twice, say, or a reweight whose old edge
+     * still carries units after the engine released every one of its own there. [child] is left
+     * as it was before this apply.
      */
     public data class Refused(
         override val child: GroupId,

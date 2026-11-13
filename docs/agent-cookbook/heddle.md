@@ -101,14 +101,17 @@ generation 0, and `groupId("acme", "batch")` names the group. On a reload,
 `new`, reading which edges exist from the ledger rather than from the old tree, so it works after
 a restart, retires what an earlier reload left draining, and after a partial apply lists exactly
 the rest; a new weight is a new edge, so the group's fairness history restarts at its parent's
-front. Nothing public applies the steps yet: the single-writer engine's `apply` (Task L3 of #3173)
-will, under one lock, against the ledger it diffed.
+front. You do not apply the steps yourself: `LocalHeddle.apply(new, generation)` diffs and applies
+them in one call, under your lock, against the ledger it diffed (see
+[A fair-share tree in one process](#a-fair-share-tree-in-one-process)). The list is what it runs,
+and what a preview would show.
 
-Children the app creates while running go under a group marked `runtimeChildren`.
-`Topology.attachRuntimeChild(group, name, ledger, generation)` and
-`detachRuntimeChild(group, name, ledger)` list the steps for one child, at the marker's weight,
-under a name of any spelling that never collides with a declared child. A reload that keeps the
-marker keeps the child and its history; one that drops the marker closes it. Every detach leaves a
+Children the app creates while running go under a group marked `runtimeChildren`. On an engine,
+`LocalHeddle.attachRuntimeChild(group, name, generation)` and `detachRuntimeChild(group, name)`
+attach and detach one child, at the marker's weight, under a name of any spelling that never
+collides with a declared child; a detach drains like a removal. `Topology.attachRuntimeChild` and
+`detachRuntimeChild` list the same steps without applying them. A reload that keeps the marker
+keeps the child and its history; one that drops the marker closes it. Every detach leaves a
 retired edge in the ledger for good, so keep a child that comes back often attached between uses.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleRuntimeChildren -->
