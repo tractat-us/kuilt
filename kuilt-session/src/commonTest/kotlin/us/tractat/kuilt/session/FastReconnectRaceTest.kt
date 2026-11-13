@@ -255,7 +255,7 @@ class FastReconnectRaceTest {
             memberName = "table-7",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = keyedStore(),
             heartbeatConfig = hostConfig,
             roomId = RoomId("room-1"),
         ).also { it.start() }
@@ -278,7 +278,7 @@ class FastReconnectRaceTest {
             memberName = "client",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = keyedStore(),
             heartbeatConfig = joinerConfig,
             roomId = null,
             reweave = {

@@ -60,7 +60,7 @@ class TransportCloseWindowTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -75,7 +75,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -114,7 +114,7 @@ class TransportCloseWindowTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -129,7 +129,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -171,7 +171,7 @@ class TransportCloseWindowTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -187,7 +187,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -210,7 +210,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -247,7 +247,7 @@ class TransportCloseWindowTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -263,7 +263,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -290,7 +290,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
@@ -333,7 +333,7 @@ class TransportCloseWindowTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -348,7 +348,7 @@ class TransportCloseWindowTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = keyedStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }
