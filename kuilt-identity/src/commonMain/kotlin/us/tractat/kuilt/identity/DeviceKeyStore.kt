@@ -43,8 +43,10 @@ public interface DeviceKeyStore {
      * ECDSA through the platform's provider, unless the store was built for tests.
      *
      * A store answers the scheme its own keys are in, so a room cannot sign in one scheme and check
-     * in another. The only store that answers anything else is the one `:kuilt-identity-test` builds,
-     * behind its tests-only opt-in.
+     * in another. A store answers anything but [KeyScheme.P256] only when someone opted in to build
+     * it that way: through this opt-in, by overriding this member or using
+     * `InMemoryDeviceKeyStore(scheme)`, or through `:kuilt-identity-test`'s tests-only opt-in for its
+     * fake. No default, no decoded frame and no `did:key` ever selects another scheme.
      */
     @IdentityInternalApi
     public val keyScheme: KeyScheme get() = KeyScheme.P256

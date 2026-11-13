@@ -26,9 +26,8 @@ public class InMemoryDeviceKeyStore private constructor(
     public constructor() : this({}, KeyScheme.P256)
 
     /**
-     * A store whose key, made on first use, is [scheme]'s, and whose [keyScheme] is [scheme]. This is
-     * how `:kuilt-identity-test` builds a store on its fake scheme, with the same grant rules as
-     * every other store.
+     * A store whose key, made on first use, is [scheme]'s, and whose [keyScheme] is [scheme], with the
+     * same grant rules as every other store. It takes any scheme: the opt-in is the only fence.
      */
     @IdentityInternalApi
     public constructor(scheme: KeyScheme) : this({}, scheme)

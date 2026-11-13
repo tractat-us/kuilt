@@ -15,9 +15,11 @@ package us.tractat.kuilt.identity.test
  * @file:OptIn(TestOnlyKeyScheme::class)
  * ```
  *
- * Opt in from test source sets only. Java callers do not see opt-in requirements at all, so on the
- * JVM this is a convention, not a fence; the fence there is that no production module depends on
- * `:kuilt-identity-test`.
+ * Opt in from test source sets, and from test-support modules whose published code builds rooms for
+ * tests, never from production code. The opt-in is the whole fence: nothing in the build stops a
+ * production module depending on `:kuilt-identity-test`, and Java callers do not see opt-in
+ * requirements at all. What it does guarantee is that no default selects the fake: a room uses it
+ * only when it is built on a store made here, and nothing decoded off the wire picks a scheme.
  */
 @RequiresOptIn(
     message = "A fake key scheme whose signatures anyone can compute. For tests only; never use it in production.",

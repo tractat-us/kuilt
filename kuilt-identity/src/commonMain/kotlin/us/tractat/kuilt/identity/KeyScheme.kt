@@ -5,8 +5,11 @@ package us.tractat.kuilt.identity
  * scheme for everything it signs and checks, and takes it from its [DeviceKeyStore.keyScheme].
  *
  * There is one scheme for real use, [P256]: ECDSA on P-256, through the platform's own provider. It
- * is what every [DeviceKeyStore] answers unless it says otherwise, and [InMemoryDeviceKeyStore]'s
- * public constructor answers nothing else.
+ * is what every [DeviceKeyStore] answers unless it says otherwise. Any other scheme is reachable only
+ * through an opt-in: this type's own `@IdentityInternalApi`, which a store on an arbitrary scheme
+ * needs (`InMemoryDeviceKeyStore(scheme)`, or an implementor overriding [DeviceKeyStore.keyScheme]),
+ * or `:kuilt-identity-test`'s `@TestOnlyKeyScheme` for its fake. No default, no deserialisation path
+ * and no [DidKey] ever selects one.
  *
  * **Why the seam exists.** On wasmJs every [P256] operation is a WebCrypto promise. A room test
  * running under `runTest` that waits on one stops being a virtual-time test, so the room and timer
