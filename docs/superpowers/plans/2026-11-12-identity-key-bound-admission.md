@@ -96,6 +96,13 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
   - KDoc: `held` is joiner seats only, never the host's; revocation is the caller's; "fall through"
     means calling `decideSeat` again without the released seat, not a hardcoded `Ordinary`.
   - AGENTS.md: drop the "(today only the internal key → seat decision reads them)" parenthetical.
+- **1.4–1.6: the split must name two shared-device harnesses in published/common code (from #3258's
+  review).** `RoomConformanceSuite.defaultHarness` (`kuilt-conformance` **commonMain**, ~line 2179:
+  `hostFactory = factory, joinerFactory = factory`, one store) and `ReferenceResumeHarness`
+  (`kuilt-conformance` commonTest). From 1.5's host-key check, every default-harness TCK row reds at
+  once. Build two factories, and KDoc `RoomHarness.hostFactory/joinerFactory` as distinct devices.
+  The opposite case, `examples` `ResumeTokenFailoverTest` (one client device modelled as two stores),
+  is rewritten when 1.7–1.8 retire `Resume`.
 - **1.4–1.6: split shared factories in tests (from #3258).** About 24 test files build one
   `SeamRoomFactory` and use it for the host and joiners, or for several joiners, so those rooms
   share one `InMemoryDeviceKeyStore` and are **one device**. Harmless until the key → seat table
