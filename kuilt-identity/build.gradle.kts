@@ -95,6 +95,10 @@ dependencies {
 if (runWebkitTests) {
     tasks.named<KotlinJsTest>("wasmJsBrowserWebkitTest") {
         dependsOn(assembleKarmaWebkitConfig)
+        // The build-wide browser-test mutex the convention plugin gives wasmJsBrowserTest. Beyond
+        // load, both tasks write the same karma.conf.js into the module's npm package directory,
+        // so run side by side one reads the other's: measured, ChromeHeadless's task ran in WebKit.
+        usesService(gradle.sharedServices.registrations.getByName("browserTestSerializer").service)
         useKarma {
             // A placeholder Karma insists on; karma-webkit.d/webkit.js replaces the browser list.
             useChromeHeadless()
