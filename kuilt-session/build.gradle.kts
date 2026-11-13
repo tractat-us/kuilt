@@ -43,8 +43,9 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-core"))
             // `api`: `:kuilt-identity` types are in this module's public surface — `AdmissionRequest.key`
-            // is a `DidKey` and `HostAdmission.revocations` a `RevocationList` — so a consumer writing
-            // an `AdmissionPolicy` needs them on its compile classpath.
+            // is a `DidKey`, `HostAdmission.revocations` a `RevocationList`, and `DeviceKeyStore` sits in
+            // `SeamRoomFactory`'s public constructor — so a consumer writing an `AdmissionPolicy` or
+            // building a factory needs them on its compile classpath (#3208).
             api(project(":kuilt-identity"))
             implementation(project(":kuilt-liveness"))
             implementation(project(":kuilt-crdt"))

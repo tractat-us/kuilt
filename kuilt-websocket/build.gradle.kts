@@ -52,6 +52,8 @@ kotlin {
         val jvmAndAndroidMain by creating {
             dependsOn(commonMain.get())
             dependencies {
+                // `KtorRoomHost` takes a `DeviceKeyStore` in its public constructor (#3208).
+                api(project(":kuilt-identity"))
                 implementation(libs.ktor.serverCore)
                 implementation(libs.ktor.serverWebsockets)
                 // Shared by JVM and Android: the wss:// dev-cert helpers (tls/) use the OkHttp

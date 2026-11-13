@@ -2,6 +2,7 @@ package us.tractat.kuilt.multipeer
 
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.session.LoomRoomHost
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.RoomHost
@@ -21,8 +22,11 @@ import us.tractat.kuilt.session.RoomHost
  * **JNA dylib note:** this class is pure-commonMain Kotlin over [Loom]/[Room].
  * It has no native-code path. The [MultipeerPeerLinkFactory] dylib basenames and
  * JNA constants are unchanged and outside the scope of this class.
+ *
+ * [deviceKeyStore] holds this device's key; see [LoomRoomHost].
  */
 public class MultipeerRoomHost(
     loom: Loom,
     sessionConfig: Pattern,
-) : RoomHost by LoomRoomHost(loom, sessionConfig)
+    deviceKeyStore: DeviceKeyStore,
+) : RoomHost by LoomRoomHost(loom, sessionConfig, deviceKeyStore)
