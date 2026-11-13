@@ -462,12 +462,14 @@ class LocalHeddleApplyTest {
         val target = tree(s = false)
         val removing = h.apply(target, generation = 1L)
         val before = h.snapshot().ledger
-        val done = h.complete(lease.id, 5L)
+        // An overrun far above what the root holds: were it delegated anywhere, the shortfall would be minted.
+        val done = h.complete(lease.id, 1_000L)
         val after = h.snapshot().ledger
         val retired = h.apply(target, generation = 1L)
         assertAll(
+            { assertTrue(before.holdings(t.groupId(), LOCAL) < 998L, "the rig: the root cannot cover the overrun") },
             { assertEquals(listOf(s), removing.refusals.map { it.child }) },
-            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L), done, "reported in full") },
+            { assertEquals(LeaseOutcome.Done(charged = 1_000L, overrun = 998L), done, "reported in full") },
             { assertEquals(before.leafSpentTotal() + 2L, after.leafSpentTotal(), "only the reservation is recorded") },
             { assertEquals(before.mintedTotal(), after.mintedTotal(), "nothing was minted for the overrun") },
             { assertEquals(0, h.forcedMints) },
