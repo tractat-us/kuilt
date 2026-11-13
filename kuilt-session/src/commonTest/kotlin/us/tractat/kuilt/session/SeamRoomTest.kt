@@ -17,6 +17,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,7 +36,7 @@ import kotlin.time.Duration.Companion.seconds
 class SeamRoomTest {
     private fun loom() = InMemoryLoom()
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
-        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) })
+        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = InMemoryDeviceKeyStore())
 
     // ── Role ──────────────────────────────────────────────────────────────────
 
@@ -361,7 +362,7 @@ class SeamRoomTest {
         runTest {
             val clock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
             val failingLoom = FailingLoom(IllegalStateException("loom closed"))
-            val factory = SeamRoomFactory(failingLoom, backgroundScope, clock)
+            val factory = SeamRoomFactory(failingLoom, backgroundScope, clock, InMemoryDeviceKeyStore())
 
             val result = runCatchingCancellable { factory.host(Pattern("Alice")) }
 

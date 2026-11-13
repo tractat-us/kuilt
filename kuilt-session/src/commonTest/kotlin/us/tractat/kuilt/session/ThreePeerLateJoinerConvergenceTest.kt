@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
@@ -68,9 +69,9 @@ class ThreePeerLateJoinerConvergenceTest {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
 
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Host"))
-            val joiner1Room = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Joiner1"))
-            val joiner2Room = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Joiner2"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).host(Pattern("Host"))
+            val joiner1Room = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).join(InMemoryTag("Joiner1"))
+            val joiner2Room = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).join(InMemoryTag("Joiner2"))
 
             hostRoom.roster.first { it.size == 2 }
             joiner1Room.roster.first { it.isNotEmpty() }
@@ -117,8 +118,8 @@ class ThreePeerLateJoinerConvergenceTest {
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
 
             // ── Phase 1: two-peer convergence ─────────────────────────────────
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Host"))
-            val joiner1Room = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Joiner1"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).host(Pattern("Host"))
+            val joiner1Room = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).join(InMemoryTag("Joiner1"))
 
             hostRoom.roster.first { it.size == 1 }
             joiner1Room.roster.first { it.isNotEmpty() }
@@ -135,7 +136,7 @@ class ThreePeerLateJoinerConvergenceTest {
             assertEquals(8L, repJoiner1.state.value.value, "joiner1 must converge to 8 before late join")
 
             // ── Phase 2: late joiner + new deltas trigger gap-fill ────────────
-            val joiner2Room = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Joiner2"))
+            val joiner2Room = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).join(InMemoryTag("Joiner2"))
             val repJoiner2 = gcounterReplicator(joiner2Room, backgroundScope)
 
             hostRoom.roster.first { it.size == 2 }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultySeam
@@ -61,7 +62,7 @@ class PartitionRoleTest {
      */
     @Test
     fun `host factory method assigns Host role`() = runTest {
-        val factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock, fastConfig)
+        val factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
         val room = factory.host(Pattern("Alice"))
         assertEquals(SessionRole.Host, room.role.value)
         room.leave()
@@ -73,7 +74,7 @@ class PartitionRoleTest {
     @Test
     fun `join factory method assigns Joiner role`() = runTest {
         val loom = InMemoryLoom()
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, fastConfig)
+        val factory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
         factory.host(Pattern("Alice"))
         val joinerRoom = factory.join(InMemoryTag("Bob"))
         assertEquals(SessionRole.Joiner, joinerRoom.role.value)
@@ -103,6 +104,7 @@ class PartitionRoleTest {
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -115,6 +117,7 @@ class PartitionRoleTest {
             memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -165,6 +168,7 @@ class PartitionRoleTest {
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -174,6 +178,7 @@ class PartitionRoleTest {
             memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -228,6 +233,7 @@ class PartitionRoleTest {
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -237,6 +243,7 @@ class PartitionRoleTest {
             memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -303,6 +310,7 @@ class PartitionRoleTest {
             memberName = "Alice",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -312,6 +320,7 @@ class PartitionRoleTest {
             memberName = "Bob",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 

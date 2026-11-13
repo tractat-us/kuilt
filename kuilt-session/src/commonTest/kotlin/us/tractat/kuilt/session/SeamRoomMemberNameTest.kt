@@ -5,6 +5,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -19,10 +20,10 @@ class SeamRoomMemberNameTest {
     fun `joiner appears under its own memberName not the session name`() = runTest {
         val loom = InMemoryLoom()
         val clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
-        val host = SeamRoomFactory(loom, backgroundScope, clock = clock)
+        val host = SeamRoomFactory(loom, backgroundScope, clock = clock, deviceKeyStore = InMemoryDeviceKeyStore())
             .host(Pattern(sessionName = "Alice's game"), memberName = "Alice")
         // Joiner discovers the session ("Alice's game") but names itself "Bob".
-        val joiner = SeamRoomFactory(loom, backgroundScope, clock = clock)
+        val joiner = SeamRoomFactory(loom, backgroundScope, clock = clock, deviceKeyStore = InMemoryDeviceKeyStore())
             .join(InMemoryTag("Alice's game"), memberName = "Bob")
 
         val hostRoster = host.roster.first { it.size == 1 }      // the admitted joiner
