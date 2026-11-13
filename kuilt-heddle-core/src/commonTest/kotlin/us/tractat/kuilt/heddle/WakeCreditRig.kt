@@ -110,12 +110,24 @@ internal object WakeCreditRig {
         fun cost(index: Int): Long = spec.costs[index % spec.costs.size]
     }
 
+    /**
+     * Print-only tracing for `SpillRowsProbe` (#3248 review). [sink] hears one `T` line per tick on
+     * which a bursty lane was picked, released or woke, and, for ticks in [states], an `S` line per
+     * tree level before each acquire: each child's raw and effective virtual service, its stored
+     * offset, whether it demands, the wake front its clamp would use, and the level's mean `V`.
+     */
+    class Trace(val sink: (String) -> Unit, val states: (Long) -> Boolean = { false }) {
+        companion object {
+            val OFF = Trace({})
+        }
+    }
+
     fun oneLevel(): EntitlementLedger = shapedLedger(ROOT, listOf(edgeOf(ROOT, A), edgeOf(ROOT, B)))
 
     fun twoLevel(): EntitlementLedger =
         shapedLedger(ROOT, listOf(edgeOf(ROOT, G), edgeOf(ROOT, B), edgeOf(G, A1), edgeOf(G, A2)))
 
-    fun run(config: WakeConfig): Run {
+    fun run(config: WakeConfig, trace: Trace = Trace.OFF): Run {
         val h = engineOver(
             config.ledger,
             ROOT,
@@ -138,6 +150,7 @@ internal object WakeCreditRig {
             watched.any { (after[it] ?: Rational.ZERO) > (before[it] ?: Rational.ZERO) }
 
         for (t in 0L until config.horizon) {
+            val events = ArrayList<String>()
             for (i in slots.indices) {
                 val run = slots[i] ?: continue
                 if (run.endsAt != t) continue
@@ -153,12 +166,14 @@ internal object WakeCreditRig {
                     overrun += expectedOverrun
                 }
                 if (rose(before, offsets())) compensations++
+                if (run.lane >= 0) events += "R$i:${lanes[run.lane].spec.leaf.value}:${run.reserved - run.actual}"
                 slots[i] = null
             }
             for ((index, lane) in lanes.withIndex()) {
                 if (lane.queue.isEmpty() && t == lane.nextArrival) {
                     repeat(lane.spec.burst) { lane.queue.addLast(Job(t, lane.jobs++)) }
                     lane.bursts++
+                    events += "W:${lane.spec.leaf.value}"
                     if (slots.any { it != null && it.lane == index }) lane.wakesWithOpenLease++
                 }
             }
@@ -166,6 +181,12 @@ internal object WakeCreditRig {
                 if (slots[i] != null) continue
                 val waiting = lanes.filter { it.queue.isNotEmpty() }.mapTo(HashSet()) { it.spec.leaf }.apply { add(B) }
                 val before = h.snapshot()
+                if (trace.states(t)) {
+                    val demanded = waiting.flatMapTo(HashSet()) { leaf -> checkNotNull(config.ledger.lineageOf(leaf)).map { checkNotNull(config.ledger.record(it)).child } }
+                    for (parent in config.ledger.allEdges().mapNotNull { config.ledger.record(it)?.parent }.distinct().sorted()) {
+                        trace.sink("S t=$t slot=$i ${levelState(before, parent, demanded)}")
+                    }
+                }
                 val out = h.acquire(waiting, waiting, startedAt = t, reservation = 1L)
                 check(out is AcquireOutcome.Acquired) { "t=$t slot=$i: $out" }
                 val after = h.snapshot()
@@ -176,6 +197,7 @@ internal object WakeCreditRig {
                 if (laneIndex < 0) {
                     slots[i] = Running(lease.id, lane = -1, endsAt = t + 1L, actual = 1L, reserved = 1L, cancels = false)
                     bTime += 1L
+                    events += "P$i:b"
                     continue
                 }
                 val lane = lanes[laneIndex]
@@ -197,7 +219,9 @@ internal object WakeCreditRig {
                 val cancels = lane.spec.arm == Arm.CANCEL_LAST && emptiesQueue
                 slots[i] = Running(lease.id, laneIndex, endsAt = t + actual, actual = actual, reserved = r, cancels = cancels)
                 lane.slotTime += actual
+                events += "P$i:${lane.spec.leaf.value}:r$r"
             }
+            if (events.any { !it.endsWith(":b") }) trace.sink("T t=$t " + events.joinToString(" "))
         }
         assertEquals(0, h.forcedMints, "the supply covered every overrun")
         // Slot time is counted at the pick, so trim what runs past the horizon from every lane alike.
@@ -212,6 +236,33 @@ internal object WakeCreditRig {
             config.label, all, totalSlotTime = all.values.sumOf { it.slotTime },
             clamps, wakes, compensations, released, overrun, cancelled,
         )
+    }
+
+    /** One tree level as a pick at [parent] would read it on [state], with [demanded] the groups that want service. */
+    private fun levelState(state: LocalHeddleState, parent: GroupId, demanded: Set<GroupId>): String {
+        val ledger = state.ledger
+        val memory = state.allocatorMemory
+        val wants = Demand(targetOutstanding = Long.MAX_VALUE / 4, maximumUsefulGrant = 1L)
+        val edges = ledger.activeChildren(parent).map { summary ->
+            val record = checkNotNull(ledger.record(summary.attachment))
+            PolicyEdge(
+                record, summary, if (record.child in demanded) wants else Demand.NONE,
+                ledger.gauge(summary.attachment), ledger.baseIssuance(summary.attachment),
+                memory.wakeOffsets[summary.attachment] ?: Rational.ZERO,
+            )
+        }
+        val wakers = edges.filter { HeddlePolicy.isDemanding(it) && memory.demandingObserved[it.record.id] == false }.mapTo(HashSet()) { it.record.id }
+        val front = if (wakers.isEmpty()) null else HeddlePolicy.front(edges, excluding = wakers)
+        val clamped = edges.map { e ->
+            if (front == null || e.record.id !in wakers) e else e.copy(virtualOffset = Rational.max(e.virtualOffset, front - HeddlePolicy.virtualService(e)))
+        }
+        val v = HeddlePolicy.front(clamped.filter { HeddlePolicy.isDemanding(it) })
+        return "parent=${parent.value} V=$v front=$front " + clamped.joinToString(" ") { e ->
+            val raw = HeddlePolicy.virtualService(e)
+            val ev = raw + e.virtualOffset
+            val demanding = HeddlePolicy.isDemanding(e)
+            "${e.record.child.value}[raw=$raw off=${e.virtualOffset} ev=$ev dem=$demanding wake=${e.record.id in wakers} elig=${demanding && v != null && ev <= v}]"
+        }
     }
 
     fun fmt(d: Double): String = (kotlin.math.round(d * 10_000) / 10_000).toString()
