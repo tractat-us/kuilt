@@ -770,15 +770,17 @@ kuilt-store          durable key→bytes storage (DurableStore) — depends on N
 
 kuilt-seal           public-key sealed boxes (SealedBox) — depends on NO other kuilt module
 
+kuilt-identity       one key per device, named by a did:key — depends on NO other kuilt module (yet)
+
 kuilt-bom            Gradle/Maven platform constraining every module to one aligned version (not a code module)
 ```
 
-Four roots, and that is the point. `kuilt-core` carries the networking contract;
+Five roots, and that is the point. `kuilt-core` carries the networking contract;
 `kuilt-crdt` carries data types that need no network at all; `kuilt-store` carries
-"keep these bytes safe" and `kuilt-seal` "keep these bytes secret", and each knows
-about none of the others. Each depends on no other kuilt
-module and can be used entirely on its own. Everything else hangs off one of the
-four, and the arrow only ever points *down* — nothing points back into a root. Keeping `kuilt-core` free of fabric imports is what
+"keep these bytes safe", `kuilt-seal` "keep these bytes secret", and `kuilt-identity`
+"this is the same device as before", and each knows about none of the others. Each
+depends on no other kuilt module and can be used entirely on its own. Everything else
+hangs off one of the five, and the arrow only ever points *down* — nothing points back into a root. Keeping `kuilt-core` free of fabric imports is what
 lets the whole boundary be build-enforced when consumed as a composite build or a
 published artifact.
 

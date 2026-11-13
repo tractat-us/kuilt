@@ -1,0 +1,3 @@
+public abstract interface annotation class us/tractat/kuilt/identity/IdentityInternalApi : java/lang/annotation/Annotation {
+}
+
