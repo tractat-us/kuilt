@@ -24,6 +24,34 @@ because it names the device's key and is useless without it. The statements a ro
 exchange is made of, the checks that decide whether a grant is good in this room now, and the
 per-platform stores that keep a key across launches arrive in the pieces that follow.
 
+The store. A device is recognised only if it comes back with the same key, so the key has to
+outlive the app. `DeviceKeyStore` is where it lives: the first `deviceKey()` call makes it and every
+call after returns it, and beside it the store keeps the device's grants, the newest from each host.
+A grant is not a secret, since it is useless without the key; the key is, and how well a store keeps
+it is what tells one store from another. `InMemoryDeviceKeyStore` keeps both in memory and forgets
+them with the process, so a device using it is a new device every time the app starts. That suits
+tests, and an app that has chosen not to be recognised. The platform stores, which keep the key on
+the device across launches, are still to come.
+
+## What this protects against, and what it does not
+
+The room exchange these keys are for is not built yet. When it is, its promise is the design's,
+quoted here in its own words:
+
+> - **Protected:** a bystander in the room — who knows every peer id, the room id and every key —
+>   cannot resume as, return as, or lock out another member. A captured proof cannot be replayed.
+> - **Not protected:** an active relay sitting on the victim's own link over an unauthenticated
+>   fabric. Peer ids are self-chosen on WebSocket and star fabrics, so such a relay can forward a
+>   challenge and its answer. Closing that needs channel binding (a TLS exporter from #3157, or
+>   `kuilt-nw`'s PSK session); the proof layout reserves a field for it, empty in this slice.
+> - **The key binds the handshake, not later frames.** On a `Mesh`, a link that later takes a
+>   member's peer id (#2387) sends frames under that member's `Member.key`. Deployments on
+>   `HostedOverlay` should use a binding `LinkAdmission` until #2387 lands.
+
+Every store answers to one more line of the design: "A credential many hold never resumes; one a
+single device holds does." A key copied to a second device, by a synced keychain or a restored
+backup, is a credential two hold, so a store keeps its key on the device that made it.
+
 ## Underneath
 
 One P-256 key per device, signing with ECDSA over SHA-256. Its name is a `did:key`, which carries
