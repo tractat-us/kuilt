@@ -63,7 +63,13 @@ public class AdmissionProof internal constructor(
      *
      * @throws IllegalStateException when this platform's cryptographic provider cannot run here.
      */
-    public suspend fun isSignedBy(joiner: DidKey): Boolean = StatementCodec.isSignedBy(wireBytes, joiner)
+    public suspend fun isSignedBy(joiner: DidKey): Boolean = isSignedBy(joiner, KeyScheme.P256)
+
+    /**
+     * [isSignedBy], checked in [scheme] rather than always in [KeyScheme.P256]. A room passes its own
+     * [DeviceKeyStore.keyScheme], so a room on the real scheme checks with ECDSA whatever was sent.
+     */
+    public suspend fun isSignedBy(joiner: DidKey, scheme: KeyScheme): Boolean = StatementCodec.isSignedBy(wireBytes, joiner, scheme)
 
     override fun equals(other: Any?): Boolean = other is AdmissionProof && wireBytes.contentEquals(other.wireBytes)
 

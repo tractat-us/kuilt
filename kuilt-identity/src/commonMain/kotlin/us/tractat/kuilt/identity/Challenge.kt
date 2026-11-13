@@ -60,7 +60,13 @@ public class Challenge internal constructor(
      *
      * @throws IllegalStateException when this platform's cryptographic provider cannot run here.
      */
-    public suspend fun isSignedByHost(): Boolean = StatementCodec.isSignedBy(wireBytes, hostKey)
+    public suspend fun isSignedByHost(): Boolean = isSignedByHost(KeyScheme.P256)
+
+    /**
+     * [isSignedByHost], checked in [scheme] rather than always in [KeyScheme.P256]. A room passes its
+     * own [DeviceKeyStore.keyScheme], so a room on the real scheme checks with ECDSA whatever was sent.
+     */
+    public suspend fun isSignedByHost(scheme: KeyScheme): Boolean = StatementCodec.isSignedBy(wireBytes, hostKey, scheme)
 
     override fun equals(other: Any?): Boolean = other is Challenge && wireBytes.contentEquals(other.wireBytes)
 

@@ -1,3 +1,5 @@
+@file:OptIn(IdentityInternalApi::class)
+
 package us.tractat.kuilt.identity
 
 import kotlinx.coroutines.sync.Mutex
@@ -18,9 +20,21 @@ import kotlinx.coroutines.sync.withLock
 public class InMemoryDeviceKeyStore private constructor(
     /** Called each time this store is about to make a key, and at no other time: the TCK's gate. */
     private val beforeKeyIsMade: suspend () -> Unit,
+    private val scheme: KeyScheme,
 ) : DeviceKeyStore {
     /** A store whose key, made on first use, is [DeviceKey.generate]'s. */
-    public constructor() : this({})
+    public constructor() : this({}, KeyScheme.P256)
+
+    /**
+     * A store whose key, made on first use, is [scheme]'s, and whose [keyScheme] is [scheme]. This is
+     * how `:kuilt-identity-test` builds a store on its fake scheme, with the same grant rules as
+     * every other store.
+     */
+    @IdentityInternalApi
+    public constructor(scheme: KeyScheme) : this({}, scheme)
+
+    @IdentityInternalApi
+    override val keyScheme: KeyScheme get() = scheme
 
     private val mutex = Mutex()
     private var key: DeviceKey? = null
@@ -29,7 +43,7 @@ public class InMemoryDeviceKeyStore private constructor(
     override suspend fun deviceKey(): DeviceKey = mutex.withLock {
         key ?: run {
             beforeKeyIsMade()
-            DeviceKey.generate()
+            scheme.generate()
         }.also { key = it }
     }
 
@@ -42,6 +56,7 @@ public class InMemoryDeviceKeyStore private constructor(
          * A store that calls [beforeKeyIsMade] each time it is about to make a key: the conformance
          * suite's gate.
          */
-        fun gatedBy(beforeKeyIsMade: suspend () -> Unit): InMemoryDeviceKeyStore = InMemoryDeviceKeyStore(beforeKeyIsMade)
+        fun gatedBy(beforeKeyIsMade: suspend () -> Unit): InMemoryDeviceKeyStore =
+            InMemoryDeviceKeyStore(beforeKeyIsMade, KeyScheme.P256)
     }
 }

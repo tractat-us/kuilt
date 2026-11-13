@@ -39,6 +39,17 @@ public interface DeviceKeyStore {
     public suspend fun keepGrant(grant: Grant)
 
     /**
+     * The scheme a room built on this store signs and checks every signature with: [KeyScheme.P256],
+     * ECDSA through the platform's provider, unless the store was built for tests.
+     *
+     * A store answers the scheme its own keys are in, so a room cannot sign in one scheme and check
+     * in another. The only store that answers anything else is the one `:kuilt-identity-test` builds,
+     * behind its tests-only opt-in.
+     */
+    @IdentityInternalApi
+    public val keyScheme: KeyScheme get() = KeyScheme.P256
+
+    /**
      * Where each platform's one-line default hangs: `DeviceKeyStore.platform(appId, …)`, declared in
      * that platform's own source set, since what a platform needs to find its storage differs — a
      * directory on the desktop JVM.

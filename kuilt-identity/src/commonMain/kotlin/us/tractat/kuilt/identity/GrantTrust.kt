@@ -1,3 +1,5 @@
+@file:OptIn(IdentityInternalApi::class)
+
 package us.tractat.kuilt.identity
 
 /**
@@ -60,12 +62,18 @@ public sealed interface GrantVerdict {
  * @property hostKey The verifying host's own key: the one issuer this host trusts. A room builds this
  *   from its own device key, so the key that issues grants and the key that checks them cannot differ.
  * @property revocations The host's revocations, consulted on every [verify].
+ * @param scheme The scheme the signature is checked in: the room's own [DeviceKeyStore.keyScheme].
+ *   The two-argument constructor checks in [KeyScheme.P256].
  * @sample us.tractat.kuilt.identity.sampleGrantTrust
  */
-public class GrantTrust(
+public class GrantTrust @IdentityInternalApi constructor(
     public val hostKey: DidKey,
     public val revocations: RevocationList,
+    private val scheme: KeyScheme,
 ) {
+    /** A trust that checks signatures in [KeyScheme.P256]: ECDSA through the platform's provider. */
+    public constructor(hostKey: DidKey, revocations: RevocationList) : this(hostKey, revocations, KeyScheme.P256)
+
     /**
      * The verdict on [grant], presented by the device whose key is [subject], to the room [roomId],
      * at [now] in epoch milliseconds. [subject] must be a key the presenter has *proved* it holds,
@@ -76,7 +84,7 @@ public class GrantTrust(
      */
     public suspend fun verify(grant: Grant, subject: DidKey, roomId: String, now: Long): GrantVerdict = when {
         grant.issuer != hostKey -> GrantVerdict.UntrustedIssuer
-        !grant.isSignedByIssuer() -> GrantVerdict.BadSignature
+        !grant.isSignedByIssuer(scheme) -> GrantVerdict.BadSignature
         grant.subject != subject -> GrantVerdict.WrongSubject
         !grant.scope.covers(roomId) -> GrantVerdict.WrongScope
         grant.isRevoked() -> GrantVerdict.Revoked

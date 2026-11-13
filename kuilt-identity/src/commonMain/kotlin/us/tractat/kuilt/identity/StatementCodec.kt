@@ -71,10 +71,11 @@ internal object StatementCodec {
         return layout + signature
     }
 
-    /** Whether [wire]'s trailing signature is [signer]'s over the layout in front of it. */
-    suspend fun isSignedBy(wire: ByteArray, signer: DidKey): Boolean {
+    /** Whether [wire]'s trailing signature is [signer]'s over the layout in front of it, in [scheme]. */
+    @IdentityInternalApi
+    suspend fun isSignedBy(wire: ByteArray, signer: DidKey, scheme: KeyScheme): Boolean {
         val (layout, signature) = Layout.split(wire) ?: return false
-        return signer.verify(layout, signature)
+        return scheme.verify(signer, layout, signature)
     }
 
     /** The width of a time field: one `Long`. */

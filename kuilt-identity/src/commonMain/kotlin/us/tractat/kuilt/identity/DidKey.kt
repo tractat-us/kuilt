@@ -92,6 +92,25 @@ public value class DidKey internal constructor(
             return key
         }
 
+        /**
+         * The `DidKey` [value] names, after checking its syntax only — what a frame's serializer
+         * checks, and no more. For a [KeyScheme] with no curve to check a point against; a name from
+         * outside, for real use, goes through [parse].
+         *
+         * @throws IllegalArgumentException when [value] is not a P-256 `did:key` by syntax.
+         */
+        @IdentityInternalApi
+        public fun ofSyntax(value: String): DidKey = DidKey(value)
+
+        /**
+         * The name of the key whose 33-byte compressed point is [point], checking syntax only. For a
+         * [KeyScheme] that makes its own points, such as a test scheme.
+         *
+         * @throws IllegalArgumentException when [point] is not 33 bytes led by `0x02` or `0x03`.
+         */
+        @IdentityInternalApi
+        public fun ofSyntax(point: ByteArray): DidKey = ofCompressedPoint(point)
+
         /** The name of the key whose 33-byte compressed point is [point]. Checks syntax only. */
         internal fun ofCompressedPoint(point: ByteArray): DidKey = DidKey(PREFIX + Base58.encode(MULTICODEC + point))
     }
