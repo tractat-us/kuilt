@@ -6,7 +6,8 @@ package us.tractat.kuilt.identity
  * A device is recognised when it comes back only if it comes back with the *same* key, so the key
  * has to outlive the app: a closed and reopened app, a restarted phone. That is this store's whole
  * job. The first [deviceKey] call makes the key and every later call returns it. Beside it the store
- * keeps the device's grants, the newest from each host, so a returning device has a pass to show.
+ * keeps the device's grants, the newest from each host for each scope, so a returning device has a
+ * pass to show in every room it may come back to.
  *
  * A grant is not a secret — it names this device's key and is useless to anyone who cannot sign
  * with it — so a store keeps grants in plain view. The key is the secret, and how well it is kept is
@@ -22,13 +23,15 @@ public interface DeviceKeyStore {
     /** This device's key: created on first call, the same on every call after. */
     public suspend fun deviceKey(): DeviceKey
 
-    /** The grants this device holds, by issuer. Not secret — useless without the key. */
+    /** The grants this device holds: the newest per issuer and scope. Not secret — useless without the key. */
     public suspend fun grants(): List<Grant>
 
     /**
-     * Keeps [grant], replacing the one held from the same [Grant.issuer] when [grant] is newer by
-     * [Grant.issuedAt]. A grant that is not newer — older, or issued at the same instant — is
-     * ignored, so keeping one grant twice is a no-op. A grant from another issuer sits beside it.
+     * Keeps [grant], replacing the one held from the same [Grant.issuer] for the same [Grant.scope]
+     * when [grant] is newer by [Grant.issuedAt]. One host key can host many rooms, so a pass into
+     * `Room("A")` and one into `Room("B")` from the same issuer are both kept, and so is a grant from
+     * another issuer. A grant that is not newer — older, or issued at the same instant — is ignored,
+     * so a replayed or reordered copy can never displace the grant already held.
      *
      * The store does not check the grant: whether it is signed, names this device or is still good
      * is the room's question when the grant is presented.
@@ -37,12 +40,13 @@ public interface DeviceKeyStore {
 }
 
 /**
- * These grants with [grant] kept: it replaces the grant from the same issuer when strictly newer by
- * [Grant.issuedAt], is ignored when not, and is added when no grant from its issuer is held. The one
- * rule every [DeviceKeyStore] applies, so stores cannot disagree about which grant survives.
+ * These grants with [grant] kept: it replaces the grant from the same issuer for the same scope when
+ * strictly newer by [Grant.issuedAt], is ignored when not, and is added when none for its issuer and
+ * scope is held. Scopes compare by value. The one rule every [DeviceKeyStore] applies, so stores
+ * cannot disagree about which grant survives.
  */
 internal fun List<Grant>.keeping(grant: Grant): List<Grant> {
-    val held = firstOrNull { it.issuer == grant.issuer }
+    val held = firstOrNull { it.issuer == grant.issuer && it.scope == grant.scope }
     return when {
         held == null -> this + grant
         grant.issuedAt > held.issuedAt -> map { if (it === held) grant else it }
