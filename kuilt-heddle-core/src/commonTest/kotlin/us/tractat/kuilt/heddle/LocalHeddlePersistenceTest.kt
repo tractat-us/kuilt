@@ -323,6 +323,91 @@ class LocalHeddlePersistenceTest {
         assertEquals(GOLDEN_FORMAT_1, text, "format 1 changed; the encoding is now:\n$text\n")
     }
 
+    /**
+     * The tree the rich scenario runs: `acme` (a nested group at a fractional weight, holding a group
+     * and a lane), `tenants` (marked for runtime children), and, while [withSpare], a lane `spare`.
+     */
+    private fun richTree(acmeWeight: Weight, withSpare: Boolean): Topology = Topology(
+        "root",
+        listOfNotNull(
+            Topology.Group(
+                "acme",
+                acmeWeight,
+                listOf(Topology.Group("batch", Weight.ONE, listOf(Topology.Lane("x"), Topology.Lane("y", Weight.of(2)))), Topology.Lane("interactive")),
+            ),
+            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
+            Topology.Lane("spare").takeIf { withSpare },
+        ),
+    )
+
+    private val richBefore = richTree(Weight.of(3, 2), withSpare = true)
+    private val richAfter = richTree(Weight.of(5, 2), withSpare = false)
+    private val richPolicy = LocalPolicy(defaultReservation = 2L)
+    private val tenant = richBefore.runtimeChildId(listOf("tenants"), "t1")
+    private val richLeaves = setOf(richBefore.groupId("acme", "interactive"), richBefore.groupId("acme", "batch", "x"), richBefore.groupId("acme", "batch", "y"), tenant)
+
+    /**
+     * Every shape format 1 has to carry. `t1` is attached under `tenants`; leases open at
+     * `acme/interactive`, `spare`, `t1` and `acme/batch/x`; a reload reweights `acme`, moving the two
+     * leases under it onto its new edge, and removes `spare`, which drains with its lease open; the
+     * `batch/x` lease is cancelled; the engine is restored under epoch 1 and leases once more, so the
+     * open leases span two epochs. Returns that engine and its open leases.
+     */
+    private fun richScenario(): Pair<LocalHeddle, List<Lease>> {
+        val h = LocalHeddle.fromTopology(richBefore, richPolicy, epoch = 0L).also { it.reconcileCapacity(4L) }
+        check(h.attachRuntimeChild(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
+        val interactive = h.lease(setOf(richBefore.groupId("acme", "interactive")), reservation = 2L, startedAt = 10L)
+        val spare = h.lease(setOf(richBefore.groupId("spare")), reservation = 3L, startedAt = 11L)
+        val inTenant = h.lease(setOf(tenant), reservation = 1L, startedAt = 12L)
+        val x = h.lease(setOf(richBefore.groupId("acme", "batch", "x")), reservation = 2L, startedAt = 13L)
+        val pathBefore = h.capturedPath(interactive.id)
+        val reload = h.apply(richAfter, generation = 2L)
+        check(reload.refusals.single() is StepRefusal.Draining) { "spare drains: $reload" }
+        check(h.capturedPath(interactive.id) != pathBefore) { "the reweight moved the interactive lease" }
+        check(h.cancel(x.id) == LeaseOutcome.Done(0L, 0L)) { "cancelled" }
+        val restored = throughJson(h, richPolicy)
+        val later = restored.lease(setOf(richBefore.groupId("acme", "batch", "y")), reservation = 2L, startedAt = 20L)
+        return restored to listOf(interactive, spare, inTenant, later)
+    }
+
+    /** The same calls after the rich scenario, on whichever engine: settle every lease, reload again so `spare` retires, then 12 slots. */
+    private fun richContinuation(h: LocalHeddle, open: List<Lease>): List<Any> {
+        val outcomes = ArrayList<Any>()
+        open.forEachIndexed { i, lease -> outcomes += h.complete(lease.id, 1L + i) }
+        outcomes += shape(h.apply(richAfter, generation = 3L))
+        repeat(12) {
+            val out = h.acquire(richLeaves, richLeaves, startedAt = 100L + it)
+            outcomes += shape(out)
+            if (out is AcquireOutcome.Acquired) outcomes += h.complete(out.lease.id, 2L)
+        }
+        outcomes.add(books(h).dropLast(2))
+        return outcomes
+    }
+
+    /**
+     * The rich golden is frozen too, and it restores: an engine started from it carries on exactly
+     * as the engine that wrote it would have, through a drain finishing and a reload.
+     */
+    @Test
+    fun richFormatOneStillEncodesToItsGoldenAndRestores() {
+        val (reference, open) = richScenario()
+        val text = encode(reference.persist())
+        // Decoded inside each arm, so a golden that no longer decodes still prints the new encoding.
+        val golden = { decoded(GOLDEN_FORMAT_1_RICH) }
+        assertAll(
+            { assertEquals(GOLDEN_FORMAT_1_RICH, text, "format 1 changed; the rich encoding is now:\n$text\n") },
+            { assertEquals(setOf(0L, 1L), golden().leases.map { it.id.epoch }.toSet(), "the rig: open leases from two epochs") },
+            { assertTrue(golden().ledger.let { l -> l.allEdges().any { l.lifecycle(it) == Lifecycle.CLOSING } }, "the rig: an edge is draining") },
+            { assertTrue(golden().leases.any { it.leaf == tenant }, "the rig: a lease at a runtime child") },
+            { assertEquals(richAfter, golden().lastApplied, "the rig: the topology last applied is the reload's") },
+            {
+                val snapshot = golden()
+                val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
+                assertEquals(richContinuation(reference, open), richContinuation(restored, open))
+            },
+        )
+    }
+
     @Test
     fun unsupportedVersionIsNamed() {
         val later = GOLDEN_FORMAT_1.replaceFirst("[1,", "[2,")
