@@ -64,6 +64,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *   raw value at a time through `recordHistogram`; the SDK hands over buckets already counted,
  *   and `mergeHistogram` is a join, so adding one interval's buckets to the last has no entry point.
  * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it).
+ * - a sum whose own temporality is not the one asked for above — a cumulative counter, or a
+ *   delta UpDownCounter, from a reader with its own temporality selector — is **dropped**
+ *   (WARN). Added, the first would count its running total again each collection; stored,
+ *   the second would be a change read as a level.
  *
  * @param exporter the durable kuilt buffer points are written into.
  * @param scope the drain coroutine's scope (required — never a real-dispatcher default).
@@ -123,12 +127,14 @@ public class KuiltMetricExporter(
         return when (md.type) {
             MetricDataType.LONG_SUM -> {
                 val s = md.longSumData
+                if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return true
                 s.points.map { p ->
                     if (s.isMonotonic) incLong(name, p) else setGaugeOk(name, p.attributes, p.value.toDouble(), p.epochNanos)
                 }.all { it }
             }
             MetricDataType.DOUBLE_SUM -> {
                 val s = md.doubleSumData
+                if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return true
                 s.points.map { p ->
                     if (s.isMonotonic) incDouble(name, p) else setGaugeOk(name, p.attributes, p.value, p.epochNanos)
                 }.all { it }
@@ -145,6 +151,22 @@ public class KuiltMetricExporter(
                 true
             }
         }
+    }
+
+    /**
+     * Whether a sum arrived with the temporality its mapping needs: delta for a counter's
+     * increment, cumulative for an UpDownCounter's level. A reader that consults
+     * [getAggregationTemporality] always delivers that; one with its own selector may not,
+     * and either mismatch would be silently wrong, so the sum is dropped with a WARN instead.
+     */
+    private fun sumTemporalityFits(name: String, monotonic: Boolean, temporality: AggregationTemporality): Boolean {
+        val needed = if (monotonic) AggregationTemporality.DELTA else AggregationTemporality.CUMULATIVE
+        if (temporality == needed) return true
+        logger.warn {
+            "KuiltMetricExporter: dropping ${if (monotonic) "monotonic" else "non-monotonic"} sum '$name' — it " +
+                "arrived $temporality and the bridge needs $needed; register it on a reader that asks the exporter"
+        }
+        return false
     }
 
     private suspend fun incLong(name: String, p: LongPointData): Boolean {
