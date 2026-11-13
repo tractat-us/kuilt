@@ -669,6 +669,7 @@ public class LocalHeddle private constructor(
      * documented default. Work that will resume belongs in [live], so it never becomes an orphan.
      *
      * @throws ArithmeticException when `now − startedAt` is positive and does not fit in a `Long`.
+     * @sample us.tractat.kuilt.heddle.sampleReconcileLeases
      */
     public fun reconcileLeases(live: Set<LeaseId>, now: Long): LeaseReconciliation {
         val orphaned = open.values.asSequence()
