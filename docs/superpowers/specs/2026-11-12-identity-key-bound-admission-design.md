@@ -63,6 +63,15 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     admission. Host-to-host handover of trust is not built.
 12. **Revoking blocks the next return; it does not evict (Iain).** Removing someone present is the
     app's separate call.
+13. **`DidKey` checks syntax in `init`; the point is decoded in `suspend DidKey.parse` (Iain,
+    planning R1).** A constructor cannot suspend and WebCrypto's decoders are async, so `init`
+    checks prefix, multicodec, length and the `0x02`/`0x03` lead byte only. Every verify decodes the
+    point, so an off-curve key verifies nothing.
+14. **A revoked present member gets no refresh and no held-seat restore (Iain, planning R2).** The
+    host stops re-issuing grants to a member whose subject was revoked after its current admission,
+    and a revoked device's held-seat restore falls through to ordinary admission.
+15. **Android's platform default takes a `Context` (Iain, planning R3):**
+    `DeviceKeyStore.platform(appId, context)`, grants under `context.noBackupFilesDir`.
 
 ## Goals
 
@@ -122,7 +131,8 @@ The rest of this document is for the builder.
 
 - `DidKey` — `did:key` for P-256: multicodec `p256-pub` (`0x1200`, varint `0x80 0x24`), compressed
   33-byte SEC1 point, base58btc with `z`, so every value starts `did:key:zDn`. A value class whose
-  `init` checks the prefix, multicodec and length **and decodes the point** (on-curve).
+  `init` checks the prefix, multicodec, length and lead byte; `suspend DidKey.parse` also decodes
+  the point (Decided 13).
 - `DeviceKey` — a P-256 ECDSA key pair from cryptography-kotlin.
 - cryptography-kotlin 0.6.0 exposes `EC.PublicKey.Format.RAW.Compressed` and
   `ECDSA.SignatureFormat.RAW`. *First task of slice 0:* prove compressed import/export at runtime on
@@ -143,7 +153,8 @@ public interface DeviceKeyStore {
 
 `InMemoryDeviceKeyStore` everywhere. Platform stores, one slice each: JVM file (takes a directory),
 Apple Keychain, Android Keystore, wasmJs WebCrypto + IndexedDB. `DeviceKeyStore.platform(appId)` is
-the one-line default where the platform can find its own storage; on JVM it takes a directory.
+the one-line default where the platform can find its own storage; on JVM it takes a directory, on
+Android a `Context` (Decided 15).
 
 ### Signed statements
 

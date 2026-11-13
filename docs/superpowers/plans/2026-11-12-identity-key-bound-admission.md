@@ -20,20 +20,11 @@
 6. Revocation is by subject key plus a `notBefore` cutoff.
 7. A room-scoped grant survives a host restart only when the app supplies a stable `roomId`. An `AnyRoomOfIssuer` grant survives a restart.
 
-## Rulings needed before dispatch
+## Rulings (Iain, 2026-11-12 — recorded as the spec's Decided 13–15)
 
-The spec does not settle these, so the plan does not guess. Each one blocks the tasks it names.
-
-- **R1. The on-curve check in `DidKey.init` cannot run on wasmJs. Blocks Task 0.3.** The spec asks `DidKey`'s `init` to decode the point. A constructor cannot suspend. On WebCrypto, cryptography-kotlin 0.6.0 sends every `*Blocking` decoder through `nonBlocking()`, which throws. That was read from the provider's klib, and Task 0.1 confirms it at runtime. The options are:
-  - **(a)** `init` checks syntax only: the `did:key:zDn` prefix, base58btc, multicodec `0x80 0x24`, 33 bytes, and a leading `0x02`/`0x03`. The only public way in is `suspend fun DidKey.parse(value)`, which also decodes the point. A `DidKey` decoded off the wire is checked for syntax, and every verify decodes the point, so an off-curve key verifies nothing.
-  - **(b)** Two types: a syntactic `DidKey` and a `VerifiedDidKey` from a suspend factory, which `AdmissionRequest` and `Member.key` carry.
-  - **(c)** A hand-rolled quadratic-residue check. The spec's "do not hand-roll point decompression" excludes it.
-
-  The recommendation is (a). Task 0.3 is written for (a) and changes if Iain picks (b).
-- **R2. Revocation reaching a present member. Blocks Tasks 2.5 and 2.6.** Decided 12 says revoking "blocks the next return", and Decided 1 calls all three tiers a "return". This plan derives two rules from them. Confirm both.
-  - (i) The host stops re-issuing grants to a member whose subject was revoked after that member's current admission. Without this, the next refresh mints a grant with `issuedAt ≥ notBefore`, and the revocation does nothing.
-  - (ii) For a revoked subject, a held-seat restore (tier 1) falls through to ordinary admission, so the policy decides.
-- **R3. `DeviceKeyStore.platform` on Android needs a `Context`. Blocks Task 3.3.** Android cannot find a grants directory without one. The plan uses `platform(appId, context)` and stores grants in `context.noBackupFilesDir`. The spec says only that JVM takes a directory.
+- **R1 → (a).** `DidKey.init` checks syntax only (`did:key:zDn` prefix, base58btc, multicodec `0x80 0x24`, 33 bytes, leading `0x02`/`0x03`). `suspend fun DidKey.parse(value)` also decodes the point. Every verify decodes the point, so an off-curve key verifies nothing. Task 0.3 is written for this.
+- **R2 → both rules.** (i) The host stops re-issuing grants to a member whose subject was revoked after that member's current admission. (ii) For a revoked subject, a held-seat restore (tier 1) falls through to ordinary admission.
+- **R3 → `DeviceKeyStore.platform(appId, context)`** in `androidMain`, grants under `context.noBackupFilesDir`. Other targets keep `platform(appId)`; JVM takes a directory.
 
 ## Plan decisions
 
@@ -178,7 +169,7 @@ internal object Layout {
 - [ ] **Step 3: Implement `Layout`**, then run `:kuilt-identity:allTests` and expect PASS.
 - [ ] **Step 4: Pre-merge verification, then commit.** Commit: "identity: the fixed signed-statement layout (#3159)".
 
-### Task 0.3: `DidKey` [after G0 passes and R1 is ruled]
+### Task 0.3: `DidKey` [after G0 passes]
 
 **Files:**
 - Create: `commonMain/DidKey.kt` and `commonMain/Base58.kt` (internal base58btc).
@@ -650,7 +641,7 @@ public class HostAdmission(public val policy: AdmissionPolicy, public val trust:
   - `retriedHelloDuringDecisionAdmitsOnce`.
 - [ ] **Step 2: Watch them fail, implement, thread the call sites, update `api/` (the PR body names `AdoptRole` and the host parameter), run the full build, then commit.** Commit: "session: hosts decide ordinary admissions through an AdmissionPolicy (#3159)".
 
-### Task 2.5: Grants are issued on Welcome and refreshed while connected [after 2.4 and R2]
+### Task 2.5: Grants are issued on Welcome and refreshed while connected [after 2.4]
 
 **Files:**
 - Create: `admit/GrantIssuer.kt` (internal: per-member terms, issue, the refresh schedule, the R2(i) check).
@@ -671,7 +662,7 @@ public class HostAdmission(public val policy: AdmissionPolicy, public val trust:
   - `joinerIgnoresAGrantFromAnotherIssuer`.
 - [ ] **Step 2: Watch them fail, implement, update `api/`, run the full build, then commit.** Commit: "session: hosts issue and refresh grants (#3159)".
 
-### Task 2.6: Returning admission inside a grant [after 2.5 and R2]
+### Task 2.6: Returning admission inside a grant [after 2.5]
 
 **Files:**
 - Modify: `SeamRoom.kt` (the joiner puts `grants().filter { it.issuer == challenge.hostKey }` in the Proof, the host verifies each with `GrantTrust`, and `holdsValidGrant` feeds `decideSeat`), `admit/GrantIssuer.kt` (departed records `key → (previousId, latest notAfter)`, pruned at expiry, and the carry-forward of terms), `AdmitMessage.kt` (`Welcome.previousPeerId: String? = null`, and `returnKind = Returning` on the direct and bystander Welcomes), `MembershipEvent.kt` (`Joined(member, returning: ReturningMark? = null)`, `ReturningMark(previousId: PeerId?)`), `ProtocolVersion` (+1), and the R2(ii) check in the `Restore` arms.
@@ -755,7 +746,7 @@ Spec sections: *Key storage* and Decided 4, 8, 9. Each store keeps its key with 
 - [ ] **Step 2: Write `keychainItemIsThisDeviceOnlyAndUnsynced`.** Read the item's attributes back and assert both. Then implement, and run the suite on both Apple targets.
 - [ ] **Step 3: `api/` and the pre-merge build on macOS, then commit.** Commit: "identity: the Apple Keychain device-key store (#3159)".
 
-### Task 3.3: Android Keystore store [after 3.1 and R3]
+### Task 3.3: Android Keystore store [after 3.1]
 
 **Files:**
 - Create: `androidMain/AndroidKeystoreDeviceKeyStore.kt` and `androidUnitTest/AndroidKeystoreDeviceKeyStoreTest.kt`.
