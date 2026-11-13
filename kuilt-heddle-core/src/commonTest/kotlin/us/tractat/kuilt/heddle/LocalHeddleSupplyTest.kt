@@ -115,6 +115,64 @@ class LocalHeddleSupplyTest {
         )
     }
 
+    /**
+     * An extend refused as draining leaves no top-up behind either. The root sits exactly at the
+     * watermark, so this extend would top up; the control, the same engine with the edge left open,
+     * shows it does.
+     */
+    @Test
+    fun aDrainingExtendLeavesNoTopUpBehind() {
+        fun atTheWatermark(): Pair<LocalHeddle, Lease> {
+            val h = engineOver(oneLeaf, root, supply = 0L, policy = policy(reservation = 5L))
+            h.reconcileCapacity(2L)
+            val first = h.lease(setOf(a), reservation = 5L)
+            repeat(2) { h.lease(setOf(a), reservation = 5L) }
+            return h to first
+        }
+        val (h, lease) = atTheWatermark()
+        val held = h.atRoot()
+        h.reshapeForTest { it.piece(assertNotNull(it.close(AttachmentId("root>a/b"))).delta) }
+        val before = h.snapshot().ledger
+        val draining = h.extend(lease.id, 1L)
+        val (open, control) = atTheWatermark()
+        val mintedBefore = open.minted()
+        val extended = open.extend(control.id, 1L)
+        assertAll(
+            { assertEquals(10L, held, "the rig: the root holds exactly the low watermark, 2 slots × 5") },
+            { assertEquals(LeaseOutcome.PathDraining(AttachmentId("root>a/b")), draining) },
+            { assertSame(before, h.snapshot().ledger, "nothing was minted for it") },
+            { assertEquals(LeaseOutcome.Done(0L, 0L), extended) },
+            { assertTrue(open.minted() > mintedBefore, "the control: the same extend on an open path tops up") },
+        )
+    }
+
+    /**
+     * A zero low watermark mints just in time: only when the root cannot fund the operation. With a
+     * zero target too it mints exactly the shortfall; with a positive target it leaves the target.
+     */
+    @Test
+    fun aZeroLowWatermarkMintsOnlyWhenTheRootIsShort() {
+        val exact = engineOver(oneLeaf, root, supply = 0L, policy = policy(reservation = 4L, low = 0L, target = 0L))
+        exact.reconcileCapacity(3L)
+        val exactAfter = listOf(
+            exact.lease(setOf(a), reservation = 4L).let { exact.minted() to exact.atRoot() },
+            exact.lease(setOf(a), reservation = 3L).let { exact.minted() to exact.atRoot() },
+        )
+        val ahead = engineOver(oneLeaf, root, supply = 0L, policy = policy(reservation = 4L, low = 0L, target = 1L))
+        ahead.reconcileCapacity(3L)
+        val first = ahead.lease(setOf(a), reservation = 4L)
+        val aheadAfter = listOf(ahead.minted() to ahead.atRoot())
+        repeat(3) { ahead.lease(setOf(a), reservation = 4L) }
+        val drained = ahead.minted() to ahead.atRoot()
+        ahead.extend(first.id, 2L)
+        assertAll(
+            { assertEquals(listOf(4L to 0L, 7L to 0L), exactAfter, "each lease minted exactly what it took") },
+            { assertEquals(listOf(16L to 12L), aheadAfter, "short, so it minted the target of 3 × 4 plus the 4 it took") },
+            { assertEquals(16L to 0L, drained, "and nothing more while the root could fund each lease, down to empty") },
+            { assertEquals(16L + 12L + 2L to 12L, ahead.minted() to ahead.atRoot(), "short again: back to the target") },
+        )
+    }
+
     /** A preview tops up where the acquires it previews would, so it does not stop at an empty root. */
     @Test
     fun previewPicksTopUpLikeTheAcquiresTheyPreview() {
@@ -240,6 +298,13 @@ class LocalHeddleSupplyTest {
             { assertFailsWith<IllegalArgumentException> { SupplyPolicy(lowWatermarkSlots = -1L, targetSlots = 1L) } },
             { assertFailsWith<IllegalArgumentException> { SupplyPolicy(lowWatermarkSlots = 3L, targetSlots = 2L) } },
             { assertEquals(SupplyPolicy(0L, 0L), SupplyPolicy(lowWatermarkSlots = 0L, targetSlots = 0L)) },
+            {
+                // A zero target sizes nothing, so no slot count can overflow it.
+                val justInTime = engineOver(oneLeaf, root, supply = 0L, policy = policy(reservation = LocalHeddle.MAX_RESERVATION, low = 0L, target = 0L))
+                justInTime.reconcileCapacity(Long.MAX_VALUE)
+                justInTime.lease(setOf(a), reservation = 7L)
+                assertEquals(7L, justInTime.minted())
+            },
         )
     }
 

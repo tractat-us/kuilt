@@ -656,8 +656,14 @@ public class LocalHeddle private constructor(
         require(rounds.targetSlots == 0L || totalSlots <= SUPPLY_TARGET_LIMIT / perRound / rounds.targetSlots) {
             "totalSlots $totalSlots × defaultReservation $perRound × targetSlots ${rounds.targetSlots} is above $SUPPLY_TARGET_LIMIT"
         }
-        val round = totalSlots * perRound
-        capacity = Capacity(totalSlots, low = round * rounds.lowWatermarkSlots, target = round * rounds.targetSlots)
+        // A zero target makes both levels zero (low ≤ target) for any count, so nothing is multiplied.
+        // Otherwise the check above bounds every product, and the checked multiplies restate it.
+        capacity = if (rounds.targetSlots == 0L) {
+            Capacity(totalSlots, low = 0L, target = 0L)
+        } else {
+            val round = checkedMul(totalSlots, perRound)
+            Capacity(totalSlots, low = checkedMul(round, rounds.lowWatermarkSlots), target = checkedMul(round, rounds.targetSlots))
+        }
     }
 
     /**

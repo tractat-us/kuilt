@@ -253,11 +253,30 @@ class LocalHeddleExplainTest {
      */
     @Test
     fun explainAgreesWithAcquire() {
+        explainAgreement("supplied", absent = FUNDED_BY_TOP_UP) { rng -> engineOver(reshapeLedger, root, supply = 10L + rng.nextInt(150)) }
+    }
+
+    /**
+     * The same histories with no supply up front and a capacity reconciled under a non-zero low
+     * watermark, so every acquire's supply comes from a top-up. `explain` must see that top-up:
+     * it never says `SupplyExhausted`, and an acquire the root alone could not have funded is
+     * explained exactly like any other.
+     */
+    @Test
+    fun explainAgreesWithAcquireWithSupplyToppedUp() {
+        explainAgreement("topped-up", absent = WaitExplanation.Kind.SUPPLY_EXHAUSTED.ordinal) { rng ->
+            engineOver(reshapeLedger, root, supply = 0L, policy = LocalPolicy(defaultReservation = 2L, supply = SupplyPolicy(lowWatermarkSlots = 1L, targetSlots = 2L)))
+                .also { it.reconcileCapacity(1L + rng.nextInt(3)) }
+        }
+    }
+
+    /** The random histories, with every rig firing except [absent], which must never fire. */
+    private fun explainAgreement(label: String, absent: Int, engine: (Random) -> LocalHeddle) {
         var acquires = 0
         val seen = IntArray(RIG.size)
         for (seed in 0 until SEEDS) {
             val rng = Random(seed)
-            val h = engineOver(reshapeLedger, root, supply = 10L + rng.nextInt(150))
+            val h = engine(rng)
             repeat(STEPS) { step ->
                 val open = h.snapshot().leases
                 val draw = rng.nextInt(10)
@@ -273,10 +292,11 @@ class LocalHeddleExplainTest {
                 }
             }
         }
-        println("EXPLAIN-AGREES acquires=$acquires " + RIG.indices.joinToString(" ") { "${RIG[it]}=${seen[it]}" })
+        println("EXPLAIN-AGREES $label acquires=$acquires " + RIG.indices.joinToString(" ") { "${RIG[it]}=${seen[it]}" })
         assertAll(
             { assertTrue(acquires > SEEDS * STEPS / 3, "the explain-then-acquire arm ran: $acquires") },
-            { assertTrue(seen.all { it > 0 }, "every rig fired: ${RIG.indices.joinToString { "${RIG[it]}=${seen[it]}" }}") },
+            { assertTrue(seen.indices.all { it == absent || seen[it] > 0 }, "every rig fired: ${RIG.indices.joinToString { "${RIG[it]}=${seen[it]}" }}") },
+            { assertEquals(0, seen[absent], "${RIG[absent]} never fires in the $label arm") },
         )
     }
 
@@ -297,6 +317,7 @@ class LocalHeddleExplainTest {
         if (after.ledger !== l || after != before) fail("explain changed the engine at $at")
 
         val out = h.acquire(waiting, eligible, startedAt = 0L, reservation = reservation)
+        if (out is AcquireOutcome.Acquired && l.holdings(root, LOCAL) < reservation) seen[FUNDED_BY_TOP_UP]++
         val picked = (out as? AcquireOutcome.Acquired)?.lease?.leaf
         val pickedLineage = picked?.let { checkNotNull(l.lineageOf(it)) }
         for (g in explained) {
@@ -393,10 +414,13 @@ class LocalHeddleExplainTest {
         const val STEPS = 60
 
         /** One counter per [WaitExplanation.Kind], by ordinal, then the shapes that matter most. */
-        val RIG = WaitExplanation.Kind.entries.map { it.name } + listOf("behindBelowRoot", "behindClosing", "gainedAChild", "wakerEligible")
+        val RIG = WaitExplanation.Kind.entries.map { it.name } + listOf("behindBelowRoot", "behindClosing", "gainedAChild", "wakerEligible", "fundedByTopUp")
         val BEHIND_BELOW_ROOT = WaitExplanation.Kind.entries.size
         val BEHIND_CLOSING = BEHIND_BELOW_ROOT + 1
         val GAINED_A_CHILD = BEHIND_BELOW_ROOT + 2
         val WAKER_ELIGIBLE = BEHIND_BELOW_ROOT + 3
+
+        /** An acquire that leased with the root holding less than its reservation: only a top-up funds that. */
+        val FUNDED_BY_TOP_UP = BEHIND_BELOW_ROOT + 4
     }
 }
