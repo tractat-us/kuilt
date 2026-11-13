@@ -139,6 +139,11 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
     Non-suspend helpers become suspend (keys come from `DidKey.parse` / `DeviceKey.generate()`).
   - Session opts in to `@IdentityInternalApi` via `compilerOptions.optIn`.
 - **1.5**
+  - From #3251 (1.2 as merged): `held` never contains the host's own seat, so a joiner presenting the
+    **host's key** is decided `Returning`/`Ordinary`. 1.5 must catch that case before `decideSeat`
+    (answer depends on #3257, Iain's), or that joiner is admitted as a stranger. `decideSeat` never
+    throws: a key holding two seats yields `Restore` for the claimed one, else `RestoreUnderNewId` on
+    the lowest `PeerId.value`; keeping one seat per key is the admission site's job.
   - `handleResume` also constructs `ProvenResume` (after its secret check) until 1.8 retires it.
   - A successful `tryResume` emits `Resumed`, fans out `Unpaused` and sends `ResumeAck`. On the Proof
     path: **no Welcome/Farewell fan-out, but the existing `Unpaused` still goes**; say which path sends
