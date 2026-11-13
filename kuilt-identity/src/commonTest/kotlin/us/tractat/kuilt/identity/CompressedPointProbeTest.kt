@@ -43,7 +43,7 @@ class CompressedPointProbeTest {
         assertAll(
             // Precondition: the original really is the 65-byte SEC 1 form, so equality below means something.
             { assertEquals(UNCOMPRESSED_SIZE, uncompressed.size, "uncompressed export size") },
-            { assertEquals(uncompressed.toHex(), reExported.toHex(), "decoded compressed point re-exports the original") },
+            { assertEquals(uncompressed.toHexString(), reExported.toHexString(), "decoded compressed point re-exports the original") },
         )
     }
 
@@ -70,13 +70,13 @@ class CompressedPointProbeTest {
     fun knownCompressedPointDecodesOnEveryTarget() = runTest {
         val decoder = algorithms().ecdsa.publicKeyDecoder(EC.Curve.P256)
         // Both parities: the 0x02 (even y) and 0x03 (odd y) branches of decompression differ.
-        val even = decoder.decodeFromByteArray(EC.PublicKey.Format.RAW.Compressed, EVEN_COMPRESSED.hexToBytes())
+        val even = decoder.decodeFromByteArray(EC.PublicKey.Format.RAW.Compressed, EVEN_COMPRESSED.hexToByteArray())
             .encodeToByteArray(EC.PublicKey.Format.RAW)
-        val odd = decoder.decodeFromByteArray(EC.PublicKey.Format.RAW.Compressed, ODD_COMPRESSED.hexToBytes())
+        val odd = decoder.decodeFromByteArray(EC.PublicKey.Format.RAW.Compressed, ODD_COMPRESSED.hexToByteArray())
             .encodeToByteArray(EC.PublicKey.Format.RAW)
         assertAll(
-            { assertEquals(EVEN_UNCOMPRESSED, even.toHex(), "even-y point (0x02)") },
-            { assertEquals(ODD_UNCOMPRESSED, odd.toHex(), "odd-y point (0x03)") },
+            { assertEquals(EVEN_UNCOMPRESSED, even.toHexString(), "even-y point (0x02)") },
+            { assertEquals(ODD_UNCOMPRESSED, odd.toHexString(), "odd-y point (0x03)") },
         )
     }
 
@@ -97,7 +97,3 @@ class CompressedPointProbeTest {
                 "4f407eeb4111d32aa16b20c62870177cbb7d65750a7f821d336faa4fdba316cb"
     }
 }
-
-internal fun ByteArray.toHex(): String = joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
-
-internal fun String.hexToBytes(): ByteArray = ByteArray(length / 2) { substring(it * 2, it * 2 + 2).toInt(16).toByte() }
