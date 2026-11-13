@@ -286,6 +286,14 @@ class LocalHeddleSupplyTest {
         )
     }
 
+    /** Forward, an elapsed time that leaves `Long` throws rather than wrapping to a small one. */
+    @Test
+    fun orphanElapsedThatOverflowsThrows() {
+        val h = engineOver(oneLeaf, root, supply = 100L)
+        h.lease(setOf(a), startedAt = Long.MIN_VALUE)
+        assertFailsWith<ArithmeticException> { h.reconcileLeases(emptySet(), now = 1L) }
+    }
+
     /** The documented settlement charges the time an orphan ran, capped at what it was granted. */
     @Test
     fun defaultSettlementCapsAtGranted() {
