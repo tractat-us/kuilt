@@ -82,7 +82,7 @@ class LeaseScaleProbe {
         val ledger = shaped.piece(joinAll(bareRecords.map { checkNotNull(shaped.retire(it.id)).delta }))
         val buildTime = built.elapsedNow()
 
-        val heddle = LocalHeddle.over(ledger, ROOT, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+        val heddle = LocalHeddle.over(ledger, ROOT, LocalPolicy(defaultReservation = 3L), epoch = 0L, Leasable.EveryGroup)
         heddle.mintSupply(SUPPLY)
         val everyone = children.mapTo(HashSet()) { it.child }
 

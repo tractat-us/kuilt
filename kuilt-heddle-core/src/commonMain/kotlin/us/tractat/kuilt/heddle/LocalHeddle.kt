@@ -319,6 +319,8 @@ public class LocalHeddle private constructor(
     public val epoch: Long,
     private var ledger: EntitlementLedger,
     private val allocator: FairShareAllocator,
+    /** What the topology lets a lease end at; see "What a lease ends at". */
+    private val leasable: Leasable,
 ) {
     init {
         require(epoch >= 0L) { "epoch must be non-negative, was $epoch" }
@@ -413,7 +415,7 @@ public class LocalHeddle private constructor(
      * tops up, as this one would next, and moving it moves nothing here.
      */
     private fun scratch(over: EntitlementLedger): LocalHeddle =
-        LocalHeddle(root, policy, epoch, over, FairShareAllocator(SELF, policyConfig(policy), allocator.memory))
+        LocalHeddle(root, policy, epoch, over, FairShareAllocator(SELF, policyConfig(policy), allocator.memory), leasable)
             .also { it.capacity = capacity }
 
     /**
@@ -910,11 +912,14 @@ public class LocalHeddle private constructor(
          * own supply once [reconcileCapacity] is called.
          */
         public fun fresh(root: GroupId, policy: LocalPolicy, epoch: Long): LocalHeddle =
-            over(EntitlementLedger.ZERO, root, policy, epoch)
+            over(EntitlementLedger.ZERO, root, policy, epoch, Leasable.EveryGroup)
 
-        /** An engine over [ledger] as it stands, with a fresh allocator. For tests until L3 boots one from a topology. */
-        internal fun over(ledger: EntitlementLedger, root: GroupId, policy: LocalPolicy, epoch: Long): LocalHeddle =
-            LocalHeddle(root, policy, epoch, ledger, FairShareAllocator(SELF, policyConfig(policy)))
+        /**
+         * An engine over [ledger] as it stands, with a fresh allocator, leasing what [leasable]
+         * declares. For tests until L3 boots one from a topology.
+         */
+        internal fun over(ledger: EntitlementLedger, root: GroupId, policy: LocalPolicy, epoch: Long, leasable: Leasable): LocalHeddle =
+            LocalHeddle(root, policy, epoch, ledger, FairShareAllocator(SELF, policyConfig(policy)), leasable)
 
         /**
          * The allocator's policy: an unbounded quantum, because each pick's reservation rides in its

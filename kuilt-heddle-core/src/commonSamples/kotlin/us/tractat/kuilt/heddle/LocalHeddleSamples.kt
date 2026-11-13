@@ -98,5 +98,5 @@ private fun twoGroupEngine(root: GroupId, heavy: GroupId, light: GroupId): Local
         tree = tree.piece(checkNotNull(tree.prepare(record)).delta)
         tree = tree.piece(checkNotNull(tree.activate(record.id)).delta)
     }
-    return LocalHeddle.over(tree, root, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    return LocalHeddle.over(tree, root, LocalPolicy(defaultReservation = 3L), epoch = 0L, Leasable.EveryGroup)
 }

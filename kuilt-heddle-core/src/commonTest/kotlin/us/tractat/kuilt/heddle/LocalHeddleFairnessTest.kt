@@ -192,7 +192,7 @@ class LocalHeddleFairnessTest {
 
     private fun runFairness(seed: Int, churn: Boolean, supply: Supply): FairnessRun {
         val rng = Random(seed)
-        val heddle = LocalHeddle.over(smallTree(), ROOT, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+        val heddle = LocalHeddle.over(smallTree(), ROOT, LocalPolicy(defaultReservation = 1L), epoch = 0L, Leasable.EveryGroup)
         val harness = Harness(heddle, supply)
         val run = FairnessRun()
         val waiting = BooleanArray(LEAVES.size) { true }
