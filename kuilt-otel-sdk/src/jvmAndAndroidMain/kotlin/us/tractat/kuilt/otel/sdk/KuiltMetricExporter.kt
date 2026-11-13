@@ -67,7 +67,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *   `WarpMetricExporter` does keep histograms (a `DDSketch` per series), but it takes them one
  *   raw value at a time through `recordHistogram`; the SDK hands over buckets already counted,
  *   and `mergeHistogram` is a join, so adding one interval's buckets to the last has no entry point.
- * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it).
+ * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it), and so is a
+ *   NaN delta (WARN). Either is one dropped point, never a failed export: the export is one
+ *   batch, so a point it could not apply would otherwise take every other point with it.
  * - a sum whose own temporality is not the one asked for above — a cumulative counter, or a
  *   delta UpDownCounter, from a reader with its own temporality selector — is **dropped**
  *   (WARN). Added, the first would count its running total again each collection; stored,
@@ -181,11 +183,27 @@ public class KuiltMetricExporter(
         into += MetricUpdate.IncrementSum(MetricKey(name, MetricKind.SUM, attrs(p.attributes)), p.value)
     }
 
+    /**
+     * Written `!(value > 0.0)` rather than `value <= 0.0` so a NaN is skipped too: the SDK lets one
+     * through `DoubleCounter.add` and through an observable callback computing 0/0, a grow-only
+     * counter cannot take it, and [MetricUpdate.IncrementSumDouble] would reject it while the
+     * export is being collected — failing the whole export, every valid point with it.
+     */
     private fun incDouble(name: String, p: DoublePointData, into: MutableList<MetricUpdate>) {
-        if (p.value <= 0.0) return
+        if (!(p.value > 0.0)) {
+            if (p.value.isNaN()) {
+                logger.warn { "KuiltMetricExporter: dropping a NaN point of monotonic sum '$name' — a counter cannot add it" }
+            }
+            return
+        }
         into += MetricUpdate.IncrementSumDouble(MetricKey(name, MetricKind.SUM, attrs(p.attributes)), p.value)
     }
 
+    /**
+     * A gauge takes any value, NaN included: `LWWRegister` holds it and [MetricUpdate.SetGauge]
+     * does not reject it, so a NaN gauge point cannot take the rest of the export down. It is
+     * stored as given, as it was before batching.
+     */
     private fun gauge(name: String, attributes: Attributes, value: Double, epochNanos: Long, into: MutableList<MetricUpdate>) {
         into += MetricUpdate.SetGauge(MetricKey(name, MetricKind.GAUGE, attrs(attributes)), value, epochNanos)
     }

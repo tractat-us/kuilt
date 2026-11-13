@@ -465,6 +465,8 @@ public class WarpMetricExporter(
      *   the batch is **not atomic** on disk — a kind the store took is durable even when another
      *   kind was refused — and retrying a failed batch counts its increments twice, exactly as
      *   retrying a failed [incrementSum] does.
+     * - On [health] each kind's write is its own turn: a batch counts one turn per kind it
+     *   touched, and a partial refusal moves both `acknowledged` and `failed`.
      *
      * In memory the exporter ends where applying [updates] one by one through [incrementSum],
      * [incrementSumDouble], [setGauge], [addCardinality] and [recordHistogram] would leave it,
