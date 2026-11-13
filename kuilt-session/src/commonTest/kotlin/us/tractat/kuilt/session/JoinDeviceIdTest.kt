@@ -48,10 +48,12 @@ class JoinDeviceIdTest {
             val loom = InMemoryLoom()
             val hostSeam = loom.weave(Rendezvous.New(Pattern("s")))
             val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
-            val factory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore())
+            // Two devices, so two factories: one store would make the host and the joiner one device.
+            val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore())
+            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore())
 
-            val hostRoom = factory.adopt(hostSeam, SessionRole.Host, memberName = "Alice")
-            val joinerRoom = factory.adopt(joinerSeam, SessionRole.Joiner, memberName = "Bob", deviceId = "d-2")
+            val hostRoom = hostFactory.adopt(hostSeam, SessionRole.Host, memberName = "Alice")
+            val joinerRoom = joinerFactory.adopt(joinerSeam, SessionRole.Joiner, memberName = "Bob", deviceId = "d-2")
 
             assertEquals("d-2", hostRoom.roster.first { it.size == 1 }.single().identity.deviceId)
 
