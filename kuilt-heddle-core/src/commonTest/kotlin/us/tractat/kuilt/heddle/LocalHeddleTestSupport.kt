@@ -21,14 +21,18 @@ internal fun shapedLedger(
     return l
 }
 
-/** An engine over [ledger] holding [supply] at the root, epoch 0 unless told otherwise. */
+/**
+ * An engine over [ledger] holding [supply] at the root, epoch 0 unless told otherwise. A hand-built
+ * ledger's ids are in no topology's grammar, so by default every leaf is leasable.
+ */
 internal fun engineOver(
     ledger: EntitlementLedger,
     root: GroupId,
     supply: Long,
     policy: LocalPolicy = LocalPolicy(defaultReservation = 1L),
     epoch: Long = 0L,
-): LocalHeddle = LocalHeddle.over(ledger, root, policy, epoch).also { if (supply > 0L) it.mintSupply(supply) }
+    leasable: Leasable = Leasable.EveryGroup,
+): LocalHeddle = LocalHeddle.over(ledger, root, policy, epoch, leasable).also { if (supply > 0L) it.mintSupply(supply) }
 
 /** Every group any record in [ledger] names, sorted. */
 internal fun groupsOf(ledger: EntitlementLedger): List<GroupId> =
