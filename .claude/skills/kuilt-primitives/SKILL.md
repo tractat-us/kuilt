@@ -51,10 +51,10 @@ Rows pair `;`-separated groups in order.
 ## Fetching a route
 
 `<path>`: `docs/agent-cookbook/<jump-to file>` or the index `docs/agent-cookbook.md`.
-Inside kuilt, read it directly; consumers take the first working rung:
+In kuilt, read it directly; consumers take the first working rung:
 
 1. `git -C ../kuilt fetch -q origin main && git -C ../kuilt show origin/main:<path>`
-   Read `origin/main`, never its working tree.
+   Read `origin/main`, not its working tree.
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
