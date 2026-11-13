@@ -767,7 +767,7 @@ kuilt-crdt           delta-state CRDT zoo — plain value types, depends on NO o
   └── kuilt-deal       fair card dealing + fair-random (SRA / commit-reveal)  → kuilt-crdt + kuilt-core
 
 kuilt-store          durable key→bytes storage (DurableStore) — depends on NO other kuilt module
-  └── kuilt-identity  one key per device, named by a did:key; revocations kept in a DurableStore  → kuilt-store
+  └── kuilt-identity  one key per device, named by a did:key; revocations and the key stores' grants kept in a DurableStore  → kuilt-store
 
 kuilt-seal           public-key sealed boxes (SealedBox) — depends on NO other kuilt module
 

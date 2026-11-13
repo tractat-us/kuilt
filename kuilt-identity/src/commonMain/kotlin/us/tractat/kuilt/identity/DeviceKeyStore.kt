@@ -37,6 +37,13 @@ public interface DeviceKeyStore {
      * is the room's question when the grant is presented.
      */
     public suspend fun keepGrant(grant: Grant)
+
+    /**
+     * Where each platform's one-line default hangs: `DeviceKeyStore.platform(appId, …)`, declared in
+     * that platform's own source set, since what a platform needs to find its storage differs — a
+     * directory on the desktop JVM.
+     */
+    public companion object
 }
 
 /**

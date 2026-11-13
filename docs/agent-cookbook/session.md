@@ -484,7 +484,7 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
 ## Device identity & return
 
 **Intent:** recognise a device when it comes back — a phone that dropped off the Wi-Fi, an app that was closed and reopened — and you are reaching for a device id the device tells you, a token you mint and hand out, or a hand-rolled public-key fingerprint.
-**Primitive:** `DeviceKeyStore` (`us.tractat.kuilt.identity`, `:kuilt-identity`). A device is recognised only if it comes back with the same key, so the key has to outlive the app; this is where it lives. `deviceKey()` makes the key on the first call and returns the same one on every call after, concurrent first calls included. `keepGrant` keeps the newest grant per host and scope — an older one from the same host for the same scope is ignored, while a pass into another room from the same host, or one from another host, sits beside it — and `grants()` reads them back. A grant issued at the same instant as the held one is ignored too, so a replayed or reordered copy cannot displace it. Do not hand-roll a key file or a "remember this device" token beside it. Take the store as a parameter: `InMemoryDeviceKeyStore()` keeps everything in memory and forgets it with the process, which is right for tests and for an app that has chosen not to be recognised; the platform stores that keep the key across launches are still to come.
+**Primitive:** `DeviceKeyStore` (`us.tractat.kuilt.identity`, `:kuilt-identity`). A device is recognised only if it comes back with the same key, so the key has to outlive the app; this is where it lives. `deviceKey()` makes the key on the first call and returns the same one on every call after, concurrent first calls included. `keepGrant` keeps the newest grant per host and scope — an older one from the same host for the same scope is ignored, while a pass into another room from the same host, or one from another host, sits beside it — and `grants()` reads them back. A grant issued at the same instant as the held one is ignored too, so a replayed or reordered copy cannot displace it. Do not hand-roll a key file or a "remember this device" token beside it. Take the store as a parameter: `InMemoryDeviceKeyStore()` keeps everything in memory and forgets it with the process, which is right for tests and for an app that has chosen not to be recognised; a platform store keeps the key across launches (below).
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleDeviceKeyStore -->
 ```kotlin
@@ -504,6 +504,36 @@ internal suspend fun sampleDeviceKeyStore() {
     store.keepGrant(renewed)
     store.keepGrant(first) // older than the one held from this host: ignored
     check(store.grants() == listOf(renewed))
+}
+```
+
+**Keeping it across launches:** `DeviceKeyStore.platform(appId, …)`, one per platform. Do not hand-roll a key file, a PKCS#8 export or a "device id" saved to preferences. On the desktop JVM it is `DeviceKeyStore.platform("my-app", directory)` (a `FileDeviceKeyStore` over `directory/my-app`): the key is a JWK file only this user can read, read back with a sign-then-verify self-test, and the grants sit beside it. A damaged key file — truncated, edited, or two halves of different keys — is moved aside to `device-key.jwk.refused-<n>` and replaced with a new key and one warning in the log, never a throw, so the app carries on as a new device; deleting the file is how to start again on purpose. A key file that is there but cannot be read — no permission, a link loop, an I/O error — throws `IOException` instead: that is not damage, and replacing it would change the device's identity over a passing fault. Two `platform` calls, or two processes, over one directory are one device. kuilt does not pick the directory: pass one that outlives the app and never travels to another machine, because a copied key makes two machines one device — `%LOCALAPPDATA%` on Windows (never the roaming `%APPDATA%`), `$XDG_STATE_HOME` on Linux, and on macOS `~/Library/Application Support/<app>` excluded from Time Machine (`tmutil addexclusion`). The Apple, Android and browser stores follow.
+
+<!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleDeviceKeyStoreRemembers -->
+```kotlin
+internal suspend fun sampleDeviceKeyStoreRemembers(openAtLaunch: suspend () -> DeviceKeyStore) {
+    // At launch the app opens its platform store, e.g. DeviceKeyStore.platform("my-app", dir) on the desktop.
+    val today = openAtLaunch()
+    val me = today.deviceKey()
+    val host = DeviceKey.generate()
+    val now = 1_700_000_000_000L
+    val pass = Grant.issue(host, me.id, GrantScope.Room("table-7"), issuedAt = now, notAfter = now + 3_600_000)
+    today.keepGrant(pass)
+
+    // The app is closed, and opened again tomorrow: the same device, still holding its pass.
+    val tomorrow = openAtLaunch()
+    check(tomorrow.deviceKey().id == me.id)
+    check(tomorrow.grants() == listOf(pass))
+}
+```
+
+**Writing your own store** — a Secure Enclave key, an app's own vault: subclass `DeviceKeyStoreConformanceSuite` (`:kuilt-conformance`) rather than writing its tests by hand. Your fixture states once whether the store `KeepsNothing` across a restart or is `Durable`; a `Durable` store supplies one hook per damage it must survive (a corrupt key, a key that fails its self-test, a cleared key, a crash mid-write, unreadable grants) and one that puts the key out of reach without damaging it, and the suite checks that the declared arm is the true one. Damage must be *replaced*; a key the medium cannot read right now — a Keychain locked before first unlock — must be *refused* with a throw, or the device becomes a new one on every launch the condition lasts. The two hooks for states a medium may never reach answer with two arms — `UnreadableKey.Rigged`/`CannotOccur`, `KeyWriteInterruption.LeftResidue`/`AtomicMedium` — and the arm that claims the state carries a probe the suite checks, so a hook that does nothing reds. The store takes a `beforeKeyIsMade` hook, called each time it is about to make a key, which is how the suite counts keys and forces concurrent first calls to overlap.
+
+<!-- verbatim from kuilt-identity/src/commonTest/kotlin/us/tractat/kuilt/identity/InMemoryDeviceKeyStoreConformanceTest.kt#InMemoryDeviceKeyStoreConformanceTest -->
+```kotlin
+class InMemoryDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() {
+    override suspend fun newFixture(): DeviceKeyStoreFixture =
+        DeviceKeyStoreFixture.KeepsNothing { beforeKeyIsMade -> InMemoryDeviceKeyStore.gatedBy(beforeKeyIsMade) }
 }
 ```
 
@@ -656,4 +686,4 @@ public suspend fun hostAdmissionSample(friends: Set<DidKey>, store: DurableStore
 }
 ```
 
-So far this is the store, the key, its name, the pass, its check, the revocations and the policy's types. The platform stores that keep the key across launches, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
+So far this is the store (in memory, and on the desktop JVM), the key, its name, the pass, its check, the revocations and the policy's types. The other platforms' stores, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).

@@ -25,6 +25,8 @@ abstract interface us.tractat.kuilt.identity/DeviceKeyStore { // us.tractat.kuil
     abstract suspend fun deviceKey(): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity/DeviceKeyStore.deviceKey|deviceKey(){}[0]
     abstract suspend fun grants(): kotlin.collections/List<us.tractat.kuilt.identity/Grant> // us.tractat.kuilt.identity/DeviceKeyStore.grants|grants(){}[0]
     abstract suspend fun keepGrant(us.tractat.kuilt.identity/Grant) // us.tractat.kuilt.identity/DeviceKeyStore.keepGrant|keepGrant(us.tractat.kuilt.identity.Grant){}[0]
+
+    final object Companion // us.tractat.kuilt.identity/DeviceKeyStore.Companion|null[0]
 }
 
 sealed interface us.tractat.kuilt.identity/GrantScope { // us.tractat.kuilt.identity/GrantScope|null[0]

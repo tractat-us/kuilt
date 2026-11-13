@@ -41,8 +41,9 @@ kotlin {
 
         commonMain.dependencies {
             // `api`: `RevocationList.open` takes a `DurableStore` and a `StoreKey`, so a caller names
-            // both. The one kuilt module this depends on; it brings only coroutines and atomicfu,
-            // which this module already uses.
+            // both. Every platform key store also keeps its grants in one (FileDeviceKeyStore in a
+            // FileChannelDurableStore). The one kuilt module this depends on; it brings only
+            // coroutines and atomicfu, which this module already uses.
             api(project(":kuilt-store"))
             // The primitives are cryptography-kotlin's; this module composes them and owns no
             // cryptographic math beyond decompressing a point (ionspin, below).
@@ -63,19 +64,35 @@ kotlin {
             // (#3201), so it runs here, in common code, and every provider gets the same answer.
             // Pure Kotlin on every target, as in :kuilt-deal.
             implementation(libs.ionspin.bignum)
+            // Reading a stored JWK's own x and y (SoftwareDeviceKey.readBack): the providers disagree
+            // about a private JWK's public half, so the name is read here. Already on every runtime
+            // classpath through cryptography-kotlin's JWK codec.
+            implementation(libs.kotlinx.serialization.json)
         }
         // One provider per platform, each a thin wrapper over the platform's own implementation.
         // Chosen explicitly in `platformProvider()` rather than via `CryptographyProvider.Default`,
         // which a consumer can replace process-wide with `CryptographySystem.setDefaultProvider`.
-        jvmMain.dependencies { implementation(libs.cryptography.provider.jdk) }
+        jvmMain.dependencies {
+            implementation(libs.cryptography.provider.jdk)
+            // FileDeviceKeyStore's one warning: a key it could not read back, replaced.
+            implementation(libs.kotlin.logging)
+        }
         androidMain.dependencies { implementation(libs.cryptography.provider.jdk) }
         appleMain.dependencies { implementation(libs.cryptography.provider.cryptokit) }
         wasmJsMain.dependencies { implementation(libs.cryptography.provider.webcrypto) }
 
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            // DeviceKeyStoreConformanceSuite. `:kuilt-conformance` api's THIS module in its main
+            // source set; this is a test-only edge back, so the graph stays acyclic, as in :kuilt-store.
+            implementation(project(":kuilt-conformance"))
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.serialization.cbor)
+        }
+        jvmTest.dependencies {
+            // Compile scope: FileDeviceKeyStoreTest reads the replacement warning off a Logback
+            // ListAppender, the line an operator would actually see.
+            implementation(libs.logback)
         }
         // For the WebKit run above, declared whatever the flag so the shared yarn.lock does not
         // change with it. playwright-core downloads no browser on install; its version fixes which

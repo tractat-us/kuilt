@@ -50,9 +50,13 @@ public final class us/tractat/kuilt/identity/DeviceKey$Companion {
 }
 
 public abstract interface class us/tractat/kuilt/identity/DeviceKeyStore {
+	public static final field Companion Lus/tractat/kuilt/identity/DeviceKeyStore$Companion;
 	public abstract fun deviceKey (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun grants (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun keepGrant (Lus/tractat/kuilt/identity/Grant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/identity/DeviceKeyStore$Companion {
 }
 
 public final class us/tractat/kuilt/identity/DidKey {
@@ -74,6 +78,17 @@ public final class us/tractat/kuilt/identity/DidKey {
 public final class us/tractat/kuilt/identity/DidKey$Companion {
 	public final fun parse-etAtolQ (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/identity/FileDeviceKeyStore : us/tractat/kuilt/identity/DeviceKeyStore {
+	public fun <init> (Ljava/nio/file/Path;)V
+	public fun deviceKey (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun grants (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun keepGrant (Lus/tractat/kuilt/identity/Grant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/identity/FileDeviceKeyStoreKt {
+	public static final fun platform (Lus/tractat/kuilt/identity/DeviceKeyStore$Companion;Ljava/lang/String;Ljava/nio/file/Path;)Lus/tractat/kuilt/identity/DeviceKeyStore;
 }
 
 public final class us/tractat/kuilt/identity/Grant {

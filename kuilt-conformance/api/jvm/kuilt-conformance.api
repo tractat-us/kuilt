@@ -102,6 +102,70 @@ public final class us/tractat/kuilt/conformance/DepartureFixture$NoLeaveSignal :
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract class us/tractat/kuilt/conformance/DeviceKeyStoreConformanceSuite {
+	public fun <init> ()V
+	public final fun aClearedKeyStartsAsANewDevice ()V
+	public final fun aCorruptKeyIsReplacedNotFatal ()V
+	public final fun aKeyIsMadeOnceAndSignsUnderItsOwnName ()V
+	public final fun aKeyThatFailsItsSelfTestIsReplaced ()V
+	public final fun aRestartKeepsTheKeyOrForgetsIt ()V
+	public final fun anInterruptedKeyWriteLeavesTheStoreReadable ()V
+	public final fun anUnreadableKeyIsRefusedNotReplaced ()V
+	public final fun concurrentFirstCallsAgreeOnOneKey ()V
+	public final fun corruptGrantsAreDroppedNotFatal ()V
+	public final fun distinctFixturesAreDistinctDevices ()V
+	public final fun grantsSurviveARestartOrAreForgotten ()V
+	public final fun keepsTheNewestGrantPerIssuerAndScope ()V
+	protected abstract fun newFixture (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun twoStoresOverOneMediumAreOneDevice ()V
+}
+
+public abstract interface class us/tractat/kuilt/conformance/DeviceKeyStoreFixture {
+	public abstract fun open (Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/conformance/DeviceKeyStoreFixture$Durable : us/tractat/kuilt/conformance/DeviceKeyStoreFixture {
+	public fun <init> (Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)V
+	public final fun getClearKey ()Lkotlin/jvm/functions/Function1;
+	public final fun getCorruptGrants ()Lkotlin/jvm/functions/Function1;
+	public final fun getCorruptKey ()Lkotlin/jvm/functions/Function1;
+	public final fun getInterruptKeyWrite ()Lkotlin/jvm/functions/Function1;
+	public final fun getMakeKeyUnreadable ()Lkotlin/jvm/functions/Function1;
+	public final fun getPlantMismatchedKey ()Lkotlin/jvm/functions/Function1;
+	public fun open (Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/conformance/DeviceKeyStoreFixture$KeepsNothing : us/tractat/kuilt/conformance/DeviceKeyStoreFixture {
+	public fun <init> (Lkotlin/jvm/functions/Function2;)V
+	public fun open (Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/DeviceKeyStoreFixture$KeyWriteInterruption {
+}
+
+public final class us/tractat/kuilt/conformance/DeviceKeyStoreFixture$KeyWriteInterruption$AtomicMedium : us/tractat/kuilt/conformance/DeviceKeyStoreFixture$KeyWriteInterruption {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun getReason ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/DeviceKeyStoreFixture$KeyWriteInterruption$LeftResidue : us/tractat/kuilt/conformance/DeviceKeyStoreFixture$KeyWriteInterruption {
+	public fun <init> (Lkotlin/jvm/functions/Function1;)V
+	public final fun getResidue ()Lkotlin/jvm/functions/Function1;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/DeviceKeyStoreFixture$UnreadableKey {
+}
+
+public final class us/tractat/kuilt/conformance/DeviceKeyStoreFixture$UnreadableKey$CannotOccur : us/tractat/kuilt/conformance/DeviceKeyStoreFixture$UnreadableKey {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun getReason ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/conformance/DeviceKeyStoreFixture$UnreadableKey$Rigged : us/tractat/kuilt/conformance/DeviceKeyStoreFixture$UnreadableKey {
+	public fun <init> (Lkotlin/jvm/functions/Function1;)V
+	public final fun getRestore ()Lkotlin/jvm/functions/Function1;
+}
+
 public abstract class us/tractat/kuilt/conformance/DiscoverySourceConformanceSuite {
 	public fun <init> ()V
 	public final fun anArrivalIsNeverReportedAsADeparture ()V
