@@ -25,6 +25,7 @@ import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_SEED
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
 import us.tractat.kuilt.raft.test.RAFT_SIM_WEDGE_BACKSTOP
 import us.tractat.kuilt.raft.test.dumpOnWedge
+import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
@@ -246,7 +247,7 @@ internal class ControlledRoomHost(
     fun newestRoom(id: NodeId): FakeRoom? = connections[id]?.lastOrNull()?.room
 
     override suspend fun start(onRoom: suspend (Room) -> Unit): Unit = coroutineScope {
-        fun admit(id: NodeId) {
+        suspend fun admit(id: NodeId) {
             val room = roomFor(id)
             val admission = launch {
                 try {
@@ -284,10 +285,10 @@ internal class ControlledRoomHost(
         }
     }
 
-    private fun roomFor(id: NodeId): FakeRoom = FakeRoom(
+    private suspend fun roomFor(id: NodeId): FakeRoom = FakeRoom(
         selfId = self,
         initialRoster = setOf(
-            Member(PeerId(id.value), MemberIdentity(displayName = id.value, sessionId = id.value), Liveness.Connected),
+            Member(PeerId(id.value), MemberIdentity(displayName = id.value, sessionId = id.value), DeviceKey.generate().id, Liveness.Connected),
         ),
     )
 

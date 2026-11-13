@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.PeerNotConnected
+import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.assertAll
@@ -286,6 +287,7 @@ class StarRelayTest {
                     assignedPeerId = star.joinerAId.value,
                     displayName = "attacker",
                     sessionId = star.joinerAId.value,
+                    key = DeviceKey.generate().id,
                 ),
             )
             star.joinerA.sendRelay(RelayDest.One(star.joinerBId), forgedWelcome)
@@ -909,6 +911,7 @@ class StarRelayTest {
                     assignedPeerId = star.joinerAId.value,
                     displayName = "attacker",
                     sessionId = star.joinerAId.value,
+                    key = DeviceKey.generate().id,
                 ),
             )
 

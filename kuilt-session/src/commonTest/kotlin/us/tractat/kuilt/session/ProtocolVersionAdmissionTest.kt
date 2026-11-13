@@ -193,15 +193,6 @@ class ProtocolVersionAdmissionTest {
             host.leave()
         }
 
-    /** A Hello as a current joiner sends it: the current version, a device key and a joiner nonce. */
-    private suspend fun currentHello(name: String) = AdmitMessage.Hello(
-        displayName = name,
-        sessionId = "session-$name",
-        protocolVersion = ProtocolVersion.CURRENT,
-        key = InMemoryDeviceKeyStore().deviceKey().id,
-        joinerNonce = ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE),
-    )
-
     private suspend fun firstReject(seam: Seam): AdmitMessage.Reject =
         seam.incoming
             .mapNotNull { AdmitMessage.decode(it.toByteArray()) as? AdmitMessage.Reject }

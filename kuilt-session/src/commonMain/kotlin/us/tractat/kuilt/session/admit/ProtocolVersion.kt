@@ -22,6 +22,16 @@ package us.tractat.kuilt.session.admit
  * *definitionally* incapable of relaying — exactly the population this bump exists to exclude. A
  * version-less peer is locked out of rooms, and that is the intended cost.
  *
+ * ## Version 3 — the device key (#3210)
+ *
+ * Version 3 adds the joiner's device key and a fresh joiner nonce to the Hello, a key to every
+ * Welcome, and the Challenge and Proof frames that prove the key. A v2 peer sends no key, so it
+ * cannot take part in that proof, and the spec rules out mixed versions: v2 is refused like every
+ * older peer. A Hello that declares v3 but omits the key or the nonce is refused with the same
+ * [RejectCode.ProtocolMismatch], by the same host-side gate.
+ *
+ * Every later change to what a joiner must send to be admitted bumps this line again.
+ *
  * ## The limit of this gate, stated plainly
  *
  * The gate lives **host-side**, in `SeamRoom.handleAdmitFrame`. A **pre-#1569 host** has no gate at
@@ -30,13 +40,13 @@ package us.tractat.kuilt.session.admit
  */
 public object ProtocolVersion {
     /** The protocol version this build stamps into every [AdmitMessage.Hello] it sends. */
-    public const val CURRENT: Int = 2
+    public const val CURRENT: Int = 3
 
     /** Oldest declared version this build will admit. */
-    public const val MIN_SUPPORTED: Int = 2
+    public const val MIN_SUPPORTED: Int = 3
 
     /** Newest declared version this build will admit. */
-    public const val MAX_SUPPORTED: Int = 2
+    public const val MAX_SUPPORTED: Int = 3
 
     /**
      * Whether a joiner's declared [version] is one this host can admit.

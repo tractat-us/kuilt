@@ -13,6 +13,7 @@ import us.tractat.kuilt.core.MuxClientLoom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
@@ -45,6 +46,7 @@ class SeamRoomMuxSubscriptionTest {
                             assignedPeerId = host.value,
                             displayName = "Host",
                             sessionId = host.value,
+                            key = DeviceKey.generate().id,
                         ),
                     )
                     buffered.deliver(host, payload.copyOfRange(0, headerSize) + welcome)

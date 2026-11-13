@@ -79,7 +79,7 @@ internal fun mintFakeRoomId(selfId: PeerId): RoomId = RoomId("${selfId.value}-ro
  *
  * ```kotlin
  * val room = FakeRoom()
- * room.addMember(Member(PeerId("alice"), identity("alice"), Liveness.Connected))
+ * room.addMember(Member(PeerId("alice"), identity("alice"), DeviceKey.generate().id, Liveness.Connected))
  * room.deliver(PeerId("alice"), byteArrayOf(1, 2, 3))
  * val frame = room.incoming.first()
  * ```
@@ -447,7 +447,7 @@ public class FakeRoom(
      * Add [member] to the roster and emit [MembershipEvent.Joined].
      *
      * ```kotlin
-     * room.addMember(Member(PeerId("alice"), identity("alice"), Liveness.Connected))
+     * room.addMember(Member(PeerId("alice"), identity("alice"), DeviceKey.generate().id, Liveness.Connected))
      * ```
      */
     public suspend fun addMember(member: Member) {

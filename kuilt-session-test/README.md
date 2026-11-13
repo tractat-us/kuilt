@@ -10,7 +10,7 @@ testImplementation("us.tractat.kuilt:kuilt-session-test:<version>")
 
 ```kotlin
 val room = FakeRoom()   // selfId=PeerId("self"), Host role, empty roster
-room.addMember(Member(PeerId("alice"), MemberIdentity("alice", "alice"), Liveness.Connected))
+room.addMember(Member(PeerId("alice"), MemberIdentity("alice", "alice"), DeviceKey.generate().id, Liveness.Connected))
 room.deliver(PeerId("alice"), byteArrayOf(1, 2, 3))
 val frame = room.incoming.first()
 // frame.sender == PeerId("alice")

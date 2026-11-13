@@ -50,7 +50,9 @@ import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.flushWithin
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.validFirstHop
+import org.kotlincrypto.random.CryptoRand
 import us.tractat.kuilt.identity.DeviceKeyStore
+import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
@@ -131,7 +133,8 @@ public typealias JoinerReconnectControllerFactory =
  * is remembered across restarts is the caller's choice, not a default. Pass a platform store to be
  * recognised when the app comes back, or `InMemoryDeviceKeyStore()` to be a new device every run
  * (tests, and apps that choose not to be remembered). Every room this factory makes shares it, since
- * they are all the same device. Nothing reads it yet: the key-bound admission exchange (#3159) will.
+ * they are all the same device. Its key travels in every `Hello` and on every [Member]; until the
+ * key-proving exchange of #3159 lands, that key is a claim nobody checks.
  *
  * [heartbeatConfig] controls partition-detection timing.
  *
@@ -627,8 +630,9 @@ internal class SeamRoom(
     private val clock: () -> Instant,
     /**
      * This device's key store, shared by every room its [SeamRoomFactory] makes. Required, so a test
-     * that builds a room directly chooses its device just as a factory's caller does. Held but not
-     * yet read: the key-bound admission exchange (#3159) is what reads it.
+     * that builds a room directly chooses its device just as a factory's caller does. Read for this
+     * device's key: a joiner names it in every [AdmitMessage.Hello], and a host names its own in the
+     * host-intro [AdmitMessage.Welcome] (#3210).
      */
     private val deviceKeyStore: DeviceKeyStore,
     private val heartbeatConfig: HeartbeatConfig,
@@ -1527,6 +1531,7 @@ internal class SeamRoom(
             is AdmitMessage.Hello -> {
                 if (_role.value == SessionRole.Host) {
                     val target = msg.targetRoom
+                    val key = msg.key
                     // Protocol-version gate (#1569, tightened for #1994). A joiner declaring a
                     // version outside this build's supported range is refused at admit time with a
                     // terminal ProtocolMismatch — better than completing the handshake and failing
@@ -1543,6 +1548,21 @@ internal class SeamRoom(
                                 AdmitMessage.Reject(
                                     "protocol-mismatch: ${msg.protocolVersion} not in " +
                                         "${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.MAX_SUPPORTED}",
+                                    RejectCode.ProtocolMismatch,
+                                ),
+                            )
+                            runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
+                        }
+                    } else if (key == null || msg.joinerNonce == null) {
+                        // The v3 half of the same gate (#3210). The key and nonce are optional on
+                        // the wire only so that a v2 Hello still decodes and reaches the version
+                        // check above; a Hello that declares v3 carries both, or it does not speak
+                        // the version it declares.
+                        logger.debug { "Rejecting Hello from $sender: protocol-mismatch (v3 hello without a key or nonce)" }
+                        scope.launch {
+                            val rejectBytes = AdmitMessage.encode(
+                                AdmitMessage.Reject(
+                                    "protocol-mismatch: a v${msg.protocolVersion} hello names a device key and a joiner nonce",
                                     RejectCode.ProtocolMismatch,
                                 ),
                             )
@@ -1566,10 +1586,12 @@ internal class SeamRoom(
                             runCatchingCancellable { seam.sendTo(sender, rejectBytes) }
                         }
                     } else {
-                        scope.launch { admitPeer(sender, msg) }
+                        scope.launch { admitPeer(sender, msg, key) }
                     }
                 }
             }
+            // The v3 key-proving frames (#3210). Nothing sends them yet, so neither role acts on one.
+            is AdmitMessage.Challenge, is AdmitMessage.Proof -> Unit
             is AdmitMessage.Welcome -> {
                 if (_role.value == SessionRole.Joiner) {
                     handleWelcome(sender, msg)
@@ -1636,8 +1658,15 @@ internal class SeamRoom(
      * 5. Send self-introduction (host identity) to the new joiner.
      *
      * State mutation is under lock; all seam sends happen outside the lock.
+     *
+     * [key] is the device key the [hello] named (the caller has checked it is present). It becomes
+     * the member's [Member.key] and rides every Welcome that names the joiner; each bootstrap Welcome
+     * carries an existing member's recorded key, and the host intro carries this host's own (#3210).
      */
-    private suspend fun admitPeer(joinerPeerId: PeerId, hello: AdmitMessage.Hello) {
+    private suspend fun admitPeer(joinerPeerId: PeerId, hello: AdmitMessage.Hello, key: DidKey) {
+        // Read before the roster changes, so a store that cannot produce the key admits nobody
+        // rather than leaving a member admitted whose host intro was never sent.
+        val hostKey = deviceKeyStore.deviceKey().id
         val identity = MemberIdentity(
             displayName = hello.displayName,
             sessionId = hello.sessionId,
@@ -1646,6 +1675,7 @@ internal class SeamRoom(
         val member = Member(
             id = joinerPeerId,
             identity = identity,
+            key = key,
             liveness = Liveness.Connected,
             // Prefer the map-keyed roster (hub path: RoomHubSeam / Mesh keys a principal per peer),
             // falling back to the single-value marker (2-peer relay path: Seam.withPrincipal).
@@ -1672,6 +1702,7 @@ internal class SeamRoom(
             assignedPeerId = joinerPeerId.value,
             displayName = hello.displayName,
             sessionId = hello.sessionId,
+            key = key,
             deviceId = hello.deviceId,
             roomId = _roomId.value?.value,
         )
@@ -1708,6 +1739,7 @@ internal class SeamRoom(
                     assignedPeerId = existing.id.value,
                     displayName = existing.identity.displayName,
                     sessionId = existing.identity.sessionId,
+                    key = existing.key,
                     deviceId = existing.identity.deviceId,
                 ),
             )
@@ -1720,6 +1752,7 @@ internal class SeamRoom(
                 assignedPeerId = selfId.value,
                 displayName = resolvedMemberName,
                 sessionId = selfId.value,
+                key = hostKey,
             ),
         )
         runCatchingCancellable { seam.sendTo(joinerPeerId, hostIntro) }
@@ -1732,6 +1765,10 @@ internal class SeamRoom(
             deviceId = deviceId,
             targetRoom = roomKey,
             protocolVersion = ProtocolVersion.CURRENT,
+            key = deviceKeyStore.deviceKey().id,
+            // Fresh on every Hello, from the platform CSPRNG: the challenge built over it is
+            // single-use only if the nonce is never reused (#3210).
+            joinerNonce = CryptoRand.Default.nextBytes(ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE)),
         )
         runCatchingCancellable { seam.broadcast(AdmitMessage.encode(hello)) }
     }
@@ -1890,7 +1927,7 @@ internal class SeamRoom(
                 sessionId = welcome.sessionId,
                 deviceId = welcome.deviceId,
             )
-            val member = Member(id = assignedId, identity = identity, liveness = Liveness.Connected)
+            val member = Member(id = assignedId, identity = identity, key = welcome.key, liveness = Liveness.Connected)
             addToRoster(member)
         }
     }

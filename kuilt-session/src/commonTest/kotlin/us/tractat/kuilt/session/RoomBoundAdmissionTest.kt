@@ -73,14 +73,9 @@ class RoomBoundAdmissionTest {
             val joinerSeam = loom.join(InMemoryTag("Bob", roomKey = "room-B"))
             joinerSeam.broadcast(
                 AdmitMessage.encode(
-                    AdmitMessage.Hello(
-                        displayName = "Bob",
-                        sessionId = "session-bob",
-                        targetRoom = "room-B",
-                        // Declare the current version so this Hello clears the protocol gate, which
-                        // runs first (#1994): the subject here is the room gate, not versioning.
-                        protocolVersion = ProtocolVersion.CURRENT,
-                    ),
+                    // A complete current Hello, so it clears the protocol gate and the v3 key check,
+                    // which run first (#1994, #3210): the subject here is the room gate.
+                    currentHello(displayName = "Bob", sessionId = "session-bob", targetRoom = "room-B"),
                 ),
             )
 
