@@ -750,7 +750,7 @@ kuilt-core         the contract + InMemoryLoom + MuxSeam + NamedMux + CompositeL
   │     ├── kuilt-game  turn-based game facade (TurnSequencer / SpeculativeSequencer)  → kuilt-raft + kuilt-session
   │     ├── kuilt-heddle  fair-share ledger for a pooled resource  → kuilt-raft + kuilt-quilter + kuilt-crdt
   │     └── kuilt-cluster  server-cluster facade (ServerCluster / ClusterClient / VoterMesh)  → kuilt-raft + kuilt-session + kuilt-websocket (JVM/Android)
-  ├── kuilt-session     membership/room layer (admit, roster, roles, resume)  → kuilt-core + kuilt-liveness + kuilt-quilter
+  ├── kuilt-session     membership/room layer (admit, roster, roles, resume)  → kuilt-core + kuilt-liveness + kuilt-quilter + kuilt-identity
   ├── kuilt-gossip      partial-mesh broadcast overlay (GossipSeam)  → kuilt-core + kuilt-liveness
   ├── kuilt-stream      length-prefix framing: a byte stream becomes a Connection  → kuilt-core
   │     └── kuilt-tcp   raw TCP fabric (JVM/Android)            → kuilt-stream
