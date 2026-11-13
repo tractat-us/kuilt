@@ -323,8 +323,9 @@ lock. On the way back, `LocalHeddle.decode(bytes, format)` (or `decode(text, for
 format) returns `Restored(snapshot)`, `UnsupportedVersion(found, supported)` or `Corrupt(reason)`,
 never an exception. Then `LocalHeddle.restore(snapshot, policy, epoch)` carries on where the old
 engine stopped: every open lease is valid again under its old id, with its path and its
-`startedAt`, and the wake memory and the reconciled capacity come back, so the next picks and
-top-ups are the ones the old engine would have made. The epoch must be above the snapshot's.
+`startedAt`, and the wake memory, the reconciled capacity and the topology last applied come
+back, so the next picks and top-ups are the ones the old engine would have made, over the same
+leasable groups. The epoch must be above the snapshot's.
 Treat it as a boot counter you persist and only ever raise, since lease ids count from zero in
 each epoch; an old id that is no longer open answers `Stale`. Each release reads its own format
 and the one before it (`LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS`), so stored state survives
