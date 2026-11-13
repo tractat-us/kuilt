@@ -28,15 +28,22 @@ public sealed interface GrantScope {
  * When a host admits a device, it can hand the device a grant: "the device with key [subject] may
  * come back to [scope] until [notAfter]", signed with the host's own key, [issuer]. The device keeps
  * it, and presents it when it returns. A grant is not a secret: it names the device's key, so it is
- * useless to anyone who cannot sign with that key.
+ * useless to anyone who cannot sign with that key. Nor is it an invite: its subject is a key the host
+ * has already seen, so only a device that was admitted once can hold one.
  *
  * This type is the statement and its signature, and nothing more. Deciding whether a grant is good
  * *here, now, for this device* — the right issuer, subject and room, not expired, not revoked — is
  * the checker's job, not this type's: [isSignedByIssuer] checks the signature alone.
  *
  * **The wire form is the grant.** [wire] is the signed layout followed by the 64-byte signature, and
- * it is what a device stores and sends. Two grants are equal exactly when their wire bytes are. The
- * layout, after the `kuilt/grant` tag and version `1`:
+ * it is what a device stores and sends. Two grants are equal exactly when their wire bytes are.
+ *
+ * **One set of terms can carry more than one valid signature.** ECDSA signatures are malleable: if
+ * `(r, s)` verifies, so does `(r, n − s)`, and nothing here insists on one of the two. So two grants
+ * with the same [id] and the same terms can both verify and still be unequal. To deduplicate grants,
+ * key on [id] and [issuer], never on `==`.
+ *
+ * The layout, after the `kuilt/grant` tag and version `1`:
  *
  * | Field | Bytes |
  * |---|---|
@@ -79,8 +86,10 @@ public class Grant private constructor(
     public val wire: ByteArray get() = wireBytes.copyOf()
 
     /**
-     * Whether the signature on this grant is [issuer]'s, over exactly these terms. A grant whose any
-     * byte was changed after signing — its subject, its scope, its expiry — answers `false`.
+     * Whether the signature on this grant is [issuer]'s, over exactly these terms. A grant whose
+     * terms — any byte of the signed layout: its subject, its scope, its expiry — changed after
+     * signing answers `false`. The signature bytes themselves are another matter: see the note on
+     * malleability above.
      *
      * Never throws on a bad grant. It throws [IllegalStateException] only when this platform's
      * cryptographic provider cannot run at all.
@@ -158,7 +167,9 @@ public class Grant private constructor(
          * Checks the layout only. Whether the signature is good is [isSignedByIssuer]'s question.
          */
         public fun decode(wire: ByteArray): Grant? {
-            val (layout, _) = Layout.split(wire) ?: return null
+            // One copy, taken first: what is parsed is what is kept, whatever the caller does to [wire] after.
+            val bytes = wire.copyOf()
+            val (layout, _) = Layout.split(bytes) ?: return null
             val fields = Layout.decode(layout, TAG, VERSION, FIELD_COUNT) ?: return null
             val issuer = didKeyOf(fields[0]) ?: return null
             val subject = didKeyOf(fields[1]) ?: return null
@@ -167,7 +178,7 @@ public class Grant private constructor(
             val notAfter = longOf(fields[4]) ?: return null
             val id = fields[5]
             if (id.size != ID_SIZE || fields[6].isNotEmpty() || notAfter <= issuedAt) return null
-            return Grant(issuer, subject, scope, issuedAt, notAfter, id, wire.copyOf())
+            return Grant(issuer, subject, scope, issuedAt, notAfter, id, bytes)
         }
 
         private const val TAG = "kuilt/grant"
