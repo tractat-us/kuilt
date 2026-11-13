@@ -50,9 +50,10 @@ public data class Lease(
  * What a [LocalHeddle] needs to resume, as one immutable value: once taken, safe to read, encode or
  * hand to another thread without the caller's scheduling lock.
  *
- * The counters an engine numbers its leases and mints from are not here, and need not be: a
- * restarted engine takes a new [epoch], and every id it issues, lease and mint alike, is scoped by
- * its epoch, so it can count from zero again without reusing one.
+ * The counter an engine numbers its leases from is not here, and need not be: a restarted engine
+ * takes a new [epoch] and lease ids are scoped by it, so it can count from zero again without
+ * reusing one. Mints need no counter at all: each epoch writes one mint record, `local#<epoch>`,
+ * whose amount is the epoch's running total, read back off the [ledger].
  *
  * @property leases every open lease, in [LeaseId] order.
  * @property allocatorMemory the fair-share allocator's wake memory, which a restart must keep for
@@ -142,13 +143,19 @@ public sealed interface LeaseOutcome {
  * `ev + reservation / weight`, and every candidate in one pick shares this slot's reservation: it
  * is EEVDF by the slot's request length, so between two children that request alike, the one
  * further behind goes first. Two sets steer it, and they are different on purpose:
- * - **waiting** is every leaf with work queued. It decides who is competing, which is what seats a
- *   new group at its parent's front and what tells a group returning from idle apart from one that
+ * - **waiting** is every leaf with work queued that a descent could reach: a leaf behind ACTIVE
+ *   edges, the same test the pick applies. It decides who is competing, which is what seats a new
+ *   group at its parent's front and what tells a group returning from idle apart from one that
  *   never left.
  * - **eligible** is the waiting leaves this particular slot can run. Only they can be picked.
  *
- * A group that is waiting but cannot run on this slot keeps its claim: it is not idle, so the next
- * slot it can run on does not clamp it as a waker.
+ * A group that is waiting and reachable but cannot run on this slot keeps its claim: it is not
+ * idle, so the next slot it can run on does not clamp it as a waker. Work no descent can reach is
+ * a different case and counts as **idle**, even if the caller lists it as waiting: a leaf whose
+ * only route crosses a closing edge, or a named group that has gained an ACTIVE child. A subtree
+ * holding only such work is observed idle, so it banks no credit through the reshape window
+ * (design §10.5): when it can be reached again, say because a new child under it activates, it is
+ * clamped as a waker rather than owed the slots it could not have used.
  *
  * ## Every delegation is seated first
  *
@@ -196,8 +203,18 @@ public sealed interface LeaseOutcome {
  *
  * Nothing suspends and nothing times out. An argument out of range throws
  * [IllegalArgumentException], a reservation or extension above [MAX_RESERVATION] included.
- * Arithmetic that would leave `Long` throws [ArithmeticException] rather than wrapping. A state the engine's own invariants rule out throws
- * [IllegalStateException]: that is a bug in the engine, not in the call (#1737).
+ *
+ * Arithmetic that would leave `Long` throws [ArithmeticException] rather than wrapping, and one
+ * place it is reachable is a lifetime ceiling on service. A pick compares virtual times as exact
+ * rationals over `Long`, and their numerators grow with the service a parent has handed down,
+ * scaled by its children's weights. So the total service under one parent is bounded, and the bound
+ * depends on the weights. In one measurement, integer weights 3 : 1 ran past 2^60 units, while
+ * fractional weights 3/7 : 2/5 threw near 2^56. A throw changes nothing, so once a parent is past
+ * its ceiling every later [acquire] there throws too.
+ *
+ * A state the engine's own invariants rule out throws [IllegalStateException]: that is a bug in
+ * the engine, or a ledger conflict the engine did not create, such as two live inbound edges into
+ * one group, a divergent record, or a cycle on a lease's path (#1737).
  *
  * @sample us.tractat.kuilt.heddle.sampleLocalLease
  */
@@ -217,7 +234,7 @@ public class LocalHeddle private constructor(
     /** Open leases by id. Looked up, never iterated without sorting. */
     private val open = HashMap<LeaseId, OpenLease>()
     private var nextSeq = 0L
-    private var nextMint = 0L
+
 
     /** Mints [complete] and [admit] wrote to cover a shortfall at the root. */
     internal var forcedMints: Int = 0
@@ -415,7 +432,7 @@ public class LocalHeddle private constructor(
 
     /** Mint [amount] at the root, as one act. L2's top-up replaces this; tests fund through it now. */
     internal fun mintSupply(amount: Long) {
-        ledger = ledger.piece(ledger.mint(nextMintId(), root, SELF, amount).delta)
+        ledger = mintAt(ledger, amount)
     }
 
     private fun open(leaf: GroupId, path: List<AttachmentId>, reservation: Long, startedAt: Long): Lease {
@@ -483,7 +500,7 @@ public class LocalHeddle private constructor(
     private fun fund(start: EntitlementLedger, amount: Long): Pair<EntitlementLedger, Int> {
         val shortfall = amount - start.holdings(root, SELF)
         if (shortfall <= 0L) return start to 0
-        return start.piece(start.mint(nextMintId(), root, SELF, shortfall).delta) to 1
+        return mintAt(start, shortfall) to 1
     }
 
     /**
@@ -495,13 +512,26 @@ public class LocalHeddle private constructor(
         return { edge -> if (allocator.lastObservedDemanding(edge) == true) wants else Demand.NONE }
     }
 
+    /** This epoch's one mint id, `local#<epoch>`. */
+    private val epochMintId: MintId get() = MintId("local#$epoch")
+
     /**
-     * A fresh id per mint act, scoped by [epoch]: `local#<epoch>#<k>`. Two acts under one id
-     * max-join into one record and the smaller amount is lost (Task C found this the hard way), so
-     * an engine restarted over this one's ledger, which counts `k` from zero again, must not reuse
-     * an id this one wrote.
+     * [start] with [amount] more minted at the root. The epoch keeps **one** mint record, whose
+     * amount is everything the epoch has minted: mint records join by max, so the record carrying
+     * the larger total supersedes the older one, and the count of records stays one per epoch. A
+     * record per mint act would grow without bound, and [EntitlementLedger.holdings] at the root and
+     * every root delegation's witness fold over all of them.
+     *
+     * The running total is read off [start], never kept beside it. An operation that mints on a
+     * working ledger and is then refused discards that ledger, mint and all; a counter kept on the
+     * engine would have advanced anyway, and the next mint would credit the root with supply that
+     * was never minted. An engine started over a ledger that already holds its epoch's record
+     * carries on from it for the same reason.
      */
-    private fun nextMintId(): MintId = MintId("local#$epoch#${nextMint++}")
+    private fun mintAt(start: EntitlementLedger, amount: Long): EntitlementLedger {
+        val total = checkedAdd(start.mintRecord(epochMintId)?.amount ?: 0L, amount)
+        return start.piece(start.mint(epochMintId, root, SELF, total).delta)
+    }
 
     /** An open lease and the path it was delegated down, which every later charge follows. */
     private data class OpenLease(val lease: Lease, val path: List<AttachmentId>)
@@ -511,9 +541,10 @@ public class LocalHeddle private constructor(
         internal val SELF: ReplicaId = ReplicaId("local")
 
         /**
-         * The largest single reservation or extension: 2^44, about 1.8 × 10^13 cost units (4.9 hours
-         * in nanoseconds, 557 years in milliseconds). A lease that runs longer is [extend]ed, or
-         * charged its overrun at [complete], which this does not bound.
+         * The largest single reservation or extension: 2^44, about 1.8 × 10^13 cost units. A lease
+         * that runs longer is [extend]ed, or charged its overrun at [complete], which this does not
+         * bound. It does not bound the service a parent hands down over its lifetime either; that
+         * ceiling depends on the children's weights (see "Failure surface" in the class KDoc).
          *
          * It exists to keep [UNBOUNDED_TARGET] unbounded in practice. Every pick asks for
          * `UNBOUNDED_TARGET − outstanding` on an edge, so the edge goes on reading as wanting the

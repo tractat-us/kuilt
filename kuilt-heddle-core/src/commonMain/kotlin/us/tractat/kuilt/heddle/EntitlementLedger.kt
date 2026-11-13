@@ -2112,6 +2112,12 @@ public class EntitlementLedger private constructor(
     /** Whether every mint record is at [root]; true for a ledger with none. Allocates nothing. */
     internal fun mintedOnlyAt(root: GroupId): Boolean = minted.values.all { it.root == root }
 
+    /** The [MintRecord] under [id], or `null` when there is none. */
+    internal fun mintRecord(id: MintId): MintRecord? = minted[id]
+
+    /** Every [MintId] this ledger holds a record under. */
+    internal fun mintIds(): Set<MintId> = minted.keys
+
     /** The highest topology-grammar generation over [allEdges], and how many edges carry it; from the index. */
     internal fun generationTop(): GenerationTop = index.value.generationTop
 

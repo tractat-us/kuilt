@@ -177,17 +177,25 @@ one **lease** per free slot. When a slot frees, `acquire(waiting, eligible, star
 leaf whose work runs next and reserves an estimated cost for it; when the work ends,
 `complete(lease, actualCost)` charges what it really cost, hands the unused part back, and reports
 any overrun, which is never refused. Cost is time, in your own unit. `waiting` is every leaf with
-work queued and `eligible` the ones this slot can run: a leaf that is waiting but cannot run here
-keeps its claim, so it is not treated as returning from idle when a slot it can run comes up. A
-new leaf starts level with its siblings rather than owed their whole history. `extend` reserves
+work queued and `eligible` the ones this slot can run. A waiting leaf that cannot run on this slot
+keeps its claim, so it is not treated as returning from idle when a slot it can run comes up. Work
+no pick could reach counts as idle, even when you list it as waiting: a leaf behind an edge a
+reload is closing, or a group that has gained a child. Its subtree builds up no credit while it is
+cut off, so when it can be reached again it starts level with its siblings. A new leaf starts level
+with its siblings too, rather than owed their whole history. `extend` reserves
 more for a lease that runs long, `cancel` charges nothing, `admit(leaf, startedAt)` charges work
 another scheduler already started, and `previewPicks` answers "who goes next" without changing
 anything. `startedAt` is stored on the lease and never read by a pick. A pick only goes down a
 subtree it can finish in, so a group whose only leaf sits behind a closing edge never takes a slot
 from a sibling that can run. A refusal is a typed outcome (`NothingEligible`, `SupplyExhausted`,
 `NoLiveLineage`, `PathDraining`, `Unknown`, `Stale`), never an exception: an `extend` on a lease
-whose path a reload is closing is `PathDraining`, and its `complete` still settles. Only a bad
-argument throws, such as a reservation above `LocalHeddle.MAX_RESERVATION` (2^44 cost units). The
+whose path a reload is closing is `PathDraining`, and its `complete` still settles. A bad argument
+throws `IllegalArgumentException`, such as a reservation above `LocalHeddle.MAX_RESERVATION`
+(2^44 cost units). `ArithmeticException` is reachable too: a pick compares exact fractions, so
+the total service under one parent has a ceiling. The ceiling depends on the children's weights:
+whole-number weights reach much further than fractional ones. Past it, every `acquire` there
+throws. `IllegalStateException` is left only for a conflicted ledger, such as two live edges into
+one group, a split record or a cycle, which the public surface cannot reach today. The
 engine reads no clock and no random source, and it is not thread-safe: call every method under your
 scheduling lock, `snapshot()` included, and hand status and persistence readers the immutable value
 it returns.

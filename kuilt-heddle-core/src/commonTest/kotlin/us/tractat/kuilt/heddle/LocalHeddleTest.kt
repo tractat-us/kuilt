@@ -383,6 +383,93 @@ class LocalHeddleTest {
     }
 
     /**
+     * "The deepest group ACTIVE edges reach" on a three-edge path: `root → p → a → a/x` with
+     * `a → a/x` closing. The overrun is delegated to `a` and charged there, so `p → a`'s virtual time
+     * advances by all of it; charging it at `p` instead would conserve just as well.
+     */
+    @Test
+    fun anOverrunIsChargedAtTheDeepestGroupActiveEdgesReach() {
+        val p = GroupId("p")
+        val x = GroupId("a/x")
+        val pa = edgeOf(p, a)
+        val ax = edgeOf(a, x)
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, p), pa, ax)), root, supply = 100)
+        val open = h.lease(setOf(x), reservation = 2L)
+        h.reshapeForTest { it.piece(assertNotNull(it.close(ax.id)).delta) }
+        val before = h.snapshot().ledger
+        val done = h.complete(open.id, 5L)
+        val l = h.snapshot().ledger
+        assertAll(
+            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L), done) },
+            { assertEquals(Rational.of(2L), before.virtualService(pa.id), "the rig: p → a carried the reservation") },
+            { assertEquals(Rational.of(5L), l.virtualService(pa.id), "p → a advanced by the 3-unit overrun") },
+            { assertEquals(5L, assertNotNull(l.edge(pa.id)).spent, "the whole cost is charged at p → a") },
+            { assertEquals(2L, assertNotNull(l.edge(ax.id)).spent, "only the reservation crosses the closing edge") },
+            { assertEquals(0L, l.holdings(a, LOCAL)) },
+            { assertEquals(0L, l.holdings(p, LOCAL)) },
+            { assertEquals(emptyList(), l.validate()) },
+        )
+    }
+
+    /**
+     * Work no descent can reach is idle. `t`'s only leaf is behind a closing edge while it is still
+     * listed as waiting, so `t` is observed idle and banks nothing while `p` runs; when `t → a2`
+     * activates, `t` is clamped as a waker and shares level with `p` rather than catching up.
+     */
+    @Test
+    fun workNoDescentCanReachIsObservedIdle() {
+        val p = GroupId("p")
+        val t = GroupId("t")
+        val a2 = GroupId("a2")
+        val ta = edgeOf(t, a)
+        val ta2 = edgeOf(t, a2)
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, p), edgeOf(root, t), ta), prepared = listOf(ta2)), root, supply = 1_000)
+        val open = h.lease(setOf(a), reservation = 1L)
+        h.reshapeForTest { it.piece(assertNotNull(it.close(ta.id)).delta) }
+        val cutOff = cycles(h, setOf(p, a), setOf(p, a), 30)
+        val observed = h.snapshot().allocatorMemory.demandingObserved[AttachmentId("root>t")]
+        h.reshapeForTest { it.piece(assertNotNull(it.activate(ta2.id)).delta) }
+        val after = cycles(h, setOf(p, a2), setOf(p, a2), 20)
+        assertAll(
+            { assertEquals(List(30) { p }, cutOff, "the rig: a is waiting but unreachable, so p runs alone") },
+            { assertEquals(false, observed, "t was observed idle, though a was listed as waiting") },
+            { assertTrue(count(after, a2) in 9..11, "t woke level with p, not 30 units behind it: ${count(after, a2)} of 20") },
+            { assertEquals(LeaseOutcome.Done(1L, 0L), h.complete(open.id, 1L), "the cut-off lease still settles") },
+        )
+    }
+
+    /**
+     * Each epoch keeps one mint record, `local#<epoch>`, carrying its running total, however many
+     * top-ups and forced mints it writes. A same-epoch engine over the ledger carries the total on.
+     */
+    @Test
+    fun anEpochKeepsOneMintRecord() {
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, a))), root, supply = 0L, epoch = 2L)
+        repeat(20) {
+            h.mintSupply(2L) // a top-up the lease then takes in full
+            val lease = h.lease(setOf(a), reservation = 2L)
+            h.complete(lease.id, 3L) // a 1-unit overrun with the root empty: a forced mint
+        }
+        val admitted = assertNotNull((h.admit(a, 0L, reservation = 4L) as? AcquireOutcome.Acquired)?.lease)
+        h.complete(admitted.id, 4L)
+        repeat(30) { h.mintSupply(1L) }
+        val one = h.snapshot().ledger
+        val same = engineOver(one, root, supply = 5L, epoch = 2L).snapshot().ledger
+        val next = engineOver(one, root, supply = 7L, epoch = 3L).snapshot().ledger
+        assertAll(
+            { assertEquals(21, h.forcedMints, "the rig: every overrun and the admit forced a mint") },
+            { assertEquals(20L * 3L + 4L + 30L, one.mintedTotal(), "70 mint acts' worth of supply") },
+            { assertEquals(setOf(MintId("local#2")), one.mintIds(), "one record for the whole epoch") },
+            { assertEquals(one.leafSpentTotal(), one.mintedTotal() - one.holdings(root, LOCAL), "and it carries every unit") },
+            { assertEquals(setOf(MintId("local#2")), same.mintIds()) },
+            { assertEquals(one.mintedTotal() + 5L, same.mintedTotal(), "a same-epoch engine carries the total on") },
+            { assertEquals(setOf(MintId("local#2"), MintId("local#3")), next.mintIds()) },
+            { assertEquals(one.mintedTotal() + 7L, next.mintedTotal()) },
+            { assertEquals(emptyList(), next.validate()) },
+        )
+    }
+
+    /**
      * The one place the overrun has nowhere to go: the root's own child edge is closing, so no group
      * below the root is reached through ACTIVE edges, and the ledger keeps no spend at the root. The
      * lease still closes, the reservation is charged at the leaf, conservation holds and nothing is

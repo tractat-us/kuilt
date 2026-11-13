@@ -166,7 +166,10 @@ class LocalHeddlePropertyTest {
                         val reached = reachableEligibleLeaves(l, eligible)
                         val reachable = reached.isNotEmpty()
                         if (eligible.isNotEmpty() && !reachable) seen[NONE_REACHABLE]++
-                        if (reachable && reached.size < eligible.size) seen[DEAD_END_BESIDE]++
+                        // The starvation shape: beside a reachable leaf, an eligible group the old live lift
+                        // wanted but no descent can end at, a leaf behind a closing edge or a group with an
+                        // active child.
+                        if (reachable && eligible.any { it !in reached && isADeadEnd(l, it) }) seen[DEAD_END_BESIDE_REACHABLE]++
                         val out = h.acquire(waiting.toSet(), eligible, startedAt = step.toLong(), reservation = 1L + rng.nextInt(5))
                         val at = "seed $seed step $step"
                         when (out) {
@@ -198,10 +201,23 @@ class LocalHeddlePropertyTest {
                     draw == 5 -> {
                         val lease = open[rng.nextInt(open.size)]
                         val actual = rng.nextInt(10).toLong()
-                        val draining = l.lineageOf(lease.leaf).orEmpty().any { l.lifecycle(it) != Lifecycle.ACTIVE }
-                        if (draining && actual > lease.reserved) seen[OVERRUN_DRAINING]++
+                        val path = l.lineageOf(lease.leaf).orEmpty()
+                        // How many edges from the root are still ACTIVE: the overrun lands on the last of them.
+                        val reach = path.indexOfFirst { l.lifecycle(it) != Lifecycle.ACTIVE }
+                        val overrunDraining = reach >= 0 && actual > lease.reserved
+                        if (overrunDraining) seen[OVERRUN_DRAINING]++
+                        if (overrunDraining && reach >= 2) seen[OVERRUN_DEEP_REACH]++
                         val out = h.complete(lease.id, actual)
                         if (out != LeaseOutcome.Done(actual, maxOf(0L, actual - lease.reserved))) fail("complete gave $out, seed $seed step $step")
+                        if (overrunDraining) {
+                            val after = h.snapshot().ledger
+                            fun grew(e: AttachmentId): Long = checkNotNull(after.edge(e)).spent - checkNotNull(l.edge(e)).spent
+                            val at = "seed $seed step $step, path ${path.map { it.value }}"
+                            if (grew(path[reach]) != lease.reserved) fail("the first draining edge was charged ${grew(path[reach])}, not the reservation, at $at")
+                            if (reach >= 1 && grew(path[reach - 1]) != actual) {
+                                fail("the deepest ACTIVE edge was charged ${grew(path[reach - 1])}, not the whole $actual, at $at")
+                            }
+                        }
                     }
                     draw == 6 -> h.cancel(open[rng.nextInt(open.size)].id)
                     draw == 7 -> h.admit(reshapeGroups[rng.nextInt(reshapeGroups.size)], step.toLong(), 1L + rng.nextInt(5))
@@ -216,6 +232,12 @@ class LocalHeddlePropertyTest {
             { assertEquals(SEEDS * RESHAPE_STEPS, steps, "every step ran and was checked") },
             { assertTrue(seen.all { it > 0 }, "every rig fired: ${RIG.indices.joinToString { "${RIG[it]}=${seen[it]}" }}") },
         )
+    }
+
+    /** A group with a live lineage that a descent cannot end at: behind a closing edge, or with an active child. */
+    private fun isADeadEnd(l: EntitlementLedger, g: GroupId): Boolean {
+        val lineage = l.lineageOf(g) ?: return false
+        return lineage.isNotEmpty() && (!l.isLeaf(g) || lineage.any { l.lifecycle(it) == Lifecycle.CLOSING })
     }
 
     /** Close a random ACTIVE edge (two times in three) or activate a random PREPARED one. */
@@ -270,8 +292,9 @@ class LocalHeddlePropertyTest {
     private val r = GroupId("r")
 
     /**
-     * The fixed tree's shape with a direct leaf `d` beside the lanes, and prepared edges waiting to
-     * activate: under a leaf (`a/b → a/b/x`, `d → d/y`), under a lane (`q → f`), and under the root
+     * The fixed tree's shape with a direct leaf `d` beside the lanes, two of `q`'s children made
+     * lanes over a leaf each (`c/w`, `é/z`, so some paths have three edges and an overrun can land
+     * two edges down), and prepared edges waiting to activate: under a leaf (`a/b → a/b/x`, `d → d/y`), under a lane (`q → f`), and under the root
      * (`root → r`).
      */
     private val reshapeLedger = shapedLedger(
@@ -280,6 +303,7 @@ class LocalHeddlePropertyTest {
             edgeOf(root, p, 2), edgeOf(root, q, 1), edgeOf(root, d, 1),
             edgeOf(p, leaves[0], 3), edgeOf(p, leaves[1], 1),
             edgeOf(q, leaves[2], 1), edgeOf(q, leaves[3], 2),
+            edgeOf(leaves[2], GroupId("c/w"), 1), edgeOf(leaves[3], GroupId("é/z"), 1),
         ),
         prepared = listOf(
             edgeOf(leaves[0], GroupId("a/b/x")), edgeOf(d, GroupId("d/y")), edgeOf(q, GroupId("f")), edgeOf(root, r, 2),
@@ -287,7 +311,7 @@ class LocalHeddlePropertyTest {
     )
 
     /** Every non-root group, lanes included, since a lane whose last active child closes is a leaf. */
-    private val reshapeGroups = listOf(p, q, d, r, GroupId("a/b/x"), GroupId("d/y"), GroupId("f")) + leaves
+    private val reshapeGroups = listOf(p, q, d, r, GroupId("a/b/x"), GroupId("d/y"), GroupId("f"), GroupId("c/w"), GroupId("é/z")) + leaves
 
     private companion object {
         const val SEEDS = 200
@@ -295,12 +319,16 @@ class LocalHeddlePropertyTest {
         const val PREVIEW_SEEDS = 100
         const val RESHAPE_STEPS = 80
 
-        val RIG = listOf("noneReachable", "deadEndBeside", "drainingExtend", "overrunDraining", "activated", "closedUnderALease")
+        val RIG = listOf(
+            "noneReachable", "deadEndBesideReachable", "drainingExtend", "overrunDraining", "activated", "closedUnderALease",
+            "overrunDeepReach",
+        )
         const val NONE_REACHABLE = 0
-        const val DEAD_END_BESIDE = 1
+        const val DEAD_END_BESIDE_REACHABLE = 1
         const val DRAINING_EXTEND = 2
         const val OVERRUN_DRAINING = 3
         const val ACTIVATED = 4
         const val CLOSED_UNDER_A_LEASE = 5
+        const val OVERRUN_DEEP_REACH = 6
     }
 }
