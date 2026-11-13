@@ -225,6 +225,7 @@ class LocalHeddlePersistenceTest {
                     "nothing past the version is read",
                 )
             },
+            { assertEquals(RestoreResult.UnsupportedVersion(3, listOf(1)), LocalHeddle.decode("""{"formatVersion":3}""", Json), "with no state at all") },
             { assertEquals(listOf(1), LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS) },
             { assertEquals(1, LocalHeddleSnapshot.FORMAT_VERSION) },
         )

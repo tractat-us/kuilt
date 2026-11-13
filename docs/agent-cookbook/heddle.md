@@ -317,6 +317,33 @@ is still draining moves its leases onto the new edge.
     check(heddle.apply(after, generation = 1L).refusals.isEmpty())
 ```
 
+To survive a restart, call `persist()` under your scheduling lock and store the
+`LocalHeddleSnapshot` it returns, encoded in any format; encoding and writing can happen off the
+lock. On the way back, `LocalHeddle.decode(bytes, format)` (or `decode(text, format)` for a text
+format) returns `Restored(snapshot)`, `UnsupportedVersion(found, supported)` or `Corrupt(reason)`,
+never an exception. Then `LocalHeddle.restore(snapshot, policy, epoch)` carries on where the old
+engine stopped: every open lease is valid again under its old id, with its path and its
+`startedAt`, and the wake memory and the reconciled capacity come back, so the next picks and
+top-ups are the ones the old engine would have made. The epoch must be above the snapshot's.
+Treat it as a boot counter you persist and only ever raise, since lease ids count from zero in
+each epoch; an old id that is no longer open answers `Stale`. Each release reads its own format
+and the one before it (`LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS`), so stored state survives
+one upgrade. After a restore, settle the work that did not survive with `reconcileLeases`.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalPersistence -->
+```kotlin
+    // Under your scheduling lock: take the snapshot. Encoding and storing it can happen off the lock.
+    val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
+
+    // After the restart: decode, then restore under a later epoch, your persisted boot counter.
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored)
+    val restarted = LocalHeddle.restore(decoded.snapshot, policy, epoch = decoded.snapshot.epoch + 1)
+
+    // The lease that was running is still open, and settles as it would have.
+    check(restarted.complete(running.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+```
+
 ### Run it over a network — reserve, run, charge once
 
 **Intent:** put the fair-share tally on a live connection between peers — advertise appetite,
