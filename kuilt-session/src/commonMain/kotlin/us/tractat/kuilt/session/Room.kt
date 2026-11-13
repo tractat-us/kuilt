@@ -527,6 +527,10 @@ public interface RoomFactory {
      * It defaults to null, in which case the peer's own id ([Room.selfId]) is used. It is
      * deliberately *not* derived from the discovered [Tag.sessionName]: the session name
      * names the session being joined, not this joiner (#1177).
+     *
+     * [deviceId] is a hardware-stable id for this device. It travels in the joiner's `Hello`, and the
+     * host records it as the member's [MemberIdentity.deviceId]. It defaults to null, which sends
+     * none.
      */
-    public suspend fun join(tag: Tag, memberName: String? = null): Room
+    public suspend fun join(tag: Tag, memberName: String? = null, deviceId: String? = null): Room
 }

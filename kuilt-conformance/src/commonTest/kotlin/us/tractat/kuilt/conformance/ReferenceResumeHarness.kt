@@ -115,14 +115,15 @@ internal fun referenceResumeHarness(
         override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
             factory.host(pattern, memberName, roomId).also { hostRoom = it }
 
-        override suspend fun join(tag: Tag, memberName: String?): Room = factory.join(tag, memberName)
+        override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room =
+            factory.join(tag, memberName, deviceId)
     }
     val joinerFactory = if (!ignoreSecret) factory else object : RoomFactory {
         override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
             factory.host(pattern, memberName, roomId)
 
-        override suspend fun join(tag: Tag, memberName: String?): Room {
-            val room = factory.join(tag, memberName)
+        override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room {
+            val room = factory.join(tag, memberName, deviceId)
             return object : Room by room {
                 override suspend fun resume(token: ResumeToken): ResumeResult.JoinerOutcome =
                     room.resume(room.resumeToken?.let { token.copy(secret = it.secret) } ?: token)

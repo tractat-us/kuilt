@@ -50,6 +50,7 @@ import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.flushWithin
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.validFirstHop
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.session.admit.RejectCode
@@ -126,6 +127,12 @@ public typealias JoinerReconnectControllerFactory =
  * a virtual clock in tests. An accidental epoch-zero default would ship wrong
  * timestamps silently.
  *
+ * [deviceKeyStore] holds this device's key, and is required for the same reason: whether a device
+ * is remembered across restarts is the caller's choice, not a default. Pass a platform store to be
+ * recognised when the app comes back, or `InMemoryDeviceKeyStore()` to be a new device every run
+ * (tests, and apps that choose not to be remembered). Every room this factory makes shares it, since
+ * they are all the same device. Nothing reads it yet: the key-bound admission exchange (#3159) will.
+ *
  * [heartbeatConfig] controls partition-detection timing.
  *
  * [admitTimeout] bounds the joiner's admit handshake: if no
@@ -139,6 +146,7 @@ public class SeamRoomFactory(
     private val loom: Loom,
     private val scope: CoroutineScope,
     private val clock: () -> Instant,
+    private val deviceKeyStore: DeviceKeyStore,
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
     private val admitTimeout: Duration = DEFAULT_ADMIT_TIMEOUT,
     /**
@@ -190,6 +198,7 @@ public class SeamRoomFactory(
             memberName = memberName,
             scope = scope,
             clock = clock,
+            deviceKeyStore = deviceKeyStore,
             heartbeatConfig = heartbeatConfig,
             admitTimeout = admitTimeout,
             roomId = resolvedRoomId,
@@ -202,7 +211,7 @@ public class SeamRoomFactory(
         ).also { room -> room.start() }
     }
 
-    override suspend fun join(tag: Tag, memberName: String?): Room {
+    override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room {
         val seam = loom.join(tag)
         return SeamRoom(
             seam = seam,
@@ -211,8 +220,10 @@ public class SeamRoomFactory(
             // Deliberately NOT tag.sessionName — the discovered session name names the session being
             // joined, not this joiner (the #1177 latent-bug fix).
             memberName = memberName,
+            deviceId = deviceId,
             scope = scope,
             clock = clock,
+            deviceKeyStore = deviceKeyStore,
             heartbeatConfig = heartbeatConfig,
             admitTimeout = admitTimeout,
             roomId = null,
@@ -256,6 +267,10 @@ public class SeamRoomFactory(
      * matchmaker-assigned game id) and the room must adopt it. It does **not** make a host restart
      * resumable — see [Room.roomId] and #1593.
      *
+     * [deviceId] travels in this peer's `Hello` when it joins, and the host records it as the
+     * member's [MemberIdentity.deviceId]. Null, the default, sends none. A host sends no `Hello`, so
+     * a host adopt ignores it.
+     *
      * @throws IllegalArgumentException if [roomId] is non-null and [role] is [SessionRole.Joiner].
      *   A joiner cannot choose the room's identity, and silently overriding the caller's value with
      *   a different one would fork its durable records with no signal.
@@ -267,6 +282,7 @@ public class SeamRoomFactory(
         roomKey: String? = null,
         reweave: (suspend () -> Seam)? = null,
         roomId: RoomId? = null,
+        deviceId: String? = null,
     ): Room {
         // Rejected, not ignored. A joiner learns the room's identity from the host's Welcome, so a
         // supplied id here is a claim this peer is not entitled to make — and silently dropping it
@@ -283,8 +299,10 @@ public class SeamRoomFactory(
             seam = seam,
             role = role,
             memberName = memberName,
+            deviceId = deviceId,
             scope = scope,
             clock = clock,
+            deviceKeyStore = deviceKeyStore,
             heartbeatConfig = heartbeatConfig,
             admitTimeout = admitTimeout,
             roomId = resolvedRoomId,
@@ -357,6 +375,7 @@ public class SeamRoomFactory(
         public fun systemClock(
             loom: Loom,
             scope: CoroutineScope,
+            deviceKeyStore: DeviceKeyStore,
             heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
             admitTimeout: Duration = DEFAULT_ADMIT_TIMEOUT,
             memberInboxCapacity: Int = DEFAULT_MEMBER_INBOX_CAPACITY,
@@ -365,6 +384,7 @@ public class SeamRoomFactory(
             loom = loom,
             scope = scope,
             clock = { Clock.System.now() },
+            deviceKeyStore = deviceKeyStore,
             heartbeatConfig = heartbeatConfig,
             admitTimeout = admitTimeout,
             memberInboxCapacity = memberInboxCapacity,
@@ -597,8 +617,20 @@ internal class SeamRoom(
      * which names the *session*, not this member (#1177).
      */
     private val memberName: String? = null,
+    /**
+     * **Joiner only.** The hardware-stable id this peer sends in its [AdmitMessage.Hello], which the
+     * host records as the member's [MemberIdentity.deviceId]. Null sends none. A host sends no
+     * `Hello`, so a host room ignores it.
+     */
+    private val deviceId: String? = null,
     private val scope: CoroutineScope,
     private val clock: () -> Instant,
+    /**
+     * This device's key store, shared by every room its [SeamRoomFactory] makes. Required, so a test
+     * that builds a room directly chooses its device just as a factory's caller does. Held but not
+     * yet read: the key-bound admission exchange (#3159) is what reads it.
+     */
+    private val deviceKeyStore: DeviceKeyStore,
     private val heartbeatConfig: HeartbeatConfig,
     /**
      * **Joiner only.** Admit deadline: if no [AdmitMessage.Welcome] admits this joiner within
@@ -1697,6 +1729,7 @@ internal class SeamRoom(
         val hello = AdmitMessage.Hello(
             displayName = resolvedMemberName,
             sessionId = selfId.value,
+            deviceId = deviceId,
             targetRoom = roomKey,
             protocolVersion = ProtocolVersion.CURRENT,
         )

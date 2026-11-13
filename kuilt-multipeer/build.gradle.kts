@@ -90,6 +90,8 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-core"))  // public API returns Seam from weave() — expose the contract transitively
             implementation(project(":kuilt-session"))
+            // `DeviceKeyStore` is in the room host's public constructor, so consumers must see it (#3208).
+            api(project(":kuilt-identity"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlin.logging)
         }
