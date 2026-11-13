@@ -1,9 +1,11 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.serialization.json.Json
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -125,9 +127,13 @@ class LocalHeddleWakeExposureTest {
         val h = oneLevel()
         straddle(h)
         val later = open(h, setOf(a, b), a, 8L)
+        val exposed = h.snapshot().allocatorMemory.wakeExposures.containsKey(aEdge)
         val before = ev(h, aEdge)
         h.complete(later.id, 2L)
-        assertEquals(before - Rational.of(6L), ev(h, aEdge), "a later lease's release of 6 corrects its own charge")
+        assertAll(
+            { assertTrue(exposed, "the rig: the clamp's exposure was still held when the later lease completed") },
+            { assertEquals(before - Rational.of(6L), ev(h, aEdge), "a later lease's release of 6 corrects its own charge") },
+        )
     }
 
     /**
@@ -236,6 +242,36 @@ class LocalHeddleWakeExposureTest {
         assertAll(
             { assertEquals(40 * 300, steps, "every step ran") },
             { assertTrue(compensated > 0, "the rig: some release was added back: $compensated") },
+        )
+    }
+
+    @Test
+    fun wakeExposuresSurviveTheMemoryRoundTrip() {
+        val h = oneLevel()
+        straddle(h)
+        val memory = h.snapshot().allocatorMemory
+        val bytes = Json.encodeToString(AllocatorMemory.serializer(), memory)
+        val reordered = AllocatorMemory(memory.wakeOffsets, memory.demandingObserved, memory.wakeExposures.entries.reversed().associate { it.key to it.value })
+        assertAll(
+            { assertTrue(memory.wakeExposures.containsKey(aEdge), "the rig: the clamp left an exposure") },
+            { assertEquals(memory, Json.decodeFromString(AllocatorMemory.serializer(), bytes), "decodes to the same memory") },
+            { assertEquals(bytes, Json.encodeToString(AllocatorMemory.serializer(), reordered), "equal memories, equal bytes") },
+            { assertEquals(memory, FairShareAllocator(LOCAL, PolicyConfig(quantum = Long.MAX_VALUE), memory).memory, "an allocator resumes it") },
+            {
+                assertEquals(
+                    """{"wakeOffsets":{},"demandingObserved":{}}""",
+                    Json.encodeToString(AllocatorMemory.serializer(), AllocatorMemory.EMPTY),
+                    "a memory with no exposure encodes as it did before",
+                )
+            },
+        )
+    }
+
+    @Test
+    fun aWakeExposureRefusesASlackThatCoversItsBudget() {
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { WakeExposure(slack = 8L, budget = 8L, openedBeforeEpoch = 0L, openedBeforeSeq = 1L) } },
+            { assertFailsWith<IllegalArgumentException> { WakeExposure(slack = -1L, budget = 8L, openedBeforeEpoch = 0L, openedBeforeSeq = 1L) } },
         )
     }
 }
