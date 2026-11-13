@@ -41,8 +41,9 @@ kotlin {
 
         commonMain.dependencies {
             // `api`: `RevocationList.open` takes a `DurableStore` and a `StoreKey`, so a caller names
-            // both. The one kuilt module this depends on; it brings only coroutines and atomicfu,
-            // which this module already uses.
+            // both. Every platform key store also keeps its grants in one (FileDeviceKeyStore in a
+            // FileChannelDurableStore). The one kuilt module this depends on; it brings only
+            // coroutines and atomicfu, which this module already uses.
             api(project(":kuilt-store"))
             // The primitives are cryptography-kotlin's; this module composes them and owns no
             // cryptographic math beyond decompressing a point (ionspin, below).
@@ -63,10 +64,6 @@ kotlin {
             // (#3201), so it runs here, in common code, and every provider gets the same answer.
             // Pure Kotlin on every target, as in :kuilt-deal.
             implementation(libs.ionspin.bignum)
-            // Where every platform store keeps its grants: a grant is not a secret, so it goes in a
-            // plain DurableStore beside the key, which the platform keeps. `implementation`: no
-            // :kuilt-store type is in this module's public surface yet.
-            implementation(project(":kuilt-store"))
         }
         // One provider per platform, each a thin wrapper over the platform's own implementation.
         // Chosen explicitly in `platformProvider()` rather than via `CryptographyProvider.Default`,

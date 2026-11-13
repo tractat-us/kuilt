@@ -14,11 +14,11 @@ Rows pair `;`-separated groups in order.
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
 |a rejoin/reconnect loop, a resume token, a grace window; why a rejoin was refused|`Room.resumeToken` + `Room.resume`; `ResumeResult.JoinerOutcome` (`code.retryable`)|`session.md#rejoin--reconnect`|
-|a device key/did:key, recognising a returning device; a "remember this device" pass, revoking it across restarts; who joins|`DeviceKeyStore` → `DeviceKey` + `DidKey`; `Grant` + `GrantTrust`/`RevocationList.open`; `AdmissionPolicy`/`HostAdmission`|`session.md#device-identity--return`|
+|a device key/did:key kept across launches, recognising a returning device; a "remember this device" pass, revoking it across restarts; who joins|`DeviceKeyStore.platform` (JVM; `DeviceKeyStoreConformanceSuite`) → `DeviceKey` + `DidKey`; `Grant` + `GrantTrust`/`RevocationList.open`; `AdmissionPolicy`/`HostAdmission`|`session.md#device-identity--return`|
 |a "why did we drop" classifier; a retry/back-off loop; a per-session id every peer agrees on|`MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`); `ExponentialBackoff`; `Room.roomId`/`RoomFactory.host(…, roomId = …)`|`session.md#rejoin--reconnect`|
 |a heartbeat, an idle reaper, "is this peer alive"; reaping a room nobody joined; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
 |a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned(since, windowExpiresAt)` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|
-|a per-member reader as `room.incoming.filter { it.sender == peer }`, a member's first frame lost before its collector subscribed|`Room.incomingFrom` (fails with `FramesLost`, never silently)|`session.md#per-member-frames`|
+|a per-member reader as `room.incoming.filter { it.sender == peer }`, a member's first frame lost before its collector subscribed|`Room.incomingFrom` (`FramesLost`, never silent)|`session.md#per-member-frames`|
 |a `delay` between a last send and `leave`/`close`|`Room`/`Seam.flush` → `FlushOutcome` (often `Unsupported`: keep your delay or ack)|`session.md#a-last-frame-before-leaving`|
 |a `host == selfId` check, re-electing when the host leaves mid-lobby|`SeamRoomFactory.electLobby` → `ElectionLobby.awaitRoom` → `ElectionOutcome.BecameHost` → `start()`|`session.md#host-election--the-lobby`|
 |a propose→commit turn/session facade, host election with a term|`GameSession` + `TurnSequencer`|`consensus.md#consensus--turns`|
@@ -31,7 +31,7 @@ Rows pair `;`-separated groups in order.
 |a shared random nobody could steer — a seed, a first player, a die roll|`FairRandom.roll()`|`replication.md#nobody-chose-that-number`|
 |a `seenIds` set|`GSet`/kuilt dedup|`replication.md#dedup`|
 |a longer-lived copy of a replicated log; replaying it, a resume cursor, "did it stop?"|`BoltDecorator` + `AppliedOpSink` (`WarpLogRecordExporter(appliedOps = …)`); `Bolt.replay` + `ReplayScope` → `CleanTail`/`Truncated`; `Bolt.durability()`|`replication.md#archiving-what-the-live-replica-forgets`|
-|merging discovery feeds into one roster; a `try`/`catch` per browse feed|`discoveryRoster` (`onSourceFailure`) — sources are isolated already|`fabrics.md#discovery`|
+|merging discovery feeds into one roster; a `try`/`catch` per browse feed|`discoveryRoster` (`onSourceFailure`; sources already isolated)|`fabrics.md#discovery`|
 |a sweeper over a discovery list — peers that left still on screen|`PeerDiscoverySource.departures()` + `DiscoverySourceConformanceSuite`|`fabrics.md#peers-pile-up-and-are-never-removed`|
 |a peer-supplied id straight into a `Set<PeerId>`|`PeerIdentityRegistry`|`fabrics.md#a-peer-id-off-the-wire-straight-into-a-setpeerid`|
 |a 4-byte length prefix, a reassembly loop over a socket|`framed()` → `handshaking()`|`fabrics.md#your-own-transport`|

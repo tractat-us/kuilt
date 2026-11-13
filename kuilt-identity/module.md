@@ -41,8 +41,7 @@ never revoked anyone, so `open` cannot tell and opens an empty list. A store tha
 damaged is different: `open` throws an `IllegalStateException` naming the store key, rather than
 quietly starting from nothing, and leaves the bytes where they are.
 
-The statements a room's admission exchange is made of, and the per-platform stores that keep a key
-across launches, arrive in the pieces that follow.
+The statements a room's admission exchange is made of arrive in the pieces that follow.
 
 The store. A device is recognised only if it comes back with the same key, so the key has to
 outlive the app. `DeviceKeyStore` is where it lives: the first `deviceKey()` call makes it and every
@@ -52,6 +51,14 @@ The key is the secret, and how well a store keeps it is what tells one store fro
 `InMemoryDeviceKeyStore` keeps both in memory and forgets them with the process, so a device using
 it is a new device every time the app starts. That suits tests, and an app that has chosen not to
 be recognised.
+
+On the desktop, `DeviceKeyStore.platform("my-app", directory)` keeps the key in a file under that
+directory, so the app is the same device after a restart. Only this user can read the file. If the
+file is damaged — cut short, edited, or holding two halves of different keys — the store makes a new
+key and logs a warning: the app keeps working, as a new device, and never crashes over it. The
+Apple, Android and browser stores follow, one at a time. Every store, including one you write
+yourself, proves it keeps its promises by passing `DeviceKeyStoreConformanceSuite` from
+`:kuilt-conformance`.
 
 ## What this protects against, and what it does not
 
@@ -90,3 +97,13 @@ no point on P-256 would decode into a key, while CryptoKit and WebCrypto refuse 
 `DidKey.parse` and `DidKey.verify` check `x < p` and that `x³ − 3x + b` is a square mod `p`, take its
 root, pick the root whose parity the lead byte names, and import `0x04 ‖ x ‖ y`. Every platform gets
 the same bytes and the same answer. Exporting a key in compressed form stays the library's.
+
+The desktop store writes its key as a JWK carrying `x`, `y` and `d`, created with POSIX mode `0600`
+through a forced temporary file and an atomic rename. It reads the key back with a self-test: sign
+with `d`, then verify under the name `x` and `y` give, through the same `DidKey.verify` every other
+device uses. A pair whose halves belong to different keys fails it and is replaced like a truncated
+file. PKCS#8 is not the format because the JDK provider writes it without the public half, and
+reading it back then needs a public half only BouncyCastle can derive; BouncyCastle is not an option,
+since two registered JCA providers stop this module's provider from starting. The grants sit beside
+the key in a `FileChannelDurableStore`, as one strict record that is dropped whole if it cannot be
+read.

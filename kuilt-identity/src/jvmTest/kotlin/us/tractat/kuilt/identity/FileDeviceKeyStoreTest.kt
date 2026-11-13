@@ -11,9 +11,7 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
-import kotlin.io.path.createDirectory
 import kotlin.io.path.createTempDirectory
-import kotlin.io.path.deleteExisting
 import kotlin.io.path.exists
 import kotlin.io.path.readBytes
 import kotlin.io.path.writeBytes
@@ -81,17 +79,40 @@ class FileDeviceKeyStoreTest {
         )
     }
 
-    /** A key file that exists and cannot be read is an error, not a reason to become a new device. */
+    /**
+     * A key file that exists and cannot be read is an error, not a reason to become a new device.
+     *
+     * The rig is a key file with no permissions at all, which this user cannot read but the store
+     * *could* rename a new key over, since a rename needs only the directory's permission. That is what
+     * makes it discriminate: a store that treated the read failure as damage would replace the key
+     * without a throw, and the file's old bytes would be gone. (A directory in the key file's place
+     * would not do: the replacing rename fails on it too, so both behaviours would throw.)
+     */
     @Test
     fun anUnreadableKeyFileThrowsRatherThanBecomingANewDevice() = runTest {
         val directory = createTempDirectory("kuilt-device-key")
         val keyFile = directory.resolve(FileDeviceKeyStore.KEY_FILE)
         FileDeviceKeyStore(directory).deviceKey()
-        keyFile.deleteExisting()
-        keyFile.createDirectory() // present, and not readable as a file
+        val before = keyFile.readBytes()
+        Files.setPosixFilePermissions(keyFile, emptySet())
+        val readable = Files.isReadable(keyFile)
 
-        assertFailsWith<IOException> { FileDeviceKeyStore(directory).deviceKey() }
-        assertTrue(Files.isDirectory(keyFile), "and nothing was written over it")
+        val thrown = runCatchingIo { FileDeviceKeyStore(directory).deviceKey() }
+        Files.setPosixFilePermissions(keyFile, PosixFilePermissions.fromString("rw-------"))
+        val after = keyFile.readBytes()
+
+        assertAll(
+            { assertFalse(readable, "precondition: this user cannot read the key file (not running as root)") },
+            { assertTrue(thrown is IOException, "an unreadable key file throws IOException, got $thrown") },
+            { assertTrue(before.contentEquals(after), "and the key file was not replaced") },
+        )
+    }
+
+    private suspend fun runCatchingIo(block: suspend () -> Unit): Throwable? = try {
+        block()
+        null
+    } catch (e: IOException) {
+        e
     }
 
     @Test
