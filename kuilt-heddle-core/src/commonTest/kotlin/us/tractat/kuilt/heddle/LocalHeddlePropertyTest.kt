@@ -33,11 +33,31 @@ class LocalHeddlePropertyTest {
 
     @Test
     fun conservationHoldsUnderRandomLeaseSequences() {
+        randomLeaseSequences(engine = { engineOver(ledger, root, supply = 200) })
+    }
+
+    /**
+     * The same sequences with no supply up front and capacity reconciled once, so every unit is
+     * minted by a top-up inside an `acquire` or `extend`, or forced by an overrun or an admission.
+     */
+    @Test
+    fun conservationHoldsWithSupplyToppedUp() {
+        var toppedUp = 0
+        randomLeaseSequences(
+            engine = { seed ->
+                engineOver(ledger, root, supply = 0, policy = LocalPolicy(defaultReservation = 3L)).also { it.reconcileCapacity(1L + seed % 4) }
+            },
+            after = { h -> if (h.snapshot().ledger.mintedTotal() > 0L) toppedUp++ },
+        )
+        assertEquals(SEEDS, toppedUp, "every seed minted its own supply")
+    }
+
+    private fun randomLeaseSequences(engine: (seed: Int) -> LocalHeddle, after: (LocalHeddle) -> Unit = {}) {
         var operations = 0
         val kinds = IntArray(5)
         for (seed in 0 until SEEDS) {
             val rng = Random(seed)
-            val h = engineOver(ledger, root, supply = 200)
+            val h = engine(seed)
             repeat(STEPS) { step ->
                 val open = h.snapshot().leases
                 val kind = rng.nextInt(5)
@@ -56,6 +76,7 @@ class LocalHeddlePropertyTest {
                 operations++
                 assertConserved(h, "seed $seed step $step")
             }
+            after(h)
         }
         assertAll(
             { assertEquals(SEEDS * STEPS, operations, "every step ran and was checked") },

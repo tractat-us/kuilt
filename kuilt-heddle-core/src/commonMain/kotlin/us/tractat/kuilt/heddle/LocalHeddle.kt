@@ -3,16 +3,45 @@ package us.tractat.kuilt.heddle
 import us.tractat.kuilt.crdt.ReplicaId
 
 /**
- * How a [LocalHeddle] sizes a lease and how much idle credit a waking group keeps.
+ * How much supply a [LocalHeddle] keeps ahead of its leases, in rounds of capacity: one round is
+ * every slot ([LocalHeddle.reconcileCapacity]) leased once at [LocalPolicy.defaultReservation].
+ *
+ * When an [LocalHeddle.acquire] or [LocalHeddle.extend] would leave the root holding less than
+ * [lowWatermarkSlots] rounds, it first mints enough that the root still holds [targetSlots] rounds
+ * after it. So a top-up runs about once per `targetSlots − lowWatermarkSlots` rounds of leases,
+ * and the low watermark is the headroom kept for what is never refused: an overrun charged at
+ * [LocalHeddle.complete], and an [LocalHeddle.admit]. Work beyond that headroom is still charged,
+ * through a mint of its own.
+ *
+ * @property lowWatermarkSlots the rounds of supply below which a top-up runs. Non-negative.
+ * @property targetSlots the rounds of supply a top-up leaves. At least [lowWatermarkSlots].
+ */
+public data class SupplyPolicy(
+    public val lowWatermarkSlots: Long = 1L,
+    public val targetSlots: Long = 2L,
+) {
+    init {
+        require(lowWatermarkSlots >= 0L) { "lowWatermarkSlots must be non-negative, was $lowWatermarkSlots" }
+        require(targetSlots >= lowWatermarkSlots) {
+            "targetSlots must be at least lowWatermarkSlots ($lowWatermarkSlots), was $targetSlots"
+        }
+    }
+}
+
+/**
+ * How a [LocalHeddle] sizes a lease, how much idle credit a waking group keeps, and how far ahead
+ * it mints supply.
  *
  * @property defaultReservation the cost a lease reserves when the caller passes no estimate, in the
  *   caller's cost unit (time, by convention: R2). Positive, and at most [LocalHeddle.MAX_RESERVATION].
  * @property sleeperCredit the virtual-time credit a group that wakes from idle may keep (design
  *   §10.6). `0`, the default, keeps none. Non-negative.
+ * @property supply how far ahead of its leases the engine mints supply.
  */
 public data class LocalPolicy(
     public val defaultReservation: Long,
     public val sleeperCredit: Long = 0L,
+    public val supply: SupplyPolicy = SupplyPolicy(),
 ) {
     init {
         require(defaultReservation in 1L..LocalHeddle.MAX_RESERVATION) {
@@ -95,6 +124,42 @@ public sealed interface AcquireOutcome {
  * and is never refused for supply.
  */
 public sealed interface AdmitOutcome
+
+/**
+ * What [LocalHeddle.reconcileLeases] found: the two ways the caller's running work and the
+ * engine's open leases can disagree. Both lists are in [LeaseId] order.
+ *
+ * @property orphaned every open lease the caller did not name as live: work that is no longer
+ *   running, and was never completed or cancelled.
+ * @property unknown every id the caller named as live that the engine holds no open lease for,
+ *   from this epoch or another.
+ */
+public data class LeaseReconciliation(
+    public val orphaned: List<Orphan>,
+    public val unknown: List<LeaseId>,
+) {
+    /**
+     * An open lease whose work is no longer running, and how long it ran.
+     *
+     * @property elapsed `now − lease.startedAt` in the cost unit, or `0` when the caller's clock
+     *   went back, say across a restart.
+     */
+    public data class Orphan(public val lease: Lease, public val elapsed: Long) {
+        init {
+            require(elapsed >= 0L) { "elapsed must be non-negative, was $elapsed" }
+        }
+
+        /** What the engine handed this lease: its reservation plus every extension, [Lease.reserved]. */
+        public val granted: Long get() = lease.reserved
+
+        /**
+         * The documented settlement, `min(elapsed, granted)`: charge the time it ran, but no more
+         * than it was granted, since a dead piece of work's overrun cannot be verified. A caller
+         * with evidence of a longer run may [LocalHeddle.complete] it at more.
+         */
+        public val defaultSettlement: Long get() = elapsed
+    }
+}
 
 /** What [LocalHeddle.extend], [LocalHeddle.complete] or [LocalHeddle.cancel] did. */
 public sealed interface LeaseOutcome {
@@ -542,6 +607,31 @@ public class LocalHeddle private constructor(
         }
         return share
     }
+
+    /**
+     * Tell the engine how many slots the caller runs at once, [totalSlots]. It sizes the supply
+     * watermarks of [LocalPolicy.supply] and nothing else: it mints nothing and changes no lease,
+     * and calling it again with the same value changes nothing. Until it is called with a positive
+     * value no supply is minted ahead, and an [acquire] or [extend] the root cannot fund is refused.
+     *
+     * @throws IllegalArgumentException when [totalSlots] is negative, or the target it sizes,
+     *   `totalSlots × defaultReservation × targetSlots`, is above `Long.MAX_VALUE / 4`.
+     */
+    public fun reconcileCapacity(totalSlots: Long) {
+    }
+
+    /**
+     * Compare the engine's open leases with [live], the leases whose work the caller still has
+     * running, as of [now] in the cost unit. Reports both directions and changes nothing.
+     *
+     * Each orphan carries how long it ran, `max(0, now − startedAt)`. Which orphans to settle, and
+     * at what cost, is the caller's policy; [LeaseReconciliation.Orphan.defaultSettlement] is the
+     * documented default. Work that will resume belongs in [live], so it never becomes an orphan.
+     *
+     * @throws ArithmeticException when `now − startedAt` is positive and does not fit in a `Long`.
+     */
+    public fun reconcileLeases(live: Set<LeaseId>, now: Long): LeaseReconciliation =
+        LeaseReconciliation(emptyList(), emptyList())
 
     /**
      * Replace the ledger with [transform] of it: the test seam for a topology change while leases
