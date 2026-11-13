@@ -129,8 +129,35 @@ class InMemoryDeviceKeyStoreTest {
         )
     }
 
-    private suspend fun grant(issuer: DeviceKey, subject: DidKey, issuedAt: Long): Grant =
-        Grant.issue(issuer, subject, GrantScope.AnyRoomOfIssuer, issuedAt, issuedAt + HOUR)
+    @Test
+    fun twoRoomsFromOneIssuerBothKept() = runTest {
+        val host = DeviceKey.generate() // one host key, hosting two rooms
+        val store = InMemoryDeviceKeyStore()
+        val subject = store.deviceKey().id
+        val roomA = grant(host, subject, issuedAt = T + 5_000, scope = GrantScope.Room("A"))
+        val roomB = grant(host, subject, issuedAt = T, scope = GrantScope.Room("B")) // older, but another room
+        val roomARenewed = grant(host, subject, issuedAt = T + 9_000, scope = GrantScope.Room("A"))
+
+        store.keepGrant(roomA)
+        store.keepGrant(roomB)
+        val afterBoth = store.grants()
+        store.keepGrant(roomARenewed)
+        val afterRenewal = store.grants()
+
+        assertAll(
+            { assertEquals(setOf(roomA, roomB), afterBoth.toSet(), "a pass into each room is kept") },
+            { assertEquals(2, afterBoth.size) },
+            { assertEquals(setOf(roomARenewed, roomB), afterRenewal.toSet(), "a newer pass into A replaces A's alone") },
+            { assertEquals(2, afterRenewal.size) },
+        )
+    }
+
+    private suspend fun grant(
+        issuer: DeviceKey,
+        subject: DidKey,
+        issuedAt: Long,
+        scope: GrantScope = GrantScope.AnyRoomOfIssuer,
+    ): Grant = Grant.issue(issuer, subject, scope, issuedAt, issuedAt + HOUR)
 
     private companion object {
         const val CALLERS = 50
