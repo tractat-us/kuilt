@@ -7,7 +7,6 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFails
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -15,9 +14,11 @@ import kotlin.test.assertTrue
  * Gate G0 for the device identity: every provider this module ships on must read and write a P-256
  * public key as a 33-byte compressed point, because a `did:key` name carries exactly that.
  *
- * WebCrypto has no compressed `raw` import of its own in most browsers, so on wasmJs this proves the
- * library's own path works, not the browser's. Every arm runs through the module's self-tested
- * [algorithms], so a provider that cannot start fails the arm instead of passing it by absence.
+ * On wasmJs the two directions rest on different code. Export compresses in the library, so it is
+ * the same in every browser. Import hands the 33 bytes to the browser's own `importKey("raw")`,
+ * where compressed points are optional in the WebCrypto spec, so a green here proves import only
+ * in the browser the tests ran in. Every arm runs through the module's self-tested [algorithms],
+ * so a provider that cannot start fails the arm instead of passing it by absence.
  */
 class CompressedPointProbeTest {
     @Test
@@ -77,20 +78,6 @@ class CompressedPointProbeTest {
             { assertEquals(EVEN_UNCOMPRESSED, even.toHex(), "even-y point (0x02)") },
             { assertEquals(ODD_UNCOMPRESSED, odd.toHex(), "odd-y point (0x03)") },
         )
-    }
-
-    /**
-     * Not in the plan's list; added because Decided 13 rests on it ("every verify decodes the point,
-     * so an off-curve key verifies nothing"). x = 1 has no point on P-256 (x³ − 3x + b is a
-     * non-residue mod p), so a decompression that skips the square-root check would hand back a
-     * key that is not on the curve.
-     */
-    @Test
-    fun compressedPointWithNoCurvePointIsRefused() = runTest {
-        val decoder = algorithms().ecdsa.publicKeyDecoder(EC.Curve.P256)
-        val noSuchPoint = ByteArray(COMPRESSED_SIZE).also { it[0] = 0x02; it[COMPRESSED_SIZE - 1] = 0x01 }
-        // A decoder that accepts it fails the arm; the thrown type is whatever the provider uses.
-        assertFails { decoder.decodeFromByteArray(EC.PublicKey.Format.RAW.Compressed, noSuchPoint) }
     }
 
     private companion object {

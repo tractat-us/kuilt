@@ -1,0 +1,11 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-identity>
+open annotation class us.tractat.kuilt.identity/IdentityInternalApi : kotlin/Annotation { // us.tractat.kuilt.identity/IdentityInternalApi|null[0]
+    constructor <init>() // us.tractat.kuilt.identity/IdentityInternalApi.<init>|<init>(){}[0]
+}
