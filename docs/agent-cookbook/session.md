@@ -527,7 +527,7 @@ internal suspend fun sampleDeviceKeySigns() {
 }
 ```
 
-**A pass to come back:** `Grant`. Do not hand-roll an invite token, a "remember this device" cookie or a signed blob to let a device back in. `Grant.issue(host, subject, scope, issuedAt, notAfter)` is the host's signed statement that the device with key `subject` may return to `GrantScope.Room(roomId)`, or to `GrantScope.AnyRoomOfIssuer`, until `notAfter` (`Grant.NO_EXPIRY` for never). Times are epoch milliseconds you pass in; a grant never reads a clock. `wire` is what the device keeps and presents, and `Grant.decode(wire)` reads it back, `null` on anything malformed. A grant is not a secret, since it is useless without the subject's key. `isSignedByIssuer` checks the signature and nothing else: whether the issuer, subject, room and expiry are right for this room now is the checker's job, and that checker arrives with the room exchange.
+**A pass to come back:** `Grant`. Do not hand-roll a "remember this device" cookie or a signed blob that lets an *already-admitted* device back in. A grant is not an invite: it names the key of a device the host has already let in once, so a newcomer has nothing to put in it. `Grant.issue(host, subject, scope, issuedAt, notAfter)` is the host's signed statement that the device with key `subject` may return to `GrantScope.Room(roomId)`, or to `GrantScope.AnyRoomOfIssuer`, until `notAfter` (`Grant.NO_EXPIRY` for never). Times are epoch milliseconds you pass in; a grant never reads a clock. `wire` is what the device keeps and presents, and `Grant.decode(wire)` reads it back, `null` on anything malformed. A grant is not a secret, since it is useless without the subject's key. `isSignedByIssuer` checks the signature and nothing else: whether the issuer, subject, room and expiry are right for this room now is the checker's job, and that checker arrives with the room exchange.
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleIssueGrant -->
 ```kotlin
@@ -546,7 +546,7 @@ internal suspend fun sampleIssueGrant() {
     check(presented.subject == phone.id && presented.scope == GrantScope.Room("table-7"))
     check(now + 60_000 < presented.notAfter) // a minute later, still good
 
-    // Change any byte — here the last byte of the signature — and it is no longer the host's pass.
+    // Damage it — here the last byte of the signature — and it is no longer the host's pass.
     val edited = kept.copyOf().also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }
     check(Grant.decode(edited)?.isSignedByIssuer() == false)
 }

@@ -51,7 +51,7 @@ internal suspend fun sampleIssueGrant() {
     check(presented.subject == phone.id && presented.scope == GrantScope.Room("table-7"))
     check(now + 60_000 < presented.notAfter) // a minute later, still good
 
-    // Change any byte — here the last byte of the signature — and it is no longer the host's pass.
+    // Damage it — here the last byte of the signature — and it is no longer the host's pass.
     val edited = kept.copyOf().also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }
     check(Grant.decode(edited)?.isSignedByIssuer() == false)
 }
