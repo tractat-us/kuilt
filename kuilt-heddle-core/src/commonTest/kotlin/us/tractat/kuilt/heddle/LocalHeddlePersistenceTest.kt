@@ -5,6 +5,8 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationStrategy
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -145,6 +147,83 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
+     * A CBOR array with an element past the state is corrupt, and named so rather than thrown. CBOR
+     * looks up each element's annotations in the envelope's descriptor before it hands back the
+     * element's index, so this is the one input that asks the descriptor about an index it does not
+     * describe.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun aCborElementPastTheStateIsCorrupt() {
+        val bytes = Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), wakerScenario().first.persist())
+        // `9F 01 <state> FF`: an indefinite-length array, the version, the state, the break.
+        val state = bytes.copyOfRange(2, bytes.size - 1)
+        val extra = bytes.copyOfRange(0, bytes.size - 1) + state + bytes.copyOfRange(bytes.size - 1, bytes.size)
+        assertAll(
+            { assertEquals(listOf(0x9F, 0x01), bytes.take(2).map { it.toInt() and 0xFF }, "the rig: an indefinite-length array, version 1 first") },
+            { assertEquals(0xFF, bytes.last().toInt() and 0xFF, "the rig: closed by a break") },
+            { assertIs<RestoreResult.Restored>(LocalHeddle.decode(bytes, Cbor), "the rig: the untouched bytes decode") },
+            {
+                val out = LocalHeddle.decode(extra, Cbor)
+                assertTrue(out is RestoreResult.Corrupt && "past its state" in out.reason, "expected Corrupt naming the element past the state, got $out")
+            },
+        )
+    }
+
+    /**
+     * The envelope's descriptor says what is written: a LIST of exactly two elements, an `Int` named
+     * `formatVersion` and then the state, under the snapshot's own name. Schema tooling and
+     * descriptor-driven formats read this, not the bytes.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun theDescriptorDescribesTheEnvelope() {
+        val d = LocalHeddleSnapshot.serializer().descriptor
+        assertAll(
+            { assertEquals("us.tractat.kuilt.heddle.LocalHeddleSnapshot", d.serialName) },
+            { assertEquals(StructureKind.LIST, d.kind) },
+            { assertEquals(2, d.elementsCount) },
+            { assertEquals(listOf("formatVersion", "state"), List(d.elementsCount) { d.getElementName(it) }) },
+            { assertEquals(PrimitiveKind.INT, d.getElementDescriptor(0).kind) },
+            { assertEquals(StructureKind.CLASS, d.getElementDescriptor(1).kind) },
+        )
+    }
+
+    /**
+     * A format that writes each collection's size before its elements and reads sequentially reads
+     * the envelope too. Read without its size, the `2` in front is taken for the version, and every
+     * snapshot comes back as `UnsupportedVersion(2)`.
+     */
+    @Test
+    fun snapshotRoundTripsThroughASizePrefixedFormat() {
+        val snapshot = richScenario().first.persist()
+        val bytes = SizePrefixedFormat.encodeToByteArray(LocalHeddleSnapshot.serializer(), snapshot)
+        assertAll(
+            { assertEquals(listOf<Byte>(0, 0, 0, 2), bytes.take(4), "the rig: the format wrote the envelope's size first") },
+            { assertEquals(listOf<Byte>(0, 0, 0, 1), bytes.slice(4..7), "the rig: and the version after it") },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytes, SizePrefixedFormat)) },
+        )
+    }
+
+    /** A size-prefixed envelope that says it holds other than two elements is corrupt, whatever follows. */
+    @Test
+    fun aSizePrefixedEnvelopeOfTheWrongSizeIsCorrupt() {
+        val bytes = SizePrefixedFormat.encodeToByteArray(LocalHeddleSnapshot.serializer(), wakerScenario().first.persist())
+        val checks = listOf(0, 1, 3).map { size ->
+            val resized = byteArrayOf(0, 0, 0, size.toByte()) + bytes.copyOfRange(4, bytes.size)
+            val check: () -> Unit = {
+                val out = LocalHeddle.decode(resized, SizePrefixedFormat)
+                assertTrue(out is RestoreResult.Corrupt && "has $size" in out.reason, "size $size: expected Corrupt naming it, got $out")
+            }
+            check
+        }
+        assertAll(
+            { assertIs<RestoreResult.Restored>(LocalHeddle.decode(bytes, SizePrefixedFormat), "the rig: the untouched bytes decode") },
+            *checks.toTypedArray(),
+        )
+    }
+
+    /**
      * A snapshot taken mid-drain restores, and the drain finishes after it. A removal with a lease
      * open leaves its edge CLOSING; the lease's path crosses that edge. Restored, the lease completes,
      * and applying the same topology again retires the edge.
@@ -210,6 +289,26 @@ class LocalHeddlePersistenceTest {
             { assertEquals(viaReference, viaRestored, "completing them is what completing them would have been") },
             { assertEquals(books(reference), books(restored), "charged to the same leaves, down the same paths") },
             { assertTrue(restored.snapshot().ledger.validate().isEmpty()) },
+        )
+    }
+
+    /**
+     * A snapshot built in this module with a lease at the root and no path is refused. Decoding never
+     * gets this far with an empty path, so this is the one route that reaches the check, and the
+     * root's live lineage is empty too, so the lineage check alone would let it through.
+     */
+    @Test
+    fun aRootLeaseWithNoPathIsRefused() {
+        val s = LocalHeddle.fromTopology(pair, policy, epoch = 0L).persist()
+        val atRoot = PersistedLease(Lease(LeaseId(0L, 0L), root, reserved = 1L, startedAt = 0L), path = emptyList())
+        assertAll(
+            { assertEquals(emptyList(), s.ledger.lineageOf(root), "the rig: the root's live lineage is the empty path") },
+            {
+                val e = assertFailsWith<IllegalArgumentException> {
+                    LocalHeddleSnapshot(s.epoch, s.ledger, s.allocatorMemory, s.totalSlots, listOf(atRoot), s.lastApplied)
+                }
+                assertTrue("empty path" in e.message.orEmpty(), "refused for its empty path: ${e.message}")
+            },
         )
     }
 
@@ -327,6 +426,50 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
+     * Format 1 is frozen in CBOR too, both ways: the JSON golden's snapshot encodes to the CBOR
+     * golden byte for byte, and the CBOR golden decodes to that snapshot. The same choice as
+     * [formatOneStillEncodesToTheGolden] applies when it reds.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun formatOneStillEncodesToTheCborGolden() {
+        val snapshot = decoded(GOLDEN_FORMAT_1)
+        val hex = hexOf(Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), snapshot))
+        assertAll(
+            { assertEquals(GOLDEN_FORMAT_1_CBOR, hex, "format 1 changed in CBOR; the encoding is now:\n$hex\n") },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_1_CBOR), Cbor)) },
+        )
+    }
+
+    /**
+     * A CBOR writer that states each array's length up front (`82`, not `9f … ff`) is read too, and
+     * a definite-length array of three, `83 01 S S`, is refused by its stated size before anything
+     * past the version is read.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun definiteLengthCborRoundTripsAndAThreeElementArrayIsCorrupt() {
+        val definite = Cbor { useDefiniteLengthEncoding = true }
+        val snapshot = decoded(GOLDEN_FORMAT_1)
+        val bytes = definite.encodeToByteArray(LocalHeddleSnapshot.serializer(), snapshot)
+        val state = bytes.copyOfRange(2, bytes.size)
+        val three = byteArrayOf(0x83.toByte(), 0x01) + state + state
+        assertAll(
+            { assertEquals(listOf(0x82, 0x01), bytes.take(2).map { it.toInt() and 0xFF }, "the rig: a definite-length array of two, version 1 first") },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytes, definite)) },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytes, Cbor), "a default reader reads it as well") },
+            {
+                val out = LocalHeddle.decode(three, definite)
+                assertTrue(out is RestoreResult.Corrupt && "has 3" in out.reason, "expected Corrupt naming the size, got $out")
+            },
+        )
+    }
+
+    private fun hexOf(bytes: ByteArray): String = bytes.joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+
+    private fun bytesOf(hex: String): ByteArray = ByteArray(hex.length / 2) { hex.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
+
+    /**
      * The tree the rich scenario runs: `acme` (a nested group at a fractional weight, holding a group
      * and a lane), `tenants` (marked for runtime children), and, while [withSpare], a lane `spare`.
      */
@@ -350,7 +493,8 @@ class LocalHeddlePersistenceTest {
     private val richLeaves = setOf(richBefore.groupId("acme", "interactive"), richBefore.groupId("acme", "batch", "x"), richBefore.groupId("acme", "batch", "y"), tenant)
 
     /**
-     * Every shape format 1 has to carry. `t1` is attached under `tenants`; leases open at
+     * The shapes format 1's envelope and topology have to carry; the ledger's own maps are pinned
+     * in `:kuilt-heddle`'s `EntitlementLedgerCanonicalEncodingTest`. `t1` is attached under `tenants`; leases open at
      * `acme/interactive`, `spare`, `t1` and `acme/batch/x`; a reload reweights `acme`, moving the two
      * leases under it onto its new edge, and removes `spare`, which drains with its lease open; the
      * `batch/x` lease is cancelled; the engine is restored under epoch 1 and leases once more, so the

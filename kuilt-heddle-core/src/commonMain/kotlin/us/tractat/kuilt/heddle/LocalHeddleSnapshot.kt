@@ -4,8 +4,11 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.InternalSerializationApi
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.descriptors.SerialDescriptor
-import kotlinx.serialization.descriptors.listSerialDescriptor
+import kotlinx.serialization.descriptors.StructureKind
+import kotlinx.serialization.descriptors.buildSerialDescriptor
 import kotlinx.serialization.encoding.CompositeDecoder
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
@@ -52,7 +55,8 @@ import kotlinx.serialization.encoding.encodeCollection
  * Encoded, a snapshot is a two-element sequence, `[formatVersion, state]`: a JSON array, a CBOR
  * array. It is a sequence and not an object so that a store which reorders an object's keys, as
  * Postgres `jsonb` does, cannot put `state` ahead of `formatVersion`. JSON and CBOR are both
- * checked; ProtoBuf cannot carry an [EntitlementLedger] at all. `formatVersion` is
+ * checked. ProtoBuf is not: kotlinx ProtoBuf writes an [EntitlementLedger] but cannot read it back,
+ * because it fails on the ledger's maps whose values are maps, such as `transfers`. `formatVersion` is
  * [FORMAT_VERSION] for every snapshot this release writes. Each release reads the format the one
  * before it wrote, as well as its own ([SUPPORTED_FORMAT_VERSIONS]), so storage written by the old
  * release survives one upgrade. [LocalHeddle.decode] reads `formatVersion` before it reads anything
@@ -145,6 +149,10 @@ internal data class PersistedLease(val lease: Lease, val path: List<AttachmentId
      * starts from a state it could have reached. A live lineage may cross a CLOSING edge, which is a
      * drain in progress, and must still restore; it never crosses a RETIRED or PREPARED edge, and a
      * quarantined lineage (two live inbound edges, a divergent record, a cycle) has none.
+     *
+     * The empty-path check guards the internal constructor alone: a decoded lease already has a
+     * path, since its leaf is read off the path's last edge. Without it a lease at the root, whose
+     * live lineage is empty, would pass, and the root is never leasable.
      */
     fun requireConsistent(root: GroupId, epoch: Long, ledger: EntitlementLedger) {
         val id = lease.id
@@ -260,45 +268,67 @@ internal class UnsupportedSnapshotFormat(val found: Int) :
  * that reorders an object's keys, as Postgres `jsonb` does, cannot move `state` ahead of
  * `formatVersion`, and every format writes and reads the version first. The version decides how
  * `state` is read, so a format this release does not know is refused before any of its state is
- * decoded. A sequence with its elements the other way round, or with a third, is malformed.
+ * decoded. A sequence with its elements the other way round, with fewer than two, or with a third,
+ * is malformed.
  */
 internal object LocalHeddleSnapshotSerializer : KSerializer<LocalHeddleSnapshot> {
     private const val VERSION = 0
     private const val STATE = 1
+    private const val ELEMENTS = 2
 
     /**
-     * A LIST-kind descriptor, which every format reads in order. The library's list descriptor
-     * names one element type and the envelope has two, so it names the state's; the version is
-     * read and written by index as an `Int`, which every format allows inside a list.
+     * A LIST of exactly two elements, `formatVersion` an `Int` and `state` format 1's surrogate:
+     * the fixed-shape list the library's `StructureKind.LIST` documentation allows for. LIST, so
+     * that every format reads it in order. Its own name and its own element types, so that schema
+     * tooling and descriptor-driven formats see what is actually written.
      */
-    @OptIn(ExperimentalSerializationApi::class)
-    override val descriptor: SerialDescriptor = listSerialDescriptor(SnapshotFormat1.serializer().descriptor)
+    @OptIn(InternalSerializationApi::class)
+    override val descriptor: SerialDescriptor = buildSerialDescriptor("us.tractat.kuilt.heddle.LocalHeddleSnapshot", StructureKind.LIST) {
+        element("formatVersion", Int.serializer().descriptor)
+        element("state", SnapshotFormat1.serializer().descriptor)
+    }
 
     override fun serialize(encoder: Encoder, value: LocalHeddleSnapshot) {
-        encoder.encodeCollection(descriptor, collectionSize = 2) {
+        encoder.encodeCollection(descriptor, collectionSize = ELEMENTS) {
             encodeIntElement(descriptor, VERSION, LocalHeddleSnapshot.FORMAT_VERSION)
             encodeSerializableElement(descriptor, STATE, SnapshotFormat1.serializer(), SnapshotFormat1.of(value))
         }
     }
 
+    /**
+     * Reads the size first, as a size-prefixed format needs: such a format would otherwise hand the
+     * size back as the version. JSON, and CBOR's indefinite-length arrays, report no size (`-1`).
+     * Then the version, the state and the end, in that order. A LIST is read by position, so the
+     * order is the code's and there is no state-before-version case to refuse.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
     override fun deserialize(decoder: Decoder): LocalHeddleSnapshot = decoder.decodeStructure(descriptor) {
+        val size = decodeCollectionSize(descriptor)
+        if (size != -1 && size != ELEMENTS) {
+            throw SerializationException("a snapshot is a sequence of $ELEMENTS elements, but this one has $size")
+        }
         if (decodeSequentially()) {
             val version = decodeIntElement(descriptor, VERSION).also(::requireSupported)
             return@decodeStructure decodeState(this, version)
         }
-        var version: Int? = null
-        var state: LocalHeddleSnapshot? = null
-        while (true) {
-            when (val index = decodeElementIndex(descriptor)) {
-                VERSION -> version = decodeIntElement(descriptor, VERSION).also(::requireSupported)
-                STATE -> state = decodeState(this, version ?: throw SerializationException("state precedes formatVersion"))
-                CompositeDecoder.DECODE_DONE -> break
-                else -> throw SerializationException("a snapshot has an element $index past its state")
-            }
+        if (!hasNextElement()) throw SerializationException("a snapshot has no formatVersion")
+        val version = decodeIntElement(descriptor, VERSION).also(::requireSupported)
+        if (!hasNextElement()) throw SerializationException("a snapshot of format $version has no state")
+        val state = decodeState(this, version)
+        // CBOR looks up an element's annotations in the descriptor before it hands back the
+        // element's index, so an element past the state asks about an index the descriptor does not
+        // describe, and it throws: that, too, is an element past the state.
+        val pastState = try {
+            hasNextElement()
+        } catch (_: IndexOutOfBoundsException) {
+            true
         }
-        if (version == null) throw SerializationException("a snapshot has no formatVersion")
-        state ?: throw SerializationException("a snapshot of format $version has no state")
+        if (pastState) throw SerializationException("a snapshot has an element past its state")
+        state
     }
+
+    /** Whether the sequence holds another element. */
+    private fun CompositeDecoder.hasNextElement(): Boolean = decodeElementIndex(descriptor) != CompositeDecoder.DECODE_DONE
 
     private fun requireSupported(found: Int) {
         if (found !in LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS) throw UnsupportedSnapshotFormat(found)
