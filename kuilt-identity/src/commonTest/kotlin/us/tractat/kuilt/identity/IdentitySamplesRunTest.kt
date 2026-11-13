@@ -9,7 +9,8 @@ import kotlin.test.Test
  * cannot drift from code that runs. Their `check`s are the assertions: a real name parses, a
  * well-formed name for an off-curve point is refused, and a key's signature verifies under its own
  * name and no other, a grant round-trips under its issuer's signature until one byte changes, and a
- * key store returns one key and keeps the newest grant per host and scope.
+ * key store returns one key and keeps the newest grant per host and scope, and a host's trust
+ * answers each defect with its own verdict and lets a fresh pass in after a revocation.
  */
 class IdentitySamplesRunTest {
     @Test
@@ -23,4 +24,7 @@ class IdentitySamplesRunTest {
 
     @Test
     fun deviceKeyStoreSampleRuns(): TestResult = runTest { sampleDeviceKeyStore() }
+
+    @Test
+    fun grantTrustSampleRuns(): TestResult = runTest { sampleGrantTrust() }
 }
