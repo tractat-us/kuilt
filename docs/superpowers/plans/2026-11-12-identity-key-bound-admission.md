@@ -209,6 +209,21 @@ internal object Layout {
   - Cookbook: a stub section with one compiled-sample snippet (`commonSamples/IdentitySamples.kt` → `sampleParseDidKey`), plus `IdentitySamplesRunTest`.
 - [ ] **Step 4: Run `allTests`, the doc checks and the pre-merge build, then commit.** Commit: "identity: DidKey, the did:key name of a P-256 device key (#3159)".
 
+### Task 0.8: Decompress in common code and import uncompressed on every target [after 0.3; before 0.5, 0.6, 0.7 and 3.4]
+
+Spec Decided 16. #3232's probe: Safari/WebKit refuse a 33-byte compressed raw import.
+
+**Files:** modify `commonMain/P256Curve.kt` (an internal `decompress(compressed: ByteArray): ByteArray?` returning `0x04‖x‖y`, or null off the curve; `isOnCurve` becomes `decompress(...) != null` or shares its `rhs`) and `commonMain/DidKey.kt` (`decodeOnCurve` decodes `RAW` uncompressed from `decompress`'s output, never `RAW.Compressed`). Test: `commonTest/P256CurveTest.kt`, plus arms in `DidKeyTest`.
+
+- [ ] **Step 1: Failing tests.**
+  - `decompressMatchesKnownPoints`: both G0 fixed points (`02` and `03`) decompress to the 65-byte forms in `CompressedPointProbeTest`, and G (`03 6b17…`) decompresses to `04‖Gx‖Gy` (hex literals from SEC 2).
+  - `decompressAgreesWithTheProviderOnGeneratedKeys`: 32 generated keys. `decompress(RAW.Compressed export)` equals the `RAW` export, byte for byte, on every target.
+  - `decompressRefusesOffCurveAndOutOfRange`: x = 1, x = p, x = p+5 and a `0x04` lead byte all give null.
+  - `decodeOnCurveNeverCallsCompressedImport`: assert by construction (a review point, not a test) that no `RAW.Compressed` decode remains in `commonMain`. Add a lexical check in the test that reads nothing, or state it in the PR body and let review hold it.
+- [ ] **Step 2: Mutations.** Flip the parity choice, which should red the `03` arm and half the generated keys. Drop the `x < p` check, which should red the out-of-range arm.
+- [ ] **Step 3: Docs.** Update `module.md` § Underneath ("the module decompresses the point itself …, because Safari refuses compressed import") and the AGENTS.md row's "beyond one on-curve validation" wording.
+- [ ] **Step 4:** `allTests` + `testDebugUnitTest`, a per-target table, and the pre-merge module build. Commit: "identity: decompress P-256 points in common code so every browser imports them (#3159)".
+
 ### Task 0.4: `DeviceKey` and signature vectors [after G0; parallel with 0.3 once 0.3's `DidKey` signature is fixed; merges after 0.3]
 
 **Files:**
@@ -236,7 +251,7 @@ internal class SoftwareDeviceKey : DeviceKey {   // wraps a cryptography-kotlin 
 - [ ] **Step 2: Watch them fail, implement, then run `:kuilt-identity:allTests` and `testDebugUnitTest`.**
 - [ ] **Step 3: Docs, `api/` and the pre-merge build, then commit.** Commit: "identity: DeviceKey and cross-target signature vectors (#3159)".
 
-### Task 0.5: Challenge and Admission-proof statements [after 0.2, 0.3, 0.4]
+### Task 0.5: Challenge and Admission-proof statements [after 0.2, 0.3, 0.4, 0.8]
 
 **Files:**
 - Create: `commonMain/Challenge.kt` and `commonMain/AdmissionProof.kt`.
@@ -282,7 +297,7 @@ internal class SoftwareDeviceKey : DeviceKey {   // wraps a cryptography-kotlin 
 - [ ] **Step 2: Watch them fail, implement, then run `allTests`.**
 - [ ] **Step 3: `api/` and the pre-merge build, then commit.** Commit: "identity: the Challenge and Admission-proof statements (#3159)".
 
-### Task 0.6: The `Grant` statement [after 0.2, 0.3, 0.4; parallel with 0.5]
+### Task 0.6: The `Grant` statement [after 0.2, 0.3, 0.4, 0.8; parallel with 0.5]
 
 **Files:**
 - Create: `commonMain/Grant.kt`.
@@ -763,7 +778,7 @@ Spec sections: *Key storage* and Decided 4, 8, 9. Each store keeps its key with 
 - [ ] **Step 1: Write the tests.** Robolectric has no AndroidKeyStore provider, so the store runs over an internal `KeystoreBackend` seam, and the suite runs against a JCA-backed fake of it. Add `derToRawIsLeftPaddedAndFixedWidth`, with vectors whose `r` and `s` have leading zero bytes. Add `keystoreSpecIsSignOnlyAndDeviceBound`: the `KeyGenParameterSpec` the store builds names the `AndroidKeyStore` provider and `PURPOSE_SIGN` alone. `KeystoreBackend` has no member that returns private-key bytes, so the store cannot export the key.
 - [ ] **Step 2: Implement, run `testDebugUnitTest`, update `api/`, run the pre-merge build, then commit.** The PR body states that the real-Keystore path has **no automated runtime test** in this repo and needs a device check by Iain. Commit: "identity: the Android Keystore device-key store (#3159)".
 
-### Task 3.4: wasmJs WebCrypto + IndexedDB store [after 3.1]
+### Task 3.4: wasmJs WebCrypto + IndexedDB store [after 3.1, 0.8, #3232]
 
 **Files:**
 - Create: `wasmJsMain/WebCryptoDeviceKeyStore.kt` and `wasmJsTest/WebCryptoDeviceKeyStoreConformanceTest.kt`.

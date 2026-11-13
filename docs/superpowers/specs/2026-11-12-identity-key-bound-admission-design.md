@@ -73,6 +73,13 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
 14. **A revoked present member gets no refresh and no held-seat restore (Iain, planning R2).** The
     host stops re-issuing grants to a member whose subject was revoked after its current admission,
     and a revoked device's held-seat restore falls through to ordinary admission.
+16. **kuilt decompresses the point itself and imports it uncompressed on every target (Iain,
+    2026-11-12).** Real Safari 27.0.1 and WebKit refuse a 33-byte compressed `importKey("raw")`
+    (`DataError`); Chromium and Firefox accept it, and the 65-byte form works in all four (#3232's
+    probe). Every iOS browser is WebKit. So after the on-curve check, take `y = rhs^((p+1)/4)`, pick
+    its parity by the lead byte, and import `0x04‖x‖y` on JVM, Android, Apple and wasmJs alike. The
+    wire stays compressed did:key; export stays the library's. This supersedes Decided 13's
+    "decompression stays the library's" and takes the JDK's unchecked decoder out of the path.
 15. **Android's platform default takes a `Context` (Iain, planning R3):**
     `DeviceKeyStore.platform(appId, context)`, grants under `context.noBackupFilesDir`.
 
