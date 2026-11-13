@@ -122,6 +122,12 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
     dependency when 1.8 deletes `ResumeSecret`.
 - **1.4**
   - `PendingChallenges` has already landed (above); 1.4 wires it.
+  - From #3264's review: `take` returns null for never-opened, expired **and already-taken**. A
+    duplicate Proof for a challenge whose decision is in flight must be **dropped silently**, not
+    answered with `Reject(BadProof)` (terminal), or a joiner the host is about to admit is rejected.
+  - Expiry is lazy against the room clock: the timeout test must tie that clock to
+    `testScheduler.currentTime`. A frozen `Instant.fromEpochMilliseconds(0)` makes `advanceTimeBy`
+    expire nothing, and the test passes without exercising expiry.
   - A pending sender is not an admitted member, so `handlePeerLost` never fires for it. Drop pending
     entries for senders that leave `seam.peers`, or rely on the `admitTimeout` sweep.
   - **A `Goodbye` from the sender drops its pending entry** (needed by
@@ -173,6 +179,10 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
 - **1.9** — the harness reshape is already done in 1.7; the rest stands.
 - **2.3** — after 2.1 (graph above). `AdmissionRequest.key: DidKey` needs the `api` edge.
 - **2.4**
+  - Retire a decided challenge with `PendingChallenges.retire(sender, generation)` (compare-and-remove,
+    added in #3264), never `isCurrent` + `drop`: the decision completes on the `admitPeer` coroutine,
+    so a re-Hello's `open` can land between the two and the `drop` deletes the newer challenge.
+    `drop(sender)` stays for Goodbye and peer loss.
   - `HostAdmission(policy, revocations)`; the room builds `GrantTrust` from its own store key
     (Decided 17). Tests no longer need a suspend `store.deviceKey().id` to build the trust.
   - Same missed sites as 1.1 (`LoomRoomHost`, `NwRoomHost`, `MultipeerRoomHost`, `:examples`); drop
