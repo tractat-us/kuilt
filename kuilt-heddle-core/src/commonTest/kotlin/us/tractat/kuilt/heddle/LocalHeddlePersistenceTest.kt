@@ -5,6 +5,8 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationStrategy
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -169,6 +171,25 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
+     * The envelope's descriptor says what is written: a LIST of exactly two elements, an `Int` named
+     * `formatVersion` and then the state, under the snapshot's own name. Schema tooling and
+     * descriptor-driven formats read this, not the bytes.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun theDescriptorDescribesTheEnvelope() {
+        val d = LocalHeddleSnapshot.serializer().descriptor
+        assertAll(
+            { assertEquals("us.tractat.kuilt.heddle.LocalHeddleSnapshot", d.serialName) },
+            { assertEquals(StructureKind.LIST, d.kind) },
+            { assertEquals(2, d.elementsCount) },
+            { assertEquals(listOf("formatVersion", "state"), List(d.elementsCount) { d.getElementName(it) }) },
+            { assertEquals(PrimitiveKind.INT, d.getElementDescriptor(0).kind) },
+            { assertEquals(StructureKind.CLASS, d.getElementDescriptor(1).kind) },
+        )
+    }
+
+    /**
      * A format that writes each collection's size before its elements and reads sequentially reads
      * the envelope too. Read without its size, the `2` in front is taken for the version, and every
      * snapshot comes back as `UnsupportedVersion(2)`.
@@ -268,6 +289,26 @@ class LocalHeddlePersistenceTest {
             { assertEquals(viaReference, viaRestored, "completing them is what completing them would have been") },
             { assertEquals(books(reference), books(restored), "charged to the same leaves, down the same paths") },
             { assertTrue(restored.snapshot().ledger.validate().isEmpty()) },
+        )
+    }
+
+    /**
+     * A snapshot built in this module with a lease at the root and no path is refused. Decoding never
+     * gets this far with an empty path, so this is the one route that reaches the check, and the
+     * root's live lineage is empty too, so the lineage check alone would let it through.
+     */
+    @Test
+    fun aRootLeaseWithNoPathIsRefused() {
+        val s = LocalHeddle.fromTopology(pair, policy, epoch = 0L).persist()
+        val atRoot = PersistedLease(Lease(LeaseId(0L, 0L), root, reserved = 1L, startedAt = 0L), path = emptyList())
+        assertAll(
+            { assertEquals(emptyList(), s.ledger.lineageOf(root), "the rig: the root's live lineage is the empty path") },
+            {
+                val e = assertFailsWith<IllegalArgumentException> {
+                    LocalHeddleSnapshot(s.epoch, s.ledger, s.allocatorMemory, s.totalSlots, listOf(atRoot), s.lastApplied)
+                }
+                assertTrue("empty path" in e.message.orEmpty(), "refused for its empty path: ${e.message}")
+            },
         )
     }
 
@@ -408,7 +449,8 @@ class LocalHeddlePersistenceTest {
     private val richLeaves = setOf(richBefore.groupId("acme", "interactive"), richBefore.groupId("acme", "batch", "x"), richBefore.groupId("acme", "batch", "y"), tenant)
 
     /**
-     * Every shape format 1 has to carry. `t1` is attached under `tenants`; leases open at
+     * The shapes format 1's envelope and topology have to carry; the ledger's own maps are pinned
+     * in `:kuilt-heddle`'s `EntitlementLedgerCanonicalEncodingTest`. `t1` is attached under `tenants`; leases open at
      * `acme/interactive`, `spare`, `t1` and `acme/batch/x`; a reload reweights `acme`, moving the two
      * leases under it onto its new edge, and removes `spare`, which drains with its lease open; the
      * `batch/x` lease is cancelled; the engine is restored under epoch 1 and leases once more, so the
