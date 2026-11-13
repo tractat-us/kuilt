@@ -131,6 +131,13 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
   - **Every version bump edits `admit/ProtocolVersionTest.kt`** (1.3, 1.4, 1.5, 1.6, 1.8, 2.5, 2.6).
   - Nonces from `org.kotlincrypto.random.CryptoRand`, which session already uses; keep that
     dependency when 1.8 deletes `ResumeSecret`.
+- **Test crypto seam (#3280; Iain's ruling, 2026-11-13) — before 1.4, after 1.3's wire.** On wasmJs every
+  WebCrypto call is a promise; while `runTest` waits on one it fast-forwards virtual time and every
+  timer fires (1.3 measured 11/473 wasm session tests red). Identity gets an internal signer/verifier
+  seam; room tests inject a synchronous deterministic fake on every target, chosen per room/factory,
+  opt-in-marked tests-only, refusing wrong key / message / tampered signature. Real P-256 coverage stays
+  in identity's tests, the signature vectors and the WebKit nightly. Lands on main; 1.3 adopts it, and
+  every 1.4–2.7 room test uses it.
 - **1.4**
   - `PendingChallenges` has already landed (above); 1.4 wires it.
   - From #3264's review: `take` returns null for never-opened, expired **and already-taken**. A
