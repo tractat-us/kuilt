@@ -7,7 +7,6 @@ import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 
 /**
@@ -210,11 +209,30 @@ class SeatDecisionTest {
         assertEquals(rows.map { it.third }, actual)
     }
 
+    /**
+     * Two seats under one key is reachable — two tabs of one device both decided `Ordinary` before
+     * either was added — and the Proof handler must not throw on it, since an escaping throw there
+     * aborts a Kotlin/Native host. So the decision is still a decision, and the same one whichever
+     * order the map hands the seats back in.
+     */
     @Test
-    fun twoSeatsSharingAKeyAreRefused() = seatTest { a, _, _ ->
-        assertFailsWith<IllegalArgumentException> {
-            decideSeat(p3, a, held = mapOf(p1 to live(a), p2 to live(a)), holdsValidGrant = false)
-        }
+    fun twoSeatsUnderOneKeyStillDecide() = seatTest { a, b, c ->
+        val both = mapOf(p1 to live(a), p2 to away(a))
+        val bothReversed = mapOf(p2 to away(a), p1 to live(a))
+        assertAll(
+            // Assert the rig: both fixtures really do hold two seats under key A.
+            { assertEquals(2, both.values.count { it.key == a }) },
+            { assertEquals(2, bothReversed.values.count { it.key == a }) },
+            { assertEquals(SeatDecision.Restore(p2), decideSeat(p2, a, both, holdsValidGrant = false)) },
+            { assertEquals(SeatDecision.Restore(p2), decideSeat(p2, a, bothReversed, holdsValidGrant = false)) },
+            // A new id names the key's seat with the lowest id, in either order.
+            { assertEquals(SeatDecision.RestoreUnderNewId(previous = p1), decideSeat(p3, a, both, holdsValidGrant = false)) },
+            { assertEquals(SeatDecision.RestoreUnderNewId(previous = p1), decideSeat(p3, a, bothReversed, holdsValidGrant = true)) },
+            // The claimed id held under another key still conflicts.
+            { assertEquals(SeatDecision.KeyConflict, decideSeat(p3, a, both + (p3 to away(b)), holdsValidGrant = false)) },
+            // Two seats under someone else's key are no business of this decision.
+            { assertEquals(SeatDecision.Ordinary, decideSeat(p3, a, mapOf(p1 to live(c), p2 to live(c)), holdsValidGrant = false)) },
+        )
     }
 
     private fun label(decision: SeatDecision): String = when (decision) {
