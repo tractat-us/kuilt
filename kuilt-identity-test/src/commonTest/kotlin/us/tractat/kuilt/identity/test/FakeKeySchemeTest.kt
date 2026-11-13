@@ -6,6 +6,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.identity.AdmissionProof
 import us.tractat.kuilt.identity.Challenge
 import us.tractat.kuilt.identity.DeviceKey
@@ -23,7 +24,6 @@ import kotlin.coroutines.startCoroutine
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
@@ -210,9 +210,13 @@ class FakeKeySchemeTest {
     @Test
     fun parseChecksSyntaxOnly() = runTest {
         val key = scheme.generate()
+        val parsed = scheme.parse(key.id.value)
+        val malformed = runCatchingCancellable { scheme.parse("did:key:not-a-key") }.exceptionOrNull()
 
-        assertEquals(key.id, scheme.parse(key.id.value))
-        assertFailsWith<IllegalArgumentException> { scheme.parse("did:key:not-a-key") }
+        assertAll(
+            { assertEquals(key.id, parsed) },
+            { assertTrue(malformed is IllegalArgumentException, "a malformed key is refused, not $malformed") },
+        )
     }
 
     /**
@@ -302,9 +306,15 @@ class FakeKeySchemeTest {
         }
         val challenge = challengeSignedBy(failing.key(3))
 
-        assertFailsWith<IllegalStateException> { fakeKeyStore(0, failing).deviceKey() }
-        assertFailsWith<IllegalStateException> { challenge.isSignedByHost(failing) }
-        assertFailsWith<IllegalStateException> { failing.parse(fakeDidKey(0).value) }
+        val fromStore = runCatchingCancellable { fakeKeyStore(0, failing).deviceKey() }.exceptionOrNull()
+        val fromCheck = runCatchingCancellable { challenge.isSignedByHost(failing) }.exceptionOrNull()
+        val fromParse = runCatchingCancellable { failing.parse(fakeDidKey(0).value) }.exceptionOrNull()
+
+        assertAll(
+            { assertTrue(fromStore is IllegalStateException, "the store's first key: $fromStore") },
+            { assertTrue(fromCheck is IllegalStateException, "a statement check: $fromCheck") },
+            { assertTrue(fromParse is IllegalStateException, "a parse: $fromParse") },
+        )
     }
 
     private suspend fun challengeSignedBy(host: DeviceKey): Challenge =
