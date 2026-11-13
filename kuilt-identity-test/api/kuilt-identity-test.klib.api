@@ -56,7 +56,7 @@ sealed interface us.tractat.kuilt.identity.test/FakeKeyOperation { // us.tractat
 }
 
 final class us.tractat.kuilt.identity.test/FakeKeyScheme : us.tractat.kuilt.identity/KeyScheme { // us.tractat.kuilt.identity.test/FakeKeyScheme|null[0]
-    constructor <init>(kotlin.random/Random = ..., kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.identity.test/FakeKeyOperation, kotlin/Unit> = ...) // us.tractat.kuilt.identity.test/FakeKeyScheme.<init>|<init>(kotlin.random.Random;kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.identity.test.FakeKeyOperation,kotlin.Unit>){}[0]
+    constructor <init>(kotlin.random/Random, kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.identity.test/FakeKeyOperation, kotlin/Unit> = ...) // us.tractat.kuilt.identity.test/FakeKeyScheme.<init>|<init>(kotlin.random.Random;kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.identity.test.FakeKeyOperation,kotlin.Unit>){}[0]
 
     final fun key(kotlin/Int): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity.test/FakeKeyScheme.key|key(kotlin.Int){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.identity.test/FakeKeyScheme.toString|toString(){}[0]
@@ -67,4 +67,4 @@ final class us.tractat.kuilt.identity.test/FakeKeyScheme : us.tractat.kuilt.iden
 
 final fun us.tractat.kuilt.identity.test/fakeDeviceKey(kotlin/Int): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity.test/fakeDeviceKey|fakeDeviceKey(kotlin.Int){}[0]
 final fun us.tractat.kuilt.identity.test/fakeDidKey(kotlin/Int): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity.test/fakeDidKey|fakeDidKey(kotlin.Int){}[0]
-final fun us.tractat.kuilt.identity.test/fakeKeyStore(us.tractat.kuilt.identity.test/FakeKeyScheme = ...): us.tractat.kuilt.identity/DeviceKeyStore // us.tractat.kuilt.identity.test/fakeKeyStore|fakeKeyStore(us.tractat.kuilt.identity.test.FakeKeyScheme){}[0]
+final fun us.tractat.kuilt.identity.test/fakeKeyStore(kotlin/Int, us.tractat.kuilt.identity.test/FakeKeyScheme = ...): us.tractat.kuilt.identity/DeviceKeyStore // us.tractat.kuilt.identity.test/fakeKeyStore|fakeKeyStore(kotlin.Int;us.tractat.kuilt.identity.test.FakeKeyScheme){}[0]

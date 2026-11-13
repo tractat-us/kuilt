@@ -22,6 +22,8 @@ kotlin {
             implementation(libs.kotlincrypto.hash.sha2)
             // The lock `FakeKeyScheme` draws key points under, so one scheme can be shared across threads.
             implementation(libs.kotlinx.atomicfu)
+            // The mutex a fake store makes its one key under, as `InMemoryDeviceKeyStore` does.
+            implementation(libs.kotlinx.coroutines.core)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))

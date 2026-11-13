@@ -8,8 +8,9 @@ every signature is a WebCrypto promise. While a test waits on one, the test's cl
 timers stop agreeing, and a test that passes everywhere else fails there.
 
 This module swaps the real signatures for fake ones that are computed on the spot. A test builds
-each device's store with `fakeKeyStore()`, and a room built on that store signs and checks with the
-fake. A room built on a real store never does.
+each device's store with `fakeKeyStore(n)`, a different number for each device, and a room built on
+that store signs and checks with the fake. A room built on a real store never does. The number fixes
+the device's key, so a test gets the same keys in every run and a failure replays the same way.
 
 ## What the fake still refuses
 
@@ -25,7 +26,7 @@ nightly cover it.
 
 `FakeKeyScheme` implements `:kuilt-identity`'s `KeyScheme`, the seam a room signs, checks and reads
 keys through. A `DeviceKeyStore` answers its scheme as `keyScheme`; every production store answers
-`KeyScheme.P256`, and `fakeKeyStore` builds an `InMemoryDeviceKeyStore` on the fake. The scheme
+`KeyScheme.P256`, and `fakeKeyStore(n)` answers the fake, with `fakeDeviceKey(n)` as its key. The scheme
 travels with the store, never with a key: a key read off the wire is checked in the scheme of the room
 that reads it, so a room on the real scheme treats a fake signature as a bad one.
 

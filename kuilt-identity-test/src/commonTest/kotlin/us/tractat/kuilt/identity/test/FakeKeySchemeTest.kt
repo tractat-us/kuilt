@@ -162,11 +162,11 @@ class FakeKeySchemeTest {
 
     @Test
     fun aFakeStoreAnswersItsSchemeAndAProductionStoreAnswersP256() = runTest {
-        val fake = fakeKeyStore(scheme)
+        val fake = fakeKeyStore(1, scheme)
         val key = fake.deviceKey()
         val again = fake.deviceKey()
         val verifies = fake.keyScheme.verify(key.id, message, key.sign(message))
-        val otherDevice = fakeKeyStore(scheme).deviceKey()
+        val otherDevice = fakeKeyStore(2, scheme).deviceKey()
 
         assertAll(
             { assertSame(scheme, fake.keyScheme) },
@@ -174,6 +174,31 @@ class FakeKeySchemeTest {
             { assertSame(key, again, "one store, one key") },
             { assertTrue(verifies) },
             { assertNotEquals(key.id, otherDevice.id, "two stores are two devices") },
+        )
+    }
+
+    /**
+     * A store's index is its identity: the same index is the same device in every run, and two indices
+     * are two devices. The default schemes are distinct too, seeded from the index, so a test that
+     * makes extra keys through a store's scheme replays as well.
+     */
+    @Test
+    fun aStoreIndexFixesItsKeyAndTellsDevicesApart() = runTest {
+        val one = fakeKeyStore(1).deviceKey()
+        val oneAgain = fakeKeyStore(1).deviceKey()
+        val two = fakeKeyStore(2).deviceKey()
+        val oneOnSharedScheme = fakeKeyStore(1, scheme).deviceKey()
+        val extraOne = fakeKeyStore(1).keyScheme.generate()
+        val extraOneAgain = fakeKeyStore(1).keyScheme.generate()
+        val extraTwo = fakeKeyStore(2).keyScheme.generate()
+
+        assertAll(
+            { assertEquals(fakeDidKey(1), one.id, "a store's key is fakeDeviceKey(index)") },
+            { assertEquals(one.id, oneAgain.id, "the same index is the same key") },
+            { assertNotEquals(one.id, two.id, "two indices are two keys") },
+            { assertEquals(one.id, oneOnSharedScheme.id, "the scheme passed does not change the key") },
+            { assertEquals(extraOne.id, extraOneAgain.id, "the default scheme's draws repeat for one index") },
+            { assertNotEquals(extraOne.id, extraTwo.id, "and differ between indices") },
         )
     }
 
@@ -209,7 +234,7 @@ class FakeKeySchemeTest {
             val grant = Grant.issue(host, joiner.id, GrantScope.AnyRoomOfIssuer, issuedAt = 0, notAfter = 10)
             check(GrantTrust(host.id, RevocationList.inMemory(), scheme).verify(grant, joiner.id, ROOM, now = 1) == GrantVerdict.Valid)
             check(scheme.parse(host.id.value) == host.id)
-            val store = fakeKeyStore(scheme)
+            val store = fakeKeyStore(9, scheme)
             check(store.deviceKey() === store.deviceKey())
             check(scheme.verify(fakeDidKey(4), message, fakeDeviceKey(4).sign(message)))
         }.startCoroutine(Continuation(EmptyCoroutineContext) { result ->
@@ -228,7 +253,7 @@ class FakeKeySchemeTest {
         val key = fakeDeviceKey(1)
         val signature = key.sign(message)
         val inThisScheme = scheme.verify(fakeDidKey(1), message, signature)
-        val inAnotherScheme = FakeKeyScheme().verify(key.id, message, signature)
+        val inAnotherScheme = FakeKeyScheme(Random(2)).verify(key.id, message, signature)
         val underKeyTwo = scheme.verify(fakeDidKey(2), message, signature)
 
         assertAll(
@@ -277,7 +302,7 @@ class FakeKeySchemeTest {
         }
         val challenge = challengeSignedBy(failing.key(3))
 
-        assertFailsWith<IllegalStateException> { fakeKeyStore(failing).deviceKey() }
+        assertFailsWith<IllegalStateException> { fakeKeyStore(0, failing).deviceKey() }
         assertFailsWith<IllegalStateException> { challenge.isSignedByHost(failing) }
         assertFailsWith<IllegalStateException> { failing.parse(fakeDidKey(0).value) }
     }

@@ -2,6 +2,8 @@ package us.tractat.kuilt.identity.test
 
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.kotlincrypto.hash.sha2.SHA512
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
@@ -37,15 +39,18 @@ import kotlin.random.Random
  * ECDSA, so a fake signature sent to it is simply a bad one.
  *
  * Every fake scheme checks every other fake scheme's signatures, and [fakeDeviceKey]'s: the scheme
- * holds no secret. Two stores on one scheme, or on two, are two devices with two different keys.
+ * holds no secret. A store's key does not come from [generate] but from the index the store was built
+ * with, so two stores with different indices are two devices with two different keys whichever
+ * schemes they share.
  *
- * @param random where [generate]'s points come from. Pass a seeded `Random` for keys that repeat run
- *   to run. Draws are taken under a lock, so one scheme is safe to share across threads.
+ * @param random where [generate]'s points come from. There is no default: pass a seeded `Random`, so a
+ *   red that depends on which key sorts first replays the same way. Two schemes on equal seeds draw
+ *   the same keys. Draws are taken under a lock, so one scheme is safe to share across threads.
  * @param before runs at the start of every operation, with the operation it is about to run.
  */
 @TestOnlyKeyScheme
 public class FakeKeyScheme(
-    private val random: Random = Random.Default,
+    private val random: Random,
     private val before: suspend (FakeKeyOperation) -> Unit = {},
 ) : KeyScheme {
     private val lock = reentrantLock()
@@ -61,6 +66,12 @@ public class FakeKeyScheme(
      * suspending. Its signatures run this scheme's [before]. Its [DeviceKey.id] is [fakeDidKey]`(index)`.
      */
     public fun key(index: Int): DeviceKey = FakeDeviceKey(fakeDidKey(index), before)
+
+    /** A store's first key: [key]`(index)`, after the [before] hook has seen [FakeKeyOperation.Generate]. */
+    internal suspend fun generateFixed(index: Int): DeviceKey {
+        before(FakeKeyOperation.Generate)
+        return key(index)
+    }
 
     override suspend fun parse(value: String): DidKey {
         before(FakeKeyOperation.Parse(value))
@@ -99,14 +110,48 @@ public sealed interface FakeKeyOperation {
 }
 
 /**
- * A [DeviceKeyStore] on [scheme]: its first key comes from [FakeKeyScheme.generate], and a room built
- * on it signs and checks with the fake. It keeps grants by the same rules as every other store, since
- * it is an [InMemoryDeviceKeyStore] underneath.
+ * The fake device numbered [index]: a [DeviceKeyStore] whose key is [fakeDeviceKey]`(index)`, and on
+ * which a room signs and checks with [scheme]. It keeps grants by the same rules as every other store,
+ * since an [InMemoryDeviceKeyStore] keeps them underneath.
  *
- * One store is one device. A test with a host and two joiners builds three.
+ * One store is one device, and the index is what tells devices apart: a test with a host and two
+ * joiners builds `fakeKeyStore(0)`, `fakeKeyStore(1)` and `fakeKeyStore(2)`. Distinct indices give
+ * distinct keys and the same index gives the same key, in every run and on every target, so a red that
+ * depends on how the devices' keys sort replays exactly, and a test can name a device's key as
+ * [fakeDidKey]`(index)` before the store has made it.
+ *
+ * The first [DeviceKeyStore.deviceKey] call runs [scheme]'s `before` hook with
+ * [FakeKeyOperation.Generate], so a hook can hold or fail a store's key the way a slow or broken
+ * provider would. The store's key never comes from [scheme]'s `Random`: that only feeds a test that
+ * calls [FakeKeyScheme.generate] itself, and by default it is seeded with [index].
+ *
+ * @param scheme the scheme a room built on this store signs and checks with. Pass one to share a
+ *   `before` hook across devices.
  */
 @TestOnlyKeyScheme
-public fun fakeKeyStore(scheme: FakeKeyScheme = FakeKeyScheme()): DeviceKeyStore = InMemoryDeviceKeyStore(scheme)
+public fun fakeKeyStore(index: Int, scheme: FakeKeyScheme = FakeKeyScheme(Random(index))): DeviceKeyStore =
+    FakeDeviceKeyStore(index, scheme)
+
+/**
+ * [fakeKeyStore]'s store: the key is [FakeKeyScheme.generateFixed]'s, made once under [mutex] as
+ * [InMemoryDeviceKeyStore] makes its own, and the grants and the scheme are [grantsKept]'s. That inner
+ * store's own key is never asked for, so its `Random` is never drawn from.
+ */
+@OptIn(TestOnlyKeyScheme::class)
+private class FakeDeviceKeyStore(
+    private val index: Int,
+    private val scheme: FakeKeyScheme,
+    private val grantsKept: DeviceKeyStore = InMemoryDeviceKeyStore(scheme),
+) : DeviceKeyStore by grantsKept {
+    private val mutex = Mutex()
+    private var key: DeviceKey? = null
+
+    override suspend fun deviceKey(): DeviceKey = mutex.withLock {
+        key ?: scheme.generateFixed(index).also { key = it }
+    }
+
+    override fun toString(): String = "fakeKeyStore($index)"
+}
 
 /**
  * The fixed fake key numbered [index], made without suspending: the same key in every run and on every

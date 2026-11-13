@@ -35,7 +35,6 @@ public final class us/tractat/kuilt/identity/test/FakeKeyOperation$Verify : us/t
 }
 
 public final class us/tractat/kuilt/identity/test/FakeKeyScheme : us/tractat/kuilt/identity/KeyScheme {
-	public fun <init> ()V
 	public fun <init> (Lkotlin/random/Random;Lkotlin/jvm/functions/Function2;)V
 	public synthetic fun <init> (Lkotlin/random/Random;Lkotlin/jvm/functions/Function2;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun generate (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -48,8 +47,8 @@ public final class us/tractat/kuilt/identity/test/FakeKeyScheme : us/tractat/kui
 public final class us/tractat/kuilt/identity/test/FakeKeySchemeKt {
 	public static final fun fakeDeviceKey (I)Lus/tractat/kuilt/identity/DeviceKey;
 	public static final fun fakeDidKey (I)Ljava/lang/String;
-	public static final fun fakeKeyStore (Lus/tractat/kuilt/identity/test/FakeKeyScheme;)Lus/tractat/kuilt/identity/DeviceKeyStore;
-	public static synthetic fun fakeKeyStore$default (Lus/tractat/kuilt/identity/test/FakeKeyScheme;ILjava/lang/Object;)Lus/tractat/kuilt/identity/DeviceKeyStore;
+	public static final fun fakeKeyStore (ILus/tractat/kuilt/identity/test/FakeKeyScheme;)Lus/tractat/kuilt/identity/DeviceKeyStore;
+	public static synthetic fun fakeKeyStore$default (ILus/tractat/kuilt/identity/test/FakeKeyScheme;ILjava/lang/Object;)Lus/tractat/kuilt/identity/DeviceKeyStore;
 }
 
 public abstract interface annotation class us/tractat/kuilt/identity/test/TestOnlyKeyScheme : java/lang/annotation/Annotation {

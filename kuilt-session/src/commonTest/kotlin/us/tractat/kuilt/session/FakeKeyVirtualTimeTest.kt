@@ -45,7 +45,7 @@ import kotlin.time.Duration.Companion.seconds
  * So these are the wasmJs pins on the fake: if it ever waits on the provider, they go red there.
  */
 class FakeKeyVirtualTimeTest {
-    private val store: DeviceKeyStore = fakeKeyStore()
+    private val store: DeviceKeyStore = fakeKeyStore(0)
 
     @Test
     fun aRoomTestThatSignsFirstStillDeliversItsFrame() = runTest(UnconfinedTestDispatcher()) {
