@@ -78,7 +78,11 @@ assigned at join time, wait for the admit handshake, then start the learner
 <!-- condensed from examples/src/test/kotlin/us/tractat/kuilt/examples/ServerClusterE2ETest.kt#`ClusterClient propose commits end-to-end through ServerCluster facade` -->
 ```kotlin
 val clientScope = CoroutineScope(coroutineContext + Job())
-val clientRoom = SeamRoomFactory.systemClock(loom = clientLoom, scope = clientScope)
+val clientRoom = SeamRoomFactory.systemClock(
+    loom = clientLoom,
+    scope = clientScope,
+    deviceKeyStore = InMemoryDeviceKeyStore(),
+)
     .join(
         WebSocketAdvertisement(
             url = "ws://localhost$serverPath",

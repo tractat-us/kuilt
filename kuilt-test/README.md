@@ -50,11 +50,12 @@ fanout isolation pinned by `RoomFanoutIsolationConformanceSuite`).
 
 ```kotlin
 val fabric = InMemoryRoomFabric(scope = backgroundScope, dispatcher = dispatcher)
-val hostFactory = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock = zeroClock)
+val hostFactory = SeamRoomFactory(fabric.serverLoom, backgroundScope, zeroClock, InMemoryDeviceKeyStore())
 val room1 = hostFactory.host(Pattern("room-1"))
 val room2 = hostFactory.host(Pattern("room-2"))
 
-val joinerFactory = SeamRoomFactory(fabric.clientLoom(PeerId("joiner"), Random(1L)), backgroundScope, clock = zeroClock)
+val joinerFactory =
+    SeamRoomFactory(fabric.clientLoom(PeerId("joiner"), Random(1L)), backgroundScope, zeroClock, InMemoryDeviceKeyStore())
 val joiner = joinerFactory.join(InMemoryTag("room-1"))   // reaches room-1 only; room-2 stays empty
 ```
 
