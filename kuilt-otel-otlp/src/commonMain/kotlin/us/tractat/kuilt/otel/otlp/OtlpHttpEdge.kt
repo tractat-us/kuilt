@@ -62,7 +62,9 @@ public enum class OtlpWireFormat {
  * offline window.
  *
  * @param client caller-owned Ktor [HttpClient] — it owns the engine, timeouts, TLS,
- *   and any auth headers. kuilt does not create or close it.
+ *   and any auth headers. kuilt does not create or close it, and this module ships no
+ *   engine: depend on one (`ktor-client-okhttp`, `ktor-client-java`, `ktor-client-darwin`, …)
+ *   and pass it, as in `HttpClient(OkHttp)`.
  * @param endpoint collector base URL, e.g. `https://collector:4318`. Any trailing `/` is
  *   trimmed, so `.../:4318/` and `.../:4318` are one collector. The sent-set [StoreKey]
  *   identifies the endpoint by a 128-bit SHA-256 tag rather than by the URL, so two
