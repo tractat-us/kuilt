@@ -8,6 +8,14 @@ import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.util.ExponentialBackoff
+import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.RevocationList
+import us.tractat.kuilt.session.admit.AdmissionDecision
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.GrantReach
+import us.tractat.kuilt.session.admit.GrantTerms
+import us.tractat.kuilt.session.admit.HostAdmission
+import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.election.ElectionLobby
 import us.tractat.kuilt.session.election.ElectionOutcome
@@ -18,6 +26,7 @@ import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.random.Random
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
 
 // Minimal, compile-checked snippets quoted verbatim by docs/agent-cookbook/session.md (most) and
@@ -336,4 +345,31 @@ public suspend fun flushThenLeaveSample(
         // Not proven, not lost. This fabric cannot tell, a link stalled, or the room already ended.
         FlushOutcome.Unsupported, FlushOutcome.TimedOut, is FlushOutcome.Failed -> false
     }
+}
+
+/**
+ * Decide who gets into a room you host, and for how long each may come back without being asked
+ * again. A friend's pass is good in any room you host and never runs out; a stranger's is good in
+ * this room for an hour after last contact; a device you have revoked gets your own refusal code.
+ */
+public suspend fun hostAdmissionSample(friends: Set<DidKey>, store: DurableStore): HostAdmission {
+    // RejectCode is open, but the joiner sees only the id: this arrives as RejectCode.Unknown("not-welcome"),
+    // which is treated as retryable.
+    val notWelcome = object : RejectCode {
+        override val id: String = "not-welcome"
+    }
+    // One list: the room checks returning passes against it, and the policy refuses newcomers on it.
+    // Kept in the store, since a friend's pass never expires: an in-memory list forgets on restart.
+    val revocations = RevocationList.open(store)
+    val policy = AdmissionPolicy { request ->
+        // `key` is the device key the joiner proved it holds. `displayName` is only its say-so.
+        when {
+            // Revoking voids a key's passes, not its next ordinary admission, so refuse it here too.
+            // A key revoked once is then refused for good, friend or not.
+            revocations.notBefore(request.key) != null -> AdmissionDecision.Reject(notWelcome)
+            request.key in friends -> AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
+            else -> AdmissionDecision.Admit(GrantTerms(readmitFor = 1.hours))
+        }
+    }
+    return HostAdmission(policy, revocations)
 }

@@ -629,4 +629,31 @@ internal suspend fun sampleDurableRevocations() {
 }
 ```
 
-So far this is the store, the key, its name, the pass, its check and the revocations. The platform stores that keep the key across launches, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
+**Who gets in, and for how long:** `AdmissionPolicy` (`us.tractat.kuilt.session.admit`). Do not hand-roll an "is this joiner allowed" callback, an allow-list check, or a per-member expiry map beside the room. A policy answers `AdmissionDecision.Admit(GrantTerms(readmitFor, reach))` — the pass the newcomer gets: back within `readmitFor` of last contact (`Duration.INFINITE` for never expiring), in `GrantReach.ThisRoom` or `AnyRoomOfIssuer` — or `AdmissionDecision.Reject(code)`. **The joiner sees only `code.id`:** your own `RejectCode` arrives as `RejectCode.Unknown(id)` and is treated as retryable, whatever its `retryable` says. It sees newcomers only: a device whose seat is held, or that returns inside its pass, gets back in without asking it, and revoking a key voids its passes but not its next ordinary admission, so have the policy read the same `RevocationList` the host holds — opened on a store, as above, when passes outlive a restart — rather than keep a second list beside it. Decide on `request.key`, the key the joiner proved; `displayName` is unverified. `AdmissionPolicy.open(readmitFor = 1.hours)` admits everyone, and checks its term when built rather than on a joiner's admission. `HostAdmission(policy, revocations)` is what a host will hold; it takes no host key, since the room checks passes against its own. No room entry point takes one yet; that is tracked by #3220.
+
+<!-- verbatim from kuilt-session/src/commonSamples/kotlin/us/tractat/kuilt/session/AgentCookbookSamples.kt#hostAdmissionSample -->
+```kotlin
+public suspend fun hostAdmissionSample(friends: Set<DidKey>, store: DurableStore): HostAdmission {
+    // RejectCode is open, but the joiner sees only the id: this arrives as RejectCode.Unknown("not-welcome"),
+    // which is treated as retryable.
+    val notWelcome = object : RejectCode {
+        override val id: String = "not-welcome"
+    }
+    // One list: the room checks returning passes against it, and the policy refuses newcomers on it.
+    // Kept in the store, since a friend's pass never expires: an in-memory list forgets on restart.
+    val revocations = RevocationList.open(store)
+    val policy = AdmissionPolicy { request ->
+        // `key` is the device key the joiner proved it holds. `displayName` is only its say-so.
+        when {
+            // Revoking voids a key's passes, not its next ordinary admission, so refuse it here too.
+            // A key revoked once is then refused for good, friend or not.
+            revocations.notBefore(request.key) != null -> AdmissionDecision.Reject(notWelcome)
+            request.key in friends -> AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
+            else -> AdmissionDecision.Admit(GrantTerms(readmitFor = 1.hours))
+        }
+    }
+    return HostAdmission(policy, revocations)
+}
+```
+
+So far this is the store, the key, its name, the pass, its check, the revocations and the policy's types. The platform stores that keep the key across launches, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).

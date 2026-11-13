@@ -40,10 +40,10 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-core"))
-            // `implementation` while no `:kuilt-identity` type is in this module's public surface:
-            // the key → seat decision (`admit/SeatDecision.kt`) is internal. It becomes `api` in the
-            // PR that first puts a `DidKey` or `DeviceKeyStore` in a public signature.
-            implementation(project(":kuilt-identity"))
+            // `api`: `:kuilt-identity` types are in this module's public surface — `AdmissionRequest.key`
+            // is a `DidKey` and `HostAdmission.revocations` a `RevocationList` — so a consumer writing
+            // an `AdmissionPolicy` needs them on its compile classpath.
+            api(project(":kuilt-identity"))
             implementation(project(":kuilt-liveness"))
             implementation(project(":kuilt-crdt"))
             implementation(project(":kuilt-quilter"))

@@ -6,6 +6,17 @@
 // - Show declarations: true
 
 // Library unique name: <us.tractat.kuilt:kuilt-session>
+final enum class us.tractat.kuilt.session.admit/GrantReach : kotlin/Enum<us.tractat.kuilt.session.admit/GrantReach> { // us.tractat.kuilt.session.admit/GrantReach|null[0]
+    enum entry AnyRoomOfIssuer // us.tractat.kuilt.session.admit/GrantReach.AnyRoomOfIssuer|null[0]
+    enum entry ThisRoom // us.tractat.kuilt.session.admit/GrantReach.ThisRoom|null[0]
+
+    final val entries // us.tractat.kuilt.session.admit/GrantReach.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.session.admit/GrantReach> // us.tractat.kuilt.session.admit/GrantReach.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.session.admit/GrantReach // us.tractat.kuilt.session.admit/GrantReach.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.session.admit/GrantReach> // us.tractat.kuilt.session.admit/GrantReach.values|values#static(){}[0]
+}
+
 final enum class us.tractat.kuilt.session/SessionRole : kotlin/Enum<us.tractat.kuilt.session/SessionRole> { // us.tractat.kuilt.session/SessionRole|null[0]
     enum entry Host // us.tractat.kuilt.session/SessionRole.Host|null[0]
     enum entry Joiner // us.tractat.kuilt.session/SessionRole.Joiner|null[0]
@@ -33,6 +44,14 @@ open enum class us.tractat.kuilt.session/RoomFramePrefix : kotlin/Enum<us.tracta
     final fun valueOf(kotlin/String): us.tractat.kuilt.session/RoomFramePrefix // us.tractat.kuilt.session/RoomFramePrefix.valueOf|valueOf#static(kotlin.String){}[0]
     final fun values(): kotlin/Array<us.tractat.kuilt.session/RoomFramePrefix> // us.tractat.kuilt.session/RoomFramePrefix.values|values#static(){}[0]
     open fun classifies(kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.session/RoomFramePrefix.classifies|classifies(kotlin.ByteArray){}[0]
+}
+
+abstract fun interface us.tractat.kuilt.session.admit/AdmissionPolicy { // us.tractat.kuilt.session.admit/AdmissionPolicy|null[0]
+    abstract suspend fun decide(us.tractat.kuilt.session.admit/AdmissionRequest): us.tractat.kuilt.session.admit/AdmissionDecision // us.tractat.kuilt.session.admit/AdmissionPolicy.decide|decide(us.tractat.kuilt.session.admit.AdmissionRequest){}[0]
+
+    final object Companion { // us.tractat.kuilt.session.admit/AdmissionPolicy.Companion|null[0]
+        final fun open(kotlin.time/Duration = ...): us.tractat.kuilt.session.admit/AdmissionPolicy // us.tractat.kuilt.session.admit/AdmissionPolicy.Companion.open|open(kotlin.time.Duration){}[0]
+    }
 }
 
 abstract fun interface us.tractat.kuilt.session.partition/EndpointSelector { // us.tractat.kuilt.session.partition/EndpointSelector|null[0]
@@ -162,6 +181,34 @@ abstract interface us.tractat.kuilt.session/RoomFactory { // us.tractat.kuilt.se
 
 abstract interface us.tractat.kuilt.session/RoomHost : kotlin/AutoCloseable { // us.tractat.kuilt.session/RoomHost|null[0]
     abstract suspend fun start(kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.session/Room, kotlin/Unit>) // us.tractat.kuilt.session/RoomHost.start|start(kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.session.Room,kotlin.Unit>){}[0]
+}
+
+sealed interface us.tractat.kuilt.session.admit/AdmissionDecision { // us.tractat.kuilt.session.admit/AdmissionDecision|null[0]
+    final class Admit : us.tractat.kuilt.session.admit/AdmissionDecision { // us.tractat.kuilt.session.admit/AdmissionDecision.Admit|null[0]
+        constructor <init>(us.tractat.kuilt.session.admit/GrantTerms) // us.tractat.kuilt.session.admit/AdmissionDecision.Admit.<init>|<init>(us.tractat.kuilt.session.admit.GrantTerms){}[0]
+
+        final val grant // us.tractat.kuilt.session.admit/AdmissionDecision.Admit.grant|{}grant[0]
+            final fun <get-grant>(): us.tractat.kuilt.session.admit/GrantTerms // us.tractat.kuilt.session.admit/AdmissionDecision.Admit.grant.<get-grant>|<get-grant>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.session.admit/GrantTerms // us.tractat.kuilt.session.admit/AdmissionDecision.Admit.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.session.admit/GrantTerms = ...): us.tractat.kuilt.session.admit/AdmissionDecision.Admit // us.tractat.kuilt.session.admit/AdmissionDecision.Admit.copy|copy(us.tractat.kuilt.session.admit.GrantTerms){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmissionDecision.Admit.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/AdmissionDecision.Admit.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmissionDecision.Admit.toString|toString(){}[0]
+    }
+
+    final class Reject : us.tractat.kuilt.session.admit/AdmissionDecision { // us.tractat.kuilt.session.admit/AdmissionDecision.Reject|null[0]
+        constructor <init>(us.tractat.kuilt.session.admit/RejectCode) // us.tractat.kuilt.session.admit/AdmissionDecision.Reject.<init>|<init>(us.tractat.kuilt.session.admit.RejectCode){}[0]
+
+        final val code // us.tractat.kuilt.session.admit/AdmissionDecision.Reject.code|{}code[0]
+            final fun <get-code>(): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session.admit/AdmissionDecision.Reject.code.<get-code>|<get-code>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.session.admit/RejectCode // us.tractat.kuilt.session.admit/AdmissionDecision.Reject.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.session.admit/RejectCode = ...): us.tractat.kuilt.session.admit/AdmissionDecision.Reject // us.tractat.kuilt.session.admit/AdmissionDecision.Reject.copy|copy(us.tractat.kuilt.session.admit.RejectCode){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/AdmissionDecision.Reject.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/AdmissionDecision.Reject.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmissionDecision.Reject.toString|toString(){}[0]
+    }
 }
 
 sealed interface us.tractat.kuilt.session.admit/AdmitMessage { // us.tractat.kuilt.session.admit/AdmitMessage|null[0]
@@ -988,6 +1035,45 @@ sealed interface us.tractat.kuilt.session/ReconnectReason { // us.tractat.kuilt.
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.session/ReconnectReason.TransportClosed.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.session/ReconnectReason.TransportClosed.toString|toString(){}[0]
     }
+}
+
+final class us.tractat.kuilt.session.admit/AdmissionRequest { // us.tractat.kuilt.session.admit/AdmissionRequest|null[0]
+    final val deviceId // us.tractat.kuilt.session.admit/AdmissionRequest.deviceId|{}deviceId[0]
+        final fun <get-deviceId>(): kotlin/String? // us.tractat.kuilt.session.admit/AdmissionRequest.deviceId.<get-deviceId>|<get-deviceId>(){}[0]
+    final val displayName // us.tractat.kuilt.session.admit/AdmissionRequest.displayName|{}displayName[0]
+        final fun <get-displayName>(): kotlin/String // us.tractat.kuilt.session.admit/AdmissionRequest.displayName.<get-displayName>|<get-displayName>(){}[0]
+    final val key // us.tractat.kuilt.session.admit/AdmissionRequest.key|{}key[0]
+        final fun <get-key>(): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.session.admit/AdmissionRequest.key.<get-key>|<get-key>(){}[0]
+
+    final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/AdmissionRequest.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.session.admit/GrantTerms { // us.tractat.kuilt.session.admit/GrantTerms|null[0]
+    constructor <init>(kotlin.time/Duration, us.tractat.kuilt.session.admit/GrantReach = ...) // us.tractat.kuilt.session.admit/GrantTerms.<init>|<init>(kotlin.time.Duration;us.tractat.kuilt.session.admit.GrantReach){}[0]
+
+    final val reach // us.tractat.kuilt.session.admit/GrantTerms.reach|{}reach[0]
+        final fun <get-reach>(): us.tractat.kuilt.session.admit/GrantReach // us.tractat.kuilt.session.admit/GrantTerms.reach.<get-reach>|<get-reach>(){}[0]
+    final val readmitFor // us.tractat.kuilt.session.admit/GrantTerms.readmitFor|{}readmitFor[0]
+        final fun <get-readmitFor>(): kotlin.time/Duration // us.tractat.kuilt.session.admit/GrantTerms.readmitFor.<get-readmitFor>|<get-readmitFor>(){}[0]
+
+    final fun component1(): kotlin.time/Duration // us.tractat.kuilt.session.admit/GrantTerms.component1|component1(){}[0]
+    final fun component2(): us.tractat.kuilt.session.admit/GrantReach // us.tractat.kuilt.session.admit/GrantTerms.component2|component2(){}[0]
+    final fun copy(kotlin.time/Duration = ..., us.tractat.kuilt.session.admit/GrantReach = ...): us.tractat.kuilt.session.admit/GrantTerms // us.tractat.kuilt.session.admit/GrantTerms.copy|copy(kotlin.time.Duration;us.tractat.kuilt.session.admit.GrantReach){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.session.admit/GrantTerms.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.session.admit/GrantTerms.hashCode|hashCode(){}[0]
+    final fun notAfter(kotlin/Long): kotlin/Long // us.tractat.kuilt.session.admit/GrantTerms.notAfter|notAfter(kotlin.Long){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/GrantTerms.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.session.admit/HostAdmission { // us.tractat.kuilt.session.admit/HostAdmission|null[0]
+    constructor <init>(us.tractat.kuilt.session.admit/AdmissionPolicy, us.tractat.kuilt.identity/RevocationList) // us.tractat.kuilt.session.admit/HostAdmission.<init>|<init>(us.tractat.kuilt.session.admit.AdmissionPolicy;us.tractat.kuilt.identity.RevocationList){}[0]
+
+    final val policy // us.tractat.kuilt.session.admit/HostAdmission.policy|{}policy[0]
+        final fun <get-policy>(): us.tractat.kuilt.session.admit/AdmissionPolicy // us.tractat.kuilt.session.admit/HostAdmission.policy.<get-policy>|<get-policy>(){}[0]
+    final val revocations // us.tractat.kuilt.session.admit/HostAdmission.revocations|{}revocations[0]
+        final fun <get-revocations>(): us.tractat.kuilt.identity/RevocationList // us.tractat.kuilt.session.admit/HostAdmission.revocations.<get-revocations>|<get-revocations>(){}[0]
+
+    final fun toString(): kotlin/String // us.tractat.kuilt.session.admit/HostAdmission.toString|toString(){}[0]
 }
 
 final class us.tractat.kuilt.session.election/LobbyTornException : kotlin/Exception { // us.tractat.kuilt.session.election/LobbyTornException|null[0]
