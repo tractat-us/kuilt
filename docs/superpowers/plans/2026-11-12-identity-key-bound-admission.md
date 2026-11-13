@@ -260,7 +260,7 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
 2. **A policy that throws or stalls.** A user expects the joiner to get an answer and the room to keep running. On Kotlin/Native an escaped throw kills the process. **Pinned by `throwingPolicyRejectsRetryablyAndRoomSurvives` and `slowPolicyTimesOutWithoutWedgingPending` (Task 2.4).**
 3. **A Hello retried while the first one is still being decided.** A user expects exactly one admission. **Pinned by `retriedHelloDuringDecisionAdmitsOnce` (Task 2.4):** the Proof for the overwritten challenge is refused, and one `Joined` fires.
 4. **A key that leaves the device**, through iCloud Keychain sync or a backup restore. That breaks Decided 4, since many devices would hold one key. A user expects the key to stay on its device. **Pinned by `keychainItemIsThisDeviceOnlyAndUnsynced` (Task 3.2), `keystoreSpecIsSignOnlyAndDeviceBound` (Task 3.3) and `webCryptoKeyIsNonExtractable` (Task 3.4).**
-5. **A cleared or corrupt key store**: a truncated key file, a deleted Keychain item, cleared site data. A user expects the app to keep working as a new device, with no crash and no prompt. **Pinned by `corruptKeyIsReplacedNotFatal` in `DeviceKeyStoreConformanceSuite` (Task 3.1),** which every platform store inherits.
+5. **A cleared or corrupt key store**: a truncated key file, a deleted Keychain item, cleared site data. A user expects the app to keep working as a new device, with no crash and no prompt. **Pinned by `aCorruptKeyIsReplacedNotFatal` in `DeviceKeyStoreConformanceSuite` (`:kuilt-conformance`, Task 3.1),** which every platform store inherits. Its counterweight, from #3272's review: a **transiently unreadable** medium (Keychain before first unlock, EIO, a symlink loop) must throw and keep the key, never mint a new one — pinned by the `makeKeyUnreadable` hook.
 
 ## Dependency graph
 
@@ -920,6 +920,8 @@ Each of the last five goes to ordinary admission with exactly one policy call.
 ---
 
 ## Slice 3: platform key stores
+
+**From #3272 (3.1) — every platform store inherits these:** the TCK lives in `:kuilt-conformance` (published, so consumers test their own stores), arms `KeepsNothing`/`Durable`. Two-armed hooks: `makeKeyUnreadable` (`Rigged`/`CannotOccur`) and `interruptKeyWrite` (`LeftResidue`/`AtomicMedium`) — a Keychain or IndexedDB store picks its arm honestly. Name the key from the stored public half, never the provider's derived one (CryptoKit derives it from `d` alone, so a mismatched pair passed on iOS). A signing fault during the self-test is a provider error, not damage. Steer storage away from backed-up/roaming locations (Decided 4): Android `noBackupFilesDir`, Apple `ThisDeviceOnly` accessibility, desktop non-roaming local dirs.
 
 Spec sections: *Key storage* and Decided 4, 8, 9. Each store keeps its key with the platform and its grants in a `DurableStore`. Each subclasses the TCK from Task 3.1 and adds its own `DeviceKeyStore.platform(...)`. The function is declared in that platform's source set, with no `expect`.
 
