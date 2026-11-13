@@ -119,7 +119,7 @@ public class Grant private constructor(
          * a fresh random [id] from the platform's cryptographically secure source.
          *
          * @throws IllegalArgumentException when [notAfter] is not after [issuedAt], or a
-         *   [GrantScope.Room] id is longer than 65 534 UTF-8 bytes.
+         *   [GrantScope.Room] id holds an unpaired surrogate or is longer than 65 534 UTF-8 bytes.
          * @throws IllegalStateException when [issuer] returns a signature that is not 64 bytes, or
          *   this platform's cryptographic provider cannot sign here.
          */
@@ -190,8 +190,19 @@ public class Grant private constructor(
         private val NO_PARENT = ByteArray(0)
 
         private fun GrantScope.encode(): ByteArray = when (this) {
-            is GrantScope.Room -> byteArrayOf(SCOPE_ROOM) + roomId.encodeToByteArray()
+            is GrantScope.Room -> byteArrayOf(SCOPE_ROOM) + strictUtf8(roomId)
             GrantScope.AnyRoomOfIssuer -> byteArrayOf(SCOPE_ANY_ROOM_OF_ISSUER)
+        }
+
+        /**
+         * [roomId] as UTF-8, refusing an unpaired surrogate. The lenient encoder would replace it
+         * (`?` on the JVM, `EF BF BD` elsewhere), so the grant would sign another room id than the
+         * one it was given, and a different one on each platform.
+         */
+        private fun strictUtf8(roomId: String): ByteArray = try {
+            roomId.encodeToByteArray(startIndex = 0, endIndex = roomId.length, throwOnInvalidSequence = true)
+        } catch (_: CharacterCodingException) {
+            throw IllegalArgumentException("the room id is not valid Unicode: it holds an unpaired surrogate")
         }
 
         private fun scopeOf(field: ByteArray): GrantScope? = when {

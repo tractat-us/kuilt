@@ -76,6 +76,27 @@ class GrantTest {
     }
 
     @Test
+    fun roomIdMustBeValidUnicodeToIssue() = runTest {
+        val issuer = DeviceKey.generate()
+        // A lenient encoder would sign "r?" on the JVM and "r�" elsewhere: not the id it was given.
+        assertFailsWith<IllegalArgumentException>("an unpaired high surrogate") {
+            Grant.issue(issuer, SUBJECT, GrantScope.Room("r\uD800"), ISSUED_AT, NOT_AFTER)
+        }
+        assertFailsWith<IllegalArgumentException>("an unpaired low surrogate") {
+            Grant.issue(issuer, SUBJECT, GrantScope.Room("\uDC00r"), ISSUED_AT, NOT_AFTER)
+        }
+        val multiByte = "ré🃏" // r, é, and U+1F0CF as a surrogate pair
+        val grant = Grant.issue(issuer, SUBJECT, GrantScope.Room(multiByte), ISSUED_AT, NOT_AFTER)
+        assertAll(
+            { assertEquals(GrantScope.Room(multiByte), Grant.decode(grant.wire)?.scope, "control: a valid multi-byte id round-trips") },
+            {
+                // scope length 8, Room tag, then 72 · c3 a9 · f0 9f 83 8f
+                assertTrue("0008" + "01" + "72c3a9f09f838f" in grant.wire.toHexString(), "the id is signed as its exact UTF-8")
+            },
+        )
+    }
+
+    @Test
     fun nonEmptyParentDoesNotDecode() {
         assertAll(
             { assertNotNull(Grant.decode(wireOf(parent = byteArrayOf())), "control: an empty parent decodes") },
