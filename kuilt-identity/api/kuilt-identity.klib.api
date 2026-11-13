@@ -10,6 +10,17 @@ open annotation class us.tractat.kuilt.identity/IdentityInternalApi : kotlin/Ann
     constructor <init>() // us.tractat.kuilt.identity/IdentityInternalApi.<init>|<init>(){}[0]
 }
 
+abstract interface us.tractat.kuilt.identity/DeviceKey { // us.tractat.kuilt.identity/DeviceKey|null[0]
+    abstract val id // us.tractat.kuilt.identity/DeviceKey.id|{}id[0]
+        abstract fun <get-id>(): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/DeviceKey.id.<get-id>|<get-id>(){}[0]
+
+    abstract suspend fun sign(kotlin/ByteArray): kotlin/ByteArray // us.tractat.kuilt.identity/DeviceKey.sign|sign(kotlin.ByteArray){}[0]
+
+    final object Companion { // us.tractat.kuilt.identity/DeviceKey.Companion|null[0]
+        final suspend fun generate(): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity/DeviceKey.Companion.generate|generate(){}[0]
+    }
+}
+
 final value class us.tractat.kuilt.identity/DidKey { // us.tractat.kuilt.identity/DidKey|null[0]
     final val value // us.tractat.kuilt.identity/DidKey.value|{}value[0]
         final fun <get-value>(): kotlin/String // us.tractat.kuilt.identity/DidKey.value.<get-value>|<get-value>(){}[0]

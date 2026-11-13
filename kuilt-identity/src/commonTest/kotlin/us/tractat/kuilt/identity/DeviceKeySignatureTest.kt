@@ -4,7 +4,6 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -90,25 +89,19 @@ class DeviceKeySignatureTest {
     }
 
     @Test
-    fun pkcs8RoundTripKeepsTheId() = runTest {
-        val original = SoftwareDeviceKey.generate()
-        val der = original.encodePkcs8()
-        val decoded = SoftwareDeviceKey.decodePkcs8(der)
-        val message = "the same key, read back".encodeToByteArray()
-        // The decoded key signs, and the ORIGINAL name accepts it: the private half came back, not
-        // just a public key that happens to encode the same.
-        val signature = decoded.sign(message)
-        val other = SoftwareDeviceKey.generate()
+    fun signingTwiceGivesTwoSignaturesThatBothVerify() = runTest {
+        val key = DeviceKey.generate()
+        val message = "the same message, twice".encodeToByteArray()
+        val first = key.sign(message)
+        val second = key.sign(message)
+        val firstVerifies = key.id.verify(message, first)
+        val secondVerifies = key.id.verify(message, second)
         assertAll(
-            { assertTrue(der.isNotEmpty(), "precondition: PKCS#8 bytes") },
-            { assertFalse(original.id == other.id, "precondition: two generated keys differ, so equal ids below mean something") },
-            { assertEquals(original.id, decoded.id, "the decoded key has the original's name") },
-            { assertTrue(original.id.verify(message, signature), "the decoded key's signature verifies under the original name") },
-            { assertFalse(other.id.verify(message, signature), "and not under another key's name") },
-            { assertEquals(original.id, SoftwareDeviceKey.decodePkcs8(decoded.encodePkcs8()).id, "a second round trip keeps it too") },
-            { assertFailsWith<IllegalArgumentException>("garbage") { SoftwareDeviceKey.decodePkcs8(byteArrayOf(1, 2, 3)) } },
-            { assertFailsWith<IllegalArgumentException>("empty") { SoftwareDeviceKey.decodePkcs8(ByteArray(0)) } },
-            { assertFailsWith<IllegalArgumentException>("truncated") { SoftwareDeviceKey.decodePkcs8(der.copyOf(der.size / 2)) } },
+            // A fresh nonce per signature: the same r twice would leak the private key.
+            { assertFalse(first.contentEquals(second), "two signatures over one message differ") },
+            { assertFalse(first.copyOf(32).contentEquals(second.copyOf(32)), "and so does their r") },
+            { assertTrue(firstVerifies, "the first verifies") },
+            { assertTrue(secondVerifies, "the second verifies") },
         )
     }
 

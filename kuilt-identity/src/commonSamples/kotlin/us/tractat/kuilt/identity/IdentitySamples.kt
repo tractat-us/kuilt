@@ -18,3 +18,19 @@ internal suspend fun sampleParseDidKey() {
     }
     check(refused)
 }
+
+/** @suppress — sample only */
+internal suspend fun sampleDeviceKeySigns() {
+    // This device's key. A real app gets it from a key store, so it is the same key tomorrow.
+    val key = DeviceKey.generate()
+
+    // The device signs something fresh; anyone holding only its public name can check the signature.
+    val challenge = "a fresh challenge from the room".encodeToByteArray()
+    val signature = key.sign(challenge)
+    check(key.id.verify(challenge, signature))
+
+    // A signature proves this key and this message, nothing else.
+    val someoneElse = DeviceKey.generate()
+    check(!someoneElse.id.verify(challenge, signature))
+    check(!key.id.verify("a different message".encodeToByteArray(), signature))
+}

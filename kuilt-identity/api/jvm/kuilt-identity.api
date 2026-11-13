@@ -1,3 +1,13 @@
+public abstract interface class us/tractat/kuilt/identity/DeviceKey {
+	public static final field Companion Lus/tractat/kuilt/identity/DeviceKey$Companion;
+	public abstract fun getId-UjzFoJQ ()Ljava/lang/String;
+	public abstract fun sign ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/identity/DeviceKey$Companion {
+	public final fun generate (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public final class us/tractat/kuilt/identity/DidKey {
 	public static final field Companion Lus/tractat/kuilt/identity/DidKey$Companion;
 	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/identity/DidKey;
