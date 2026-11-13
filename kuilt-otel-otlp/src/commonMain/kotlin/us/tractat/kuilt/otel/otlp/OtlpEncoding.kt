@@ -42,6 +42,14 @@ internal fun SpanKind.toOtlp(): Int = when (this) {
 private fun attrs(m: Map<String, String>): List<KeyValue> =
     m.map { KeyValue(it.key, AnyValue(it.value)) }
 
+/** The envelope's resource as OTLP/JSON, or null (field omitted) when it has no attributes. */
+private fun OtlpEnvelope.jsonResource(): OtlpResource? =
+    if (resource.isEmpty()) null else OtlpResource(attrs(resource))
+
+/** The envelope's scope as OTLP/JSON, or null (field omitted) when name and version are both empty. */
+private fun OtlpEnvelope.jsonScope(): OtlpScope? =
+    if (scopeIsEmpty) null else OtlpScope(scopeName, scopeVersion)
+
 /** Render spans (with their inferred causal links) into an OTLP/JSON traces request. */
 internal fun tracesRequestOf(
     spans: Set<SpanRecord>,
@@ -64,7 +72,9 @@ internal fun tracesRequestOf(
             },
         )
     }
-    return TracesRequest(listOf(ResourceSpans(scopeSpans = listOf(ScopeSpans(spans = otlpSpans)))))
+    return TracesRequest(
+        listOf(ResourceSpans(envelope.jsonResource(), listOf(ScopeSpans(envelope.jsonScope(), otlpSpans)))),
+    )
 }
 
 /** Render log records into an OTLP/JSON logs request. */
@@ -81,7 +91,7 @@ internal fun logsRequestOf(logs: Set<LogRecord>, envelope: OtlpEnvelope): LogsRe
             spanId = r.spanId?.toHex(),
         )
     }
-    return LogsRequest(listOf(ResourceLogs(scopeLogs = listOf(ScopeLogs(logRecords = recs)))))
+    return LogsRequest(listOf(ResourceLogs(envelope.jsonResource(), listOf(ScopeLogs(envelope.jsonScope(), recs)))))
 }
 
 /**
@@ -161,7 +171,9 @@ internal fun metricsRequestOf(points: Set<MetricPoint>, envelope: OtlpEnvelope):
             )
         }
     }
-    return MetricsRequest(listOf(ResourceMetrics(scopeMetrics = listOf(ScopeMetrics(metrics = metrics)))))
+    return MetricsRequest(
+        listOf(ResourceMetrics(envelope.jsonResource(), listOf(ScopeMetrics(envelope.jsonScope(), metrics)))),
+    )
 }
 
 /** A sign's bucket array as OTLP/JSON, or null (field omitted) when no buckets are populated. */

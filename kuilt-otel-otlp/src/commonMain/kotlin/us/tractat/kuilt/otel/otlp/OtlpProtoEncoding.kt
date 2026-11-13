@@ -17,6 +17,14 @@ private fun ByteString.toByteArray(): ByteArray = ByteArray(size) { this[it] }
 private fun protoAttrs(m: Map<String, String>): List<ProtoKeyValue> =
     m.map { ProtoKeyValue(it.key, ProtoAnyValue(it.value)) }
 
+/** The envelope's resource as OTLP/protobuf, or null (field absent) when it has no attributes. */
+private fun OtlpEnvelope.protoResource(): ProtoResource? =
+    if (resource.isEmpty()) null else ProtoResource(protoAttrs(resource))
+
+/** The envelope's scope as OTLP/protobuf, or null (field absent) when name and version are both empty. */
+private fun OtlpEnvelope.protoScope(): ProtoScope? =
+    if (scopeIsEmpty) null else ProtoScope(scopeName, scopeVersion)
+
 /** Render spans (with their inferred causal links) into an OTLP/protobuf traces request. */
 internal fun tracesProtoOf(
     spans: Set<SpanRecord>,
@@ -43,7 +51,9 @@ internal fun tracesProtoOf(
             },
         )
     }
-    return ProtoTracesRequest(listOf(ProtoResourceSpans(scopeSpans = listOf(ProtoScopeSpans(spans = protoSpans)))))
+    return ProtoTracesRequest(
+        listOf(ProtoResourceSpans(envelope.protoResource(), listOf(ProtoScopeSpans(envelope.protoScope(), protoSpans)))),
+    )
 }
 
 /** Render log records into an OTLP/protobuf logs request. */
@@ -60,7 +70,9 @@ internal fun logsProtoOf(logs: Set<LogRecord>, envelope: OtlpEnvelope): ProtoLog
             spanId = r.spanId?.toByteArray(),
         )
     }
-    return ProtoLogsRequest(listOf(ProtoResourceLogs(scopeLogs = listOf(ProtoScopeLogs(logRecords = recs)))))
+    return ProtoLogsRequest(
+        listOf(ProtoResourceLogs(envelope.protoResource(), listOf(ProtoScopeLogs(envelope.protoScope(), recs)))),
+    )
 }
 
 /**
@@ -145,7 +157,9 @@ internal fun metricsProtoOf(points: Set<MetricPoint>, envelope: OtlpEnvelope): P
             )
         }
     }
-    return ProtoMetricsRequest(listOf(ProtoResourceMetrics(scopeMetrics = listOf(ProtoScopeMetrics(metrics = metrics)))))
+    return ProtoMetricsRequest(
+        listOf(ProtoResourceMetrics(envelope.protoResource(), listOf(ProtoScopeMetrics(envelope.protoScope(), metrics)))),
+    )
 }
 
 /** A sign's bucket array as OTLP/protobuf, or null (field absent) when no buckets are populated. */
