@@ -8,9 +8,9 @@ import kotlin.time.Duration
 import kotlin.time.TimeSource
 
 /**
- * The scale row for the lease model (#3173, plan Task C): what one acquire and one complete cost on
- * [LeasePrototype] when a lane carries 5,000 runtime-style children and 50,000 retired edges. It
- * decides whether L1 needs a ledger index.
+ * The scale row for the lease model (#3173): what one acquire and one complete cost on [LocalHeddle]
+ * when a lane carries 5,000 runtime-style children and 50,000 retired edges. Task C ran it on a
+ * prototype and decided L0's ledger index; L1 re-points it at the engine.
  *
  * **Gated at the task level**: excluded from every test task unless `-Pheddle.scale.probe=true`
  * (`kuilt-heddle-core/build.gradle.kts`). Timing is printed as `LEASE-SCALE` lines and never
@@ -39,7 +39,7 @@ class LeaseScaleProbe {
     private fun scaleRow(active: Int, retired: Int, served: Int): String {
         val clock = TimeSource.Monotonic
         val built = clock.markNow()
-        val self = LeasePrototype.SELF
+        val self = LOCAL
         val lane = GroupId("lane")
         val laneEdge = AttachmentRecord(AttachmentId("root>lane"), ROOT, lane, Weight.ONE)
         val children = (0 until active).map { k ->
@@ -82,24 +82,21 @@ class LeaseScaleProbe {
         val ledger = shaped.piece(joinAll(bareRecords.map { checkNotNull(shaped.retire(it.id)).delta }))
         val buildTime = built.elapsedNow()
 
-        val parentOf = HashMap<GroupId, GroupId>().apply {
-            put(lane, ROOT)
-            children.forEach { put(it.child, lane) }
-        }
-        val proto = LeasePrototype(ledger, ROOT, parentOf, watermark = WATERMARK, mintChunk = WATERMARK)
+        val heddle = LocalHeddle.over(ledger, ROOT, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+        heddle.mintSupply(SUPPLY)
         val everyone = children.mapTo(HashSet()) { it.child }
 
         val seatMark = clock.markNow()
-        val first = proto.acquire(everyone, everyone, reservation = 3L)
+        val first = heddle.acquire(everyone, everyone, startedAt = 0L)
         val seatTime = seatMark.elapsedNow()
         val acquireTimes = (0 until TIMED).map {
             val mark = clock.markNow()
-            val out = proto.acquire(everyone, everyone, reservation = 3L)
-            mark.elapsedNow().also { assertTrue(out is PrototypeAcquire.Acquired, "timed acquire $it: $out") }
+            val out = heddle.acquire(everyone, everyone, startedAt = it.toLong())
+            mark.elapsedNow().also { assertTrue(out is AcquireOutcome.Acquired, "timed acquire $it: $out") }
         }
 
         // Where an acquire's time goes: each ledger primitive it leans on, timed alone on the same ledger.
-        val probe = proto.ledger
+        val probe = heddle.snapshot().ledger
         val someChild = children.first().child
         val primitives = listOf(
             "activeChildren" to { probe.activeChildren(lane).size.toLong() },
@@ -107,21 +104,32 @@ class LeaseScaleProbe {
             "lineageOf" to { probe.lineageOf(someChild)?.size?.toLong() ?: -1L },
             "isLeaf" to { if (probe.isLeaf(someChild)) 1L else 0L },
             "piece" to { probe.piece(probe.mint(MintId("probe"), ROOT, self, 1L).delta).mintedTotal() },
+            // The allocator's own scan at the lane: one seat-and-wake pass and one EEVDF pick over every child.
+            "pickChild" to {
+                val wants = Demand(targetOutstanding = 1L shl 40, maximumUsefulGrant = 3L)
+                FairShareAllocator(self, PolicyConfig(quantum = Long.MAX_VALUE)).pickChild(lane, probe, { wants }, { wants })?.grant?.amount ?: -1L
+            },
+            "liftLineages" to { probe.withDelegableLineages(everyone).size.toLong() },
+            "liftLive" to { probe.withLiveLineages(everyone).size.toLong() },
+            "delegatePiece" to {
+                val edge = children.first().id
+                probe.piece(checkNotNull(probe.delegate(self, laneEdge.id, 1L)).delta).baseIssuance(edge)
+            },
         ).joinToString(" ") { (name, call) ->
             val mark = clock.markNow()
             repeat(PRIMITIVE_REPS) { call() }
             "$name=${mark.elapsedNow().inWholeMicroseconds / PRIMITIVE_REPS}"
         }
-        val completeTimes = proto.openLeases().map { lease ->
+        val completeTimes = heddle.snapshot().leases.map { lease ->
             val mark = clock.markNow()
-            proto.complete(lease.id, actual = 2L)
+            heddle.complete(lease.id, actualCost = 2L)
             mark.elapsedNow()
         }
 
-        val after = proto.ledger
+        val after = heddle.snapshot().ledger
         val leases = TIMED + 1
         assertAll(
-            { assertTrue(first is PrototypeAcquire.Acquired, "the seating acquire: $first") },
+            { assertTrue(first is AcquireOutcome.Acquired, "the seating acquire: $first") },
             { assertEquals(active, after.activeChildren(lane).size, "active children") },
             { assertEquals(retired, gone.count { after.lifecycle(it.id) == Lifecycle.RETIRED }, "retired edges") },
             { assertEquals(served, servedRecords.count { after.edge(it.id)?.spent == SERVED_COST }, "served retired edges carry their spend") },
@@ -143,7 +151,7 @@ class LeaseScaleProbe {
             "firstAcquireMs=${seatTime.inWholeMilliseconds} " +
             "acquireUs[mean=${acquireTimes.meanUs()} min=${acquireTimes.minOf { it.inWholeMicroseconds }} max=${acquireTimes.maxOf { it.inWholeMicroseconds }}] " +
             "completeUs[mean=${completeTimes.meanUs()} max=${completeTimes.maxOf { it.inWholeMicroseconds }}] " +
-            "primitiveUs[$primitives] mints=${proto.mints}"
+            "primitiveUs[$primitives]"
     }
 
     /** Join many small deltas pairwise, so building `n` edges costs `n log n` map copies rather than `n²`. */
@@ -161,7 +169,8 @@ class LeaseScaleProbe {
         const val TIMED = 10
         const val PRIMITIVE_REPS = 5
         const val SERVED_COST = 3L
-        const val WATERMARK = 40L
+        /** Enough for every timed lease: the engine tops up nothing on its own before L2. */
+        const val SUPPLY = 1_000L
         val ROOT = GroupId("root")
     }
 }

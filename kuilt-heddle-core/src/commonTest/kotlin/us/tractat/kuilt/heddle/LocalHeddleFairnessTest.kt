@@ -10,9 +10,11 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
- * Fairness and supply evidence for the lease model, gathered on [LeasePrototype] before the
- * `LocalHeddle` API is frozen (#3173, plan Task C). The numbers here are the deliverable: L1's
- * tolerances are taken from what these tests pin. The scale row is `LeaseScaleProbe`, gated.
+ * Task C's fairness and supply evidence, re-run on [LocalHeddle] (#3173, plan Task L1). Task C
+ * gathered it on a test-only prototype before the engine's API was frozen, and pinned every
+ * integer the runs produced in one `fingerprint()` string. The pins below are those strings,
+ * unchanged: the engine makes exactly the picks, extensions, overruns and wakes the prototype did,
+ * on every target. The prototype is gone; this is what it proved.
  *
  * ## The generator
  *
@@ -30,31 +32,45 @@ import kotlin.test.fail
  * - **churn** — each leaf's waiting flag flips with probability 1/10 per step, and every acquire
  *   carries a seeded slot label (`x` or `y`): `a` runs on either, `b` only on `x`, `c` only on `y`.
  *   The ideal is **waiting-GPS**: each completed lease's actual cost shared by weight among the
- *   leaves that were *waiting* when it was acquired. That is heddle's entitlement model — a leaf
- *   waiting but not eligible keeps its claim, an idle one forfeits it at the wake clamp. The
- *   eligible-GPS share is reported beside it, not asserted.
+ *   leaves that were *waiting* when it was acquired. A leaf waiting but not eligible keeps its
+ *   claim; an idle one forfeits it at the wake clamp.
  * - **starved** — the churn generator with a watermark and chunk of 2, below the largest
- *   reservation. It must report exhaustion, leave the ledger untouched when it does, and still
- *   never refuse a charge. A lease whose extend is refused stops renewing and is left to `complete`.
+ *   reservation. It must report exhaustion and still never refuse a charge.
  *
- * Supply in the first two arms is a watermark of 40 (capacity 8 × the largest reservation 5) with a
- * 40-unit chunk and at most one mint per acquire or extend. With those numbers exhaustion is
- * impossible by construction, since one chunk covers any reservation, so the low `unspent` reading
- * there is bounded below by `40 − 5` and is reported, not offered as evidence. The starved arm is
- * where exhaustion is measured.
+ * ## Which fields the engine decides
+ *
+ * The fingerprints are a differential against the prototype, so they stay byte-identical; but not
+ * every field in them is the engine's.
+ * - **Engine-decided:** the per-leaf totals (which leaf each pick chose), `acquires`, `filtered`,
+ *   `seesExtended`, and `wakes`, which the harness counts but reads off the engine's own wake memory.
+ * - **Harness-decided:** `extends`, `completes` and `inlineOverruns` follow the generator's plan for
+ *   each lease; `nothingEligible` counts the generator's empty eligible sets, which the engine only
+ *   echoes; and every supply field, `exhaustedAcquires`, `exhaustedExtends`, `mints`, `forcedMints`
+ *   and `minUnspent`, is the harness's own top-up below. The engine's `SupplyExhausted` arms and its
+ *   own forced mint are never reached here (each run asserts the engine minted nothing itself), so
+ *   they are pinned in `LocalHeddleTest` instead: `exhaustedSupplyIsNamed`,
+ *   `admitIsNeverRefusedForSupply` and `anOverrunWithTheRootShortForcesOneMint`.
+ *
+ * ## Supply is the harness's, as it was the prototype's
+ *
+ * Before L2 the engine mints nothing on its own except a `complete`'s or an `admit`'s shortfall.
+ * So [Harness.topUp] is the prototype's top-up, run before the call it funds: at most one chunk
+ * below the watermark, the shortfall too when the call is a `complete`, and an acquire or extend
+ * refused when one chunk cannot cover it. That reproduces the prototype's ledger at every pick,
+ * which is what makes the fingerprints comparable. Supply in the first two arms is a watermark of
+ * 40 (capacity 8 × the largest reservation 5) with a 40-unit chunk, so exhaustion is impossible
+ * there by construction; the starved arm is where it is measured.
  *
  * ## The bar
  *
- * Set before the first run, and asserted:
  * - backlogged: every leaf's overall share within **0.01** of 3:1:1, every 500-step window within **0.05**;
  * - churn: every leaf's overall share within **0.03** of waiting-GPS, every 500-step window within **0.15**.
  *
- * What the churn bar can see was measured on JVM by editing the prototype (on the first revision of
- * the generator): feeding the **eligible** set to wake detection moved the overall error from 0.0108
- * to 0.0737 (red) while the window stayed under its bar (0.1234); dropping idle forfeiture moved them
- * to 0.1047 and 0.1661 (both red). So the overall bound is the sharper instrument.
+ * On Task C's first generator, feeding the **eligible** set to wake detection moved the churn arm's
+ * overall error from 0.0108 to 0.0737 (red) while the window stayed under its bar, so the overall
+ * bound is the sharper instrument. The window bar has not been shown to red on anything.
  */
-class LeaseCharacterizationTest {
+class LocalHeddleFairnessTest {
 
     @Test
     fun backloggedLeasesFollowTheWeights() {
@@ -145,13 +161,42 @@ class LeaseCharacterizationTest {
     /** What the generator decided for one lease at acquire. */
     private class Plan(val reservation: Long, val actual: Long, var renews: Boolean, val waited: List<Int>, val eligible: List<Int>)
 
+    /** The prototype's top-up, run by the harness before the call it funds. */
+    private class Harness(val heddle: LocalHeddle, val supply: Supply) {
+        var mints = 0
+        var forcedMints = 0
+        var minUnspent = Long.MAX_VALUE
+
+        /**
+         * Fund a call needing [amount] at the root: one chunk below the watermark, then the exact
+         * shortfall too if [force], else `false` when the root still could not cover it. Nothing is
+         * minted when it answers `false`.
+         */
+        fun topUp(amount: Long, force: Boolean): Boolean {
+            val held = heddle.snapshot().ledger.holdings(ROOT, LOCAL)
+            if (mints + forcedMints > 0) minUnspent = minOf(minUnspent, held)
+            val chunk = if (held < supply.watermark) supply.mintChunk else 0L
+            val shortfall = maxOf(0L, amount - held - chunk)
+            if (shortfall > 0L && !force) return false
+            if (chunk > 0L) {
+                heddle.mintSupply(chunk)
+                mints++
+            }
+            if (shortfall > 0L) {
+                heddle.mintSupply(shortfall)
+                forcedMints++
+            }
+            return true
+        }
+    }
+
     private fun runFairness(seed: Int, churn: Boolean, supply: Supply): FairnessRun {
         val rng = Random(seed)
-        val tree = smallTree()
-        val proto = LeasePrototype(tree.ledger, ROOT, tree.parentOf, supply.watermark, supply.mintChunk)
+        val heddle = LocalHeddle.over(smallTree(), ROOT, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+        val harness = Harness(heddle, supply)
         val run = FairnessRun()
         val waiting = BooleanArray(LEAVES.size) { true }
-        val plans = HashMap<Long, Plan>() // looked up by lease id, never iterated
+        val plans = HashMap<LeaseId, Plan>() // looked up by lease id, never iterated
         var target = 1 + rng.nextInt(CAPACITY)
 
         for (step in 0 until STEPS) {
@@ -160,7 +205,7 @@ class LeaseCharacterizationTest {
             if (churn) {
                 for (i in LEAVES.indices) if (rng.nextInt(10) == 0) waiting[i] = !waiting[i]
             }
-            val open = proto.openLeases()
+            val open = heddle.snapshot().leases
             if (open.size < target) {
                 val waitingIdx = LEAVES.indices.filter { waiting[it] }
                 val label = if (churn) SLOT_LABELS[rng.nextInt(SLOT_LABELS.size)] else null
@@ -170,59 +215,68 @@ class LeaseCharacterizationTest {
                 val renews = rng.nextBoolean()
                 val seesExtended = open.any { lease -> lease.reserved > (plans[lease.id]?.reservation ?: lease.reserved) }
                 val eligibleLeaves = eligibleIdx.mapTo(HashSet()) { LEAVES[it] }
-                val before = proto.ledger
-                when (val out = proto.acquire(waitingIdx.mapTo(HashSet()) { LEAVES[it] }, eligibleLeaves, reservation)) {
-                    is PrototypeAcquire.Acquired -> {
-                        if (out.lease.leaf !in eligibleLeaves) fail("step $step leased ${out.lease.leaf.value}, outside $eligibleLeaves")
-                        run.acquires++
-                        if (eligibleIdx.size < waitingIdx.size) run.filteredAcquires++
-                        if (seesExtended) run.acquiresSeeingExtended++
-                        plans[out.lease.id] = Plan(reservation, actual, renews, waitingIdx, eligibleIdx)
+                val before = heddle.snapshot()
+                if (eligibleLeaves.isNotEmpty() && !harness.topUp(reservation, force = false)) {
+                    run.exhaustedAcquires++
+                    assertSame(before.ledger, heddle.snapshot().ledger, "an exhausted acquire on step $step left the ledger unchanged")
+                } else {
+                    val waitingLeaves = waitingIdx.mapTo(HashSet()) { LEAVES[it] }
+                    when (val out = heddle.acquire(waitingLeaves, eligibleLeaves, startedAt = step.toLong(), reservation = reservation)) {
+                        is AcquireOutcome.Acquired -> {
+                            if (out.lease.leaf !in eligibleLeaves) fail("step $step leased ${out.lease.leaf.value}, outside $eligibleLeaves")
+                            run.acquires++
+                            if (eligibleIdx.size < waitingIdx.size) run.filteredAcquires++
+                            if (seesExtended) run.acquiresSeeingExtended++
+                            plans[out.lease.id] = Plan(reservation, actual, renews, waitingIdx, eligibleIdx)
+                        }
+                        AcquireOutcome.NothingEligible -> run.nothingEligible++
+                        AcquireOutcome.SupplyExhausted -> fail("the harness funded step $step, yet the engine reported exhaustion")
+                        is AcquireOutcome.NoLiveLineage -> fail("descent failed at ${out.at.value} on step $step")
                     }
-                    PrototypeAcquire.NothingEligible -> run.nothingEligible++
-                    PrototypeAcquire.SupplyExhausted -> {
-                        run.exhaustedAcquires++
-                        assertSame(before, proto.ledger, "an exhausted acquire on step $step left the ledger unchanged")
-                    }
-                    is PrototypeAcquire.DescentFailed -> fail("descent failed at ${out.at.value} on step $step")
+                    // A wake is an edge the allocator last observed idle and has now observed waiting.
+                    val observed = before.allocatorMemory.demandingObserved
+                    run.wakes += heddle.snapshot().allocatorMemory.demandingObserved.count { (edge, demanding) -> demanding && observed[edge] == false }
                 }
             } else {
                 val lease = open[rng.nextInt(open.size)]
                 val plan = checkNotNull(plans[lease.id]) { "lease ${lease.id} untracked" }
                 if (plan.renews && plan.actual > lease.reserved) {
-                    when (proto.extend(lease.id, plan.reservation)) {
-                        PrototypeExtend.Extended -> run.extends++
-                        PrototypeExtend.SupplyExhausted -> {
-                            // The work runs on unrenewed and `complete` covers it: a lease that kept
-                            // retrying could hold every slot while supply never came back.
-                            run.exhaustedExtends++
-                            plan.renews = false
-                        }
+                    if (harness.topUp(plan.reservation, force = false)) {
+                        assertEquals(LeaseOutcome.Done(0L, 0L), heddle.extend(lease.id, plan.reservation))
+                        run.extends++
+                    } else {
+                        // The work runs on unrenewed and `complete` covers it: a lease that kept
+                        // retrying could hold every slot while supply never came back.
+                        run.exhaustedExtends++
+                        plan.renews = false
                     }
                 } else {
-                    val done = proto.complete(lease.id, plan.actual)
-                    if (done.overrun > 0L) run.inlineOverruns++
+                    val overrun = maxOf(0L, plan.actual - lease.reserved)
+                    if (overrun > 0L) harness.topUp(overrun, force = true)
+                    assertEquals(LeaseOutcome.Done(plan.actual, overrun), heddle.complete(lease.id, plan.actual))
+                    if (overrun > 0L) run.inlineOverruns++
                     run.completes++
                     plans.remove(lease.id)
                     run.record(step, LEAVES.indexOf(lease.leaf), plan.actual, plan.waited, plan.eligible)
                 }
             }
-            if (step % 1000 == 999) assertConserved(proto, "step $step")
+            if (step % 1000 == 999) assertConserved(heddle, "step $step")
         }
-        assertConserved(proto, "end")
-        run.mints = proto.mints
-        run.forcedMints = proto.forcedMints
-        run.wakes = proto.wakes
-        run.minUnspent = proto.minUnspent
+        assertConserved(heddle, "end")
+        run.mints = harness.mints
+        run.forcedMints = harness.forcedMints
+        run.minUnspent = harness.minUnspent
+        assertEquals(0, heddle.forcedMints, "the harness funded every overrun, so the engine never minted its own")
         return run
     }
 
-    private fun assertConserved(proto: LeasePrototype, at: String) {
-        val l = proto.ledger
+    private fun assertConserved(heddle: LocalHeddle, at: String) {
+        val s = heddle.snapshot()
+        val l = s.ledger
         val groups = listOf(ROOT, LANE) + LEAVES
-        val held = groups.sumOf { l.holdings(it, LeasePrototype.SELF) }
-        val leafHeld = LEAVES.sumOf { l.holdings(it, LeasePrototype.SELF) }
-        val reserved = proto.openLeases().sumOf { it.reserved }
+        val held = groups.sumOf { l.holdings(it, LOCAL) }
+        val leafHeld = LEAVES.sumOf { l.holdings(it, LOCAL) }
+        val reserved = s.leases.sumOf { it.reserved }
         assertAll(
             { assertEquals(l.mintedTotal(), held + l.leafSpentTotal(), "Σ holdings + spent == minted at $at") },
             { assertEquals(reserved, leafHeld, "leaf holdings are exactly the open reservations at $at") },
@@ -325,10 +379,8 @@ class LeaseCharacterizationTest {
         }
     }
 
-    private class Tree(val ledger: EntitlementLedger, val parentOf: Map<GroupId, GroupId>)
-
     /** `root → t → {a:3, b:1, c:1}`, every edge active, no supply yet: top-up mints all of it. */
-    private fun smallTree(): Tree {
+    private fun smallTree(): EntitlementLedger {
         var l = EntitlementLedger.bootstrap(ROOT, emptyMap(), nonce = "genesis")
         val records = listOf(AttachmentRecord(AttachmentId("root>t"), ROOT, LANE, Weight.ONE)) +
             LEAVES.indices.map { i -> AttachmentRecord(AttachmentId("t>${LEAVES[i].value}"), LANE, LEAVES[i], Weight.of(WEIGHTS[i])) }
@@ -336,7 +388,7 @@ class LeaseCharacterizationTest {
             l = l.piece(checkNotNull(l.prepare(r)).delta)
             l = l.piece(checkNotNull(l.activate(r.id)).delta)
         }
-        return Tree(l, mapOf(LANE to ROOT) + LEAVES.associateWith { LANE })
+        return l
     }
 
     private companion object {

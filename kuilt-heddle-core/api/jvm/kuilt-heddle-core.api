@@ -1,3 +1,68 @@
+public abstract interface class us/tractat/kuilt/heddle/AcquireOutcome {
+}
+
+public final class us/tractat/kuilt/heddle/AcquireOutcome$Acquired : us/tractat/kuilt/heddle/AcquireOutcome, us/tractat/kuilt/heddle/AdmitOutcome {
+	public fun <init> (Lus/tractat/kuilt/heddle/Lease;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/Lease;
+	public final fun copy (Lus/tractat/kuilt/heddle/Lease;)Lus/tractat/kuilt/heddle/AcquireOutcome$Acquired;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/AcquireOutcome$Acquired;Lus/tractat/kuilt/heddle/Lease;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/AcquireOutcome$Acquired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLease ()Lus/tractat/kuilt/heddle/Lease;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/AcquireOutcome$NoLiveLineage : us/tractat/kuilt/heddle/AcquireOutcome, us/tractat/kuilt/heddle/AdmitOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/AcquireOutcome$NoLiveLineage;
+	public static synthetic fun copy-9eHOidQ$default (Lus/tractat/kuilt/heddle/AcquireOutcome$NoLiveLineage;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/AcquireOutcome$NoLiveLineage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAt-urUY4Jo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/AcquireOutcome$NothingEligible : us/tractat/kuilt/heddle/AcquireOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/AcquireOutcome$NothingEligible;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/AcquireOutcome$SupplyExhausted : us/tractat/kuilt/heddle/AcquireOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/AcquireOutcome$SupplyExhausted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/AdmitOutcome {
+}
+
+public final class us/tractat/kuilt/heddle/AllocatorMemory {
+	public static final field Companion Lus/tractat/kuilt/heddle/AllocatorMemory$Companion;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/AllocatorMemory$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/AllocatorMemory$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/AllocatorMemory;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/AllocatorMemory;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/AllocatorMemory$Companion {
+	public final fun getEMPTY ()Lus/tractat/kuilt/heddle/AllocatorMemory;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public final class us/tractat/kuilt/heddle/AttachmentId : java/lang/Comparable {
 	public static final field Companion Lus/tractat/kuilt/heddle/AttachmentId$Companion;
 	public static final synthetic fun box-impl (Ljava/lang/String;)Lus/tractat/kuilt/heddle/AttachmentId;
@@ -67,6 +132,19 @@ public final class us/tractat/kuilt/heddle/AttachmentRecord$Companion {
 public final class us/tractat/kuilt/heddle/CheckedMathKt {
 	public static final fun checkedAdd (JJ)J
 	public static final fun checkedMul (JJ)J
+}
+
+public final class us/tractat/kuilt/heddle/ChildPick {
+	public fun <init> (Lus/tractat/kuilt/heddle/EntitlementLedger;Lus/tractat/kuilt/heddle/Grant;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public final fun component2 ()Lus/tractat/kuilt/heddle/Grant;
+	public final fun copy (Lus/tractat/kuilt/heddle/EntitlementLedger;Lus/tractat/kuilt/heddle/Grant;)Lus/tractat/kuilt/heddle/ChildPick;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/ChildPick;Lus/tractat/kuilt/heddle/EntitlementLedger;Lus/tractat/kuilt/heddle/Grant;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ChildPick;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGrant ()Lus/tractat/kuilt/heddle/Grant;
+	public final fun getLedger ()Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class us/tractat/kuilt/heddle/CounterFamily : java/lang/Enum {
@@ -219,6 +297,9 @@ public final class us/tractat/kuilt/heddle/EntitlementLedger$Companion {
 
 public final class us/tractat/kuilt/heddle/FairShareAllocator {
 	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/PolicyConfig;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/PolicyConfig;Lus/tractat/kuilt/heddle/AllocatorMemory;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getMemory ()Lus/tractat/kuilt/heddle/AllocatorMemory;
+	public final fun pickChild-mLLTQY0 (Ljava/lang/String;Lus/tractat/kuilt/heddle/EntitlementLedger;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/heddle/ChildPick;
 	public final fun schedule-mLLTQY0 (Ljava/lang/String;Lus/tractat/kuilt/heddle/LedgerCell;JLkotlin/jvm/functions/Function1;)I
 	public final fun virtualTime-3ggexMs (Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/lang/String;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/heddle/Rational;
 }
@@ -310,6 +391,90 @@ public final class us/tractat/kuilt/heddle/HeddlePolicy {
 	public final fun pick (Ljava/util/List;Lus/tractat/kuilt/heddle/PolicyConfig;J)Lus/tractat/kuilt/heddle/Grant;
 	public final fun virtualService (Lus/tractat/kuilt/heddle/PolicyEdge;)Lus/tractat/kuilt/heddle/Rational;
 	public final fun wakeOffset (Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Weight;J)Lus/tractat/kuilt/heddle/Rational;
+}
+
+public final class us/tractat/kuilt/heddle/Lease {
+	public synthetic fun <init> (Lus/tractat/kuilt/heddle/LeaseId;Ljava/lang/String;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/LeaseId;
+	public final fun component2-urUY4Jo ()Ljava/lang/String;
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun copy-DbAf7io (Lus/tractat/kuilt/heddle/LeaseId;Ljava/lang/String;JJ)Lus/tractat/kuilt/heddle/Lease;
+	public static synthetic fun copy-DbAf7io$default (Lus/tractat/kuilt/heddle/Lease;Lus/tractat/kuilt/heddle/LeaseId;Ljava/lang/String;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/Lease;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()Lus/tractat/kuilt/heddle/LeaseId;
+	public final fun getLeaf-urUY4Jo ()Ljava/lang/String;
+	public final fun getReserved ()J
+	public final fun getStartedAt ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LeaseId : java/lang/Comparable {
+	public fun <init> (JJ)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LeaseId;)I
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun copy (JJ)Lus/tractat/kuilt/heddle/LeaseId;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/LeaseId;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/LeaseId;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEpoch ()J
+	public final fun getSeq ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/LeaseOutcome {
+}
+
+public final class us/tractat/kuilt/heddle/LeaseOutcome$Done : us/tractat/kuilt/heddle/LeaseOutcome {
+	public fun <init> (JJ)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun copy (JJ)Lus/tractat/kuilt/heddle/LeaseOutcome$Done;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/LeaseOutcome$Done;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/LeaseOutcome$Done;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCharged ()J
+	public final fun getOverrun ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LeaseOutcome$PathDraining : us/tractat/kuilt/heddle/LeaseOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun copy-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/LeaseOutcome$PathDraining;
+	public static synthetic fun copy-dq4I9ps$default (Lus/tractat/kuilt/heddle/LeaseOutcome$PathDraining;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LeaseOutcome$PathDraining;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LeaseOutcome$Stale : us/tractat/kuilt/heddle/LeaseOutcome {
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Lus/tractat/kuilt/heddle/LeaseOutcome$Stale;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/LeaseOutcome$Stale;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/LeaseOutcome$Stale;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCurrentEpoch ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LeaseOutcome$SupplyExhausted : us/tractat/kuilt/heddle/LeaseOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/LeaseOutcome$SupplyExhausted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LeaseOutcome$Unknown : us/tractat/kuilt/heddle/LeaseOutcome {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/LeaseOutcome$Unknown;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public abstract interface class us/tractat/kuilt/heddle/LedgerCell {
@@ -502,6 +667,57 @@ public final class us/tractat/kuilt/heddle/Lifecycle : java/lang/Enum {
 
 public final class us/tractat/kuilt/heddle/Lifecycle$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/LocalHeddle {
+	public static final field Companion Lus/tractat/kuilt/heddle/LocalHeddle$Companion;
+	public static final field MAX_RESERVATION J
+	public final fun acquire (Ljava/util/Set;Ljava/util/Set;JJ)Lus/tractat/kuilt/heddle/AcquireOutcome;
+	public static synthetic fun acquire$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/util/Set;Ljava/util/Set;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AcquireOutcome;
+	public final fun admit-lUmtw0Q (Ljava/lang/String;JJ)Lus/tractat/kuilt/heddle/AdmitOutcome;
+	public static synthetic fun admit-lUmtw0Q$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AdmitOutcome;
+	public final fun cancel (Lus/tractat/kuilt/heddle/LeaseId;)Lus/tractat/kuilt/heddle/LeaseOutcome;
+	public final fun complete (Lus/tractat/kuilt/heddle/LeaseId;J)Lus/tractat/kuilt/heddle/LeaseOutcome;
+	public final fun extend (Lus/tractat/kuilt/heddle/LeaseId;J)Lus/tractat/kuilt/heddle/LeaseOutcome;
+	public final fun getEpoch ()J
+	public final fun getRoot-urUY4Jo ()Ljava/lang/String;
+	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;Ljava/util/List;)Ljava/util/List;
+	public final fun snapshot ()Lus/tractat/kuilt/heddle/LocalHeddleState;
+}
+
+public final class us/tractat/kuilt/heddle/LocalHeddle$Companion {
+	public final fun fresh-lUmtw0Q (Ljava/lang/String;Lus/tractat/kuilt/heddle/LocalPolicy;J)Lus/tractat/kuilt/heddle/LocalHeddle;
+}
+
+public final class us/tractat/kuilt/heddle/LocalHeddleState {
+	public fun <init> (Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/util/List;JLus/tractat/kuilt/heddle/AllocatorMemory;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()J
+	public final fun component4 ()Lus/tractat/kuilt/heddle/AllocatorMemory;
+	public final fun copy (Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/util/List;JLus/tractat/kuilt/heddle/AllocatorMemory;)Lus/tractat/kuilt/heddle/LocalHeddleState;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/LocalHeddleState;Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/util/List;JLus/tractat/kuilt/heddle/AllocatorMemory;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LocalHeddleState;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllocatorMemory ()Lus/tractat/kuilt/heddle/AllocatorMemory;
+	public final fun getEpoch ()J
+	public final fun getLeases ()Ljava/util/List;
+	public final fun getLedger ()Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LocalPolicy {
+	public fun <init> (JJ)V
+	public synthetic fun <init> (JJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun copy (JJ)Lus/tractat/kuilt/heddle/LocalPolicy;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/LocalPolicy;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/LocalPolicy;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDefaultReservation ()J
+	public final fun getSleeperCredit ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class us/tractat/kuilt/heddle/MapMergeKt {

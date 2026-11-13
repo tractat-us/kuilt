@@ -172,6 +172,58 @@ through the same check and throws `TopologyException` with the problems `from` w
     }
 ```
 
+To schedule work against the tree in one process, `LocalHeddle` (`:kuilt-heddle-core`) hands out
+one **lease** per free slot. When a slot frees, `acquire(waiting, eligible, startedAt)` names the
+leaf whose work runs next and reserves an estimated cost for it; when the work ends,
+`complete(lease, actualCost)` charges what it really cost, hands the unused part back, and reports
+any overrun, which is never refused. Cost is time, in your own unit. `waiting` is every leaf with
+work queued and `eligible` the ones this slot can run. A waiting leaf that cannot run on this slot
+keeps its claim, so it is not treated as returning from idle when a slot it can run comes up. Work
+no pick could reach counts as idle, even when you list it as waiting: a leaf behind an edge a
+reload is closing, or a group that has gained a child. Its subtree builds up no credit while it is
+cut off, so when it can be reached again it starts level with its siblings. A new leaf starts level
+with its siblings too, rather than owed their whole history. `extend` reserves
+more for a lease that runs long, `cancel` charges nothing, `admit(leaf, startedAt)` charges work
+another scheduler already started, and `previewPicks` answers "who goes next" without changing
+anything. `startedAt` is stored on the lease and never read by a pick. A pick only goes down a
+subtree it can finish in, so a group whose only leaf sits behind a closing edge never takes a slot
+from a sibling that can run. A refusal is a typed outcome (`NothingEligible`, `SupplyExhausted`,
+`NoLiveLineage`, `PathDraining`, `Unknown`, `Stale`), never an exception: an `extend` on a lease
+whose path a reload is closing is `PathDraining`, and its `complete` still settles. A bad argument
+throws `IllegalArgumentException`, such as a reservation above `LocalHeddle.MAX_RESERVATION`
+(2^44 cost units). `ArithmeticException` is reachable too: a pick compares exact fractions, so
+the total service under one parent has a ceiling. The ceiling depends on the children's weights:
+whole-number weights reach much further than fractional ones. Past it, every `acquire` there
+throws. `IllegalStateException` is left only for a conflicted ledger, such as two live edges into
+one group, a split record or a cycle, which the public surface cannot reach today. The
+engine reads no clock and no random source, and it is not thread-safe: call every method under your
+scheduling lock, `snapshot()` included, and hand status and persistence readers the immutable value
+it returns.
+
+**Today's public surface cannot yet run one.** `LocalHeddle.fresh` is the only public way to make an
+engine, and it has no topology and no supply, so every `acquire` on it is refused. Booting from a
+`Topology` and topping up supply are not public yet. The sample below builds its tree and its supply
+through module-internal seams, which a consumer cannot call.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalLease -->
+```kotlin
+    // Both groups have work queued, and this slot can run either.
+    val queued = setOf(heavy, light)
+    val first = heddle.acquire(waiting = queued, eligible = queued, startedAt = 100L)
+    check(first is AcquireOutcome.Acquired)
+
+    // The job overran its 3-unit estimate: all 5 units are charged, 2 of them as overrun.
+    check(heddle.complete(first.lease.id, actualCost = 5L) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+
+    // Over many slots the shares follow the weights, 2 : 1.
+    val picks = (0 until 30).map {
+        val lease = (heddle.acquire(queued, queued, startedAt = it.toLong()) as AcquireOutcome.Acquired).lease
+        heddle.complete(lease.id, actualCost = 3L)
+        lease.leaf
+    }
+    check(picks.count { it == heavy } in 19..21)
+```
+
 ### Run it over a network — reserve, run, charge once
 
 **Intent:** put the fair-share tally on a live connection between peers — advertise appetite,
