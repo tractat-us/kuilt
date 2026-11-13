@@ -113,12 +113,80 @@ interface with a crash-safe implementation per platform. It lives in its own mod
 **`kuilt-store`**, because a durable key→bytes store has nothing to do with telemetry;
 see that module's documentation for the durability contract and the four backends.
 
+## kuilt-otel on a server
+
+On a phone, kuilt-otel is the safety net for a train tunnel. A server rarely loses
+its network. It does crash, restart and get redeployed, and a deploy can take the
+last few seconds of metrics with it. On a server kuilt-otel plays a smaller part:
+a copy of your metrics on disk, kept beside the OpenTelemetry SDK you already run.
+That copy survives the restart and reaches the collector later.
+
+It is not where a busy server should count each request. The SDK already does that
+in memory, cheaply. Let the SDK add up the numbers, and let kuilt keep what the SDK
+hands over. `KuiltMetricExporter`, in `kuilt-otel-sdk`, is the bridge between the two.
+
+### The promise, and what it costs
+
+`WarpMetricExporter` returns `MetricExportResult.Success` only once the update is
+**durably written** to its `DurableStore`. That is the whole contract. It says
+nothing about the collector, which hears about the update on a later drain.
+
+A `Failure` means "not yet on disk", not "not counted". The change stays in memory
+and the next successful write of that metric kind carries it, so retrying a failed
+increment counts it twice.
+
+The promise has a price. Each recorded change re-encodes every series of its kind
+and writes the result once. `KuiltMetricExporter` applies an SDK export point by
+point, so an export of N points is N writes. That is why kuilt-otel belongs behind
+the SDK's periodic reader, which hands it one batch every few seconds, and not in
+a request's hot path.
+
+### What a collector receives
+
+A number can travel two ways: as a running total since the start, or as the change
+since the last report. OpenTelemetry calls this choice *temporality*, and the two
+values are **cumulative** and **delta**. kuilt takes deltas in and sends totals out.
+
+Going in, `KuiltMetricExporter` asks the SDK for delta temporality on every
+instrument, because `incrementSum` *adds* what it is given; a running total would be
+added again on every collection. The SDK sets temporality per reader, so registering
+the bridge on a reader of its own leaves your existing OTLP exporter as it was.
+
+Going out, `WarpOtlpBridge.drain` renders each series from its CRDT, and the OTLP
+encoders in `kuilt-otel-otlp` (JSON and protobuf alike) put it on the wire like this:
+
+| `MetricKind` | Stored as | OTLP point | Temporality |
+|---|---|---|---|
+| `SUM`, `incrementSum` | `GCounter` | monotonic `Sum`, integer | cumulative |
+| `SUM`, `incrementSumDouble` | `GCounterDouble` | monotonic `Sum`, double | cumulative |
+| `GAUGE` | `LWWRegister<Double>` | `Gauge` | none — a level |
+| `CARDINALITY` | `HyperLogLog` | `Gauge`, the integer estimate | none — a level |
+| `EXPONENTIAL_HISTOGRAM` | `DDSketch` | `ExponentialHistogram` | cumulative |
+
+A collector should expect four things of those points:
+
+- **The start time is zero.** Sums and histograms carry `startTimeUnixNano = 0`,
+  OTLP's "unknown start", so nothing on the wire marks where a series began.
+- **The time is the drain's, not the update's.** Every point is stamped with the
+  bridge's clock when the drain runs.
+- **An unchanged series is not re-sent.** A drain sends a series only when its value
+  differs from the last one the edge recorded for it. A steady total produces no new
+  points, and a gap between points does not mean a gap in counting.
+- **A total already includes every peer it has merged.** A `GCounter` adds up each
+  replica's own slot, so two replicas that gossip their metrics and drain the same
+  series both send the combined total. Adding their totals together counts the shared
+  increments twice.
+
+If you implement `OtlpEdge` yourself, the same rules apply: `MetricPoint.Sum`,
+`MetricPoint.DoubleSum` and `MetricPoint.ExponentialHistogram` are running totals,
+so send them as cumulative.
+
 ## What's here
 
 | Type | What it does |
 |---|---|
 | `WarpSpanExporter` | Span buffer of full `SpanRecord` values (ORSet). Snapshot merge is idempotent; export retries can mint another causal stamp. |
-| `WarpMetricExporter` | CRDT-backed metric buffer: sums (GCounter), gauges (LWWRegister), cardinality (HyperLogLog). |
+| `WarpMetricExporter` | CRDT-backed metric buffer: sums (GCounter, GCounterDouble), gauges (LWWRegister), cardinality (HyperLogLog), exponential histograms (DDSketch). `Success` means durably written. |
 | `WarpLogRecordExporter` | CRDT-backed log buffer (Rga). Ordered, idempotent export + merge. |
 | `WarpTelemetry` | Facade that composes all exporters under one surface. |
 | `WarpTelemetry.clear` | The supported reset: empties every signal's buffer and its persisted state on a **live** instance — no restart, no per-platform directory delete. Logs and spans suppress what they drop, so a peer cannot re-merge it back; metrics forget only locally (a monotonic join has no merge-safe forget). |
@@ -129,15 +197,11 @@ see that module's documentation for the durability contract and the four backend
 | `SpanRecord` | OTLP-shaped span data model. |
 | `LogRecord` | OTLP-shaped log-record data model with optional trace correlation. |
 | `MetricKey` | Identity of one metric time series (name + kind + label set). |
-| `MetricKind` | SUM / GAUGE / CARDINALITY. |
+| `MetricKind` | SUM / GAUGE / CARDINALITY / EXPONENTIAL_HISTOGRAM. |
 | `ExportResult` | Typed result of span/log `export()` / `merge()`. |
 | `MetricExportResult` | Typed result of metric mutations. |
 | `BufferPolicy` | Span/log bounded-buffer eviction strategy (spans log each drop; log records count them on `ExporterHealth`). |
 | `MetricBufferPolicy` | Metric bounded-buffer eviction strategy (always logs what it drops). |
-
-## Deferred (follow-up PRs)
-
-- **Histogram metrics** — DDSketch or t-digest for merge-able quantile estimates.
 
 ## Honest limits
 
