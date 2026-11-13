@@ -112,7 +112,10 @@ internal class SoftwareDeviceKey private constructor(
          * @throws IllegalStateException when this platform's cryptographic provider cannot run at all,
          *   which says nothing about [jwk] and so must not be read as a reason to replace it.
          */
-        suspend fun readBack(jwk: ByteArray): StoredKey {
+        suspend fun readBack(jwk: ByteArray): StoredKey = readBack(jwk, ::selfTestSignature)
+
+        /** [readBack] with the self-test's signing step injected, so a test can make the provider fail there. */
+        suspend fun readBack(jwk: ByteArray, sign: suspend (ECDSA.PrivateKey, ByteArray) -> ByteArray): StoredKey {
             val ecdsa = algorithms().ecdsa
             var failing = "its x and y do not name a P-256 key"
             val (privateKey, name, signature) = try {
@@ -120,7 +123,7 @@ internal class SoftwareDeviceKey private constructor(
                 failing = "it does not decode as a P-256 JWK"
                 val privateKey = ecdsa.privateKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PrivateKey.Format.JWK, jwk)
                 failing = "its private half cannot sign"
-                val signature = privateKey.signatureGenerator(SHA256, ECDSA.SignatureFormat.RAW).generateSignature(SELF_TEST)
+                val signature = sign(privateKey, SELF_TEST)
                 Triple(privateKey, name, signature)
             } catch (e: CancellationException) {
                 // One the provider minted while this job is alive is a failure on these bytes like any other.
@@ -152,6 +155,9 @@ internal class SoftwareDeviceKey private constructor(
             val lead: Byte = if (coordinate("y").last().toInt() and 1 == 1) 0x03 else 0x02
             return DidKey.ofCompressedPoint(byteArrayOf(lead) + x)
         }
+
+        private suspend fun selfTestSignature(privateKey: ECDSA.PrivateKey, message: ByteArray): ByteArray =
+            privateKey.signatureGenerator(SHA256, ECDSA.SignatureFormat.RAW).generateSignature(message)
 
         private const val COORDINATE_BYTES = 32
         private val JWK_BASE64 = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL)

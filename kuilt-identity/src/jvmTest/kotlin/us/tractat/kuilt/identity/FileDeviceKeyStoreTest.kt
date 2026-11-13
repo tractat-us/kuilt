@@ -108,6 +108,55 @@ class FileDeviceKeyStoreTest {
         )
     }
 
+    /**
+     * A key file whose existence cannot be settled — here a symbolic link to itself, which reads fail
+     * with `ELOOP` and an existence probe answers "absent" — is an error, not a first launch. The store
+     * must not rename a new key over it: that would replace the identity without a warning.
+     */
+    @Test
+    fun aKeyFileThatCannotBeResolvedThrowsRatherThanBecomingANewDevice() = runTest {
+        val directory = createTempDirectory("kuilt-device-key")
+        val keyFile = directory.resolve(FileDeviceKeyStore.KEY_FILE)
+        FileDeviceKeyStore(directory).deviceKey()
+        val aside = directory.resolve("held-by-test")
+        Files.move(keyFile, aside)
+        Files.createSymbolicLink(keyFile, keyFile.fileName)
+        val probeSaysAbsent = !Files.exists(keyFile)
+
+        val thrown = runCatchingIo { FileDeviceKeyStore(directory).deviceKey() }
+
+        assertAll(
+            { assertTrue(probeSaysAbsent, "precondition: an existence probe calls the looping key file absent") },
+            { assertTrue(thrown is IOException, "a key file that cannot be resolved throws IOException, got $thrown") },
+            { assertTrue(Files.isSymbolicLink(keyFile), "and nothing was renamed over it") },
+        )
+    }
+
+    /**
+     * A refused key is moved aside to `device-key.jwk.refused-<n>`, never overwritten, so a key that was
+     * misjudged can still be recovered by hand. A second refusal takes the next number.
+     */
+    @Test
+    fun aRefusedKeyIsKeptAsideNotOverwritten() = runTest {
+        val directory = createTempDirectory("kuilt-device-key")
+        val keyFile = directory.resolve(FileDeviceKeyStore.KEY_FILE)
+        FileDeviceKeyStore(directory).deviceKey()
+        val firstDamage = keyFile.readBytes().let { it.copyOf(it.size / 2) }
+        keyFile.writeBytes(firstDamage)
+        FileDeviceKeyStore(directory).deviceKey()
+        val secondDamage = byteArrayOf(1, 2, 3)
+        keyFile.writeBytes(secondDamage)
+        FileDeviceKeyStore(directory).deviceKey()
+
+        val first = directory.resolve("${FileDeviceKeyStore.KEY_FILE}.refused-1")
+        val second = directory.resolve("${FileDeviceKeyStore.KEY_FILE}.refused-2")
+        assertAll(
+            { assertTrue(first.exists() && first.readBytes().contentEquals(firstDamage), "the first refused key, kept as it was") },
+            { assertTrue(second.exists() && second.readBytes().contentEquals(secondDamage), "the second, beside it") },
+            { assertEquals("rw-------", permissionsOf(first), "and still owner-only") },
+        )
+    }
+
     private suspend fun runCatchingIo(block: suspend () -> Unit): Throwable? = try {
         block()
         null

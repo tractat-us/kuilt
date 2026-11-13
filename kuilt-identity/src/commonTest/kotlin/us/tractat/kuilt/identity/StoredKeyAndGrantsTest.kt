@@ -1,7 +1,10 @@
 package us.tractat.kuilt.identity
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -69,6 +72,50 @@ class StoredKeyAndGrantsTest {
         }
         assertAll(
             *refusals.map { read -> { assertIs<StoredKey.Refused>(read); Unit } }.toTypedArray(),
+        )
+    }
+
+    /**
+     * A fault in the provider while it signs the self-test says nothing about the stored bytes, so it
+     * throws [IllegalStateException] instead of condemning the key. A store that read it as damage
+     * would replace a sound key every time the provider stumbled. A cancellation the provider mints
+     * while this job is alive is such a fault too, and is reported the same way rather than ending the
+     * caller silently.
+     */
+    @Test
+    fun aProviderFaultWhileSigningThrowsRatherThanRefusing() = runTest {
+        val jwk = SoftwareDeviceKey.generate().encodeJwk()
+        val faults = listOf<Throwable>(RuntimeException("signer unavailable"), CancellationException("minted by the provider"))
+        val outcomes = faults.map { fault ->
+            try {
+                "returned ${SoftwareDeviceKey.readBack(jwk) { _, _ -> throw fault }}"
+            } catch (e: IllegalStateException) {
+                currentCoroutineContext().ensureActive()
+                "threw ${e::class.simpleName}"
+            }
+        }
+        val unfaulted = SoftwareDeviceKey.readBack(jwk)
+        assertAll(
+            { assertIs<StoredKey.Usable>(unfaulted, "precondition: the key itself reads back") },
+            *outcomes.zip(faults).map { (outcome, fault) ->
+                { assertEquals("threw IllegalStateException", outcome, "a ${fault::class.simpleName} while signing") }
+            }.toTypedArray(),
+        )
+    }
+
+    /**
+     * A `d` that is not a P-256 scalar — zero, or the group order — is damage in the stored bytes and is
+     * refused like any other, whatever the provider would do with it at signing time.
+     */
+    @Test
+    fun aPrivatePartOutOfRangeIsRefused() = runTest {
+        val jwk = SoftwareDeviceKey.generate().encodeJwk().decodeToString()
+        val d = checkNotNull(Regex("\"d\"\\s*:\\s*\"([^\"]+)\"").find(jwk)).groupValues[1]
+        val zero = jwk.replace(d, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        val order = jwk.replace(d, "_____wAAAAD__________7zm-q2nF56E87nKwvxjJVE")
+        val reads = listOf(zero, order).map { SoftwareDeviceKey.readBack(it.encodeToByteArray()) }
+        assertAll(
+            *reads.map { read -> { assertIs<StoredKey.Refused>(read, "$read"); Unit } }.toTypedArray(),
         )
     }
 

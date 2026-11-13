@@ -5,6 +5,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
+import us.tractat.kuilt.conformance.DeviceKeyStoreFixture.KeyWriteInterruption
+import us.tractat.kuilt.conformance.DeviceKeyStoreFixture.UnreadableKey
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
@@ -14,7 +16,9 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertTrue
 
@@ -53,11 +57,22 @@ import kotlin.test.assertTrue
  *   key, is a red rather than a pass.
  * - **Every damage hook really damages.** Each damage property first runs a control reopen that keeps
  *   the key, so a "new key after damage" verdict cannot come from a store that never kept one.
+ * - **Every rig says whether it fired.** A hook for a state the medium may not be able to reach
+ *   returns a two-armed answer — [DeviceKeyStoreFixture.UnreadableKey] and
+ *   [DeviceKeyStoreFixture.KeyWriteInterruption] — and the arm that claims the state was reached
+ *   carries a probe the property checks, so a hook that does nothing reds instead of passing.
+ *
+ * ## Replace damage, refuse a medium that cannot answer
+ *
+ * The suite pushes a store two ways at once, and they must not be confused. A key that *was read*
+ * and is not a key — truncated, edited, two halves of different keys — is damage, and the store
+ * replaces it: the device carries on as a new device. A key the medium *cannot read right now* — a
+ * permission it lacks, a file system loop, a Keychain locked before the first unlock — is not damage,
+ * and the store throws: replacing it would turn a passing condition into a new identity on every
+ * launch it lasts for. [anUnreadableKeyIsRefusedNotReplaced] is the second half.
  *
  * ## What it deliberately does not require
  *
- * - **Two stores over one medium at once.** Two processes opening the same directory are not part of
- *   the contract; a store may say in its own KDoc that one medium belongs to one process.
  * - **That a store drops grants when it replaces a key.** A grant names the old key, so it is useless
  *   with the new one and harmless to keep; whether to tidy it away is the store's choice.
  * - **That a replacement is reported.** A store should log it, and a platform store's own tests can
@@ -324,22 +339,115 @@ public abstract class DeviceKeyStoreConformanceSuite {
             is DeviceKeyStoreFixture.KeepsNothing -> assertForgets(fixture)
             is DeviceKeyStoreFixture.Durable -> {
                 val held = fixture.open { }.deviceKey().id
-                fixture.interruptKeyWrite()
+                val crashOverHeld = fixture.interruptKeyWrite()
+                val residueOverHeld = (crashOverHeld as? KeyWriteInterruption.LeftResidue)?.residue?.invoke()
                 val overHeld = KeyGate()
                 val afterCrashOverHeld = fixture.open(overHeld::pass).deviceKey().id
 
                 fixture.clearKey()
-                fixture.interruptKeyWrite()
+                val crashOverNothing = fixture.interruptKeyWrite()
+                val planted = (crashOverNothing as? KeyWriteInterruption.LeftResidue)?.residue?.invoke()
                 val overNothing = KeyGate()
-                val fresh = fixture.open(overNothing::pass).deviceKey().id
+                val fresh = fixture.open(overNothing::pass).deviceKey().id // writes a key over the residue
+                val residueAfterWrite = (crashOverNothing as? KeyWriteInterruption.LeftResidue)?.residue?.invoke()
                 val freshAgain = fixture.open { }.deviceKey().id
 
                 assertAll(
+                    {
+                        assertEquals(
+                            crashOverHeld::class, crashOverNothing::class,
+                            "precondition: the medium answers the same way both times",
+                        )
+                    },
+                    {
+                        if (crashOverNothing is KeyWriteInterruption.LeftResidue) {
+                            assertNotNull(residueOverHeld, "rig: the residue existed before the reopen over a held key")
+                            assertNotNull(planted, "rig: the residue existed before the reopen over no key")
+                            assertTrue(
+                                residueAfterWrite == null || !residueAfterWrite.contentEquals(planted),
+                                "the next key write leaves the crash's residue gone or overwritten",
+                            )
+                        }
+                    },
                     { assertEquals(held, afterCrashOverHeld, "a crash while writing over a held key leaves the held key") },
                     { assertEquals(0, overHeld.made, "and makes no new one") },
                     { assertEquals(1, overNothing.made, "over no key, the next launch makes one") },
                     { assertNotEquals(held, fresh, "precondition: the cleared key really was gone") },
                     { assertEquals(fresh, freshAgain, "and that key is kept, despite the crash's leftovers") },
+                )
+            }
+        }
+    }
+
+    /**
+     * A key the medium cannot read *right now* is refused, not replaced: [DeviceKeyStore.deviceKey]
+     * throws, no key is made, and once the medium can read again the original key is back.
+     *
+     * The other half of [aCorruptKeyIsReplacedNotFatal]. A store that answered "no key" whenever the
+     * read failed would pass every damage property and turn each passing fault into a new identity.
+     */
+    @Test
+    public fun anUnreadableKeyIsRefusedNotReplaced(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        when (val fixture = newFixture()) {
+            is DeviceKeyStoreFixture.KeepsNothing -> assertForgets(fixture)
+            is DeviceKeyStoreFixture.Durable -> {
+                val held = fixture.open { }.deviceKey().id
+                when (val rig = fixture.makeKeyUnreadable()) {
+                    is UnreadableKey.Rigged -> {
+                        val gate = KeyGate()
+                        val failure = failureOf { fixture.open(gate::pass).deviceKey() }
+                        rig.restore()
+                        val afterRestore = fixture.open { }.deviceKey().id
+                        assertAll(
+                            { assertNotNull(failure, "a key the medium cannot read throws, rather than starting a new device") },
+                            { assertEquals(0, gate.made, "and no key is made") },
+                            { assertEquals(held, afterRestore, "once the medium can read again, the original key is back") },
+                        )
+                    }
+                    is UnreadableKey.CannotOccur ->
+                        assertEquals(held, fixture.open { }.deviceKey().id, "the key is still the key")
+                }
+            }
+        }
+    }
+
+    /**
+     * Two stores open over one medium at once — the app called the platform default twice, or two
+     * processes share a directory — are one device: one key between them, and neither store's grants
+     * lost to the other's write.
+     *
+     * The first calls overlap through the gate, so both stores are inside [DeviceKeyStore.deviceKey]
+     * before either has made a key. A store whose stores each cached the medium would make two keys
+     * here, and the second store's grant write would drop the first's.
+     */
+    @Test
+    public fun twoStoresOverOneMediumAreOneDevice(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        when (val fixture = newFixture()) {
+            is DeviceKeyStoreFixture.KeepsNothing -> assertForgets(fixture)
+            is DeviceKeyStoreFixture.Durable -> {
+                val gateA = KeyGate { yield() }
+                val gateB = KeyGate { yield() }
+                val a = fixture.open(gateA::pass)
+                val b = fixture.open(gateB::pass)
+                val idA = async { a.deviceKey().id }
+                val idB = async { b.deviceKey().id }
+                val me = idA.await()
+                val alsoMe = idB.await()
+
+                val host = DeviceKey.generate()
+                val intoA = grant(host, me, T, GrantScope.Room("A"))
+                val intoB = grant(host, me, T, GrantScope.Room("B"))
+                a.keepGrant(intoA)
+                b.keepGrant(intoB)
+                val seenByA = a.grants().toSet()
+                val kept = fixture.open { }.grants().toSet()
+
+                assertAll(
+                    { assertNotSame(a, b, "precondition: two stores, not one") },
+                    { assertEquals(1, gateA.made + gateB.made, "one key made between two stores over one medium") },
+                    { assertEquals(me, alsoMe, "both stores name the same device") },
+                    { assertEquals(setOf(intoA, intoB), kept, "neither store's grant is lost to the other's write") },
+                    { assertEquals(setOf(intoA, intoB), seenByA, "and each store sees the grant the other kept") },
                 )
             }
         }
@@ -432,6 +540,16 @@ public abstract class DeviceKeyStoreConformanceSuite {
         return replacement.id
     }
 
+    /** What [block] threw, or `null` if it returned. Cancellation of this test is never a verdict. */
+    private suspend fun failureOf(block: suspend () -> Unit): Exception? = try {
+        block()
+        null
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        e
+    }
+
     private suspend fun grant(
         issuer: DeviceKey,
         subject: DidKey,
@@ -516,17 +634,76 @@ public sealed interface DeviceKeyStoreFixture {
      *   reasoned in its own KDoc, never a stub that plants nothing.
      * @param clearKey removes the stored key, leaving the grants.
      * @param interruptKeyWrite leaves what a crash part-way through writing a new key would leave, over
-     *   whatever key is held now.
+     *   whatever key is held now, and says whether the medium can leave anything; see
+     *   [KeyWriteInterruption].
      * @param corruptGrants makes the stored grants unreadable, leaving the key.
+     * @param makeKeyUnreadable puts the held key out of the store's reach without damaging it — a
+     *   permission it lacks, a file system loop, a Keychain locked before first unlock — and says how
+     *   to put it back; see [UnreadableKey].
      */
     public class Durable(
         private val reopen: suspend (beforeKeyIsMade: suspend () -> Unit) -> DeviceKeyStore,
         public val corruptKey: suspend () -> Unit,
         public val plantMismatchedKey: suspend () -> DidKey,
         public val clearKey: suspend () -> Unit,
-        public val interruptKeyWrite: suspend () -> Unit,
+        public val interruptKeyWrite: suspend () -> KeyWriteInterruption,
         public val corruptGrants: suspend () -> Unit,
+        public val makeKeyUnreadable: suspend () -> UnreadableKey,
     ) : DeviceKeyStoreFixture {
         override suspend fun open(beforeKeyIsMade: suspend () -> Unit): DeviceKeyStore = reopen(beforeKeyIsMade)
+    }
+
+    /**
+     * What [Durable.makeKeyUnreadable] did: put the key out of reach, or say why this medium never can.
+     *
+     * Two-armed for the reason the fixture is: a nullable hook would let a store whose refusal is
+     * broken opt out, and that is the store this property exists to catch — a Keychain store that read
+     * `errSecInteractionNotAllowed` as "no key" would mint a new identity on every launch before the
+     * first unlock, and pass every other property here.
+     */
+    public sealed interface UnreadableKey {
+        /** The key is out of reach until [restore] runs, which must bring back the very same key. */
+        public class Rigged(public val restore: suspend () -> Unit) : UnreadableKey
+
+        /**
+         * This medium has no state in which a key it holds cannot be read, and [reason] says why.
+         *
+         * Choosing this arm proves nothing: the property then checks only that the key is still there.
+         * It cannot detect a store that would replace an unreadable key, so the reason has to be an
+         * argument about the medium, not about the test.
+         */
+        public class CannotOccur(public val reason: String) : UnreadableKey {
+            init {
+                require(reason.isNotBlank()) { "CannotOccur needs a reason: why this medium can always read its key" }
+            }
+        }
+    }
+
+    /**
+     * What [Durable.interruptKeyWrite] left behind: residue a crash would leave, or a statement that
+     * this medium writes a key in one step and leaves none.
+     *
+     * Two-armed because a no-op hook passed the old property, and a store whose medium writes
+     * atomically (a Keychain item, an IndexedDB transaction) would write exactly that no-op. Now the
+     * no-op has to be named.
+     */
+    public sealed interface KeyWriteInterruption {
+        /**
+         * The hook planted what a crash mid-write leaves, and [residue] reads it back: its bytes while
+         * it is there, `null` once it is gone. The property checks the residue existed before the
+         * reopen, and is gone or overwritten after the next key write.
+         */
+        public class LeftResidue(public val residue: suspend () -> ByteArray?) : KeyWriteInterruption
+
+        /**
+         * The medium writes a key in one step, so a crash leaves the old key or the new one and nothing
+         * between, and [reason] says why. This arm cannot detect a store that reads leftovers as a key,
+         * because it plants none.
+         */
+        public class AtomicMedium(public val reason: String) : KeyWriteInterruption {
+            init {
+                require(reason.isNotBlank()) { "AtomicMedium needs a reason: why a crash can leave no residue" }
+            }
+        }
     }
 }
