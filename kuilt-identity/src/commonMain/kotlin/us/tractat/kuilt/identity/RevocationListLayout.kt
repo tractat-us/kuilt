@@ -41,14 +41,19 @@ internal object RevocationListLayout {
         val body = bytes.size - HEADER_SIZE
         if (body % ENTRY_SIZE != 0) return null
         val cutoffs = LinkedHashMap<DidKey, Long>()
+        var previous: DidKey? = null
         for (i in 0 until body / ENTRY_SIZE) {
             val at = HEADER_SIZE + i * ENTRY_SIZE
             val point = bytes.copyOfRange(at, at + POINT_SIZE)
             // The only syntax a 33-byte point can get wrong; checked here so `ofCompressedPoint` cannot throw.
             if (point[0] != 0x02.toByte() && point[0] != 0x03.toByte()) return null
+            val subject = DidKey.ofCompressedPoint(point)
+            // Strictly after the previous entry, as the encoder sorts them; this also refuses a subject twice.
+            if (previous != null && subject.value <= previous.value) return null
+            previous = subject
             var cutoff = 0L
             for (b in 0 until CUTOFF_SIZE) cutoff = (cutoff shl BYTE_BITS) or (bytes[at + POINT_SIZE + b].toLong() and BYTE_MASK)
-            if (cutoffs.put(DidKey.ofCompressedPoint(point), cutoff) != null) return null
+            cutoffs[subject] = cutoff
         }
         return cutoffs
     }

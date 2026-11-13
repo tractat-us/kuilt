@@ -2,8 +2,10 @@ package us.tractat.kuilt.identity
 
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.StoreKey
 
@@ -70,9 +72,19 @@ public class RevocationList private constructor(
      * A list from [open] returns only once the whole list, this cutoff included, is written to its
      * store. The cutoff holds in this process before its write starts, so a write that fails or never
      * returns does not let the device in here. If the write throws, so does `revoke`, and what the
-     * store holds is unknown; calling `revoke` again
-     * writes the whole list again, so a retry makes it good. Concurrent calls write one at a time, in
-     * the order they merged, so an older list can never land on top of a newer one.
+     * store holds is unknown; calling `revoke` again writes the whole list again, so a retry makes it
+     * good.
+     *
+     * Concurrent calls write one at a time, in the order they merged, and each waits for its write to
+     * return before the next starts, even when it is cancelled. That keeps an older list from landing
+     * on top of a newer one, with one exception the store's contract leaves open: a write that
+     * *throws* may still commit later, and if it does, it can land on top of a list written after it.
+     * Only a later `revoke` whose write commits after that repairs it.
+     *
+     * The cost of waiting through cancellation: on a list from [open], `revoke` is not cancellable
+     * while its write runs. A store whose write never returns makes `revoke` never return, cancelled
+     * or not, and holds up every later `revoke` on the list. A host shutting down gets its last
+     * revocation written rather than abandoned.
      */
     public suspend fun revoke(subject: DidKey, notBefore: Long) {
         when (keeping) {
@@ -83,7 +95,12 @@ public class RevocationList private constructor(
             // the write suspends and nothing may suspend under it.
             is Keeping.InStore -> keeping.writes.withLock {
                 val snapshot = merge(subject, notBefore)
-                keeping.store.write(keeping.key, RevocationListLayout.encode(snapshot))
+                // Shielded, so cancelling this call cannot release `writes` while the write is still in
+                // flight: a store may commit after its caller stops waiting, and the next revoke's newer
+                // list would then be overwritten by this older one.
+                withContext(NonCancellable) {
+                    keeping.store.write(keeping.key, RevocationListLayout.encode(snapshot))
+                }
             }
         }
     }
