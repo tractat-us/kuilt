@@ -240,14 +240,13 @@ public interface DeviceKey {
     public companion object { public suspend fun generate(): DeviceKey }   // software key, platform CSPRNG
 }
 internal class SoftwareDeviceKey : DeviceKey {   // wraps a cryptography-kotlin ECDSA key pair
-    suspend fun encodePkcs8(): ByteArray
-    companion object { suspend fun decodePkcs8(der: ByteArray): SoftwareDeviceKey }   // for the file/Keychain stores
+    // As built in #3243: no PKCS#8 pair. On the JDK provider, PKCS#8 drops the public half and
+    // getPublicKey() throws. The stores' key format is JWK plus a self-test (Task 3.1).
 }
 ```
 - [ ] **Step 1: Write the failing tests.**
-  - `jdkMadeSignatureVerifiesOnEveryTarget`: take a fixed `did:key`, a fixed message and a fixed 64-byte signature, made once on the JDK and pasted as constants. Assert `DidKey.parse(did).verify(msg, sig)`. Then assert it is `false` with one flipped signature bit, and `false` with one flipped message bit.
+  - `wycheproofSignaturesVerifyOnEveryTarget` (as built in #3243, stronger than the original JDK-made vector): use Project Wycheproof `ecdsa_secp256r1_sha256_p1363_test.json` at C2SP/wycheproof `878e5366`, with 6 valid and 4 invalid cases pasted unchanged. Assert `DidKey.parse(did).verify(msg, sig)`. Then assert it is `false` with one flipped signature bit, and `false` with one flipped message bit.
   - `signThenVerifyHoldsPerTarget`: 20 keys × 3 messages (empty, 1 byte, 4 KiB). Each signature is 64 bytes and verifies under `id`, and not under another key's `id`.
-  - `pkcs8RoundTripKeepsTheId`.
 - [ ] **Step 2: Watch them fail, implement, then run `:kuilt-identity:allTests` and `testDebugUnitTest`.**
 - [ ] **Step 3: Docs, `api/` and the pre-merge build, then commit.** Commit: "identity: DeviceKey and cross-target signature vectors (#3159)".
 
@@ -738,7 +737,7 @@ Spec sections: *Key storage* and Decided 4, 8, 9. Each store keeps its key with 
 
 **Interfaces (produced):**
 - In the suite, the fixture is a **two-armed sealed fixture**, `sealed interface Fixture { class Volatile(val fresh: suspend () -> DeviceKeyStore); class Durable(val open: suspend () -> DeviceKeyStore, val corruptKey: suspend () -> Unit, val clearKey: suspend () -> Unit) }`. The KDoc states what the `Volatile` arm cannot detect.
-- `public class FileDeviceKeyStore(directory: Path)`. The key is PKCS#8 in a `0600` file. Grants go through `FileChannelDurableStore`.
+- `public class FileDeviceKeyStore(directory: Path)`. The key is a JWK file (x, y, d) with mode `0600`, self-tested on decode. Grants go through `FileChannelDurableStore`.
 - `public fun DeviceKeyStore.Companion.platform(appId: String, directory: Path): DeviceKeyStore`.
 
 - [ ] **Step 1: Write the suite's cases.**
@@ -759,7 +758,7 @@ Spec sections: *Key storage* and Decided 4, 8, 9. Each store keeps its key with 
 - Modify: `api/`, on macOS.
 
 **Interfaces (produced):** `public fun DeviceKeyStore.Companion.platform(appId: String): DeviceKeyStore`.
-- The key is PKCS#8 in a `kSecClassGenericPassword` item. Service `"us.tractat.kuilt.identity.<appId>"`, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, `kSecAttrSynchronizable = false`.
+- The key is a JWK (x, y, d), self-tested on decode, in a `kSecClassGenericPassword` item. Service `"us.tractat.kuilt.identity.<appId>"`, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, `kSecAttrSynchronizable = false`.
 - Grants go in `NSFileManagerDurableStore` under Application Support/`<appId>`.
 
 - [ ] **Step 1: Probe first.** Run `SecItemAdd` + `SecItemCopyMatching` from `macosArm64Test` and `iosSimulatorArm64Test`. **If either returns `errSecMissingEntitlement` (-34018) or prompts, stop and report.** Test binaries are not app bundles, and the answer decides the test strategy.

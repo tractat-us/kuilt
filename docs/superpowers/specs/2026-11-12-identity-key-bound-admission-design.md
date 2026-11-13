@@ -143,7 +143,7 @@ The rest of this document is for the builder.
   33-byte SEC1 point, base58btc with `z`, so every value starts `did:key:zDn`. A value class whose
   `init` checks the prefix, multicodec, length and lead byte; `suspend DidKey.parse` also decodes
   the point (Decided 13).
-- `DeviceKey` — a P-256 ECDSA key pair from cryptography-kotlin.
+- `DeviceKey` — an interface (`id: DidKey`, `suspend fun sign`) over a P-256 key that never has to expose its bytes. The software key wraps cryptography-kotlin's.
 - cryptography-kotlin 0.6.0 exposes `EC.PublicKey.Format.RAW.Compressed` and
   `ECDSA.SignatureFormat.RAW`. *First task of slice 0:* prove compressed import/export at runtime on
   the WebCrypto provider, which has no native compressed path. If it fails, stop and report; do not
@@ -203,7 +203,7 @@ stable id to `host(roomId =)` — a host-minted id is fresh per process.
 
 - `did:key` against the W3C did:key P-256 test vectors.
 - Each layout: fixed inputs → exact bytes.
-- Verify-only signature vectors (fixed key, message, signature made once on the JDK) checked on JVM,
+- Verify-only signature vectors (Project Wycheproof's P-256/SHA-256 P1363 cases) checked on JVM,
   Android, iOS, macOS and wasmJs; a per-target sign-then-verify property for signing.
 
 ## `:kuilt-session`
