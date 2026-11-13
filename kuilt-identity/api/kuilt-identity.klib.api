@@ -42,6 +42,63 @@ sealed interface us.tractat.kuilt.identity/GrantScope { // us.tractat.kuilt.iden
     }
 }
 
+final class us.tractat.kuilt.identity/AdmissionProof { // us.tractat.kuilt.identity/AdmissionProof|null[0]
+    final val deviceId // us.tractat.kuilt.identity/AdmissionProof.deviceId|{}deviceId[0]
+        final fun <get-deviceId>(): kotlin/String // us.tractat.kuilt.identity/AdmissionProof.deviceId.<get-deviceId>|<get-deviceId>(){}[0]
+    final val hostKey // us.tractat.kuilt.identity/AdmissionProof.hostKey|{}hostKey[0]
+        final fun <get-hostKey>(): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/AdmissionProof.hostKey.<get-hostKey>|<get-hostKey>(){}[0]
+    final val hostNonce // us.tractat.kuilt.identity/AdmissionProof.hostNonce|{}hostNonce[0]
+        final fun <get-hostNonce>(): kotlin/ByteArray // us.tractat.kuilt.identity/AdmissionProof.hostNonce.<get-hostNonce>|<get-hostNonce>(){}[0]
+    final val hostPeerId // us.tractat.kuilt.identity/AdmissionProof.hostPeerId|{}hostPeerId[0]
+        final fun <get-hostPeerId>(): kotlin/String // us.tractat.kuilt.identity/AdmissionProof.hostPeerId.<get-hostPeerId>|<get-hostPeerId>(){}[0]
+    final val joinerPeerId // us.tractat.kuilt.identity/AdmissionProof.joinerPeerId|{}joinerPeerId[0]
+        final fun <get-joinerPeerId>(): kotlin/String // us.tractat.kuilt.identity/AdmissionProof.joinerPeerId.<get-joinerPeerId>|<get-joinerPeerId>(){}[0]
+    final val roomId // us.tractat.kuilt.identity/AdmissionProof.roomId|{}roomId[0]
+        final fun <get-roomId>(): kotlin/String // us.tractat.kuilt.identity/AdmissionProof.roomId.<get-roomId>|<get-roomId>(){}[0]
+    final val wire // us.tractat.kuilt.identity/AdmissionProof.wire|{}wire[0]
+        final fun <get-wire>(): kotlin/ByteArray // us.tractat.kuilt.identity/AdmissionProof.wire.<get-wire>|<get-wire>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/AdmissionProof.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/AdmissionProof.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.identity/AdmissionProof.toString|toString(){}[0]
+    final suspend fun isSignedBy(us.tractat.kuilt.identity/DidKey): kotlin/Boolean // us.tractat.kuilt.identity/AdmissionProof.isSignedBy|isSignedBy(us.tractat.kuilt.identity.DidKey){}[0]
+
+    final object Companion { // us.tractat.kuilt.identity/AdmissionProof.Companion|null[0]
+        final fun decode(kotlin/ByteArray): us.tractat.kuilt.identity/AdmissionProof? // us.tractat.kuilt.identity/AdmissionProof.Companion.decode|decode(kotlin.ByteArray){}[0]
+        final suspend fun sign(us.tractat.kuilt.identity/DeviceKey, kotlin/String, us.tractat.kuilt.identity/DidKey, kotlin/String, kotlin/String, kotlin/String?, kotlin/ByteArray): us.tractat.kuilt.identity/AdmissionProof // us.tractat.kuilt.identity/AdmissionProof.Companion.sign|sign(us.tractat.kuilt.identity.DeviceKey;kotlin.String;us.tractat.kuilt.identity.DidKey;kotlin.String;kotlin.String;kotlin.String?;kotlin.ByteArray){}[0]
+    }
+}
+
+final class us.tractat.kuilt.identity/Challenge { // us.tractat.kuilt.identity/Challenge|null[0]
+    final val hostKey // us.tractat.kuilt.identity/Challenge.hostKey|{}hostKey[0]
+        final fun <get-hostKey>(): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/Challenge.hostKey.<get-hostKey>|<get-hostKey>(){}[0]
+    final val hostNonce // us.tractat.kuilt.identity/Challenge.hostNonce|{}hostNonce[0]
+        final fun <get-hostNonce>(): kotlin/ByteArray // us.tractat.kuilt.identity/Challenge.hostNonce.<get-hostNonce>|<get-hostNonce>(){}[0]
+    final val hostPeerId // us.tractat.kuilt.identity/Challenge.hostPeerId|{}hostPeerId[0]
+        final fun <get-hostPeerId>(): kotlin/String // us.tractat.kuilt.identity/Challenge.hostPeerId.<get-hostPeerId>|<get-hostPeerId>(){}[0]
+    final val joinerNonce // us.tractat.kuilt.identity/Challenge.joinerNonce|{}joinerNonce[0]
+        final fun <get-joinerNonce>(): kotlin/ByteArray // us.tractat.kuilt.identity/Challenge.joinerNonce.<get-joinerNonce>|<get-joinerNonce>(){}[0]
+    final val joinerPeerId // us.tractat.kuilt.identity/Challenge.joinerPeerId|{}joinerPeerId[0]
+        final fun <get-joinerPeerId>(): kotlin/String // us.tractat.kuilt.identity/Challenge.joinerPeerId.<get-joinerPeerId>|<get-joinerPeerId>(){}[0]
+    final val roomId // us.tractat.kuilt.identity/Challenge.roomId|{}roomId[0]
+        final fun <get-roomId>(): kotlin/String // us.tractat.kuilt.identity/Challenge.roomId.<get-roomId>|<get-roomId>(){}[0]
+    final val wire // us.tractat.kuilt.identity/Challenge.wire|{}wire[0]
+        final fun <get-wire>(): kotlin/ByteArray // us.tractat.kuilt.identity/Challenge.wire.<get-wire>|<get-wire>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/Challenge.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/Challenge.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.identity/Challenge.toString|toString(){}[0]
+    final suspend fun isSignedByHost(): kotlin/Boolean // us.tractat.kuilt.identity/Challenge.isSignedByHost|isSignedByHost(){}[0]
+
+    final object Companion { // us.tractat.kuilt.identity/Challenge.Companion|null[0]
+        final const val NONCE_SIZE // us.tractat.kuilt.identity/Challenge.Companion.NONCE_SIZE|{}NONCE_SIZE[0]
+            final fun <get-NONCE_SIZE>(): kotlin/Int // us.tractat.kuilt.identity/Challenge.Companion.NONCE_SIZE.<get-NONCE_SIZE>|<get-NONCE_SIZE>(){}[0]
+
+        final fun decode(kotlin/ByteArray): us.tractat.kuilt.identity/Challenge? // us.tractat.kuilt.identity/Challenge.Companion.decode|decode(kotlin.ByteArray){}[0]
+        final suspend fun sign(us.tractat.kuilt.identity/DeviceKey, kotlin/String, kotlin/String, kotlin/String, kotlin/ByteArray, kotlin/ByteArray): us.tractat.kuilt.identity/Challenge // us.tractat.kuilt.identity/Challenge.Companion.sign|sign(us.tractat.kuilt.identity.DeviceKey;kotlin.String;kotlin.String;kotlin.String;kotlin.ByteArray;kotlin.ByteArray){}[0]
+    }
+}
+
 final class us.tractat.kuilt.identity/Grant { // us.tractat.kuilt.identity/Grant|null[0]
     final val id // us.tractat.kuilt.identity/Grant.id|{}id[0]
         final fun <get-id>(): kotlin/ByteArray // us.tractat.kuilt.identity/Grant.id.<get-id>|<get-id>(){}[0]
