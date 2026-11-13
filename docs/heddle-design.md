@@ -342,7 +342,9 @@ cancel                →  complete with actualCost = 0
 ```
 
 `actualCost > maximumCost` is rejected as an invariant violation, never
-recorded. Unknown-cost work reserves in renewable quanta.
+recorded. Unknown-cost work reserves in renewable quanta. (The single-writer
+`LocalHeddle` differs: its `complete` charges an overrun inline, and §7.5 decides
+how its leases renew and what a wrong estimate may cost.)
 
 Because generations are immutable, a completion that arrives after its edge
 closed still charges the *old* generation — historical service follows the
@@ -727,6 +729,440 @@ Production extensions (latency classes, minimum grants, bounded sleeper
 credit, entitlement recall) are policy-layer only and must not touch
 conservation or path accounting.
 
+### 7.5 A wrong estimate: what it may cost, and whom
+
+A lane asks for a slot and says how long its job will take. If it says too
+little, its job looks cheap while it runs, and the lane wins slots it should
+have waited for. If it says too much, the lane looks expensive and waits longer
+than it needed to. The rule this section sets is short: **a wrong estimate may
+cost the lane that made it, and may never cost its siblings.** A lane that
+under-estimates must end up no better off than one that told the truth, or every
+lane has a reason to under-estimate.
+
+Today that rule fails in two places, both measured (#3238, #3239). This section
+says why, compares three fixes, and records the one chosen. It is decided and
+not yet built. §7.4 (#3229, a draft) is about how long a request is for
+*ordering*; this section is about what a request is *charged*.
+
+#### As built
+
+- **A pick charges the reservation, and `complete` corrects it.** `acquire`
+  delegates the slot's `reservation` down the path it picks
+  (`LocalHeddle.kt:261-301`, the check at `:289`), so every edge on the path
+  advances by `r/w` at once. `complete` extends the overrun or releases the
+  remainder (`:360-387`); `cancel` releases everything (`:390-395`).
+- **The wake clamp counts an open lease at its reservation.** A clamp is
+  `max(carried, front − v_raw − sleeperCredit/w)` (`FairShareAllocator.kt:407-420`,
+  `HeddlePolicy.kt:283-286`), and `v_raw` counts committed service, `issued −
+  returned`, which holds every open lease at what it reserved
+  (`HeddlePolicy.kt:193-196`). The stored offset is joined with `max` and never
+  lowered (#1714, `FairShareAllocator.kt:416-418`).
+- **A leaf with running leases and an empty queue is idle.** `waiting` is queued
+  work (`LocalHeddle.kt:146-149`), so the clamp sees a lane whose last job just
+  started as not competing, and its next queued job as a wake. That is right:
+  such a lane is not asking for more slots, and a lane that kept its claim while
+  its work ran would bank credit for every slot it did not ask for. The probe's
+  honest arm clamps over 100 times for exactly this reason.
+
+**Measured** with the deterministic probe on branch `probe-wake-credit`
+(`LocalHeddleWakeCreditProbe.kt`), re-run on JVM at `c46ac7645`: `root → {a, b}`,
+equal weight, 8 slots, `b` always backlogged at cost 1, `a` in bursts of 4 jobs of
+cost 8, the next burst queued `think` units after the last job of a burst starts.
+The issue reports macosArm64 agreeing on every row. Shares are `a`'s, against the
+honest arm.
+
+| arm | think 7 | think 4 |
+|---|---|---|
+| honest (share) | 0.3636 | 0.4444 |
+| every job under-reserved, `r = C/4` | **+0.0808** | −0.0000 |
+| every job over-reserved, `r = 4C` | −0.0970 | −0.1112 |
+| only the job that empties the queue under-reserved | −0.0303 | −0.0444 |
+| only the job that empties the queue over-reserved | **+0.1362** | **+0.0555** |
+| control: honest with `sleeperCredit = 3C` | +0.1363 | +0.0555 |
+
+The bar is 0.03, the overall-share bar of `LocalHeddleFairnessTest`.
+
+#### Why: where a correction lands
+
+A lease's error, `R − C`, is corrected when it settles. What that correction does
+depends on what the lane is doing at that moment.
+
+| the correction lands | over-reserved (release) | under-reserved (overrun) |
+|---|---|---|
+| while the lane competes | `v` falls, the lane catches up: exact | `v` rises, the lane waits: exact, a lead repaid |
+| while the lane is idle, before its next wake | the clamp may forfeit it: a penalty | **the clamp may erase it: a gain** (#3239) |
+| after a wake whose clamp counted the lease | **credit the clamp denied, handed back** (#3238) | a penalty the clamp did not foresee |
+
+The two bold cells are the two issues.
+
+- **#3238, the third row.** The clamp placed the lane at the front against a `v`
+  that counted `R`. The release then lowers `v` by `(R − C)/w`, below the front
+  the lane was clamped to, and the offset is not revisited. The probe's formula
+  predicts the stored offset at every wake with no misses, and the over-last arm
+  matches the `sleeperCredit = r − C` control row for row. `cancel` hands back
+  all of `R/w` the same way.
+- **#3239, the second row.** An under-reserved lane wins its burst's picks
+  cheaply, goes idle as its queue empties, and its overruns land while it is
+  idle. The next wake clamps to the front. If the front passed the lane while it
+  slept, the debt is gone. At think 7 the idle interval is long enough for that,
+  and the gain is +0.0808. At think 4 the lane wakes still ahead, pays its debt,
+  and gains nothing (−0.0000). So the gain is the clamp absorbing debt, not the
+  cheap picks themselves: in a busy period with no wake, EEVDF repays a lead as
+  soon as the overrun is charged.
+
+**Renewing a lease as it runs does not reach either bold cell.** A burst's picks
+happen at one instant, before any progress exists to report. And the renewals a
+running lease would send land while its lane is idle, since its queue is empty,
+which is the second row again. Renewals bound something else: the lead of a lane
+that keeps competing while a long job runs past its estimate.
+
+#### Three options
+
+| | where the error is corrected | new state | closes #3238 | closes #3239 | engine default from observed cost |
+|---|---|---|---|---|---|
+| 1. settle the clamp's books | in the wake offset, at settlement | two `Long`s per edge in `AllocatorMemory` | yes | yes, at every wake | no |
+| 2. charge from observed cost | at the pick, through a learned per-lane bias | two means per leaf | only with option 1's release rule | only for a stationary estimator | yes |
+| 3. both, without the bias | 1, plus an observed default and renewals | 1, plus one mean per leaf | yes | yes | yes |
+
+**Option 1: settle the clamp's books.** Make every correction in the table land
+as if the lease had reserved its actual cost from the start, in the one direction
+§10.5 forbids, credit, and let the other direction cost the lane. Two numbers per
+edge do it: `atRisk`, what a later release could hand back, and `owed`, what the
+clamp would otherwise erase. It needs no estimate at all, and its guarantee holds
+whatever the caller passes. It does not give the engine an observed default,
+which the ruling on #3239 requires.
+
+**Option 2: charge from observed cost.** Charge each lease `max(d, ⌈d · A/D⌉)`,
+where `d` is its estimate and `A/D` is the lane's recent actual cost over its
+recent estimates, so a lane that under-estimates by a factor `k` is charged `k`
+times what it declares. That stops a uniform under-reserver at the pick. It keeps
+more state and has a learning transient: a lane that switches from honest to
+under-estimating by `k` is undercharged by at most `C · (k − 1) · 2^s` in total
+before the bias catches up, with `2^s` the window. Its guarantee depends on the
+estimator being stationary. A lane that banks over-estimates holds the bias at 1,
+and a lane whose jobs crash teaches it a truncated cost; without option 1's
+`owed`, those leads are still erased at the next wake. And it still needs option
+1's release rule, because `cancel` and an over-estimate straddling a wake do not
+go through the bias.
+
+**Option 3: both, without the bias.** Option 1's books as the guarantee, an
+observed default for a lease with no estimate, as the ruling requires, and
+renewals for long jobs. The bias of option 2 is not needed for the guarantee and
+is left open, to add only if its arm (below) shows the in-flight lead past the
+bar.
+
+#### Decision: option 3
+
+**Recommended.** Not built; tracked by #3238 and #3239, and landing before Task P,
+since it changes the snapshot. Four mechanisms, each with its bound.
+
+**M1. A release after a wake hands back nothing the clamp denied** (#3238). Each
+edge `e` of weight `w` keeps `atRisk(e)`, in cost units, in `AllocatorMemory`:
+
+```text
+at a clamp of e (a wake, with a front):   atRisk(e) := outstanding(e)
+a release of x across e, as a settlement: c := min(x, atRisk(e))
+                                          offset(e) += c / w ;  atRisk(e) −= c
+after any settlement on e:                atRisk(e) := min(atRisk(e), outstanding(e))
+```
+
+A settlement is what a lease's own lifecycle moves after its pick: the overrun
+or remainder at `complete`, everything at `cancel`, and an extension (M4). Only
+its releases reach M1's second line. The probe author's sketch had the first two
+lines. The cap is new, and it matters:
+without it, an `atRisk` left over after its leases settled would charge some
+unrelated release much later.
+
+- *Bound, credit.* None. Whatever releases arrive, the offset added since the
+  edge's latest clamp is at least the release of the leases that were open at
+  it, which is the credit the clamp would otherwise hand back. A release from a
+  lease opened after the clamp can use up `atRisk` first, but every unit it uses
+  was added to the offset.
+- *Bound, penalty.* At most `outstanding(e)` at the latest clamp, divided by `w`,
+  and only out of units actually released. It is zero for a lane whose leases
+  settle at their reservation. It is not zero when a lease opened after the
+  clamp over-reserves, or when the clamp did not bind (`carried` was already
+  larger): both are an over-estimate costing its own lane.
+- `cancel` is covered by the same rule, up to `R/w` per straddling lease.
+
+**M2. An overrun cannot be slept off** (#3239). Each edge keeps `owed(e)`, a signed
+`Long` in cost units, in `AllocatorMemory`:
+
+```text
+every settlement delta δ on e, net of M1's c
+(an overrun or extension is +, a release is −):   owed(e) += δ
+a pick at e's parent sees e competing,
+and e was competing at the pick before:           owed(e) := 0
+a pick at e's parent sees e wake:                 offset(e) := max(carried,
+                                                      front − v_raw − sleeperCredit/w + max(0, owed(e))/w)
+                                                  owed(e) := 0
+```
+
+So `owed` holds what settled since `e` was last seen competing. At a wake, the
+lane is placed where the plain clamp would place it with those settlements
+undone, and then they are put back on top. A release while idle (negative `owed`)
+is applied as zero: it corrects that lease's own over-charge, and is not credit.
+
+- *Bound.* At each wake the lane is placed at most `max(0, owed)/w` further on
+  than the plain clamp would place it, and `owed` is at most the overruns and
+  extensions that settled since it last competed.
+- *What it buys.* Compare the under-reserver with the honest lane at the wake
+  after a burst, both starting the wake from the same settled `v_raw` and the same
+  carried offset. The under-reserver's offset is then at least the honest one,
+  since it adds `owed ≥ 0` to the same clamp. Its next burst's `k`-th pick then waits for an `ev` of
+  `front + owed/w + k·R/w` against the honest `front + k·C/w`. With `owed` equal
+  to the burst's `n` overruns, that is higher by `(n − k)(C − R)/w ≥ 0` for every
+  `k < n`, so no pick comes earlier. This argument holds the siblings still; the
+  probe's arms (below) are what pin it with them moving.
+- Like every clamp, it is enforced at the granularity of picks at the parent
+  (#1715): a settlement is classed by the last pick that observed `e`.
+
+**M3. With no estimate, a lease is charged what its lane has cost.** The engine
+keeps, per leaf `GroupId`, the mean actual cost of its completed leases, in a new
+`CostMemory` beside `AllocatorMemory`:
+
+```text
+complete(lease, actual):  m(ℓ) := m(ℓ) + (min(actual, MAX_RESERVATION)·2^16 − m(ℓ)) / 2^s
+                          (the first completion sets m(ℓ) := min(actual, MAX_RESERVATION)·2^16)
+estimate for ℓ:           ⌈m(ℓ) / 2^16⌉, clamped to 1..MAX_RESERVATION,
+                          or LocalPolicy.defaultReservation before ℓ's first completion
+```
+
+- `m` is fixed-point with 16 fractional bits and at most `2^60`, so every step
+  fits in a `Long`. Signed `Long` division truncates the same way on every
+  target, and the window `s = LocalPolicy.costWindow` can change across a restore
+  without rescaling. `s = 0` is "the last observed cost".
+- It learns only at `complete`, from the cost the caller reports. Heddle reads no
+  clock, so nothing decays with time, only with completions. `cancel` teaches it
+  nothing, or cancelling would lower a lane's estimate.
+- It is keyed by leaf `GroupId`, not by edge. A reweight makes a new edge (R1),
+  and the lane's jobs have not changed, so the cost survives it. A rename or a
+  move makes a new `GroupId` and starts over (Ruling 12). L3 drops a removed
+  leaf's entry.
+- *Gaming.* A declared estimate is charged as declared, so an under-estimate
+  gains an in-flight lead, which M2 takes back at the next wake. The only way to
+  lower `m` is to report lower actual costs, and a caller that misreports cost
+  breaks every guarantee in this document, today as before.
+
+**M4. A lease is renewed as it runs, not only charged at the end.**
+`renew(lease, elapsed)` reports how long the lease has run, in the cost unit.
+When `elapsed ≥ reserved`, it extends the lease to `elapsed + renewStep`, by at
+most `MAX_RESERVATION` per call, through `extend`'s path: it is refused with
+`PathDraining` or `SupplyExhausted` as `extend` is, and then changes nothing.
+Below the reservation it changes nothing, so an honest renewer never extends. It
+never shrinks a lease, and the same `elapsed` twice is a no-op.
+
+- *No clock.* `elapsed` is a number the caller passes, like a cost. The engine
+  never computes it from `startedAt`, so `startedAtNeverAffectsAPick` keeps
+  holding with the same renewals in both runs. `heartbeat(now)` was the
+  alternative, and is settled below.
+- *Never called.* The lease keeps its pick-time charge until `complete` extends
+  the overrun, as today. Its lead while it runs is at most `(C − R)⁺`, and when
+  the lane is idle by the time it settles, M2 carries it to the next wake. So not
+  renewing is never better than renewing at a wake, and within a busy period the
+  lead is bounded by the lease's own estimate error.
+- *Called every `Δ ≤ renewStep`.* The lease is never charged less than it has
+  run.
+- *With `reconcileLeases(live, now)`* (L2). An orphan's `granted` is
+  `Lease.reserved`, renewals included, so a renewed lease's
+  `defaultSettlement = min(elapsed, granted)` tracks how long it ran. Without
+  renewals it stops at the pick-time charge. That is the main reason a consumer
+  renews.
+- A renewal's extension is a settlement for M1 and M2. Its headroom, at most
+  `renewStep`, is released at `complete`: one more release M1 covers. **So
+  renewals do not make M1 smaller or unnecessary.** They add up to `renewStep`
+  per renewed lease to what it covers, and do nothing for a release under the
+  reservation or for `cancel`.
+
+**Over-reservation keeps costing the lane, and should.** An over-estimate is
+charged as declared, so the lane waits longer while the lease runs: −0.097 and
+−0.111 in the probe. After M1 that in-flight cost is the only thing an
+over-estimate does, and the over-last arm's +0.136 is closed. The remedy is in
+the caller's hands: a caller that does not know should pass no estimate and be
+charged the observed default, not pass a timeout.
+
+**Applied after the swap.** An operation collects the settlement deltas it makes
+and hands them to the allocator only once its ledger value is swapped in, so an
+operation that throws or is refused leaves `AllocatorMemory` and `CostMemory` as
+they were. The one exception stays the documented one: the clamp inside a failed
+`acquire` may advance wake memory (`LocalHeddle.kt:171-173`), and `owed` is part
+of that memory. Two releases are **structural, not settlements**, and pass no
+delta: `acquire`'s own correction from the slot length to the lease's charge,
+made in the same operation as the delegation it corrects, and L3's re-home.
+
+#### API
+
+```text
+LocalPolicy(
+    defaultReservation: Long,                // now: the cold-start estimate, and the slot length when none is given
+    sleeperCredit: Long = 0,
+    supply: SupplyPolicy = SupplyPolicy(),   // L2, #3234
+    costWindow: Int = 3,                     // new: M3's s, in 0..16
+    renewStep: Long = defaultReservation,    // new: M4's step, in 1..MAX_RESERVATION
+)
+
+acquire(waiting, eligible, startedAt,
+        reservation: Long? = null,           // was Long = defaultReservation
+        estimates: Map<GroupId, Long> = emptyMap()): AcquireOutcome      // new parameter
+admit(leaf, startedAt, reservation: Long? = null): AdmitOutcome          // was Long = defaultReservation
+renew(lease: LeaseId, elapsed: Long): LeaseOutcome                       // new
+previewPicks(waiting, eligible, reservations: List<Long?>,               // was List<Long>
+             estimates: Map<GroupId, Long> = emptyMap()): List<GroupId>
+LocalHeddleState(ledger, leases, epoch, allocatorMemory, costMemory)     // new component
+CostMemory                                                               // new: @Serializable, contents internal, EMPTY
+AllocatorMemory                                                          // public surface unchanged; its encoding gains atRisk and owed
+```
+
+- `reservation` keeps today's meaning when given: the slot's length, by which
+  the pick orders (Amendment 9), and the estimate of whichever leaf wins. `null`
+  orders by `defaultReservation` and charges each leaf M3's estimate. That is the
+  ruling's change: the default is now observed.
+- `estimates` gives a leaf's own estimate, for the job at the head of its queue:
+  what the caller last observed for that job. It overrides `reservation` for that
+  leaf. `estimates.keys ⊆ waiting` is required, as `eligible ⊆ waiting` is, and
+  an estimate out of `1..MAX_RESERVATION` throws.
+- The descent still delegates the slot length at every level. Once the leaf is
+  known, the same operation extends the difference down the whole path from the
+  root, or releases it up the path. So no interior group holds leftover units,
+  and there is no pick-first descent, which §7.4's option C needed.
+  `Lease.reserved` is the charge.
+- `renew`'s outcomes are `LeaseOutcome`'s existing arms, and `elapsed < 0` throws.
+- Binary breaks on a module not yet on Maven Central: `Long` to `Long?`, two new
+  `LocalPolicy` components, one new `LocalHeddleState` component. Source calls
+  that pass a `reservation` keep compiling and behaving as they do now.
+
+#### What it does elsewhere
+
+- **L2 (#3234, in review).** `acquire` funds the slot length before the descent,
+  as #3234 does, and the charge's difference after it, on the same working
+  value. A refusal after the descent returns `SupplyExhausted` with the ledger
+  untouched, under the existing wake-memory exception. The watermark keeps
+  `defaultReservation` as its unit. When observed costs run above it, top-ups
+  come more often, which rewrites the epoch's one mint record and grows nothing.
+  `reconcileLeases` is unchanged; M4 makes its `granted` honest.
+- **L3.** The re-home is structural and passes no deltas. A reweight forgets
+  `atRisk` and `owed` with the retired edge, which is the history reset R1
+  already accepts. The cost memory survives it.
+- **Task P.** `LocalHeddleSnapshot` gains `costMemory`, and the encoding of
+  `AllocatorMemory` gains `atRisk` and `owed`. Both land before P, so P's first
+  format carries them and no golden snapshot lacks them.
+  `restoreReplaysIdenticallyWithAWaker` must restore with a lease open across a
+  clamp (`atRisk > 0`) and an idle edge with `owed > 0`, or it is vacuous for
+  both.
+- **`HeddleNode`.** It shares the allocator but never releases, so `owed` stays
+  zero, M1 never fires, and its picks are unchanged. Its memory carries one
+  unused `atRisk` per clamped edge, forgotten with the edge. `:kuilt-heddle:build`
+  must stay green.
+- **§7.4 (#3229).** Its property 2 names the wake clamp and `cancel` as places a
+  reservation error moves shares, and its first Open item asks whether to close
+  the clamp's. M1 and M2 close both. Its option C sets the amount by a per-call
+  length and is not recommended. `estimates` here sets the amount without C's
+  pick-first descent, and M2 is what answers C's "reach of a forged length".
+- **#3231.** No new `Rational` state: `atRisk`, `owed` and `m` are `Long`. The
+  offset gains `c/w` and `owed/w`, whose denominator, the weight's numerator, is
+  already in `v_raw`, and whose size is bounded by the edge's outstanding.
+
+#### What must still hold
+
+| invariant | after this design |
+|---|---|
+| `minted == Σ holdings + spent`, and `Σ leaf holdings == Σ open reserved` | holds: the charge correction and renewals are delegations and releases through the existing helpers, and `Lease.reserved` follows them |
+| every operation all-or-nothing | holds: deltas and cost updates are applied after the swap; the one wake-memory exception is unchanged |
+| one leaf predicate, demand lifted by the descent's terminal predicate | unchanged: the charge is set after the descent |
+| `previewPicks` equals the acquires it previews | holds if the scratch engine copies `CostMemory` as well as `AllocatorMemory`, `owed` included |
+| a pick never reads `startedAt` | holds: `renew` takes `elapsed` |
+| `complete` is never refused | unchanged |
+| `MAX_RESERVATION` | every charge, estimate and renewal step is capped by it |
+| offsets never decrease (#1714) | holds: M1 and M2 only raise an offset |
+
+#### Acceptance
+
+The probe becomes a test, `LocalHeddleWakeCreditTest`, on the same rig, with the
+arms declaring through `estimates` instead of extending after the pick. It runs
+under `allTests`, and the JVM, macosArm64 and wasmJs rows are read together. The
+rig draws nothing at random, so the rows should be identical on every target; one
+that differs is a determinism defect.
+
+- **Unchanged.** The honest arm's row on both headline workloads is identical to
+  the one above: honest leases settle at their reservation, so no delta is ever
+  passed.
+- **No better than honest**, each within 0.03 of the honest share or below it:
+  under-every-job, under-last, over-every-job, over-last, a new **cancel-last**
+  arm (the job that empties the queue is cancelled at its end, with share counted
+  by slot time, since a cancel charges nothing), a new **undeclared-variance** arm
+  (no estimates, `a`'s burst costs `[4, 4, 4, 20]`, against an honest arm
+  declaring each cost), and a new **renewing-under** arm (under-every-job,
+  renewed every unit).
+- **Open loop**, from the probe's open-loop sweep: the mean wait of the under and
+  over-last arms is at least 0.9 × the honest arm's.
+- **The rig fired.** The probe's checks stay (over 100 wakes, at least 90% of
+  them with `a`'s lease open, over 100 clamps, no model misses). Added: M1 fired
+  on over-last and cancel-last, M2 applied a positive `owed` on under-every-job,
+  and each arm's residual credit, the probe's credit less M1's compensation, is
+  at most zero. The `sleeperCredit` control still moves the share past the bar.
+- **Mutations, recorded in the PR.** Skip M1's compensation: over-last and
+  cancel-last red. Skip M2: under-every-job reds at think 7, with today's
+  +0.0808. Drop M1's cap: `atRiskNeverExceedsOutstanding` reds. Replace M3 with
+  `defaultReservation`: `undeclaredChargeTracksObservedCost` reds. These are
+  predictions. A mutation that does not red names a vacuous arm, to replace
+  before merging.
+- **Unit tests.** `releaseAfterAWakeHandsBackNothing`,
+  `cancelAfterAWakeHandsBackNothing`, `overrunWhileIdleIsCarriedToTheWake`,
+  `atRiskNeverExceedsOutstanding`, `offsetsNeverDecrease` (a property over random
+  operations), `aRefusedOperationLeavesBothMemoriesUnchanged`,
+  `undeclaredChargeTracksObservedCost`, `coldStartChargesDefaultReservation`,
+  `costMemoryLearnsFromCompleteNotCancel`, `costMemoryGoldenValues` (a fixed
+  sequence gives the same `m` on every target), `renewIsIdempotent`,
+  `renewNeverShrinks`, `anHonestRenewerNeverExtends` and
+  `renewAcrossADrainingPathIsRefused`. `startedAtNeverAffectsAPick`, the
+  `previewPicks` equality property and the conservation property gain `renew`
+  and `estimates`.
+- **#3231's arm.** The reproduction at `MAX_RESERVATION` under weights
+  `3/7 : 2/5` first throws no earlier than cycle 4,995, its measurement on #3231.
+
+#### Settled — don't reopen
+
+- Counting a leaf with open leases as competing, so that no wake falls while one
+  is open: a lane would keep its claim to every slot it did not ask for while
+  its work ran. The honest arm clamps over 100 times for this (#3238, #3239).
+- Charging open leases up to `now − startedAt` inside `acquire`, or a
+  `heartbeat(now)` that does: a pick would read `startedAt` (Amendment 8).
+  Reopen only if that invariant is relaxed.
+- Charging one quantum at the pick and renewing from there: a caller that never
+  renews under-reserves by `C − q`, and renewals land while the lane is idle
+  (#3239).
+- A surcharge in the ledger: `spent` must equal what the caller reported, or
+  conservation's `spent` stops being cost (#3239).
+- A penalty added to the offset at `complete`: the next wake's `max` join
+  swallows it, the same way it erases debt (#3239).
+- Lowering an offset when an overrun settles after a wake: it would refund the
+  under-reserver's penalty at that wake, against the ruling, and break #1714's
+  high-water mark.
+- Flooring a declared estimate at the lane's observed cost: it overrides an
+  accurate short estimate in a lane of long jobs, and M2 already takes the lead
+  back (#3239).
+- Keeping the observed cost in `AllocatorMemory`: the allocator never sees a
+  lease or a leaf, `HeddleNode` would carry it unused, and keying it by edge
+  would lose it at every reweight (#3239).
+
+#### Open
+
+- Whether to add option 2's bias on top. A **busy-period arm** decides it: `a`
+  and `b` both always backlogged, `a` under-estimating by 4 with no wake at all,
+  recording `a`'s peak slots and its worst 500-step window share. If the lead
+  stays under the bar, the bias is not needed (#3239).
+- Whether an orphan's settlement should teach M3. L2's documented settlement
+  stops at `granted`, so a lane whose jobs crash learns a shorter cost. M2 bounds
+  what that buys at a wake; within a busy period it is a lead (#3239).
+- The defaults: `costWindow = 3`, about the last 8 completions, and
+  `renewStep = defaultReservation`. The arms at `s ∈ {0, 3, 6}` would show the
+  trade between following a change fast and following noise (#3239).
+- Exact attribution for M1, per lease rather than per edge, would remove the
+  penalty an over-reserving lease opened after a wake pays. It costs one counter
+  per lease per path edge in P's snapshot. Measure the penalty first with an
+  **honest-noise arm**: each estimate is the job's previous cost, with costs
+  drawn in turn from a fixed list (#3238).
+
 ## 8. Partitions, crashes, and the fairness-error bound
 
 ### 8.1 Partition ≠ crash
@@ -915,7 +1351,9 @@ Carried over from the source intact; each is a named property test (§13).
    seat is published on the edge's `Gauge` as an exact `Rational`, not frozen
    into the record, so there is no rounding rule to state (§7.2).
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
-   clamps forward.
+   clamps forward. A lease's reservation error, settled after the wake or while
+   the lane slept, may neither hand back credit the clamp denied nor erase debt
+   (§7.5; decided, not yet built: #3238, #3239).
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
    post-heal convergence restores a single agreed ledger.
 8. **Projection homomorphism.**
