@@ -196,6 +196,9 @@ public final class us/tractat/kuilt/identity/RevocationList {
 }
 
 public final class us/tractat/kuilt/identity/RevocationList$Companion {
+	public final fun getDEFAULT_STORE_KEY-V7ECK2g ()Ljava/lang/String;
 	public final fun inMemory ()Lus/tractat/kuilt/identity/RevocationList;
+	public final fun open-nDmdsz8 (Lus/tractat/kuilt/store/DurableStore;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun open-nDmdsz8$default (Lus/tractat/kuilt/identity/RevocationList$Companion;Lus/tractat/kuilt/store/DurableStore;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
