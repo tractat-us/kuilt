@@ -1,5 +1,7 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.serialization.BinaryFormat
+import kotlinx.serialization.StringFormat
 import us.tractat.kuilt.crdt.ReplicaId
 
 /**
@@ -939,6 +941,16 @@ public class LocalHeddle private constructor(
     internal fun capturedPath(lease: LeaseId): List<AttachmentId>? = open[lease]?.path
 
     /**
+     * Everything a restart needs, as one value to encode and store: see [LocalHeddleSnapshot]. Like
+     * [snapshot], it is taken under the caller's scheduling lock, since it reads the engine's own
+     * maps; the value it returns is immutable, so encoding and writing it can happen off the lock.
+     * Costs a sort of the open leases and of the wake memory.
+     *
+     * @sample us.tractat.kuilt.heddle.sampleLocalPersistence
+     */
+    public fun persist(): LocalHeddleSnapshot = TODO("Task P")
+
+    /**
      * Replace the ledger with [transform] of it: the test seam for a topology change while leases
      * are open that [apply] cannot express, such as an edge left closing by hand.
      */
@@ -1230,6 +1242,39 @@ public class LocalHeddle private constructor(
          */
         internal fun over(ledger: EntitlementLedger, root: GroupId, policy: LocalPolicy, epoch: Long, leasable: Leasable): LocalHeddle =
             LocalHeddle(root, policy, epoch, ledger, FairShareAllocator(SELF, policyConfig(policy)), leasable)
+
+        /**
+         * An engine that carries on from [snapshot], issuing new lease ids under [epoch].
+         *
+         * Every lease open in [snapshot] is open again under its own id, from whatever epoch issued
+         * it, and charges down the path it was delegated on. The wake memory and the capacity come
+         * back too, so the next picks and top-ups are the ones the persisted engine would have made.
+         * [policy] is taken afresh: pass the one the persisted engine ran with for that to hold.
+         *
+         * [epoch] must be above [snapshot]'s. Treat it as a boot counter you persist and only ever
+         * raise: lease ids are numbered from zero in each epoch, so restoring under an epoch an
+         * earlier run already used could hand out an id that run handed out too. An older lease id
+         * that is no longer open is then answered [LeaseOutcome.Stale], never [LeaseOutcome.Unknown].
+         *
+         * @throws IllegalArgumentException when [epoch] is not above [LocalHeddleSnapshot.epoch], or
+         *   when [policy] cannot size [LocalHeddleSnapshot.totalSlots] (see [reconcileCapacity]).
+         * @sample us.tractat.kuilt.heddle.sampleLocalPersistence
+         */
+        public fun restore(snapshot: LocalHeddleSnapshot, policy: LocalPolicy, epoch: Long): LocalHeddle = TODO("Task P")
+
+        /**
+         * Read a snapshot from [bytes], encoded in [format] from [LocalHeddleSnapshot]'s serializer.
+         * Never throws for what the bytes hold: see [RestoreResult].
+         */
+        public fun decode(bytes: ByteArray, format: BinaryFormat): RestoreResult = TODO("Task P")
+
+        /**
+         * Read a snapshot from [text], encoded in [format] from [LocalHeddleSnapshot]'s serializer.
+         * Never throws for what the text holds: see [RestoreResult].
+         *
+         * @sample us.tractat.kuilt.heddle.sampleLocalPersistence
+         */
+        public fun decode(text: String, format: StringFormat): RestoreResult = TODO("Task P")
 
         /**
          * The allocator's policy: an unbounded quantum, because each pick's reservation rides in its

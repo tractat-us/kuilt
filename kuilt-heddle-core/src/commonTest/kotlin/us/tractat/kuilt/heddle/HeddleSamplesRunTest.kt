@@ -56,4 +56,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun localReloadHolds() = sampleLocalReload()
+
+    @Test
+    fun localPersistenceHolds() = sampleLocalPersistence()
 }

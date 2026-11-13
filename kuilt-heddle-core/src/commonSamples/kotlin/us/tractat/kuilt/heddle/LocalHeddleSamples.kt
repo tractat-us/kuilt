@@ -1,5 +1,7 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.serialization.json.Json
+
 /**
  * One free slot, one lease: ask who goes next, run their work, and charge what it really cost.
  * The heavy group goes first twice as often as the light one. A job that runs long is charged its
@@ -83,6 +85,35 @@ internal fun sampleReconcileLeases() {
     // It ran 9 units against the 3 it was granted, which a dead job cannot prove: charge 3.
     check(heddle.complete(orphan.lease.id, orphan.defaultSettlement) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
     check(heddle.reconcileLeases(live = setOf(kept.id), now = 110L).orphaned.isEmpty())
+}
+
+/**
+ * Save the engine before a restart and carry on after it: the open lease is still valid under its
+ * old id, and the next pick is the one the old engine would have made.
+ */
+@Suppress("unused")
+internal fun sampleLocalPersistence() {
+    val tree = twoLanes()
+    val heavy = tree.groupId("heavy")
+    val light = tree.groupId("light")
+    val policy = LocalPolicy(defaultReservation = 3L)
+    val heddle = LocalHeddle.fromTopology(tree, policy, epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 2L)
+    val queued = setOf(heavy, light)
+    val running = (heddle.acquire(queued, queued, startedAt = 100L) as AcquireOutcome.Acquired).lease
+
+    // Under your scheduling lock: take the snapshot. Encoding and storing it can happen off the lock.
+    val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
+
+    // After the restart: decode, then restore under a later epoch, your persisted boot counter.
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored)
+    val restarted = LocalHeddle.restore(decoded.snapshot, policy, epoch = decoded.snapshot.epoch + 1)
+
+    // The lease that was running is still open, and settles as it would have.
+    check(restarted.complete(running.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    // New leases are named under the new epoch, so none can repeat an old id.
+    check((restarted.acquire(queued, queued, startedAt = 120L) as AcquireOutcome.Acquired).lease.id.epoch == 1L)
 }
 
 /**
