@@ -464,50 +464,65 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
-     * A persist and restore at a random point of a random lease sequence is invisible: from then on
-     * every outcome and the books after every step match an engine that never persisted. Leases are
-     * addressed by their place in the open list, which is id order in both: the restored engine's
-     * own ids come after every restored one, as later sequence numbers do in the reference.
+     * A persist and restore at a random point of a random sequence is invisible: from then on every
+     * outcome and the books after every step match an engine that never persisted. The sequence
+     * mixes lease operations with reloads, a reweight (which moves open leases), a removal (which
+     * drains), a new weight on a runtime marker, and attaching and detaching runtime children, so a
+     * restore lands mid-drain and after a reload as well as on a quiet tree. Leases are addressed by
+     * their place in the open list, which is id order in both: the restored engine's own ids come
+     * after every restored one, as later sequence numbers do in the reference.
      */
     @Test
     fun aRestoreAnywhereIsInvisible() {
-        val tree = Topology(
+        fun tree(pWeight: Long = 2L, markerWeight: Long = 1L, withHash3: Boolean = true) = Topology(
             "root",
             listOf(
-                Topology.Group("p", Weight.of(2), listOf(Topology.Lane("a/b", Weight.of(3)), Topology.Lane("#3"))),
+                Topology.Group("p", Weight.of(pWeight), listOfNotNull(Topology.Lane("a/b", Weight.of(3)), Topology.Lane("#3").takeIf { withHash3 })),
                 Topology.Group("q", Weight.ONE, listOf(Topology.Lane("c-7f3a"), Topology.Lane("é#%@", Weight.of(2)))),
+                Topology.Group("r", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.of(markerWeight))),
             ),
         )
-        val leaves = listOf(tree.groupId("p", "a/b"), tree.groupId("p", "#3"), tree.groupId("q", "c-7f3a"), tree.groupId("q", "é#%@"))
+        val base = tree()
+        val drafts = listOf(base, tree(pWeight = 3L), tree(withHash3 = false), tree(markerWeight = 2L))
+        val runtime = listOf("x", "y")
+        val leaves = listOf(base.groupId("p", "a/b"), base.groupId("p", "#3"), base.groupId("q", "c-7f3a"), base.groupId("q", "é#%@")) +
+            runtime.map { base.runtimeChildId(listOf("r"), it) }
         val wide = LocalPolicy(defaultReservation = 3L)
         var restores = 0
         var withLeasesOpen = 0
         var withAWakeOffset = 0
+        var midDrain = 0
+        var afterAReload = 0
+        var withARuntimeLease = 0
+        var drains = 0
         var compared = 0
         for (seed in 0 until SEEDS) {
             val rng = Random(seed)
-            val reference = LocalHeddle.fromTopology(tree, wide, epoch = 0L).also { it.reconcileCapacity(2L) }
-            var subject = LocalHeddle.fromTopology(tree, wide, epoch = 0L).also { it.reconcileCapacity(2L) }
+            val reference = LocalHeddle.fromTopology(base, wide, epoch = 0L).also { it.reconcileCapacity(2L) }
+            var subject = LocalHeddle.fromTopology(base, wide, epoch = 0L).also { it.reconcileCapacity(2L) }
             val cut = rng.nextInt(STEPS)
             repeat(STEPS) { step ->
                 if (step == cut) {
                     val persisted = subject.persist()
                     if (persisted.leases.isNotEmpty()) withLeasesOpen++
                     if (persisted.allocatorMemory.wakeOffsets.values.any { it != Rational.ZERO }) withAWakeOffset++
+                    if (persisted.ledger.allEdges().any { persisted.ledger.lifecycle(it) == Lifecycle.CLOSING }) midDrain++
+                    if (persisted.lastApplied != base) afterAReload++
+                    if (persisted.leases.any { it.leaf.value.startsWith("root/r/") }) withARuntimeLease++
                     subject = throughJson(subject, wide)
                     restores++
                 }
                 val open = reference.snapshot().leases
-                val kind = rng.nextInt(5)
+                val kind = rng.nextInt(8)
                 val (expected, actual) = when {
-                    kind == 0 || open.isEmpty() -> {
+                    kind == 0 || (kind in 1..3 && open.isEmpty()) -> {
                         val waiting = leaves.filter { rng.nextInt(3) != 0 }.toSet()
                         val eligible = waiting.filterTo(HashSet()) { rng.nextBoolean() }
                         val r = 1L + rng.nextInt(5)
                         val s = step.toLong()
                         shape(reference.acquire(waiting, eligible, s, r)) to shape(subject.acquire(waiting, eligible, s, r))
                     }
-                    else -> {
+                    kind in 1..3 -> {
                         val i = rng.nextInt(open.size)
                         val mine = subject.snapshot().leases[i].id
                         val theirs = open[i].id
@@ -515,12 +530,27 @@ class LocalHeddlePersistenceTest {
                         when (kind) {
                             1 -> reference.extend(theirs, amount + 1) to subject.extend(mine, amount + 1)
                             2 -> reference.complete(theirs, amount) to subject.complete(mine, amount)
-                            3 -> reference.cancel(theirs) to subject.cancel(mine)
-                            else -> {
-                                val leaf = leaves[rng.nextInt(leaves.size)]
-                                shape(reference.admit(leaf, step.toLong())) to shape(subject.admit(leaf, step.toLong()))
-                            }
+                            else -> reference.cancel(theirs) to subject.cancel(mine)
                         }
+                    }
+                    kind == 4 -> {
+                        val leaf = leaves[rng.nextInt(leaves.size)]
+                        shape(reference.admit(leaf, step.toLong())) to shape(subject.admit(leaf, step.toLong()))
+                    }
+                    kind == 5 -> {
+                        val draft = drafts[rng.nextInt(drafts.size)]
+                        val out = shape(reference.apply(draft, step.toLong()))
+                        if (reference.snapshot().ledger.allEdges().any { reference.snapshot().ledger.lifecycle(it) == Lifecycle.CLOSING }) drains++
+                        out to shape(subject.apply(draft, step.toLong()))
+                    }
+                    kind == 6 -> {
+                        val name = runtime[rng.nextInt(runtime.size)]
+                        shape(reference.attachRuntimeChild(listOf("r"), name, step.toLong())) to
+                            shape(subject.attachRuntimeChild(listOf("r"), name, step.toLong()))
+                    }
+                    else -> {
+                        val name = runtime[rng.nextInt(runtime.size)]
+                        shape(reference.detachRuntimeChild(listOf("r"), name)) to shape(subject.detachRuntimeChild(listOf("r"), name))
                     }
                 }
                 if (expected != actual) fail("seed $seed step $step (restored at $cut): $expected, but $actual")
@@ -534,14 +564,29 @@ class LocalHeddlePersistenceTest {
             { assertEquals(SEEDS * STEPS, compared, "every step was compared") },
             { assertTrue(withLeasesOpen > SEEDS / 2, "the rig: most restores carried open leases, $withLeasesOpen") },
             { assertTrue(withAWakeOffset > 0, "the rig: some restore carried a wake offset, $withAWakeOffset") },
+            { assertTrue(drains > 0, "the rig: some reload left an edge draining, $drains") },
+            { assertTrue(midDrain > 0, "the rig: some restore landed mid-drain, $midDrain") },
+            { assertTrue(afterAReload > 0, "the rig: some restore came after a reload, $afterAReload") },
+            { assertTrue(withARuntimeLease > 0, "the rig: some restore carried a lease at a runtime child, $withARuntimeLease") },
         )
     }
 
-    /** An outcome with the lease id left out, since a restored engine names its new leases under its own epoch. */
+    /**
+     * An outcome with every lease id left out, since a restored engine names its new leases under its
+     * own epoch: a lease is its leaf, reservation and start time.
+     */
     private fun shape(out: Any): Any = when (out) {
-        is AcquireOutcome.Acquired -> Triple(out.lease.leaf, out.lease.reserved, out.lease.startedAt)
+        is AcquireOutcome.Acquired -> shapeOf(out.lease)
+        is ApplyResult -> out.applied to out.refusals.map { refusal ->
+            when (refusal) {
+                is StepRefusal.Draining -> listOf(refusal.child, refusal.edge, refusal.outstanding, refusal.blockingLeases.map(::shapeOf))
+                is StepRefusal.Refused -> listOf(refusal.child, refusal.step)
+            }
+        }
         else -> out
     }
+
+    private fun shapeOf(lease: Lease): Any = Triple(lease.leaf, lease.reserved, lease.startedAt)
 
     /** A binary format carrying JSON as UTF-8: enough to drive the `ByteArray` overload with what `commonTest` has. */
     private object JsonBytes : BinaryFormat {
