@@ -25,8 +25,8 @@ public final class us/tractat/kuilt/cluster/ClusterClient {
 }
 
 public final class us/tractat/kuilt/cluster/ClusterClientKt {
-	public static final fun clusterClient-DMFuT84 (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/cluster/ClusterEndpoints;Ljava/lang/String;Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/jvm/functions/Function0;)Lus/tractat/kuilt/cluster/ClusterClient;
-	public static synthetic fun clusterClient-DMFuT84$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/cluster/ClusterEndpoints;Ljava/lang/String;Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/jvm/functions/Function0;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/ClusterClient;
+	public static final fun clusterClient-qmPWZw4 (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/cluster/ClusterEndpoints;Ljava/lang/String;Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/jvm/functions/Function0;)Lus/tractat/kuilt/cluster/ClusterClient;
+	public static synthetic fun clusterClient-qmPWZw4$default (Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/cluster/ClusterEndpoints;Ljava/lang/String;Lus/tractat/kuilt/raft/ClusterConfig;Lus/tractat/kuilt/raft/RaftConfig;Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/raft/ClientIdentity;Lkotlin/jvm/functions/Function0;ILjava/lang/Object;)Lus/tractat/kuilt/cluster/ClusterClient;
 	public static final fun clusterClientWithNode (Lus/tractat/kuilt/raft/RaftNode;)Lus/tractat/kuilt/cluster/ClusterClient;
 }
 
