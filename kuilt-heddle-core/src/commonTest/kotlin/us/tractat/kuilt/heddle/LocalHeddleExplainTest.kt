@@ -162,14 +162,35 @@ class LocalHeddleExplainTest {
         val closing = weighted.piece(checkNotNull(weighted.close(AttachmentId("q>c-7f3a"))).delta)
         val gainedAChild = weighted.piece(checkNotNull(weighted.activate(AttachmentId("c-7f3a>c-7f3a/x"))).delta)
         val all = setOf(a, b, c)
-        for ((name, ledger) in listOf("behind a closing edge" to closing, "a group with an active child" to gainedAChild)) {
+        val shares = listOf(closing, gainedAChild).map { ledger ->
             val h = engineOver(ledger, root, supply = 0)
-            assertAll(
-                { assertEquals(Rational.of(9L), h.entitlement(a, all, 12), "$name: q competes for nothing") },
-                { assertEquals(Rational.of(3L), h.entitlement(b, all, 12), name) },
-                { assertEquals(Rational.ZERO, h.entitlement(c, all, 12), name) },
-            )
+            listOf(a, b, c).map { h.entitlement(it, all, 12) }
         }
+        val owed = listOf(9L, 3L, 0L).map(Rational::of)
+        assertAll(
+            { assertEquals(owed, shares[0], "behind a closing edge, c-7f3a and so q compete for nothing") },
+            { assertEquals(owed, shares[1], "nor as a group with an active child") },
+        )
+    }
+
+    @Test
+    fun explainTakesTheFrontOverEveryoneWaiting() {
+        val x = GroupId("x")
+        val y = GroupId("y")
+        val z = GroupId("z")
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, x), edgeOf(root, y), edgeOf(root, z))), root, supply = 100)
+        val waiting = setOf(x, y, z)
+        // z waits through four slots it cannot run, so x and y run two each.
+        repeat(4) {
+            val lease = (h.acquire(waiting, setOf(x, y), startedAt = 0L) as AcquireOutcome.Acquired).lease
+            h.complete(lease.id, lease.reserved)
+        }
+        // y ties x and loses on id. Its side is at 2, above the front of the three waiting (4/3),
+        // which is what tells it that z is owed: the mean of the eligible two alone would be 2.
+        assertEquals(
+            WaitExplanation.BehindAtLevel(root, x, leafSideVirtualService = Rational.of(2L), front = Rational.of(4L, 3L)),
+            h.explain(y, waiting, setOf(x, y)),
+        )
     }
 
     @Test
