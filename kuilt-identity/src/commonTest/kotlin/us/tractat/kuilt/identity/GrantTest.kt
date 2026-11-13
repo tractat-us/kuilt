@@ -207,12 +207,24 @@ class GrantTest {
         val grant = Grant.issue(issuer, SUBJECT, GrantScope.Room("room-7"), ISSUED_AT, NOT_AFTER)
         val twin = Grant.issue(issuer, SUBJECT, GrantScope.Room("room-7"), ISSUED_AT, NOT_AFTER)
         val decoded = assertNotNull(Grant.decode(grant.wire))
+        // decode keeps its own copy: overwriting the array it read afterwards changes nothing.
+        val source = grant.wire
+        val fromSource = assertNotNull(Grant.decode(source))
+        source.fill(0)
+        val fromSourceVerifies = fromSource.isSignedByIssuer()
+        // Same id, same terms, other signature bytes: another grant, since equality is by wire.
+        val otherSignature = assertNotNull(Grant.decode(grant.wire.flipLowBit(grant.wire.size - 1)))
         val id = grant.id
         grant.id[0] = (id[0] + 1).toByte()
         grant.wire[0] = 0x7f
         assertAll(
             { assertEquals(grant, decoded) },
             { assertEquals(grant.hashCode(), decoded.hashCode()) },
+            { assertEquals(0, source.count { it != 0.toByte() }, "precondition: the source array really was overwritten") },
+            { assertEquals(grant, fromSource, "a grant decoded from an array overwritten afterwards") },
+            { assertTrue(fromSourceVerifies, "and it still verifies") },
+            { assertContentEquals(grant.id, otherSignature.id, "precondition: the flipped copy has the same id") },
+            { assertNotEquals(grant, otherSignature, "equal ids, other signature bytes: unequal") },
             { assertNotEquals(grant, twin, "the same terms issued twice are two grants") },
             { assertContentEquals(id, grant.id, "id hands out a copy") },
             { assertContentEquals(decoded.wire, grant.wire, "wire hands out a copy") },
