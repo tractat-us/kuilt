@@ -17,7 +17,7 @@ kotlin {
 
         commonMain.dependencies {
             // No kuilt module yet. The primitives are cryptography-kotlin's; this module composes
-            // them and owns no cryptographic math beyond one on-curve validation (ionspin, below).
+            // them and owns no cryptographic math beyond decompressing a point (ionspin, below).
             // `implementation`, not `api`: no cryptography-kotlin type appears in the public surface.
             implementation(libs.cryptography.core)
             // `api`: the device's `DidKey` name is `@Serializable` in the public surface.
@@ -25,10 +25,11 @@ kotlin {
             // Only for `currentCoroutineContext().ensureActive()`: telling this coroutine's own
             // cancellation from one a provider minted (providerCall), per kuilt's exception rule.
             implementation(libs.kotlinx.coroutines.core)
-            // Only for `isOnCurve`: checking that a did:key's x has a point on P-256. JDK's
-            // compressed-point decoder never checks (#3201), so the check runs here, in common code,
-            // and every provider gets the same answer. Validation only; decompression stays the
-            // provider's. Pure Kotlin on every target, as in :kuilt-deal.
+            // Only for `decompress`: checking that a did:key's x has a point on P-256 and computing
+            // its y, so every provider imports the 65-byte uncompressed point. Safari's WebCrypto
+            // refuses compressed import (#3232) and JDK's compressed decoder never checks the curve
+            // (#3201), so it runs here, in common code, and every provider gets the same answer.
+            // Pure Kotlin on every target, as in :kuilt-deal.
             implementation(libs.ionspin.bignum)
         }
         // One provider per platform, each a thin wrapper over the platform's own implementation.
