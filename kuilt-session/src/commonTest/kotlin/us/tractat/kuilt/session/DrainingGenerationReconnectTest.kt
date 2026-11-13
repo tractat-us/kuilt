@@ -260,7 +260,7 @@ class DrainingGenerationReconnectTest {
             memberName = "table-7",
             scope = backgroundScope,
             clock = { Instant.fromEpochMilliseconds(0L) },
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = config,
             roomId = RoomId("room-1"),
         ).also { it.start() }
@@ -291,7 +291,7 @@ class DrainingGenerationReconnectTest {
             memberName = "client",
             scope = backgroundScope,
             clock = { Instant.fromEpochMilliseconds(0L) },
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = config,
             roomId = null,
             reweave = {

@@ -45,7 +45,7 @@ class SeamRoomDetectorTeardownTest {
                 memberName = "Alice",
                 scope = roomScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = keyedDevice(),
                 heartbeatConfig = HeartbeatConfig(),
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -57,7 +57,7 @@ class SeamRoomDetectorTeardownTest {
                 memberName = "Bob",
                 scope = backgroundScope,
                 clock = clock,
-                deviceKeyStore = keyedStore(),
+                device = keyedDevice(),
                 heartbeatConfig = HeartbeatConfig(),
                 roomId = null,
             ).also { it.start() }

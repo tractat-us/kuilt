@@ -158,7 +158,7 @@ class RoomLifecycleFlapTest {
             memberName = "host",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -168,7 +168,7 @@ class RoomLifecycleFlapTest {
             memberName = "joiner",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
 
@@ -263,7 +263,7 @@ class RoomLifecycleFlapTest {
             memberName = "host",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
         SeamRoom(
@@ -272,7 +272,7 @@ class RoomLifecycleFlapTest {
             memberName = "joiner",
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = keyedStore(),
+            device = keyedDevice(),
             heartbeatConfig = fastConfig,
         ).also { it.start() }
         hostRoom.roster.first { it.isNotEmpty() }
