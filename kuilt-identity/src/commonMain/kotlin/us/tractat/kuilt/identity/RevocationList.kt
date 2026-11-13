@@ -17,8 +17,12 @@ import us.tractat.kuilt.store.StoreKey
  * back on one; [GrantTrust] answers [GrantVerdict.Revoked] for it. A grant issued at or after the
  * cutoff still works, so a device that is welcome again simply gets a fresh pass.
  *
- * Revoking blocks the next return; it does not remove a device that is in the room now. That is the
- * app's separate call.
+ * Revoking voids passes; it is not a ban. A revoked device that knocks again is a newcomer, and the
+ * host's admission policy decides it like any other. A cutoff cannot be taken back, so an app that
+ * means to keep a device out keeps its own blocked set, which it can undo, and refuses on that.
+ *
+ * Revoking stops a return on an old pass; it does not remove a device that is in the room now. That is
+ * the app's separate call.
  *
  * One entry per subject key: its cutoff, `notBefore`. A grant with `issuedAt < notBefore` is revoked,
  * and one issued exactly at the cutoff is not. The host keeps no grants, only these cutoffs, so

@@ -351,7 +351,15 @@ public suspend fun flushThenLeaveSample(
 /**
  * Decide who gets into a room you host, and for how long each may come back without being asked
  * again. A friend's pass is good in any room you host and never runs out; a stranger's is good in
- * this room for an hour after last contact; a device you have revoked gets your own refusal code.
+ * this room for an hour after last contact; a device the app has blocked gets the app's own refusal
+ * code, until the app unblocks it.
+ *
+ * Revoking and blocking are separate. Revoking a key voids the passes it already holds, so it has to
+ * knock again as a newcomer; it is not a ban, and this policy lets a revoked friend straight back in
+ * with a fresh pass. [blocked] is what keeps a device out: the app's own set, which it can undo, held
+ * in a `StateFlow` because the policy may decide two joiners at once. To
+ * shut a device out now, do both: blocking alone leaves a pass it holds working, and revoking alone
+ * only sends it back to this policy.
  */
 public suspend fun hostAdmissionSample(
     friends: Set<DidKey>,
@@ -363,15 +371,15 @@ public suspend fun hostAdmissionSample(
     val notWelcome = object : RejectCode {
         override val id: String = "not-welcome"
     }
-    // One list: the room checks returning passes against it, and the policy refuses newcomers on it.
-    // Kept in the store, since a friend's pass never expires: an in-memory list forgets on restart.
+    // The room checks returning passes against this list. Kept in the store, since a friend's pass
+    // never expires: an in-memory list forgets on restart, and the voided passes work again.
     val revocations = RevocationList.open(store)
     val policy = AdmissionPolicy { request ->
         // `key` is the device key the joiner proved it holds. `displayName` is only its say-so.
         when {
-            // Revoking voids a key's passes, not its next ordinary admission, so refuse it here too.
-            // A key revoked once is then refused for good, friend or not.
-            revocations.notBefore(request.key) != null -> AdmissionDecision.Reject(notWelcome)
+            // The app's blocked set, never the revocations: a revocation cannot be taken back, so
+            // refusing every revoked key here would ban it for good.
+            request.key in blocked.value -> AdmissionDecision.Reject(notWelcome)
             request.key in friends -> AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
             else -> AdmissionDecision.Admit(GrantTerms(readmitFor = 1.hours))
         }
