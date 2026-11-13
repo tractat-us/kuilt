@@ -48,9 +48,11 @@ class OtlpProtoEncodingTest {
     //         39 <fixed64 5>     Span.start_time_unix_nano (f7, fixed64)
     //         41 <fixed64 9>     Span.end_time_unix_nano   (f8, fixed64)
     // parent_span_id (f4), attributes (f9), links (f13) are absent (root, no attrs/links).
-    private val goldenSpanHex =
-        "0a38" + "1236" + "1234" +
-            "0a10" + "0a".repeat(16) +
+    private val goldenSpanHex = "0a38" + "1236" + "1234" + spanBodyHex
+
+    // The minimal span's own 52 bytes, shared by goldenSpanHex and goldenEnvelopedSpanHex.
+    private val spanBodyHex: String get() =
+        "0a10" + "0a".repeat(16) +
             "1208" + "0b".repeat(8) +
             "2a02" + "6f70" +
             "3002" +
@@ -63,7 +65,7 @@ class OtlpProtoEncodingTest {
             traceId = tId(0x0a), spanId = sId(0x0b), parentSpanId = null,
             name = "op", kind = SpanKind.SERVER, startEpochNanos = 5L, endEpochNanos = 9L,
         )
-        val bytes = proto.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(setOf(span), emptyList()))
+        val bytes = proto.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(setOf(span), emptyList(), OtlpEnvelope.NONE))
         assertEquals(goldenSpanHex, bytes.toHex())
     }
 
@@ -75,7 +77,7 @@ class OtlpProtoEncodingTest {
             attributes = mapOf("http.method" to "GET"),
         )
         val link = SpanLink(fromSpanId = sId(0x0b), linkedTraceId = tId(0x0c), linkedSpanId = sId(0x0d))
-        val req = tracesProtoOf(setOf(span), listOf(link))
+        val req = tracesProtoOf(setOf(span), listOf(link), OtlpEnvelope.NONE)
         val decoded = proto.decodeFromByteArray(
             ProtoTracesRequest.serializer(),
             proto.encodeToByteArray(ProtoTracesRequest.serializer(), req),
@@ -101,7 +103,7 @@ class OtlpProtoEncodingTest {
         )
         val decoded = proto.decodeFromByteArray(
             ProtoLogsRequest.serializer(),
-            proto.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(setOf(rec))),
+            proto.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(setOf(rec), OtlpEnvelope.NONE)),
         )
         val r = decoded.resourceLogs.single().scopeLogs.single().logRecords.single()
         assertAll(
@@ -119,7 +121,7 @@ class OtlpProtoEncodingTest {
         val p = MetricPoint.Sum(MetricKey("req", MetricKind.SUM), value = 7L, startEpochNanos = 0L, timeEpochNanos = 5L)
         val decoded = proto.decodeFromByteArray(
             ProtoMetricsRequest.serializer(),
-            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p))),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p), OtlpEnvelope.NONE)),
         )
         val m = decoded.resourceMetrics.single().scopeMetrics.single().metrics.single()
         assertAll(
@@ -174,7 +176,7 @@ class OtlpProtoEncodingTest {
             negativeOffset = 0, negativeBucketCounts = emptyList(),
             startEpochNanos = 0L, timeEpochNanos = 5L,
         )
-        val bytes = proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p)))
+        val bytes = proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p), OtlpEnvelope.NONE))
         assertEquals(goldenExpHistHex, bytes.toHex())
     }
 
@@ -190,7 +192,7 @@ class OtlpProtoEncodingTest {
         )
         val m = proto.decodeFromByteArray(
             ProtoMetricsRequest.serializer(),
-            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p))),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p), OtlpEnvelope.NONE)),
         ).resourceMetrics.single().scopeMetrics.single().metrics.single()
         val dp = m.exponentialHistogram?.dataPoints?.single()
         assertAll(
@@ -214,13 +216,13 @@ class OtlpProtoEncodingTest {
         val g = MetricPoint.Gauge(MetricKey("cpu", MetricKind.GAUGE), value = 0.5, timeEpochNanos = 5L)
         val gm = proto.decodeFromByteArray(
             ProtoMetricsRequest.serializer(),
-            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(g))),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(g), OtlpEnvelope.NONE)),
         ).resourceMetrics.single().scopeMetrics.single().metrics.single()
 
         val c = MetricPoint.Cardinality(MetricKey("users", MetricKind.CARDINALITY), estimate = 12L, timeEpochNanos = 5L)
         val cm = proto.decodeFromByteArray(
             ProtoMetricsRequest.serializer(),
-            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(c))),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(c), OtlpEnvelope.NONE)),
         ).resourceMetrics.single().scopeMetrics.single().metrics.single()
 
         assertAll(
@@ -228,6 +230,106 @@ class OtlpProtoEncodingTest {
             { assertEquals(0.5, gm.gauge?.dataPoints?.single()?.asDouble) },
             { assertTrue(cm.gauge != null && cm.sum == null, "cardinality renders as a Gauge") },
             { assertEquals(12L, cm.gauge?.dataPoints?.single()?.asInt) },
+        )
+    }
+
+    // ── Resource and instrumentation scope (#3153) ───────────────────────────────
+
+    private val envelope = OtlpEnvelope(mapOf("service.name" to "svc"), scopeName = "lib", scopeVersion = "1")
+
+    /** UTF-8 bytes of [s] as lowercase hex, spelled independently of the encoder under test. */
+    private fun utf8Hex(s: String): String = s.encodeToByteArray().toHex()
+
+    // Hand-verified against opentelemetry-proto resource.proto / common.proto / trace.proto.
+    // goldenSpanHex's span, now wrapped in a resource and a scope:
+    //   0a 5b                      ExportTraceServiceRequest.resource_spans (f1, len 91)
+    //     0a 17                    ResourceSpans.resource (f1, len 23)
+    //       0a 15                  Resource.attributes (f1, KeyValue, len 21)
+    //         0a 0c "service.name" KeyValue.key (f1, 12 bytes)
+    //         12 05                KeyValue.value (f2, AnyValue, len 5)
+    //           0a 03 "svc"        AnyValue.string_value (f1)
+    //     12 40                    ResourceSpans.scope_spans (f2, len 64)
+    //       0a 08                  ScopeSpans.scope (f1, InstrumentationScope, len 8)
+    //         0a 03 "lib"          InstrumentationScope.name (f1)
+    //         12 01 "1"            InstrumentationScope.version (f2)
+    //       12 34 <span>           ScopeSpans.spans (f2, len 52) — the same 52 bytes as above
+    // Field 1 precedes field 2 at both levels: canonical ascending order.
+    private val goldenEnvelopedSpanHex =
+        "0a5b" +
+            "0a17" + "0a15" + "0a0c" + utf8Hex("service.name") + "1205" + "0a03" + utf8Hex("svc") +
+            "1240" + "0a08" + "0a03" + utf8Hex("lib") + "1201" + utf8Hex("1") +
+            "1234" + spanBodyHex
+
+    @Test
+    fun envelopedTracesRequestMatchesGoldenBytes() {
+        val span = SpanRecord(
+            traceId = tId(0x0a), spanId = sId(0x0b), parentSpanId = null,
+            name = "op", kind = SpanKind.SERVER, startEpochNanos = 5L, endEpochNanos = 9L,
+        )
+        // The before-state is the same span with no envelope: goldenSpanHex, unchanged.
+        val bare = proto.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(setOf(span), emptyList(), OtlpEnvelope.NONE))
+        val enveloped = proto.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(setOf(span), emptyList(), envelope))
+        assertAll(
+            { assertEquals(goldenSpanHex, bare.toHex()) },
+            { assertEquals(goldenEnvelopedSpanHex, enveloped.toHex()) },
+        )
+    }
+
+    @Test
+    fun logsAndMetricsCarryResourceAndScopeThroughRoundTrip() {
+        val rec = LogRecord(recordId = sId(1), body = "hello")
+        val p = MetricPoint.Gauge(MetricKey("cpu", MetricKind.GAUGE), value = 0.5, timeEpochNanos = 5L)
+        val logs = proto.decodeFromByteArray(
+            ProtoLogsRequest.serializer(),
+            proto.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(setOf(rec), envelope)),
+        ).resourceLogs.single()
+        val metrics = proto.decodeFromByteArray(
+            ProtoMetricsRequest.serializer(),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p), envelope)),
+        ).resourceMetrics.single()
+        assertAll(
+            { assertEquals(listOf("service.name" to "svc"), logs.resource?.attributes?.map { it.key to it.value.stringValue }) },
+            { assertEquals(ProtoScope("lib", "1"), logs.scopeLogs.single().scope) },
+            { assertEquals(listOf("service.name" to "svc"), metrics.resource?.attributes?.map { it.key to it.value.stringValue }) },
+            { assertEquals(ProtoScope("lib", "1"), metrics.scopeMetrics.single().scope) },
+        )
+    }
+
+    @Test
+    fun emptyEnvelopeSendsNoResourceAndNoScope() {
+        val rec = LogRecord(recordId = sId(1), body = "hello")
+        val p = MetricPoint.Gauge(MetricKey("cpu", MetricKind.GAUGE), value = 0.5, timeEpochNanos = 5L)
+        val logs = proto.decodeFromByteArray(
+            ProtoLogsRequest.serializer(),
+            proto.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(setOf(rec), OtlpEnvelope.NONE)),
+        ).resourceLogs.single()
+        val metrics = proto.decodeFromByteArray(
+            ProtoMetricsRequest.serializer(),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p), OtlpEnvelope.NONE)),
+        ).resourceMetrics.single()
+        assertAll(
+            { assertEquals(null, logs.resource) },
+            { assertEquals(null, logs.scopeLogs.single().scope) },
+            { assertEquals(null, metrics.resource) },
+            { assertEquals(null, metrics.scopeMetrics.single().scope) },
+        )
+    }
+
+    @Test
+    fun resourceAndScopeAreSentIndependently() {
+        val rec = LogRecord(recordId = sId(1), body = "hello")
+        fun roundTrip(e: OtlpEnvelope) = proto.decodeFromByteArray(
+            ProtoLogsRequest.serializer(),
+            proto.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(setOf(rec), e)),
+        ).resourceLogs.single()
+        val resourceOnly = roundTrip(OtlpEnvelope(mapOf("service.name" to "svc"), scopeName = "", scopeVersion = ""))
+        val versionOnly = roundTrip(OtlpEnvelope(emptyMap(), scopeName = "", scopeVersion = "1"))
+        assertAll(
+            { assertEquals("svc", resourceOnly.resource?.attributes?.single()?.value?.stringValue) },
+            { assertEquals(null, resourceOnly.scopeLogs.single().scope) },
+            { assertEquals(null, versionOnly.resource) },
+            // A scope with a version and no name is still a scope: only both-empty is omitted.
+            { assertEquals(ProtoScope("", "1"), versionOnly.scopeLogs.single().scope) },
         )
     }
 }

@@ -3,6 +3,8 @@ public final class us/tractat/kuilt/otel/otlp/OtlpHttpEdge : us/tractat/kuilt/ot
 	public static final field DEFAULT_MAX_SENT_IDS I
 	public fun <init> (Lio/ktor/client/HttpClient;Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/otlp/OtlpWireFormat;)V
 	public synthetic fun <init> (Lio/ktor/client/HttpClient;Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/otlp/OtlpWireFormat;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lio/ktor/client/HttpClient;Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/otlp/OtlpWireFormat;Ljava/util/Map;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Lio/ktor/client/HttpClient;Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/otlp/OtlpWireFormat;Ljava/util/Map;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun digest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun logDigest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun metricDigest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

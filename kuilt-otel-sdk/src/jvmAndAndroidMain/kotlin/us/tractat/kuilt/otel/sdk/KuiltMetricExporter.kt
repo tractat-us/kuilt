@@ -46,8 +46,13 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *
  * ## Mapping
  * - monotonic `LONG_SUM` → `incrementSum`; monotonic `DOUBLE_SUM` → `incrementSumDouble`.
- * - non-monotonic sums (UpDownCounter) and gauges → `setGauge`.
+ * - non-monotonic sums (UpDownCounter) and gauges → `setGauge`. Under delta temporality an
+ *   UpDownCounter's point is its change over the collection interval, not its current level,
+ *   so the gauge it becomes holds that change.
  * - histograms / exponential histograms / summaries → **dropped** (WARN), never a failure.
+ *   `WarpMetricExporter` does keep histograms (a `DDSketch` per series), but it takes them one
+ *   raw value at a time through `recordHistogram`; the SDK hands over buckets already counted,
+ *   and `mergeHistogram` is a join, so adding one interval's buckets to the last has no entry point.
  * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it).
  *
  * @param exporter the durable kuilt buffer points are written into.
@@ -117,7 +122,10 @@ public class KuiltMetricExporter(
             MetricDataType.DOUBLE_GAUGE ->
                 md.doubleGaugeData.points.map { setGaugeOk(name, it.attributes, it.value, it.epochNanos) }.all { it }
             MetricDataType.HISTOGRAM, MetricDataType.EXPONENTIAL_HISTOGRAM, MetricDataType.SUMMARY -> {
-                logger.warn { "KuiltMetricExporter: dropping unsupported metric '$name' (${md.type}) — no CRDT for it" }
+                logger.warn {
+                    "KuiltMetricExporter: dropping unsupported metric '$name' (${md.type}) — the SDK sends " +
+                        "pre-bucketed deltas, and WarpMetricExporter records histograms one value at a time"
+                }
                 true
             }
         }

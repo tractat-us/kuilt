@@ -17,8 +17,20 @@ private fun ByteString.toByteArray(): ByteArray = ByteArray(size) { this[it] }
 private fun protoAttrs(m: Map<String, String>): List<ProtoKeyValue> =
     m.map { ProtoKeyValue(it.key, ProtoAnyValue(it.value)) }
 
+/** The envelope's resource as OTLP/protobuf, or null (field absent) when it has no attributes. */
+private fun OtlpEnvelope.protoResource(): ProtoResource? =
+    if (resource.isEmpty()) null else ProtoResource(protoAttrs(resource))
+
+/** The envelope's scope as OTLP/protobuf, or null (field absent) when name and version are both empty. */
+private fun OtlpEnvelope.protoScope(): ProtoScope? =
+    if (scopeIsEmpty) null else ProtoScope(scopeName, scopeVersion)
+
 /** Render spans (with their inferred causal links) into an OTLP/protobuf traces request. */
-internal fun tracesProtoOf(spans: Set<SpanRecord>, links: List<SpanLink>): ProtoTracesRequest {
+internal fun tracesProtoOf(
+    spans: Set<SpanRecord>,
+    links: List<SpanLink>,
+    envelope: OtlpEnvelope,
+): ProtoTracesRequest {
     val linksByFrom = links.groupBy { it.fromSpanId }
     val protoSpans = spans.map { s ->
         ProtoSpan(
@@ -39,11 +51,13 @@ internal fun tracesProtoOf(spans: Set<SpanRecord>, links: List<SpanLink>): Proto
             },
         )
     }
-    return ProtoTracesRequest(listOf(ProtoResourceSpans(listOf(ProtoScopeSpans(protoSpans)))))
+    return ProtoTracesRequest(
+        listOf(ProtoResourceSpans(envelope.protoResource(), listOf(ProtoScopeSpans(envelope.protoScope(), protoSpans)))),
+    )
 }
 
 /** Render log records into an OTLP/protobuf logs request. */
-internal fun logsProtoOf(logs: Set<LogRecord>): ProtoLogsRequest {
+internal fun logsProtoOf(logs: Set<LogRecord>, envelope: OtlpEnvelope): ProtoLogsRequest {
     val recs = logs.map { r ->
         ProtoLogRecord(
             timeUnixNano = r.timestampEpochNanos,
@@ -56,14 +70,16 @@ internal fun logsProtoOf(logs: Set<LogRecord>): ProtoLogsRequest {
             spanId = r.spanId?.toByteArray(),
         )
     }
-    return ProtoLogsRequest(listOf(ProtoResourceLogs(listOf(ProtoScopeLogs(recs)))))
+    return ProtoLogsRequest(
+        listOf(ProtoResourceLogs(envelope.protoResource(), listOf(ProtoScopeLogs(envelope.protoScope(), recs)))),
+    )
 }
 
 /**
  * Render metric points into an OTLP/protobuf metrics request (Sum for sums, Gauge for
  * gauge/cardinality, ExponentialHistogram for histograms).
  */
-internal fun metricsProtoOf(points: Set<MetricPoint>): ProtoMetricsRequest {
+internal fun metricsProtoOf(points: Set<MetricPoint>, envelope: OtlpEnvelope): ProtoMetricsRequest {
     val metrics = points.map { p ->
         when (p) {
             is MetricPoint.Sum -> ProtoMetric(
@@ -141,7 +157,9 @@ internal fun metricsProtoOf(points: Set<MetricPoint>): ProtoMetricsRequest {
             )
         }
     }
-    return ProtoMetricsRequest(listOf(ProtoResourceMetrics(listOf(ProtoScopeMetrics(metrics)))))
+    return ProtoMetricsRequest(
+        listOf(ProtoResourceMetrics(envelope.protoResource(), listOf(ProtoScopeMetrics(envelope.protoScope(), metrics)))),
+    )
 }
 
 /** A sign's bucket array as OTLP/protobuf, or null (field absent) when no buckets are populated. */

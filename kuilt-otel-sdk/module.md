@@ -12,8 +12,16 @@ Three optional, additive pieces, all for apps that already run OpenTelemetry:
 - `KuiltLogRecordExporter` is an OpenTelemetry SDK log exporter: point your
   existing log pipeline at it and every record also lands in kuilt's durable,
   extractable buffer — without adopting kuilt's own capture edge.
-- `KuiltMetricExporter` is its metric twin: register it on your metric reader
-  and every counter and gauge also lands in the same durable buffer. Histograms
-  and summaries are dropped with a warning.
+- `KuiltMetricExporter` is its metric twin: register it on a metric reader of
+  its own and every counter and gauge also lands in the same durable buffer. It
+  asks the SDK for **delta** temporality, because kuilt adds each point to a
+  running total; your own OTLP exporter, on its own reader, keeps whatever it
+  asked for. One consequence: an UpDownCounter arrives as a delta too, so the
+  gauge it becomes holds the change over the last interval, not the current level.
+  Histograms and summaries are dropped with a warning. kuilt does store
+  histograms, but one raw value at a time, and the SDK sends buckets already
+  counted.
 
-None is required for kuilt telemetry; off the JVM there is nothing here.
+None is required for kuilt telemetry; off the JVM there is nothing here. What
+the metric bridge sends a collector, and where kuilt fits on a server, is in the
+`kuilt-otel` module documentation.

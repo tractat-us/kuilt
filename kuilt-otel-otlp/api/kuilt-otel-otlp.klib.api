@@ -19,6 +19,7 @@ final enum class us.tractat.kuilt.otel.otlp/OtlpWireFormat : kotlin/Enum<us.trac
 
 final class us.tractat.kuilt.otel.otlp/OtlpHttpEdge : us.tractat.kuilt.otel/OtlpEdge { // us.tractat.kuilt.otel.otlp/OtlpHttpEdge|null[0]
     constructor <init>(io.ktor.client/HttpClient, kotlin/String, us.tractat.kuilt.store/DurableStore, kotlin/Int = ..., us.tractat.kuilt.otel.otlp/OtlpWireFormat = ...) // us.tractat.kuilt.otel.otlp/OtlpHttpEdge.<init>|<init>(io.ktor.client.HttpClient;kotlin.String;us.tractat.kuilt.store.DurableStore;kotlin.Int;us.tractat.kuilt.otel.otlp.OtlpWireFormat){}[0]
+    constructor <init>(io.ktor.client/HttpClient, kotlin/String, us.tractat.kuilt.store/DurableStore, kotlin/Int = ..., us.tractat.kuilt.otel.otlp/OtlpWireFormat = ..., kotlin.collections/Map<kotlin/String, kotlin/String> = ..., kotlin/String = ..., kotlin/String = ...) // us.tractat.kuilt.otel.otlp/OtlpHttpEdge.<init>|<init>(io.ktor.client.HttpClient;kotlin.String;us.tractat.kuilt.store.DurableStore;kotlin.Int;us.tractat.kuilt.otel.otlp.OtlpWireFormat;kotlin.collections.Map<kotlin.String,kotlin.String>;kotlin.String;kotlin.String){}[0]
 
     final suspend fun digest(): us.tractat.kuilt.otel/SpanDigest // us.tractat.kuilt.otel.otlp/OtlpHttpEdge.digest|digest(){}[0]
     final suspend fun logDigest(): us.tractat.kuilt.otel/LogDigest // us.tractat.kuilt.otel.otlp/OtlpHttpEdge.logDigest|logDigest(){}[0]

@@ -28,7 +28,8 @@ import us.tractat.kuilt.store.StoreKey
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExporter")
 
 /**
- * A CRDT-backed metric exporter for cumulative sums, gauges, and cardinality estimates.
+ * A CRDT-backed metric exporter for cumulative sums, gauges, cardinality estimates, and
+ * exponential histograms.
  *
  * Each metric kind is backed by a different CRDT chosen to match its semantics:
  *
@@ -59,9 +60,14 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  *
  * ## Key inversion
  *
- * [incrementSum], [setGauge], and [addCardinality] all return [MetricExportResult.Success]
- * the moment the updated CRDT is **durably written to [DurableStore]** — not when it is
- * delivered to any backend. Delivery is asynchronous and eventually consistent.
+ * Every mutating method — [incrementSum], [incrementSumDouble], [setGauge], [addCardinality],
+ * [recordHistogram] and their `merge*` twins — returns [MetricExportResult.Success] only once
+ * the updated CRDT is **durably written to [DurableStore]**, never when it is delivered to any
+ * backend. Delivery is asynchronous and eventually consistent.
+ *
+ * A [MetricExportResult.Failure] means "not yet durable", not "not counted": the in-memory
+ * CRDT keeps the change, and the next successful write of that kind persists it. Retrying a
+ * failed [incrementSum] therefore adds it twice.
  *
  * ## Buffer cap
  *
