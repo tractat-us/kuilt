@@ -49,18 +49,11 @@ class SeamRoomCloseResurrectionTest {
 
     private val hostId = PeerId("host")
 
-    private fun helloFrame(joiner: PeerId): Swatch =
+    private suspend fun helloFrame(joiner: PeerId): Swatch =
         Swatch(
-            payload = AdmitMessage.encode(
-                AdmitMessage.Hello(
-                    displayName = joiner.value,
-                    sessionId = joiner.value,
-                    targetRoom = null,
-                    // Declare the current version so these Hellos clear the protocol gate (#1994);
-                    // the subject here is the post-close admit race, not versioning.
-                    protocolVersion = ProtocolVersion.CURRENT,
-                ),
-            ),
+            // A complete current Hello, so it clears the protocol gate and the v3 key check
+            // (#1994, #3210); the subject here is the post-close admit race, not versioning.
+            payload = AdmitMessage.encode(currentHello(displayName = joiner.value, sessionId = joiner.value)),
             sender = joiner,
         )
 

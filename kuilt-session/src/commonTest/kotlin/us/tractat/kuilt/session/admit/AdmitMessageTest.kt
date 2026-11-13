@@ -261,7 +261,8 @@ class AdmitMessageTest {
             AdmitMessage.Proof(statement = byteArrayOf(4, 5), grants = listOf(byteArrayOf(6), byteArrayOf(7, 8))),
         )
         assertAll(
-            shapes.map { shape -> { assertEquals(shape, AdmitMessage.decode(AdmitMessage.encode(shape)), "$shape") } },
+            *shapes.map { shape -> { assertEquals(shape, AdmitMessage.decode(AdmitMessage.encode(shape)), "$shape") } }
+                .toTypedArray(),
         )
     }
 

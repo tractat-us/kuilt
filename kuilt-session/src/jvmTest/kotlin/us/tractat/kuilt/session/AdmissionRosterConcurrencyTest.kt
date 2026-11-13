@@ -80,11 +80,7 @@ class AdmissionRosterConcurrencyTest {
                     room.events.collect { if (it is MembershipEvent.Left) departures.send(Unit) }
                 }
                 val hello = Swatch(
-                    AdmitMessage.encode(AdmitMessage.Hello(
-                        displayName = "peer",
-                        sessionId = "peer",
-                        protocolVersion = ProtocolVersion.CURRENT,
-                    )), sender = peer,
+                    AdmitMessage.encode(currentHello(displayName = "peer", sessionId = "peer")), sender = peer,
                 )
                 val goodbye = Swatch(AdmitMessage.encode(AdmitMessage.Goodbye), sender = peer)
                 var rosterDisagreements = 0
