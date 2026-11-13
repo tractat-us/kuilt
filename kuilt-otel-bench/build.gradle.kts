@@ -36,6 +36,7 @@ dependencies {
     // network, so it needs no real engine.
     testImplementation(libs.ktor.client.core)
     testImplementation(libs.ktor.client.mock)
+    testImplementation(project(":kuilt-test"))
     testImplementation(libs.kotlin.test)
     testRuntimeOnly(libs.junit.platform.launcher)
 }
