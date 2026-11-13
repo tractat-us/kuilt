@@ -8,6 +8,13 @@ import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.util.ExponentialBackoff
+import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.RevocationList
+import us.tractat.kuilt.session.admit.AdmissionDecision
+import us.tractat.kuilt.session.admit.AdmissionPolicy
+import us.tractat.kuilt.session.admit.GrantReach
+import us.tractat.kuilt.session.admit.GrantTerms
+import us.tractat.kuilt.session.admit.HostAdmission
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.election.ElectionLobby
 import us.tractat.kuilt.session.election.ElectionOutcome
@@ -18,6 +25,7 @@ import us.tractat.kuilt.session.partition.ResumeToken
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.random.Random
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
 
 // Minimal, compile-checked snippets quoted verbatim by docs/agent-cookbook/session.md (most) and
@@ -336,4 +344,27 @@ public suspend fun flushThenLeaveSample(
         // Not proven, not lost. This fabric cannot tell, a link stalled, or the room already ended.
         FlushOutcome.Unsupported, FlushOutcome.TimedOut, is FlushOutcome.Failed -> false
     }
+}
+
+/**
+ * Decide who gets into a room you host, and for how long each may come back without being asked
+ * again. A friend's pass is good in any room you host and never runs out; a stranger's is good in
+ * this room for an hour after last contact; a device you refuse gets your own refusal code.
+ */
+public fun hostAdmissionSample(friends: Set<DidKey>, refused: Set<DidKey>): HostAdmission {
+    // RejectCode is open: a code of your own sits beside kuilt's, and says whether retrying helps.
+    val notWelcome = object : RejectCode {
+        override val id: String = "not-welcome"
+        override val retryable: Boolean = false
+    }
+    val policy = AdmissionPolicy { request ->
+        // `key` is the device key the joiner proved it holds. `displayName` is only its say-so.
+        when (request.key) {
+            in refused -> AdmissionDecision.Reject(notWelcome)
+            in friends -> AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
+            else -> AdmissionDecision.Admit(GrantTerms(readmitFor = 1.hours))
+        }
+    }
+    // Revoking a key voids the passes it holds, not its next ordinary admission: refuse it above too.
+    return HostAdmission(policy, RevocationList.inMemory())
 }
