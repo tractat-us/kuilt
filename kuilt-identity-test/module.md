@@ -31,4 +31,7 @@ travels with the store, never with a key: a key read off the wire is checked in 
 that reads it, so a room on the real scheme treats a fake signature as a bad one.
 
 Both are behind `@TestOnlyKeyScheme`, an opt-in at level `ERROR`, so using them means writing
-`@OptIn(TestOnlyKeyScheme::class)` at the use site. Opt in from test source sets only.
+`@OptIn(TestOnlyKeyScheme::class)` at the use site. Opt in from test source sets, and from
+test-support modules whose published code builds rooms for tests, such as a room conformance suite.
+Never opt in from production code. The opt-in is the fence: nothing in the build stops a production
+module from depending on this one.
