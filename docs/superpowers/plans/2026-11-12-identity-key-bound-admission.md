@@ -729,6 +729,8 @@ Spec sections: *Key storage* and Decided 4, 8, 9. Each store keeps its key with 
 
 ### Task 3.1: The store TCK and the desktop-JVM file store [after 0.7; add `:kuilt-store` if 2.2 has not]
 
+**Key file format (Iain approved 2026-11-12): JWK, carrying x, y and d.** On decode, run a sign-then-verify self-test, so a mismatched pair is refused and treated as a corrupt key, which is replaced, not fatal. PKCS#8 does not work: on the JDK provider (cryptography-kotlin 0.6.0) it drops the public half, and `getPublicKey()` then throws (measured in #3243). BouncyCastle is rejected because two registered JCA providers stop `PlatformProvider` from starting.
+
 **Files:**
 - Create: `commonTest/DeviceKeyStoreConformanceSuite.kt` (abstract) and `commonTest/InMemoryDeviceKeyStoreConformanceTest.kt`.
 - Create: `jvmMain/FileDeviceKeyStore.kt` and `jvmTest/FileDeviceKeyStoreConformanceTest.kt`.
