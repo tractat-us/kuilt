@@ -960,15 +960,15 @@ carries it.
 
 - I3, the subtree's own pick as an interior length: exact, but a speculative
   descent per eligible subtree and a second copy of §7.2's one-front rule
-  (#3200).
+  (#3229).
 - A sum or mean of the subtree's lengths as an interior length: not a request
-  length (#3200).
+  length (#3229).
 - A two-phase descent: needs a non-mutating copy of the seat and wake step
-  (#3200).
+  (#3229).
 - Interleave and correct: interior groups keep leftover units, the earmark L1
-  avoided (#3200).
+  avoided (#3229).
 - Replacing `acquire`'s waiting set with a map of lengths: breaks the public API
-  for every caller that has none (#3200).
+  for every caller that has none (#3229).
 
 #### Open
 
