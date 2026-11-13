@@ -441,6 +441,17 @@ public final class us/tractat/kuilt/heddle/LeaseOutcome$Done : us/tractat/kuilt/
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/heddle/LeaseOutcome$PathDraining : us/tractat/kuilt/heddle/LeaseOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-i0YUZAc ()Ljava/lang/String;
+	public final fun copy-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/LeaseOutcome$PathDraining;
+	public static synthetic fun copy-dq4I9ps$default (Lus/tractat/kuilt/heddle/LeaseOutcome$PathDraining;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LeaseOutcome$PathDraining;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/heddle/LeaseOutcome$Stale : us/tractat/kuilt/heddle/LeaseOutcome {
 	public fun <init> (J)V
 	public final fun component1 ()J
@@ -660,6 +671,7 @@ public final class us/tractat/kuilt/heddle/Lifecycle$Companion {
 
 public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public static final field Companion Lus/tractat/kuilt/heddle/LocalHeddle$Companion;
+	public static final field MAX_RESERVATION J
 	public final fun acquire (Ljava/util/Set;Ljava/util/Set;JJ)Lus/tractat/kuilt/heddle/AcquireOutcome;
 	public static synthetic fun acquire$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/util/Set;Ljava/util/Set;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AcquireOutcome;
 	public final fun admit-lUmtw0Q (Ljava/lang/String;JJ)Lus/tractat/kuilt/heddle/AdmitOutcome;

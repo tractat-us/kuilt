@@ -182,12 +182,20 @@ keeps its claim, so it is not treated as returning from idle when a slot it can 
 new leaf starts level with its siblings rather than owed their whole history. `extend` reserves
 more for a lease that runs long, `cancel` charges nothing, `admit(leaf, startedAt)` charges work
 another scheduler already started, and `previewPicks` answers "who goes next" without changing
-anything. `startedAt` is stored on the lease and never read by a pick. A refusal is a typed
-outcome (`NothingEligible`, `SupplyExhausted`, `NoLiveLineage`, `Unknown`, `Stale`), never an
-exception. The engine reads no clock and no random source, and it is not thread-safe: call it under
-your scheduling lock, and give status and persistence readers `snapshot()`, which is immutable.
-Booting it from a `Topology` and topping up its supply are not public yet, so the sample below
-builds its tree through module seams first.
+anything. `startedAt` is stored on the lease and never read by a pick. A pick only goes down a
+subtree it can finish in, so a group whose only leaf sits behind a closing edge never takes a slot
+from a sibling that can run. A refusal is a typed outcome (`NothingEligible`, `SupplyExhausted`,
+`NoLiveLineage`, `PathDraining`, `Unknown`, `Stale`), never an exception: an `extend` on a lease
+whose path a reload is closing is `PathDraining`, and its `complete` still settles. Only a bad
+argument throws, such as a reservation above `LocalHeddle.MAX_RESERVATION` (2^44 cost units). The
+engine reads no clock and no random source, and it is not thread-safe: call every method under your
+scheduling lock, `snapshot()` included, and hand status and persistence readers the immutable value
+it returns.
+
+**Today's public surface cannot yet run one.** `LocalHeddle.fresh` is the only public way to make an
+engine, and it has no topology and no supply, so every `acquire` on it is refused. Booting from a
+`Topology` and topping up supply are not public yet. The sample below builds its tree and its supply
+through module-internal seams, which a consumer cannot call.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalLease -->
 ```kotlin

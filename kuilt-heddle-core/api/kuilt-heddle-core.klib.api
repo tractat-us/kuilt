@@ -116,6 +116,19 @@ sealed interface us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.hedd
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LeaseOutcome.Done.toString|toString(){}[0]
     }
 
+    final class PathDraining : us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/AttachmentId) // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.<init>|<init>(us.tractat.kuilt.heddle.AttachmentId){}[0]
+
+        final val edge // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.edge|{}edge[0]
+            final fun <get-edge>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.edge.<get-edge>|<get-edge>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/AttachmentId = ...): us.tractat.kuilt.heddle/LeaseOutcome.PathDraining // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.copy|copy(us.tractat.kuilt.heddle.AttachmentId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.toString|toString(){}[0]
+    }
+
     final class Stale : us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.heddle/LeaseOutcome.Stale|null[0]
         constructor <init>(kotlin/Long) // us.tractat.kuilt.heddle/LeaseOutcome.Stale.<init>|<init>(kotlin.Long){}[0]
 
@@ -790,6 +803,9 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
     final fun snapshot(): us.tractat.kuilt.heddle/LocalHeddleState // us.tractat.kuilt.heddle/LocalHeddle.snapshot|snapshot(){}[0]
 
     final object Companion { // us.tractat.kuilt.heddle/LocalHeddle.Companion|null[0]
+        final const val MAX_RESERVATION // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION|{}MAX_RESERVATION[0]
+            final fun <get-MAX_RESERVATION>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION.<get-MAX_RESERVATION>|<get-MAX_RESERVATION>(){}[0]
+
         final fun fresh(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/LocalPolicy, kotlin/Long): us.tractat.kuilt.heddle/LocalHeddle // us.tractat.kuilt.heddle/LocalHeddle.Companion.fresh|fresh(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.LocalPolicy;kotlin.Long){}[0]
     }
 }
