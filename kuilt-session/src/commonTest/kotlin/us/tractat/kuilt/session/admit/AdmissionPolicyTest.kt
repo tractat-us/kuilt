@@ -6,6 +6,7 @@ import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.GrantScope
 import us.tractat.kuilt.session.hostAdmissionSample
+import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -146,17 +147,22 @@ class AdmissionPolicyTest {
     @Test
     fun samplePolicyRefusesTheRevokedThenBefriendsThenDefaults() = keysTest { a, b ->
         val stranger = DeviceKey.generate().id
-        val admission = hostAdmissionSample(friends = setOf(a, b))
+        val store = InMemoryDurableStore()
+        val admission = hostAdmissionSample(friends = setOf(a, b), store = store)
         val forever = AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
         // Before the revocation b is a friend like a, so the refusal below is the revocation's doing.
         val bBefore = admission.policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
-        admission.revocations.revoke(b, notBefore = 1_700_000_000_001L)
+        admission.revocations.revoke(b, notBefore = 1_700_000_000_001L) // the clock now, plus one
         val friend = admission.policy.decide(AdmissionRequest(a, "Ada", deviceId = null))
         val refused = admission.policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
         val other = admission.policy.decide(AdmissionRequest(stranger, "Cy", deviceId = "laptop"))
+        // The host restarts on the same store: the revocation, and so the refusal, survive.
+        val afterRestart = hostAdmissionSample(friends = setOf(a, b), store = store)
+            .policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
         assertAll(
             { assertEquals(forever, bBefore) },
             { assertEquals(forever, friend) },
+            { assertIs<AdmissionDecision.Reject>(afterRestart) },
             {
                 // The joiner's view of the refusal is the wire's: the id alone, rebuilt as Unknown, retryable.
                 val code = assertIs<AdmissionDecision.Reject>(refused).code

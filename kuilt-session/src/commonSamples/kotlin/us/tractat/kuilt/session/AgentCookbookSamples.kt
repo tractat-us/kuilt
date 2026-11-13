@@ -15,6 +15,7 @@ import us.tractat.kuilt.session.admit.AdmissionPolicy
 import us.tractat.kuilt.session.admit.GrantReach
 import us.tractat.kuilt.session.admit.GrantTerms
 import us.tractat.kuilt.session.admit.HostAdmission
+import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.election.ElectionLobby
 import us.tractat.kuilt.session.election.ElectionOutcome
@@ -351,14 +352,15 @@ public suspend fun flushThenLeaveSample(
  * again. A friend's pass is good in any room you host and never runs out; a stranger's is good in
  * this room for an hour after last contact; a device you have revoked gets your own refusal code.
  */
-public fun hostAdmissionSample(friends: Set<DidKey>): HostAdmission {
+public suspend fun hostAdmissionSample(friends: Set<DidKey>, store: DurableStore): HostAdmission {
     // RejectCode is open, but the joiner sees only the id: this arrives as RejectCode.Unknown("not-welcome"),
     // which is treated as retryable.
     val notWelcome = object : RejectCode {
         override val id: String = "not-welcome"
     }
     // One list: the room checks returning passes against it, and the policy refuses newcomers on it.
-    val revocations = RevocationList.inMemory()
+    // Kept in the store, since a friend's pass never expires: an in-memory list forgets on restart.
+    val revocations = RevocationList.open(store)
     val policy = AdmissionPolicy { request ->
         // `key` is the device key the joiner proved it holds. `displayName` is only its say-so.
         when {
