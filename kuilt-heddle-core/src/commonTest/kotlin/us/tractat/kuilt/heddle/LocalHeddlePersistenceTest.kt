@@ -6,6 +6,10 @@ import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationStrategy
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.modules.SerializersModule
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
@@ -137,6 +141,58 @@ class LocalHeddlePersistenceTest {
         assertAll(
             { assertEquals(4, (bytes[0].toInt() and 0xFF) shr 5, "the rig: CBOR wrote an array (major type 4), not a map (5)") },
             { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytes, Cbor)) },
+        )
+    }
+
+    /**
+     * A snapshot taken mid-drain restores, and the drain finishes after it. A removal with a lease
+     * open leaves its edge CLOSING; the lease's path crosses that edge. Restored, the lease completes,
+     * and applying the same topology again retires the edge.
+     */
+    @Test
+    fun aDrainingRemovalRetiresAfterARestore() {
+        val before = Topology("root", listOf(Topology.Lane("a"), Topology.Lane("spare")))
+        val after = Topology("root", listOf(Topology.Lane("a")))
+        val spare = before.groupId("spare")
+        val h = LocalHeddle.fromTopology(before, policy, epoch = 0L).also { it.reconcileCapacity(2L) }
+        val leftover = h.lease(setOf(spare))
+        val edge = leftover.let { checkNotNull(h.capturedPath(it.id)).single() }
+        val first = h.apply(after, generation = 1L)
+        val persisted = h.persist()
+        val restored = throughJson(h)
+        val done = restored.complete(leftover.id, 1L)
+        val second = restored.apply(after, generation = 1L)
+        assertAll(
+            { assertIs<StepRefusal.Draining>(first.refusals.single(), "the rig: the removal is draining") },
+            { assertEquals(Lifecycle.CLOSING, persisted.ledger.lifecycle(edge), "the rig: the snapshot holds a CLOSING edge on an open lease's path") },
+            { assertEquals(listOf(leftover), persisted.leases) },
+            { assertEquals(LeaseOutcome.Done(1L, 0L), done, "the lease completes after the restore") },
+            { assertEquals(emptyList(), second.refusals, "and the same topology applied again lands") },
+            { assertEquals(Lifecycle.RETIRED, restored.snapshot().ledger.lifecycle(edge), "the edge retired") },
+        )
+    }
+
+    /**
+     * A lease whose leaf has no single live lineage in the ledger, here because a second live
+     * inbound edge reaches it, is a snapshot no engine could have written: after every landed run,
+     * every open lease's path is its leaf's lineage. It decodes as [RestoreResult.Corrupt] rather
+     * than restoring an engine whose first reload would trip on it.
+     */
+    @Test
+    fun aQuarantinedLineageIsCorrupt() {
+        val (h, _) = wakerScenario()
+        val second = AttachmentRecord(AttachmentId("root/a@2:1#9"), root, a, Weight.of(2))
+        var ledger = h.snapshot().ledger
+        ledger = ledger.piece(checkNotNull(ledger.prepare(second)).delta)
+        ledger = ledger.piece(checkNotNull(ledger.activate(second.id)).delta)
+        val envelope = Json.parseToJsonElement(encode(h.persist())).jsonArray
+        val state = envelope[1].jsonObject
+        val tampered = JsonArray(
+            listOf(envelope[0], JsonObject(state + ("ledger" to Json.encodeToJsonElement(EntitlementLedger.serializer(), ledger)))),
+        )
+        assertAll(
+            { assertEquals(null, ledger.lineageOf(a), "the rig: a's lineage is quarantined") },
+            { assertIs<RestoreResult.Corrupt>(LocalHeddle.decode(tampered.toString(), Json)) },
         )
     }
 
