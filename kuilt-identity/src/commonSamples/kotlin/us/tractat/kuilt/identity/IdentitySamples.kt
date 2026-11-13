@@ -74,3 +74,33 @@ internal suspend fun sampleDeviceKeyStore() {
     store.keepGrant(first) // older than the one held from this host: ignored
     check(store.grants() == listOf(renewed))
 }
+
+/** @suppress — sample only */
+internal suspend fun sampleGrantTrust() {
+    val host = DeviceKey.generate() // the host's own key: the only issuer it trusts
+    val phone = DeviceKey.generate() // a device the host let in once
+    val revocations = RevocationList.inMemory()
+    val trust = GrantTrust(host.id, revocations)
+    val now = 1_700_000_000_000L // epoch ms, from your clock: the check never reads one
+
+    // The phone comes back with the pass the host gave it, having proved it holds `phone`'s key.
+    val pass = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = now, notAfter = now + 3_600_000)
+    check(trust.verify(pass, phone.id, "table-7", now + 60_000) == GrantVerdict.Valid)
+
+    // The first thing wrong is the answer: another room, another device, too late.
+    check(trust.verify(pass, phone.id, "table-8", now + 60_000) == GrantVerdict.WrongScope)
+    check(trust.verify(pass, host.id, "table-7", now + 60_000) == GrantVerdict.WrongSubject)
+    check(trust.verify(pass, phone.id, "table-7", now + 3_600_000) == GrantVerdict.Expired)
+
+    // The phone is lost: revoke it. A pass issued exactly at the cutoff stays good, so the cutoff is
+    // one past the clock, or one issued in this same millisecond would slip through.
+    val lostAt = now + 120_000
+    val sameMillisecond = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = lostAt, notAfter = lostAt + 3_600_000)
+    revocations.revoke(phone.id, notBefore = lostAt + 1)
+    check(trust.verify(pass, phone.id, "table-7", lostAt + 60_000) == GrantVerdict.Revoked)
+    check(trust.verify(sameMillisecond, phone.id, "table-7", lostAt + 60_000) == GrantVerdict.Revoked)
+
+    // A fresh pass, issued after the cutoff, works again.
+    val fresh = Grant.issue(host, phone.id, GrantScope.Room("table-7"), issuedAt = lostAt + 120_000, notAfter = lostAt + 3_720_000)
+    check(trust.verify(fresh, phone.id, "table-7", lostAt + 180_000) == GrantVerdict.Valid)
+}

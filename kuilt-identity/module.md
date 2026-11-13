@@ -20,9 +20,22 @@ still a `DeviceKey`. `DeviceKey.generate()` makes one in memory.
 The pass. A `Grant` is a host's signed promise that one device may come back: to one room, or to
 any room that host runs, until a time the host picks, or for good. The device keeps it and shows it
 when it returns, and `isSignedByIssuer` checks the host really signed it. It is not a secret,
-because it names the device's key and is useless without it. The statements a room's admission
-exchange is made of, the checks that decide whether a grant is good in this room now, and the
-per-platform stores that keep a key across launches arrive in the pieces that follow.
+because it names the device's key and is useless without it.
+
+The check. When a device shows a grant, `GrantTrust` decides whether it is good in this room now:
+issued and signed by this host's own key, naming the device that proved it holds that key, for this
+room, not revoked, not run out. The answer is a `GrantVerdict`, `Valid` or the first thing wrong. A
+host that no longer wants a device back on an old pass revokes it in its `RevocationList`: every
+grant issued to that key before the cutoff stops working, and a fresh one issued after works again.
+Revoking blocks the next return; it does not remove a device that is in the room now.
+
+Two losses go in opposite directions. Lose the revocations, and revoked devices come back on their
+old passes: `RevocationList.inMemory()` loses them whenever the process ends. Lose the host's key,
+and every grant it issued is from an issuer it no longer trusts, so those devices are vetted again,
+which is safe.
+
+The statements a room's admission exchange is made of, and the per-platform stores that keep a key
+across launches, arrive in the pieces that follow.
 
 The store. A device is recognised only if it comes back with the same key, so the key has to
 outlive the app. `DeviceKeyStore` is where it lives: the first `deviceKey()` call makes it and every

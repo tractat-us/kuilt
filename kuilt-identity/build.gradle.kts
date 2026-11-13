@@ -50,6 +50,9 @@ kotlin {
             // from one a provider minted (providerCall), per kuilt's exception rule; and for the
             // `Mutex` InMemoryDeviceKeyStore holds across first-key generation.
             implementation(libs.kotlinx.coroutines.core)
+            // For `RevocationList`'s `reentrantLock`: a revocation is a read-modify-write that never
+            // suspends, so a plain lock guards it and a `Mutex` would buy nothing.
+            implementation(libs.kotlinx.atomicfu)
             // Only for `decompress`: checking that a did:key's x has a point on P-256 and computing
             // its y, so every provider imports the 65-byte uncompressed point. Safari's WebCrypto
             // refuses compressed import (#3232) and JDK's compressed decoder never checks the curve
