@@ -275,7 +275,7 @@ The host keeps, for each member, its key. On a verified Proof:
 | new | same | held | **Restored under the new id**: the old member leaves with a dedicated `LeaveReason` (superseded), the new one inherits the membership; one event pair, ordered through `fanOutToOtherMembers` |
 | any | same | gone, grant `Valid` | **Returning**: admitted without calling vetting; the roster Welcome carries a `returning` mark |
 | same | **different** | connected | **Rejected**, terminal — a different device claiming a connected member's id (Decided 18) |
-| same | **different** | partitioned | old seat released; **ordinary admission** as a new member (Decided 18) |
+| same | **different** | partitioned | old seat released; the key is decided again without it: **Returning** with a valid grant, else **ordinary admission** as a new member (Decided 18, 23) |
 | any | — | none, no valid grant | ordinary admission through `AdmissionPolicy` |
 
 This retires `ResumeSecret`, the `Resume` frame and the token-presentation problem in #1593: a

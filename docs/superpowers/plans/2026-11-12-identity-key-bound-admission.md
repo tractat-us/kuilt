@@ -139,6 +139,12 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
     Non-suspend helpers become suspend (keys come from `DidKey.parse` / `DeviceKey.generate()`).
   - Session opts in to `@IdentityInternalApi` via `compilerOptions.optIn`.
 - **1.5**
+  - From #3251's re-review: the host-key check (compare `provenKey` to the room's own store key, under
+    the lock, before `decideSeat`) must land **with** the 1.4–1.6 factory split — ~24 test files share
+    one `SeamRoomFactory` (one key store) between host and joiners, so every such joiner presents the
+    host's key; the check alone reds them, an incomplete split leaves them silently testing #3257's
+    case as `Ordinary`. Pin it with a room-level test. Check revocation per key before trusting any
+    restore verdict (a re-decide can otherwise restore a revoked key's *other* seat).
   - From #3251 (1.2 as merged): `held` never contains the host's own seat, so a joiner presenting the
     **host's key** is decided `Returning`/`Ordinary`. 1.5 must catch that case before `decideSeat`
     (answer depends on #3257, Iain's), or that joiner is admitted as a stranger. `decideSeat` never
@@ -632,7 +638,7 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
 - `JoinerReconnectController.tryResume(resume: ProvenResume, at: Long): ResumeResult.HostVerdict`.
 
 **Behaviour:**
-- `Restore` on a partitioned seat calls `tryResume`. `Success` restores the same membership: the host emits `MembershipEvent.Resumed`, re-sends the Welcome burst with `returnKind = Restored`, and fans out nothing to bystanders. Any other verdict treats the seat as gone, and the decision falls through to `Ordinary`.
+- `Restore` on a partitioned seat calls `tryResume`. `Success` restores the same membership: the host emits `MembershipEvent.Resumed`, re-sends the Welcome burst with `returnKind = Restored`, and fans out nothing to bystanders. Any other verdict treats the seat as gone, and the key is **decided again without that seat** (Decided 23): `Returning` with a valid grant, else `Ordinary` — never a hardcoded `Ordinary`.
 - `Restore` on a connected seat supersedes the old link, emits `Resumed`, and fans out nothing.
 - `KeyConflict` sends `Reject(KeyConflict)`, which is terminal.
 - The old `Resume` frame still works.
@@ -642,7 +648,7 @@ The precedence is: id held → `Restore` or `KeyConflict`; else key held → `Re
   - `processRebuiltWithSameIdInsideWindowRestores`: a new `SeamRoom` over the same `DeviceKeyStore` and the same fabric id.
   - `stillConnectedSeatRestoresAndSupersedesOldLink`.
   - `bystanderClaimingALiveMembersIdIsRejectedKeyConflict`: the victim stays in every roster.
-  - `windowExpiredFallsThroughToOrdinary`.
+  - `windowExpiredDecidesAgainWithoutTheSeat` (`Ordinary` without a grant, `Returning` with one).
   - `seatChecksRunUnderTheLockAtProofTime`: the window expires between Challenge and Proof, and the outcome is `Ordinary`.
 - [ ] **Step 2: Watch them fail, implement, update `api/`, run the full build, then commit.** Commit: "session: a proven key restores its held seat (#3159)".
 
@@ -855,7 +861,7 @@ public class HostAdmission(public val policy: AdmissionPolicy, public val trust:
 **Behaviour:**
 - `Returning` admits without calling the policy. Host and bystanders emit `Joined(member, ReturningMark(previousId))`. `previousId` is null when the host no longer has a departed record, for example after a restart.
 - The re-issued grant keeps the presented terms.
-- **R2(ii).** A revoked subject's held-seat restore falls through to `Ordinary`.
+- **R2(ii).** A revoked subject's held-seat restore is decided again without the seat; revocation is checked once per key **before** trusting any restore verdict, so a second seat under the same key cannot come back as `RestoreUnderNewId`.
 
 - [ ] **Step 1: Write the failing tests.**
   - `returnInsideGrantSkipsPolicyAndIsMarked`: policy calls = 0, and the bystander sees the mark.
