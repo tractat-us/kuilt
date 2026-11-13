@@ -19,6 +19,10 @@ import kotlin.test.assertTrue
  * where compressed points are optional in the WebCrypto spec, so a green here proves import only
  * in the browser the tests ran in. Every arm runs through the module's self-tested [algorithms],
  * so a provider that cannot start fails the arm instead of passing it by absence.
+ *
+ * The module no longer imports the compressed form: Safari and WebKit refuse it (#3232), so
+ * [decodeOnCurve] imports what [decompress] computes. These arms stay as a record of what each
+ * provider does, and the export arm still backs every `did:key` this module mints.
  */
 class CompressedPointProbeTest {
     @Test

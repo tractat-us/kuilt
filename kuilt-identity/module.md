@@ -17,17 +17,18 @@ of, and the per-platform key stores arrive in the pieces that follow.
 ## Underneath
 
 One P-256 key per device, signing with ECDSA over SHA-256. Its name is a `did:key`, which carries
-the public key as a 33-byte compressed point, so every platform must read and write that form. The
-module's tests check it on JVM and Android's host-JDK unit tests, iOS, macOS and headless Chrome;
-compressed import in other browsers is unproven. The primitives come from
+the public key as a 33-byte compressed point. The primitives come from
 [cryptography-kotlin](https://github.com/whyoleg/cryptography-kotlin), which wraps each platform's
 own implementation: JCA on JVM and Android, CryptoKit on Apple, WebCrypto in the browser. This
-module composes them and owns no cryptographic math beyond one on-curve validation, described
-below. It does not depend on `:kuilt-seal`, so a consumer of
-one inherits nothing of the other.
+module composes them and owns no cryptographic math beyond decompressing a point, described below.
+It does not depend on `:kuilt-seal`, so a consumer of one inherits nothing of the other.
 
-One check is the module's own. The JDK decoder takes a square root without checking it, so on JVM
-and Android a `did:key` whose `x` has no point on P-256 would decode into a key, while CryptoKit and
-WebCrypto refuse it. `DidKey.parse` and `DidKey.verify` therefore check the point in common code,
-`x < p` and then that `x³ − 3x + b` is a square mod `p`, so every platform gives the same answer.
-That is validation only; computing `y` stays the provider's.
+The module decompresses the point itself and hands every provider the 65-byte uncompressed form,
+because Safari refuses compressed import. Safari's and WebKit's WebCrypto throw a `DataError` on a
+33-byte `importKey("raw")`, while Chromium and Firefox accept it and the uncompressed form imports
+in all four; every browser on iOS is WebKit. Doing it in common code fixes a second problem too: the
+JDK decoder takes a square root without checking it, so on JVM and Android a `did:key` whose `x` has
+no point on P-256 would decode into a key, while CryptoKit and WebCrypto refuse it. So
+`DidKey.parse` and `DidKey.verify` check `x < p` and that `x³ − 3x + b` is a square mod `p`, take its
+root, pick the root whose parity the lead byte names, and import `0x04 ‖ x ‖ y`. Every platform gets
+the same bytes and the same answer. Exporting a key in compressed form stays the library's.

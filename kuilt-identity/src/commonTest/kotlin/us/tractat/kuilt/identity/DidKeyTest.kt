@@ -57,12 +57,12 @@ class DidKeyTest {
 
     @Test
     fun w3cVectorsRoundTrip() = runTest {
-        val decoder = algorithms().ecdsa.publicKeyDecoder(EC.Curve.P256)
         val rows = W3C_P256_VECTORS.map { vector ->
             val key = DidKey.parse(vector.did)
             val x = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).decode(vector.jwkX)
             val y = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).decode(vector.jwkY)
-            val decompressed = decoder.decodeFromByteArray(EC.PublicKey.Format.RAW.Compressed, key.compressedPoint())
+            // Through the module's own path: decompressed in common code, then imported by the provider.
+            val decompressed = checkNotNull(decodeOnCurve(key.compressedPoint())) { "${vector.did} decodes" }
                 .encodeToByteArray(EC.PublicKey.Format.RAW)
             Triple(vector, key, Pair(x + y, decompressed))
         }
@@ -77,7 +77,7 @@ class DidKeyTest {
                         assertEquals(
                             "04" + xy.first.toHexString(),
                             xy.second.toHexString(),
-                            "decompressing ${vector.did} through the provider gives the JWK x‖y",
+                            "decoding ${vector.did} gives the JWK x‖y",
                         )
                     },
                     { assertTrue(DidKey.ofCompressedPoint(key.compressedPoint()) == key, "re-encoding gives the same name") },
