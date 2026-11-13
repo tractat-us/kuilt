@@ -63,7 +63,7 @@ class OtlpProtoEncodingTest {
             traceId = tId(0x0a), spanId = sId(0x0b), parentSpanId = null,
             name = "op", kind = SpanKind.SERVER, startEpochNanos = 5L, endEpochNanos = 9L,
         )
-        val bytes = proto.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(setOf(span), emptyList()))
+        val bytes = proto.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(setOf(span), emptyList(), OtlpEnvelope.NONE))
         assertEquals(goldenSpanHex, bytes.toHex())
     }
 
@@ -75,7 +75,7 @@ class OtlpProtoEncodingTest {
             attributes = mapOf("http.method" to "GET"),
         )
         val link = SpanLink(fromSpanId = sId(0x0b), linkedTraceId = tId(0x0c), linkedSpanId = sId(0x0d))
-        val req = tracesProtoOf(setOf(span), listOf(link))
+        val req = tracesProtoOf(setOf(span), listOf(link), OtlpEnvelope.NONE)
         val decoded = proto.decodeFromByteArray(
             ProtoTracesRequest.serializer(),
             proto.encodeToByteArray(ProtoTracesRequest.serializer(), req),
@@ -101,7 +101,7 @@ class OtlpProtoEncodingTest {
         )
         val decoded = proto.decodeFromByteArray(
             ProtoLogsRequest.serializer(),
-            proto.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(setOf(rec))),
+            proto.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(setOf(rec), OtlpEnvelope.NONE)),
         )
         val r = decoded.resourceLogs.single().scopeLogs.single().logRecords.single()
         assertAll(
@@ -119,7 +119,7 @@ class OtlpProtoEncodingTest {
         val p = MetricPoint.Sum(MetricKey("req", MetricKind.SUM), value = 7L, startEpochNanos = 0L, timeEpochNanos = 5L)
         val decoded = proto.decodeFromByteArray(
             ProtoMetricsRequest.serializer(),
-            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p))),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p), OtlpEnvelope.NONE)),
         )
         val m = decoded.resourceMetrics.single().scopeMetrics.single().metrics.single()
         assertAll(
@@ -174,7 +174,7 @@ class OtlpProtoEncodingTest {
             negativeOffset = 0, negativeBucketCounts = emptyList(),
             startEpochNanos = 0L, timeEpochNanos = 5L,
         )
-        val bytes = proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p)))
+        val bytes = proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p), OtlpEnvelope.NONE))
         assertEquals(goldenExpHistHex, bytes.toHex())
     }
 
@@ -190,7 +190,7 @@ class OtlpProtoEncodingTest {
         )
         val m = proto.decodeFromByteArray(
             ProtoMetricsRequest.serializer(),
-            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p))),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p), OtlpEnvelope.NONE)),
         ).resourceMetrics.single().scopeMetrics.single().metrics.single()
         val dp = m.exponentialHistogram?.dataPoints?.single()
         assertAll(
@@ -214,13 +214,13 @@ class OtlpProtoEncodingTest {
         val g = MetricPoint.Gauge(MetricKey("cpu", MetricKind.GAUGE), value = 0.5, timeEpochNanos = 5L)
         val gm = proto.decodeFromByteArray(
             ProtoMetricsRequest.serializer(),
-            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(g))),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(g), OtlpEnvelope.NONE)),
         ).resourceMetrics.single().scopeMetrics.single().metrics.single()
 
         val c = MetricPoint.Cardinality(MetricKey("users", MetricKind.CARDINALITY), estimate = 12L, timeEpochNanos = 5L)
         val cm = proto.decodeFromByteArray(
             ProtoMetricsRequest.serializer(),
-            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(c))),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(c), OtlpEnvelope.NONE)),
         ).resourceMetrics.single().scopeMetrics.single().metrics.single()
 
         assertAll(

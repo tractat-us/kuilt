@@ -8,16 +8,29 @@ import kotlinx.serialization.Serializable
 // the mappers in OtlpEncoding.kt produce those String values, so the DTO fields are
 // already String and need no custom serializers. A response body is never parsed.
 
+// ── Envelope ─────────────────────────────────────────────────────────────────
+// The resource (who produced the telemetry) and the instrumentation scope (which library
+// recorded it) wrap every signal the same way. Both are nullable and omitted when absent,
+// so an edge configured with neither emits exactly the bytes it did before they existed.
+
+/** OTLP `Resource`: the attributes a collector groups records by (`service.name`, …). */
+@Serializable
+internal data class OtlpResource(val attributes: List<KeyValue>)
+
+/** OTLP `InstrumentationScope`. An empty string is OTLP's "unknown" and is omitted. */
+@Serializable
+internal data class OtlpScope(val name: String = "", val version: String = "")
+
 // ── Traces ───────────────────────────────────────────────────────────────────
 
 @Serializable
 internal data class TracesRequest(val resourceSpans: List<ResourceSpans>)
 
 @Serializable
-internal data class ResourceSpans(val scopeSpans: List<ScopeSpans>)
+internal data class ResourceSpans(val resource: OtlpResource? = null, val scopeSpans: List<ScopeSpans>)
 
 @Serializable
-internal data class ScopeSpans(val spans: List<OtlpSpan>)
+internal data class ScopeSpans(val scope: OtlpScope? = null, val spans: List<OtlpSpan>)
 
 @Serializable
 internal data class OtlpSpan(
@@ -51,10 +64,10 @@ internal data class AnyValue(val stringValue: String)
 internal data class LogsRequest(val resourceLogs: List<ResourceLogs>)
 
 @Serializable
-internal data class ResourceLogs(val scopeLogs: List<ScopeLogs>)
+internal data class ResourceLogs(val resource: OtlpResource? = null, val scopeLogs: List<ScopeLogs>)
 
 @Serializable
-internal data class ScopeLogs(val logRecords: List<OtlpLogRecord>)
+internal data class ScopeLogs(val scope: OtlpScope? = null, val logRecords: List<OtlpLogRecord>)
 
 @Serializable
 internal data class OtlpLogRecord(
@@ -74,10 +87,10 @@ internal data class OtlpLogRecord(
 internal data class MetricsRequest(val resourceMetrics: List<ResourceMetrics>)
 
 @Serializable
-internal data class ResourceMetrics(val scopeMetrics: List<ScopeMetrics>)
+internal data class ResourceMetrics(val resource: OtlpResource? = null, val scopeMetrics: List<ScopeMetrics>)
 
 @Serializable
-internal data class ScopeMetrics(val metrics: List<OtlpMetric>)
+internal data class ScopeMetrics(val scope: OtlpScope? = null, val metrics: List<OtlpMetric>)
 
 @Serializable
 internal data class OtlpMetric(

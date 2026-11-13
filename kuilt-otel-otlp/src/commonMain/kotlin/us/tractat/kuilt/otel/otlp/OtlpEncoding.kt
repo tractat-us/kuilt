@@ -43,7 +43,11 @@ private fun attrs(m: Map<String, String>): List<KeyValue> =
     m.map { KeyValue(it.key, AnyValue(it.value)) }
 
 /** Render spans (with their inferred causal links) into an OTLP/JSON traces request. */
-internal fun tracesRequestOf(spans: Set<SpanRecord>, links: List<SpanLink>): TracesRequest {
+internal fun tracesRequestOf(
+    spans: Set<SpanRecord>,
+    links: List<SpanLink>,
+    envelope: OtlpEnvelope,
+): TracesRequest {
     val linksByFrom = links.groupBy { it.fromSpanId }
     val otlpSpans = spans.map { s ->
         OtlpSpan(
@@ -60,11 +64,11 @@ internal fun tracesRequestOf(spans: Set<SpanRecord>, links: List<SpanLink>): Tra
             },
         )
     }
-    return TracesRequest(listOf(ResourceSpans(listOf(ScopeSpans(otlpSpans)))))
+    return TracesRequest(listOf(ResourceSpans(scopeSpans = listOf(ScopeSpans(spans = otlpSpans)))))
 }
 
 /** Render log records into an OTLP/JSON logs request. */
-internal fun logsRequestOf(logs: Set<LogRecord>): LogsRequest {
+internal fun logsRequestOf(logs: Set<LogRecord>, envelope: OtlpEnvelope): LogsRequest {
     val recs = logs.map { r ->
         OtlpLogRecord(
             timeUnixNano = r.timestampEpochNanos?.toString(),
@@ -77,14 +81,14 @@ internal fun logsRequestOf(logs: Set<LogRecord>): LogsRequest {
             spanId = r.spanId?.toHex(),
         )
     }
-    return LogsRequest(listOf(ResourceLogs(listOf(ScopeLogs(recs)))))
+    return LogsRequest(listOf(ResourceLogs(scopeLogs = listOf(ScopeLogs(logRecords = recs)))))
 }
 
 /**
  * Render metric points into an OTLP/JSON metrics request (Sum for sums, Gauge for
  * gauge/cardinality, ExponentialHistogram for histograms).
  */
-internal fun metricsRequestOf(points: Set<MetricPoint>): MetricsRequest {
+internal fun metricsRequestOf(points: Set<MetricPoint>, envelope: OtlpEnvelope): MetricsRequest {
     val metrics = points.map { p ->
         when (p) {
             is MetricPoint.Sum -> OtlpMetric(
@@ -157,7 +161,7 @@ internal fun metricsRequestOf(points: Set<MetricPoint>): MetricsRequest {
             )
         }
     }
-    return MetricsRequest(listOf(ResourceMetrics(listOf(ScopeMetrics(metrics)))))
+    return MetricsRequest(listOf(ResourceMetrics(scopeMetrics = listOf(ScopeMetrics(metrics = metrics)))))
 }
 
 /** A sign's bucket array as OTLP/JSON, or null (field omitted) when no buckets are populated. */

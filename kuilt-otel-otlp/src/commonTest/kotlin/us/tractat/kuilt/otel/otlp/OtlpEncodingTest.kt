@@ -24,7 +24,7 @@ class OtlpEncodingTest {
             name = "op", kind = SpanKind.SERVER, startEpochNanos = 5L, endEpochNanos = 9L,
         )
         val link = SpanLink(fromSpanId = sId(0x0b), linkedTraceId = tId(0x0c), linkedSpanId = sId(0x0d))
-        val req = tracesRequestOf(setOf(span), listOf(link))
+        val req = tracesRequestOf(setOf(span), listOf(link), OtlpEnvelope.NONE)
         val s = json.encodeToString(TracesRequest.serializer(), req)
         assertTrue(s.contains("\"traceId\":\"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a\""), s)
         assertTrue(s.contains("\"spanId\":\"0b0b0b0b0b0b0b0b\""), s)
@@ -37,7 +37,7 @@ class OtlpEncodingTest {
     @Test
     fun logEncodesBodyAndEnvelope() {
         val rec = LogRecord(recordId = sId(1), body = "hello", severityNumber = 9, severityText = "INFO")
-        val s = json.encodeToString(LogsRequest.serializer(), logsRequestOf(setOf(rec)))
+        val s = json.encodeToString(LogsRequest.serializer(), logsRequestOf(setOf(rec), OtlpEnvelope.NONE))
         assertTrue(s.contains("\"resourceLogs\""), s)
         assertTrue(s.contains("hello"), s)
         assertTrue(s.contains("\"severityText\":\"INFO\""), s)
@@ -46,7 +46,7 @@ class OtlpEncodingTest {
     @Test
     fun sumEncodesAsCumulativeIntString() {
         val p = MetricPoint.Sum(MetricKey("req", MetricKind.SUM), value = 7L, startEpochNanos = 0L, timeEpochNanos = 5L)
-        val s = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(p)))
+        val s = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(p), OtlpEnvelope.NONE))
         assertTrue(s.contains("\"resourceMetrics\""), s)
         assertTrue(s.contains("\"asInt\":\"7\""), s)
     }
@@ -54,7 +54,7 @@ class OtlpEncodingTest {
     @Test
     fun doubleSumEncodesAsDouble() {
         val p = MetricPoint.DoubleSum(MetricKey("bytes", MetricKind.SUM), value = 2.5, startEpochNanos = 0L, timeEpochNanos = 5L)
-        val s = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(p)))
+        val s = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(p), OtlpEnvelope.NONE))
         assertTrue(s.contains("\"asDouble\":2.5"), s)
         assertTrue(s.contains("\"sum\""), s)
     }
@@ -66,12 +66,12 @@ class OtlpEncodingTest {
         // enum as AGGREGATION_TEMPORALITY_UNSPECIFIED (0) drops/mis-aggregates the Sum — silent
         // metric loss. They MUST always be on the wire for a Sum.
         val longSum = MetricPoint.Sum(MetricKey("req", MetricKind.SUM), value = 7L, startEpochNanos = 0L, timeEpochNanos = 5L)
-        val longJson = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(longSum)))
+        val longJson = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(longSum), OtlpEnvelope.NONE))
         assertTrue(longJson.contains("\"aggregationTemporality\":2"), longJson)
         assertTrue(longJson.contains("\"isMonotonic\":true"), longJson)
 
         val doubleSum = MetricPoint.DoubleSum(MetricKey("bytes", MetricKind.SUM), value = 2.5, startEpochNanos = 0L, timeEpochNanos = 5L)
-        val doubleJson = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(doubleSum)))
+        val doubleJson = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(doubleSum), OtlpEnvelope.NONE))
         assertTrue(doubleJson.contains("\"aggregationTemporality\":2"), doubleJson)
         assertTrue(doubleJson.contains("\"isMonotonic\":true"), doubleJson)
     }
@@ -85,7 +85,7 @@ class OtlpEncodingTest {
             negativeOffset = 0, negativeBucketCounts = emptyList(),
             startEpochNanos = 0L, timeEpochNanos = 5L,
         )
-        val s = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(p)))
+        val s = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(p), OtlpEnvelope.NONE))
         assertTrue(s.contains("\"exponentialHistogram\""), s)
         assertTrue(s.contains("\"scale\":5"), s)
         assertTrue(s.contains("\"count\":\"4\""), s) // uint64 as string, like asInt
@@ -101,12 +101,12 @@ class OtlpEncodingTest {
     @Test
     fun gaugeAndCardinalityEncode() {
         val g = MetricPoint.Gauge(MetricKey("cpu", MetricKind.GAUGE), value = 0.5, timeEpochNanos = 5L)
-        val gs = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(g)))
+        val gs = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(g), OtlpEnvelope.NONE))
         assertTrue(gs.contains("\"gauge\""), gs)
         assertTrue(gs.contains("\"asDouble\":0.5"), gs)
 
         val c = MetricPoint.Cardinality(MetricKey("users", MetricKind.CARDINALITY), estimate = 12L, timeEpochNanos = 5L)
-        val cs = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(c)))
+        val cs = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(c), OtlpEnvelope.NONE))
         assertTrue(cs.contains("\"gauge\""), cs)
         assertTrue(cs.contains("\"asInt\":\"12\""), cs)
     }
