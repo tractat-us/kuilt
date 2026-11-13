@@ -200,10 +200,20 @@ engine reads no clock and no random source, and it is not thread-safe: call ever
 scheduling lock, `snapshot()` included, and hand status and persistence readers the immutable value
 it returns.
 
-**Today's public surface cannot yet run one.** `LocalHeddle.fresh` is the only public way to make an
-engine, and it has no topology and no supply, so every `acquire` on it is refused. Booting from a
-`Topology` and topping up supply are not public yet. The sample below builds its tree and its supply
-through module-internal seams, which a consumer cannot call.
+The engine mints its own supply. Call `reconcileCapacity(totalSlots)` with how many slots you run,
+at start and whenever that changes. It mints nothing itself; it sizes the watermarks of
+`LocalPolicy.supply` (`SupplyPolicy`, counted in rounds of every slot leased once at the default
+reservation). From then on `acquire` and `extend` top the root up inside the same operation whenever
+it would drop below the low watermark, so supply never runs out between calls, and a refused
+operation leaves no mint behind. `SupplyExhausted` now means no capacity was reconciled. The low
+watermark is also the headroom for an overrun or an `admit`, which are never refused and mint for
+themselves past it. Every mint in an epoch rewrites one record, so the ledger never grows with
+service.
+
+**Today's public surface cannot yet seat a tree.** `LocalHeddle.fresh` is the only public way to
+make an engine, and it has no topology, so every `acquire` on it finds no lineage. Booting from a
+`Topology` is not public yet. The samples below build their tree through a module-internal seam,
+which a consumer cannot call.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalLease -->
 ```kotlin
@@ -248,6 +258,29 @@ fraction, over the same competing set: work no pick can reach is owed nothing an
     // While both stay queued, heavy is owed 2 slots of every 3 and light 1.
     check(heddle.entitlement(heavy, waiting = queued, totalSlots = 3L) == Rational.of(2L))
     check(heddle.entitlement(light, waiting = queued, totalSlots = 3L) == Rational.ONE)
+```
+
+After a crash or a restart of your executors, `reconcileLeases(live, now)` compares the leases the
+engine holds open with the ones whose work you still have running. It reports both directions and
+changes nothing. `orphaned` lists each open lease you did not name, with `elapsed`, which is
+`now − startedAt` and never below zero if your clock went back. `unknown` lists the ids you named
+that the engine holds no lease for. Which orphans to settle, and at what cost, is yours to decide.
+The documented default is `complete(lease, orphan.defaultSettlement)`: the time it ran, capped at
+`granted`, its reservation plus extensions, because a dead job's overrun cannot be checked. Work
+that will resume belongs in `live`, so it never becomes an orphan.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleReconcileLeases -->
+```kotlin
+    // The executor came back running only `kept`, and one job the engine never leased.
+    val stranger = LeaseId(epoch = 7L, seq = 0L)
+    val found = heddle.reconcileLeases(live = setOf(kept.id, stranger), now = 110L)
+    check(found.unknown == listOf(stranger))
+    val orphan = found.orphaned.single()
+    check(orphan.lease == lost && orphan.elapsed == 9L && orphan.granted == 3L)
+
+    // It ran 9 units against the 3 it was granted, which a dead job cannot prove: charge 3.
+    check(heddle.complete(orphan.lease.id, orphan.defaultSettlement) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.reconcileLeases(live = setOf(kept.id), now = 110L).orphaned.isEmpty())
 ```
 
 ### Run it over a network — reserve, run, charge once

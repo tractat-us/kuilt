@@ -886,6 +886,42 @@ final class us.tractat.kuilt.heddle/LeaseId : kotlin/Comparable<us.tractat.kuilt
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LeaseId.toString|toString(){}[0]
 }
 
+final class us.tractat.kuilt.heddle/LeaseReconciliation { // us.tractat.kuilt.heddle/LeaseReconciliation|null[0]
+    constructor <init>(kotlin.collections/List<us.tractat.kuilt.heddle/LeaseReconciliation.Orphan>, kotlin.collections/List<us.tractat.kuilt.heddle/LeaseId>) // us.tractat.kuilt.heddle/LeaseReconciliation.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.heddle.LeaseReconciliation.Orphan>;kotlin.collections.List<us.tractat.kuilt.heddle.LeaseId>){}[0]
+
+    final val orphaned // us.tractat.kuilt.heddle/LeaseReconciliation.orphaned|{}orphaned[0]
+        final fun <get-orphaned>(): kotlin.collections/List<us.tractat.kuilt.heddle/LeaseReconciliation.Orphan> // us.tractat.kuilt.heddle/LeaseReconciliation.orphaned.<get-orphaned>|<get-orphaned>(){}[0]
+    final val unknown // us.tractat.kuilt.heddle/LeaseReconciliation.unknown|{}unknown[0]
+        final fun <get-unknown>(): kotlin.collections/List<us.tractat.kuilt.heddle/LeaseId> // us.tractat.kuilt.heddle/LeaseReconciliation.unknown.<get-unknown>|<get-unknown>(){}[0]
+
+    final fun component1(): kotlin.collections/List<us.tractat.kuilt.heddle/LeaseReconciliation.Orphan> // us.tractat.kuilt.heddle/LeaseReconciliation.component1|component1(){}[0]
+    final fun component2(): kotlin.collections/List<us.tractat.kuilt.heddle/LeaseId> // us.tractat.kuilt.heddle/LeaseReconciliation.component2|component2(){}[0]
+    final fun copy(kotlin.collections/List<us.tractat.kuilt.heddle/LeaseReconciliation.Orphan> = ..., kotlin.collections/List<us.tractat.kuilt.heddle/LeaseId> = ...): us.tractat.kuilt.heddle/LeaseReconciliation // us.tractat.kuilt.heddle/LeaseReconciliation.copy|copy(kotlin.collections.List<us.tractat.kuilt.heddle.LeaseReconciliation.Orphan>;kotlin.collections.List<us.tractat.kuilt.heddle.LeaseId>){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LeaseReconciliation.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LeaseReconciliation.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LeaseReconciliation.toString|toString(){}[0]
+
+    final class Orphan { // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/Lease, kotlin/Long) // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.<init>|<init>(us.tractat.kuilt.heddle.Lease;kotlin.Long){}[0]
+
+        final val defaultSettlement // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.defaultSettlement|{}defaultSettlement[0]
+            final fun <get-defaultSettlement>(): kotlin/Long // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.defaultSettlement.<get-defaultSettlement>|<get-defaultSettlement>(){}[0]
+        final val elapsed // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.elapsed|{}elapsed[0]
+            final fun <get-elapsed>(): kotlin/Long // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.elapsed.<get-elapsed>|<get-elapsed>(){}[0]
+        final val granted // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.granted|{}granted[0]
+            final fun <get-granted>(): kotlin/Long // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.granted.<get-granted>|<get-granted>(){}[0]
+        final val lease // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.lease|{}lease[0]
+            final fun <get-lease>(): us.tractat.kuilt.heddle/Lease // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.lease.<get-lease>|<get-lease>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/Lease // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/Lease = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/LeaseReconciliation.Orphan // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.copy|copy(us.tractat.kuilt.heddle.Lease;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LeaseReconciliation.Orphan.toString|toString(){}[0]
+    }
+}
+
 final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/LocalHeddle|null[0]
     final val epoch // us.tractat.kuilt.heddle/LocalHeddle.epoch|{}epoch[0]
         final fun <get-epoch>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.epoch.<get-epoch>|<get-epoch>(){}[0]
@@ -900,6 +936,8 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
     final fun explain(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long = ...): us.tractat.kuilt.heddle/WaitExplanation // us.tractat.kuilt.heddle/LocalHeddle.explain|explain(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
     final fun extend(us.tractat.kuilt.heddle/LeaseId, kotlin/Long): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/LocalHeddle.extend|extend(us.tractat.kuilt.heddle.LeaseId;kotlin.Long){}[0]
     final fun previewPicks(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin/Int>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/List<kotlin/Long>): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LocalHeddle.previewPicks|previewPicks(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.Int>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.List<kotlin.Long>){}[0]
+    final fun reconcileCapacity(kotlin/Long) // us.tractat.kuilt.heddle/LocalHeddle.reconcileCapacity|reconcileCapacity(kotlin.Long){}[0]
+    final fun reconcileLeases(kotlin.collections/Set<us.tractat.kuilt.heddle/LeaseId>, kotlin/Long): us.tractat.kuilt.heddle/LeaseReconciliation // us.tractat.kuilt.heddle/LocalHeddle.reconcileLeases|reconcileLeases(kotlin.collections.Set<us.tractat.kuilt.heddle.LeaseId>;kotlin.Long){}[0]
     final fun snapshot(): us.tractat.kuilt.heddle/LocalHeddleState // us.tractat.kuilt.heddle/LocalHeddle.snapshot|snapshot(){}[0]
 
     final object Companion { // us.tractat.kuilt.heddle/LocalHeddle.Companion|null[0]
@@ -933,16 +971,19 @@ final class us.tractat.kuilt.heddle/LocalHeddleState { // us.tractat.kuilt.heddl
 }
 
 final class us.tractat.kuilt.heddle/LocalPolicy { // us.tractat.kuilt.heddle/LocalPolicy|null[0]
-    constructor <init>(kotlin/Long, kotlin/Long = ...) // us.tractat.kuilt.heddle/LocalPolicy.<init>|<init>(kotlin.Long;kotlin.Long){}[0]
+    constructor <init>(kotlin/Long, kotlin/Long = ..., us.tractat.kuilt.heddle/SupplyPolicy = ...) // us.tractat.kuilt.heddle/LocalPolicy.<init>|<init>(kotlin.Long;kotlin.Long;us.tractat.kuilt.heddle.SupplyPolicy){}[0]
 
     final val defaultReservation // us.tractat.kuilt.heddle/LocalPolicy.defaultReservation|{}defaultReservation[0]
         final fun <get-defaultReservation>(): kotlin/Long // us.tractat.kuilt.heddle/LocalPolicy.defaultReservation.<get-defaultReservation>|<get-defaultReservation>(){}[0]
     final val sleeperCredit // us.tractat.kuilt.heddle/LocalPolicy.sleeperCredit|{}sleeperCredit[0]
         final fun <get-sleeperCredit>(): kotlin/Long // us.tractat.kuilt.heddle/LocalPolicy.sleeperCredit.<get-sleeperCredit>|<get-sleeperCredit>(){}[0]
+    final val supply // us.tractat.kuilt.heddle/LocalPolicy.supply|{}supply[0]
+        final fun <get-supply>(): us.tractat.kuilt.heddle/SupplyPolicy // us.tractat.kuilt.heddle/LocalPolicy.supply.<get-supply>|<get-supply>(){}[0]
 
     final fun component1(): kotlin/Long // us.tractat.kuilt.heddle/LocalPolicy.component1|component1(){}[0]
     final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/LocalPolicy.component2|component2(){}[0]
-    final fun copy(kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/LocalPolicy // us.tractat.kuilt.heddle/LocalPolicy.copy|copy(kotlin.Long;kotlin.Long){}[0]
+    final fun component3(): us.tractat.kuilt.heddle/SupplyPolicy // us.tractat.kuilt.heddle/LocalPolicy.component3|component3(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ..., us.tractat.kuilt.heddle/SupplyPolicy = ...): us.tractat.kuilt.heddle/LocalPolicy // us.tractat.kuilt.heddle/LocalPolicy.copy|copy(kotlin.Long;kotlin.Long;us.tractat.kuilt.heddle.SupplyPolicy){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LocalPolicy.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LocalPolicy.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LocalPolicy.toString|toString(){}[0]
@@ -1097,6 +1138,22 @@ final class us.tractat.kuilt.heddle/SlotFinals { // us.tractat.kuilt.heddle/Slot
 
         final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/SlotFinals> // us.tractat.kuilt.heddle/SlotFinals.Companion.serializer|serializer(){}[0]
     }
+}
+
+final class us.tractat.kuilt.heddle/SupplyPolicy { // us.tractat.kuilt.heddle/SupplyPolicy|null[0]
+    constructor <init>(kotlin/Long = ..., kotlin/Long = ...) // us.tractat.kuilt.heddle/SupplyPolicy.<init>|<init>(kotlin.Long;kotlin.Long){}[0]
+
+    final val lowWatermarkSlots // us.tractat.kuilt.heddle/SupplyPolicy.lowWatermarkSlots|{}lowWatermarkSlots[0]
+        final fun <get-lowWatermarkSlots>(): kotlin/Long // us.tractat.kuilt.heddle/SupplyPolicy.lowWatermarkSlots.<get-lowWatermarkSlots>|<get-lowWatermarkSlots>(){}[0]
+    final val targetSlots // us.tractat.kuilt.heddle/SupplyPolicy.targetSlots|{}targetSlots[0]
+        final fun <get-targetSlots>(): kotlin/Long // us.tractat.kuilt.heddle/SupplyPolicy.targetSlots.<get-targetSlots>|<get-targetSlots>(){}[0]
+
+    final fun component1(): kotlin/Long // us.tractat.kuilt.heddle/SupplyPolicy.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/SupplyPolicy.component2|component2(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/SupplyPolicy // us.tractat.kuilt.heddle/SupplyPolicy.copy|copy(kotlin.Long;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/SupplyPolicy.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/SupplyPolicy.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/SupplyPolicy.toString|toString(){}[0]
 }
 
 final class us.tractat.kuilt.heddle/Topology { // us.tractat.kuilt.heddle/Topology|null[0]

@@ -10,18 +10,9 @@ internal fun sampleLocalLease() {
     val root = GroupId("pool")
     val heavy = GroupId("heavy")
     val light = GroupId("light")
-    // The public surface cannot yet boot an engine from a Topology or give it supply, so this
-    // sample builds its two-group tree and its supply through the module's own seams.
-    var tree = EntitlementLedger.bootstrap(root, emptyMap(), nonce = "genesis")
-    for (record in listOf(
-        AttachmentRecord(AttachmentId("pool>heavy"), root, heavy, Weight.of(2)),
-        AttachmentRecord(AttachmentId("pool>light"), root, light, Weight.ONE),
-    )) {
-        tree = tree.piece(checkNotNull(tree.prepare(record)).delta)
-        tree = tree.piece(checkNotNull(tree.activate(record.id)).delta)
-    }
-    val heddle = LocalHeddle.over(tree, root, LocalPolicy(defaultReservation = 3L), epoch = 0L)
-    heddle.mintSupply(1_000L)
+    val heddle = twoGroupEngine(root, heavy, light)
+    // Four slots: the engine mints its own supply ahead of them.
+    heddle.reconcileCapacity(totalSlots = 4L)
 
     // Both groups have work queued, and this slot can run either.
     val queued = setOf(heavy, light)
@@ -49,17 +40,8 @@ internal fun sampleExplainWait() {
     val root = GroupId("pool")
     val heavy = GroupId("heavy")
     val light = GroupId("light")
-    // As in sampleLocalLease, the tree and its supply come through the module's own seams for now.
-    var tree = EntitlementLedger.bootstrap(root, emptyMap(), nonce = "genesis")
-    for (record in listOf(
-        AttachmentRecord(AttachmentId("pool>heavy"), root, heavy, Weight.of(2)),
-        AttachmentRecord(AttachmentId("pool>light"), root, light, Weight.ONE),
-    )) {
-        tree = tree.piece(checkNotNull(tree.prepare(record)).delta)
-        tree = tree.piece(checkNotNull(tree.activate(record.id)).delta)
-    }
-    val heddle = LocalHeddle.over(tree, root, LocalPolicy(defaultReservation = 3L), epoch = 0L)
-    heddle.mintSupply(1_000L)
+    val heddle = twoGroupEngine(root, heavy, light)
+    heddle.reconcileCapacity(totalSlots = 2L)
 
     val queued = setOf(heavy, light)
     // Light is behind at the pool: at twice the weight, heavy's turn comes due sooner.
@@ -73,4 +55,48 @@ internal fun sampleExplainWait() {
     check(heddle.entitlement(light, waiting = queued, totalSlots = 3L) == Rational.ONE)
     // A group with nothing queued is simply not waiting.
     check(heddle.explain(light, waiting = setOf(heavy), eligible = setOf(heavy)) == WaitExplanation.NotWaiting)
+}
+
+/**
+ * After a crash, some work the engine still holds a lease for is gone. Ask which, settle each
+ * orphan at the time it ran, capped at what it was granted, and the books balance again.
+ */
+@Suppress("unused")
+internal fun sampleReconcileLeases() {
+    val root = GroupId("pool")
+    val heavy = GroupId("heavy")
+    val light = GroupId("light")
+    val heddle = twoGroupEngine(root, heavy, light)
+    heddle.reconcileCapacity(totalSlots = 2L)
+    val queued = setOf(heavy, light)
+    val kept = (heddle.acquire(queued, queued, startedAt = 100L) as AcquireOutcome.Acquired).lease
+    val lost = (heddle.acquire(queued, queued, startedAt = 101L) as AcquireOutcome.Acquired).lease
+
+    // The executor came back running only `kept`, and one job the engine never leased.
+    val stranger = LeaseId(epoch = 7L, seq = 0L)
+    val found = heddle.reconcileLeases(live = setOf(kept.id, stranger), now = 110L)
+    check(found.unknown == listOf(stranger))
+    val orphan = found.orphaned.single()
+    check(orphan.lease == lost && orphan.elapsed == 9L && orphan.granted == 3L)
+
+    // It ran 9 units against the 3 it was granted, which a dead job cannot prove: charge 3.
+    check(heddle.complete(orphan.lease.id, orphan.defaultSettlement) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.reconcileLeases(live = setOf(kept.id), now = 110L).orphaned.isEmpty())
+}
+
+/**
+ * A two-group tree, `heavy` at weight 2 beside `light`, with a 3-unit default reservation. The
+ * public surface cannot yet boot an engine from a `Topology`, so the samples build the tree
+ * through the module's own seam.
+ */
+private fun twoGroupEngine(root: GroupId, heavy: GroupId, light: GroupId): LocalHeddle {
+    var tree = EntitlementLedger.bootstrap(root, emptyMap(), nonce = "genesis")
+    for (record in listOf(
+        AttachmentRecord(AttachmentId("pool>heavy"), root, heavy, Weight.of(2)),
+        AttachmentRecord(AttachmentId("pool>light"), root, light, Weight.ONE),
+    )) {
+        tree = tree.piece(checkNotNull(tree.prepare(record)).delta)
+        tree = tree.piece(checkNotNull(tree.activate(record.id)).delta)
+    }
+    return LocalHeddle.over(tree, root, LocalPolicy(defaultReservation = 3L), epoch = 0L)
 }

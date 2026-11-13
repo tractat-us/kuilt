@@ -50,4 +50,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun explainWaitHolds() = sampleExplainWait()
+
+    @Test
+    fun reconcileLeasesHolds() = sampleReconcileLeases()
 }

@@ -33,11 +33,54 @@ class LocalHeddlePropertyTest {
 
     @Test
     fun conservationHoldsUnderRandomLeaseSequences() {
+        randomLeaseSequences(engine = { engineOver(ledger, root, supply = 200) })
+    }
+
+    /**
+     * The same sequences with no supply up front and capacity reconciled once, so every unit is
+     * minted by a top-up inside an `acquire` or `extend`, or forced by an overrun or an admission.
+     */
+    @Test
+    fun conservationHoldsWithSupplyToppedUp() {
+        var toppedUp = 0
+        var funded = 0
+        fun slots(seed: Int): Long = 1L + seed % 4
+        randomLeaseSequences(
+            engine = { seed ->
+                engineOver(ledger, root, supply = 0, policy = LocalPolicy(defaultReservation = 3L)).also { it.reconcileCapacity(slots(seed)) }
+            },
+            after = { h -> if (h.snapshot().ledger.mintedTotal() > 0L) toppedUp++ },
+            onOp = { h, seed, out ->
+                val at = "seed $seed"
+                if (out == AcquireOutcome.SupplyExhausted || out == LeaseOutcome.SupplyExhausted) fail("refused for supply with a capacity reconciled, $at")
+                // After an acquire or extend that went through, the root holds at least the low watermark: one round.
+                if (out is AcquireOutcome.Acquired || out == LeaseOutcome.Done(0L, 0L)) {
+                    funded++
+                    val held = h.snapshot().ledger.holdings(root, LOCAL)
+                    if (held < slots(seed) * 3L) fail("the root holds $held after a funded operation, under the watermark ${slots(seed) * 3L}, $at")
+                }
+            },
+        )
+        assertAll(
+            { assertEquals(SEEDS, toppedUp, "every seed minted its own supply") },
+            { assertTrue(funded > SEEDS * STEPS / 4, "the rig: $funded funded acquires and extends") },
+        )
+    }
+
+    /**
+     * [onOp] sees each acquire's and each extend's outcome, after the operation. A cancel's outcome is
+     * also `Done(0, 0)`, so it is not passed.
+     */
+    private fun randomLeaseSequences(
+        engine: (seed: Int) -> LocalHeddle,
+        after: (LocalHeddle) -> Unit = {},
+        onOp: (LocalHeddle, seed: Int, outcome: Any) -> Unit = { _, _, _ -> },
+    ) {
         var operations = 0
         val kinds = IntArray(5)
         for (seed in 0 until SEEDS) {
             val rng = Random(seed)
-            val h = engineOver(ledger, root, supply = 200)
+            val h = engine(seed)
             repeat(STEPS) { step ->
                 val open = h.snapshot().leases
                 val kind = rng.nextInt(5)
@@ -45,10 +88,10 @@ class LocalHeddlePropertyTest {
                     kind == 0 || open.isEmpty() -> {
                         val waiting = subset(rng, leaves)
                         val eligible = waiting.filter { rng.nextBoolean() }
-                        h.acquire(waiting.toSet(), eligible.toSet(), startedAt = step.toLong(), reservation = 1L + rng.nextInt(5))
+                        onOp(h, seed, h.acquire(waiting.toSet(), eligible.toSet(), startedAt = step.toLong(), reservation = 1L + rng.nextInt(5)))
                         kinds[0]++
                     }
-                    kind == 1 -> { h.extend(open[rng.nextInt(open.size)].id, 1L + rng.nextInt(4)); kinds[1]++ }
+                    kind == 1 -> { onOp(h, seed, h.extend(open[rng.nextInt(open.size)].id, 1L + rng.nextInt(4))); kinds[1]++ }
                     kind == 2 -> { h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(9).toLong()); kinds[2]++ }
                     kind == 3 -> { h.cancel(open[rng.nextInt(open.size)].id); kinds[3]++ }
                     else -> { h.admit(leaves[rng.nextInt(leaves.size)], startedAt = step.toLong(), reservation = 1L + rng.nextInt(5)); kinds[4]++ }
@@ -56,6 +99,7 @@ class LocalHeddlePropertyTest {
                 operations++
                 assertConserved(h, "seed $seed step $step")
             }
+            after(h)
         }
         assertAll(
             { assertEquals(SEEDS * STEPS, operations, "every step ran and was checked") },
@@ -149,11 +193,27 @@ class LocalHeddlePropertyTest {
      */
     @Test
     fun reshapesNeverStarveASiblingNorThrow() {
+        reshapeSequences("supplied") { engineOver(reshapeLedger, root, supply = 100_000) }
+    }
+
+    /**
+     * The same reshapes with no supply up front and a capacity reconciled, so every all-or-nothing
+     * check above runs on the top-up path: a refused acquire and a draining extend leave no mint
+     * behind, and supply never runs out.
+     */
+    @Test
+    fun reshapesNeverStarveASiblingNorThrowWithSupplyToppedUp() {
+        reshapeSequences("topped-up") { seed ->
+            engineOver(reshapeLedger, root, supply = 0, policy = LocalPolicy(defaultReservation = 2L)).also { it.reconcileCapacity(1L + seed % 3) }
+        }
+    }
+
+    private fun reshapeSequences(label: String, engine: (seed: Int) -> LocalHeddle) {
         var steps = 0
         val seen = IntArray(RIG.size)
         for (seed in 0 until SEEDS) {
             val rng = Random(seed)
-            val h = engineOver(reshapeLedger, root, supply = 100_000)
+            val h = engine(seed)
             repeat(RESHAPE_STEPS) { step ->
                 val before = h.snapshot()
                 val open = before.leases
@@ -227,7 +287,7 @@ class LocalHeddlePropertyTest {
                 assertConservedEverywhere(h, "seed $seed step $step")
             }
         }
-        println("LEASE-RESHAPE steps=$steps " + RIG.indices.joinToString(" ") { "${RIG[it]}=${seen[it]}" })
+        println("LEASE-RESHAPE $label steps=$steps " + RIG.indices.joinToString(" ") { "${RIG[it]}=${seen[it]}" })
         assertAll(
             { assertEquals(SEEDS * RESHAPE_STEPS, steps, "every step ran and was checked") },
             { assertTrue(seen.all { it > 0 }, "every rig fired: ${RIG.indices.joinToString { "${RIG[it]}=${seen[it]}" }}") },
