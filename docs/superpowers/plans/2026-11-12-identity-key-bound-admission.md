@@ -78,7 +78,8 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
     `FakeRoomFactory`, two anonymous objects in `ReferenceResumeHarness`).
   - **Drop `ServerCluster.kt`** and the `(PeerId) -> DeviceKeyStore` idea: it takes a `RoomHost`.
     Multi-server tests pass distinct `InMemoryDeviceKeyStore()`s per `KtorRoomHost`.
-  - Count: ~145 sites in ~69 files (62 test, 7 main), not ~50.
+  - Count, measured by the 1.1 worker (#3258): **240 sites in 89 files**, including 62 direct internal
+    `SeamRoom(` constructions. `:kuilt-nw` also needs the `api(project(":kuilt-identity"))` edge.
   - Docs with constructor snippets: `docs/usage.md`, `Writerside/topics/fabrics.md`,
     `Writerside/topics/cluster-server-client.md`, `kuilt-cluster/module.md`, `kuilt-test/README.md`.
   - `spike/` (`ConnectivitySuite.kt`): fix it, or say in the PR it is knowingly left.
@@ -95,6 +96,11 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
   - KDoc: `held` is joiner seats only, never the host's; revocation is the caller's; "fall through"
     means calling `decideSeat` again without the released seat, not a hardcoded `Ordinary`.
   - AGENTS.md: drop the "(today only the internal key → seat decision reads them)" parenthetical.
+- **1.4–1.6: split shared factories in tests (from #3258).** About 24 test files build one
+  `SeamRoomFactory` and use it for the host and joiners, or for several joiners, so those rooms
+  share one `InMemoryDeviceKeyStore` and are **one device**. Harmless until the key → seat table
+  reads keys; from 1.5 they will restore or supersede each other. Each of 1.4–1.6 gives every
+  logical device in its tests its own store (or factory), and its brief says so.
 - **1.5 / 2.4 obligation (from #3251's review):** re-run `decideSeat` under the room lock immediately
   before `addToRoster`, *after* any suspension (the policy in 2.4). If the key gained a seat in the
   meantime, supersede rather than add a second seat. A failed `tryResume` decides again without the
