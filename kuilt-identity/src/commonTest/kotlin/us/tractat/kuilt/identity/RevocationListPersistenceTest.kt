@@ -1,6 +1,7 @@
 package us.tractat.kuilt.identity
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
@@ -25,6 +26,7 @@ import kotlin.test.assertTrue
  * first list is never read again, so nothing it holds in memory can stand in for what reached the
  * store.
  */
+@OptIn(ExperimentalCoroutinesApi::class) // runCurrent
 class RevocationListPersistenceTest {
     @Test
     fun revocationSurvivesReopen() = runTest {
