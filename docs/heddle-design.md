@@ -725,10 +725,10 @@ hoarder is throttled; a returner recovers.
 
 Production extensions (latency classes, minimum grants, bounded sleeper
 credit, entitlement recall) are policy-layer only and must not touch
-conservation or path accounting. §7.4 works one of them through: a request
-length of each leaf's own.
+conservation or path accounting. §7.4 works the first of them through:
+a request length of a group's own.
 
-### 7.4 Request length: the slot's, and what a leaf's own would take
+### 7.4 Request length: the slot's, and what a group's own would take
 
 When a slot frees, the scheduler asks two things of each group that wants it.
 How far behind its share is it? And how long is the job it would run? The first
@@ -737,8 +737,8 @@ a short job need not wait behind a long one. Today the second answer is one numb
 for the whole slot, shared by every group in the pick. The engine does not know
 which group wins until the walk down the tree ends, and job lengths are usually
 not known in advance anyway. This section records that choice. It also works out
-what a length per leaf would take, so the question is not re-derived from
-scratch.
+three ways a group could have a length of its own, cheapest first, so the
+question is not re-derived from scratch.
 
 #### As built: one length per slot
 
@@ -754,16 +754,31 @@ single-writer engine needs no earmark between a lane and the group under it.
 
 Three properties of §7.3 carry the rest of this section.
 
-1. **A request length only orders.** Steps 1–3 decide who is a candidate, what
-   `V` is, and who is eligible. They read `q` only through `q > 0`, and the
-   length enters at step 4 alone. So no length, true or false, can make an
-   ineligible child eligible.
-2. **Shares are in committed service, and committed service ends at the actual
-   cost.** A grant advances `ev` by what was delegated. `complete` extends the
-   overrun down the whole captured path, or releases the remainder up it. Once a
-   lease completes, every edge on its path has been charged the lease's actual
-   cost. The long-run share at every level is therefore independent of what any
-   length said. A length decides who goes *first*, never who gets *how much*.
+1. **Within one pick, a length only orders.** Steps 1–3 decide who is a
+   candidate, what `V` is, and who is eligible. They read `q` only through
+   `q > 0`, and the length enters at step 4 alone. So no length, true or false,
+   can make an ineligible child eligible *at that pick*. What a length does to
+   later picks depends on whether it also sets the amount delegated, which is
+   what separates the three options below.
+2. **Shares follow committed service, which usually ends at the actual cost.** A
+   grant advances `ev` by what was delegated. `complete` extends the overrun down
+   the captured path, or releases the remainder up it, so a lease completed on a
+   fully ACTIVE path leaves every edge charged its actual cost. Three places break
+   that, and all three exist under slot length today:
+   - **The wake clamp.** A group that wakes while one of its leases is open is
+     clamped against a `ev` that still counts the lease's reservation rather than
+     its cost. The offset is joined with `max` and never lowered, so when the
+     lease completes, the reservation error stays: an over-reserved lease leaves
+     idle credit, an under-reserved one a permanent penalty. Whether this is a
+     leak to close is open (below).
+   - **A draining path.** When an edge of a lease's path is no longer ACTIVE, the
+     overrun is charged only on the ACTIVE prefix, and the edges below it are
+     charged the reservation.
+   - **`cancel`** charges nothing, however long the work ran.
+
+   So reservation error *can* move shares. A design that keeps the delegated
+   amount at the slot's `r` leaves every share exactly as slot length leaves it.
+   A design that changes the amount changes the size of all three effects.
 3. **A pick reads nothing above its own group.** The pick at group `A` reads
    `A`'s child edges, their gauges, the wake memory and `holdings(A)`. Delegating
    down the edge into `A` changes only that edge and `holdings(A)`. So the only tie
@@ -771,188 +786,216 @@ Three properties of §7.3 carry the rest of this section.
    `FairShareAllocator.pickChild`: it finds no pick when `holdings(A)` is zero, and
    it trims `q` to `holdings(A)`.
 
-#### Per-leaf lengths: three questions
+#### Three options, cheapest first
 
-A length per leaf, `r(ℓ)`, is the estimate of the job at the head of leaf `ℓ`'s
-queue, or the slot's `r` when that job has none. It raises three questions: what
-an interior edge's length is, how the walk delegates an amount it learns only at
-the bottom, and what stops a caller from declaring every job short.
+| | who sets the length | does it set the amount? | levels it orders | cost | reach of a forged length |
+|---|---|---|---|---|---|
+| A. a length per group, in the topology | the admin, per group | no, the amount stays `r` | every level, each edge its own | a `Topology` field, a problem kind, an engine-side map | none per call: the admin sets it |
+| B. order-only lengths per call | the caller, per head of queue | no, the amount stays `r` | the last level only | about ten lines in `acquire`, and an overload | the order of siblings under one parent, nothing else |
+| C. lengths that also set the amount | the caller, per head of queue | yes, `r(ℓ)` | the last level, or every level | a pick-first descent, a `pickChild` overload, L2's watermark | every ancestor of the forger, against its cousins at every level |
 
-**An interior edge's length.** By property 2, no choice of interior length moves
-any share. It is a latency heuristic, so the cheapest acceptable one wins.
+**A and B share one mechanism.** The engine sets each edge's
+`maximumUsefulGrant` in the eligible demand to `min(length, r)`, keeps delegating
+`reservation` down the path, and relaxes the descent's check that each grant
+equals the reservation: the grant's amount now orders, and the delegation is
+always `r`. Taking `min(length, r)` explicitly, rather than relying on the
+holdings trim, keeps a one-level tree, where the root holds the whole supply,
+ordering the same way as a deep one. A length above `r` orders exactly like an
+unknown one.
+
+Because the amount is still `r`, every charge, every in-flight undercharge and
+every effect in property 2 is exactly the slot-length one. A length changes only
+which eligible candidate goes first. A forged short length therefore buys one
+thing: earlier picks among co-eligible siblings. It wins no extra picks over a
+window, since each pick still advances its `ev` by `r/w` and eligibility still
+gates it.
+
+**A: a length per group, in the topology.** These are the "latency classes" §7.3
+names. An admin declares that the requests of `interactive` are short and those of
+`batch` long, and that holds even when no single job's length is known, which is
+the common case. Each node of the topology carries an optional length, and runtime
+children inherit their marker's. The length lives in the engine, read from the
+applied topology, and not in the ledger or an edge's id. So changing it is not a
+reweight: no new edge, no R1 re-home, no history reset, and `Topology.diff` emits
+no step for it. It costs a field on public data classes (an ABI change, additive
+in source), a `TopologyProblem.Kind` for an invalid length, and `lastApplied`
+carrying it through Task P.
+
+**B: order-only lengths per call.** The caller passes the head-of-queue length of
+each leaf that has one. It orders siblings at the last level only, since an
+interior edge has no single head. It is the per-call refinement of A, for a
+caller that does have estimates and finds a group too coarse.
+
+**C: lengths that also set the amount.** The lease reserves `r(ℓ)` instead of
+`r`, so in-flight accounting tracks an honest estimate. It is the expensive
+option, and it buys little: a caller can already make a lease's reservation honest
+by reserving `r` and extending to its estimate straight after the pick. Three
+questions decide its shape.
+
+*An interior edge's length.*
 
 | | interior edge's length | cost per acquire | what it gets wrong |
 |---|---|---|---|
 | I1 | the slot's `r`; only the last level reads a leaf's own | one lookup per bottom-level candidate; no state | a short job in one subtree cannot overtake a long one in another at an interior level |
-| I2 | the minimum over the subtree's eligible terminal leaves, with unknown read as the slot's `r` | folded into the lineage lift every acquire already runs, propagating upward and stopping where an ancestor's minimum is already lower. An incremental lift (#3199) would need an ordered multiset per group, `O(depth · log n)` per change of a head | the subtree is ordered as its shortest job, but descends to whichever leaf its own pick chooses, which may be its longest. One short head, honest or forged, lowers every ancestor's deadline |
+| I2 | the minimum over the subtree's eligible terminal leaves, with unknown read as the slot's `r` | folded into the lineage lift every acquire already runs, stopping where an ancestor's minimum is already lower. An incremental lift (#3199) would need an ordered multiset per group, `O(depth · log n)` per change of a head | the subtree is ordered as its shortest job, but descends to whichever leaf its own pick chooses, which may be its longest |
 | I3 | the length of the leaf the subtree would itself pick | a speculative descent into every eligible subtree, with a non-mutating seat and wake step at every group off the path: `O(eligible edges)`, and a second copy of §7.2's one-front rule | nothing, at a price the reference scale cannot pay: 5,000 active and 50,000 retired edges, about 8.5 ms per JVM acquire before this cost |
 
 A sum or a mean over the subtree has no reading as "the length of the next
-request", and is not a candidate.
+request", and is not a candidate. I1 already separates ordering from amount at
+interior levels: an interior edge orders by `r` and is charged `r(ℓ)`.
 
-**Order versus amount.** With per-leaf lengths, the amount is `r(ℓ)` for the leaf
-`ℓ` the walk ends at. Delegating on the way down is then impossible: the root
-would send an amount before it knows `ℓ`. There are three ways out.
+*Order versus amount.* The amount is `r(ℓ)` for the leaf `ℓ` the walk ends at, so
+the root would have to delegate before it knows `ℓ`.
 
 ```text
 interleaved (today)                 pick first, delegate after
-root  pick A, delegate r            root  pick A   (holdings(A) + incoming)
-A     pick ℓ, delegate r            A     pick ℓ   → r(ℓ) is now known
-                                    delegate r(ℓ) along root → A → ℓ, once
+root  pick A, delegate r            root  pick A   (ordered by r)
+A     pick ℓ, delegate r            A     pick ℓ   (ordered by r(ℓ), untrimmed)
+                                    check supply; delegate r(ℓ) root → A → ℓ, once
 ```
 
-- **Pick first, delegate after.** Walk down making picks only. Tell each pick at
-  an interior group the amount that will arrive from above, so the holdings gate
-  of property 3 does not refuse a group that is not funded yet. Then delegate
-  `r(ℓ)` down the whole path once. By property 3 these are the picks the
-  interleaved walk makes, so under slot length this is a refactor with no change
-  in behaviour, which a differential test pins. Every level still hands down
-  exactly what it receives, so no earmark appears.
+- **Pick first, delegate after.** Walk down making picks only, then delegate
+  `r(ℓ)` down the whole path once. By property 3 the interior picks are the ones
+  the interleaved walk makes. The bottom pick cannot be told "the amount arriving
+  from above", because that amount is the bottom pick's own result. It must run
+  without the holdings trim, or with a bound of the largest eligible length, or a
+  length above the bound is silently trimmed to it. The root's supply is checked
+  after the walk.
 - **Two-phase.** A read-only descent computes the path, then a commit pass seats
   and delegates. The read-only pass must still know where a newborn would be
   seated, since a seat moves `ev`. So it needs a non-mutating copy of the seat
   and wake step: a second implementation of the rule §7.2 says has one.
 - **Interleave and correct.** Delegate the interior's length on the way down,
   then top up or release the difference at the leaf. Interior groups then hold
-  leftover units between steps, which is the earmark L1 avoided. L3's re-home
-  would then have real interior holdings to move.
+  leftover units between steps, which is the earmark L1 avoided.
 
-Pick first changes one public contract. `FairShareAllocator.pickChild` gains the
-incoming amount, as an overload so the ABI keeps the old one. `HeddlePolicy` does
-not change: §7.3 step 1 already trims each candidate's `q` by that candidate's own
-`maximumUsefulGrant`, so a length per candidate is already inside the policy's
-contract. The descent's check that each grant equals the reservation becomes one
-delegation along the path. That is also the shape #3199's "one `piece` per
-operation" asks for, a delegation of several edges in one patch, so pick first
-earns its keep without per-leaf lengths.
+*Honesty.* Let `U(e)` be the in-flight undercharge under edge `e`: the sum, over
+the open leases below `e`, of how far each has run beyond what is reserved for it.
+Each lease holds one slot, so a caller declaring `ε` for jobs of cost `C` has
+`U(e) ≤ K·(C − ε)` with `K` slots. Under C that amount is missing from **every**
+ancestor of the forger, so each ancestor's `ev` advances by `ε/w` rather than `r/w`
+per pick, and stays eligible longer against its cousins at every level, not only
+among siblings. At `complete` the overrun is charged along the path, and the
+ancestors become ineligible until the cousins catch up. Slot length has the same
+effect for every job that runs past `r`, with `ε` replaced by `r`. Extending a
+lease in quanta as it runs would cap `U`, but that is caller discipline, not
+something the engine can enforce.
 
-**Honesty.** By property 1, a short declaration cannot buy eligibility. It buys
-order among the eligible, and a smaller charge while the lease is in flight. Let
-`U(e)` be the in-flight undercharge under edge `e`: the sum, over the open leases
-below `e`, of how far each has run beyond what is reserved for it. Every extend
-and every overrun runs down the whole captured path, so `U` adds up the tree, and
-an overrun lands on every ancestor at the moment it lands on the leaf. So:
+C also changes L2. The top-up watermark,
+`totalSlots × defaultReservation × lowWatermarkSlots`, assumes each slot reserves
+about `defaultReservation`, which per-call amounts no longer promise.
+`SupplyExhausted` is then decided after the picks, so a supply refusal joins the
+failed acquires whose wake memory may advance.
 
-- While leases are in flight, an edge can sit ahead of its fair position by
-  `U(e)/w(e)`, on top of the bound that holds once they complete. Say a caller declares `ε`
-  for jobs that cost `C`, while its edge is eligible with headroom
-  `h = V − ev`. It can win on the order of `h·w/ε` picks before it is
-  ineligible. The declared length converts headroom into slots, amplified by
-  `C/ε`.
-- At `complete` the overrun is charged, and `ev` jumps by the excess. The edge is
-  then ineligible until its siblings catch up. Over a window long enough for its
-  leases to complete, the share error is back to the slot-length bound, counted
-  in actual cost.
-- Slot length has the same effect in flight, for every job that runs past the
-  slot's `r`, with amplification `C/r` rather than `C/ε`. Per-leaf lengths make it
-  larger only for a caller who declares below the slot's length.
-- Two levers bound it, and neither reads history. Extending a lease in renewable
-  quanta as it runs (R2) caps each lease's share of `U` at one extension. A floor
-  on a declared length caps the amplification at `C/floor`; it clamps rather than
-  rejects, because a length is a quantity. Under I1 a forged length reorders only
-  the siblings under one parent. Under I2 it lowers every ancestor's deadline,
-  which is a second reason to prefer I1.
-
-One incentive follows. Declaring a length longer than the slot's `r` only delays
-the job, so a rational caller declares only shorter lengths and leaves long jobs
-unknown. Per-leaf lengths can therefore say only "shorter than the default". That
-makes `defaultReservation` the length an unknown job is *ordered* by, as well as
-the amount it reserves.
+One incentive holds for B and C alike. Declaring a length longer than `r` only
+delays the job, so a rational caller declares only shorter lengths and leaves long
+jobs unknown. A per-call length can therefore say only "shorter than the default".
+A, set by the admin, has no such incentive.
 
 These bounds come from the arithmetic and are not measured. The prototype under
-the Decision below has an arm for each.
+the Decision has an arm for each.
 
 #### What would change, and what would not
 
-| invariant | under per-leaf lengths |
-|---|---|
-| conservation: `minted = Σ holdings + spent`, and `Σ leaf holdings = Σ open reserved` | Unchanged. One amount still runs down the whole path, now `r(ℓ)`. |
-| every operation is all-or-nothing, through one swap | Unchanged, with one consequence. The amount is known only after the walk, so `SupplyExhausted` is decided after the picks. A supply refusal then joins the failed acquires whose wake memory may advance. A top-up (L2) sized to the largest eligible length keeps that rare. |
-| one leaf predicate, with demand lifted by the descent's terminal predicate | Unchanged. A length is read only at the terminal the walk stops at. I2's minimum is taken over the same terminals the lift uses. A length keyed on a group that is not a terminal is never read. |
-| `previewPicks` equals the acquires it previews | Unchanged: it runs real acquires on a scratch engine. Its per-leaf overload pops the head of the picked leaf's queue. |
-| a pick never reads `startedAt` | Unchanged. A length is a duration the caller declares, and a pick reads it. `startedAt` is an instant, and nothing reads it. |
-| `complete` charges the actual cost | Unchanged, and now what keeps declarations honest as well as groups fair. |
-| new: no lengths, no change | With no lengths supplied, every acquire makes the slot-length pick: a differential property over Task C's workload, pick for pick. |
-| new: a length only orders | On a given state, permuting the declared lengths never changes that pick's eligible set: a property over `HeddlePolicy.pick`. |
+| invariant | under A and B | under C |
+|---|---|---|
+| conservation: `minted = Σ holdings + spent`, and `Σ leaf holdings = Σ open reserved` | unchanged; the amount is `r` | unchanged; the amount is `r(ℓ)` |
+| every operation is all-or-nothing, through one swap | unchanged | unchanged, but a supply refusal now comes after the picks and may advance wake memory |
+| one leaf predicate, with demand lifted by the descent's terminal predicate | unchanged; a length is read only at the edge into a terminal (B) or from the applied topology (A) | unchanged; I2's minimum is over the same terminals the lift uses |
+| `previewPicks` equals the acquires it previews | unchanged: it runs real acquires on a scratch engine | the same |
+| a pick never reads `startedAt` | unchanged: a length is a declared duration, `startedAt` an instant | the same |
+| `complete` charges the actual cost | unchanged, with property 2's exceptions | unchanged, and the exceptions change size |
+| new: no lengths, no change | with no lengths supplied (B), or every class length equal to `r` (A), every acquire makes the slot-length pick | the same |
+| new: a length only orders within a pick | on a given state, permuting the lengths never changes that pick's eligible set | the same, within one pick |
 
 #### API and migration
 
 Today's `reservation` already *is* the length of a leaf with no estimate, since
-no leaf has one. So the per-leaf form is an overload, not a replacement.
+no leaf has one. So the per-call form is an overload, not a replacement.
 
 ```text
 acquire(waiting, eligible, startedAt, reservation = policy.defaultReservation)
     today, unchanged: every leaf is unknown
 
 acquire(waiting, eligible, startedAt, lengths: Map<GroupId, Long>, reservation = …)
-    a length for each head that has one; a leaf absent from the map is unknown
+    B: a length for each head that has one; a leaf absent from the map is unknown
 
 previewPicks(queues: Map<GroupId, List<Long?>>, eligible, reservation = …)
     each leaf's queue, with null for unknown; each pick pops the picked leaf's head
 ```
 
-The old `acquire` delegates with an empty map, so the slot-length API stays
-compatible in source and in binary. Today's `previewPicks`, with a count per leaf
-and one reservation per pick, stays too. A length is a duration in the cost unit,
-and must be positive. `Lease.reserved` already varies per lease, and `admit`
-already takes a leaf's own reservation, so neither changes. The caller's contract
-gains one sentence: the job run on a lease is the one whose length was declared.
-
-- **Task P.** Nothing new is persisted. A length is an input to one call and
-  lands in `Lease.reserved`, which P already stores. `AllocatorMemory` is
-  untouched, and the format version does not move. If the engine corrected
-  lengths from the overruns it has seen, that would be new allocator memory, a
-  format bump and a golden snapshot. That is one reason it is not proposed.
-- **L3.** The re-home re-delegates each lease's own `reserved`, as it already
-  does. Pick first keeps "each level hands down exactly what it receives", so no
-  earmark appears for a re-home to move.
+- `lengths.keys ⊆ waiting` is required, as `eligible ⊆ waiting` is. Each length
+  must be in `1..MAX_RESERVATION`, and one out of range throws
+  `IllegalArgumentException`, exactly as an out-of-range `reservation` does. It is
+  not clamped.
+- The old `acquire` delegates with an empty map, so the slot-length API stays
+  compatible in source and in binary. Today's `previewPicks`, with a count per
+  leaf and one reservation per pick, stays too. The per-leaf `previewPicks`
+  overload restores the shape Amendment 7 first named, a list per leaf.
+- `Lease.reserved` and `admit` are unchanged under A and B. Under C,
+  `Lease.reserved` is `r(ℓ)`.
+- The caller's contract gains one sentence under B and C: the job run on a lease
+  is the one whose length was declared.
+- **Task P.** Under B and C nothing new is persisted: a length is an input to one
+  call. Under A the lengths travel in `lastApplied`. `AllocatorMemory` is
+  untouched in all three.
+- **L3.** The re-home re-delegates each lease's own `reserved`, as it already does.
+  Under A a change of length is not a reweight and re-homes nothing.
 - **E and O1.** `entitlement(leaf, …)` is a share of capacity by weight and reads
   no length. A hold reason would need one more case, "a shorter co-eligible
   request went first", once lengths reorder picks.
 
 #### Decision
 
-**Slot length is the contract** (#3200, ruled 2026-11-12). Per-leaf lengths are
-parked, with the design above as the starting point when they are reopened: I1
-with pick first, through the overload.
+**Slot length is the contract**, ruled in #3200 and recorded as Amendment 9 (#3230). A
+group's own length is parked. When it is reopened, **A is the first extension**,
+because it works when job lengths are unknown, and **B is its per-call form**.
+**C is not recommended**: its one gain, honest in-flight accounting, is already
+available by reserving `r` and extending to the estimate. **Pick first is a #3199
+matter only**: it changes no behaviour under slot length, and it is the shape
+#3199's single-patch delegation wants.
 
-- Lengths are usually unknown, and with none supplied the per-leaf design is the
-  slot design. The gain needs a workload this engine is not known to have:
-  backlogged sibling leaves, known lengths of widely varying size, and short jobs
-  whose latency matters.
-- It is exactly neutral when no lengths are supplied; when every length equals
-  the slot's; when free slots keep up with waiting leaves, so nobody waits behind
-  anybody; when each level's eligible set holds one candidate; and always for
-  long-run shares.
-- **Cost if this is wrong:** short jobs wait behind co-eligible siblings. That is
-  a latency cost, never a share cost, and the fix is additive: an overload and
-  pick first, with no format change and no break. **Cost if the opposite call
-  were wrong:** a public overload nobody feeds, a way to game picks that needs
-  documenting, and a hold reason, all kept for good.
+- It is exactly neutral when no lengths are supplied, or every class length
+  equals `r`; when free slots keep up with waiting leaves, so nobody waits behind
+  anybody; and when each level's eligible set holds one candidate. Under A and B
+  it is also neutral for long-run shares.
+- The gain needs backlogged groups whose requests differ widely in length, and
+  short work whose latency matters.
+- **Cost if this is wrong:** short work waits behind co-eligible groups. That is
+  a latency cost, never a share cost, and A and B are additive. **Cost if the
+  opposite call were wrong:** a public field and overload nobody feeds, a hold
+  reason, and under B a way to reorder siblings that needs documenting, all kept
+  for good.
 
-**Reopen when** a consumer has jobs of known length whose short-job latency
-matters under contention, and the prototype below shows the gain. **Pick first
-stands apart from this decision.** It changes no behaviour under slot length, and
-it is the shape #3199's single-patch delegation wants, so whichever lands first
-carries it.
+**Reopen** A when an admin wants one group's requests ordered as short ones. Reopen
+B when callers have per-job estimates and a group is too coarse. Either way, the
+prototype below must show the gain first.
 
 **The prototype that would settle it** is a test-only characterization in
-`:kuilt-heddle-core`'s `commonTest`, driving `pickChild` directly.
+`:kuilt-heddle-core`'s `commonTest`.
 
-- One level needs no production change, since the root holds the supply. Two
-  levels need the holdings gate out of the way: fund each interior edge with
-  `B·w` units first, so every sibling's virtual service moves by the same `B`.
-- Workloads, seeded: `N ∈ {16, 256}` backlogged leaves; `K ∈ {1, 4, 16}` slots;
-  lengths bimodal (1 and 100, nine to one) and log-uniform over 1..1000; a known
-  fraction `p ∈ {0, ¼, ½, 1}`; 10,000 steps; and an arm with intermittent waiting
-  sets.
-- Arms: slot, I1 and I2. Record, per length class, the mean and p99 wait; the
-  overall share deviation against Task C's 0.03 bar; the worst 500-step window;
-  and the peak concurrent slots per leaf.
-- The `p = 0` arm must equal slot, pick for pick. Every `p > 0` arm asserts that
-  at least one pick differed, or it measured nothing.
-- A dishonest arm: one leaf declares 1 for jobs of 100, with and without
-  extension in quanta. Record its peak slots and its window share.
+- Drivers. The slot arm is production `LocalHeddle.acquire`. The A and B arms are
+  a test copy of its descent that differs only in the eligible demand per edge.
+  Their neutral arms, B at `p = 0` and A with every class length equal to `r`,
+  are compared pick for pick against production `acquire`; a copy compared with
+  itself would be vacuous. Every arm with lengths asserts that at least one pick
+  differed, or it measured nothing.
+- The C arm needs funded interior groups: fund every interior edge under one
+  parent together, `B·w` units each, and refill all of them together whenever one
+  falls below `B·w/2`, so every sibling's virtual service moves by the same
+  amount.
+- Workloads, seeded: `N ∈ {16, 256}` backlogged leaves under two subtrees;
+  `K ∈ {1, 4, 16}` slots; slot `r = 10`; lengths bimodal (1 and 100, nine to one)
+  and log-uniform over 1..1000; a known fraction `p ∈ {0, ¼, ½, 1}`, where an
+  unknown job's actual cost is drawn from the same distribution as a known one's;
+  10,000 steps; and an arm with intermittent waiting sets and open leases, so the
+  wake clamp fires mid-lease.
+- Record, per length class, the mean and p99 wait; the overall share deviation
+  against Task C's 0.03 bar; the share deviation per reservation-error class
+  (actual cost over reserved below ½, from ½ to 2, above 2); the worst 500-step
+  window; and the peak concurrent slots per leaf.
+- A dishonest arm, two levels deep: one leaf in subtree `X` declares 1 for jobs of
+  100. Record the cousin subtree `Y`'s share and peak slots under B and under C.
 - A `LeaseScaleProbe` row with lengths on 5,000 leaves prices I2's lift.
 - Run under `allTests`, and read the targets together.
 
@@ -969,14 +1012,16 @@ carries it.
   avoided (#3229).
 - Replacing `acquire`'s waiting set with a map of lengths: breaks the public API
   for every caller that has none (#3229).
+- Clamping an out-of-range length: it throws, as `reservation` does (#3229).
 
 #### Open
 
-- If per-leaf lengths are reopened, should they reorder interior levels at all
-  (I2), or only siblings (I1)? The prototype's I1 and I2 arms decide (#3200).
-- Should an unknown job's ordering length be separate from the amount it
-  reserves, so `defaultReservation` can stay small while unknown jobs are
-  ordered as long ones? (#3200)
+- The wake clamp freezes a lease's reservation error into a permanent offset when
+  its group wakes mid-lease: idle credit when over-reserved, a penalty when
+  under-reserved. Both exist under slot length. Whether to close it, and how, is
+  being investigated separately (#3200).
+- If C is ever reopened, should lengths reorder interior levels (I2) or only
+  siblings (I1)? The prototype's I1 and I2 arms decide (#3200).
 
 ## 8. Partitions, crashes, and the fairness-error bound
 
