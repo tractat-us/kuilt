@@ -215,6 +215,16 @@ public class FairShareAllocator(
     ): Rational? = HeddlePolicy.front(policyEdges(ledger, parent, demand))
 
     /**
+     * [edge]'s effective virtual service as a pick at [parent] would read it in [ledger]: its
+     * [HeddlePolicy.virtualService] plus this allocator's stored wake clamp. `null` when [edge] is
+     * not an active child of [parent]. A diagnostic, like [virtualTime]: it observes nothing.
+     */
+    internal fun effectiveVirtualService(ledger: EntitlementLedger, parent: GroupId, edge: AttachmentId): Rational? =
+        policyEdges(ledger, parent) { Demand.NONE }
+            .firstOrNull { it.record.id == edge }
+            ?.let { HeddlePolicy.virtualService(it) + it.virtualOffset }
+
+    /**
      * Build the policy input at [parent] from [s] and run one [HeddlePolicy.pick].
      *
      * **An unseated edge is not a candidate** (issue #1752). [settleJoiners] seats every active

@@ -345,7 +345,7 @@ class LocalHeddleExplainTest {
     private val explained = listOf(root, p, q, d, r, a, b, c, e, GroupId("a/b/x"), GroupId("d/y"), GroupId("f"), GroupId("c/w"), GroupId("é/z"))
 
     private companion object {
-        const val SEEDS = 120
+        const val SEEDS = 200
         const val STEPS = 60
 
         /** One counter per [WaitExplanation.Kind], by ordinal, then the shapes that matter most. */

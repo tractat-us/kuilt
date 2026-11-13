@@ -269,36 +269,44 @@ public class LocalHeddle private constructor(
         if (eligible.isEmpty()) return AcquireOutcome.NothingEligible
         val base = ledger
         if (base.holdings(root, SELF) < reservation) return AcquireOutcome.SupplyExhausted
+        return when (val descent = descend(base, Demands.of(base, waiting, eligible, reservation), eligible, reservation)) {
+            is Descent.Refused -> AcquireOutcome.NoLiveLineage(descent.at)
+            is Descent.Reached -> {
+                ledger = descent.ledger
+                AcquireOutcome.Acquired(open(descent.leaf, descent.levels.map { it.edge }, reservation, startedAt))
+            }
+        }
+    }
 
-        val wants = Demand(targetOutstanding = UNBOUNDED_TARGET, maximumUsefulGrant = reservation)
-        // Lifted by the very predicate the descent stops on: a leaf reached through ACTIVE edges. A
-        // subtree with no such leaf is never wanted, so no pick can lead into it.
-        val waitingGroups = base.withDelegableLineages(waiting)
-        // eligible ⊆ waiting, so equal sizes mean equal sets, and the lift is shared.
-        val eligibleGroups = if (eligible.size == waiting.size) waitingGroups else base.withDelegableLineages(eligible)
-        val waitingDemand = demandOver(base, waitingGroups, wants)
-        val eligibleDemand = demandOver(base, eligibleGroups, wants)
-
+    /**
+     * The pick [acquire] makes, on [base] and this engine's allocator: from [root], one
+     * [FairShareAllocator.pickChild] per level and a delegation of [reservation] down the edge it
+     * picked, until it reaches an eligible leaf. Every step lands on a local value; [base] is not
+     * changed. Only the allocator's wake memory moves, which is why [explain] and [previewPicks] run
+     * it on a [scratch] engine.
+     */
+    private fun descend(base: EntitlementLedger, demands: Demands, eligible: Set<GroupId>, reservation: Long): Descent {
         var local = base
-        val path = ArrayList<AttachmentId>()
+        val levels = ArrayList<Level>()
         var group = root
         while (group == root || group !in eligible || !local.isLeaf(group)) {
-            val pick = allocator.pickChild(group, local, waitingDemand, eligibleDemand)
-                ?: return AcquireOutcome.NoLiveLineage(group)
+            val pick = allocator.pickChild(group, local, demands.waiting, demands.eligible) ?: return Descent.Refused(group)
             val edge = pick.grant.attachment
             check(pick.grant.amount == reservation) {
                 "picked ${edge.value} for ${pick.grant.amount}, not the reservation $reservation"
             }
-            local = checkNotNull(seatThenDelegate(pick.ledger, listOf(edge), reservation, waitingDemand)) {
+            levels += Level(group, pick.ledger, edge)
+            local = checkNotNull(seatThenDelegate(pick.ledger, listOf(edge), reservation, demands.waiting)) {
                 "the delegation of $reservation down ${edge.value}, just picked, was refused"
             }
-            path += edge
             group = checkNotNull(local.record(edge)) { "picked edge ${edge.value} has no record" }.child
         }
-
-        ledger = local
-        return AcquireOutcome.Acquired(open(group, path, reservation, startedAt))
+        return Descent.Reached(local, group, levels)
     }
+
+    /** An engine over this one's ledger with a copy of its wake memory: it picks as this one would next, and moving it moves nothing here. */
+    private fun scratch(): LocalHeddle =
+        LocalHeddle(root, policy, epoch, ledger, FairShareAllocator(SELF, policyConfig(policy), allocator.memory))
 
     /**
      * Charge work another scheduler already started at [leaf]: open a lease for it with no pick,
@@ -407,7 +415,7 @@ public class LocalHeddle private constructor(
      */
     public fun previewPicks(waiting: Map<GroupId, Int>, eligible: Set<GroupId>, reservations: List<Long>): List<GroupId> {
         require(waiting.values.all { it >= 0 }) { "a queued count must be non-negative" }
-        val scratch = LocalHeddle(root, policy, epoch, ledger, FairShareAllocator(SELF, policyConfig(policy), allocator.memory))
+        val scratch = scratch()
         val remaining = HashMap(waiting)
         val picks = ArrayList<GroupId>(reservations.size)
         for (reservation in reservations) {
@@ -422,14 +430,98 @@ public class LocalHeddle private constructor(
         return picks
     }
 
+    /**
+     * Why [leaf] is not, or is, what the next [acquire] on these same arguments picks. Changes
+     * nothing, not even the wake memory.
+     *
+     * The reasons are checked in [WaitExplanation.Kind] order, and the first that holds is the
+     * answer: [leaf] is not in [waiting], not in [eligible], cannot be reached (the same test the
+     * pick applies, so a leaf behind a closing edge or a group with an active child is
+     * [WaitExplanation.NoLiveLineage]), or the root cannot fund [reservation]. Past those, the
+     * answer is the pick itself, run on a [scratch] copy of the engine with the allocator's wake
+     * memory, so a group waking from idle is clamped here exactly as the acquire would clamp it:
+     * [WaitExplanation.WouldBePickedNext] when the pick ends at [leaf], and otherwise
+     * [WaitExplanation.BehindAtLevel] at the first group where it goes another way.
+     *
+     * @throws IllegalArgumentException as [acquire] does: [reservation] out of range, or [eligible]
+     *   not a subset of [waiting].
+     */
     public fun explain(
         leaf: GroupId,
         waiting: Set<GroupId>,
         eligible: Set<GroupId>,
         reservation: Long = policy.defaultReservation,
-    ): WaitExplanation = TODO("Task E")
+    ): WaitExplanation {
+        requireReservation("reservation", reservation)
+        require(waiting.containsAll(eligible)) { "eligible must be a subset of waiting" }
+        if (leaf !in waiting) return WaitExplanation.NotWaiting
+        if (leaf !in eligible) return WaitExplanation.NotEligible
+        val base = ledger
+        if (!base.canEndAt(leaf)) return WaitExplanation.NoLiveLineage(leaf)
+        if (base.holdings(root, SELF) < reservation) return WaitExplanation.SupplyExhausted
 
-    public fun entitlement(leaf: GroupId, waiting: Set<GroupId>, totalSlots: Long): Rational = TODO("Task E")
+        val trial = scratch()
+        val demands = Demands.of(base, waiting, eligible, reservation)
+        val descent = trial.descend(base, demands, eligible, reservation)
+        // An eligible leaf the pick can end at, with the root funded: the root's pick has a candidate
+        // in the leaf's own top edge, and every pick below goes toward an eligible leaf.
+        check(descent is Descent.Reached) { "no pick reached any leaf, though ${leaf.value} is eligible and reachable" }
+        if (descent.leaf == leaf) return WaitExplanation.WouldBePickedNext
+        val lineage = checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }
+        // Every group above the leaf on its lineage has an active child, so the pick cannot have
+        // stopped there: it left the lineage at some level.
+        val level = checkNotNull(lineage.indices.firstOrNull { it >= descent.levels.size || descent.levels[it].edge != lineage[it] }) {
+            "the pick went past ${leaf.value}, an eligible leaf on its own path"
+        }
+        check(level < descent.levels.size) { "the pick stopped above ${leaf.value}, at a group with an active child" }
+        val at = descent.levels[level]
+        // The trial's wake memory has moved on below this level, but each level writes only its own
+        // children's entries, so what it holds for this level's children is what this level read.
+        return WaitExplanation.BehindAtLevel(
+            parent = at.parent,
+            nextChild = checkNotNull(base.record(at.edge)) { "picked edge ${at.edge.value} has no record" }.child,
+            leafSideVirtualService = checkNotNull(trial.allocator.effectiveVirtualService(at.seated, at.parent, lineage[level])) {
+                "${lineage[level].value} is not an active child of ${at.parent.value}"
+            },
+            front = checkNotNull(trial.allocator.virtualTime(at.seated, at.parent, demands.waiting)) {
+                "${at.parent.value} has no active children, though a pick was made there"
+            },
+        )
+    }
+
+    /**
+     * [leaf]'s fair share of [totalSlots] slots right now, as an exact rational: its weight's share
+     * among the siblings competing beside it, times its parent's share among the siblings beside
+     * that, up to the root, times [totalSlots]. This is the share an idealised fair scheduler
+     * (generalised processor sharing) would give it while [waiting] stays as it is.
+     *
+     * "Competing" is the set a pick takes its front over: an ACTIVE child counts when a leaf of
+     * [waiting] that a pick could end at lies under it. So work no descent can reach, behind a
+     * closing edge or at a group with an active child, competes for nothing and is owed nothing,
+     * and it takes nothing from its siblings' shares. `0` when [leaf] is not in [waiting], or is not
+     * a leaf a pick could end at.
+     *
+     * A share, not a promise: the slots a leaf gets over a run track it only while the waiting set
+     * holds still, and a leaf that is waiting but rarely eligible gets less.
+     *
+     * @throws IllegalArgumentException when [totalSlots] is negative.
+     * @throws ArithmeticException when the exact share does not fit in `Long` numerators.
+     */
+    public fun entitlement(leaf: GroupId, waiting: Set<GroupId>, totalSlots: Long): Rational {
+        require(totalSlots >= 0L) { "totalSlots must be non-negative, was $totalSlots" }
+        val base = ledger
+        if (leaf !in waiting || !base.canEndAt(leaf)) return Rational.ZERO
+        val competing = base.withDelegableLineages(waiting)
+        var share = Rational.of(totalSlots)
+        for (edge in checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }) {
+            val record = checkNotNull(base.record(edge)) { "lineage edge ${edge.value} has no record" }
+            val competingWeight = base.activeChildren(record.parent)
+                .mapNotNull { base.record(it.attachment)?.takeIf { sibling -> sibling.child in competing } }
+                .fold(Rational.ZERO) { sum, sibling -> sum + sibling.weight.asRational() }
+            share = share * record.weight.asRational() / competingWeight
+        }
+        return share
+    }
 
     /**
      * Replace the ledger with [transform] of it: the test seam for a topology change while leases
@@ -545,6 +637,35 @@ public class LocalHeddle private constructor(
     /** An open lease and the path it was delegated down, which every later charge follows. */
     private data class OpenLease(val lease: Lease, val path: List<AttachmentId>)
 
+    /**
+     * The two demand views one pick reads, each lifted by the very predicate the descent stops on:
+     * a leaf reached through ACTIVE edges ([EntitlementLedger.withDelegableLineages]). A subtree
+     * with no such leaf is never wanted, so no pick can lead into it.
+     */
+    private class Demands(val waiting: (AttachmentId) -> Demand, val eligible: (AttachmentId) -> Demand) {
+        companion object {
+            fun of(base: EntitlementLedger, waiting: Set<GroupId>, eligible: Set<GroupId>, reservation: Long): Demands {
+                val wants = Demand(targetOutstanding = UNBOUNDED_TARGET, maximumUsefulGrant = reservation)
+                val waitingGroups = base.withDelegableLineages(waiting)
+                // eligible ⊆ waiting, so equal sizes mean equal sets, and the lift is shared.
+                val eligibleGroups = if (eligible.size == waiting.size) waitingGroups else base.withDelegableLineages(eligible)
+                return Demands(demandOver(base, waitingGroups, wants), demandOver(base, eligibleGroups, wants))
+            }
+        }
+    }
+
+    /** What [descend] did. */
+    private sealed interface Descent {
+        /** It ended at [leaf], with [ledger] the delegated result and [levels] each pick on the way. */
+        class Reached(val ledger: EntitlementLedger, val leaf: GroupId, val levels: List<Level>) : Descent
+
+        /** No pick could be made at [at]. */
+        class Refused(val at: GroupId) : Descent
+    }
+
+    /** One level of a [Descent]: the pick at [parent] chose [edge], on [seated], the ledger with [parent]'s children seated. */
+    private class Level(val parent: GroupId, val seated: EntitlementLedger, val edge: AttachmentId)
+
     public companion object {
         /** The one writer. Internal: a consumer never needs to name it. */
         internal val SELF: ReplicaId = ReplicaId("local")
@@ -576,6 +697,14 @@ public class LocalHeddle private constructor(
         /** The index of the first edge of [path] that is not ACTIVE, or `null` when every edge is. */
         private fun EntitlementLedger.firstNotActiveIndex(path: List<AttachmentId>): Int? =
             path.indexOfFirst { lifecycle(it) != Lifecycle.ACTIVE }.takeIf { it >= 0 }
+
+        /**
+         * Whether a pick can end at [group]: not the root, a leaf, and reached from the root through
+         * ACTIVE edges only. The descent's own terminal test, through the same lift.
+         */
+        private fun EntitlementLedger.canEndAt(group: GroupId): Boolean = group in withDelegableLineages(listOf(group))
+
+        private fun Weight.asRational(): Rational = Rational.of(numerator, denominator)
 
         /** The first edge of [path] that is not ACTIVE, or `null` when every edge is. */
         private fun EntitlementLedger.firstNotActive(path: List<AttachmentId>): AttachmentId? =
