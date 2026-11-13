@@ -111,15 +111,18 @@ public value class DidKey internal constructor(
  * The provider's key for [point], or `null` when the point is not on P-256 or the provider refuses it.
  *
  * The one path from a compressed point to a provider key: [DidKey.parse] and [DidKey.verify] both
- * come through here, so the on-curve check cannot drop out of either. It runs before the provider
- * sees the point, because the JDK provider would accept an off-curve one (#3201). A provider that
- * cannot run here at all still throws [IllegalStateException] from [algorithms].
+ * come through here, so the on-curve check cannot drop out of either. The provider never sees the
+ * compressed form: [decompress] checks the point and computes `y` in common code, and the provider
+ * imports the 65-byte uncompressed point. That form imports in Safari, whose WebCrypto refuses the
+ * compressed one (#3232), and the check keeps an off-curve point from the JDK decoder, which would
+ * accept it (#3201). A provider that cannot run here at all still throws [IllegalStateException]
+ * from [algorithms].
  */
 internal suspend fun decodeOnCurve(point: ByteArray): ECDSA.PublicKey? {
-    if (!isOnCurve(point)) return null
+    val uncompressed = decompress(point) ?: return null
     val ecdsa = algorithms().ecdsa
     return try {
-        ecdsa.publicKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PublicKey.Format.RAW.Compressed, point)
+        ecdsa.publicKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PublicKey.Format.RAW, uncompressed)
     } catch (e: CancellationException) {
         currentCoroutineContext().ensureActive()
         null
