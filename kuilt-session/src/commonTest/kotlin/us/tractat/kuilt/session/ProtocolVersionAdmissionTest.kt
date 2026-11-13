@@ -126,11 +126,15 @@ class ProtocolVersionAdmissionTest {
         }
 
     /**
-     * A v2 joiner, sending exactly what a v2 build sends (a version of 2, no key, no nonce), is told
+     * A v2 joiner, sending the bytes a v2 build sends (a version of 2, no key, no nonce), is told
      * [RejectCode.ProtocolMismatch] (#3210). It is not dropped: the Hello still decodes, because the
      * key and nonce are optional on the wire, so the gate reads its version and answers. Were either
      * field required, the decode would fail, the host would say nothing, and the wait below would
      * time out.
+     *
+     * The frame is [GOLDEN_V2_HELLO_HEX], captured from the v2 encoder, not a Hello this build
+     * encodes: a v2 peer does not run this build's encoder, and an encoder change (one that writes
+     * an explicit null, say) would otherwise change the sender along with the receiver.
      */
     @Test
     fun `a v2 joiner is refused with ProtocolMismatch`() =
@@ -139,9 +143,7 @@ class ProtocolVersionAdmissionTest {
             val host = factory(loom, backgroundScope).host(Pattern("HostA"), memberName = "HostA")
 
             val v2Seam = loom.join(InMemoryTag("Bob"))
-            v2Seam.broadcast(
-                AdmitMessage.encode(AdmitMessage.Hello(displayName = "Bob", sessionId = "session-bob", protocolVersion = 2)),
-            )
+            v2Seam.broadcast(GOLDEN_V2_HELLO_HEX.chunked(2).map { it.toInt(16).toByte() }.toByteArray())
             val reject = withTimeoutOrNull(5.seconds) { firstReject(v2Seam) }
 
             assertAll(

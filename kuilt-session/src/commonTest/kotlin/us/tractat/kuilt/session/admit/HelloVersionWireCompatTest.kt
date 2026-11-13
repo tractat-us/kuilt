@@ -1,5 +1,6 @@
 package us.tractat.kuilt.session.admit
 
+import us.tractat.kuilt.session.GOLDEN_V2_HELLO_HEX
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -68,8 +69,7 @@ class HelloVersionWireCompatTest {
      * a v2 joiner sends, captured from the encoder **before** v3 added the device key and the joiner
      * nonce (#3210).
      */
-    private val goldenV2Hello =
-        "619f6568656c6c6fbf6b646973706c61794e616d65634164616973657373696f6e496463732d316a746172676574526f6f6d66726f6f6d2d376f70726f746f636f6c56657273696f6e02ffff"
+    private val goldenV2Hello = GOLDEN_V2_HELLO_HEX
 
     /**
      * The capture receipt for [goldenV2Hello]: a Hello with no key and no nonce still encodes to the
