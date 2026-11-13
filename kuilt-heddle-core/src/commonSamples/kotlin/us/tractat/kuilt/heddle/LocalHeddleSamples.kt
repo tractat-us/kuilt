@@ -144,5 +144,158 @@ internal fun sampleLocalReload() {
     check(heddle.apply(after, generation = 1L).refusals.isEmpty())
 }
 
+/**
+ * One build farm, start to finish: the worked example the guide's fair-share pages quote in order.
+ * Two teams share four build agents three to one, and every claim those pages make about them is a
+ * `check` here, so the pages cannot drift from what the engine does.
+ */
+@Suppress("unused")
+internal fun sampleBuildFarm() {
+    // Two teams share the farm's build agents. Web gets three parts to mobile's one.
+    val farm = draft("farm") {
+        group("web", Weight.of(3)) { lane("builds") }
+        group("mobile") { lane("builds") }
+    }
+    val web = farm.groupId("web", "builds")
+    val mobile = farm.groupId("mobile", "builds")
+    // A build takes about 3 minutes, so a lease reserves 3 when the caller knows no better.
+    val policy = LocalPolicy(defaultReservation = 3L)
+    // Load the tree into an engine. Lease ids it hands out carry the epoch, 0 here.
+    val heddle = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+
+    // Nothing to hand out until the engine knows how many agents there are.
+    val both = setOf(web, mobile)
+    check(heddle.acquire(waiting = both, eligible = both, startedAt = 0L) == AcquireOutcome.SupplyExhausted)
+    heddle.reconcileCapacity(totalSlots = 4L)
+
+    // One build: lease a slot, run it, and charge the minutes it took.
+    fun build(waiting: Set<GroupId>, startedAt: Long, minutes: Long = 3L): GroupId {
+        val out = heddle.acquire(waiting, eligible = waiting, startedAt = startedAt)
+        check(out is AcquireOutcome.Acquired)
+        check(heddle.complete(out.lease.id, actualCost = minutes) is LeaseOutcome.Done)
+        return out.lease.leaf
+    }
+
+    // Ask who goes next without changing anything, then run the first eight builds.
+    val firstEight = listOf(web, mobile, web, web, web, mobile, web, web)
+    check(heddle.previewPicks(mapOf(web to 8, mobile to 8), both, List(8) { 3L }) == firstEight)
+    check((0 until 8).map { build(both, startedAt = it * 3L) } == firstEight)
+
+    // Mobile is waiting and level with web, so it loses the ninth pick on its deadline.
+    check(
+        heddle.explain(mobile, waiting = both, eligible = both) ==
+            WaitExplanation.BehindAtLevel(
+                parent = farm.groupId(),
+                nextChild = farm.groupId("web"),
+                leafSideVirtualService = Rational.of(6L),
+                front = Rational.of(6L),
+                eligibleFront = Rational.of(6L),
+            ),
+    )
+    check(heddle.explain(web, waiting = both, eligible = both) == WaitExplanation.WouldBePickedNext)
+    // Of four agents, web is owed three and mobile one.
+    check(heddle.entitlement(web, waiting = both, totalSlots = 4L) == Rational.of(3L))
+    check(heddle.entitlement(mobile, waiting = both, totalSlots = 4L) == Rational.ONE)
+
+    // The ninth build is web's, and it runs 9 minutes against its 3-minute estimate.
+    val ninth = heddle.acquire(both, both, startedAt = 24L)
+    check(ninth is AcquireOutcome.Acquired && ninth.lease.leaf == web)
+    check(heddle.complete(ninth.lease.id, actualCost = 9L) == LeaseOutcome.Done(charged = 9L, overrun = 6L))
+    // All nine minutes count: web is now past the line, so mobile goes next.
+    check(
+        heddle.explain(web, waiting = both, eligible = both) ==
+            WaitExplanation.BehindAtLevel(
+                parent = farm.groupId(),
+                nextChild = farm.groupId("mobile"),
+                leafSideVirtualService = Rational.of(9L),
+                front = Rational.of(33L, 4L),
+                eligibleFront = Rational.of(33L, 4L),
+            ),
+    )
+
+    // Mobile's queue empties, and web runs twelve builds alone.
+    check((0 until 12).map { build(setOf(web), startedAt = 30L + it * 3L) }.all { it == web })
+    // Mobile comes back level with web, not owed the twelve builds it sat out.
+    val returned = heddle.explain(mobile, waiting = both, eligible = both)
+    check(returned is WaitExplanation.BehindAtLevel && returned.leafSideVirtualService == Rational.of(21L))
+    check(returned.front == Rational.of(21L))
+    check((0 until 8).map { build(both, startedAt = 66L + it * 3L) } == firstEight)
+
+    // The next free agent is a Mac, which only mobile builds use. Mobile's last build took
+    // 7 minutes, a better estimate than the default.
+    val estimated = heddle.acquire(waiting = both, eligible = setOf(mobile), startedAt = 90L, reservation = 7L)
+    check(estimated is AcquireOutcome.Acquired && estimated.lease.reserved == 7L)
+    // Still running at 7 minutes, it asks for 3 more, then finishes at 8.
+    check(heddle.extend(estimated.lease.id, amount = 3L) == LeaseOutcome.Done(charged = 0L, overrun = 0L))
+    check(heddle.complete(estimated.lease.id, actualCost = 8L) == LeaseOutcome.Done(charged = 8L, overrun = 0L))
+    // A build cancelled before it ran is charged nothing.
+    val cancelled = heddle.acquire(both, both, startedAt = 98L)
+    check(cancelled is AcquireOutcome.Acquired)
+    check(heddle.cancel(cancelled.lease.id) == LeaseOutcome.Done(charged = 0L, overrun = 0L))
+    // Someone started a mobile build by hand. Admit it: no pick, but it is charged like any other.
+    val byHand = heddle.admit(mobile, startedAt = 99L)
+    check(byHand is AcquireOutcome.Acquired)
+    check(heddle.complete(byHand.lease.id, actualCost = 4L) == LeaseOutcome.Done(charged = 4L, overrun = 1L))
+
+    // A web build is running when the admin saves a new tree: web drops to two parts, and a new
+    // group shares one part among contributors' forks, which the program names as they open.
+    val running = heddle.acquire(setOf(web), setOf(web), startedAt = 100L)
+    check(running is AcquireOutcome.Acquired)
+    val grown = draft("farm") {
+        group("web", Weight.of(2)) { lane("builds") }
+        group("mobile") { lane("builds") }
+        group("forks") { runtimeChildren() }
+    }
+    check(heddle.apply(grown, generation = 1L).refusals.isEmpty())
+    // The running build moved onto web's new weight, and finishes as if nothing happened.
+    check(heddle.complete(running.lease.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+
+    // A contributor opens a fork. Attach it, and it can be leased like any lane.
+    check(heddle.attachRuntimeChild(listOf("forks"), "ana", generation = 2L).refusals.isEmpty())
+    val ana = grown.runtimeChildId(listOf("forks"), "ana")
+    val forkBuild = heddle.acquire(setOf(ana), setOf(ana), startedAt = 103L)
+    check(forkBuild is AcquireOutcome.Acquired && forkBuild.lease.leaf == ana)
+    // The fork closes while its build runs. It takes no new builds, and waits for this one.
+    val closing = heddle.detachRuntimeChild(listOf("forks"), "ana").refusals.single()
+    check(closing is StepRefusal.Draining && closing.child == ana && closing.blockingLeases == listOf(forkBuild.lease))
+    check(heddle.acquire(setOf(ana), setOf(ana), startedAt = 104L) is AcquireOutcome.NoLiveLineage)
+    check(heddle.complete(forkBuild.lease.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    // Its last build is done, so the same detach now finishes.
+    check(heddle.detachRuntimeChild(listOf("forks"), "ana").refusals.isEmpty())
+
+    // Two builds are running when the agent host restarts. It comes back running only one of
+    // them, and one build the engine never leased.
+    val kept = (heddle.acquire(both, both, startedAt = 110L) as AcquireOutcome.Acquired).lease
+    val lost = (heddle.acquire(both, both, startedAt = 111L) as AcquireOutcome.Acquired).lease
+    val stranger = LeaseId(epoch = 0L, seq = 999L)
+    val found = heddle.reconcileLeases(live = setOf(kept.id, stranger), now = 125L)
+    check(found.unknown == listOf(stranger))
+    val orphan = found.orphaned.single()
+    check(orphan.lease == lost && orphan.elapsed == 14L && orphan.granted == 3L)
+    // It ran 14 minutes on a 3-minute lease, which a lost build cannot prove: charge the 3.
+    check(heddle.complete(orphan.lease.id, orphan.defaultSettlement) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    // Settled once, it is gone: a second settlement changes nothing.
+    check(heddle.complete(orphan.lease.id, actualCost = 14L) == LeaseOutcome.Unknown)
+
+    // Now the engine's own program restarts, with `kept` still running. Under your scheduling
+    // lock, take a snapshot, then encode it and store the text exactly as it comes.
+    val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
+
+    // After the restart, decode it and restore under a higher epoch: keep a boot counter, raise it.
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored && decoded.snapshot.epoch == 0L)
+    val restored = LocalHeddle.restore(decoded.snapshot, policy, epoch = 1L)
+    // It would pick exactly as the old engine would have.
+    val ahead = mapOf(web to 8, mobile to 8)
+    check(restored.previewPicks(ahead, both, List(8) { 3L }) == heddle.previewPicks(ahead, both, List(8) { 3L }))
+    // The build that was running finishes on the new engine, charged as it would have been.
+    check(restored.complete(kept.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    // A lease settled before the restart is named as one from an older epoch.
+    check(restored.complete(lost.id, actualCost = 3L) == LeaseOutcome.Stale(currentEpoch = 1L))
+    // The agent count came back too, so it leases at once, and new ids carry the new epoch.
+    val next = restored.acquire(both, both, startedAt = 130L)
+    check(next is AcquireOutcome.Acquired && next.lease.id.epoch == 1L)
+}
+
 /** Two lanes under `pool`, `heavy` at weight 2 beside `light`. */
 private fun twoLanes(): Topology = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light")))

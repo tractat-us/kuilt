@@ -51,6 +51,10 @@ Creating more allowance or changing the team structure needs an agreed decision.
 budget, the queue, and a change of team. It explains what a lost connection
 can delay and why a missing device's share cannot just be taken back.
 
+Is everything in one program, with no network at all?
+[Fair share in one program](heddle-local.md) shares a build farm's agents
+between two teams, one build at a time.
+
 [Follow a Warp job](warp-jobs.md) to see how a team label connects a photo
 to its allowance. Automatic recovery of a crashed
 device's budget is still future work.

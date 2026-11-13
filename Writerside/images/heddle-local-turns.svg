@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 250" role="img" aria-labelledby="title desc">
+  <title id="title">The first eight builds, and the eight after a quiet spell</title>
+  <desc id="desc">The first eight builds go web, mobile, web, web, web, mobile, web, web: six to two. Mobile then sits out while web runs twelve builds alone. When mobile returns, the next eight builds follow the same pattern, rather than giving mobile a burst of catch-up turns.</desc>
+  <rect width="800" height="250" rx="16" fill="#111827"/>
+  <g font-family="system-ui, sans-serif" fill="#cbd5e1" font-size="15">
+    <text x="32" y="44">Builds 1 to 8</text>
+    <text x="32" y="174">After mobile's quiet spell</text>
+    <text x="32" y="130">Mobile idle: web runs 12 builds alone</text>
+  </g>
+  <g font-family="system-ui, sans-serif" text-anchor="middle" font-size="16">
+    <g transform="translate(32 56)">
+      <rect x="0" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="40" y="28" fill="#f1f5f9">web</text>
+      <rect x="92" width="80" height="44" rx="8" fill="#713f12"/><text x="132" y="28" fill="#f1f5f9">mobile</text>
+      <rect x="184" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="224" y="28" fill="#f1f5f9">web</text>
+      <rect x="276" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="316" y="28" fill="#f1f5f9">web</text>
+      <rect x="368" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="408" y="28" fill="#f1f5f9">web</text>
+      <rect x="460" width="80" height="44" rx="8" fill="#713f12"/><text x="500" y="28" fill="#f1f5f9">mobile</text>
+      <rect x="552" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="592" y="28" fill="#f1f5f9">web</text>
+      <rect x="644" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="684" y="28" fill="#f1f5f9">web</text>
+    </g>
+    <g transform="translate(32 186)">
+      <rect x="0" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="40" y="28" fill="#f1f5f9">web</text>
+      <rect x="92" width="80" height="44" rx="8" fill="#713f12"/><text x="132" y="28" fill="#f1f5f9">mobile</text>
+      <rect x="184" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="224" y="28" fill="#f1f5f9">web</text>
+      <rect x="276" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="316" y="28" fill="#f1f5f9">web</text>
+      <rect x="368" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="408" y="28" fill="#f1f5f9">web</text>
+      <rect x="460" width="80" height="44" rx="8" fill="#713f12"/><text x="500" y="28" fill="#f1f5f9">mobile</text>
+      <rect x="552" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="592" y="28" fill="#f1f5f9">web</text>
+      <rect x="644" width="80" height="44" rx="8" fill="#1e3a8a"/><text x="684" y="28" fill="#f1f5f9">web</text>
+    </g>
+  </g>
+  <path d="M32 140 H756" stroke="#475569" stroke-dasharray="6 6"/>
+</svg>
