@@ -205,6 +205,8 @@ jobs:
       - name: Open or reuse a tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job checks nothing out, so gh cannot read the repository from a .git directory.
+          GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
