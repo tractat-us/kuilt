@@ -379,8 +379,8 @@ jobs:
   # Idempotent by exact title; best-effort — the failed jobs are the signal
   # that matters, so the alert never fails the run further. Scheduled runs
   # only: a red workflow_dispatch on a topic branch is the dispatcher's
-  # business, not a main-lane breakage. Its own job, so a red `apple` and a
-  # red `abi` both raise it.
+  # business, not a main-lane breakage. Its own job, so a red `apple`, a red
+  # `abi` and a red `webkit` each raise it.
   alert:
     needs: [apple, abi, webkit]
     if: ${{ failure() && github.event_name == 'schedule' }}
@@ -405,20 +405,22 @@ jobs:
           set -eu
           TITLE="apple-nightly failing on main"
           LABEL="apple-nightly-red"
-          BODY="The Apple K/N nightly lane (\`apple-nightly.yml\`) failed.
+          BODY="A job in the macOS nightly workflow (\`apple-nightly.yml\`) failed. The job list below says which.
 
           - Failing run: ${RUN_URL}
           - Commit: ${COMMIT_SHA}
           - Jobs: apple=${APPLE_RESULT}, abi=${ABI_RESULT}, webkit=${WEBKIT_RESULT}
 
-          This is the ONLY lane that executes the Apple K/N tests (ci-required's ubuntu build skips them), so Apple-target regressions are invisible until this is green again. Test reports are attached to the run as the \`test-reports-apple\` artifact.
+          A red \`apple\` job means the Apple K/N tests failed. This is the ONLY lane that executes them (ci-required's ubuntu build skips them), so Apple-target regressions are invisible until this is green again. Its test reports are attached to the run as the \`test-reports-apple\` artifact.
 
-          A red \`abi\` job means the public ABI on macOS no longer matches the committed dumps (#2684). The run carries the regenerated dumps as the \`abi-dumps\` artifact: unpack it over the repo root, read the diff, and commit it if the change was meant."
+          A red \`abi\` job means the public ABI on macOS no longer matches the committed dumps (#2684). The run carries the regenerated dumps as the \`abi-dumps\` artifact: unpack it over the repo root, read the diff, and commit it if the change was meant.
+
+          A red \`webkit\` job means \`:kuilt-identity\`'s wasmJs tests failed in Playwright WebKit. The likeliest cause is that the module imports a compressed P-256 point again, which Safari and WebKit refuse while every per-PR target accepts it (#3246, #3232). Its reports are in the \`test-reports-webkit\` artifact."
 
           # Best-effort label create (idempotent). Title-based search below doesn't
           # depend on it, so a failure here is tolerated.
           gh label create "$LABEL" --color B60205 \
-            --description "apple-nightly.yml is failing on main; Apple K/N regressions invisible" 2>/dev/null || true
+            --description "apple-nightly.yml is failing on main; Apple K/N, ABI or WebKit regressions invisible" 2>/dev/null || true
 
           # Find an existing OPEN issue by exact title (title-based idempotency —
           # no label dependency). Comment on it if present; otherwise open one.
