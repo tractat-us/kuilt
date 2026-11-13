@@ -66,11 +66,13 @@ internal fun decideSeat(
     require(held.values.distinctBy { it.key }.size == held.size) { "two held seats share a key: $held" }
     val byId = held[claimedId]
     val byKey = held.entries.firstOrNull { it.value.key == provenKey }
+    val admission = if (holdsValidGrant) SeatDecision.Returning else SeatDecision.Ordinary
     return when {
         byId != null && byId.key == provenKey -> SeatDecision.Restore(claimedId)
-        byId != null -> SeatDecision.KeyConflict
+        byId != null && byKey != null -> SeatDecision.KeyConflict
+        byId != null && byId.liveness == SeatLiveness.Connected -> SeatDecision.KeyConflict
+        byId != null -> SeatDecision.ReleaseAndAdmit(released = claimedId, admission = admission)
         byKey != null -> SeatDecision.RestoreUnderNewId(previous = byKey.key)
-        holdsValidGrant -> SeatDecision.Returning
-        else -> SeatDecision.Ordinary
+        else -> admission
     }
 }
