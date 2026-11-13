@@ -105,6 +105,14 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     #3252's review).** An unpaired surrogate is refused with `IllegalArgumentException` rather than
     replaced (`?` on the JVM, U+FFFD elsewhere), so a statement never signs a value other than the one
     it was given, and the signed bytes are the same on every target.
+23. **Where two rows meet, the claimed id decides, and a released seat is decided again (controller
+    ruling, 2026-11-13, #3251's review; for Iain to confirm).** When the claimed id holds a seat under
+    a *different* key while the proven key holds *another* seat, the verdict is the terminal key
+    conflict whatever either seat's liveness: releasing the id's seat would leave one key holding two
+    seats. When Decided 18 releases a partitioned seat, the joiner's key is then decided as if that
+    seat were never held: `Returning` with a valid grant, else ordinary. The same "decide again
+    without the seat" applies to a revoked restore (Decided 14) and to a restore whose window refuses
+    it. A host's own seat is never in the table; a joiner presenting the host's key is #3257.
 
 ## Goals
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Kotlin Multiplatform (JVM, Android, iOS, macOS, wasmJs). cryptography-kotlin 0.6.0 (JDK, CryptoKit and WebCrypto providers, as in `:kuilt-seal`). kotlinx-serialization (CBOR on the admit wire). `:kuilt-store` for durable revocations and grants. `:kuilt-test` (`assertAll`).
 
-**Spec:** `docs/superpowers/specs/2026-11-12-identity-key-bound-admission-design.md`, approved by Iain on 2026-11-12. Decided 1–22 there are binding. The calls Iain approved alongside the spec are listed under *Approved with the spec* below.
+**Spec:** `docs/superpowers/specs/2026-11-12-identity-key-bound-admission-design.md`, approved by Iain on 2026-11-12. Decided 1–23 there are binding. The calls Iain approved alongside the spec are listed under *Approved with the spec* below.
 
 ## Approved with the spec (binding, from the dispatch arguments)
 
@@ -83,6 +83,22 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
     `Writerside/topics/cluster-server-client.md`, `kuilt-cluster/module.md`, `kuilt-test/README.md`.
   - `spike/` (`ConnectivitySuite.kt`): fix it, or say in the PR it is knowingly left.
   - Run `updateKotlinAbi` and record whatever moves (`:kuilt-game` likely does not; multipeer does).
+- **1.2** (from #3251's review; fixed in 1.2 itself, before merge)
+  - `Seat` carries liveness (connected / partitioned). `KeyConflict` only against a connected seat
+    (Decided 18); a partitioned same-id/different-key seat gives a release-and-admit verdict that
+    carries whether the key then holds a valid grant (Decided 23).
+  - The id-holds-a-seat-under-another-key ∧ key-holds-another-seat overlap is `KeyConflict` whatever
+    the liveness (Decided 23).
+  - **No throwing `require`s.** Two seats per key is reachable (two tabs both decided `Ordinary`
+    before either is added), and a throw on the Proof path aborts a Kotlin/Native host. Make id
+    uniqueness structural (`Map<PeerId, Seat>`); key uniqueness is the admission site's job (1.5/2.4).
+  - KDoc: `held` is joiner seats only, never the host's; revocation is the caller's; "fall through"
+    means calling `decideSeat` again without the released seat, not a hardcoded `Ordinary`.
+  - AGENTS.md: drop the "(today only the internal key → seat decision reads them)" parenthetical.
+- **1.5 / 2.4 obligation (from #3251's review):** re-run `decideSeat` under the room lock immediately
+  before `addToRoster`, *after* any suspension (the policy in 2.4). If the key gained a seat in the
+  meantime, supersede rather than add a second seat. A failed `tryResume` decides again without the
+  seat (Decided 23) rather than falling through to `Ordinary`.
 - **1.3**
   - **`Hello.key` and `Hello.joinerNonce` are nullable on the wire** (`= null`). Non-null fields make a
     v2 Hello fail CBOR decode, which `AdmitMessage.decode` turns into a silent drop, so the version
