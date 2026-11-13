@@ -139,7 +139,12 @@ internal data class PersistedLease(val lease: Lease, val path: List<AttachmentId
     /**
      * Throws [IllegalArgumentException] unless this lease is one an engine at [epoch], rooted at
      * [root], could hold open over [ledger]: an id from no later epoch, a positive reservation, and
-     * a path of known edges leading from [root] to the leaf, none of them retired.
+     * a path of known edges leading from [root] to the leaf that is the leaf's one live lineage.
+     *
+     * That last is the invariant the engine checks after every landed run, so a restored engine
+     * starts from a state it could have reached. A live lineage may cross a CLOSING edge, which is a
+     * drain in progress, and must still restore; it never crosses a RETIRED or PREPARED edge, and a
+     * quarantined lineage (two live inbound edges, a divergent record, a cycle) has none.
      */
     fun requireConsistent(root: GroupId, epoch: Long, ledger: EntitlementLedger) {
         val id = lease.id
@@ -157,6 +162,10 @@ internal data class PersistedLease(val lease: Lease, val path: List<AttachmentId
             at = record.child
         }
         require(at == lease.leaf) { "lease $id's path ends at ${at.value}, not its leaf ${lease.leaf.value}" }
+        val lineage = ledger.lineageOf(lease.leaf)
+        require(lineage == path) {
+            "lease $id's path ${path.map { it.value }} is not ${lease.leaf.value}'s live lineage ${lineage?.map { it.value }}"
+        }
     }
 }
 
