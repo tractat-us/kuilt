@@ -1,9 +1,12 @@
 package us.tractat.kuilt.session.admit
 
+import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.session.partition.ResumeSecret
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -23,11 +26,12 @@ class AdmitMessageTest {
     }
 
     @Test
-    fun `encode and decode round-trips Welcome`() {
+    fun `encode and decode round-trips Welcome`() = runTest {
         val original = AdmitMessage.Welcome(
             assignedPeerId = "peer-1",
             displayName = "Alice",
             sessionId = "session-123",
+            key = DidKey.parse(KEY_A),
             deviceId = "device-abc",
         )
         val bytes = AdmitMessage.encode(original)
@@ -106,9 +110,9 @@ class AdmitMessageTest {
      * pre-#3165 bytes and an older peer decodes it unchanged.
      */
     @Test
-    fun `Welcome and Resume round-trip their secret and a secretless frame keeps the old wire`() {
+    fun `Welcome and Resume round-trip their secret and a secretless frame keeps the old wire`() = runTest {
         val secret = ResumeSecret.generate()
-        val welcome = AdmitMessage.Welcome("peer-1", "Bob", "s-1", roomId = "room-9", resumeSecret = secret)
+        val welcome = AdmitMessage.Welcome("peer-1", "Bob", "s-1", DidKey.parse(KEY_A), roomId = "room-9", resumeSecret = secret)
         val resume = AdmitMessage.Resume("peer-1", "room-9", issuedAt = 5L, resumeSecret = secret)
         val rosterCopy = AdmitMessage.encode(welcome.copy(resumeSecret = null))
         val legacyResume = AdmitMessage.encode(resume.copy(resumeSecret = null))
@@ -238,17 +242,125 @@ class AdmitMessageTest {
         )
     }
 
+    // ── v3: the device key and the challenge frames (#3210) ─────────────────────────────────
+
     /**
-     * The capture receipt for [GOLDEN_V2_WELCOME]: a v2 Welcome encodes to exactly those bytes. Run
-     * against the encoder before #3210, so the vector is evidence, not a re-derivation.
+     * Every shape v3 adds round-trips, compared by value: a keyed [AdmitMessage.Hello], a keyed
+     * [AdmitMessage.Welcome], a [AdmitMessage.Challenge], and a [AdmitMessage.Proof] with and without
+     * grants. The byte-array fields compare by content, so each decoded copy, whose arrays are new
+     * objects, must still equal the original.
      */
     @Test
-    fun `the v2 welcome vector is what a v2 encoder wrote`() {
-        val v2 = AdmitMessage.encode(AdmitMessage.Welcome("peer-1", "Ada", "s-1"))
-        assertEquals(GOLDEN_V2_WELCOME.toList(), v2.toList())
+    fun `every new shape round-trips`() = runTest {
+        val key = DidKey.parse(KEY_A)
+        val shapes = listOf(
+            AdmitMessage.Hello("Ada", "s-1", deviceId = "d-1", protocolVersion = 3, key = key, joinerNonce = nonce(1)),
+            AdmitMessage.Welcome("peer-1", "Ada", "s-1", key = key, deviceId = "d-1", roomId = "room-9"),
+            AdmitMessage.Challenge(statement = byteArrayOf(1, 2, 3)),
+            AdmitMessage.Proof(statement = byteArrayOf(4, 5)),
+            AdmitMessage.Proof(statement = byteArrayOf(4, 5), grants = listOf(byteArrayOf(6), byteArrayOf(7, 8))),
+        )
+        assertAll(
+            shapes.map { shape -> { assertEquals(shape, AdmitMessage.decode(AdmitMessage.encode(shape)), "$shape") } },
+        )
     }
 
+    /**
+     * The byte-array fields compare by content, not identity: two frames built from equal bytes in
+     * distinct arrays are equal and hash alike, and one differing byte makes them unequal. A data
+     * class compares a `ByteArray` by reference, and then no decoded frame equals its original.
+     */
+    @Test
+    fun `byte fields compare by content`() = runTest {
+        val key = DidKey.parse(KEY_A)
+        val hello = AdmitMessage.Hello("Ada", "s-1", protocolVersion = 3, key = key, joinerNonce = nonce(1))
+        val challenge = AdmitMessage.Challenge(byteArrayOf(1, 2, 3))
+        val proof = AdmitMessage.Proof(byteArrayOf(4, 5), grants = listOf(byteArrayOf(6)))
+        assertAll(
+            { assertEquals(hello, hello.copy(joinerNonce = nonce(1))) },
+            { assertEquals(hello.hashCode(), hello.copy(joinerNonce = nonce(1)).hashCode()) },
+            { assertNotEquals(hello, hello.copy(joinerNonce = nonce(2))) },
+            { assertNotEquals(hello, hello.copy(joinerNonce = null)) },
+            { assertEquals(challenge, AdmitMessage.Challenge(byteArrayOf(1, 2, 3))) },
+            { assertEquals(challenge.hashCode(), AdmitMessage.Challenge(byteArrayOf(1, 2, 3)).hashCode()) },
+            { assertNotEquals(challenge, AdmitMessage.Challenge(byteArrayOf(1, 2, 4))) },
+            { assertEquals(proof, AdmitMessage.Proof(byteArrayOf(4, 5), grants = listOf(byteArrayOf(6)))) },
+            {
+                assertEquals(
+                    proof.hashCode(),
+                    AdmitMessage.Proof(byteArrayOf(4, 5), grants = listOf(byteArrayOf(6))).hashCode(),
+                )
+            },
+            { assertNotEquals(proof, AdmitMessage.Proof(byteArrayOf(4, 5), grants = listOf(byteArrayOf(9)))) },
+            { assertNotEquals(proof, AdmitMessage.Proof(byteArrayOf(4, 6), grants = listOf(byteArrayOf(6)))) },
+        )
+    }
+
+    /**
+     * Bytes travel as CBOR byte strings (major type 2), not as arrays of integers: the nonce, the
+     * statement and each grant appear on the wire as a byte-string header and then the raw bytes. An
+     * integer array would round-trip too, so the round trip cannot pin this; these assertions do.
+     */
+    @Test
+    fun `bytes travel as CBOR byte strings`() = runTest {
+        val key = DidKey.parse(KEY_A)
+        val helloWire = AdmitMessage.encode(
+            AdmitMessage.Hello("Ada", "s-1", protocolVersion = 3, key = key, joinerNonce = nonce(1)),
+        )
+        val proofWire = AdmitMessage.encode(AdmitMessage.Proof(byteArrayOf(4, 5), grants = listOf(byteArrayOf(6, 7, 8))))
+        assertAll(
+            // 0x50: a byte string of length 16.
+            { assertTrue(helloWire.contains(byteArrayOf(0x50) + nonce(1)), "the nonce is a 16-byte CBOR byte string") },
+            // 0x42: a byte string of length 2; 0x43: of length 3.
+            { assertTrue(proofWire.contains(byteArrayOf(0x42, 4, 5)), "the statement is a CBOR byte string") },
+            { assertTrue(proofWire.contains(byteArrayOf(0x43, 6, 7, 8)), "each grant is a CBOR byte string") },
+            { assertTrue(helloWire.contains(KEY_A.encodeToByteArray()), "the key travels as its did:key text") },
+        )
+    }
+
+    /**
+     * A Hello naming a key that is not a P-256 `did:key` does not decode: [DidKey]'s serializer
+     * checks the syntax, and [AdmitMessage.decode] turns the refusal into `null`, never a throw.
+     *
+     * Built from a real keyed Hello by overwriting the `D` of the key's `zDn` prefix, so the frame is
+     * well-formed CBOR and only the key's syntax is wrong. The control is the unmodified frame.
+     */
+    @Test
+    fun `a hello with a malformed key decodes to null`() = runTest {
+        val frame = AdmitMessage.encode(
+            AdmitMessage.Hello("Ada", "s-1", protocolVersion = 3, key = DidKey.parse(KEY_A), joinerNonce = nonce(1)),
+        )
+        val at = frame.indexOf(KEY_A.encodeToByteArray())
+        val malformed = frame.copyOf().also { it[at + "did:key:z".length] = 'X'.code.toByte() }
+        assertAll(
+            { assertTrue(at >= 0, "rig: the key's text is in the frame") },
+            { assertNotNull(AdmitMessage.decode(frame), "control: the unmodified frame decodes") },
+            { assertNull(AdmitMessage.decode(malformed), "a malformed key must refuse the frame") },
+        )
+    }
+
+    /**
+     * [AdmitMessage.Welcome.key] is required on the wire, unlike [AdmitMessage.Hello.key]: a v2
+     * Welcome, which has none, does not decode. No v3 joiner is sent one, because a v2 host refuses
+     * the v3 Hello before it would admit anyone.
+     */
+    @Test
+    fun `a welcome without a key does not decode`() {
+        assertNull(AdmitMessage.decode(GOLDEN_V2_WELCOME))
+    }
+
+    /** A [AdmitMessage.Hello.JOINER_NONCE_SIZE]-byte nonce whose every byte is [fill]. */
+    private fun nonce(fill: Int): ByteArray = ByteArray(AdmitMessage.Hello.JOINER_NONCE_SIZE) { fill.toByte() }
+
+    private fun ByteArray.indexOf(needle: ByteArray): Int =
+        (0..size - needle.size).firstOrNull { i -> needle.indices.all { this[i + it] == needle[it] } } ?: -1
+
+    private fun ByteArray.contains(needle: ByteArray): Boolean = indexOf(needle) >= 0
+
     private companion object {
+        /** A P-256 `did:key` from the W3C did:key test vectors. */
+        const val KEY_A = "did:key:zDnaerx9CtbPJ1q36T5Ln5wYt3MQYeGRG5ehnPAmxcf5mDZpv"
+
         /** Captured bytes of `Hello("Alice", "session-123", "device-abc")` in the current wire format. */
         val GOLDEN_HELLO = intArrayOf(
             97, 159, 101, 104, 101, 108, 108, 111, 191, 107, 100, 105, 115, 112, 108, 97, 121, 78,
@@ -257,7 +369,10 @@ class AdmitMessageTest {
             99, 101, 73, 100, 106, 100, 101, 118, 105, 99, 101, 45, 97, 98, 99, 255, 255,
         ).map { it.toByte() }.toByteArray()
 
-        /** `AdmitMessage.encode(Welcome("peer-1", "Ada", "s-1"))`, captured from the v2 encoder. */
+        /**
+         * `AdmitMessage.encode(Welcome("peer-1", "Ada", "s-1"))`, captured from the v2 encoder in
+         * this file's history, before #3210 made the key required.
+         */
         val GOLDEN_V2_WELCOME =
             "619f6777656c636f6d65bf6e61737369676e656450656572496466706565722d316b646973706c61794e616d65634164616973657373696f6e496463732d31ffff"
                 .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
