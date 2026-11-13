@@ -55,3 +55,22 @@ internal suspend fun sampleIssueGrant() {
     val edited = kept.copyOf().also { it[it.size - 1] = (it[it.size - 1] + 1).toByte() }
     check(Grant.decode(edited)?.isSignedByIssuer() == false)
 }
+
+/** @suppress — sample only */
+internal suspend fun sampleDeviceKeyStore() {
+    // One store per device. This one forgets with the process; a platform store keeps the key on disk.
+    val store: DeviceKeyStore = InMemoryDeviceKeyStore()
+
+    // The key is made on first use, and every call after returns the same one.
+    val me = store.deviceKey()
+    check(store.deviceKey().id == me.id)
+
+    // A host lets this device back in; the device keeps the newest pass per host and scope.
+    val host = DeviceKey.generate()
+    val now = 1_700_000_000_000L
+    val first = Grant.issue(host, me.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 3_600_000)
+    val renewed = Grant.issue(host, me.id, GrantScope.AnyRoomOfIssuer, issuedAt = now + 1_800_000, notAfter = now + 5_400_000)
+    store.keepGrant(renewed)
+    store.keepGrant(first) // older than the one held from this host: ignored
+    check(store.grants() == listOf(renewed))
+}

@@ -484,7 +484,30 @@ public suspend fun handleEveryElectionOutcomeSample(lobby: ElectionLobby): Room?
 ## Device identity & return
 
 **Intent:** recognise a device when it comes back — a phone that dropped off the Wi-Fi, an app that was closed and reopened — and you are reaching for a device id the device tells you, a token you mint and hand out, or a hand-rolled public-key fingerprint.
-**Primitive:** `DidKey` (`us.tractat.kuilt.identity`, `:kuilt-identity`). The public name of one device's P-256 key, as a W3C `did:key` (always `did:key:zDn…`). One key has exactly one name, so comparing names compares keys, and `verify` checks a signature against it. Read a name that came from outside with `DidKey.parse`: building one, or decoding one with its serializer, where it travels as a plain string, checks only the syntax, and `parse` also checks the point is on the curve. That check is not optional decoration — the JVM's decoder accepts a point that is not on P-256, so without it a name for no key at all would decode there and be refused elsewhere. `verify` goes through the same check and answers `false` on a bad signature or a bad key; it throws only `IllegalStateException`, when this platform's cryptographic provider cannot run at all.
+**Primitive:** `DeviceKeyStore` (`us.tractat.kuilt.identity`, `:kuilt-identity`). A device is recognised only if it comes back with the same key, so the key has to outlive the app; this is where it lives. `deviceKey()` makes the key on the first call and returns the same one on every call after, concurrent first calls included. `keepGrant` keeps the newest grant per host and scope — an older one from the same host for the same scope is ignored, while a pass into another room from the same host, or one from another host, sits beside it — and `grants()` reads them back. A grant issued at the same instant as the held one is ignored too, so a replayed or reordered copy cannot displace it. Do not hand-roll a key file or a "remember this device" token beside it. Take the store as a parameter: `InMemoryDeviceKeyStore()` keeps everything in memory and forgets it with the process, which is right for tests and for an app that has chosen not to be recognised; the platform stores that keep the key across launches are still to come.
+
+<!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleDeviceKeyStore -->
+```kotlin
+internal suspend fun sampleDeviceKeyStore() {
+    // One store per device. This one forgets with the process; a platform store keeps the key on disk.
+    val store: DeviceKeyStore = InMemoryDeviceKeyStore()
+
+    // The key is made on first use, and every call after returns the same one.
+    val me = store.deviceKey()
+    check(store.deviceKey().id == me.id)
+
+    // A host lets this device back in; the device keeps the newest pass per host and scope.
+    val host = DeviceKey.generate()
+    val now = 1_700_000_000_000L
+    val first = Grant.issue(host, me.id, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = now + 3_600_000)
+    val renewed = Grant.issue(host, me.id, GrantScope.AnyRoomOfIssuer, issuedAt = now + 1_800_000, notAfter = now + 5_400_000)
+    store.keepGrant(renewed)
+    store.keepGrant(first) // older than the one held from this host: ignored
+    check(store.grants() == listOf(renewed))
+}
+```
+
+**The name:** `DidKey`. The public name of one device's P-256 key, as a W3C `did:key` (always `did:key:zDn…`). One key has exactly one name, so comparing names compares keys, and `verify` checks a signature against it. Read a name that came from outside with `DidKey.parse`: building one, or decoding one with its serializer, where it travels as a plain string, checks only the syntax, and `parse` also checks the point is on the curve. That check is not optional decoration — the JVM's decoder accepts a point that is not on P-256, so without it a name for no key at all would decode there and be refused elsewhere. `verify` goes through the same check and answers `false` on a bad signature or a bad key; it throws only `IllegalStateException`, when this platform's cryptographic provider cannot run at all.
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleParseDidKey -->
 ```kotlin
@@ -507,7 +530,7 @@ internal suspend fun sampleParseDidKey() {
 }
 ```
 
-**The key behind the name:** `DeviceKey`. Its `id` is the `DidKey`, and `sign` makes the signature that `id.verify` accepts — ECDSA on P-256 over SHA-256, as 64 raw `r ‖ s` bytes. It is an interface with no accessor for the private half, so a key a hardware or browser store will not hand out still fits. `DeviceKey.generate()` makes one in memory, which is gone with the process: do not hand-roll keeping it, since the per-platform key stores that keep it are coming next.
+**The key behind the name:** `DeviceKey`. Its `id` is the `DidKey`, and `sign` makes the signature that `id.verify` accepts — ECDSA on P-256 over SHA-256, as 64 raw `r ‖ s` bytes. It is an interface with no accessor for the private half, so a key a hardware or browser store will not hand out still fits. `DeviceKey.generate()` makes one in memory, which is gone with the process: do not hand-roll keeping it, since keeping it is `DeviceKeyStore`'s job.
 
 <!-- verbatim from kuilt-identity/src/commonSamples/kotlin/us/tractat/kuilt/identity/IdentitySamples.kt#sampleDeviceKeySigns -->
 ```kotlin
@@ -552,4 +575,4 @@ internal suspend fun sampleIssueGrant() {
 }
 ```
 
-So far this is the key, its name and the pass. The per-platform store that keeps the key and its grants, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).
+So far this is the store, the key, its name and the pass. The platform stores that keep the key across launches, and the room exchange that restores a returning device's seat, are arriving in the pieces that follow; until then, a returning device rejoins through [Rejoin & reconnect](#rejoin--reconnect).

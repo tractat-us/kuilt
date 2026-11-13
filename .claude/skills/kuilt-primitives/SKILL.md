@@ -14,7 +14,7 @@ Rows pair `;`-separated groups in order.
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
 |a rejoin/reconnect loop, a resume token, a grace window; why a rejoin was refused|`Room.resumeToken` + `Room.resume`; `ResumeResult.JoinerOutcome` (`code.retryable`)|`session.md#rejoin--reconnect`|
-|a device key or did:key, recognising a returning device; a "remember this device" pass|`DeviceKey` + `DidKey`; `Grant`|`session.md#device-identity--return`|
+|a device key or did:key, recognising a returning device; a "remember this device" pass|`DeviceKeyStore` → `DeviceKey` + `DidKey`; `Grant`|`session.md#device-identity--return`|
 |a "why did we drop" classifier; a retry/back-off loop; a per-session id every peer agrees on|`MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`); `ExponentialBackoff`; `Room.roomId` or `RoomFactory.host(pattern, roomId = …)`|`session.md#rejoin--reconnect`|
 |a heartbeat, an idle reaper, "is this peer alive"; reaping a room nobody joined; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
 |a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned(since, windowExpiresAt)` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|
@@ -35,7 +35,7 @@ Rows pair `;`-separated groups in order.
 |a sweeper over a discovery list — peers that left still on screen|`PeerDiscoverySource.departures()` + `DiscoverySourceConformanceSuite`|`fabrics.md#peers-pile-up-and-are-never-removed`|
 |a peer-supplied id straight into a `Set<PeerId>`|`PeerIdentityRegistry`|`fabrics.md#a-peer-id-off-the-wire-straight-into-a-setpeerid`|
 |a 4-byte length prefix, a reassembly loop over a socket|`framed()` → `handshaking()`|`fabrics.md#your-own-transport`|
-|that plumbing over plain TCP|`TcpLoom.host` / `TcpLoom.join`|`fabrics.md#plain-tcp-is-already-assembled`|
+|that, over plain TCP|`TcpLoom.host`/`.join`|`fabrics.md#plain-tcp-is-already-assembled`|
 |a bare `webSocketSession`; a socket a cancelled dial left open|`ownedWebSocketSession`|`fabrics.md#a-cancelled-dial`|
 |looping a frame back to yourself, a `peers.forEach { sendTo(it, …) }` fan-out|`broadcast`; `sendTo(selfId, …)` throws|`fabrics.md#sending-to-yourself`|
 |a hard-coded chunk size, a `FrameTooLargeException`|`Room`/`Seam.maxPayloadBytes`, then `PayloadTooLarge`|`fabrics.md#payload-limits`|
@@ -51,10 +51,10 @@ Rows pair `;`-separated groups in order.
 ## Fetching a route
 
 `<path>`: `docs/agent-cookbook/<jump-to file>` or the index `docs/agent-cookbook.md`.
-Inside kuilt, read it directly; consumers take the first working rung:
+In kuilt, read it directly; consumers take the first working rung:
 
 1. `git -C ../kuilt fetch -q origin main && git -C ../kuilt show origin/main:<path>`
-   Read `origin/main`, never its working tree.
+   Read `origin/main`, not its working tree.
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 

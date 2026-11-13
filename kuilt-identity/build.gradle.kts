@@ -22,8 +22,9 @@ kotlin {
             implementation(libs.cryptography.core)
             // `api`: the device's `DidKey` name is `@Serializable` in the public surface.
             api(libs.kotlinx.serialization.core)
-            // Only for `currentCoroutineContext().ensureActive()`: telling this coroutine's own
-            // cancellation from one a provider minted (providerCall), per kuilt's exception rule.
+            // For `currentCoroutineContext().ensureActive()`, telling this coroutine's own cancellation
+            // from one a provider minted (providerCall), per kuilt's exception rule; and for the
+            // `Mutex` InMemoryDeviceKeyStore holds across first-key generation.
             implementation(libs.kotlinx.coroutines.core)
             // Only for `decompress`: checking that a did:key's x has a point on P-256 and computing
             // its y, so every provider imports the 65-byte uncompressed point. Safari's WebCrypto

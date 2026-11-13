@@ -8,7 +8,8 @@ import kotlin.test.Test
  * Executes the documentation samples on every target, so the snippets the cookbook quotes verbatim
  * cannot drift from code that runs. Their `check`s are the assertions: a real name parses, a
  * well-formed name for an off-curve point is refused, and a key's signature verifies under its own
- * name and no other, and a grant round-trips under its issuer's signature until one byte changes.
+ * name and no other, a grant round-trips under its issuer's signature until one byte changes, and a
+ * key store returns one key and keeps the newest grant per host and scope.
  */
 class IdentitySamplesRunTest {
     @Test
@@ -19,4 +20,7 @@ class IdentitySamplesRunTest {
 
     @Test
     fun issueGrantSampleRuns(): TestResult = runTest { sampleIssueGrant() }
+
+    @Test
+    fun deviceKeyStoreSampleRuns(): TestResult = runTest { sampleDeviceKeyStore() }
 }

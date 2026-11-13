@@ -1,0 +1,40 @@
+package us.tractat.kuilt.identity
+
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+/**
+ * A [DeviceKeyStore] that keeps everything in memory, and forgets everything with the process.
+ *
+ * Its key is made in software on the first [deviceKey] call and is gone when the process ends, so a
+ * device using this store is a new device every time the app starts: nothing it was granted, and no
+ * seat it held, can be recognised after a restart. That is right for tests and for an app that has
+ * chosen not to be recognised; an app that wants to be remembered uses a platform store.
+ *
+ * Safe under a multi-threaded dispatcher: one [Mutex] guards the key and the grants, and is held
+ * across the first key's generation, so concurrent first calls wait for that one key rather than
+ * each making their own.
+ */
+public class InMemoryDeviceKeyStore private constructor(
+    private val generate: suspend () -> DeviceKey,
+) : DeviceKeyStore {
+    /** A store whose key, made on first use, is [DeviceKey.generate]'s. */
+    public constructor() : this({ DeviceKey.generate() })
+
+    private val mutex = Mutex()
+    private var key: DeviceKey? = null
+    private var held: List<Grant> = emptyList()
+
+    override suspend fun deviceKey(): DeviceKey = mutex.withLock {
+        key ?: generate().also { key = it }
+    }
+
+    override suspend fun grants(): List<Grant> = mutex.withLock { held }
+
+    override suspend fun keepGrant(grant: Grant): Unit = mutex.withLock { held = held.keeping(grant) }
+
+    internal companion object {
+        /** A store whose first key comes from [generate], so a test can force interleavings with it. */
+        fun generatingWith(generate: suspend () -> DeviceKey): InMemoryDeviceKeyStore = InMemoryDeviceKeyStore(generate)
+    }
+}
