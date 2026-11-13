@@ -106,13 +106,30 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     replaced (`?` on the JVM, U+FFFD elsewhere), so a statement never signs a value other than the one
     it was given, and the signed bytes are the same on every target.
 23. **Where two rows meet, the claimed id decides, and a released seat is decided again (controller
-    ruling, 2026-11-13, #3251's review; for Iain to confirm).** When the claimed id holds a seat under
+    ruling, 2026-11-13, #3251's review; confirmed by Iain 2026-11-13).** When the claimed id holds a seat under
     a *different* key while the proven key holds *another* seat, the verdict is the terminal key
     conflict whatever either seat's liveness: releasing the id's seat would leave one key holding two
     seats. When Decided 18 releases a partitioned seat, the joiner's key is then decided as if that
     seat were never held: `Returning` with a valid grant, else ordinary. The same "decide again
     without the seat" applies to a revoked restore (Decided 14) and to a restore whose window refuses
     it. A host's own seat is never in the table; a joiner presenting the host's key is #3257.
+24. **A grant dated beyond a clock-skew allowance is refused (Iain, 2026-11-13, #3268's review).** A
+    grant whose `issuedAt` lies more than a fixed skew allowance (a few minutes) past the verifier's
+    `now` gets a new `GrantVerdict` (e.g. `NotYetValid`), failing closed: the device goes through
+    ordinary admission. Otherwise a pass issued while the host's clock ran ahead survives a later
+    `revoke(subject, now + 1)` for the whole skew. Adding a variant to the sealed `GrantVerdict` breaks
+    exhaustive `when`s, so it lands in the breaking stack. The allowance and its place in the check
+    order are settled by that task (#3300).
+25. **`Reject` carries `retryable` on the wire (Iain, 2026-11-13, #3276).** A nullable field, decoded
+    into `RejectCode.Unknown(id, retryable)`, in 2.5's protocol bump, so an app's own refusal code
+    keeps its retry meaning and 1.7's re-Hello stops retrying a refused device.
+26. **Apps may build an `AdmissionRequest` in tests (Iain, 2026-11-13, #3277).** A tests-only factory
+    in `:kuilt-session-test` behind an opt-in marker; the room keeps the only production path, which
+    2.4 narrows to the ordinary-admission verdict.
+27. **Revocation voids passes; it is not a ban (Iain, 2026-11-13, #3270's sample).** `RevocationList`
+    is monotone and cannot be undone, so a policy that refuses every revoked key bans for good. Samples
+    and docs keep the two apart: revoking voids the passes already handed out, and an app-owned blocked
+    set (which can be undone) is what keeps a device out of ordinary admission.
 
 ## Goals
 
