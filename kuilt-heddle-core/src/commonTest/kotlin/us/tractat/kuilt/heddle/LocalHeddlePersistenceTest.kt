@@ -442,7 +442,8 @@ class LocalHeddlePersistenceTest {
             "no state" to "[1]",
             "the old object envelope" to "{\"formatVersion\":1,\"state\":" + golden.removePrefix("[1,").dropLast(1) + "}",
             "state before version" to "[" + golden.removePrefix("[1,").dropLast(1) + ",1]",
-            "an element past the state" to golden.dropLast(1) + ",1]",
+            // A well-formed second state, so only the "past its state" refusal can catch it.
+            "an element past the state" to golden.dropLast(1) + "," + golden.removePrefix("[1,").dropLast(1) + "]",
             "a lease on an edge the ledger lacks" to golden.replace(pathToA, "\"path\":[\"root/z@1:1#0\"]"),
             "a lease from a later epoch" to golden.replaceFirst("\"leases\":[{\"epoch\":0,", "\"leases\":[{\"epoch\":5,"),
             "a topology rooted elsewhere" to golden.replace("\"lastApplied\":{\"root\":\"root\"", "\"lastApplied\":{\"root\":\"elsewhere\""),
