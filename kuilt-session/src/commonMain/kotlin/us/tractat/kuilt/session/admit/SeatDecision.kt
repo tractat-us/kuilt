@@ -70,5 +70,13 @@ internal fun decideSeat(
 ): SeatDecision {
     require(held.distinctBy { it.peerId }.size == held.size) { "two held seats share a peer id: $held" }
     require(held.distinctBy { it.key }.size == held.size) { "two held seats share a key: $held" }
-    return SeatDecision.Ordinary
+    val byId = held.firstOrNull { it.peerId == claimedId }
+    val byKey = held.firstOrNull { it.key == provenKey }
+    return when {
+        byId != null && byId.key == provenKey -> SeatDecision.Restore(claimedId)
+        byId != null -> SeatDecision.KeyConflict
+        byKey != null -> SeatDecision.RestoreUnderNewId(previous = byKey.peerId)
+        holdsValidGrant -> SeatDecision.Returning
+        else -> SeatDecision.Ordinary
+    }
 }
