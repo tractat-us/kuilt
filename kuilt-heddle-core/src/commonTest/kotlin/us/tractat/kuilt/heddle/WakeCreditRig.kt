@@ -43,7 +43,7 @@ internal object WakeCreditRig {
         NOISE,
     }
 
-    class LaneSpec(val leaf: GroupId, val arm: Arm, val think: Long, val burst: Int, val costs: List<Long>)
+    class LaneSpec(val leaf: GroupId, val arm: Arm, val think: Long, val burst: Int, val costs: List<Long>, val firstArrival: Long = 0L)
 
     class WakeConfig(
         val label: String,
@@ -99,7 +99,7 @@ internal object WakeCreditRig {
 
     private class LaneState(val spec: LaneSpec) {
         val queue = ArrayDeque<Job>()
-        var nextArrival = 0L
+        var nextArrival = spec.firstArrival
         var jobs = 0
         var slotTime = 0L
         var picks = 0
