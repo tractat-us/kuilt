@@ -52,10 +52,10 @@ class InMemoryDeviceKeyStoreTest {
         val first = store.deviceKey()
         val message = "signed by the stored key".encodeToByteArray()
         val second = store.deviceKey()
-        val signature = second.sign(message)
+        val verifies = first.id.verify(message, second.sign(message))
         assertAll(
             { assertSame(first, second) },
-            { assertTrue(first.id.verify(message, signature), "the stored key signs under its own name") },
+            { assertTrue(verifies, "the stored key signs under its own name") },
         )
     }
 
