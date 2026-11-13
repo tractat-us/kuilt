@@ -467,7 +467,7 @@ public abstract class DeviceKeyStoreConformanceSuite {
  * Every arm opens a store through `open(beforeKeyIsMade)`. The store must call `beforeKeyIsMade` each
  * time it is about to make a key — the first one, and every replacement — and at no other time. It is
  * how the suite counts the keys a store makes and forces concurrent first calls to overlap, so a store
- * takes it as an internal constructor parameter its production entry points pass as a no-op.
+ * takes it through an internal constructor or factory, and its public entry points pass a no-op.
  *
  * ## Why this is two-armed and not nullable
  *

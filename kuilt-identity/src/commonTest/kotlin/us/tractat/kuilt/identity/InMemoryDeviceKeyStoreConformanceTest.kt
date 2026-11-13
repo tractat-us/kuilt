@@ -14,5 +14,5 @@ import us.tractat.kuilt.conformance.DeviceKeyStoreFixture
  */
 class InMemoryDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() {
     override suspend fun newFixture(): DeviceKeyStoreFixture =
-        DeviceKeyStoreFixture.KeepsNothing { beforeKeyIsMade -> InMemoryDeviceKeyStore(beforeKeyIsMade) }
+        DeviceKeyStoreFixture.KeepsNothing { beforeKeyIsMade -> InMemoryDeviceKeyStore.gatedBy(beforeKeyIsMade) }
 }

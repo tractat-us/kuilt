@@ -15,7 +15,7 @@ import kotlinx.coroutines.sync.withLock
  * across the first key's generation, so concurrent first calls wait for that one key rather than
  * each making their own.
  */
-public class InMemoryDeviceKeyStore internal constructor(
+public class InMemoryDeviceKeyStore private constructor(
     /** Called each time this store is about to make a key, and at no other time: the TCK's gate. */
     private val beforeKeyIsMade: suspend () -> Unit,
 ) : DeviceKeyStore {
@@ -36,4 +36,13 @@ public class InMemoryDeviceKeyStore internal constructor(
     override suspend fun grants(): List<Grant> = mutex.withLock { held }
 
     override suspend fun keepGrant(grant: Grant): Unit = mutex.withLock { held = held.keeping(grant) }
+
+    internal companion object {
+        /**
+         * A store that calls [beforeKeyIsMade] each time it is about to make a key: the conformance
+         * suite's gate. A factory rather than an `internal` primary constructor, because beside one the
+         * JVM ABI dump drops the public no-argument constructor (measured on #3224).
+         */
+        fun gatedBy(beforeKeyIsMade: suspend () -> Unit): InMemoryDeviceKeyStore = InMemoryDeviceKeyStore(beforeKeyIsMade)
+    }
 }

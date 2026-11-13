@@ -50,9 +50,13 @@ public final class us/tractat/kuilt/identity/DeviceKey$Companion {
 }
 
 public abstract interface class us/tractat/kuilt/identity/DeviceKeyStore {
+	public static final field Companion Lus/tractat/kuilt/identity/DeviceKeyStore$Companion;
 	public abstract fun deviceKey (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun grants (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun keepGrant (Lus/tractat/kuilt/identity/Grant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/identity/DeviceKeyStore$Companion {
 }
 
 public final class us/tractat/kuilt/identity/DidKey {

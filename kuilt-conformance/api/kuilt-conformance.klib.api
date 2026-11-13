@@ -73,6 +73,33 @@ sealed interface us.tractat.kuilt.conformance/DepartureFixture { // us.tractat.k
     }
 }
 
+sealed interface us.tractat.kuilt.conformance/DeviceKeyStoreFixture { // us.tractat.kuilt.conformance/DeviceKeyStoreFixture|null[0]
+    abstract suspend fun open(kotlin.coroutines/SuspendFunction0<kotlin/Unit>): us.tractat.kuilt.identity/DeviceKeyStore // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.open|open(kotlin.coroutines.SuspendFunction0<kotlin.Unit>){}[0]
+
+    final class Durable : us.tractat.kuilt.conformance/DeviceKeyStoreFixture { // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable|null[0]
+        constructor <init>(kotlin.coroutines/SuspendFunction1<kotlin.coroutines/SuspendFunction0<kotlin/Unit>, us.tractat.kuilt.identity/DeviceKeyStore>, kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.identity/DidKey>, kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<kotlin/Unit>) // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.<init>|<init>(kotlin.coroutines.SuspendFunction1<kotlin.coroutines.SuspendFunction0<kotlin.Unit>,us.tractat.kuilt.identity.DeviceKeyStore>;kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.identity.DidKey>;kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<kotlin.Unit>){}[0]
+
+        final val clearKey // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.clearKey|{}clearKey[0]
+            final fun <get-clearKey>(): kotlin.coroutines/SuspendFunction0<kotlin/Unit> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.clearKey.<get-clearKey>|<get-clearKey>(){}[0]
+        final val corruptGrants // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.corruptGrants|{}corruptGrants[0]
+            final fun <get-corruptGrants>(): kotlin.coroutines/SuspendFunction0<kotlin/Unit> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.corruptGrants.<get-corruptGrants>|<get-corruptGrants>(){}[0]
+        final val corruptKey // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.corruptKey|{}corruptKey[0]
+            final fun <get-corruptKey>(): kotlin.coroutines/SuspendFunction0<kotlin/Unit> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.corruptKey.<get-corruptKey>|<get-corruptKey>(){}[0]
+        final val interruptKeyWrite // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.interruptKeyWrite|{}interruptKeyWrite[0]
+            final fun <get-interruptKeyWrite>(): kotlin.coroutines/SuspendFunction0<kotlin/Unit> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.interruptKeyWrite.<get-interruptKeyWrite>|<get-interruptKeyWrite>(){}[0]
+        final val plantMismatchedKey // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.plantMismatchedKey|{}plantMismatchedKey[0]
+            final fun <get-plantMismatchedKey>(): kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.identity/DidKey> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.plantMismatchedKey.<get-plantMismatchedKey>|<get-plantMismatchedKey>(){}[0]
+
+        final suspend fun open(kotlin.coroutines/SuspendFunction0<kotlin/Unit>): us.tractat.kuilt.identity/DeviceKeyStore // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.open|open(kotlin.coroutines.SuspendFunction0<kotlin.Unit>){}[0]
+    }
+
+    final class KeepsNothing : us.tractat.kuilt.conformance/DeviceKeyStoreFixture { // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.KeepsNothing|null[0]
+        constructor <init>(kotlin.coroutines/SuspendFunction1<kotlin.coroutines/SuspendFunction0<kotlin/Unit>, us.tractat.kuilt.identity/DeviceKeyStore>) // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.KeepsNothing.<init>|<init>(kotlin.coroutines.SuspendFunction1<kotlin.coroutines.SuspendFunction0<kotlin.Unit>,us.tractat.kuilt.identity.DeviceKeyStore>){}[0]
+
+        final suspend fun open(kotlin.coroutines/SuspendFunction0<kotlin/Unit>): us.tractat.kuilt.identity/DeviceKeyStore // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.KeepsNothing.open|open(kotlin.coroutines.SuspendFunction0<kotlin.Unit>){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt.conformance/FlushFixture|null[0]
     final class CannotHold : us.tractat.kuilt.conformance/FlushFixture { // us.tractat.kuilt.conformance/FlushFixture.CannotHold|null[0]
         constructor <init>(kotlin/String) // us.tractat.kuilt.conformance/FlushFixture.CannotHold.<init>|<init>(kotlin.String){}[0]
@@ -378,6 +405,78 @@ abstract class us.tractat.kuilt.conformance/ConnectionSendConformanceSuite { // 
 
     // Targets: [wasmJs]
     final fun sendIntoADeadLinkLeavesACancelledCallerCancelled(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/ConnectionSendConformanceSuite.sendIntoADeadLinkLeavesACancelledCallerCancelled|sendIntoADeadLinkLeavesACancelledCallerCancelled(){}[0]
+}
+
+abstract class us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite { // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite|null[0]
+    constructor <init>() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.<init>|<init>(){}[0]
+
+    abstract suspend fun newFixture(): us.tractat.kuilt.conformance/DeviceKeyStoreFixture // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.newFixture|newFixture(){}[0]
+
+    // Targets: [apple]
+    final fun aClearedKeyStartsAsANewDevice() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aClearedKeyStartsAsANewDevice|aClearedKeyStartsAsANewDevice(){}[0]
+
+    // Targets: [apple]
+    final fun aCorruptKeyIsReplacedNotFatal() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aCorruptKeyIsReplacedNotFatal|aCorruptKeyIsReplacedNotFatal(){}[0]
+
+    // Targets: [apple]
+    final fun aKeyIsMadeOnceAndSignsUnderItsOwnName() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aKeyIsMadeOnceAndSignsUnderItsOwnName|aKeyIsMadeOnceAndSignsUnderItsOwnName(){}[0]
+
+    // Targets: [apple]
+    final fun aKeyThatFailsItsSelfTestIsReplaced() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aKeyThatFailsItsSelfTestIsReplaced|aKeyThatFailsItsSelfTestIsReplaced(){}[0]
+
+    // Targets: [apple]
+    final fun aRestartKeepsTheKeyOrForgetsIt() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aRestartKeepsTheKeyOrForgetsIt|aRestartKeepsTheKeyOrForgetsIt(){}[0]
+
+    // Targets: [apple]
+    final fun anInterruptedKeyWriteLeavesTheStoreReadable() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.anInterruptedKeyWriteLeavesTheStoreReadable|anInterruptedKeyWriteLeavesTheStoreReadable(){}[0]
+
+    // Targets: [apple]
+    final fun concurrentFirstCallsAgreeOnOneKey() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.concurrentFirstCallsAgreeOnOneKey|concurrentFirstCallsAgreeOnOneKey(){}[0]
+
+    // Targets: [apple]
+    final fun corruptGrantsAreDroppedNotFatal() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.corruptGrantsAreDroppedNotFatal|corruptGrantsAreDroppedNotFatal(){}[0]
+
+    // Targets: [apple]
+    final fun distinctFixturesAreDistinctDevices() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.distinctFixturesAreDistinctDevices|distinctFixturesAreDistinctDevices(){}[0]
+
+    // Targets: [apple]
+    final fun grantsSurviveARestartOrAreForgotten() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.grantsSurviveARestartOrAreForgotten|grantsSurviveARestartOrAreForgotten(){}[0]
+
+    // Targets: [apple]
+    final fun keepsTheNewestGrantPerIssuerAndScope() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.keepsTheNewestGrantPerIssuerAndScope|keepsTheNewestGrantPerIssuerAndScope(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aClearedKeyStartsAsANewDevice(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aClearedKeyStartsAsANewDevice|aClearedKeyStartsAsANewDevice(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aCorruptKeyIsReplacedNotFatal(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aCorruptKeyIsReplacedNotFatal|aCorruptKeyIsReplacedNotFatal(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aKeyIsMadeOnceAndSignsUnderItsOwnName(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aKeyIsMadeOnceAndSignsUnderItsOwnName|aKeyIsMadeOnceAndSignsUnderItsOwnName(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aKeyThatFailsItsSelfTestIsReplaced(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aKeyThatFailsItsSelfTestIsReplaced|aKeyThatFailsItsSelfTestIsReplaced(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aRestartKeepsTheKeyOrForgetsIt(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aRestartKeepsTheKeyOrForgetsIt|aRestartKeepsTheKeyOrForgetsIt(){}[0]
+
+    // Targets: [wasmJs]
+    final fun anInterruptedKeyWriteLeavesTheStoreReadable(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.anInterruptedKeyWriteLeavesTheStoreReadable|anInterruptedKeyWriteLeavesTheStoreReadable(){}[0]
+
+    // Targets: [wasmJs]
+    final fun concurrentFirstCallsAgreeOnOneKey(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.concurrentFirstCallsAgreeOnOneKey|concurrentFirstCallsAgreeOnOneKey(){}[0]
+
+    // Targets: [wasmJs]
+    final fun corruptGrantsAreDroppedNotFatal(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.corruptGrantsAreDroppedNotFatal|corruptGrantsAreDroppedNotFatal(){}[0]
+
+    // Targets: [wasmJs]
+    final fun distinctFixturesAreDistinctDevices(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.distinctFixturesAreDistinctDevices|distinctFixturesAreDistinctDevices(){}[0]
+
+    // Targets: [wasmJs]
+    final fun grantsSurviveARestartOrAreForgotten(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.grantsSurviveARestartOrAreForgotten|grantsSurviveARestartOrAreForgotten(){}[0]
+
+    // Targets: [wasmJs]
+    final fun keepsTheNewestGrantPerIssuerAndScope(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.keepsTheNewestGrantPerIssuerAndScope|keepsTheNewestGrantPerIssuerAndScope(){}[0]
 }
 
 abstract class us.tractat.kuilt.conformance/DiscoverySourceConformanceSuite { // us.tractat.kuilt.conformance/DiscoverySourceConformanceSuite|null[0]
