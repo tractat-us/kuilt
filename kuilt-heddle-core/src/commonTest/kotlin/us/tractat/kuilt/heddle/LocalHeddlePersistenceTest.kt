@@ -313,9 +313,12 @@ class LocalHeddlePersistenceTest {
 
     /**
      * Format 1 is frozen: the scenario still encodes to the golden, byte for byte. A change to any
-     * serializer inside a snapshot, the ledger's and the allocator memory's included, reds here, and
-     * then the choice is deliberate: a new format with its own surrogate, or, before the format has
-     * shipped, a regenerated golden. The message carries the current encoding for that case.
+     * serializer inside a snapshot, the ledger's, the allocator memory's and the topology's included,
+     * reds here, and then the choice is deliberate. Before the format has shipped, regenerate the
+     * golden from the message, which carries the current encoding. After, a field added to a nested
+     * type takes a default and leaves the bytes alone; any other nested change needs a frozen surrogate
+     * of that type under `SnapshotFormat1`, because a new top-level format alone does not keep format
+     * 1's nested values readable.
      */
     @Test
     fun formatOneStillEncodesToTheGolden() {

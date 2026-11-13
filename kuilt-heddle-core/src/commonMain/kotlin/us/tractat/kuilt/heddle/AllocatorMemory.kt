@@ -26,6 +26,9 @@ import us.tractat.kuilt.crdt.CanonicalMapSerializer
  * [CanonicalMapSerializer], so two equal memories encode to the same bytes whatever order the
  * allocator's own hash maps happen to hold them in. The contents are deliberately not public: the
  * only things a caller does with a memory are to keep it and to hand it back.
+ *
+ * Its encoded shape is part of [LocalHeddleSnapshot]'s format 1: a field added here takes a
+ * default, and any other change needs a frozen surrogate there first.
  */
 @Serializable
 public class AllocatorMemory internal constructor(

@@ -189,6 +189,16 @@ public sealed interface RestoreResult {
  * [LocalHeddleSnapshot] cannot change what an earlier format's bytes mean, and the next format adds
  * a surrogate beside this one rather than editing it. The ledger, the allocator memory and the
  * topology are nested as one value each, through their own serializers.
+ *
+ * **Those nested serializers are part of format 1 too.** A new top-level format keeps format 1's
+ * own fields readable, but not what is nested in them: [EntitlementLedger], [AllocatorMemory] and
+ * [Topology] are encoded through their live serializers, so a change to one of those types changes
+ * what format 1's bytes mean. Once format 1 has shipped:
+ * - a field added to any of them, at any depth, takes a default, so bytes written without it still
+ *   decode, and so a value holding the default still encodes to the same bytes;
+ * - a change that cannot be made that way (a rename, a removal, a new meaning for a field) needs a
+ *   frozen surrogate of the nested type under this class, which format 1 then reads through, and
+ *   only after that the change to the live type.
  */
 @Serializable
 private class SnapshotFormat1(
