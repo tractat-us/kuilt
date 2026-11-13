@@ -21,6 +21,12 @@ abstract interface us.tractat.kuilt.identity/DeviceKey { // us.tractat.kuilt.ide
     }
 }
 
+abstract interface us.tractat.kuilt.identity/DeviceKeyStore { // us.tractat.kuilt.identity/DeviceKeyStore|null[0]
+    abstract suspend fun deviceKey(): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity/DeviceKeyStore.deviceKey|deviceKey(){}[0]
+    abstract suspend fun grants(): kotlin.collections/List<us.tractat.kuilt.identity/Grant> // us.tractat.kuilt.identity/DeviceKeyStore.grants|grants(){}[0]
+    abstract suspend fun keepGrant(us.tractat.kuilt.identity/Grant) // us.tractat.kuilt.identity/DeviceKeyStore.keepGrant|keepGrant(us.tractat.kuilt.identity.Grant){}[0]
+}
+
 sealed interface us.tractat.kuilt.identity/GrantScope { // us.tractat.kuilt.identity/GrantScope|null[0]
     final class Room : us.tractat.kuilt.identity/GrantScope { // us.tractat.kuilt.identity/GrantScope.Room|null[0]
         constructor <init>(kotlin/String) // us.tractat.kuilt.identity/GrantScope.Room.<init>|<init>(kotlin.String){}[0]
@@ -129,6 +135,14 @@ final class us.tractat.kuilt.identity/Grant { // us.tractat.kuilt.identity/Grant
         final fun decode(kotlin/ByteArray): us.tractat.kuilt.identity/Grant? // us.tractat.kuilt.identity/Grant.Companion.decode|decode(kotlin.ByteArray){}[0]
         final suspend fun issue(us.tractat.kuilt.identity/DeviceKey, us.tractat.kuilt.identity/DidKey, us.tractat.kuilt.identity/GrantScope, kotlin/Long, kotlin/Long): us.tractat.kuilt.identity/Grant // us.tractat.kuilt.identity/Grant.Companion.issue|issue(us.tractat.kuilt.identity.DeviceKey;us.tractat.kuilt.identity.DidKey;us.tractat.kuilt.identity.GrantScope;kotlin.Long;kotlin.Long){}[0]
     }
+}
+
+final class us.tractat.kuilt.identity/InMemoryDeviceKeyStore : us.tractat.kuilt.identity/DeviceKeyStore { // us.tractat.kuilt.identity/InMemoryDeviceKeyStore|null[0]
+    constructor <init>() // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.<init>|<init>(){}[0]
+
+    final suspend fun deviceKey(): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.deviceKey|deviceKey(){}[0]
+    final suspend fun grants(): kotlin.collections/List<us.tractat.kuilt.identity/Grant> // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.grants|grants(){}[0]
+    final suspend fun keepGrant(us.tractat.kuilt.identity/Grant) // us.tractat.kuilt.identity/InMemoryDeviceKeyStore.keepGrant|keepGrant(us.tractat.kuilt.identity.Grant){}[0]
 }
 
 final value class us.tractat.kuilt.identity/DidKey { // us.tractat.kuilt.identity/DidKey|null[0]

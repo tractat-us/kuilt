@@ -27,11 +27,10 @@ per-platform stores that keep a key across launches arrive in the pieces that fo
 The store. A device is recognised only if it comes back with the same key, so the key has to
 outlive the app. `DeviceKeyStore` is where it lives: the first `deviceKey()` call makes it and every
 call after returns it, and beside it the store keeps the device's grants, the newest from each host.
-A grant is not a secret, since it is useless without the key; the key is, and how well a store keeps
-it is what tells one store from another. `InMemoryDeviceKeyStore` keeps both in memory and forgets
-them with the process, so a device using it is a new device every time the app starts. That suits
-tests, and an app that has chosen not to be recognised. The platform stores, which keep the key on
-the device across launches, are still to come.
+The key is the secret, and how well a store keeps it is what tells one store from another.
+`InMemoryDeviceKeyStore` keeps both in memory and forgets them with the process, so a device using
+it is a new device every time the app starts. That suits tests, and an app that has chosen not to
+be recognised.
 
 ## What this protects against, and what it does not
 
