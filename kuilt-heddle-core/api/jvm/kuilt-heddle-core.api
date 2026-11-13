@@ -728,6 +728,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun extend (Lus/tractat/kuilt/heddle/LeaseId;J)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun getEpoch ()J
 	public final fun getRoot-urUY4Jo ()Ljava/lang/String;
+	public final fun persist ()Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;
 	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;Ljava/util/List;)Ljava/util/List;
 	public final fun reconcileCapacity (J)V
 	public final fun reconcileLeases (Ljava/util/Set;J)Lus/tractat/kuilt/heddle/LeaseReconciliation;
@@ -735,7 +736,30 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 }
 
 public final class us/tractat/kuilt/heddle/LocalHeddle$Companion {
+	public final fun decode (Ljava/lang/String;Lkotlinx/serialization/StringFormat;)Lus/tractat/kuilt/heddle/RestoreResult;
+	public final fun decode ([BLkotlinx/serialization/BinaryFormat;)Lus/tractat/kuilt/heddle/RestoreResult;
 	public final fun fromTopology (Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/LocalPolicy;J)Lus/tractat/kuilt/heddle/LocalHeddle;
+	public final fun restore (Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;Lus/tractat/kuilt/heddle/LocalPolicy;J)Lus/tractat/kuilt/heddle/LocalHeddle;
+}
+
+public final class us/tractat/kuilt/heddle/LocalHeddleSnapshot {
+	public static final field Companion Lus/tractat/kuilt/heddle/LocalHeddleSnapshot$Companion;
+	public static final field FORMAT_VERSION I
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllocatorMemory ()Lus/tractat/kuilt/heddle/AllocatorMemory;
+	public final fun getEpoch ()J
+	public final fun getLastApplied ()Lus/tractat/kuilt/heddle/Topology;
+	public final fun getLeases ()Ljava/util/List;
+	public final fun getLedger ()Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public final fun getRoot-urUY4Jo ()Ljava/lang/String;
+	public final fun getTotalSlots ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LocalHeddleSnapshot$Companion {
+	public final fun getSUPPORTED_FORMAT_VERSIONS ()Ljava/util/List;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
 public final class us/tractat/kuilt/heddle/LocalHeddleState {
@@ -974,6 +998,44 @@ public final class us/tractat/kuilt/heddle/Relocation$Refused : us/tractat/kuilt
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Relocation$Refused;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Relocation$Refused;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/heddle/RestoreResult {
+}
+
+public final class us/tractat/kuilt/heddle/RestoreResult$Corrupt : us/tractat/kuilt/heddle/RestoreResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lus/tractat/kuilt/heddle/RestoreResult$Corrupt;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/RestoreResult$Corrupt;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/RestoreResult$Corrupt;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/RestoreResult$Restored : us/tractat/kuilt/heddle/RestoreResult {
+	public fun <init> (Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;
+	public final fun copy (Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;)Lus/tractat/kuilt/heddle/RestoreResult$Restored;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/RestoreResult$Restored;Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/RestoreResult$Restored;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSnapshot ()Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/RestoreResult$UnsupportedVersion : us/tractat/kuilt/heddle/RestoreResult {
+	public fun <init> (ILjava/util/List;)V
+	public final fun component1 ()I
+	public final fun component2 ()Ljava/util/List;
+	public final fun copy (ILjava/util/List;)Lus/tractat/kuilt/heddle/RestoreResult$UnsupportedVersion;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/RestoreResult$UnsupportedVersion;ILjava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/RestoreResult$UnsupportedVersion;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFound ()I
+	public final fun getSupported ()Ljava/util/List;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

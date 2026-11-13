@@ -133,10 +133,10 @@ These override the task sections below where they differ.
    - A replacement the ledger refuses after the engine has released all of its units is `Refused`, never `Draining`.
    - **An overrun under a draining top-level group** is reported in `Done`, recorded on no edge, and mints nothing. It is the one exception to R2's "never lost".
    - **S2:** `preview` predicts by running the same attempt `apply` runs on a scratch copy, not by reading the bare diff.
-   - **P's snapshot shape.** `SnapshotFormat1` holds `root`, `epoch`, `totalSlots`, `ledger`, `allocatorMemory`, the open leases with their paths, and `lastApplied`, in that order.
+   - **P's snapshot shape.** `SnapshotFormat1` holds `epoch`, `totalSlots`, `ledger`, `allocatorMemory`, the open leases with their paths, and `lastApplied`, in that order. *Revised by #3247's pre-freeze review:* `root` is not stored but derived from `lastApplied.groupId()`, and a lease stores no `leaf`, which is read off its path's last edge. Neither can then disagree with what it is derived from.
      - Capacity is persisted as `totalSlots`, which settles Amendment 10's open question.
      - `nextSeq` is not persisted. A restore must run under an epoch above the snapshot's, and lease ids carry the epoch, so a restored engine numbers from zero without a collision.
-     - `formatVersion` lives only in the envelope, ahead of `state`, and is read first.
+     - `formatVersion` lives only in the envelope, ahead of `state`, and is read first. The envelope is a two-element sequence, `[formatVersion, state]`, not an object, so a store that reorders object keys (Postgres `jsonb`) cannot put `state` first.
    - **#3238's fix adds allocator state.** `AllocatorMemory` gains `wakeExposures`, so P's `GOLDEN_FORMAT_1` is re-pinned after #3248 lands, and the format it freezes is `v0.7.4`'s.
 
 ## Verified in source (2026-11-12)

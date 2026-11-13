@@ -373,6 +373,50 @@ sealed interface us.tractat.kuilt.heddle/Relocation { // us.tractat.kuilt.heddle
     }
 }
 
+sealed interface us.tractat.kuilt.heddle/RestoreResult { // us.tractat.kuilt.heddle/RestoreResult|null[0]
+    final class Corrupt : us.tractat.kuilt.heddle/RestoreResult { // us.tractat.kuilt.heddle/RestoreResult.Corrupt|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.heddle/RestoreResult.Corrupt.<init>|<init>(kotlin.String){}[0]
+
+        final val reason // us.tractat.kuilt.heddle/RestoreResult.Corrupt.reason|{}reason[0]
+            final fun <get-reason>(): kotlin/String // us.tractat.kuilt.heddle/RestoreResult.Corrupt.reason.<get-reason>|<get-reason>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.heddle/RestoreResult.Corrupt.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.heddle/RestoreResult.Corrupt // us.tractat.kuilt.heddle/RestoreResult.Corrupt.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/RestoreResult.Corrupt.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/RestoreResult.Corrupt.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/RestoreResult.Corrupt.toString|toString(){}[0]
+    }
+
+    final class Restored : us.tractat.kuilt.heddle/RestoreResult { // us.tractat.kuilt.heddle/RestoreResult.Restored|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/LocalHeddleSnapshot) // us.tractat.kuilt.heddle/RestoreResult.Restored.<init>|<init>(us.tractat.kuilt.heddle.LocalHeddleSnapshot){}[0]
+
+        final val snapshot // us.tractat.kuilt.heddle/RestoreResult.Restored.snapshot|{}snapshot[0]
+            final fun <get-snapshot>(): us.tractat.kuilt.heddle/LocalHeddleSnapshot // us.tractat.kuilt.heddle/RestoreResult.Restored.snapshot.<get-snapshot>|<get-snapshot>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/LocalHeddleSnapshot // us.tractat.kuilt.heddle/RestoreResult.Restored.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/LocalHeddleSnapshot = ...): us.tractat.kuilt.heddle/RestoreResult.Restored // us.tractat.kuilt.heddle/RestoreResult.Restored.copy|copy(us.tractat.kuilt.heddle.LocalHeddleSnapshot){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/RestoreResult.Restored.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/RestoreResult.Restored.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/RestoreResult.Restored.toString|toString(){}[0]
+    }
+
+    final class UnsupportedVersion : us.tractat.kuilt.heddle/RestoreResult { // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion|null[0]
+        constructor <init>(kotlin/Int, kotlin.collections/List<kotlin/Int>) // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion.<init>|<init>(kotlin.Int;kotlin.collections.List<kotlin.Int>){}[0]
+
+        final val found // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion.found|{}found[0]
+            final fun <get-found>(): kotlin/Int // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion.found.<get-found>|<get-found>(){}[0]
+        final val supported // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion.supported|{}supported[0]
+            final fun <get-supported>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion.supported.<get-supported>|<get-supported>(){}[0]
+
+        final fun component1(): kotlin/Int // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion.component2|component2(){}[0]
+        final fun copy(kotlin/Int = ..., kotlin.collections/List<kotlin/Int> = ...): us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion.copy|copy(kotlin.Int;kotlin.collections.List<kotlin.Int>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/RestoreResult.UnsupportedVersion.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.heddle/StepRefusal { // us.tractat.kuilt.heddle/StepRefusal|null[0]
     abstract val child // us.tractat.kuilt.heddle/StepRefusal.child|{}child[0]
         abstract fun <get-child>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/StepRefusal.child.<get-child>|<get-child>(){}[0]
@@ -1000,6 +1044,7 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
     final fun entitlement(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/LocalHeddle.entitlement|entitlement(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
     final fun explain(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long = ...): us.tractat.kuilt.heddle/WaitExplanation // us.tractat.kuilt.heddle/LocalHeddle.explain|explain(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
     final fun extend(us.tractat.kuilt.heddle/LeaseId, kotlin/Long): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/LocalHeddle.extend|extend(us.tractat.kuilt.heddle.LeaseId;kotlin.Long){}[0]
+    final fun persist(): us.tractat.kuilt.heddle/LocalHeddleSnapshot // us.tractat.kuilt.heddle/LocalHeddle.persist|persist(){}[0]
     final fun previewPicks(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin/Int>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/List<kotlin/Long>): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LocalHeddle.previewPicks|previewPicks(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.Int>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.List<kotlin.Long>){}[0]
     final fun reconcileCapacity(kotlin/Long) // us.tractat.kuilt.heddle/LocalHeddle.reconcileCapacity|reconcileCapacity(kotlin.Long){}[0]
     final fun reconcileLeases(kotlin.collections/Set<us.tractat.kuilt.heddle/LeaseId>, kotlin/Long): us.tractat.kuilt.heddle/LeaseReconciliation // us.tractat.kuilt.heddle/LocalHeddle.reconcileLeases|reconcileLeases(kotlin.collections.Set<us.tractat.kuilt.heddle.LeaseId>;kotlin.Long){}[0]
@@ -1009,7 +1054,41 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
         final const val MAX_RESERVATION // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION|{}MAX_RESERVATION[0]
             final fun <get-MAX_RESERVATION>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION.<get-MAX_RESERVATION>|<get-MAX_RESERVATION>(){}[0]
 
+        final fun decode(kotlin/ByteArray, kotlinx.serialization/BinaryFormat): us.tractat.kuilt.heddle/RestoreResult // us.tractat.kuilt.heddle/LocalHeddle.Companion.decode|decode(kotlin.ByteArray;kotlinx.serialization.BinaryFormat){}[0]
+        final fun decode(kotlin/String, kotlinx.serialization/StringFormat): us.tractat.kuilt.heddle/RestoreResult // us.tractat.kuilt.heddle/LocalHeddle.Companion.decode|decode(kotlin.String;kotlinx.serialization.StringFormat){}[0]
         final fun fromTopology(us.tractat.kuilt.heddle/Topology, us.tractat.kuilt.heddle/LocalPolicy, kotlin/Long): us.tractat.kuilt.heddle/LocalHeddle // us.tractat.kuilt.heddle/LocalHeddle.Companion.fromTopology|fromTopology(us.tractat.kuilt.heddle.Topology;us.tractat.kuilt.heddle.LocalPolicy;kotlin.Long){}[0]
+        final fun restore(us.tractat.kuilt.heddle/LocalHeddleSnapshot, us.tractat.kuilt.heddle/LocalPolicy, kotlin/Long): us.tractat.kuilt.heddle/LocalHeddle // us.tractat.kuilt.heddle/LocalHeddle.Companion.restore|restore(us.tractat.kuilt.heddle.LocalHeddleSnapshot;us.tractat.kuilt.heddle.LocalPolicy;kotlin.Long){}[0]
+    }
+}
+
+final class us.tractat.kuilt.heddle/LocalHeddleSnapshot { // us.tractat.kuilt.heddle/LocalHeddleSnapshot|null[0]
+    final val allocatorMemory // us.tractat.kuilt.heddle/LocalHeddleSnapshot.allocatorMemory|{}allocatorMemory[0]
+        final fun <get-allocatorMemory>(): us.tractat.kuilt.heddle/AllocatorMemory // us.tractat.kuilt.heddle/LocalHeddleSnapshot.allocatorMemory.<get-allocatorMemory>|<get-allocatorMemory>(){}[0]
+    final val epoch // us.tractat.kuilt.heddle/LocalHeddleSnapshot.epoch|{}epoch[0]
+        final fun <get-epoch>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddleSnapshot.epoch.<get-epoch>|<get-epoch>(){}[0]
+    final val lastApplied // us.tractat.kuilt.heddle/LocalHeddleSnapshot.lastApplied|{}lastApplied[0]
+        final fun <get-lastApplied>(): us.tractat.kuilt.heddle/Topology // us.tractat.kuilt.heddle/LocalHeddleSnapshot.lastApplied.<get-lastApplied>|<get-lastApplied>(){}[0]
+    final val leases // us.tractat.kuilt.heddle/LocalHeddleSnapshot.leases|{}leases[0]
+        final fun <get-leases>(): kotlin.collections/List<us.tractat.kuilt.heddle/Lease> // us.tractat.kuilt.heddle/LocalHeddleSnapshot.leases.<get-leases>|<get-leases>(){}[0]
+    final val ledger // us.tractat.kuilt.heddle/LocalHeddleSnapshot.ledger|{}ledger[0]
+        final fun <get-ledger>(): us.tractat.kuilt.heddle/EntitlementLedger // us.tractat.kuilt.heddle/LocalHeddleSnapshot.ledger.<get-ledger>|<get-ledger>(){}[0]
+    final val root // us.tractat.kuilt.heddle/LocalHeddleSnapshot.root|{}root[0]
+        final fun <get-root>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LocalHeddleSnapshot.root.<get-root>|<get-root>(){}[0]
+    final val totalSlots // us.tractat.kuilt.heddle/LocalHeddleSnapshot.totalSlots|{}totalSlots[0]
+        final fun <get-totalSlots>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddleSnapshot.totalSlots.<get-totalSlots>|<get-totalSlots>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LocalHeddleSnapshot.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LocalHeddleSnapshot.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LocalHeddleSnapshot.toString|toString(){}[0]
+
+    final object Companion { // us.tractat.kuilt.heddle/LocalHeddleSnapshot.Companion|null[0]
+        final const val FORMAT_VERSION // us.tractat.kuilt.heddle/LocalHeddleSnapshot.Companion.FORMAT_VERSION|{}FORMAT_VERSION[0]
+            final fun <get-FORMAT_VERSION>(): kotlin/Int // us.tractat.kuilt.heddle/LocalHeddleSnapshot.Companion.FORMAT_VERSION.<get-FORMAT_VERSION>|<get-FORMAT_VERSION>(){}[0]
+
+        final val SUPPORTED_FORMAT_VERSIONS // us.tractat.kuilt.heddle/LocalHeddleSnapshot.Companion.SUPPORTED_FORMAT_VERSIONS|{}SUPPORTED_FORMAT_VERSIONS[0]
+            final fun <get-SUPPORTED_FORMAT_VERSIONS>(): kotlin.collections/List<kotlin/Int> // us.tractat.kuilt.heddle/LocalHeddleSnapshot.Companion.SUPPORTED_FORMAT_VERSIONS.<get-SUPPORTED_FORMAT_VERSIONS>|<get-SUPPORTED_FORMAT_VERSIONS>(){}[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/LocalHeddleSnapshot> // us.tractat.kuilt.heddle/LocalHeddleSnapshot.Companion.serializer|serializer(){}[0]
     }
 }
 

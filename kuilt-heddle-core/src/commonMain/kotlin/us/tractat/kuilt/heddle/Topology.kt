@@ -37,6 +37,10 @@ import kotlinx.serialization.encoding.Encoder
  * The same name may appear at different depths: `acme/batch` and `hobby/batch` are different
  * children.
  *
+ * Its encoded shape, [Node] and [RuntimeChildren] included, is part of [LocalHeddleSnapshot]'s
+ * format 1, which stores the topology an engine last applied: a field added here takes a default,
+ * and any other change needs a frozen surrogate there first.
+ *
  * @property root the name of the group at the top of the tree.
  * @property children the root's children, in the order written.
  * @sample us.tractat.kuilt.heddle.sampleTopologyFromDocument

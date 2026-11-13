@@ -177,6 +177,9 @@ import kotlinx.serialization.Transient
  * field must too, and it needs its own arm in `EntitlementLedgerCanonicalEncodingTest`, since no
  * test reds on a field it never writes.
  *
+ * Its encoded shape is also part of [LocalHeddleSnapshot]'s format 1: a field added here takes a
+ * default, and any other change needs a frozen surrogate there first.
+ *
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerMerge
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerLifecycle
  */

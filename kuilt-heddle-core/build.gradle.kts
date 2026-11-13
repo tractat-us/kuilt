@@ -26,6 +26,8 @@ kotlin {
             implementation(project(":kuilt-test"))
             implementation(project(":kuilt-conformance"))
             implementation(libs.kotlinx.serialization.json)
+            // A snapshot's envelope is checked in a binary format too, not only in JSON.
+            implementation(libs.kotlinx.serialization.cbor)
         }
     }
 }
