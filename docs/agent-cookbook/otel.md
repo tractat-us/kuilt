@@ -30,6 +30,24 @@ when (val result = exporter.export(pending)) {
 }
 ```
 
+**Intent:** record many metric points at once — a batch from an SDK export, a flush of counters a server tallied — without a loop of `incrementSum`/`setGauge` calls, each of which re-encodes and rewrites every series of its kind.
+**Primitive:** `WarpMetricExporter.record(updates)` (`:kuilt-otel`), a list of `MetricUpdate`s. `KuiltMetricExporter` (`:kuilt-otel-sdk`) already records each SDK export this way.
+
+One encode and one durable write per metric kind the list touches, instead of one per update — under the same contract: `Success` once every touched kind is on disk; on a refusal every kind is still attempted, the first `Failure` returns, and every update stays in memory, so a retried batch counts twice.
+
+<!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpMetricExporterBatch -->
+```kotlin
+// Three updates over two kinds: one write of the sums, one of the gauges.
+val result = exporter.record(
+    listOf(
+        MetricUpdate.IncrementSum(ok, by = 40L),
+        MetricUpdate.IncrementSum(notFound, by = 2L),
+        MetricUpdate.SetGauge(inFlight, value = 7.0, timestamp = 1_000L),
+    ),
+)
+check(result == MetricExportResult.Success) // every kind it touched is on disk
+```
+
 **Intent:** stamp which session / game / request / screen a log line belongs to — an MDC equivalent, a "logger context". Don't keep a mutable global holding "the current session" for a `CaptureConfig.attributeMapper` to read.
 **Primitive:** `withLogContext(attributes) { … }` (`:kuilt-otel-logging`).
 

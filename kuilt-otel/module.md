@@ -135,10 +135,13 @@ A `Failure` means "not yet on disk", not "not counted". The change stays in memo
 and the next successful write of that metric kind carries it, so retrying a failed
 increment counts it twice.
 
-The promise has a price. Each recorded change re-encodes every series of its kind
-and writes the result once. `KuiltMetricExporter` applies an SDK export point by
-point, so an export of N points is N writes, and every UpDownCounter series is in
-every export, moved or not. That is why kuilt-otel belongs behind
+The promise has a price. Each write re-encodes every series of its kind. A single
+call such as `incrementSum` is one write. Hand many changes over at once with
+`WarpMetricExporter.record`, a list of `MetricUpdate`s, and you pay one write per
+metric kind the list touches, under the same promise (#3284). `KuiltMetricExporter`
+records each SDK export that way, so an export of N counter points is one write of
+the sums, not N. Every UpDownCounter series is still in every export, moved or not.
+That is why kuilt-otel belongs behind
 the SDK's periodic reader, which hands it one batch every few seconds, and not in
 a request's hot path.
 
