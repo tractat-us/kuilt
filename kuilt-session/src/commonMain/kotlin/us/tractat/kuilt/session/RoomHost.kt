@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -59,6 +60,8 @@ public interface RoomHost : AutoCloseable {
  *
  * @param loom the [Loom] to host over.
  * @param pattern the session [Pattern] (session name) to advertise.
+ * @param deviceKeyStore this device's key store, handed to the [SeamRoomFactory] the host builds.
+ *   Required: see [SeamRoomFactory] for why, and what to pass.
  * @param clock time source for partition detection; defaults to wall-clock
  *   [kotlin.time.Clock.System]. Inject a virtual clock in tests.
  * @param heartbeatConfig partition-detection timing.
@@ -66,6 +69,7 @@ public interface RoomHost : AutoCloseable {
 public class LoomRoomHost(
     private val loom: Loom,
     private val pattern: Pattern,
+    private val deviceKeyStore: DeviceKeyStore,
     private val clock: () -> Instant = { Clock.System.now() },
     private val heartbeatConfig: HeartbeatConfig = HeartbeatConfig(),
 ) : RoomHost {
@@ -78,7 +82,13 @@ public class LoomRoomHost(
             started = true
         }
         coroutineScope {
-            val factory = SeamRoomFactory(loom = loom, scope = this, clock = clock, heartbeatConfig = heartbeatConfig)
+            val factory = SeamRoomFactory(
+                loom = loom,
+                scope = this,
+                clock = clock,
+                deviceKeyStore = deviceKeyStore,
+                heartbeatConfig = heartbeatConfig,
+            )
             val room: Room = factory.host(pattern)
             try {
                 onRoom(room)

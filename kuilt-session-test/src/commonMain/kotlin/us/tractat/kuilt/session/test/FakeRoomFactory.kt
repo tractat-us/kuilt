@@ -39,8 +39,11 @@ public class FakeRoomFactory : RoomFactory {
             initialRoomId = roomId ?: mintFakeRoomId(PeerId(pattern.sessionName)),
         )
 
-    /** A joiner has no room id until it is admitted; drive that with [FakeRoom.setRoomId]. */
-    override suspend fun join(tag: Tag, memberName: String?): Room =
+    /**
+     * A joiner has no room id until it is admitted; drive that with [FakeRoom.setRoomId]. A fake room
+     * sends no `Hello`, so [deviceId] goes nowhere.
+     */
+    override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room =
         FakeRoom(
             selfId = PeerId(tag.sessionName),
             initialRole = SessionRole.Joiner,
