@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import kotlin.test.Test
@@ -44,6 +45,7 @@ class SeamRoomDetectorTeardownTest {
                 memberName = "Alice",
                 scope = roomScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = HeartbeatConfig(),
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -55,6 +57,7 @@ class SeamRoomDetectorTeardownTest {
                 memberName = "Bob",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = HeartbeatConfig(),
                 roomId = null,
             ).also { it.start() }

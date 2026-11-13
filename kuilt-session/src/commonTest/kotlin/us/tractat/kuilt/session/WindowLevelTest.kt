@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.FaultySeam
@@ -789,7 +790,7 @@ class WindowLevelTest {
 
     private suspend fun TestScope.hostFaultedPair(): HostFaultedPair {
         val loom = InMemoryLoom()
-        val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), fastConfig)
+        val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), InMemoryDeviceKeyStore(), fastConfig)
         // Fault the HOST's link so its own detector times out on the joiner. `adopt` with
         // SessionRole.Host still mints a RoomId, so the reconnect controller exists — the
         // characterization test above depends on that.
@@ -806,7 +807,7 @@ class WindowLevelTest {
 
     private suspend fun TestScope.joinerFaultedPair(): JoinerFaultedPair {
         val loom = InMemoryLoom()
-        val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), fastConfig)
+        val factory = SeamRoomFactory(loom, backgroundScope, virtualClock(), InMemoryDeviceKeyStore(), fastConfig)
         val hostRoom = factory.host(Pattern("Host"))
         val faultedLink = FaultySeam(loom.join(InMemoryTag("Joiner")), backgroundScope)
         val joinerRoom = factory.adopt(faultedLink, SessionRole.Joiner)
@@ -898,6 +899,7 @@ class WindowLevelTest {
             memberName = "table-7",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
             roomId = RoomId("room-1"),
         ).also { it.start() }
@@ -922,6 +924,7 @@ class WindowLevelTest {
             memberName = "client",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
             roomId = null,
             reweave = { gate.await(); muxClient.join(tag) },
@@ -935,8 +938,8 @@ class WindowLevelTest {
     private suspend fun TestScope.mesh(hostConfig: HeartbeatConfig, joinerConfig: HeartbeatConfig): Mesh {
         val loom = InMemoryLoom()
         val clock = virtualClock()
-        val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, hostConfig)
-        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, joinerConfig)
+        val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), hostConfig)
+        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), joinerConfig)
 
         val hostRoom = hostFactory.host(Pattern("Host"))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)

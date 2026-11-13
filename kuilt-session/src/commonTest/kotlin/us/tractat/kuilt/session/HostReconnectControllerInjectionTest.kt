@@ -17,6 +17,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
@@ -99,6 +100,7 @@ class HostReconnectControllerInjectionTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
                 reconnectControllerFactory = { _, _, _ -> spy },
@@ -114,6 +116,7 @@ class HostReconnectControllerInjectionTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
             ).also { it.start() }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.Room
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
@@ -20,7 +21,7 @@ class MultipeerRoomHostTest {
     @Test
     fun `start hands a Room to onRoom and suspends until cancelled`() = runTest {
         val loom = InMemoryLoom()
-        val host = MultipeerRoomHost(loom, Pattern("test-room"))
+        val host = MultipeerRoomHost(loom, Pattern("test-room"), InMemoryDeviceKeyStore())
         val received = CompletableDeferred<Room>()
 
         coroutineScope {
@@ -36,7 +37,7 @@ class MultipeerRoomHostTest {
 
     @Test
     fun `start a second time on the same host throws`() = runTest {
-        val host = MultipeerRoomHost(InMemoryLoom(), Pattern("dup"))
+        val host = MultipeerRoomHost(InMemoryLoom(), Pattern("dup"), InMemoryDeviceKeyStore())
 
         coroutineScope {
             val firstStarted = CompletableDeferred<Unit>()

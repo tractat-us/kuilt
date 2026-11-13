@@ -13,6 +13,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
@@ -180,13 +181,13 @@ class JoinWindowHostIdentityTest {
         }
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(0L))
-        val hostRoom = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock).host(Pattern(ROOM))
+        val hostRoom = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock, InMemoryDeviceKeyStore()).host(Pattern(ROOM))
         return admitSequentially(hostRoom, coJoiners) { index ->
             val loom = fabric.clientLoom(PeerId("joiner-$index"), Random(index.toLong() + 1L))
             // `adopt` (rather than `join`) mirrors LivenessRouteGateTest.star(): the spoke's own
             // client loom is its single edge, and the room is built over that seam.
             val seam = loom.join(InMemoryTag(ROOM))
-            SeamRoomFactory(loom, backgroundScope, clock).adopt(seam, SessionRole.Joiner) to seam
+            SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore()).adopt(seam, SessionRole.Joiner) to seam
         }
     }
 
@@ -194,7 +195,7 @@ class JoinWindowHostIdentityTest {
     private suspend fun TestScope.flatMesh(coJoiners: Int): Fixture {
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         val loom = InMemoryLoom()
-        val factory = SeamRoomFactory(loom, backgroundScope, clock)
+        val factory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore())
         val hostRoom = factory.host(Pattern(ROOM))
         return admitSequentially(hostRoom, coJoiners) { index ->
             val seam = loom.join(InMemoryTag("joiner-$index"))

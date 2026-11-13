@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.ResumeResult
@@ -90,12 +91,14 @@ class ResumeTokenFailoverTest {
                 path = pathA,
                 serverPeerId = serverPeerIdA,
                 pattern = roomPattern,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
             )
             val hostB = KtorRoomHost(
                 application = application,
                 path = pathB,
                 serverPeerId = serverPeerIdB,
                 pattern = roomPattern,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
             )
 
             val clientLoom = KtorClientLoom(createClient { install(WebSockets) })
@@ -119,7 +122,7 @@ class ResumeTokenFailoverTest {
 
                 // Client scope for the initial server-A connection.
                 val clientScopeA = CoroutineScope(coroutineContext + Job())
-                val roomA = SeamRoomFactory.systemClock(loom = clientLoom, scope = clientScopeA)
+                val roomA = SeamRoomFactory.systemClock(loom = clientLoom, scope = clientScopeA, deviceKeyStore = InMemoryDeviceKeyStore())
                     .join(
                         WebSocketAdvertisement(
                             url = "ws://localhost$pathA",
@@ -191,7 +194,7 @@ class ResumeTokenFailoverTest {
                 // ── Step 5: client connects to server-B and attempts resume ───────
 
                 val clientScopeB = CoroutineScope(coroutineContext + Job())
-                val roomB = SeamRoomFactory.systemClock(loom = clientLoom, scope = clientScopeB)
+                val roomB = SeamRoomFactory.systemClock(loom = clientLoom, scope = clientScopeB, deviceKeyStore = InMemoryDeviceKeyStore())
                     .join(reconnect.currentEndpoint())
 
                 // Wait for the admit handshake on server-B to complete (fresh join).

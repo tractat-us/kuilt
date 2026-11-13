@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -30,8 +31,14 @@ class MemberInboxCapacityTest {
     fun `a room built with capacity 0 still delivers on incoming`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = SeamRoomFactory(loom, backgroundScope, clock, memberInboxCapacity = 0).host(Pattern("Alice"))
-            val joiner = SeamRoomFactory(loom, backgroundScope, clock).join(InMemoryTag("Alice"))
+            val host = SeamRoomFactory(
+                loom,
+                backgroundScope,
+                clock,
+                InMemoryDeviceKeyStore(),
+                memberInboxCapacity = 0,
+            ).host(Pattern("Alice"))
+            val joiner = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore()).join(InMemoryTag("Alice"))
             host.roster.first { it.size == 1 }
 
             val received = mutableListOf<String>()
@@ -51,8 +58,14 @@ class MemberInboxCapacityTest {
     fun `incomingFrom on a room built with capacity 0 fails loudly`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = SeamRoomFactory(loom, backgroundScope, clock, memberInboxCapacity = 0).host(Pattern("Alice"))
-            val joiner = SeamRoomFactory(loom, backgroundScope, clock).join(InMemoryTag("Alice"))
+            val host = SeamRoomFactory(
+                loom,
+                backgroundScope,
+                clock,
+                InMemoryDeviceKeyStore(),
+                memberInboxCapacity = 0,
+            ).host(Pattern("Alice"))
+            val joiner = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore()).join(InMemoryTag("Alice"))
             val joinerId = host.roster.first { it.size == 1 }.single().id
 
             val refusal = assertFailsWith<IllegalStateException> { host.incomingFrom(joinerId) }
@@ -74,7 +87,7 @@ class MemberInboxCapacityTest {
     fun `a negative capacity is refused at construction`() =
         runTest {
             assertFailsWith<IllegalArgumentException>("-1 would otherwise behave as 0 under a refusal message that says 0") {
-                SeamRoomFactory(InMemoryLoom(), backgroundScope, clock, memberInboxCapacity = -1)
+                SeamRoomFactory(InMemoryLoom(), backgroundScope, clock, InMemoryDeviceKeyStore(), memberInboxCapacity = -1)
             }
         }
 
@@ -82,8 +95,14 @@ class MemberInboxCapacityTest {
     fun `a room built with a smaller capacity holds exactly that many frames`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = SeamRoomFactory(loom, backgroundScope, clock, memberInboxCapacity = 2).host(Pattern("Alice"))
-            val joiner = SeamRoomFactory(loom, backgroundScope, clock).join(InMemoryTag("Alice"))
+            val host = SeamRoomFactory(
+                loom,
+                backgroundScope,
+                clock,
+                InMemoryDeviceKeyStore(),
+                memberInboxCapacity = 2,
+            ).host(Pattern("Alice"))
+            val joiner = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore()).join(InMemoryTag("Alice"))
             val joinerId = host.roster.first { it.size == 1 }.single().id
 
             repeat(2) { joiner.broadcast("f-$it".encodeToByteArray()) }
@@ -107,8 +126,14 @@ class MemberInboxCapacityTest {
     fun `a room built with a smaller capacity overflows once it is exceeded`() =
         runTest {
             val loom = InMemoryLoom()
-            val host = SeamRoomFactory(loom, backgroundScope, clock, memberInboxCapacity = 2).host(Pattern("Alice"))
-            val joiner = SeamRoomFactory(loom, backgroundScope, clock).join(InMemoryTag("Alice"))
+            val host = SeamRoomFactory(
+                loom,
+                backgroundScope,
+                clock,
+                InMemoryDeviceKeyStore(),
+                memberInboxCapacity = 2,
+            ).host(Pattern("Alice"))
+            val joiner = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore()).join(InMemoryTag("Alice"))
             val joinerId = host.roster.first { it.size == 1 }.single().id
 
             repeat(3) { joiner.broadcast("f-$it".encodeToByteArray()) }
