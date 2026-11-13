@@ -3,14 +3,14 @@ package us.tractat.kuilt.heddle
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.descriptors.SerialDescriptor
-import kotlinx.serialization.descriptors.buildClassSerialDescriptor
-import kotlinx.serialization.descriptors.element
+import kotlinx.serialization.descriptors.listSerialDescriptor
 import kotlinx.serialization.encoding.CompositeDecoder
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
-import kotlinx.serialization.encoding.encodeStructure
+import kotlinx.serialization.encoding.encodeCollection
 
 /**
  * Everything a [LocalHeddle] needs to carry on after a restart, as one value you can encode in any
@@ -21,8 +21,8 @@ import kotlinx.serialization.encoding.encodeStructure
  * A snapshot that exists is consistent. The engine is the only thing that builds one, and decoding
  * one runs the same check, so a snapshot whose leases name an edge the ledger lacks, a path that
  * does not lead from [root] to the lease's leaf, a path across a retired edge, or a lease from a
- * later epoch than [epoch], or a [lastApplied] rooted somewhere other than [root] never decodes:
- * [LocalHeddle.decode] reports it as [RestoreResult.Corrupt].
+ * later epoch than [epoch] never decodes: [LocalHeddle.decode] reports it as
+ * [RestoreResult.Corrupt].
  *
  * ## What is kept, and why
  *
@@ -49,7 +49,10 @@ import kotlinx.serialization.encoding.encodeStructure
  *
  * ## The encoded form
  *
- * Encoded, a snapshot is two fields: `formatVersion`, then `state`. `formatVersion` is
+ * Encoded, a snapshot is a two-element sequence, `[formatVersion, state]`: a JSON array, a CBOR
+ * array. It is a sequence and not an object so that a store which reorders an object's keys, as
+ * Postgres `jsonb` does, cannot put `state` ahead of `formatVersion`. JSON and CBOR are both
+ * checked; ProtoBuf cannot carry an [EntitlementLedger] at all. `formatVersion` is
  * [FORMAT_VERSION] for every snapshot this release writes. Each release reads the format the one
  * before it wrote, as well as its own ([SUPPORTED_FORMAT_VERSIONS]), so storage written by the old
  * release survives one upgrade. [LocalHeddle.decode] reads `formatVersion` before it reads anything
@@ -59,7 +62,6 @@ import kotlinx.serialization.encoding.encodeStructure
  * Equal snapshots encode to equal bytes: every map inside goes through a canonical serializer and
  * every list is in id order.
  *
- * @property root the tree's root, where supply is minted and every pick starts.
  * @property epoch the epoch of the engine that took this snapshot. A restore must run under a
  *   later one.
  * @property ledger the books: every edge, every grant, every charge.
@@ -71,7 +73,6 @@ import kotlinx.serialization.encoding.encodeStructure
  */
 @Serializable(with = LocalHeddleSnapshotSerializer::class)
 public class LocalHeddleSnapshot internal constructor(
-    public val root: GroupId,
     public val epoch: Long,
     public val ledger: EntitlementLedger,
     public val allocatorMemory: AllocatorMemory,
@@ -88,17 +89,19 @@ public class LocalHeddleSnapshot internal constructor(
             }
         }
         for (persisted in open) persisted.requireConsistent(root, epoch, ledger)
-        require(lastApplied.groupId() == root) {
-            "the topology last applied is rooted at ${lastApplied.groupId().value}, not ${root.value}"
-        }
     }
+
+    /**
+     * The tree's root, where supply is minted and every pick starts: [lastApplied]'s, since a reload
+     * never changes the root. It is not stored separately, so the two cannot disagree.
+     */
+    public val root: GroupId get() = lastApplied.groupId()
 
     /** Every open lease, in [LeaseId] order. */
     public val leases: List<Lease> get() = open.map { it.lease }
 
     override fun equals(other: Any?): Boolean =
         other is LocalHeddleSnapshot &&
-            root == other.root &&
             epoch == other.epoch &&
             totalSlots == other.totalSlots &&
             open == other.open &&
@@ -107,8 +110,7 @@ public class LocalHeddleSnapshot internal constructor(
             ledger == other.ledger
 
     override fun hashCode(): Int {
-        var h = root.hashCode()
-        h = 31 * h + epoch.hashCode()
+        var h = epoch.hashCode()
         h = 31 * h + totalSlots.hashCode()
         h = 31 * h + open.hashCode()
         h = 31 * h + allocatorMemory.hashCode()
@@ -182,7 +184,6 @@ public sealed interface RestoreResult {
  */
 @Serializable
 private class SnapshotFormat1(
-    val root: GroupId,
     val epoch: Long,
     val totalSlots: Long,
     val ledger: EntitlementLedger,
@@ -191,11 +192,10 @@ private class SnapshotFormat1(
     val lastApplied: Topology,
 ) {
     fun toSnapshot(): LocalHeddleSnapshot =
-        LocalHeddleSnapshot(root, epoch, ledger, allocatorMemory, totalSlots, leases.map { it.toPersisted() }, lastApplied)
+        LocalHeddleSnapshot(epoch, ledger, allocatorMemory, totalSlots, leases.map { it.toPersisted(ledger) }, lastApplied)
 
     companion object {
         fun of(snapshot: LocalHeddleSnapshot): SnapshotFormat1 = SnapshotFormat1(
-            root = snapshot.root,
             epoch = snapshot.epoch,
             totalSlots = snapshot.totalSlots,
             ledger = snapshot.ledger,
@@ -206,21 +206,28 @@ private class SnapshotFormat1(
     }
 }
 
-/** One open lease in format 1: its id, leaf, reservation so far, start time, and path, root edge first. */
+/**
+ * One open lease in format 1: its id, reservation so far, start time, and path, root edge first.
+ * The leaf is not stored: it is the child of the path's last edge, so the two cannot disagree.
+ */
 @Serializable
 private class LeaseFormat1(
     val epoch: Long,
     val seq: Long,
-    val leaf: GroupId,
     val reserved: Long,
     val startedAt: Long,
     val path: List<AttachmentId>,
 ) {
-    fun toPersisted(): PersistedLease = PersistedLease(Lease(LeaseId(epoch, seq), leaf, reserved, startedAt), path)
+    /** The lease, with its leaf read off [ledger]: throws [IllegalArgumentException] when [path] does not end at an edge it holds. */
+    fun toPersisted(ledger: EntitlementLedger): PersistedLease {
+        val last = requireNotNull(path.lastOrNull()) { "lease ${LeaseId(epoch, seq)} has an empty path" }
+        val leaf = requireNotNull(ledger.record(last)) { "lease ${LeaseId(epoch, seq)} ends on ${last.value}, which the ledger does not hold" }.child
+        return PersistedLease(Lease(LeaseId(epoch, seq), leaf, reserved, startedAt), path)
+    }
 
     companion object {
         fun of(persisted: PersistedLease): LeaseFormat1 = with(persisted.lease) {
-            LeaseFormat1(id.epoch, id.seq, leaf, reserved, startedAt, persisted.path)
+            LeaseFormat1(id.epoch, id.seq, reserved, startedAt, persisted.path)
         }
     }
 }
@@ -230,42 +237,45 @@ internal class UnsupportedSnapshotFormat(val found: Int) :
     SerializationException("snapshot format $found is not one of ${LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS}")
 
 /**
- * The envelope: `formatVersion`, then `state` in that version's surrogate. The version is read
- * first and decides how `state` is read, so a format this release does not know is refused before
- * any of its state is decoded. A `state` that arrives ahead of its version is refused as malformed,
- * since there is then no way to know how to read it; this serializer always writes the version first.
+ * The envelope: a two-element sequence, `[formatVersion, state]`, with `state` in that version's
+ * surrogate. It is a sequence rather than an object so that its order is part of its type: a store
+ * that reorders an object's keys, as Postgres `jsonb` does, cannot move `state` ahead of
+ * `formatVersion`, and every format writes and reads the version first. The version decides how
+ * `state` is read, so a format this release does not know is refused before any of its state is
+ * decoded. A sequence with its elements the other way round, or with a third, is malformed.
  */
 internal object LocalHeddleSnapshotSerializer : KSerializer<LocalHeddleSnapshot> {
     private const val VERSION = 0
     private const val STATE = 1
 
-    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("us.tractat.kuilt.heddle.LocalHeddleSnapshot") {
-        element<Int>("formatVersion")
-        element("state", SnapshotFormat1.serializer().descriptor)
-    }
+    /**
+     * A LIST-kind descriptor, which every format reads in order. The library's list descriptor
+     * names one element type and the envelope has two, so it names the state's; the version is
+     * read and written by index as an `Int`, which every format allows inside a list.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    override val descriptor: SerialDescriptor = listSerialDescriptor(SnapshotFormat1.serializer().descriptor)
 
     override fun serialize(encoder: Encoder, value: LocalHeddleSnapshot) {
-        encoder.encodeStructure(descriptor) {
+        encoder.encodeCollection(descriptor, collectionSize = 2) {
             encodeIntElement(descriptor, VERSION, LocalHeddleSnapshot.FORMAT_VERSION)
             encodeSerializableElement(descriptor, STATE, SnapshotFormat1.serializer(), SnapshotFormat1.of(value))
         }
     }
 
     override fun deserialize(decoder: Decoder): LocalHeddleSnapshot = decoder.decodeStructure(descriptor) {
+        if (decodeSequentially()) {
+            val version = decodeIntElement(descriptor, VERSION).also(::requireSupported)
+            return@decodeStructure decodeState(this, version)
+        }
         var version: Int? = null
         var state: LocalHeddleSnapshot? = null
-        if (decodeSequentially()) {
-            val found = decodeIntElement(descriptor, VERSION).also(::requireSupported)
-            version = found
-            state = decodeState(this, found)
-        } else {
-            while (true) {
-                when (val index = decodeElementIndex(descriptor)) {
-                    VERSION -> version = decodeIntElement(descriptor, VERSION).also(::requireSupported)
-                    STATE -> state = decodeState(this, version ?: throw SerializationException("state precedes formatVersion"))
-                    CompositeDecoder.DECODE_DONE -> break
-                    else -> throw SerializationException("unexpected element $index in a snapshot")
-                }
+        while (true) {
+            when (val index = decodeElementIndex(descriptor)) {
+                VERSION -> version = decodeIntElement(descriptor, VERSION).also(::requireSupported)
+                STATE -> state = decodeState(this, version ?: throw SerializationException("state precedes formatVersion"))
+                CompositeDecoder.DECODE_DONE -> break
+                else -> throw SerializationException("a snapshot has an element $index past its state")
             }
         }
         if (version == null) throw SerializationException("a snapshot has no formatVersion")

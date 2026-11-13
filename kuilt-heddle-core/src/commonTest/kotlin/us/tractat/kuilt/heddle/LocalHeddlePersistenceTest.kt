@@ -1,6 +1,8 @@
 package us.tractat.kuilt.heddle
 
 import kotlinx.serialization.BinaryFormat
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationStrategy
 import kotlinx.serialization.json.Json
@@ -126,6 +128,18 @@ class LocalHeddlePersistenceTest {
         )
     }
 
+    /** The envelope is a sequence in a real binary format too: CBOR writes it as an array and reads it back. */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun snapshotRoundTripsThroughCbor() {
+        val snapshot = wakerScenario().first.persist()
+        val bytes = Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), snapshot)
+        assertAll(
+            { assertEquals(4, (bytes[0].toInt() and 0xFF) shr 5, "the rig: CBOR wrote an array (major type 4), not a map (5)") },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytes, Cbor)) },
+        )
+    }
+
     @Test
     fun restoreKeepsLeases() {
         val (reference, open) = wakerScenario()
@@ -204,7 +218,7 @@ class LocalHeddlePersistenceTest {
         val restored = LocalHeddle.restore(decoded(encode(persisted)), policy, epoch = 1L)
         val forgetful = LocalHeddle.restore(
             LocalHeddleSnapshot(
-                persisted.root, persisted.epoch, persisted.ledger, AllocatorMemory.EMPTY, persisted.totalSlots, persisted.open, persisted.lastApplied,
+                persisted.epoch, persisted.ledger, AllocatorMemory.EMPTY, persisted.totalSlots, persisted.open, persisted.lastApplied,
             ),
             policy,
             epoch = 1L,
@@ -255,19 +269,19 @@ class LocalHeddlePersistenceTest {
 
     @Test
     fun unsupportedVersionIsNamed() {
-        val later = GOLDEN_FORMAT_1.replaceFirst("{\"formatVersion\":1,", "{\"formatVersion\":2,")
+        val later = GOLDEN_FORMAT_1.replaceFirst("[1,", "[2,")
         assertAll(
             { assertTrue(later != GOLDEN_FORMAT_1, "the rig: the version was rewritten") },
             { assertEquals(RestoreResult.UnsupportedVersion(2, listOf(1)), LocalHeddle.decode(later, Json)) },
-            { assertEquals(RestoreResult.UnsupportedVersion(0, listOf(1)), LocalHeddle.decode("""{"formatVersion":0,"state":{}}""", Json)) },
+            { assertEquals(RestoreResult.UnsupportedVersion(0, listOf(1)), LocalHeddle.decode("""[0,{}]""", Json)) },
             {
                 assertEquals(
                     RestoreResult.UnsupportedVersion(9, listOf(1)),
-                    LocalHeddle.decode("""{"formatVersion":9,"state":{"a shape":"this release has never seen"}}""", Json),
+                    LocalHeddle.decode("""[9,{"a shape":"this release has never seen"}]""", Json),
                     "nothing past the version is read",
                 )
             },
-            { assertEquals(RestoreResult.UnsupportedVersion(3, listOf(1)), LocalHeddle.decode("""{"formatVersion":3}""", Json), "with no state at all") },
+            { assertEquals(RestoreResult.UnsupportedVersion(3, listOf(1)), LocalHeddle.decode("""[3]""", Json), "with no state at all") },
             { assertEquals(listOf(1), LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS) },
             { assertEquals(1, LocalHeddleSnapshot.FORMAT_VERSION) },
         )
@@ -280,10 +294,12 @@ class LocalHeddlePersistenceTest {
         val cases = listOf(
             "not json" to "x",
             "truncated" to golden.substring(0, golden.length / 2),
-            "no version" to """{"state":{}}""",
-            "state before version" to golden.replaceFirst("{\"formatVersion\":1,", "{").dropLast(1) + ",\"formatVersion\":1}",
+            "no version" to "[]",
+            "no state" to "[1]",
+            "the old object envelope" to "{\"formatVersion\":1,\"state\":" + golden.removePrefix("[1,").dropLast(1) + "}",
+            "state before version" to "[" + golden.removePrefix("[1,").dropLast(1) + ",1]",
+            "an element past the state" to golden.dropLast(1) + ",1]",
             "a lease on an edge the ledger lacks" to golden.replace(pathToA, "\"path\":[\"root/z@1:1#0\"]"),
-            "a lease whose path ends elsewhere" to golden.replace(pathToA, "\"path\":[\"${edgeTo(b).value}\"]"),
             "a lease from a later epoch" to golden.replaceFirst("\"leases\":[{\"epoch\":0,", "\"leases\":[{\"epoch\":5,"),
             "negative capacity" to golden.replace("\"totalSlots\":2,", "\"totalSlots\":-2,"),
             "a topology rooted elsewhere" to golden.replace("\"lastApplied\":{\"root\":\"root\"", "\"lastApplied\":{\"root\":\"elsewhere\""),
@@ -359,7 +375,7 @@ class LocalHeddlePersistenceTest {
         h.reconcileCapacity(totalSlots = 1L)
         val restored = throughJson(h)
         val uncapacitated = LocalHeddle.restore(
-            h.persist().let { LocalHeddleSnapshot(it.root, it.epoch, it.ledger, it.allocatorMemory, totalSlots = 0L, it.open, it.lastApplied) },
+            h.persist().let { LocalHeddleSnapshot(it.epoch, it.ledger, it.allocatorMemory, totalSlots = 0L, it.open, it.lastApplied) },
             policy,
             epoch = 1L,
         )

@@ -957,7 +957,6 @@ public class LocalHeddle private constructor(
      * @sample us.tractat.kuilt.heddle.sampleLocalPersistence
      */
     public fun persist(): LocalHeddleSnapshot = LocalHeddleSnapshot(
-        root = root,
         epoch = epoch,
         ledger = ledger,
         allocatorMemory = allocator.memory,
@@ -1283,9 +1282,9 @@ public class LocalHeddle private constructor(
             }
             val allocator = FairShareAllocator(SELF, policyConfig(policy), snapshot.allocatorMemory)
             val leasable = Leasable.ByTopology(snapshot.lastApplied)
-            return LocalHeddle(snapshot.root, policy, epoch, snapshot.ledger, allocator, leasable).apply {
-                for (persisted in snapshot.open) open[persisted.lease.id] = OpenLease(persisted.lease, persisted.path)
-                reconcileCapacity(snapshot.totalSlots)
+            return LocalHeddle(snapshot.root, policy, epoch, snapshot.ledger, allocator, leasable).also { engine ->
+                for (persisted in snapshot.open) engine.open[persisted.lease.id] = OpenLease(persisted.lease, persisted.path)
+                engine.reconcileCapacity(snapshot.totalSlots)
             }
         }
 
