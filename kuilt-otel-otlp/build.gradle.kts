@@ -38,16 +38,11 @@ kotlin {
             api(libs.kotlinx.io.bytestring)
         }
 
-        // Per-target Ktor engines. The client runs on all targets, so this module is
-        // all-target (no server piece, no jvmAndAndroidMain intermediate — the default
-        // KMP hierarchy auto-wiring stays on). Engines attach to the leaf source sets,
-        // which always exist for the declared targets.
-        jvmMain.dependencies { implementation(libs.ktor.client.okhttp) }
-        androidMain.dependencies { implementation(libs.ktor.client.cio) }
-        val iosArm64Main by getting { dependencies { implementation(libs.ktor.client.darwin) } }
-        val iosSimulatorArm64Main by getting { dependencies { implementation(libs.ktor.client.darwin) } }
-        val macosArm64Main by getting { dependencies { implementation(libs.ktor.client.darwin) } }
-        val wasmJsMain by getting { dependencies { implementation(libs.ktor.client.js) } }
+        // No Ktor engine in any main source set (#3288). OtlpHttpEdge takes a caller-owned
+        // HttpClient and never builds one, so the engine is the consumer's choice: a server can
+        // use the JDK's own client without inheriting OkHttp beside it. The tests need only what
+        // they name — MockEngine from commonTest's ktor-client-mock everywhere, and OkHttp for the
+        // JVM integration test against a live Netty collector, declared in jvmTest below.
 
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
