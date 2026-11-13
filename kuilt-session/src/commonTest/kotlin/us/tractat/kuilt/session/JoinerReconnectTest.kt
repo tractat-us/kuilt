@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.test.FlakyLifecycleLoom
 import us.tractat.kuilt.test.FlakyLifecycleSeam
 import us.tractat.kuilt.core.InMemoryLoom
@@ -95,6 +96,7 @@ class JoinerReconnectTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -116,6 +118,7 @@ class JoinerReconnectTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
                 reweave = { muxClient.join(tag) },
@@ -171,6 +174,7 @@ class JoinerReconnectTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -194,6 +198,7 @@ class JoinerReconnectTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
                 reweave = { muxClient.join(tag) },
@@ -250,6 +255,7 @@ class JoinerReconnectTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = hostConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -271,6 +277,7 @@ class JoinerReconnectTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
                 // Delay the re-weave past the host's 100 ms window so the resume lands after the
@@ -318,6 +325,7 @@ class JoinerReconnectTest {
                 memberName = "joiner",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
                 reweave = { loom.join(tag) },
@@ -354,6 +362,7 @@ class JoinerReconnectTest {
                 memberName = "joiner",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
                 reweave = { loom.join(tag) },
@@ -497,6 +506,7 @@ class JoinerReconnectTest {
                 memberName = "h",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -511,6 +521,7 @@ class JoinerReconnectTest {
                 memberName = "j",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
                 reweave = { throwaway },
@@ -575,6 +586,7 @@ class JoinerReconnectTest {
             memberName = "table-7",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
             roomId = RoomId("room-1"),
         ).also { it.start() }
@@ -597,6 +609,7 @@ class JoinerReconnectTest {
             memberName = "client",
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
             roomId = null,
             reweave = {

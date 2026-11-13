@@ -12,6 +12,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -162,8 +163,8 @@ class LivenessRouteGateTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-            val slowFactory = SeamRoomFactory(loom, backgroundScope, clock, slowConfig)
-            val fastFactory = SeamRoomFactory(loom, backgroundScope, clock, fastConfig)
+            val slowFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), slowConfig)
+            val fastFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
 
             val hostRoom = slowFactory.host(Pattern("Mesh"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
@@ -228,7 +229,7 @@ class LivenessRouteGateTest {
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(0L))
 
-        val hostFactory = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock, fastConfig)
+        val hostFactory = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
         val hostRoom = hostFactory.host(Pattern(ROOM))
 
         val aLoom = fabric.clientLoom(PeerId("joiner-a"), Random(1L))
@@ -237,9 +238,9 @@ class LivenessRouteGateTest {
         // assert what its `peers` set actually contains.
         val aSeam = aLoom.join(InMemoryTag(ROOM))
         val bSeam = bLoom.join(InMemoryTag(ROOM))
-        val aRoom = SeamRoomFactory(aLoom, backgroundScope, clock, fastConfig)
+        val aRoom = SeamRoomFactory(aLoom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
             .adopt(aSeam, SessionRole.Joiner)
-        val bRoom = SeamRoomFactory(bLoom, backgroundScope, clock, fastConfig)
+        val bRoom = SeamRoomFactory(bLoom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
             .adopt(bSeam, SessionRole.Joiner)
 
         hostRoom.roster.first { it.size == 2 }

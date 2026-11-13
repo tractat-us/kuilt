@@ -9,6 +9,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
@@ -46,13 +47,23 @@ class RehostedRoomAdmissionTest {
                 "no dispatcher (ContinuationInterceptor) in coroutine context"
             }
             val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(3041L))
-            val hostFactory = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock = zeroClock)
+            val hostFactory = SeamRoomFactory(
+                fabric.serverLoom,
+                backgroundScope,
+                clock = zeroClock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
+            )
 
             hostFactory.host(Pattern("t")).leave()
             val rehosted = hostFactory.host(Pattern("t"))
 
             val joinerFactory =
-                SeamRoomFactory(fabric.clientLoom(PeerId("joiner"), Random(1L)), backgroundScope, clock = zeroClock)
+                SeamRoomFactory(
+                    fabric.clientLoom(PeerId("joiner"), Random(1L)),
+                    backgroundScope,
+                    clock = zeroClock,
+                    deviceKeyStore = InMemoryDeviceKeyStore(),
+                )
             val joiner = joinerFactory.join(InMemoryTag("t"))
 
             val joinerRoster = withTimeoutOrNull(5.seconds) { joiner.roster.first { it.isNotEmpty() } }

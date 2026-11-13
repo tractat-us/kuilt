@@ -19,6 +19,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
@@ -37,7 +38,7 @@ import kotlin.time.Instant
 
 class SeamElectionLobbyTest {
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
-        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) })
+        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = InMemoryDeviceKeyStore())
 
     private fun lobby(seam: Seam, loom: InMemoryLoom, scope: CoroutineScope) =
         SeamElectionLobby(seam = seam, factory = factory(loom, scope), scope = scope,
@@ -289,7 +290,7 @@ class SeamElectionLobbyTest {
             val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
             val l = SeamElectionLobby(
                 seam = seam,
-                factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock = clock),
+                factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock = clock, deviceKeyStore = InMemoryDeviceKeyStore()),
                 scope = backgroundScope,
                 clock = clock,
                 roomKey = null,

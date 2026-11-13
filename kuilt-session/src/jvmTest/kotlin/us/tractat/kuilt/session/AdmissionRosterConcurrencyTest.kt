@@ -16,6 +16,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
@@ -72,6 +73,7 @@ class AdmissionRosterConcurrencyTest {
                     memberName = "host",
                     scope = scope,
                     clock = { Instant.fromEpochMilliseconds(0) },
+                    deviceKeyStore = InMemoryDeviceKeyStore(),
                     heartbeatConfig = HeartbeatConfig(),
                 )
                 val events = scope.launch(start = CoroutineStart.UNDISPATCHED) {
