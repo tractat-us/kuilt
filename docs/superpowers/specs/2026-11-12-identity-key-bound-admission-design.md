@@ -65,8 +65,11 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     app's separate call.
 13. **`DidKey` checks syntax in `init`; the point is decoded in `suspend DidKey.parse` (Iain,
     planning R1).** A constructor cannot suspend and WebCrypto's decoders are async, so `init`
-    checks prefix, multicodec, length and the `0x02`/`0x03` lead byte only. Every verify decodes the
-    point, so an off-curve key verifies nothing.
+    checks prefix, multicodec, length and the `0x02`/`0x03` lead byte only. `parse` and `verify`
+    both run an **explicit on-curve check** (`x < p` and `y² ≡ x³ − 3x + b (mod p)`) on the decoded
+    point (Iain, 2026-11-12): cryptography-kotlin 0.6.0's JDK decoder takes a square root without
+    checking it, so an off-curve x decodes there (found by #3201's probe). The check is validation,
+    not decompression; decompression stays the library's.
 14. **A revoked present member gets no refresh and no held-seat restore (Iain, planning R2).** The
     host stops re-issuing grants to a member whose subject was revoked after its current admission,
     and a revoked device's held-seat restore falls through to ordinary admission.

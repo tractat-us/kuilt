@@ -22,7 +22,7 @@
 
 ## Rulings (Iain, 2026-11-12 — recorded as the spec's Decided 13–15)
 
-- **R1 → (a).** `DidKey.init` checks syntax only (`did:key:zDn` prefix, base58btc, multicodec `0x80 0x24`, 33 bytes, leading `0x02`/`0x03`). `suspend fun DidKey.parse(value)` also decodes the point. Every verify decodes the point, so an off-curve key verifies nothing. Task 0.3 is written for this.
+- **R1 → (a), amended.** `DidKey.init` checks syntax only (`did:key:zDn` prefix, base58btc, multicodec `0x80 0x24`, 33 bytes, leading `0x02`/`0x03`). `suspend fun DidKey.parse(value)` also decodes the point. **Amended after #3201 (PR #3228):** cryptography-kotlin 0.6.0's JDK `decodePoint` computes `y = rhs^((p+1)/4)` and never checks `y² = rhs` or `x < p`, so an off-curve x decodes on JVM/host-Android. Iain ruled: `parse` and `verify` run an explicit on-curve check. Task 0.3 is written for this.
 - **R2 → both rules.** (i) The host stops re-issuing grants to a member whose subject was revoked after that member's current admission. (ii) For a revoked subject, a held-seat restore (tier 1) falls through to ordinary admission.
 - **R3 → `DeviceKeyStore.platform(appId, context)`** in `androidMain`, grants under `context.noBackupFilesDir`. Other targets keep `platform(appId)`; JVM takes a directory.
 
@@ -172,7 +172,8 @@ internal object Layout {
 ### Task 0.3: `DidKey` [after G0 passes]
 
 **Files:**
-- Create: `commonMain/DidKey.kt` and `commonMain/Base58.kt` (internal base58btc).
+- Create: `commonMain/DidKey.kt`, `commonMain/Base58.kt` (internal base58btc) and `commonMain/P256Curve.kt` (internal on-curve check).
+- Modify: `kuilt-identity/build.gradle.kts` (`implementation(libs.ionspin.bignum)`, already in the catalog for `:kuilt-deal`).
 - Test: `commonTest/DidKeyTest.kt`.
 - Modify: the skill (add the identity row), the cookbook (start `## Device identity & return`), `docs/agent-cookbook.md`, and `api/`.
 
@@ -182,14 +183,16 @@ internal object Layout {
 @JvmInline public value class DidKey internal constructor(public val value: String) {
     // init: starts "did:key:z", base58btc decodes, multicodec 0x80 0x24, 33 bytes, leading 0x02/0x03
     public fun compressedPoint(): ByteArray                          // 33-byte copy
-    public suspend fun verify(message: ByteArray, signature: ByteArray): Boolean  // SHA-256, raw r‖s; false (never throws) on off-curve or bad length
+    public suspend fun verify(message: ByteArray, signature: ByteArray): Boolean  // runs isOnCurve first; SHA-256, raw r‖s; false (never throws) on off-curve or bad length
     public companion object {
-        public suspend fun parse(value: String): DidKey               // init checks + decodes the point; IllegalArgumentException otherwise
+        public suspend fun parse(value: String): DidKey               // init checks + isOnCurve + decodes the point; IllegalArgumentException otherwise
         internal fun ofCompressedPoint(point: ByteArray): DidKey
     }
 }
 ```
+- **The on-curve check** (`internal fun isOnCurve(compressed: ByteArray): Boolean` in `P256Curve.kt`): with the P-256 constants `p` and `b` as hex literals, require `x < p`, compute `rhs = x³ − 3x + b mod p`, and require `rhs^((p−1)/2) ≡ 1` or `rhs ≡ 0` (Euler's criterion: `rhs` is a square, so a point with this x exists; the lead byte then picks y). This is validation only. Decompression stays the provider's. It runs in common code, so every provider gets the same answer.
 - [ ] **Step 1: Write the failing tests.**
+  - `isOnCurveMatchesKnownPoints`: both G0 fixed points (`02` and `03`) and the generator's x are on the curve. `x = p` and `x = p + 1` (as 32 bytes where they fit, otherwise all-`0xff`) are rejected by the `x < p` arm. Each arm asserts its own precondition.
   - `w3cVectorsRoundTrip`: take at least two P-256 entries from the W3C CCG did:key spec's test vectors, citing the document in a comment. For each, assert that `parse(did)` succeeds, that `value` starts `did:key:zDn`, and that decompressing through the provider gives the vector's JWK `x‖y`.
   - `syntaxRejects`: each of these throws `IllegalArgumentException`.
     - a wrong prefix;
@@ -198,7 +201,7 @@ internal object Layout {
     - 32 point bytes;
     - 34 point bytes;
     - a leading `0x04`.
-  - `offCurvePointIsRejectedByParseAndVerifiesNothing`: take `x` with no point on P-256 (find one by trying `x = 0, 1, 2, …` with the provider), wrapped as `0x02‖x`. Assert that `parse` throws. Assert that a `DidKey` decoded through the serializer `verify`s to `false` and does not throw.
+  - `offCurvePointIsRejectedByParseAndVerifiesNothing`: use `x = 1`, which #3201 measured has no point on P-256, wrapped as `0x02‖x`. As the rig's control, assert that the JDK provider's raw decode **accepts** it on JVM (the defect this check exists for; skip that control on other targets, and record per target whether the provider accepted it). Assert that `parse` throws on every target. Assert that a `DidKey` decoded through the serializer `verify`s to `false` and does not throw. Mutation: make `isOnCurve` return `true`, and confirm this arm reds on JVM.
   - `serializerRoundTripsAsAString`, over CBOR.
 - [ ] **Step 2: Watch them fail**, then implement. The point decode uses `ecdsa.publicKeyDecoder(EC.Curve.P256).decodeFromByteArray(RAW.Compressed, …)` inside `providerCall`.
 - [ ] **Step 3: Docs.**
