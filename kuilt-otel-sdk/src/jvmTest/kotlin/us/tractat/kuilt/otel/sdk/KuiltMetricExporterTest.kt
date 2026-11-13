@@ -254,6 +254,36 @@ class KuiltMetricExporterTest {
         assertEquals(7.0, exp.gaugeValue(MetricKey("queue.depth", MetricKind.GAUGE)))
     }
 
+    // A reader that does not consult the bridge's temporality (a custom MetricReader with its
+    // own selector) can still hand it the other kind of sum. Each would be silently wrong:
+    // a running total added to the GCounter on every collection, or a change stored as a level.
+
+    @Test
+    fun cumulativeMonotonicSumIsDroppedNotAdded() = runTest {
+        val exp = buffer()
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val total = sum(monotonic = true, points = listOf(longPoint(3L)), temporality = AggregationTemporality.CUMULATIVE)
+        val code = bridge.export(listOf(metric("requests", MetricDataType.LONG_SUM, total)))
+        runCurrent()
+        assertAll(
+            { assertEquals(0, exp.metricCount(), "nothing written") },
+            { assertTrue(code.isSuccess, "dropped is not an export failure") },
+        )
+    }
+
+    @Test
+    fun deltaNonMonotonicSumIsDroppedNotStoredAsLevel() = runTest {
+        val exp = buffer()
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val change = sum(monotonic = false, points = listOf(doublePoint(2.0)), temporality = AggregationTemporality.DELTA)
+        val code = bridge.export(listOf(metric("queue.depth", MetricDataType.DOUBLE_SUM, change)))
+        runCurrent()
+        assertAll(
+            { assertEquals(0, exp.metricCount(), "nothing written") },
+            { assertTrue(code.isSuccess, "dropped is not an export failure") },
+        )
+    }
+
     @Test
     fun histogramIsDroppedNotFailed() = runTest {
         val exp = buffer()
