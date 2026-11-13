@@ -35,11 +35,25 @@ internal object StatementCodec {
         throw IllegalArgumentException("a statement's text field is not well-formed UTF-16: it holds an unpaired surrogate", e)
     }
 
-    /** The string whose UTF-8 is [bytes], or `null` when [bytes] is not well-formed UTF-8. */
-    fun textOrNull(bytes: ByteArray): String? = try {
-        bytes.decodeToString(throwOnInvalidSequence = true)
+    /**
+     * The string whose UTF-8 is [bytes] from [startIndex] to the end, or `null` when that is not
+     * well-formed UTF-8. The strict decode refuses an overlong form or an encoded surrogate, so one
+     * string has one spelling on the wire, and decoding then encoding gives back the same bytes.
+     */
+    fun textOrNull(bytes: ByteArray, startIndex: Int = 0): String? = try {
+        bytes.decodeToString(startIndex = startIndex, endIndex = bytes.size, throwOnInvalidSequence = true)
     } catch (_: CharacterCodingException) {
         null
+    }
+
+    /** A time in a layout is its epoch milliseconds as [TIME_SIZE] big-endian bytes. */
+    fun time(epochMillis: Long): ByteArray =
+        ByteArray(TIME_SIZE) { (epochMillis ushr (Byte.SIZE_BITS * (TIME_SIZE - 1 - it))).toByte() }
+
+    /** The epoch milliseconds [bytes] holds, or `null` when [bytes] is not [TIME_SIZE] bytes. */
+    fun timeOrNull(bytes: ByteArray): Long? {
+        if (bytes.size != TIME_SIZE) return null
+        return bytes.fold(0L) { acc, byte -> (acc shl Byte.SIZE_BITS) or (byte.toLong() and 0xFF) }
     }
 
     /**
@@ -62,6 +76,9 @@ internal object StatementCodec {
         val (layout, signature) = Layout.split(wire) ?: return false
         return signer.verify(layout, signature)
     }
+
+    /** The width of a time field: one `Long`. */
+    const val TIME_SIZE: Int = Long.SIZE_BYTES
 
     private const val EVEN_Y: Byte = 0x02
     private const val ODD_Y: Byte = 0x03
