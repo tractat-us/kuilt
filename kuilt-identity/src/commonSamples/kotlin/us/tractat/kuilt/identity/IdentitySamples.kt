@@ -123,3 +123,19 @@ internal suspend fun sampleDurableRevocations() {
     val afterRestart = RevocationList.open(store)
     check(afterRestart.notBefore(lostPhone) == now + 1)
 }
+
+/** @suppress — sample only */
+internal suspend fun sampleDeviceKeyStoreRemembers(openAtLaunch: suspend () -> DeviceKeyStore) {
+    // At launch the app opens its platform store, e.g. DeviceKeyStore.platform("my-app", dir) on the desktop.
+    val today = openAtLaunch()
+    val me = today.deviceKey()
+    val host = DeviceKey.generate()
+    val now = 1_700_000_000_000L
+    val pass = Grant.issue(host, me.id, GrantScope.Room("table-7"), issuedAt = now, notAfter = now + 3_600_000)
+    today.keepGrant(pass)
+
+    // The app is closed, and opened again tomorrow: the same device, still holding its pass.
+    val tomorrow = openAtLaunch()
+    check(tomorrow.deviceKey().id == me.id)
+    check(tomorrow.grants() == listOf(pass))
+}

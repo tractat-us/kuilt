@@ -60,6 +60,9 @@ kotlin {
             api(project(":kuilt-raft"))
             api(project(":kuilt-crdt"))
             api(project(":kuilt-store"))
+            // DeviceKeyStoreConformanceSuite: every device-key store, in :kuilt-identity or a
+            // consumer's, subclasses it. :kuilt-identity's own tests reach back here test-only.
+            api(project(":kuilt-identity"))
             api(project(":kuilt-test"))
             // The lattice-law harness asserts byte-level canonicality of encoded CRDT
             // states (#1957), so it needs a concrete BinaryFormat. CBOR matches Quilter's

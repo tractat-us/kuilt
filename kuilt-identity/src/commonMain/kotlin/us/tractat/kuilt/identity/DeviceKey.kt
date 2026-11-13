@@ -3,6 +3,9 @@ package us.tractat.kuilt.identity
 import dev.whyoleg.cryptography.algorithms.EC
 import dev.whyoleg.cryptography.algorithms.ECDSA
 import dev.whyoleg.cryptography.algorithms.SHA256
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * One device's own key: it signs, and its [id] is the public name other devices check those
@@ -52,10 +55,12 @@ public interface DeviceKey {
  * Each [sign] draws a fresh random nonce from the platform's provider, so signing the same message
  * twice gives two different signatures, and both verify.
  *
- * No persistent encoding yet; the desktop key file (plan Task 3.1) will keep it as a JWK and run a
- * sign-then-verify self-test on decode. PKCS#8 cannot be it on the JVM and Android: the JDK provider
- * writes PKCS#8 without the public key, and reading the key back then needs the public half, which
- * the JDK provider derives only with BouncyCastle present.
+ * A store that keeps it on disk writes it with [encodeJwk] and reads it back with [readBack]: a JWK
+ * carrying `x`, `y` and `d`, checked on the way in by signing and verifying under the name the JWK's
+ * public half gives. PKCS#8 cannot be the format on the JVM and Android: the JDK provider writes
+ * PKCS#8 without the public key, and reading the key back then needs the public half, which the JDK
+ * provider derives only with BouncyCastle present. A JWK carries the public half itself, so the only
+ * thing left to check is that the two halves belong together, which the self-test does.
  *
  * Immutable after construction, so it is safe to share across threads: each [sign] builds its own
  * signature generator.
@@ -71,7 +76,57 @@ internal class SoftwareDeviceKey private constructor(
     /** The name only: the private half never reaches a log line through [toString]. */
     override fun toString(): String = "SoftwareDeviceKey(${id.value})"
 
+    /**
+     * This key as a JWK carrying `x`, `y` and `d` — the private half in the clear, for a key store to
+     * keep where only this device can read it. [readBack] is the way back in.
+     */
+    suspend fun encodeJwk(): ByteArray = providerCall(::encodingFailed) {
+        privateKey.encodeToByteArray(EC.PrivateKey.Format.JWK)
+    }
+
     companion object {
+        /** What the self-test signs: fixed, since it proves only that the two halves belong together. */
+        private val SELF_TEST = "kuilt-identity device-key self-test".encodeToByteArray()
+
+        /**
+         * The key in [jwk], or why it cannot be used.
+         *
+         * Decodes the JWK, names the key from its public half, then signs [SELF_TEST] with its private
+         * half and verifies that signature under the name, through [DidKey.verify] and so through the
+         * same on-curve check and decompression every other device applies to that name. A key that
+         * passes signs for the name every room will check it against. Anything else is [StoredKey.Refused]:
+         * bytes that are not a P-256 JWK, a point that is not on the curve, a `d` out of range, and a
+         * `d` that belongs to some other key.
+         *
+         * @throws IllegalStateException when this platform's cryptographic provider cannot run at all,
+         *   which says nothing about [jwk] and so must not be read as a reason to replace it.
+         */
+        suspend fun readBack(jwk: ByteArray): StoredKey {
+            val ecdsa = algorithms().ecdsa
+            var failing = "it does not decode as a P-256 JWK"
+            val (privateKey, name, signature) = try {
+                val privateKey = ecdsa.privateKeyDecoder(EC.Curve.P256).decodeFromByteArray(EC.PrivateKey.Format.JWK, jwk)
+                failing = "its public half does not name a key"
+                val name = nameOf(privateKey.getPublicKey())
+                failing = "its private half cannot sign"
+                val signature = privateKey.signatureGenerator(SHA256, ECDSA.SignatureFormat.RAW).generateSignature(SELF_TEST)
+                Triple(privateKey, name, signature)
+            } catch (e: CancellationException) {
+                // One the provider minted while this job is alive is a failure on these bytes like any other.
+                currentCoroutineContext().ensureActive()
+                return StoredKey.Refused("$failing (${e::class.simpleName})")
+            } catch (e: Error) {
+                throw e
+            } catch (e: Throwable) {
+                // The class only: a provider's message is text this module does not control.
+                return StoredKey.Refused("$failing (${e::class.simpleName})")
+            }
+            if (!name.verify(SELF_TEST, signature)) {
+                return StoredKey.Refused("its private half does not sign for the name its public half gives, ${name.value}")
+            }
+            return StoredKey.Usable(SoftwareDeviceKey(privateKey, name))
+        }
+
         suspend fun generate(): SoftwareDeviceKey {
             val ecdsa = algorithms().ecdsa
             val pair = providerCall(::generationFailed) { ecdsa.keyPairGenerator(EC.Curve.P256).generateKey() }
@@ -90,5 +145,16 @@ internal class SoftwareDeviceKey private constructor(
 
         private fun encodingFailed(failureClass: String) =
             IllegalStateException("kuilt-identity: the platform provider failed to encode a P-256 key ($failureClass)")
+    }
+}
+
+/** What [SoftwareDeviceKey.readBack] found in a stored key. */
+internal sealed interface StoredKey {
+    /** A key whose private half signs for its name. */
+    class Usable(val key: SoftwareDeviceKey) : StoredKey
+
+    /** Not a usable key, and [reason] says why in words that carry no key material. */
+    class Refused(val reason: String) : StoredKey {
+        override fun toString(): String = "Refused($reason)"
     }
 }
