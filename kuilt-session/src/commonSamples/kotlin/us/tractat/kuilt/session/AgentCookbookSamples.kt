@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import us.tractat.kuilt.core.FabricAvailability
@@ -352,7 +353,11 @@ public suspend fun flushThenLeaveSample(
  * again. A friend's pass is good in any room you host and never runs out; a stranger's is good in
  * this room for an hour after last contact; a device you have revoked gets your own refusal code.
  */
-public suspend fun hostAdmissionSample(friends: Set<DidKey>, store: DurableStore): HostAdmission {
+public suspend fun hostAdmissionSample(
+    friends: Set<DidKey>,
+    blocked: StateFlow<Set<DidKey>>,
+    store: DurableStore,
+): HostAdmission {
     // RejectCode is open, but the joiner sees only the id: this arrives as RejectCode.Unknown("not-welcome"),
     // which is treated as retryable.
     val notWelcome = object : RejectCode {
