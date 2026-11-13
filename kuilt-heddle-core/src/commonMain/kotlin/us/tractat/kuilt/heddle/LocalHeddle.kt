@@ -161,8 +161,8 @@ public sealed interface LeaseOutcome {
  *
  * Each operation runs on a local ledger value and is swapped in once at the end, so an outcome
  * that changes nothing leaves [snapshot]'s ledger the very same object. **The one exception is the
- * allocator's wake memory, which a failed [acquire] may still advance:** the picks it made on the
- * way down observed who was waiting, and forgetting that would treat the next observation as the
+ * allocator's wake memory, which a failed [acquire] may still advance:** the pick it tried at the
+ * root observed who was waiting, and forgetting that would treat the next observation as the
  * first.
  *
  * ## Supply
