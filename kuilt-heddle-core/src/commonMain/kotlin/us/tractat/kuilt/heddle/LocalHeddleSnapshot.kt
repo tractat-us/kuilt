@@ -176,7 +176,11 @@ internal data class PersistedLease(val lease: Lease, val path: List<AttachmentId
     }
 }
 
-/** What [LocalHeddle.decode] found in a stored snapshot. */
+/**
+ * What [LocalHeddle.decode] found in a stored snapshot.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleLocalPersistence
+ */
 public sealed interface RestoreResult {
     /** The bytes held a snapshot this release reads. Start an engine from it with [LocalHeddle.restore]. */
     public data class Restored(public val snapshot: LocalHeddleSnapshot) : RestoreResult

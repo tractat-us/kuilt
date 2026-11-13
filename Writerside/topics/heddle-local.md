@@ -505,20 +505,20 @@ was really charged. Three limits come with that promise, stated plainly.
   ahead. That is a small dose of the head start the quiet-team rule exists to
   stop. A `cancel` hands back the whole estimate the same way.
 
-Both effects shrink as estimates get closer to the truth, so:
+The last two shrink as estimates get closer to the truth, so:
 
 - **Set `defaultReservation` near a typical build**, not the worst case. A small
   default favours lanes whose builds run long; a large one penalises them.
 - **Pass a `reservation` when you know better**, such as the lane's last build
   time, as the Mac agent above does.
-- **Know where the second effect lives.** It needs a lane whose queue empties
+- **Know where the quiet-spell effect lives.** It needs a lane whose queue empties
   while its own builds still run. A lane that always has work queued, or that
   finishes everything before it queues more, never meets it. A build that runs
   past its estimate hands nothing back, so it adds nothing either.
 
-Both are known in this release. The quiet-spell effect is tracked by
-[#3238](https://github.com/tractat-us/kuilt/issues/3238), and the estimate
-effect by [#3239](https://github.com/tractat-us/kuilt/issues/3239).
+Both are known gaps. The quiet-spell effect is tracked by
+[#3238](https://github.com/tractat-us/kuilt/issues/3238). The estimate effect
+is tracked by [#3239](https://github.com/tractat-us/kuilt/issues/3239).
 [What it does not promise](heddle-local-turns.md#what-it-does-not-promise) gives
 the arithmetic and the measured sizes.
 

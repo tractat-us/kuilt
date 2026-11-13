@@ -37,8 +37,11 @@ public data class SupplyPolicy(
  * @property defaultReservation the cost a lease reserves when the caller passes no estimate, in the
  *   caller's cost unit (time, by convention: R2). Positive, and at most [LocalHeddle.MAX_RESERVATION].
  * @property sleeperCredit the virtual-time credit a group that wakes from idle may keep (design
- *   §10.6). `0`, the default, keeps none. Non-negative.
+ *   §10.6). `0`, the default, keeps none. Non-negative. It is not the whole bound: a lease still
+ *   open when its group wakes can hand more back at [LocalHeddle.complete] or [LocalHeddle.cancel],
+ *   up to its reservation over the edge's weight, tracked by #3238.
  * @property supply how far ahead of its leases the engine mints supply.
+ * @sample us.tractat.kuilt.heddle.sampleLocalLease
  */
 public data class LocalPolicy(
     public val defaultReservation: Long,
@@ -383,6 +386,7 @@ public class LocalHeddle private constructor(
      *
      * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION], or
      *   [eligible] is not a subset of [waiting].
+     * @sample us.tractat.kuilt.heddle.sampleLocalLease
      */
     public fun acquire(
         waiting: Set<GroupId>,
@@ -456,6 +460,7 @@ public class LocalHeddle private constructor(
      * lineage of active edges to the root. The ledger is then unchanged.
      *
      * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION].
+     * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun admit(leaf: GroupId, startedAt: Long, reservation: Long = policy.defaultReservation): AdmitOutcome {
         requireReservation("reservation", reservation)
@@ -479,6 +484,7 @@ public class LocalHeddle private constructor(
      * reconciled. Neither changes anything.
      *
      * @throws IllegalArgumentException when [amount] is not in `1..`[MAX_RESERVATION].
+     * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun extend(lease: LeaseId, amount: Long): LeaseOutcome {
         requireReservation("extend amount", amount)
@@ -502,6 +508,7 @@ public class LocalHeddle private constructor(
      * class KDoc).
      *
      * @throws IllegalArgumentException when [actualCost] is negative.
+     * @sample us.tractat.kuilt.heddle.sampleLocalLease
      */
     public fun complete(lease: LeaseId, actualCost: Long): LeaseOutcome {
         require(actualCost >= 0L) { "actualCost must be non-negative, was $actualCost" }
@@ -532,7 +539,11 @@ public class LocalHeddle private constructor(
         return LeaseOutcome.Done(charged = actualCost, overrun = overrun)
     }
 
-    /** Close [lease] without charging it: everything reserved goes back up the path. */
+    /**
+     * Close [lease] without charging it: everything reserved goes back up the path.
+     *
+     * @sample us.tractat.kuilt.heddle.sampleBuildFarm
+     */
     public fun cancel(lease: LeaseId): LeaseOutcome {
         val current = open[lease] ?: return missing(lease)
         ledger = releaseUp(ledger, current.path, current.lease.reserved)
@@ -550,6 +561,7 @@ public class LocalHeddle private constructor(
      * ends early at the first call that would not acquire.
      *
      * @throws IllegalArgumentException when a count is negative or a reservation is not in `1..`[MAX_RESERVATION].
+     * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun previewPicks(waiting: Map<GroupId, Int>, eligible: Set<GroupId>, reservations: List<Long>): List<GroupId> {
         require(waiting.values.all { it >= 0 }) { "a queued count must be non-negative" }
@@ -678,6 +690,7 @@ public class LocalHeddle private constructor(
      *
      * @throws IllegalArgumentException when [totalSlots] is negative, or the target it sizes,
      *   `totalSlots × defaultReservation × targetSlots`, is above `Long.MAX_VALUE / 4`.
+     * @sample us.tractat.kuilt.heddle.sampleLocalLease
      */
     public fun reconcileCapacity(totalSlots: Long) {
         require(totalSlots >= 0L) { "totalSlots must be non-negative, was $totalSlots" }
@@ -775,6 +788,7 @@ public class LocalHeddle private constructor(
      *
      * @throws IllegalArgumentException if [group] does not name a group the topology marks for
      *   runtime children, [name] is empty, or [generation] is negative.
+     * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun attachRuntimeChild(group: List<String>, name: String, generation: Long): ApplyResult =
         run(topology().attachRuntimeChild(group, name, ledger, generation))
@@ -786,6 +800,7 @@ public class LocalHeddle private constructor(
      *
      * @throws IllegalArgumentException if [group] does not name a group the topology marks for
      *   runtime children, or [name] is empty.
+     * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun detachRuntimeChild(group: List<String>, name: String): ApplyResult =
         run(topology().detachRuntimeChild(group, name, ledger))
@@ -1240,6 +1255,8 @@ public class LocalHeddle private constructor(
          * It boots the way every later reload arrives: [apply] of [topology] to an empty ledger, at
          * generation 0. So the ids it starts with are exactly [Topology.lower]'s, and there is no
          * second, unfloored way to build a tree.
+         *
+         * @sample us.tractat.kuilt.heddle.sampleLocalLease
          */
         public fun fromTopology(topology: Topology, policy: LocalPolicy, epoch: Long): LocalHeddle {
             val engine = LocalHeddle(
@@ -1291,6 +1308,8 @@ public class LocalHeddle private constructor(
         /**
          * Read a snapshot from [bytes], encoded in [format] from [LocalHeddleSnapshot]'s serializer.
          * Never throws for what the bytes hold: see [RestoreResult].
+         *
+         * @sample us.tractat.kuilt.heddle.sampleLocalPersistence
          */
         public fun decode(bytes: ByteArray, format: BinaryFormat): RestoreResult =
             decoding { format.decodeFromByteArray(LocalHeddleSnapshot.serializer(), bytes) }

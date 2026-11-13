@@ -162,15 +162,15 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
   `complete` corrects the charge, not the picks already made. The effect turns
   into share when each job waits on the one before. On a probe with two lanes at
   equal weight, 8 slots and one lane always busy, the other lane gained 0.081 of
-  share by reserving a quarter of its real cost. Reserving four times its cost, it
-  lost 0.097 to 0.111, against the 0.03 bar for concurrent leases below. Most callers send
-  `defaultReservation`, so its size picks the side: small favours long jobs,
-  large penalises them. This is tracked by
+  share by reserving a quarter of its real cost. Reserving four times its cost,
+  it lost 0.097 to 0.111, against the 0.03 bar for concurrent leases below. Most
+  callers send `defaultReservation`, so its size picks the side: small favours
+  long jobs, large penalises them. This is tracked by
   [#3239](https://github.com/tractat-us/kuilt/issues/3239).
 - **A lease that straddles a wake.** A lane is a waker when an earlier pick at its
   parent saw it missing from `waiting`, even with one of its leases still open.
-  The clamp lifts its `ev` to the front, and that `ev` counts the open lease at its
-  full estimate `r`. If the lease then completes at a cost `C` below `r`, `complete`
+  The clamp lifts its `ev` to the front, and that `ev` counts the open lease at
+  its full estimate `r`. If the lease then completes at a cost `C` below `r`, `complete`
   returns `r − C` up the path, and the lane's `ev` drops `(r − C)/w` below where
   the clamp put it. A `cancel` returns all of `r`, so up to `r/w`. Nothing takes
   that back while the lane stays busy, so each such lease acts like a
@@ -188,9 +188,9 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
   fork throws `ArithmeticException`. Pick a coarse unit: minutes or seconds, not
   nanoseconds.
 
-**Sizing estimates.** Both effects vanish for a lease that settles at its
-estimate, a `cancel` aside, so aim `defaultReservation` at a typical job rather than the longest
-one, and pass a `reservation` per `acquire` when the lane's history gives a
+**Sizing estimates.** The estimate and straddle effects both vanish for a lease
+that settles at its estimate, a `cancel` aside. So aim `defaultReservation` at a
+typical job rather than the longest one, and pass a `reservation` per `acquire` when the lane's history gives a
 better guess. Raising `sleeperCredit` does not help: it grants idle credit on
 purpose, on top of any a straddling lease hands back. The probe behind both
 measurements is not part of the evidence below, which covers only what is on

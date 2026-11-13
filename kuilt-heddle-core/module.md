@@ -15,6 +15,58 @@ module alone when you only need the decision and the books in one process: it ha
 no `Seam`, no Raft, no replication and no coroutines, and its build fails if it
 ever gains one (`verifyHeddleCoreDependencies`).
 
+## Start here: a scheduler in one program
+
+Most programs want the whole loop rather than its parts: when a worker frees up,
+ask whose work runs next, run it, and charge what it really cost. That is
+`LocalHeddle`. Describe the groups and their weights as a `Topology` (in code
+with `draft`, or from an admin's file with `Topology.from`), start an engine with
+`LocalHeddle.fromTopology`, tell it how many slots you run with
+`reconcileCapacity`, and then lease one slot at a time:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalLease -->
+```kotlin
+    // Both groups have work queued, and this slot can run either.
+    val queued = setOf(heavy, light)
+    val first = heddle.acquire(waiting = queued, eligible = queued, startedAt = 100L)
+    check(first is AcquireOutcome.Acquired)
+
+    // The job overran its 3-unit estimate: all 5 units are charged, 2 of them as overrun.
+    check(heddle.complete(first.lease.id, actualCost = 5L) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+```
+
+The rest of the surface, by what you would ask it:
+
+- **Who goes next, and why not me?** `previewPicks` lists the next picks without
+  making them; `explain` returns a `WaitExplanation`; `entitlement` is a group's
+  fair share as an exact `Rational`.
+- **Other endings.** `extend` reserves more for a job still running, `cancel`
+  charges nothing, and `admit` charges work that started without a pick.
+- **The tree changes.** `apply` takes a whole new `Topology` and returns an
+  `ApplyResult`, whose `StepRefusal`s name what is still draining.
+  `attachRuntimeChild` and `detachRuntimeChild` add and remove children the
+  program names as it runs.
+- **Something crashed.** `reconcileLeases` compares the open leases with the work
+  still running and reports a `LeaseReconciliation`.
+- **The program restarts.** `persist` returns a `LocalHeddleSnapshot` to encode as
+  JSON or CBOR; `LocalHeddle.decode` reads it back as a `RestoreResult`, and
+  `LocalHeddle.restore` carries on from it under a later epoch, a boot counter
+  you persist and raise on every start. Each release
+  reads its own `FORMAT_VERSION` and the one before it
+  (`SUPPORTED_FORMAT_VERSIONS`).
+
+Every refusal is a typed outcome (`AcquireOutcome`, `AdmitOutcome`, `LeaseOutcome`)
+that changes nothing, and the engine is not thread-safe: one writer, under your own
+scheduling lock. Two fairness gaps are known. An estimate's size leans share
+toward groups that under-reserve, and a lease still running when its group
+returns from idle can hand idle credit back. Both are explained, with what to
+do about them, in the guide's
+[Fair share in one program](https://tractat-us.github.io/kuilt/guide/heddle-local.html#how-fair-is-it),
+which walks a whole build farm through every call above.
+
+The sections below are the parts `LocalHeddle` is built from, for a caller that
+needs to drive them directly.
+
 ## What the ledger keeps
 
 The ledger's data layer — the shared tally and its order-independent merge rule —

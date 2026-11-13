@@ -24,6 +24,10 @@ re-exports, so a consumer of `:kuilt-heddle` needs no second dependency. Read th
 documentation for what the ledger keeps, how it merges, and how the next child is picked. This
 module adds what it takes to run all of that between peers.
 
+If every worker you schedule lives in one program, you do not need this module at all:
+`:kuilt-heddle-core`'s `LocalHeddle` is the whole scheduler in one process, with leases, reloads
+and a snapshot to survive a restart, and no `Seam` or Raft underneath.
+
 ## Types at a glance
 
 - `FairShareExecution` — the spend surface both nodes share (`reserve`/`complete`/`cancel`/
