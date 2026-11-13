@@ -13,8 +13,8 @@ import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.encoding.encodeCollection
 
 /**
- * Everything a [LocalHeddle] needs to carry on after a restart, as one value you can encode in any
- * kotlinx.serialization format and store: the books, the open leases, how many slots the engine
+ * Everything a [LocalHeddle] needs to carry on after a restart, as one value you can encode, as
+ * JSON or CBOR, and store: the books, the open leases, how many slots the engine
  * was sized for, what the fair-share allocator remembers, and the topology it last applied. Take one with [LocalHeddle.persist],
  * and start an engine from it with [LocalHeddle.restore].
  *

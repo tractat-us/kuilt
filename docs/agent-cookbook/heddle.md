@@ -318,8 +318,9 @@ is still draining moves its leases onto the new edge.
 ```
 
 To survive a restart, call `persist()` under your scheduling lock and store the
-`LocalHeddleSnapshot` it returns, encoded in any format; encoding and writing can happen off the
-lock. On the way back, `LocalHeddle.decode(bytes, format)` (or `decode(text, format)` for a text
+`LocalHeddleSnapshot` it returns, encoded as JSON or CBOR; encoding and writing can happen off
+the lock. The encoding is a two-element array, `[formatVersion, state]`, so a store that reorders
+object keys, such as Postgres `jsonb`, cannot scramble it. On the way back, `LocalHeddle.decode(bytes, format)` (or `decode(text, format)` for a text
 format) returns `Restored(snapshot)`, `UnsupportedVersion(found, supported)` or `Corrupt(reason)`,
 never an exception. Then `LocalHeddle.restore(snapshot, policy, epoch)` carries on where the old
 engine stopped: every open lease is valid again under its old id, with its path and its

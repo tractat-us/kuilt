@@ -293,7 +293,7 @@ public sealed interface LeaseOutcome {
  * [persist] takes a [LocalHeddleSnapshot], everything a restart needs, and [restore] starts an
  * engine from one under a later epoch: every open lease is valid again under its old id, the
  * topology last applied is the one it leases by, and the next pick is the one this engine would
- * have made. Encode the snapshot in any format;
+ * have made. Encode the snapshot as JSON or CBOR;
  * [decode] reads it back and names an unsupported version or corrupt bytes rather than throwing.
  * After a [restore], settle what did not survive the restart with [reconcileLeases].
  *
