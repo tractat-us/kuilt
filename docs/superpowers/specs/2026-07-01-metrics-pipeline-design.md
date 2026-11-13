@@ -90,6 +90,13 @@ bridge. The `Long` `incrementSum` path is untouched.
 
 ### Temporality — the load-bearing decision
 
+> **Superseded in part by #3299.** "`DELTA` for every instrument type" was wrong for
+> UpDownCounters: the SDK hands them over as *sums*, not gauges, so under delta the
+> gauge they become holds the interval's change, not the level. The bridge now asks
+> for `CUMULATIVE` on `UP_DOWN_COUNTER` and `OBSERVABLE_UP_DOWN_COUNTER` and `DELTA`
+> on everything else, and drops a sum whose own temporality does not match. The
+> current account is in `kuilt-otel/module.md`.
+
 `incrementSum(key, by)` **adds** `by` to the counter. That is a **delta**
 semantic: each call contributes an increment. OTLP sums, however, can be exported
 as either `DELTA` (each point is the increment since the last collection) or

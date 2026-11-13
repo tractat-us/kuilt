@@ -137,7 +137,8 @@ increment counts it twice.
 
 The promise has a price. Each recorded change re-encodes every series of its kind
 and writes the result once. `KuiltMetricExporter` applies an SDK export point by
-point, so an export of N points is N writes. That is why kuilt-otel belongs behind
+point, so an export of N points is N writes, and every UpDownCounter series is in
+every export, moved or not. That is why kuilt-otel belongs behind
 the SDK's periodic reader, which hands it one batch every few seconds, and not in
 a request's hot path.
 
@@ -145,12 +146,17 @@ a request's hot path.
 
 A number can travel two ways: as a running total since the start, or as the change
 since the last report. OpenTelemetry calls this choice *temporality*, and the two
-values are **cumulative** and **delta**. kuilt takes deltas in and sends totals out.
+values are **cumulative** and **delta**. kuilt takes counter deltas in and sends
+totals out.
 
-Going in, `KuiltMetricExporter` asks the SDK for delta temporality on every
-instrument, because `incrementSum` *adds* what it is given; a running total would be
-added again on every collection. The SDK sets temporality per reader, so registering
-the bridge on a reader of its own leaves your existing OTLP exporter as it was.
+Going in, `KuiltMetricExporter` asks the SDK for delta temporality on counters,
+because `incrementSum` *adds* what it is given; a running total would be added again
+on every collection. It asks for cumulative on UpDownCounters, which become gauges:
+a gauge holds a level, and a delta would store the change since the last collection
+instead. Gauges and histograms stay delta. A sum that arrives the other way, from a
+reader that picks its own temporality, is dropped with a warning. The SDK sets
+temporality per reader, so registering the bridge on a reader of its own leaves your
+existing OTLP exporter as it was.
 
 Going out, `WarpOtlpBridge.drain` renders each series from its CRDT, and the OTLP
 encoders in `kuilt-otel-otlp` (JSON and protobuf alike) put it on the wire like this:
