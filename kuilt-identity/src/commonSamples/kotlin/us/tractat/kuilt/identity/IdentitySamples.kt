@@ -13,7 +13,7 @@ internal suspend fun sampleParseDidKey() {
     val refused = try {
         DidKey.parse(noSuchKey)
         false
-    } catch (e: IllegalArgumentException) {
+    } catch (_: IllegalArgumentException) {
         true
     }
     check(refused)

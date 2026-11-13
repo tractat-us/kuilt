@@ -23,6 +23,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 | You're about to write… | Use instead | Jump to |
 |---|---|---|
 | a rejoin / reconnect loop, a resume token, a "grace window / hold the slot open" | `Room.resumeToken` + `Room.resume` | [Rejoin & reconnect](agent-cookbook/session.md#rejoin--reconnect) |
+| a device id the device tells you, a token you mint to recognise a device that comes back, a hand-rolled public-key fingerprint | `DidKey` (`DidKey.parse`, `verify`) | [Device identity & return](agent-cookbook/session.md#device-identity--return) |
 | a fixed-list or exponential retry/back-off loop | `ExponentialBackoff` | [Rejoin & reconnect](agent-cookbook/session.md#rejoin--reconnect) |
 | a reconnect banner / "why did we drop" classifier — transient vs. unrecoverable buckets | `MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`), plus their `localFabric` tag | [Rejoin & reconnect](agent-cookbook/session.md#rejoin--reconnect) |
 | a propose→authoritative/rejected turn/session facade, host election with a term | `GameSession` + `TurnSequencer` | [Consensus & turns](agent-cookbook/consensus.md#consensus--turns) |
@@ -84,7 +85,7 @@ If you catch yourself writing any of these, stop — kuilt already ships it:
 The detail lives in seven family pages; each holds the sections named beside it.
 
 - [Fabrics](agent-cookbook/fabrics.md) — discovery, transports, the seam, payload limits, pumps, durable storage.
-- [Session](agent-cookbook/session.md) — rejoin & reconnect, liveness & presence, per-member frames, a last frame before leaving, host election & the lobby.
+- [Session](agent-cookbook/session.md) — rejoin & reconnect, liveness & presence, per-member frames, a last frame before leaving, host election & the lobby, device identity & return.
 - [Replication](agent-cookbook/replication.md) — replicated data, scaling to many peers, dealing cards, sealed boxes, dedup, archiving what the live replica forgets.
 - [Consensus](agent-cookbook/consensus.md) — consensus & turns, when one of the peers is a server, durable consensus state.
 - [Heddle](agent-cookbook/heddle.md) — weighted fair share, scheduling in one process without a network, a fair-share tree from a config file, reserving and charging over a network, minting quota and reshaping with agreement, weighted lanes over warp.

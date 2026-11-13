@@ -9,3 +9,19 @@
 open annotation class us.tractat.kuilt.identity/IdentityInternalApi : kotlin/Annotation { // us.tractat.kuilt.identity/IdentityInternalApi|null[0]
     constructor <init>() // us.tractat.kuilt.identity/IdentityInternalApi.<init>|<init>(){}[0]
 }
+
+final value class us.tractat.kuilt.identity/DidKey { // us.tractat.kuilt.identity/DidKey|null[0]
+    final val value // us.tractat.kuilt.identity/DidKey.value|{}value[0]
+        final fun <get-value>(): kotlin/String // us.tractat.kuilt.identity/DidKey.value.<get-value>|<get-value>(){}[0]
+
+    final fun compressedPoint(): kotlin/ByteArray // us.tractat.kuilt.identity/DidKey.compressedPoint|compressedPoint(){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity/DidKey.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity/DidKey.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.identity/DidKey.toString|toString(){}[0]
+    final suspend fun verify(kotlin/ByteArray, kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.identity/DidKey.verify|verify(kotlin.ByteArray;kotlin.ByteArray){}[0]
+
+    final object Companion { // us.tractat.kuilt.identity/DidKey.Companion|null[0]
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.identity/DidKey> // us.tractat.kuilt.identity/DidKey.Companion.serializer|serializer(){}[0]
+        final suspend fun parse(kotlin/String): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/DidKey.Companion.parse|parse(kotlin.String){}[0]
+    }
+}
