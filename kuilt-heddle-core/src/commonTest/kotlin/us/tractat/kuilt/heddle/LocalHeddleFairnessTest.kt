@@ -37,6 +37,20 @@ import kotlin.test.fail
  * - **starved** — the churn generator with a watermark and chunk of 2, below the largest
  *   reservation. It must report exhaustion and still never refuse a charge.
  *
+ * ## Which fields the engine decides
+ *
+ * The fingerprints are a differential against the prototype, so they stay byte-identical; but not
+ * every field in them is the engine's.
+ * - **Engine-decided:** the per-leaf totals (which leaf each pick chose), `acquires`, `filtered`,
+ *   `seesExtended`, and `wakes`, which the harness counts but reads off the engine's own wake memory.
+ * - **Harness-decided:** `extends`, `completes` and `inlineOverruns` follow the generator's plan for
+ *   each lease; `nothingEligible` counts the generator's empty eligible sets, which the engine only
+ *   echoes; and every supply field, `exhaustedAcquires`, `exhaustedExtends`, `mints`, `forcedMints`
+ *   and `minUnspent`, is the harness's own top-up below. The engine's `SupplyExhausted` arms and its
+ *   own forced mint are never reached here (each run asserts the engine minted nothing itself), so
+ *   they are pinned in `LocalHeddleTest` instead: `exhaustedSupplyIsNamed`,
+ *   `admitIsNeverRefusedForSupply` and `anOverrunWithTheRootShortForcesOneMint`.
+ *
  * ## Supply is the harness's, as it was the prototype's
  *
  * Before L2 the engine mints nothing on its own except a `complete`'s or an `admit`'s shortfall.

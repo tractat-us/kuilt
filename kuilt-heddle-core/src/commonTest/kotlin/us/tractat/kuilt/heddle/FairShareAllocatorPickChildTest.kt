@@ -61,10 +61,13 @@ class FairShareAllocatorPickChildTest {
     }
 
     /**
-     * A seat patch is a gauge-only ledger built outside `piece`, so the index a pick carries into
-     * its result must still agree with one rebuilt from scratch: the generation floor (#3196) and
-     * the inbound lists the lineage lift reads. The edges are lowered from a real topology, so the
-     * generation top is not the empty one.
+     * The index a pick's result carries, then a delegation on it, must agree with one rebuilt from
+     * scratch: the generation floor (#3196) and the inbound lists the lineage lift reads. The edges
+     * are lowered from a real topology, so the generation top is not the empty one.
+     *
+     * It is a regression test for `carryIndex` under `delegate`: mutating `carryIndex`'s
+     * `!base.mentions(e)` reds it. It cannot see a `seatPatch` defect, since a gauge is not an input
+     * of any index, so a seat patch that carried a wrong one would still pass here.
      */
     @Test
     fun aSeatedLedgerCarriesTheIndexItWouldRebuild() {

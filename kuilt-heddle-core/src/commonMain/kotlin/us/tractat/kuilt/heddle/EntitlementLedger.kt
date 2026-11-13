@@ -1614,13 +1614,36 @@ public class EntitlementLedger private constructor(
      * one hop each rather than a whole walk each. Every group on one walk shares its verdict, since a
      * quarantine anywhere on a lineage quarantines everything below it.
      */
-    internal fun withLiveLineages(groups: Collection<GroupId>): Set<GroupId> {
+    internal fun withLiveLineages(groups: Collection<GroupId>): Set<GroupId> = liftLineages(groups, delegable = false)
+
+    /**
+     * Every group of [groups] that a delegation from the root can **end at**, together with every
+     * group on its lineage up to the root: the set a scheduler lifts its waiting and eligible leaves
+     * to, so a parent edge reads as wanted only when a pick down it can reach one of them.
+     *
+     * A group qualifies when it has an inbound edge (the root never does), it [isLeaf], and every
+     * edge of its [lineageOf] is [Lifecycle.ACTIVE]: exactly the groups [delegate] can carry
+     * entitlement all the way down to. It is [withLiveLineages] with a CLOSING edge no longer
+     * counting as a path, and with the start required to be a leaf. That difference is the point. A
+     * subtree whose only route to its leaf crosses a closing edge, or whose named group has gained an
+     * ACTIVE child, has no group a descent could stop at, so it must never read as wanted: a pick down
+     * it would find nothing below, and the work it could have given a sibling would be lost.
+     */
+    internal fun withDelegableLineages(groups: Collection<GroupId>): Set<GroupId> = liftLineages(groups, delegable = true)
+
+    /**
+     * The shared walk behind [withLiveLineages] and [withDelegableLineages]. With [delegable], a start
+     * must be a leaf with an inbound edge, and the one live inbound edge at each step must also be
+     * ACTIVE; a group the walk reaches as an ancestor is never required to be a leaf.
+     */
+    private fun liftLineages(groups: Collection<GroupId>, delegable: Boolean): Set<GroupId> {
         val idx = index.value
         val live = HashMap<GroupId, Boolean>()
         val chain = ArrayList<GroupId>()
         val onChain = HashSet<GroupId>()
         for (start in groups) {
             if (start in live) continue
+            if (delegable && (idx.inbound[start].isNullOrEmpty() || !isLeaf(start))) continue
             chain.clear()
             onChain.clear()
             var cur = start
@@ -1651,7 +1674,8 @@ public class EntitlementLedger private constructor(
                         count++
                     }
                 }
-                val parent = if (count == 1 && only != null) recordOf(only)?.parent else null
+                val usable = count == 1 && only != null && (!delegable || lifecycleOf(only) == Lifecycle.ACTIVE)
+                val parent = if (usable && only != null) recordOf(only)?.parent else null
                 if (parent == null) {
                     verdict = false
                     break

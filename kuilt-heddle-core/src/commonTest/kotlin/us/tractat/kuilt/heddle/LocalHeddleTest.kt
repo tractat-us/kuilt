@@ -5,6 +5,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
@@ -212,50 +213,262 @@ class LocalHeddleTest {
         )
     }
 
+    /**
+     * `root → t → a` with `t → a` closing, beside `root → b`. With the demand lift matching what the
+     * descent can stop on, a failure is decided at the root before anything is delegated: there is no
+     * failure below it left to make all-or-nothing (`LocalHeddlePropertyTest.reshapesNeverStarveASiblingNorThrow` pins that every
+     * `NoLiveLineage` from `acquire` is at the root and changes nothing). What remains to show is that
+     * the dead end costs nothing: `a` alone is refused with the ledger untouched, and with `b` waiting
+     * too, `b` is leased every time.
+     */
     @Test
     fun acquireIsAllOrNothing() {
-        // root → t → a, with t→a closing: a's lineage is live but cannot be delegated down, so the
-        // descent picks t at the root, delegates there, and only then finds nothing under t.
-        val t = GroupId("t")
-        val ta = edgeOf(t, a)
-        var shaped = shapedLedger(root, listOf(edgeOf(root, t), ta))
-        shaped = shaped.piece(shaped.mint(MintId("old"), root, LOCAL, 3L).delta)
-        shaped = assertNotNull(delegateDown(shaped, a, 3L, LOCAL))
-        shaped = shaped.piece(assertNotNull(shaped.close(ta.id)).delta)
-        val h = engineOver(shaped, root, supply = 100)
+        val (h, t) = deadEndBesideB()
         val before = h.snapshot().ledger
-        val out = h.acquire(setOf(a), setOf(a), startedAt = 0L)
+        val alone = h.acquire(setOf(a, b), setOf(a), startedAt = 0L)
+        val after = h.snapshot()
+        val beside = (0 until 5).map { h.lease(setOf(a, b)).leaf }
         assertAll(
-            { assertEquals(AcquireOutcome.NoLiveLineage(t), out, "the descent got past the root and stopped at t") },
-            { assertSame(before, h.snapshot().ledger, "the root's delegation was not kept") },
-            { assertEquals(emptyList(), h.snapshot().leases) },
+            { assertEquals(Lifecycle.CLOSING, before.lifecycle(AttachmentId("${t.value}>a")), "the rig: t → a is closing") },
+            { assertEquals(3L, before.holdings(a, LOCAL), "the rig: a still holds what reached it before the close") },
+            { assertEquals(AcquireOutcome.NoLiveLineage(root), alone, "a alone has no lineage a pick could end at") },
+            { assertSame(before, after.ledger, "and nothing was delegated") },
+            { assertEquals(emptyList(), after.leases) },
+            { assertEquals(listOf(b, b, b, b, b), beside, "b is leased every time a is waiting beside it") },
         )
     }
 
     /**
-     * A config group whose only child is closing is never leased (#3193 review). `pool` declares
-     * runtime children and nothing else. `pool/!c` is attached and leased, then detached while its
-     * lease is open: the retire is refused, so `pool → c` stays CLOSING with `root → pool` ACTIVE,
-     * and the ledger now reads `pool` as a leaf. The detach is applied through the test seam, since
-     * L1 has no `apply`.
+     * The point case of the starvation the demand lift fixes: before, demand at the root counted `t`
+     * as wanted (its leaf's lineage is live, through the closing edge), so once `t` was behind `b`
+     * every pick went down `t`, found nothing it could delegate to, and was discarded, so `t`'s virtual
+     * time never moved and `b` was never picked again.
      */
     @Test
-    fun aGroupWhoseOnlyChildIsClosingIsNeverLeased() {
+    fun aDeadEndSubtreeNeverStarvesItsSibling() {
+        val (h, _) = deadEndBesideB()
+        val outs = (0 until 20).map {
+            val out = h.acquire(setOf(a, b), setOf(a, b), startedAt = it.toLong())
+            if (out is AcquireOutcome.Acquired) h.complete(out.lease.id, 1L)
+            out
+        }
+        assertEquals(List(20) { b }, outs.map { (it as? AcquireOutcome.Acquired)?.lease?.leaf ?: GroupId("$it") })
+    }
+
+    /**
+     * The second way a subtree had no terminal: the named group is eligible but is no longer a leaf,
+     * because a child edge under it activated. Nothing under it is eligible, so a pick down it found
+     * nothing, and the sibling starved exactly as behind a closing edge.
+     */
+    @Test
+    fun anEligibleGroupThatGainedAChildIsNotWanted() {
+        val ax = edgeOf(a, GroupId("a/x"))
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, a), edgeOf(root, b), ax)), root, supply = 100)
+        val outs = (0 until 20).map {
+            val out = h.acquire(setOf(a, b), setOf(a, b), startedAt = it.toLong())
+            if (out is AcquireOutcome.Acquired) h.complete(out.lease.id, 1L)
+            out
+        }
+        assertAll(
+            { assertEquals(false, h.snapshot().ledger.isLeaf(a), "the rig: a has an active child") },
+            { assertEquals(List(20) { b }, outs.map { (it as? AcquireOutcome.Acquired)?.lease?.leaf ?: GroupId("$it") }) },
+        )
+    }
+
+    /** `root → t → a` with `t → a` closing and 3 units still at `a`, beside `root → b`; supply 100. */
+    private fun deadEndBesideB(): Pair<LocalHeddle, GroupId> {
+        val t = GroupId("t")
+        val ta = edgeOf(t, a)
+        var shaped = shapedLedger(root, listOf(edgeOf(root, t), ta, edgeOf(root, b)))
+        shaped = shaped.piece(shaped.mint(MintId("old"), root, LOCAL, 3L).delta)
+        shaped = assertNotNull(delegateDown(shaped, a, 3L, LOCAL))
+        shaped = shaped.piece(assertNotNull(shaped.close(ta.id)).delta)
+        return engineOver(shaped, root, supply = 100) to t
+    }
+
+    /**
+     * The descent ends only at an eligible group (#3193 review). `pool` declares runtime children and
+     * nothing else. `pool/!c` is attached and leased, then detached while its lease is open: the
+     * retire is refused, so `pool → c` stays CLOSING with `root → pool` ACTIVE, and the ledger now
+     * reads `pool` as a leaf. `pool` is not eligible, so it is not leased, and the runtime child
+     * behind the closing edge is not reachable: the sibling `s` is leased instead. The detach is
+     * applied through the test seam, since L1 has no `apply`.
+     */
+    @Test
+    fun theDescentEndsOnlyAtAnEligibleGroup() {
         val pool = GroupId("pool")
         val runtime = GroupId("pool/!c")
+        val s = GroupId("s")
         val poolC = edgeOf(pool, runtime)
-        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, pool), poolC)), root, supply = 100)
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, pool), poolC, edgeOf(root, s))), root, supply = 100)
         val open = h.lease(setOf(runtime), reservation = 2L)
         h.reshapeForTest { it.piece(assertNotNull(it.close(poolC.id)).delta) }
         val before = h.snapshot().ledger
-        val out = h.acquire(setOf(runtime), setOf(runtime), startedAt = 1L)
+        val alone = h.acquire(setOf(runtime), setOf(runtime), startedAt = 1L)
+        val unchanged = h.snapshot().ledger
+        val beside = (0 until 4).map { h.lease(setOf(runtime, s)).leaf }
         assertAll(
             { assertEquals(runtime, open.leaf, "the rig: the runtime child was leased") },
             { assertEquals(null, before.retire(poolC.id), "the rig: its retire is refused while the lease is open") },
             { assertTrue(before.activeChildren(pool).isEmpty(), "the rig: pool has no active child, so the ledger reads it as a leaf") },
-            { assertEquals(AcquireOutcome.NoLiveLineage(pool), out, "the descent ends only at an eligible group") },
-            { assertSame(before, h.snapshot().ledger) },
+            { assertEquals(AcquireOutcome.NoLiveLineage(root), alone, "neither pool nor its runtime child is a place the descent can end") },
+            { assertSame(before, unchanged) },
+            { assertEquals(listOf(s, s, s, s), beside, "the sibling is leased instead") },
             { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(open.id, 2L), "the open lease still settles") },
+        )
+    }
+
+    /** `root → pool → c` with a 2-unit lease open at `c`, then `pool → c` closed under it; supply 100. */
+    private fun leaseBehindAClosedEdge(supply: Long = 100L): Triple<LocalHeddle, Lease, AttachmentRecord> {
+        val pool = GroupId("pool")
+        val poolC = edgeOf(pool, c)
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, pool), poolC)), root, supply = supply)
+        val open = h.lease(setOf(c), reservation = 2L)
+        h.reshapeForTest { it.piece(assertNotNull(it.close(poolC.id)).delta) }
+        return Triple(h, open, poolC)
+    }
+
+    @Test
+    fun anExtendAcrossAClosingEdgeIsDrainingAndChangesNothing() {
+        val (h, open, poolC) = leaseBehindAClosedEdge()
+        val before = h.snapshot()
+        val out = h.extend(open.id, 1L)
+        assertAll(
+            { assertEquals(LeaseOutcome.PathDraining(poolC.id), out) },
+            { assertSame(before.ledger, h.snapshot().ledger, "the ledger is the very same value") },
+            { assertEquals(before.leases, h.snapshot().leases, "the lease kept its reservation") },
+            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(open.id, 2L), "and still settles") },
+        )
+    }
+
+    /**
+     * An overrun on a lease whose path has a closing edge cannot be delegated down to the leaf. The
+     * 2 reserved units are charged at `c` as usual; the 3-unit overrun is delegated to `pool`, the
+     * deepest group ACTIVE edges still reach, and charged there.
+     */
+    @Test
+    fun anOverrunAcrossAClosingEdgeIsChargedAboveIt() {
+        val (h, open, poolC) = leaseBehindAClosedEdge()
+        val done = h.complete(open.id, 5L)
+        val l = h.snapshot().ledger
+        val pool = poolC.parent
+        assertAll(
+            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L), done) },
+            { assertEquals(emptyList(), h.snapshot().leases, "the lease is closed") },
+            { assertEquals(2L, assertNotNull(l.edge(poolC.id)).spent, "the reservation is charged at the leaf") },
+            { assertEquals(5L, assertNotNull(l.edge(AttachmentId("root>pool"))).spent, "the whole cost reaches the ACTIVE edge") },
+            { assertEquals(Rational.of(5L), l.virtualService(AttachmentId("root>pool")), "whose virtual time advanced by all of it") },
+            { assertEquals(0L, l.holdings(pool, LOCAL)) },
+            { assertEquals(0L, l.holdings(c, LOCAL)) },
+            { assertEquals(95L, l.holdings(root, LOCAL)) },
+            { assertEquals(l.mintedTotal(), l.holdings(root, LOCAL) + l.leafSpentTotal(), "minted == Σ holdings + spent") },
+            { assertEquals(emptyList(), l.validate()) },
+        )
+    }
+
+    /** As above with the root short: the overrun's shortfall is minted at the root, once, and conservation holds. */
+    @Test
+    fun anOverrunAcrossAClosingEdgeMintsTheRootsShortfall() {
+        val (h, open, _) = leaseBehindAClosedEdge(supply = 2L)
+        val done = h.complete(open.id, 5L)
+        val l = h.snapshot().ledger
+        assertAll(
+            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L), done) },
+            { assertEquals(1, h.forcedMints) },
+            { assertEquals(5L, l.mintedTotal()) },
+            { assertEquals(5L, l.leafSpentTotal()) },
+            { assertEquals(0L, l.holdings(root, LOCAL)) },
+            { assertEquals(emptyList(), l.validate()) },
+        )
+    }
+
+    /**
+     * The one place the overrun has nowhere to go: the root's own child edge is closing, so no group
+     * below the root is reached through ACTIVE edges, and the ledger keeps no spend at the root. The
+     * lease still closes, the reservation is charged at the leaf, conservation holds and nothing is
+     * minted; the overrun is reported but recorded on no edge.
+     */
+    @Test
+    fun anOverrunBelowAClosingRootEdgeIsReportedButRecordedNowhere() {
+        val rootC = edgeOf(root, c)
+        val h = engineOver(shapedLedger(root, listOf(rootC)), root, supply = 100)
+        val open = h.lease(setOf(c), reservation = 2L)
+        h.reshapeForTest { it.piece(assertNotNull(it.close(rootC.id)).delta) }
+        val done = h.complete(open.id, 5L)
+        val l = h.snapshot().ledger
+        assertAll(
+            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L), done) },
+            { assertEquals(emptyList(), h.snapshot().leases) },
+            { assertEquals(2L, l.leafSpentTotal(), "only the reservation reached an edge") },
+            { assertEquals(0, h.forcedMints) },
+            { assertEquals(100L, l.mintedTotal()) },
+            { assertEquals(l.mintedTotal(), l.holdings(root, LOCAL) + l.leafSpentTotal()) },
+            { assertEquals(emptyList(), l.validate()) },
+        )
+    }
+
+    /**
+     * Reservations up to [LocalHeddle.MAX_RESERVATION] lease, and two of them under one edge still
+     * read as wanted: the old target of 2^40 refused the first above it, and made an edge with 2^40
+     * outstanding read as satisfied.
+     */
+    @Test
+    fun aReservationAtTheBoundLeasesAndOneAboveItIsRejected() {
+        val max = LocalHeddle.MAX_RESERVATION
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, a))), root, supply = 4 * max)
+        val first = h.lease(setOf(a), reservation = max)
+        val second = h.lease(setOf(a), reservation = max)
+        val extended = h.extend(first.id, max)
+        assertAll(
+            { assertEquals(1L shl 44, max, "the documented bound") },
+            { assertEquals(listOf(a, a), listOf(first.leaf, second.leaf)) },
+            { assertEquals(LeaseOutcome.Done(0L, 0L), extended) },
+            { assertEquals(3 * max, assertNotNull(h.snapshot().ledger.edge(AttachmentId("root>a"))).outstanding, "3 × 2^44 outstanding on one edge") },
+            { assertFailsWith<IllegalArgumentException> { h.acquire(setOf(a), setOf(a), 0L, reservation = max + 1) } },
+            { assertFailsWith<IllegalArgumentException> { h.admit(a, 0L, reservation = max + 1) } },
+            { assertFailsWith<IllegalArgumentException> { h.extend(second.id, max + 1) } },
+            { assertFailsWith<IllegalArgumentException> { LocalPolicy(defaultReservation = max + 1) } },
+            { assertEquals(LeaseOutcome.Done(2 * max, 0L), h.complete(first.id, 2 * max)) },
+        )
+    }
+
+    /**
+     * Mint ids are scoped by the epoch. An engine restarted over another's ledger counts its mints
+     * from zero again; under an unscoped `local#<k>` its first mint max-joined with the old engine's
+     * and the smaller of the two was lost.
+     */
+    @Test
+    fun aRestartedEngineDoesNotReuseAMintId() {
+        val ledger = shapedLedger(root, listOf(edgeOf(root, a)))
+        val first = engineOver(ledger, root, supply = 7L, epoch = 0L).snapshot().ledger
+        val restarted = engineOver(first, root, supply = 5L, epoch = 1L).snapshot().ledger
+        assertAll(
+            { assertEquals(12L, restarted.mintedTotal(), "both mints are kept") },
+            { assertEquals(12L, restarted.holdings(root, LOCAL)) },
+        )
+    }
+
+    /**
+     * The engine's own forced mint: an overrun `complete` with the root short mints exactly the
+     * shortfall, once. The fairness harness funds every overrun itself, so this is where the engine's
+     * supply path is pinned.
+     */
+    @Test
+    fun anOverrunWithTheRootShortForcesOneMint() {
+        val h = engineOver(shapedLedger(root, listOf(edgeOf(root, a))), root, supply = 2L)
+        val lease = h.lease(setOf(a), reservation = 2L)
+        val short = h.snapshot().ledger.holdings(root, LOCAL)
+        val done = h.complete(lease.id, 5L)
+        val l = h.snapshot().ledger
+        assertAll(
+            { assertEquals(0L, short, "the rig: the root holds nothing when the overrun arrives") },
+            { assertEquals(LeaseOutcome.Done(5L, 3L), done) },
+            { assertEquals(1, h.forcedMints) },
+            { assertEquals(5L, l.mintedTotal(), "2 minted up front plus the 3-unit shortfall") },
+            { assertEquals(5L, assertNotNull(l.edge(AttachmentId("root>a"))).spent) },
+            { assertEquals(0L, l.holdings(root, LOCAL)) },
+            { assertEquals(0L, l.holdings(a, LOCAL)) },
+            { assertEquals(emptyList(), l.validate()) },
         )
     }
 

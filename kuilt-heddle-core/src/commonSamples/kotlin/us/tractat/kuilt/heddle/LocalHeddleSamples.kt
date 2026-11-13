@@ -10,8 +10,8 @@ internal fun sampleLocalLease() {
     val root = GroupId("pool")
     val heavy = GroupId("heavy")
     val light = GroupId("light")
-    // Booting from a Topology and topping up supply are the next two tasks (#3173); until they
-    // land, this sample builds its two-group tree and its supply through the module's own seams.
+    // The public surface cannot yet boot an engine from a Topology or give it supply, so this
+    // sample builds its two-group tree and its supply through the module's own seams.
     var tree = EntitlementLedger.bootstrap(root, emptyMap(), nonce = "genesis")
     for (record in listOf(
         AttachmentRecord(AttachmentId("pool>heavy"), root, heavy, Weight.of(2)),

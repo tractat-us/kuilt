@@ -132,9 +132,175 @@ class LocalHeddlePropertyTest {
 
     private fun parentOf(leaf: GroupId): GroupId = if (leaf == leaves[0] || leaf == leaves[1]) p else q
 
+    /**
+     * Random lease traffic over a tree with siblings, interleaved with reshapes that close edges
+     * (often on an open lease's path) and activate prepared ones (so a leaf becomes a lane, and a lane
+     * whose last active child closed becomes a leaf). After every step:
+     * - `acquire` returns [AcquireOutcome.NoLiveLineage] only when no eligible leaf is reachable from
+     *   the root through ACTIVE edges, by an independent top-down walk; and then at the root, with the
+     *   ledger the very same value;
+     * - no operation throws: `extend` across a closing edge is [LeaseOutcome.PathDraining], and an
+     *   overrun across one still settles;
+     * - `minted == Σ holdings + spent`, every unit held below the root belongs to an open lease, and
+     *   `validate()` is empty.
+     *
+     * Reparenting is outside the generator: two live inbound edges quarantine a group, which no walk
+     * from the root can see, and which is not this property's subject.
+     */
+    @Test
+    fun reshapesNeverStarveASiblingNorThrow() {
+        var steps = 0
+        val seen = IntArray(RIG.size)
+        for (seed in 0 until SEEDS) {
+            val rng = Random(seed)
+            val h = engineOver(reshapeLedger, root, supply = 100_000)
+            repeat(RESHAPE_STEPS) { step ->
+                val before = h.snapshot()
+                val open = before.leases
+                val l = before.ledger
+                val draw = rng.nextInt(10)
+                when {
+                    draw <= 3 || open.isEmpty() && draw <= 6 -> {
+                        val waiting = reshapeGroups.filter { rng.nextInt(3) != 0 }
+                        val eligible = waiting.filter { rng.nextInt(3) != 0 }.toSet()
+                        val reached = reachableEligibleLeaves(l, eligible)
+                        val reachable = reached.isNotEmpty()
+                        if (eligible.isNotEmpty() && !reachable) seen[NONE_REACHABLE]++
+                        if (reachable && reached.size < eligible.size) seen[DEAD_END_BESIDE]++
+                        val out = h.acquire(waiting.toSet(), eligible, startedAt = step.toLong(), reservation = 1L + rng.nextInt(5))
+                        val at = "seed $seed step $step"
+                        when (out) {
+                            is AcquireOutcome.NoLiveLineage -> {
+                                if (reachable) fail("NoLiveLineage(${out.at.value}) with an eligible leaf reachable at $at")
+                                if (out.at != root) fail("NoLiveLineage below the root, at ${out.at.value}, at $at")
+                                if (h.snapshot().ledger !== l) fail("a refused acquire changed the ledger at $at")
+                            }
+                            is AcquireOutcome.Acquired -> {
+                                val leaf = out.lease.leaf
+                                val lineage = l.lineageOf(leaf).orEmpty()
+                                if (leaf !in eligible || !l.isLeaf(leaf) || lineage.isEmpty() || lineage.any { l.lifecycle(it) != Lifecycle.ACTIVE }) {
+                                    fail("leased ${leaf.value}, not an eligible leaf behind ACTIVE edges, at $at")
+                                }
+                            }
+                            AcquireOutcome.NothingEligible -> if (eligible.isNotEmpty()) fail("NothingEligible with $eligible at $at")
+                            AcquireOutcome.SupplyExhausted -> fail("the supply is sized never to run out, at $at")
+                        }
+                    }
+                    open.isEmpty() -> reshape(h, rng, seen)
+                    draw == 4 -> {
+                        val lease = open[rng.nextInt(open.size)]
+                        val out = h.extend(lease.id, 1L + rng.nextInt(4))
+                        if (out is LeaseOutcome.PathDraining) {
+                            seen[DRAINING_EXTEND]++
+                            if (h.snapshot().ledger !== l) fail("a draining extend changed the ledger, seed $seed step $step")
+                        }
+                    }
+                    draw == 5 -> {
+                        val lease = open[rng.nextInt(open.size)]
+                        val actual = rng.nextInt(10).toLong()
+                        val draining = l.lineageOf(lease.leaf).orEmpty().any { l.lifecycle(it) != Lifecycle.ACTIVE }
+                        if (draining && actual > lease.reserved) seen[OVERRUN_DRAINING]++
+                        val out = h.complete(lease.id, actual)
+                        if (out != LeaseOutcome.Done(actual, maxOf(0L, actual - lease.reserved))) fail("complete gave $out, seed $seed step $step")
+                    }
+                    draw == 6 -> h.cancel(open[rng.nextInt(open.size)].id)
+                    draw == 7 -> h.admit(reshapeGroups[rng.nextInt(reshapeGroups.size)], step.toLong(), 1L + rng.nextInt(5))
+                    else -> reshape(h, rng, seen)
+                }
+                steps++
+                assertConservedEverywhere(h, "seed $seed step $step")
+            }
+        }
+        println("LEASE-RESHAPE steps=$steps " + RIG.indices.joinToString(" ") { "${RIG[it]}=${seen[it]}" })
+        assertAll(
+            { assertEquals(SEEDS * RESHAPE_STEPS, steps, "every step ran and was checked") },
+            { assertTrue(seen.all { it > 0 }, "every rig fired: ${RIG.indices.joinToString { "${RIG[it]}=${seen[it]}" }}") },
+        )
+    }
+
+    /** Close a random ACTIVE edge (two times in three) or activate a random PREPARED one. */
+    private fun reshape(h: LocalHeddle, rng: Random, seen: IntArray) {
+        val l = h.snapshot().ledger
+        val edges = l.allEdges().sorted()
+        val activating = rng.nextInt(3) == 0
+        val from = if (activating) Lifecycle.PREPARED else Lifecycle.ACTIVE
+        val pool = edges.filter { l.lifecycle(it) == from }
+        if (pool.isEmpty()) return
+        val edge = pool[rng.nextInt(pool.size)]
+        if (activating) {
+            h.reshapeForTest { it.piece(checkNotNull(it.activate(edge)).delta) }
+            seen[ACTIVATED]++
+        } else {
+            val onAnOpenPath = h.snapshot().leases.any { edge in l.lineageOf(it.leaf).orEmpty() }
+            h.reshapeForTest { it.piece(checkNotNull(it.close(edge)).delta) }
+            if (onAnOpenPath) seen[CLOSED_UNDER_A_LEASE]++
+        }
+    }
+
+    /** The groups of [eligible] that are leaves a top-down walk of ACTIVE edges from the root reaches. */
+    private fun reachableEligibleLeaves(l: EntitlementLedger, eligible: Set<GroupId>): Set<GroupId> {
+        val stack = ArrayDeque(listOf(root))
+        val visited = HashSet<GroupId>()
+        val found = HashSet<GroupId>()
+        while (stack.isNotEmpty()) {
+            val g = stack.removeLast()
+            if (!visited.add(g)) continue
+            for (child in l.activeChildren(g).map { checkNotNull(l.record(it.attachment)).child }) {
+                if (child in eligible && l.isLeaf(child)) found += child
+                stack.addLast(child)
+            }
+        }
+        return found
+    }
+
+    /** Conservation over every group the ledger names, so a reshaped tree is covered too. */
+    private fun assertConservedEverywhere(h: LocalHeddle, at: String) {
+        val s = h.snapshot()
+        val l = s.ledger
+        val groups = groupsOf(l)
+        val held = groups.sumOf { l.holdings(it, LOCAL) }
+        val belowRoot = groups.filter { it != root }.sumOf { l.holdings(it, LOCAL) }
+        val reserved = s.leases.sumOf { it.reserved }
+        if (l.mintedTotal() != held + l.leafSpentTotal()) fail("Σ holdings + spent != minted at $at")
+        if (reserved != belowRoot) fail("holdings below the root $belowRoot != open reservations $reserved at $at")
+        if (l.validate().isNotEmpty()) fail("validate() at $at: ${l.validate()}")
+    }
+
+    private val d = GroupId("d")
+    private val r = GroupId("r")
+
+    /**
+     * The fixed tree's shape with a direct leaf `d` beside the lanes, and prepared edges waiting to
+     * activate: under a leaf (`a/b → a/b/x`, `d → d/y`), under a lane (`q → f`), and under the root
+     * (`root → r`).
+     */
+    private val reshapeLedger = shapedLedger(
+        root,
+        active = listOf(
+            edgeOf(root, p, 2), edgeOf(root, q, 1), edgeOf(root, d, 1),
+            edgeOf(p, leaves[0], 3), edgeOf(p, leaves[1], 1),
+            edgeOf(q, leaves[2], 1), edgeOf(q, leaves[3], 2),
+        ),
+        prepared = listOf(
+            edgeOf(leaves[0], GroupId("a/b/x")), edgeOf(d, GroupId("d/y")), edgeOf(q, GroupId("f")), edgeOf(root, r, 2),
+        ),
+    )
+
+    /** Every non-root group, lanes included, since a lane whose last active child closes is a leaf. */
+    private val reshapeGroups = listOf(p, q, d, r, GroupId("a/b/x"), GroupId("d/y"), GroupId("f")) + leaves
+
     private companion object {
         const val SEEDS = 200
         const val STEPS = 60
         const val PREVIEW_SEEDS = 100
+        const val RESHAPE_STEPS = 80
+
+        val RIG = listOf("noneReachable", "deadEndBeside", "drainingExtend", "overrunDraining", "activated", "closedUnderALease")
+        const val NONE_REACHABLE = 0
+        const val DEAD_END_BESIDE = 1
+        const val DRAINING_EXTEND = 2
+        const val OVERRUN_DRAINING = 3
+        const val ACTIVATED = 4
+        const val CLOSED_UNDER_A_LEASE = 5
     }
 }
