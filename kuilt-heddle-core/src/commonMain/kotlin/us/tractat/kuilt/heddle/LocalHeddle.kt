@@ -330,8 +330,8 @@ public class LocalHeddle private constructor(
     public val epoch: Long,
     private var ledger: EntitlementLedger,
     private val allocator: FairShareAllocator,
-    /** What the topology lets a lease end at; see "What a lease ends at". */
-    private val leasable: Leasable,
+    /** What the topology lets a lease end at; see "What a lease ends at". Replaced by each [apply]. */
+    private var leasable: Leasable,
 ) {
     init {
         require(epoch >= 0L) { "epoch must be non-negative, was $epoch" }
@@ -703,8 +703,237 @@ public class LocalHeddle private constructor(
     }
 
     /**
+     * Move the tree to [new]: add what it adds, remove what it removes, and give every reweighted
+     * group a new edge at its new weight, as [Topology.Companion.diff] lists the steps. Open leases
+     * survive it, and each is still charged once, at [complete].
+     *
+     * **One unit, swapped in once.** The diff is taken here, on the ledger it is applied to, and the
+     * whole list runs on a working copy that replaces the ledger at the end, so nothing is ever
+     * leased against a state part-way through a reload. A child whose change cannot land yet is
+     * reported in [ApplyResult.refusals], and every other child's change still lands in the same
+     * swap. Apply the same topology again later, and only what is left is listed.
+     *
+     * **A reweight moves its open leases with it.** A changed weight is a new edge, and an open
+     * lease whose path crosses the old one moves onto the new one in the same unit: its reservation
+     * is handed back up the old path, the old edge retires with nothing outstanding, the new one
+     * activates (taking over the old edge's spend with a [TopologyStep.Reconcile] when the group is
+     * internal), and the reservation is delegated down the new path, which the lease charges from
+     * then on. A lease under a group and its child, both reweighted, crosses two old edges and
+     * moves once. It keeps its id, leaf and reservation, so the caller sees nothing change.
+     * **The reweighted group's fairness history resets:** its new edge is seated at its parent's
+     * front, like a newcomer's, so it is neither owed for its past nor charged for it. A child added
+     * back before its removal drained is a new edge for the same group, and its draining leases
+     * move onto it the same way.
+     *
+     * **A removal drains.** A removed child is closed at once, so nothing new is leased there, and
+     * retires once its open leases complete; until then it is [StepRefusal.Draining], naming the
+     * leases it waits for. A removal under a reweighted group wins: that group's reweight waits
+     * too, as [StepRefusal.Draining], and changes nothing until every lease beneath it can move. A
+     * lease whose work is gone is found by [reconcileLeases] and settled with [complete], so an
+     * orphan holds a reload up no longer than that.
+     *
+     * A rename or a move is a delete plus an add: the new group starts with no history, and the old
+     * one drains under its old id. While a top-level group drains, an overrun charged by one of its
+     * leases is reported in [LeaseOutcome.Done] but recorded on no edge (see "A draining path").
+     *
+     * @param generation a counter, `>= 0`, for the edges this reload adds; raised past every
+     *   generation the ledger holds, so a reused counter never reuses an id.
+     * @throws IllegalArgumentException if [new]'s root is not [root], or [generation] is negative.
+     * @sample us.tractat.kuilt.heddle.sampleLocalReload
+     */
+    public fun apply(new: Topology, generation: Long): ApplyResult {
+        require(new.groupId() == root) {
+            "the topology's root ${new.groupId().value} is not this engine's ${root.value}: a change of root is not a reload"
+        }
+        val result = run(Topology.diff(new, ledger, generation))
+        leasable = Leasable.ByTopology(new)
+        return result
+    }
+
+    /**
+     * Attach the runtime child [name] to the group at [group], read from the root down, at the
+     * weight the topology's marker on that group gives ([Topology.attachRuntimeChild]). Applied as
+     * one unit, like [apply]. Attaching a child that is already attached does nothing; attaching one
+     * whose detach is still draining gives it a new edge and moves its draining leases onto it.
+     *
+     * @throws IllegalArgumentException if [group] does not name a group the topology marks for
+     *   runtime children, [name] is empty, or [generation] is negative.
+     */
+    public fun attachRuntimeChild(group: List<String>, name: String, generation: Long): ApplyResult =
+        run(topology().attachRuntimeChild(group, name, ledger, generation))
+
+    /**
+     * Detach the runtime child [name] from the group at [group] ([Topology.detachRuntimeChild]):
+     * closed at once, and retired once its open leases complete, until when it is
+     * [StepRefusal.Draining].
+     *
+     * @throws IllegalArgumentException if [group] does not name a group the topology marks for
+     *   runtime children, or [name] is empty.
+     */
+    public fun detachRuntimeChild(group: List<String>, name: String): ApplyResult =
+        run(topology().detachRuntimeChild(group, name, ledger))
+
+    private fun topology(): Topology =
+        checkNotNull((leasable as? Leasable.ByTopology)?.topology) { "an engine over a hand-built ledger has no topology" }
+
+    /**
+     * Apply [steps] as one unit. Each [attempt] starts from the committed ledger. One that finds a
+     * child whose change cannot land names it, and the unit is attempted again without any of that
+     * child's steps, so the child is left exactly as it was. Each round leaves out at least one more
+     * child, so this ends, and the one swap is the attempt in which every child left in landed.
+     */
+    private fun run(steps: List<TopologyStep>): ApplyResult {
+        val left = LinkedHashMap<GroupId, StepRefusal>()
+        while (true) {
+            when (val trial = attempt(steps, left.keys)) {
+                is Trial.LeaveOut -> {
+                    val fresh = trial.refusals.filter { it.child !in left }
+                    check(fresh.isNotEmpty()) { "an attempt left out only children already left out: ${trial.refusals}" }
+                    for (refusal in fresh) left.getOrPut(refusal.child) { refusal }
+                }
+                is Trial.Landed -> {
+                    ledger = trial.ledger
+                    for ((id, path) in trial.moved) open[id] = open.getValue(id).copy(path = path)
+                    return ApplyResult(trial.applied, (trial.refusals + left.values).sortedBy { it.child })
+                }
+            }
+        }
+    }
+
+    /**
+     * One attempt at [steps] on a working copy of the ledger, without the steps of the children in
+     * [leftOut]. It lands when every child left in either lands or is a removal waiting on a drain;
+     * otherwise it names the children to leave out.
+     *
+     * A **replacement** is a child whose list retires an edge and activates another. The open leases
+     * across its old edges are released up their paths first, then its subtree's idle holdings, so
+     * the old edges retire with nothing outstanding. Once every step has run, reconciles included,
+     * each moved lease is delegated down its leaf's new lineage through [seatThenDelegate]. A
+     * replacement is all or nothing: if any part fails it is left out. So is a child any of whose
+     * steps the ledger refuses outright. Only a removal waiting on a drain keeps its steps up to the
+     * refused retire, since its close is what stops new work going there.
+     */
+    private fun attempt(steps: List<TopologyStep>, leftOut: Set<GroupId>): Trial {
+        val base = ledger
+        val replaced = replacedEdges(steps, leftOut)
+        // Edges this list closes or retires for a child that gets no new edge: a lease across one
+        // drains where it is, and cannot be moved.
+        val removed = steps.filter { (it is TopologyStep.Close || it is TopologyStep.Retire) && it.child !in leftOut && it.child !in replaced.values }
+            .mapTo(HashSet()) { it.edgeOf() }
+
+        val moving = ArrayList<OpenLease>()
+        val stuck = LinkedHashMap<GroupId, MutableList<Lease>>()
+        for (lease in open.values.sortedBy { it.lease.id }) {
+            val crossed = lease.path.mapNotNull { replaced[it] }.distinct()
+            if (crossed.isEmpty()) continue
+            val drainsInPlace = lease.path.any { it !in replaced && (it in removed || base.lifecycle(it) != Lifecycle.ACTIVE) }
+            if (drainsInPlace) crossed.forEach { stuck.getOrPut(it) { ArrayList() } += lease.lease } else moving += lease
+        }
+        if (stuck.isNotEmpty()) {
+            return Trial.LeaveOut(
+                stuck.map { (child, leases) ->
+                    val edge = replaced.entries.first { (e, c) -> c == child && leases.any { e in open.getValue(it.id).path } }.key
+                    StepRefusal.Draining(child, edge, base.outstanding(edge), leases)
+                },
+            )
+        }
+
+        var local = base
+        for (lease in moving) local = releaseUp(local, lease.path, lease.lease.reserved)
+        local = releaseIdleBelow(local, replaced.keys)
+
+        val movingIds = moving.mapTo(HashSet()) { it.lease.id }
+        fun refusal(step: TopologyStep, reason: String): StepRefusal {
+            val outstanding = if (step is TopologyStep.Retire) local.outstanding(step.edge) else 0L
+            if (outstanding == 0L) return StepRefusal.Refused(step.child, step, reason)
+            val blocking = open.values.filter { it.lease.id !in movingIds && step.edgeOf() in it.path }.map { it.lease }.sortedBy { it.id }
+            return StepRefusal.Draining(step.child, step.edgeOf(), outstanding, blocking)
+        }
+        val applied = ArrayList<TopologyStep>()
+        val draining = ArrayList<StepRefusal>()
+        val stopped = HashSet<GroupId>()
+        val leaveOut = ArrayList<StepRefusal>()
+        for (step in steps) {
+            val child = step.child
+            if (child in leftOut || child in stopped) continue
+            // A removal retires bottom-up, so a group's retire waits on every group below it.
+            val below = stopped.firstOrNull { it.value.startsWith(child.value + "/") }
+            val next = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
+            if (next != null) {
+                local = next
+                applied += step
+                continue
+            }
+            val why = refusal(step, if (below != null) "${below.value}, below it, did not retire" else "the ledger refused it")
+            if (child in replaced.values || why is StepRefusal.Refused) leaveOut += why else draining += why
+            // The child's first refusal is its answer: its later steps do not run.
+            stopped += child
+        }
+        if (leaveOut.isNotEmpty()) return Trial.LeaveOut(leaveOut)
+
+        val moved = LinkedHashMap<LeaseId, List<AttachmentId>>()
+        for (lease in moving) {
+            val path = local.lineageOf(lease.lease.leaf)?.takeIf { p -> p.isNotEmpty() && p.all { local.lifecycle(it) == Lifecycle.ACTIVE } }
+            val delegated = path?.let { seatThenDelegate(local, it, lease.lease.reserved, observedDemand(lease.lease.reserved)) }
+            if (path == null || delegated == null) {
+                return Trial.LeaveOut(
+                    lease.path.mapNotNull { replaced[it] }.distinct().map { child ->
+                        val activate = steps.first { it is TopologyStep.Activate && it.child == child }
+                        StepRefusal.Refused(child, activate, "lease ${lease.lease.id} cannot be delegated down ${lease.lease.leaf.value}'s new path")
+                    },
+                )
+            }
+            local = delegated
+            moved[lease.lease.id] = path
+        }
+
+        // Every open lease's path is its leaf's one live lineage: no lease crosses a retired edge, and
+        // the reload left no leaf with two live inbound edges, a divergent record or a cycle, which
+        // `delegateOrFail` and `releaseUp` throw on. An engine bug if not; the ledger is not swapped.
+        for (lease in open.values) {
+            val path = moved[lease.lease.id] ?: lease.path
+            check(local.lineageOf(lease.lease.leaf) == path) {
+                "a reload left lease ${lease.lease.id} on ${path.map { it.value }}, not ${lease.lease.leaf.value}'s lineage " +
+                    "${local.lineageOf(lease.lease.leaf)?.map { it.value }}"
+            }
+        }
+        return Trial.Landed(local, applied, draining, moved)
+    }
+
+    /**
+     * Every edge [steps] retires for a replacement, mapped to its child: a child, not in [leftOut],
+     * whose list both retires an edge and activates another.
+     */
+    private fun replacedEdges(steps: List<TopologyStep>, leftOut: Set<GroupId>): Map<AttachmentId, GroupId> {
+        // Not yet: the interpreter applies per child and moves no lease (#3176, re-home to follow).
+        return emptyMap<AttachmentId, GroupId>().also { steps.size + leftOut.size }
+    }
+
+    /**
+     * [start] with every unit this engine holds idle at a group beneath one of [edges] handed back
+     * up, deepest group first. Run after the open leases there are released, so what is left is idle
+     * by construction, and the edges then carry nothing of this engine's.
+     */
+    private fun releaseIdleBelow(start: EntitlementLedger, edges: Collection<AttachmentId>): EntitlementLedger {
+        if (edges.isEmpty()) return start
+        val below = start.allGroups().mapNotNull { g -> start.lineageOf(g)?.takeIf { p -> p.any { it in edges } }?.let { g to it } }
+            .sortedWith(compareByDescending<Pair<GroupId, List<AttachmentId>>> { it.second.size }.thenBy { it.first })
+        var local = start
+        for ((group, lineage) in below) {
+            val held = local.holdings(group, SELF)
+            if (held <= 0L) continue
+            val patch = checkNotNull(local.release(SELF, lineage.last(), held)) { "the release of $held idle units at ${group.value} was refused" }
+            local = local.piece(patch.delta)
+        }
+        return local
+    }
+
+    /** The path [lease] charges, for tests: what it was opened on, or what a reweight moved it onto. */
+    internal fun capturedPath(lease: LeaseId): List<AttachmentId>? = open[lease]?.path
+
+    /**
      * Replace the ledger with [transform] of it: the test seam for a topology change while leases
-     * are open, until L3's `apply` is the way one arrives.
+     * are open that [apply] cannot express, such as an edge left closing by hand.
      */
     internal fun reshapeForTest(transform: (EntitlementLedger) -> EntitlementLedger) {
         ledger = transform(ledger)
@@ -867,6 +1096,20 @@ public class LocalHeddle private constructor(
     /** Whether a lease can end at [group] and a delegation reach it: [isLeasable], through ACTIVE edges only. */
     private fun EntitlementLedger.canEndAt(group: GroupId): Boolean = group in reachable(listOf(group))
 
+    /** What one [attempt] at a reload came to. */
+    private sealed interface Trial {
+        /** Leave these children out and attempt again; the working copy is discarded. */
+        class LeaveOut(val refusals: List<StepRefusal>) : Trial
+
+        /** Every child left in landed or is draining: swap [ledger] in and move each lease in [moved] onto its new path. */
+        class Landed(
+            val ledger: EntitlementLedger,
+            val applied: List<TopologyStep>,
+            val refusals: List<StepRefusal>,
+            val moved: Map<LeaseId, List<AttachmentId>>,
+        ) : Trial
+    }
+
     /** What [descend] did. */
     private sealed interface Descent {
         /** It ended at [leaf], with [ledger] the delegated result and [levels] each pick on the way. */
@@ -927,16 +1170,52 @@ public class LocalHeddle private constructor(
 
         private fun Weight.asRational(): Rational = Rational.of(numerator, denominator)
 
+        /** What [edge] still carries: issued, less returned and spent. `0` for an edge this ledger does not know. */
+        private fun EntitlementLedger.outstanding(edge: AttachmentId): Long = edge(edge)?.outstanding ?: 0L
+
+        /** The edge a step names; the [TopologyStep.Reconcile] of a group names none, and is never asked. */
+        private fun TopologyStep.edgeOf(): AttachmentId = when (this) {
+            is TopologyStep.Prepare -> record.id
+            is TopologyStep.Activate -> edge
+            is TopologyStep.Close -> edge
+            is TopologyStep.Retire -> edge
+            is TopologyStep.Reconcile -> error("a reconcile names no edge")
+        }
+
+        /** This ledger with [step] applied, or `null` when the ledger refuses it. A reconcile with nothing to move applies. */
+        private fun EntitlementLedger.applyStep(step: TopologyStep): EntitlementLedger? = when (step) {
+            is TopologyStep.Prepare -> prepare(step.record)?.let { piece(it.delta) }
+            is TopologyStep.Activate -> activate(step.edge)?.let { piece(it.delta) }
+            is TopologyStep.Close -> close(step.edge)?.let { piece(it.delta) }
+            is TopologyStep.Retire -> retire(step.edge)?.let { piece(it.delta) }
+            is TopologyStep.Reconcile -> when (val move = reconcileLocally(step.child)) {
+                is Relocation.Moved -> piece(move.patch)
+                Relocation.Nothing -> this
+                is Relocation.Refused -> null
+            }
+        }
+
         /** The first edge of [path] that is not ACTIVE, or `null` when every edge is. */
         private fun EntitlementLedger.firstNotActive(path: List<AttachmentId>): AttachmentId? =
             firstNotActiveIndex(path)?.let(path::get)
 
         /**
-         * An engine with no topology and no supply, issuing lease ids under [epoch]. It mints its
-         * own supply once [reconcileCapacity] is called.
+         * An engine running [topology], issuing lease ids under [epoch], with no supply yet: it mints
+         * its own once [reconcileCapacity] is called. Its [root] is the topology's root.
+         *
+         * It boots the way every later reload arrives: [apply] of [topology] to an empty ledger, at
+         * generation 0. So the ids it starts with are exactly [Topology.lower]'s, and there is no
+         * second, unfloored way to build a tree.
          */
-        public fun fresh(root: GroupId, policy: LocalPolicy, epoch: Long): LocalHeddle =
-            over(EntitlementLedger.ZERO, root, policy, epoch, Leasable.EveryGroup)
+        public fun fromTopology(topology: Topology, policy: LocalPolicy, epoch: Long): LocalHeddle {
+            val engine = LocalHeddle(
+                topology.groupId(), policy, epoch, EntitlementLedger.ZERO, FairShareAllocator(SELF, policyConfig(policy)),
+                Leasable.ByTopology(topology),
+            )
+            val booted = engine.apply(topology, generation = 0L)
+            check(booted.refusals.isEmpty()) { "booting from an empty ledger refused ${booted.refusals}" }
+            return engine
+        }
 
         /**
          * An engine over [ledger] as it stands, with a fresh allocator, leasing what [leasable]
