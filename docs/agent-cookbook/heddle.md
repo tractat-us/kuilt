@@ -49,6 +49,9 @@ without a `Seam`, Raft or coroutines.
 (`:kuilt-heddle-core`) over a `LedgerCell`: the latest ledger plus one write step that decides
 each grant on the state it lands on. For a single process the cell is a `var`. It is the same
 loop `HeddleNode.schedule` runs. An allocator is not thread-safe: one per scheduling peer.
+This is the bare loop over a ledger you hold yourself. For a whole scheduler — a lease per free
+slot, the real cost charged after, reloads, and a snapshot across restarts — use `LocalHeddle`
+instead (see [A fair-share tree in one process](#a-fair-share-tree-in-one-process)).
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleFairShareAllocator -->
 ```kotlin
@@ -345,6 +348,47 @@ one upgrade. After a restore, settle the work that did not survive with `reconci
     // The lease that was running is still open, and settles as it would have.
     check(restarted.complete(running.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
 ```
+
+Four persistence gotchas the sample is too short to show:
+
+- **`snapshot.epoch + 1` is the sample's shorthand, not the pattern.** Restoring one snapshot
+  twice under the same epoch (a crash straight after the first restore, say) gives two engines
+  that number leases alike, so a job from the first run can settle the second's lease. Keep a
+  boot counter in storage and raise it on every start; `restore` throws
+  `IllegalArgumentException` only when the epoch is not above the snapshot's.
+- **Formats.** `:kuilt-heddle-core` brings no format: add `kotlinx-serialization-json` or
+  `kotlinx-serialization-cbor`. Both are tested, CBOR's definite- and indefinite-length arrays
+  included. **Not ProtoBuf**: it encodes a snapshot, but `decode` answers `Corrupt`, since it
+  cannot read back the ledger's maps whose values are maps. `FORMAT_VERSION` is what this
+  release writes and `SUPPORTED_FORMAT_VERSIONS` what it reads; format 1 is the first, so both are
+  1 today, and a release that adds format 2 reads 1 and 2.
+- **What `decode` checks.** The envelope's shape and version, then consistency: every open lease
+  has a positive reservation, an epoch no later than the snapshot's and a path that is its leaf's
+  one live lineage from the root, over edges the ledger holds and none retired; leases in id order;
+  a valid topology. It does **not** bound values an engine could never reach, such as a
+  reservation above `MAX_RESERVATION`, which decodes as `Restored`
+  (tracked by [#3261](https://github.com/tractat-us/kuilt/issues/3261)). Decode only bytes your
+  own program persisted.
+- **What is left draining stays draining.** The snapshot keeps the topology last applied, so after
+  the old leases settle, `apply` the same topology again to land a removal that was still waiting.
+  The `LocalPolicy` is not stored: pass the one the old engine ran with.
+
+Two fairness gaps are known, both in `LocalHeddle` and both smallest when a lease
+settles at its estimate:
+
+- **An estimate's size leans share.** A lease counts at its reservation until `complete`, so a lane
+  that under-reserves looks cheaper while it runs and gains share; one that over-reserves loses it.
+  Most callers send `defaultReservation`, so its size picks the side. Aim it at a typical job, and
+  pass a per-lease `reservation` when history gives a better one. This is tracked by
+  [#3239](https://github.com/tractat-us/kuilt/issues/3239).
+- **A lease that straddles a wake hands idle credit back.** A lane with a lease still running but
+  nothing in `waiting` is observed idle, so its next demand is a wake and is clamped to the front,
+  with that lease counted at its full reservation. When the lease then completes under its
+  reservation, the remainder walks the lane's virtual time back below the clamp; a `cancel` walks
+  back all of it. The credit is at most `reserved / weight` per such lease, and only a lane whose
+  queue empties while its own work still runs can earn it. `sleeperCredit = 0` does not prevent it.
+  This is tracked by [#3238](https://github.com/tractat-us/kuilt/issues/3238). `HeddleNode` does not take
+  this path: its `complete` keeps an unused earmark at the leaf.
 
 ### Run it over a network — reserve, run, charge once
 

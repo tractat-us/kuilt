@@ -218,7 +218,9 @@ behind it. Without that rule, mobile would take agent after agent until it
 caught up. The next eight builds follow the same three-to-one pattern as the first eight.
 
 A team counts as quiet only when it is missing from `waiting`. A team that is
-waiting but cannot run on this agent is not quiet, and keeps its place.
+waiting but cannot run on this agent is not quiet, and keeps its place. A team
+with a build still running but nothing queued is quiet, and that case has
+[one known gap](#how-fair-is-it).
 
 ## Better estimates, and other endings
 
@@ -422,12 +424,43 @@ you can tell "from before the restart" apart from "never heard of it". Builds
 that died with the old program are still leases on the new one. Find and settle
 them with [`reconcileLeases`](#after-a-crash), as above.
 
+`restore` throws `IllegalArgumentException` if the epoch is not above the
+snapshot's. Raise your boot counter even when you restore the same snapshot a
+second time, say after a crash straight after the first restore. Two engines
+under one epoch can hand out the same lease id.
+
+A removal that was still waiting for its builds when the engine stopped is still
+waiting after the restore. Call `apply` with the same tree once those builds
+finish, and the removal completes, exactly as it would have before.
+
+### What a snapshot holds
+
+- **The books**: every part of the tree, and everything handed down and charged.
+- **Every open lease**, with its id, the path it was charged down, and its
+  `startedAt`.
+- **The engine's memory of who was quiet**, so a team waking up is held level
+  just as the old engine would have held it.
+- **The agent count** last given to `reconcileCapacity`.
+- **The tree last passed to `apply`**, or the one the engine started from.
+  Runtime children are in the books, so they come back too.
+- **The epoch** of the engine that took it.
+
+Not kept: the `LocalPolicy`, which `restore` takes afresh, and the counter that
+numbers lease ids, which starts again at zero under the new epoch.
+
 ### What the saved form looks like
 
 Encoded, a snapshot is a two-item list, `[formatVersion, state]`, as a JSON
-array or a CBOR array. Both formats work; ProtoBuf cannot carry the books. It
-is a list rather than an object so that a store that reorders an object's keys,
-as Postgres `jsonb` does, cannot move `state` ahead of the version. Equal snapshots encode to equal bytes.
+array or a CBOR array. Both formats are tested. The module brings no format of
+its own, so add `kotlinx-serialization-json` or `kotlinx-serialization-cbor` to
+your build. Do not use ProtoBuf: it writes a snapshot but cannot read the books
+back, because their maps hold other maps. The list is a list rather than an
+object so that a store that reorders an object's keys, as Postgres `jsonb` does,
+cannot move `state` ahead of the version. Equal snapshots encode to equal bytes.
+
+`LocalHeddleSnapshot.FORMAT_VERSION` is the format this release writes.
+`SUPPORTED_FORMAT_VERSIONS` lists the formats it reads: its own and the one
+before it. Format 1 is the first, so today both say 1.
 
 `decode` reads the version first and never throws for what the bytes hold.
 It gives one of three answers:
@@ -442,22 +475,52 @@ It gives one of three answers:
   says which. A snapshot the engine built always adds up, so one that does not
   was damaged or changed after it was written.
 
+The check on the way in is about shape and consistency. Every open lease must
+reserve a positive amount and come from an epoch no later than the snapshot's.
+Its path must lead from the top of the tree to its lane, over parts the books
+hold and none that has retired. The leases must be in id order, and the tree
+must be valid. The check does not ask whether every number is one an engine could
+have reached. A huge but well-formed reservation still decodes, and that gap is
+tracked by [#3261](https://github.com/tractat-us/kuilt/issues/3261). So read
+snapshots only from storage your own program writes.
+
 ## How fair is it?
 
 Over time, each lane gets its weight's share of the time while it has work
 queued, and the check is one call away: compare `entitlement` with what each lane
-was really charged. Two limits come with that promise, stated plainly.
+was really charged. Three limits come with that promise, stated plainly.
 
 - **Per fork, not end to end.** Each fork in the tree keeps its own children close
   to their weights. A lane deep in the tree inherits the small gaps of every fork
   above it.
-- **Estimates steer order.** A lease counts at its estimate until it completes,
-  so a lane that always guesses low looks cheaper while its builds run. The charge
-  is corrected at `complete`, but a pick already made stays made.
+- **Estimates steer order.** A lease counts at its estimate until it completes.
+  So a lane that always guesses low looks cheaper while its builds run, and wins
+  turns it should not. A lane that always guesses high loses turns the same way.
+  The charge is corrected at `complete`, but a pick already made stays made.
+- **A quiet spell during a build.** Say mobile's queue empties while one of its
+  builds is still running, and new mobile work arrives before that build ends.
+  Mobile was quiet in between, so it comes back level with web. But that level
+  counted the running build at its full estimate. If the build then finishes
+  early, its unused minutes go back to mobile anyway, and mobile ends up that far
+  ahead. That is a small dose of the head start the quiet-team rule exists to
+  stop. A `cancel` hands back the whole estimate the same way.
 
-<!-- TODO(fairness fix): the estimate and wake-straddle effects are being decided.
-Once the fix merges, restate the second bullet as main then behaves, and add any
-guidance on sizing `defaultReservation`. -->
+The last two shrink as estimates get closer to the truth, so:
+
+- **Set `defaultReservation` near a typical build**, not the worst case. A small
+  default favours lanes whose builds run long; a large one penalises them.
+- **Pass a `reservation` when you know better**, such as the lane's last build
+  time, as the Mac agent above does.
+- **Know where the quiet-spell effect lives.** It needs a lane whose queue empties
+  while its own builds still run. A lane that always has work queued, or that
+  finishes everything before it queues more, never meets it. A build that runs
+  past its estimate hands nothing back, so it adds nothing either.
+
+Both are known gaps. The quiet-spell effect is tracked by
+[#3238](https://github.com/tractat-us/kuilt/issues/3238). The estimate effect
+is tracked by [#3239](https://github.com/tractat-us/kuilt/issues/3239).
+[What it does not promise](heddle-local-turns.md#what-it-does-not-promise) gives
+the arithmetic and the measured sizes.
 
 One more thing before you wire it in: the engine is not thread-safe, so call it
 from one place at a time. [How the next turn is chosen](heddle-local-turns.md)
