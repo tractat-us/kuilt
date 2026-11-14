@@ -53,6 +53,7 @@ class BigIntegerOracleTest {
             assertEquals(x.big().add(c.big()), (x + c).big(), "$x + $c")
             assertEquals(x.big().compareTo(y.big()), x.compareTo(y).coerceIn(-1, 1), "$x <=> $y")
             assertEquals(x.big().takeIf { it.fitsLong() }?.toLong(), x.toLongOrNull(), "$x narrowed")
+            if (c != 0L) assertEquals(x.big().rem(c.big()).toLong(), x % c, "$x % $c")
         }
     }
 

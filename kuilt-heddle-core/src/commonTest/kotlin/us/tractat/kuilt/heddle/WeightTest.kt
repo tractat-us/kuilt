@@ -34,14 +34,25 @@ class WeightTest {
         assertFailsWith<IllegalArgumentException> { Weight.of(1, -3) }
     }
 
+    /**
+     * a/b vs c/d compares a·d against c·b, and with a near-MAX numerator those products leave
+     * `Long`. They are formed in 128 bits, so the order is exact rather than a throw (#3313): a
+     * comparison that throws wedges every pick that sorts by weight.
+     */
     @Test
-    fun comparisonThatWouldOverflowThrowsRatherThanWrapping() {
-        // a/b vs c/d compares a*d against c*b. With near-MAX numerator and denominator
-        // the cross-products overflow Long — the comparator must throw, never wrap to a
-        // wrong verdict.
+    fun comparisonOrdersExactlyWhereTheCrossProductsLeaveLong() {
         val huge = Weight.of(Long.MAX_VALUE / 2, 1)
-        val alsoHuge = Weight.of(1, 3)
-        assertFailsWith<ArithmeticException> { huge.compareTo(alsoHuge) }
+        val tiny = Weight.of(1, 3)
+        val nearlyHuge = Weight.of(Long.MAX_VALUE / 2 - 1, 1)
+        val awkward = Weight.of(Long.MAX_VALUE / 3, 7)
+        val alsoAwkward = Weight.of(Long.MAX_VALUE / 5, 11)
+        assertAll(
+            { assertTrue(huge > tiny) },
+            { assertTrue(tiny < huge) },
+            { assertTrue(nearlyHuge < huge) },
+            { assertTrue(awkward > alsoAwkward) },
+            { assertEquals(0, awkward.compareTo(Weight.of(Long.MAX_VALUE / 3, 7))) },
+        )
     }
 
     @Test

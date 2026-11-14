@@ -31,6 +31,7 @@ final class us.tractat.kuilt.math/Int128 : kotlin/Comparable<us.tractat.kuilt.ma
     final fun minus(us.tractat.kuilt.math/Int128): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.minus|minus(us.tractat.kuilt.math.Int128){}[0]
     final fun plus(kotlin/Long): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.plus|plus(kotlin.Long){}[0]
     final fun plus(us.tractat.kuilt.math/Int128): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.plus|plus(us.tractat.kuilt.math.Int128){}[0]
+    final fun rem(kotlin/Long): kotlin/Long // us.tractat.kuilt.math/Int128.rem|rem(kotlin.Long){}[0]
     final fun toLongOrNull(): kotlin/Long? // us.tractat.kuilt.math/Int128.toLongOrNull|toLongOrNull(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.math/Int128.toString|toString(){}[0]
 

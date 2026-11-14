@@ -18,6 +18,7 @@ public final class us/tractat/kuilt/math/Int128 : java/lang/Comparable {
 	public final fun minus (Lus/tractat/kuilt/math/Int128;)Lus/tractat/kuilt/math/Int128;
 	public final fun plus (J)Lus/tractat/kuilt/math/Int128;
 	public final fun plus (Lus/tractat/kuilt/math/Int128;)Lus/tractat/kuilt/math/Int128;
+	public final fun rem (J)J
 	public final fun toLongOrNull ()Ljava/lang/Long;
 	public fun toString ()Ljava/lang/String;
 }
