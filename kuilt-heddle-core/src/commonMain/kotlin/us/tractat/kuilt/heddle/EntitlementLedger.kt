@@ -93,7 +93,8 @@ import kotlinx.serialization.Transient
  * ## The representation
  *
  * Sixteen components, each already a join-semilattice, so [piece] is just their
- * componentwise join (the product-of-lattices idiom):
+ * componentwise join (the product-of-lattices idiom), and a seventeenth, `forgotten`, that is not
+ * (see *Forgetting* below):
  *
  *  - [records] — the immutable topology (parent/child/weight per edge) as a
  *    grow-only **set of records per edge id**. A healthy id carries a singleton
@@ -178,8 +179,22 @@ import kotlinx.serialization.Transient
  * field must too, and it needs its own arm in `EntitlementLedgerCanonicalEncodingTest`, since no
  * test reds on a field it never writes.
  *
- * Its encoded shape is also part of [LocalHeddleSnapshot]'s format 1: a field added here takes a
- * default, and any other change needs a frozen surrogate there first.
+ * Its encoded shape is also part of [LocalHeddleSnapshot]'s formats 1 and 2: a field added here
+ * takes a default, and any other change needs a frozen surrogate there first.
+ *
+ * ## Forgetting (#3192, design §5.5)
+ *
+ * A retired edge stays in the books for good, because the work done under it still counts, so a
+ * group whose children come and go grows without bound. The internal [forget] drops a retired leaf
+ * edge's slots from the sixteen components and folds what they added up to into the seventeenth,
+ * `forgotten` ([ForgottenEdges]): [holdings], [leafSpentTotal], the generation floor and
+ * [hasChildEdges] read the fold beside the live edges, so each answers as it did before.
+ *
+ * Forgetting removes slots, so it is not a join, and it breaks §10 invariant 2 (monotonicity). It is
+ * scoped to a single writer, as invariant 4's quiesced edge is: `LocalHeddle` is its only caller,
+ * and [piece] throws rather than merge two different folds, or accept from a ledger that never
+ * forgot an edge numbered at or below the floor of the one that did. A replicated ledger never
+ * holds a fold. Forgetting between peers is open (#3332).
  *
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerMerge
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerLifecycle
@@ -218,6 +233,8 @@ public class EntitlementLedger private constructor(
     private val transferRelocIn: Map<PathKey, @Serializable(with = CanonicalMapSerializer::class) Map<ReplicaId, GCounter>> = emptyMap(),
     @Serializable(with = CanonicalMapSerializer::class)
     private val transferRelocOut: Map<PathKey, @Serializable(with = CanonicalMapSerializer::class) Map<ReplicaId, GCounter>> = emptyMap(),
+    /** The fold of every edge this ledger has forgotten; [ForgottenEdges.NONE] on every replicated ledger. */
+    private val forgotten: ForgottenEdges = ForgottenEdges.NONE,
     /** An [EdgeIndex] handed over by [piece]; derived state, see [index]. Never encoded, never compared. */
     @Transient private val carried: EdgeIndex? = null,
 ) : Quilted<EntitlementLedger> {
@@ -253,9 +270,10 @@ public class EntitlementLedger private constructor(
     }
 
     /**
-     * [piece] without the index: the componentwise join of the sixteen lattice components. A
-     * component either side leaves empty is taken from the other side as it is, not copied: every
-     * map here is read-only once built, and a patch touches only a few of the sixteen.
+     * [piece] without the index: the componentwise join of the sixteen lattice components, and the
+     * `forgotten` fold carried across ([joinForgotten]). A component either side leaves empty is
+     * taken from the other side as it is, not copied: every map here is read-only once built, and a
+     * patch touches only a few of the sixteen.
      */
     private fun join(other: EntitlementLedger): EntitlementLedger =
         EntitlementLedger(
@@ -290,13 +308,46 @@ public class EntitlementLedger private constructor(
             transferRelocOut = transferRelocOut.joinValues(other.transferRelocOut) { mine, theirs ->
                 mine.mergeRows(theirs)
             },
+            forgotten = joinForgotten(other),
         )
 
-    /** These same sixteen components, carrying [index] as already built. */
+    /**
+     * The fold the join of `this` and [other] carries: whichever side forgot, since forgetting is
+     * one writer's act and a fold is not a lattice.
+     *
+     * Throws [IllegalArgumentException], and so makes [piece] partial, in the two states a single
+     * writer never produces (design §5.5):
+     * - both sides carry a fold, and the folds differ: two writers forgot;
+     * - one side carries a fold and the other names an edge it does not, at or below its
+     *   generation floor: an edge the forgetting side may have forgotten, coming back.
+     */
+    private fun joinForgotten(other: EntitlementLedger): ForgottenEdges {
+        if (forgotten.isEmpty() && other.forgotten.isEmpty()) return ForgottenEdges.NONE
+        require(forgotten.isEmpty() || other.forgotten.isEmpty() || forgotten == other.forgotten) {
+            "two different records of forgotten edges cannot be merged: forgetting is one writer's act"
+        }
+        requireNothingResurrected(other)
+        other.requireNothingResurrected(this)
+        return if (forgotten.isEmpty()) other.forgotten else forgotten
+    }
+
+    /** Throws unless every edge [other] names that this ledger does not is above this ledger's forgotten floor. */
+    private fun requireNothingResurrected(other: EntitlementLedger) {
+        val floor = forgotten.generationFloor
+        if (floor < 0L || other === this) return
+        for (e in other.allEdges()) {
+            val generation = generationOf(e) ?: continue
+            require(generation > floor || mentions(e)) {
+                "${e.value} is at generation $generation, at or below the forgotten floor $floor, and this ledger does not hold it: it may be an edge this ledger forgot"
+            }
+        }
+    }
+
+    /** These same seventeen components, carrying [index] as already built. */
     private fun withIndex(index: EdgeIndex): EntitlementLedger = EntitlementLedger(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
         issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
-        transferRelocIn, transferRelocOut, carried = index,
+        transferRelocIn, transferRelocOut, forgotten, carried = index,
     )
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -749,7 +800,8 @@ public class EntitlementLedger private constructor(
      * The child sum runs over every child edge [group] ever had, and a retired one stays in it: a
      * served child retires with `issued − returned = spent > 0`, and that spend left this group.
      * The non-retired children are summed here; the retired ones come pre-summed from the [index]'s
-     * per-parent fold, so a group with fifty thousand retired children pays for none of them.
+     * per-parent fold, so a group with fifty thousand retired children pays for none of them. The
+     * children this ledger has forgotten ([forget]) come pre-summed too, from `forgotten`.
      *
      * The sum is kept in 128 bits and narrowed once, at the end. Wherever the old term-by-term
      * `checkedAdd`/`checkedSub` sum returned a value, this returns the same one. It now throws on
@@ -769,6 +821,7 @@ public class EntitlementLedger private constructor(
         acc.add(transferNet(pathKey, r))
         for (c in idx.unretired[group].orEmpty()) acc.sub(netInflow(c, r))
         idx.retiredOutflow[group]?.get(r)?.let(acc::sub)
+        forgotten.outflow[group]?.get(r)?.let(acc::sub)
         if (f != null) acc.sub(effLeafSpentSlot(f, r))
         return acc.toLongExact()
     }
@@ -1910,11 +1963,11 @@ public class EntitlementLedger private constructor(
      */
     public fun validate(): List<LedgerConflict> = withFreshIndex().diagnose()
 
-    /** These same sixteen components, with no index carried: the copy builds its own on first read. */
+    /** These same seventeen components, with no index carried: the copy builds its own on first read. */
     private fun withFreshIndex(): EntitlementLedger = EntitlementLedger(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
         issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
-        transferRelocIn, transferRelocOut,
+        transferRelocIn, transferRelocOut, forgotten,
     )
 
     /** The body of [validate], run on [withFreshIndex]'s copy. */
@@ -1957,6 +2010,12 @@ public class EntitlementLedger private constructor(
         // partially-delivered topology a topology-keyed predicate would report.
         val roots = mintedRoots()
         if (roots.size > 1) conflicts += LedgerConflict.MultipleRoots(roots)
+        // What a forgotten edge left behind is never negative: [forget] folds only an edge whose
+        // books closed. Its other checks ran at forget time, since nothing is left to check after.
+        for ((parent, row) in forgotten.outflow) {
+            for ((r, v) in row) if (v < 0L) conflicts += LedgerConflict.NegativeForgottenFold(parent, r)
+        }
+        for ((r, v) in forgotten.leafSpend) if (v < 0L) conflicts += LedgerConflict.NegativeForgottenFold(null, r)
         // The global backstop, last: totals read straight off the components, so it survives a
         // regression in the per-lineage derivation the checks above all depend on.
         val spentTotal = leafSpentTotal()
@@ -2128,6 +2187,111 @@ public class EntitlementLedger private constructor(
         index.value.inbound[group].orEmpty().count { isLiveEdge(it) }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Forgetting — a single writer's compaction, not a join (#3192, design §5.5)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * This ledger without [edges]: each one's slots dropped from the sixteen lattice components, and
+     * what they added up to folded into `forgotten`, so every reader that counted the edge still
+     * answers as it did. `null` when any edge in [edges] is not forgettable ([forgetRefusal]), in which
+     * case nothing is forgotten.
+     *
+     * A RETIRED edge folds its `effIssued − returned` per replica into its parent's outflow, which
+     * [holdings] subtracts, its effective leaf spend per replica into the folded leaf spend, which
+     * [leafSpentTotal] counts, and its generation into the forgotten floor, which the generation
+     * floor reads. Its parent then counts as having child edges ([hasChildEdges]) for good. A PREPARED
+     * edge never carried anything, so it moves the floor alone.
+     *
+     * **Not a join.** Every other mutator only adds to the lattice; this removes slots, so the result
+     * is not above `this`, and it breaks §10 invariant 2. It is one writer's act: `LocalHeddle` is its
+     * only caller, a replicated ledger never forgets, and [piece] refuses what a second writer would
+     * produce (see [joinForgotten]).
+     *
+     * What it rests on: [validate] can no longer see a forgotten edge, so its [LedgerConflict.PerEdgeSafety],
+     * [LedgerConflict.NegativeEffectiveSpend] and [LedgerConflict.ClosureViolation] are checked here
+     * instead, and an edge that would fail one is refused.
+     */
+    internal fun forget(edges: Collection<AttachmentId>): EntitlementLedger? {
+        val doomed = edges.toSet()
+        if (doomed.isEmpty()) return this
+        if (doomed.any { forgetRefusal(it) != null }) return null
+
+        val outflow = forgotten.outflow.mapValuesTo(HashMap()) { (_, row) -> HashMap(row) }
+        val leafSpend = HashMap(forgotten.leafSpend)
+        var floor = forgotten.generationFloor
+        for (e in doomed) {
+            floor = maxOf(floor, generationOf(e) ?: -1L)
+            if (lifecycleOf(e) != Lifecycle.RETIRED) continue
+            val record = checkNotNull(recordOf(e)) { "a forgettable edge has one record" }
+            val row = outflow.getOrPut(record.parent) { HashMap() }
+            for (r in replicasOnEdge(e)) {
+                val net = netInflow(e, r)
+                if (net != 0L) row[r] = checkedAdd(row[r] ?: 0L, net)
+                val spend = effLeafSpentSlot(e, r)
+                if (spend != 0L) leafSpend[r] = checkedAdd(leafSpend[r] ?: 0L, spend)
+            }
+        }
+        fun <V> Map<AttachmentId, V>.without(): Map<AttachmentId, V> =
+            if (keys.none { it in doomed }) this else filterKeys { it !in doomed }
+        return EntitlementLedger(
+            records = records.without(),
+            minted = minted,
+            issued = issued.without(),
+            returned = returned.without(),
+            leafSpent = leafSpent.without(),
+            rollupSpent = rollupSpent.without(),
+            transfers = transfers,
+            lifecycle = lifecycle.without(),
+            issuedRelocIn = issuedRelocIn.without(),
+            leafRelocIn = leafRelocIn.without(),
+            leafRelocOut = leafRelocOut.without(),
+            rollupRelocIn = rollupRelocIn.without(),
+            rollupRelocOut = rollupRelocOut.without(),
+            gauges = gauges.without(),
+            transferRelocIn = transferRelocIn,
+            transferRelocOut = transferRelocOut,
+            forgotten = ForgottenEdges(outflow, leafSpend, floor),
+        )
+    }
+
+    /**
+     * Why [forget] would refuse [edge], or `null` when it may be forgotten. All of these must hold
+     * (design §5.5):
+     * - one record names it, and it is RETIRED, or PREPARED with no counter and no gauge;
+     * - its child has no child edges in any lifecycle, forgotten ones included, so leaves go first;
+     * - no transfer row, base or relocation, sits at its path;
+     * - for a RETIRED edge, its books closed: charged plus returned within issued, no negative
+     *   effective spend, nothing outstanding, nothing stranded on it for any replica (what
+     *   [relocationPatch] would move), and its child holding nothing for any replica.
+     *
+     * Whether an open lease's path crosses the edge is the engine's question, not the ledger's; with
+     * nothing outstanding, no lease is charging it.
+     */
+    internal fun forgetRefusal(edge: AttachmentId): ForgetRefusal? {
+        if (!isKnown(edge)) return ForgetRefusal.UNKNOWN
+        val record = recordOf(edge) ?: return ForgetRefusal.NOT_ONE_RECORD
+        val lifecycle = lifecycleOf(edge)
+        if (lifecycle != Lifecycle.RETIRED && lifecycle != Lifecycle.PREPARED) return ForgetRefusal.LIVE
+        if (hasChildEdges(record.child)) return ForgetRefusal.CHILD_HAS_CHILD_EDGES
+        val path = PathKey.of(edge)
+        if (transferMatrices().any { path in it }) return ForgetRefusal.TRANSFER_ROWS
+        if (lifecycle == Lifecycle.PREPARED) {
+            return if (allEdgeCounters().any { edge in it } || edge in gauges) ForgetRefusal.PREPARED_CARRIES_HISTORY else null
+        }
+        val effLeaf = effLeafSpentTotal(edge)
+        val effRollup = effRollupSpentTotal(edge)
+        if (checkedAdd(checkedAdd(effLeaf, effRollup), counterValue(returned, edge)) > effIssuedTotal(edge)) {
+            return ForgetRefusal.PER_EDGE_SAFETY
+        }
+        if (effLeaf < 0L || effRollup < 0L) return ForgetRefusal.NEGATIVE_EFFECTIVE_SPEND
+        if (edge(edge)?.outstanding != 0L) return ForgetRefusal.OUTSTANDING
+        val replicas = replicasOnEdge(edge)
+        if (replicas.any { strandedOn(edge, it) != 0L }) return ForgetRefusal.STRANDED
+        if (allReplicas().any { holdings(record.child, it) != 0L }) return ForgetRefusal.CHILD_HOLDS
+        return null
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Enumeration + test-support accessors (internal — used by validate and tests)
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -2159,7 +2323,13 @@ public class EntitlementLedger private constructor(
      * Whether any edge, in any lifecycle, names [group] as its parent: the edges [holdings] subtracts
      * from [group]. Deliberately not [isLeaf], whose meaning is a scheduling question (#3191).
      */
-    internal fun hasChildEdges(group: GroupId): Boolean = childEdges(group).isNotEmpty()
+    internal fun hasChildEdges(group: GroupId): Boolean = childEdges(group).isNotEmpty() || group in forgotten.outflow
+
+    /** The highest generation any edge this ledger has forgotten carried, or `-1`: part of the generation floor. */
+    internal fun forgottenGenerationFloor(): Long = forgotten.generationFloor
+
+    /** Whether this ledger has forgotten anything. A replicated ledger never has. */
+    internal fun hasForgotten(): Boolean = !forgotten.isEmpty()
 
     /** Every edge id mentioned by any component. */
     internal fun allEdges(): Set<AttachmentId> =
@@ -2232,9 +2402,9 @@ public class EntitlementLedger private constructor(
     public fun carriedResidualOn(edge: AttachmentId, donor: ReplicaId, to: ReplicaId): Long =
         carriedResidual(PathKey.of(edge), donor, to)
 
-    /** Every group named as a parent or child by any (singleton or divergent) record. */
+    /** Every group named as a parent or child by any (singleton or divergent) record, or as the parent of a forgotten edge. */
     internal fun allGroups(): Set<GroupId> =
-        records.values.flatten().flatMapTo(HashSet()) { listOf(it.parent, it.child) }
+        records.values.flatten().flatMapTo(HashSet()) { listOf(it.parent, it.child) } + forgotten.outflow.keys
 
     /** Every replica that authored a slot, holds a mint, or sent/received a transfer. */
     internal fun allReplicas(): Set<ReplicaId> {
@@ -2246,6 +2416,7 @@ public class EntitlementLedger private constructor(
         for (rows in transfers.values) {
             for ((donor, row) in rows) { out += donor; out += row.replicas() }
         }
+        out += forgotten.replicas()
         return out
     }
 
@@ -2266,11 +2437,12 @@ public class EntitlementLedger private constructor(
     /**
      * Total service charged where an edge is a path's final edge (the conservation term), at
      * **effective** values — a relocation moves leaf spend between edges in equal and opposite
-     * amounts, so this sum is invariant under any move.
+     * amounts, so this sum is invariant under any move. The leaf spend of every forgotten edge is
+     * in it too, folded, so it is invariant under [forget] as well.
      */
     @HeddleInternalApi
     public fun leafSpentTotal(): Long =
-        allEdges().fold(0L) { acc, e -> checkedAdd(acc, effLeafSpentTotal(e)) }
+        allEdges().fold(forgotten.leafSpend.values.fold(0L, ::checkedAdd)) { acc, e -> checkedAdd(acc, effLeafSpentTotal(e)) }
 
     /** [r]'s effective issuance across [edge] — `issued + issuedRelocIn`. [HeddleInternalApi], test support. */
     @HeddleInternalApi
@@ -2322,7 +2494,7 @@ public class EntitlementLedger private constructor(
     )
 
     /**
-     * This state with every [Gauge] entry removed and all fifteen other components untouched.
+     * This state with every [Gauge] entry removed and all sixteen other components untouched.
      *
      * `internal` — and it exists for exactly one caller: the **negative control** that splits a
      * [delegate] patch so its counters travel without their checkpoint, and thereby demonstrates
@@ -2336,7 +2508,7 @@ public class EntitlementLedger private constructor(
     internal fun withoutGauges(): EntitlementLedger = EntitlementLedger(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
         issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges = emptyMap(),
-        transferRelocIn = transferRelocIn, transferRelocOut = transferRelocOut,
+        transferRelocIn = transferRelocIn, transferRelocOut = transferRelocOut, forgotten = forgotten,
     )
 
     /**
@@ -2371,7 +2543,8 @@ public class EntitlementLedger private constructor(
             rollupRelocOut == other.rollupRelocOut &&
             gauges == other.gauges &&
             transferRelocIn == other.transferRelocIn &&
-            transferRelocOut == other.transferRelocOut
+            transferRelocOut == other.transferRelocOut &&
+            forgotten == other.forgotten
 
     override fun hashCode(): Int {
         var h = records.hashCode()
@@ -2390,6 +2563,7 @@ public class EntitlementLedger private constructor(
         h = 31 * h + gauges.hashCode()
         h = 31 * h + transferRelocIn.hashCode()
         h = 31 * h + transferRelocOut.hashCode()
+        h = 31 * h + forgotten.hashCode()
         return h
     }
 
@@ -2399,7 +2573,7 @@ public class EntitlementLedger private constructor(
             "transfers=$transfers, lifecycle=$lifecycle, issuedRelocIn=$issuedRelocIn, " +
             "leafRelocIn=$leafRelocIn, leafRelocOut=$leafRelocOut, " +
             "rollupRelocIn=$rollupRelocIn, rollupRelocOut=$rollupRelocOut, gauges=$gauges, " +
-            "transferRelocIn=$transferRelocIn, transferRelocOut=$transferRelocOut)"
+            "transferRelocIn=$transferRelocIn, transferRelocOut=$transferRelocOut, forgotten=$forgotten)"
 
     /**
      * The derived topology [index] holds. Every list is sorted by [AttachmentId] and every map is
@@ -2467,8 +2641,15 @@ public class EntitlementLedger private constructor(
          * way to build a non-trivial ledger is via the mutators (a later phase);
          * this exists so this phase's lattice-law tests can construct arbitrary
          * states of the still-inert lattice.
+         *
+         * The three `forgotten…` parameters assemble the seventeenth component, the fold of the
+         * edges a ledger has forgotten ([ForgottenEdges]): `forgottenOutflow` per parent and
+         * replica, `forgottenLeafSpend` per replica, and `forgottenGenerationFloor`, `-1` for none.
+         * A ledger built with a fold merges only with one holding the same fold or none, so the
+         * lattice-law generators leave them at their defaults.
          */
         @HeddleInternalApi
+        @OptIn(ExperimentalVersionOverloading::class)
         public fun of(
             records: Map<AttachmentId, Set<AttachmentRecord>> = emptyMap(),
             minted: Map<MintId, MintRecord> = emptyMap(),
@@ -2486,11 +2667,15 @@ public class EntitlementLedger private constructor(
             gauges: Map<AttachmentId, Gauge> = emptyMap(),
             transferRelocIn: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
             transferRelocOut: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
+            @IntroducedAt("0.7.5") forgottenOutflow: Map<GroupId, Map<ReplicaId, Long>> = emptyMap(),
+            @IntroducedAt("0.7.5") forgottenLeafSpend: Map<ReplicaId, Long> = emptyMap(),
+            @IntroducedAt("0.7.5") forgottenGenerationFloor: Long = -1L,
         ): EntitlementLedger =
             EntitlementLedger(
                 records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
                 issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
                 transferRelocIn, transferRelocOut,
+                ForgottenEdges(forgottenOutflow, forgottenLeafSpend, forgottenGenerationFloor),
             )
     }
 }

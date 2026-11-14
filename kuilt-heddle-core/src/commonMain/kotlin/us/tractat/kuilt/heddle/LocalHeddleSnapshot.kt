@@ -214,6 +214,9 @@ public sealed interface RestoreResult {
  * - a change that cannot be made that way (a rename, a removal, a new meaning for a field) needs a
  *   frozen surrogate of the nested type under this class, which format 1 then reads through, and
  *   only after that the change to the live type.
+ *
+ * This release reads format 1 and never writes it, so there is no way back from a snapshot to this
+ * surrogate.
  */
 @Serializable
 private class SnapshotFormat1(
@@ -224,18 +227,10 @@ private class SnapshotFormat1(
     val leases: List<LeaseFormat1>,
     val lastApplied: Topology,
 ) {
-    fun toSnapshot(): LocalHeddleSnapshot =
-        LocalHeddleSnapshot(epoch, ledger, allocatorMemory, totalSlots, leases.map { it.toPersisted(ledger) }, lastApplied)
-
-    companion object {
-        fun of(snapshot: LocalHeddleSnapshot): SnapshotFormat1 = SnapshotFormat1(
-            epoch = snapshot.epoch,
-            totalSlots = snapshot.totalSlots,
-            ledger = snapshot.ledger,
-            allocatorMemory = snapshot.allocatorMemory,
-            leases = snapshot.open.map(LeaseFormat1::of),
-            lastApplied = snapshot.lastApplied,
-        )
+    /** The snapshot, and throws [IllegalArgumentException] when the ledger carries a fold, which format 1 predates. */
+    fun toSnapshot(): LocalHeddleSnapshot {
+        require(!ledger.hasForgotten()) { "a format-1 snapshot carries forgotten edges, which format 1 predates" }
+        return LocalHeddleSnapshot(epoch, ledger, allocatorMemory, totalSlots, leases.map { it.toPersisted(ledger) }, lastApplied)
     }
 }
 

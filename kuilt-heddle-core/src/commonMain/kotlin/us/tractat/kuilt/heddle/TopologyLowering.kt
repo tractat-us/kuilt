@@ -260,14 +260,19 @@ internal fun generationOf(id: AttachmentId): Long? {
 /**
  * The highest generation any edge of this ledger carries, leaving out the edges in [except], or `-1`
  * when none is in the topology grammar. Retired edges count: their ids are spent too, and reusing
- * one would prepare an edge the ledger already knows.
+ * one would prepare an edge the ledger already knows. So do the edges the ledger has forgotten,
+ * through their folded floor, which [except] never reaches: a forgotten id is spent for good.
  *
  * Read from the ledger's index, which folds the top generation in as edges arrive, so it costs no
  * pass over the edges. The one exception is when [except] names every edge at the top: the floor is
  * then somewhere below it, and only a scan finds it. Only [Topology.diff] passes a non-empty
  * [except], and it reads every edge anyway.
  */
-internal fun EntitlementLedger.generationFloor(except: Set<AttachmentId> = emptySet()): Long {
+internal fun EntitlementLedger.generationFloor(except: Set<AttachmentId> = emptySet()): Long =
+    maxOf(forgottenGenerationFloor(), liveGenerationFloor(except))
+
+/** [generationFloor] over the edges this ledger still holds. */
+private fun EntitlementLedger.liveGenerationFloor(except: Set<AttachmentId>): Long {
     val top = generationTop()
     if (top.edges == 0) return -1L
     if (except.count { generationOf(it) == top.generation } < top.edges) return top.generation
