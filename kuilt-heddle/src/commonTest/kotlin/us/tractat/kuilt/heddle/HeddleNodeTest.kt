@@ -851,15 +851,11 @@ class HeddleNodeTest {
         node.advertise(newborn.id, competingUnservable)
         node.schedule(root)
         h.pump()
-        assertEquals(
-            Gauge(Rational.ZERO, folded = 0L, ticksLow = 200L * 16L),
-            node.ledger.value.gauge(newborn.id),
-            "the newborn is seated at the front over the set it is joining — e1 alone, since the " +
-                "waker is a joiner too and cannot be averaged into it",
-        )
+        assertNull(node.ledger.value.gauge(newborn.id), "a round with nothing to grant writes no seat (#3353)")
 
-        // Phase 3 — all three now servable and level at 200, so they split what is left (300 units,
-        // 30 quanta) three ways. Neither joiner is a joiner any more, so no front is recomputed.
+        // Phase 3 — all three now servable. e2 kept its clamp from phase 2, so it is no longer
+        // waking, and the newborn, still unseated, is seated with the first grant at the front over
+        // e1 and e2, both at 200. They split what is left (300 units, 30 quanta) three ways.
         val hungrier = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
         node.advertise(e1, hungrier)
         node.advertise(e2, hungrier)
@@ -870,7 +866,19 @@ class HeddleNodeTest {
         val ledger = node.ledger.value
         val issued = "e1=${ledger.edge(e1)!!.issued}, e2=${ledger.edge(e2)!!.issued}, " +
             "e3=${ledger.edge(newborn.id)!!.issued}"
+        // Each checkpoint writes the gross position at the new issuance with that issuance as its
+        // fold, so `ticks − folded · 16` is the seat the first grant landed with, in ticks.
+        val gauge = assertNotNull(ledger.gauge(newborn.id))
+        val seat = gauge.ticksLow - gauge.folded * 16L
         assertAll(
+            { assertEquals(0L, gauge.ticksHigh, "the rig: a position this small has no high word") },
+            {
+                assertEquals(
+                    200L * 16L,
+                    seat,
+                    "the newborn is seated at the front over the set it is joining, never one a waker pulled down",
+                )
+            },
             {
                 assertEquals(
                     100L,

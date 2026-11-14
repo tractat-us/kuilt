@@ -2,6 +2,7 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -119,7 +120,8 @@ class FairShareAllocatorTest {
         val allocator = FairShareAllocator(self, policy)
         allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to Demand(200L, 10L)))
 
-        // One round: e3 is born and e2 wakes. Nothing is servable, so the gauge reads back as the seat.
+        // One round: e3 is born and e2 wakes. Nothing is servable, so the round writes nothing (#3353)
+        // and keeps only what it observed: e2's clamp to the front.
         val e3 = newborn(cell, "e3")
         val granted = allocator.schedule(
             root,
@@ -129,17 +131,15 @@ class FairShareAllocatorTest {
         )
         assertAll(
             { assertEquals(AllocationOutcome.NothingToDelegate, granted, "nothing is servable in the joining round") },
-            {
-                assertEquals(
-                    gaugeOfUnits(200L, folded = 0L),
-                    cell.current.gauge(e3),
-                    "seated at the front over e1 alone — the waker is a joiner too",
-                )
-            },
+            { assertNull(cell.current.gauge(e3), "and an empty round writes no seat") },
         )
 
         allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to hungry, e2 to hungry, e3 to hungry))
+        // Each checkpoint writes the gross position at the new issuance with that issuance as its fold,
+        // so `ticks − folded · G` is the seat the first grant landed with.
+        val seat = assertNotNull(cell.current.gauge(e3)).let { it.ticks - Int128.of(it.folded * TICKS_PER_UNIT) }
         assertAll(
+            { assertEquals(Int128.of(200L * TICKS_PER_UNIT), seat, "seated at the front over e1 alone — the waker is a joiner too") },
             { assertEquals(100L, issued(cell, e3), "the newborn takes a third of what is left") },
             { assertEquals(100L, issued(cell, e2), "and so does the waker, clamped to the same front") },
             { assertEquals(300L, issued(cell, e1), "and the incumbent keeps its third") },
@@ -243,7 +243,7 @@ class FairShareAllocatorTest {
         val cell = object : LedgerCell {
             override val current: EntitlementLedger get() = base.current
             override fun mutateOrSkip(transform: (EntitlementLedger) -> Patch<EntitlementLedger>?): Boolean {
-                // The first write is the seat bump; inject before the second, the first pick.
+                // The first write is the seats with the first grant; inject before the second round's.
                 if (base.writes == 1 && !injected) {
                     injected = true
                     base.apply(base.current.prepare(late))
@@ -262,7 +262,9 @@ class FairShareAllocatorTest {
             { assertEquals(100L, issued(base, e1) + issued(base, e2), "the seated edges took the whole supply") },
         )
 
-        // The next round seats it; `seat` refusing it would leave the gauge absent.
+        // The next call that grants seats it; `seat` refusing it would leave the gauge absent. More
+        // supply first, since a call with nothing to grant writes nothing, a seat included.
+        base.apply(base.current.mint(MintId("more"), root, self, 10L))
         allocator.schedule(root, base, earmarked = 0L, demandOf(late.id to hungry))
         assertNotNull(base.current.gauge(late.id), "seated on the following round")
     }
