@@ -155,6 +155,8 @@ class DDSketchAddBucketsTest {
             { assertNull(empty.addBucketsOrNull(r1, mapOf(bottom - 1 to max), emptyMap(), 1L)) },
             { assertNull(empty.addBucketsOrNull(r1, mapOf(top to max, top + 1 to 1L), emptyMap(), 0L)) },
             { assertNull(empty.addBucketsOrNull(r1, mapOf(top + 1 to max, top + 2 to 1L), emptyMap(), 0L)) },
+            // Each sign's top bucket fits, but the overflow counter takes both signs' clamped counts.
+            { assertFailsWith<ArithmeticException> { empty.addBuckets(r1, mapOf(top + 1 to max), mapOf(top + 1 to 1L), 0L) } },
         )
     }
 
