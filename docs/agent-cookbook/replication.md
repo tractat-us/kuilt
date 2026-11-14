@@ -699,6 +699,23 @@ either product fits.
 `null` where Kotlin's operators wrap; `Long.timesWide` and `compareProducts` form a product exactly
 in an `Int128`; `mulDiv(a, b, divisor, rounding)` divides that product, so only the quotient has to
 fit, and makes you choose `Rounding.FLOOR` or `Rounding.CEILING`.
+`WideSum` is an exact running sum of `Long`s or `Int128`s that refuses (`ArithmeticException`) rather
+than wraps once it leaves 128 bits, so a partial sum may pass `Long.MAX_VALUE` and come back.
+
+<!-- verbatim from kuilt-math/src/commonSamples/kotlin/us/tractat/kuilt/math/Samples.kt#sampleWideSum -->
+```kotlin
+val total = WideSum()
+total.add(Long.MAX_VALUE)
+total.add(Long.MAX_VALUE) // the partial sum has left Long; nothing is lost
+total.sub(Long.MAX_VALUE)
+assertEquals(Long.MAX_VALUE, total.toInt128().toLongOrNull())
+
+// Two of the widest products leave 128 bits: refused, never wrapped, and the total is kept.
+val products = WideSum()
+products.add(Long.MIN_VALUE.timesWide(Long.MIN_VALUE))
+assertFailsWith<ArithmeticException> { products.add(Long.MIN_VALUE.timesWide(Long.MIN_VALUE)) }
+assertEquals(Long.MIN_VALUE.timesWide(Long.MIN_VALUE), products.toInt128())
+```
 
 <!-- verbatim from kuilt-math/src/commonSamples/kotlin/us/tractat/kuilt/math/Samples.kt#sampleMulDiv -->
 ```kotlin
