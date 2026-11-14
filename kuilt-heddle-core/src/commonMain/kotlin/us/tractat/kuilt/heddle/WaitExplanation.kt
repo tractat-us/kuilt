@@ -20,7 +20,7 @@ public sealed interface WaitExplanation {
     public val kind: Kind
 
     /** The arms of a [WaitExplanation], in the order they are checked; their order is part of the API. */
-    public enum class Kind { NOT_WAITING, NOT_ELIGIBLE, NO_LIVE_LINEAGE, SUPPLY_EXHAUSTED, POSITION_CEILING, BEHIND_AT_LEVEL, WOULD_BE_PICKED_NEXT }
+    public enum class Kind { NOT_WAITING, NOT_ELIGIBLE, NO_LIVE_LINEAGE, AT_CEILING, SUPPLY_EXHAUSTED, POSITION_CEILING, BEHIND_AT_LEVEL, WOULD_BE_PICKED_NEXT }
 
     /** The leaf is not in the waiting set: it has no work queued. */
     public data object NotWaiting : WaitExplanation {
@@ -41,6 +41,20 @@ public sealed interface WaitExplanation {
      */
     public data class NoLiveLineage(public val at: GroupId) : WaitExplanation {
         override val kind: Kind get() = Kind.NO_LIVE_LINEAGE
+    }
+
+    /**
+     * [group], on the leaf's path, has [limit] leases open beneath it already, its concurrency
+     * ceiling ([Topology.Node.maxConcurrent]), so no pick goes to the leaf until one of them closes.
+     * A [limit] of `0` is a pause. When several groups on the path are at their ceilings, [group] is
+     * the one nearest the root: the whole subtree waits on it.
+     *
+     * The next acquire skips the leaf for a sibling, or returns [AcquireOutcome.NothingEligible]
+     * when every eligible leaf is capped. Checked before the supply, so a capped leaf is told this
+     * even when the root is empty.
+     */
+    public data class AtCeiling(public val group: GroupId, public val limit: Long) : WaitExplanation {
+        override val kind: Kind get() = Kind.AT_CEILING
     }
 
     /** The root holds less than the reservation, so the next acquire is refused whoever is waiting. */
