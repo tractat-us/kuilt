@@ -52,6 +52,8 @@ public sealed interface WaitExplanation {
      * The next acquire skips the leaf for a sibling, or returns [AcquireOutcome.NothingEligible]
      * when every eligible leaf is capped. Checked before the supply, so a capped leaf is told this
      * even when the root is empty.
+     *
+     * @sample us.tractat.kuilt.heddle.sampleConcurrencyCeiling
      */
     public data class AtCeiling(public val group: GroupId, public val limit: Long) : WaitExplanation {
         override val kind: Kind get() = Kind.AT_CEILING
