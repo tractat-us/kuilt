@@ -1025,6 +1025,71 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   can sit below them, at a sibling a rebase lifted to `−R`, and a waker clamped
   there would otherwise keep credit over a newborn seated at its origin.
 
+#### Planned: a child keeps its place across an idle gap (#3376)
+
+**Pausing neither costs a child its place nor buys it a better one.** A child
+that stops asking and asks again later comes back exactly as far ahead or behind
+the others as it was when it stopped. The time it spent away counts for nothing.
+
+The clamp above does not do that. It moves every waker up to the front, so it
+forgives the lag a short burst leaves behind, and a parent that drains between
+bursts forgives it every time. Over 300 bursts the weights stop holding:
+
+| Rig | Fair | Today | Planned (spike) |
+|---|---|---|---|
+| S1c: weights 2:1, 2 units a burst, both asking | 400 / 200 | 300 / 300 | 400 / 200 |
+| S7: 2:1, the heavy child asks alone for 1, then both for 1 | 500 / 100 | 600 / 0 | 500 / 100 |
+| S7b: the same, light child first | 200 / 400 | 300 / 300 | 200 / 400 |
+
+S7's first unit is uncontested, so it is the heavy child's. Counting it as
+contested would pay the light child for a stretch it was not asking (§10.6). A
+waker that keeps its raw position, with no clamp at all, delivers 400 / 200 there.
+
+**The rule.** Two values per child, kept beside the wake offsets in
+`AllocatorMemory`:
+
+- **When this peer sees a child stop asking**, it records the child's **anchor**:
+  the front of the set that was competing in the previous round, at the current
+  positions. It also records the child's **lag**: the anchor less the child's
+  effective position, positive when the child is owed. Both are stored on the
+  child's own grid and rounded down.
+- **When the child asks again**, its offset grows by `max(0, F* − anchor)`, less
+  any sleeper credit, where `F` is the front this section already defines for a
+  waker. When `F` is a mean over a competing set of weight `W`, the wakers join
+  that set. Joining moves the mean, so it reads
+  `F* = F − Σ w(j) · lag(j) / W` over this round's wakers. Otherwise `F* = F`.
+  The record is then cleared.
+- **A child this peer never saw stop** is clamped to the front, as above: a first
+  sighting, or a restart that lost its memory.
+
+**Why it keeps the lag and earns nothing.** The anchor and the front measure the
+same thing, where the others are, at departure and at return. So the shift is
+exactly how far the others moved while the child was away. Two more properties
+come with it:
+
+- Without the correction a lone rejoiner keeps only `W / (W + w)` of its lag,
+  either side, so it is forgiven part of a debt. S7b then delivers 150 / 450.
+- The shift does not read the child's own position. So a charge or refund that
+  lands on the child while it is away, or after it returns, counts exactly as it
+  would with no gap. An over-reserved lease that straddles the wake is debt at
+  departure, and its refund cancels the debt (#3238). On #3238's one-level rig
+  the over-reserve arm moved from +0.136 to 0.000, and the under-reserve arm
+  from −0.030 to 0.000.
+
+**Where it lives.** It is scheduler-local, like the wake offsets, and never
+replicated. A departure is one peer's sighting of a transition, so it has no
+lattice to join under. A peer that saw no departure clamps, and that is a penalty.
+`LocalHeddle` persists it in its snapshot; `HeddleNode` keeps it in memory.
+Under #3353's origins the anchor is stored as an absolute position, so a rebase
+that raises the origin leaves it alone.
+
+**Bounds.** A returning child takes no more than the lag it left with. That is
+at most what it would hold if it had kept asking, so the idle gap adds nothing
+to §8.2's bound. Section 10.6 will read: *No idle credit. A child that stops
+competing keeps the lag it had when it stopped, either way, and gains nothing for
+the time it was idle. A child never seen to stop is clamped to the front. Default
+sleeper credit is zero.*
+
 ### 7.3 Selection
 
 Per allocation round at one parent, on one peer:
@@ -1264,7 +1329,8 @@ Carried over from the source intact; each is a named property test (§13).
    the front rounded **up** to the edge's own grid, under one tick (§7.2), below
    the position ceiling; at it, the seat lands at the ceiling (§7.1).
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
-   clamps forward.
+   clamps forward. Planned: a waker keeps the lag it left with, and gains
+   nothing for the time it was idle (§7.2, #3376).
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
    post-heal convergence restores a single agreed ledger.
 8. **Projection homomorphism.**
