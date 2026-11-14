@@ -153,11 +153,6 @@ public final class us/tractat/kuilt/heddle/AttachmentRecord$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class us/tractat/kuilt/heddle/CheckedMathKt {
-	public static final fun checkedAdd (JJ)J
-	public static final fun checkedMul (JJ)J
-}
-
 public final class us/tractat/kuilt/heddle/ChildPick {
 	public fun <init> (Lus/tractat/kuilt/heddle/EntitlementLedger;Lus/tractat/kuilt/heddle/Grant;)V
 	public final fun component1 ()Lus/tractat/kuilt/heddle/EntitlementLedger;

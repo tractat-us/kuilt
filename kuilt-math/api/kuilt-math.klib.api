@@ -44,6 +44,17 @@ final class us.tractat.kuilt.math/Int128 : kotlin/Comparable<us.tractat.kuilt.ma
     }
 }
 
+final class us.tractat.kuilt.math/WideSum { // us.tractat.kuilt.math/WideSum|null[0]
+    constructor <init>() // us.tractat.kuilt.math/WideSum.<init>|<init>(){}[0]
+
+    final fun add(kotlin/Long) // us.tractat.kuilt.math/WideSum.add|add(kotlin.Long){}[0]
+    final fun add(us.tractat.kuilt.math/Int128) // us.tractat.kuilt.math/WideSum.add|add(us.tractat.kuilt.math.Int128){}[0]
+    final fun sub(kotlin/Long) // us.tractat.kuilt.math/WideSum.sub|sub(kotlin.Long){}[0]
+    final fun sub(us.tractat.kuilt.math/Int128) // us.tractat.kuilt.math/WideSum.sub|sub(us.tractat.kuilt.math.Int128){}[0]
+    final fun toInt128(): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/WideSum.toInt128|toInt128(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.math/WideSum.toString|toString(){}[0]
+}
+
 final fun (kotlin/Long).us.tractat.kuilt.math/minusOrNull(kotlin/Long): kotlin/Long? // us.tractat.kuilt.math/minusOrNull|minusOrNull@kotlin.Long(kotlin.Long){}[0]
 final fun (kotlin/Long).us.tractat.kuilt.math/negateOrNull(): kotlin/Long? // us.tractat.kuilt.math/negateOrNull|negateOrNull@kotlin.Long(){}[0]
 final fun (kotlin/Long).us.tractat.kuilt.math/plusOrNull(kotlin/Long): kotlin/Long? // us.tractat.kuilt.math/plusOrNull|plusOrNull@kotlin.Long(kotlin.Long){}[0]
