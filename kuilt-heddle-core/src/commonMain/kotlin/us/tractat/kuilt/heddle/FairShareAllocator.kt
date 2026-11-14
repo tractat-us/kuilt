@@ -131,6 +131,10 @@ public class FairShareAllocator(
         it.af80Total.putAll(af80Total)
         it.af80Now = af80Now
         it.netLast.putAll(netLast)
+        fifo.forEach { (k, v) -> it.fifo[k] = ArrayDeque(v.map { c -> c.copyOf() }) }
+        it.fifoLast.putAll(fifoLast)
+        it.depTick.putAll(depTick)
+        it.tickNo = tickNo
         it.rebasesForTest = rebasesForTest
     }
 
@@ -566,6 +570,7 @@ public class FairShareAllocator(
 
         if (spikeLagRule == 5) tickClock(parent, edges)
         if (spikeLagRule in 6..8) tickNetClock(parent, edges, countDeparted = spikeLagRule == 8)
+        if (spikeLagRule == 9 || spikeLagRule == 10) tickFifoClock(parent, edges, rewind = spikeLagRule == 10)
         if (spikeLagRule != 0) recordDepartures(edges)
         val unseated = edges.filter { it.gauge == null }.mapTo(HashSet()) { it.record.id }
         val wakers = edges
@@ -800,12 +805,84 @@ public class FairShareAllocator(
         af80Now = clock
     }
 
+    /** SPIKE rule 9: per edge, its outstanding units in issue order, each with the clock rate (1/W) it was issued at. */
+    private val fifo = HashMap<AttachmentId, ArrayDeque<Array<Rational>>>()
+    private val fifoLast = HashMap<AttachmentId, LongArray>()
+
+    /**
+     * SPIKE (#3376), rule 9: the net-service clock, but a refund takes back exactly what its units'
+     * issuance added (the rate they were issued at, oldest units first), not `refund / W` at today's
+     * weight. Spent units leave the queue without moving the clock, and so does a refund from a
+     * child not seen asking.
+     */
+    /** SPIKE rule 10: the tick at which each departure was recorded, and the tick counter. */
+    private val depTick = HashMap<AttachmentId, Long>()
+    private var tickNo = 0L
+
+    /**
+     * Rule 10 ([rewind]): a refund rewinds the clock as if its units had never been issued, for
+     * everyone — the clock drops by what those units added, and so does the anchor of every child
+     * seen leave after they were issued, so a reservation outstanding at a departure is not counted
+     * against the returner once it is refunded. Every refund rewinds, a departed child's own included
+     * (its own anchor moves with the clock, so its shift is unchanged).
+     */
+    private fun tickFifoClock(parent: GroupId, edges: List<PolicyEdge>, rewind: Boolean = false) {
+        tickNo += 1
+        var w = Rational.ZERO
+        for (e in edges) if (demandingObserved[e.record.id] == true && e.gauge != null) w += weightOf(e)
+        val rate = if (w > Rational.ZERO) Rational.ONE / w else Rational.ZERO
+        var clock = af80Clock[parent] ?: Rational.ZERO
+        for (e in edges) {
+            val now = longArrayOf(e.baseIssued, e.summary.returned, e.summary.spent)
+            val last = fifoLast[e.record.id]
+            fifoLast[e.record.id] = now
+            if (last == null) continue
+            val asked = demandingObserved[e.record.id] == true && e.gauge != null
+            val q = fifo.getOrPut(e.record.id) { ArrayDeque() }
+            val issued = now[0] - last[0]
+            if (issued > 0L) {
+                val r = if (asked) rate else Rational.ZERO
+                q.addLast(arrayOf(Rational.of(issued), r, Rational.of(tickNo)))
+                clock += Rational.of(issued) * r
+            }
+            fun take(units: Long, moveClock: Boolean) {
+                var left = Rational.of(units)
+                while (left > Rational.ZERO && q.isNotEmpty()) {
+                    val head = q.first()
+                    val n = if (head[0] <= left) head[0] else left
+                    if (moveClock) {
+                        clock -= n * head[1]
+                        if (rewind) {
+                            // Issued at the tick before head[2]'s; a departure recorded at that tick or later saw it.
+                            for (x in edges) {
+                                val t = depTick[x.record.id] ?: continue
+                                val d = departures[x.record.id] ?: continue
+                                if (Rational.of(t) >= head[2]) departures[x.record.id] = Departure(d.anchor - n * head[1], d.lag)
+                            }
+                        }
+                    }
+                    head[0] = head[0] - n
+                    left -= n
+                    if (head[0] == Rational.ZERO) q.removeFirst()
+                }
+            }
+            // A child seen away keeps its own refund out of the clock, as in rule 6: it already lowers its own position.
+            take(now[1] - last[1], moveClock = asked || rewind)
+            take(now[2] - last[2], moveClock = false)
+        }
+        af80Clock[parent] = clock
+        af80Now = clock
+    }
+
     private fun recordDepartures(edges: List<PolicyEdge>) {
         val prev = edges.filter { demandingObserved[it.record.id] == true && it.gauge != null }
         val leaving = prev.filter { !HeddlePolicy.isDemanding(it) }
         if (leaving.isEmpty()) return
-        if (spikeLagRule in 5..8) {
-            for (e in leaving) departures[e.record.id] = Departure(af80Now, Rational.ZERO)
+        if (spikeLagRule in 5..10) {
+            for (e in leaving) {
+                departures[e.record.id] = Departure(af80Now, Rational.ZERO)
+                depTick[e.record.id] = tickNo
+            }
             return
         }
         var sw = Rational.ZERO
@@ -863,7 +940,7 @@ public class FairShareAllocator(
             // Rule 3 is the positive control: a waker that keeps its raw position banks every idle stretch.
             val shift = when (spikeLagRule) {
                 3 -> 0L
-                5, 6, 8 -> maxOf(0L, ticksAt(af80Now, weight) - ticksAt(d.anchor, weight))
+                5, 6, 8, 9, 10 -> maxOf(0L, ticksAt(af80Now, weight) - ticksAt(d.anchor, weight))
                 // Rule 7: signed, so a gap over which the clock ran backward (a sibling refunded more than it was
                 // issued) moves the returner back too; the offset itself never goes below zero.
                 7 -> maxOf(-carried, ticksAt(af80Now, weight) - ticksAt(d.anchor, weight))

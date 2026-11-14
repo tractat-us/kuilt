@@ -136,6 +136,25 @@ class NetClockProbe {
         return "${(cell.granted["p/a"] ?: 0) - (before["p/a"] ?: 0)}/${(cell.granted["p/b"] ?: 0) - (before["p/b"] ?: 0)}"
     }
 
+    /** P2c: P2 with a third sibling c asking throughout. Returns a/b/c of the last round's 20 (+ refunded 9). */
+    private fun siblingRefundThree(): String {
+        val a = edgeOf(root, GroupId("p/a"))
+        val b = edgeOf(root, GroupId("p/b"))
+        val c = edgeOf(root, GroupId("p/c"))
+        val cell = Cell(ledger(listOf(a, b, c), emptyMap()), listOf(a, b, c))
+        val al = alloc(10L)
+        al.schedule(root, cell, 0L) { Demand.NONE }
+        cell.mint("m1", 12L)
+        al.schedule(root, cell, 0L) { id -> if (id == b.id) want(10) else want(1) }
+        cell.mint("m2", 20L)
+        al.schedule(root, cell, 0L) { id -> if (id == a.id) Demand.NONE else want(1) }
+        cell.refund(b, 9L)
+        val before = HashMap(cell.granted)
+        cell.mint("m3", 20L)
+        al.schedule(root, cell, 0L) { want(1) }
+        return listOf(a, b, c).joinToString("/") { "${(cell.granted[it.child.value] ?: 0) - (before[it.child.value] ?: 0)}" }
+    }
+
     /** §10.6: b's take of an 11-unit burst after idling [idle] episodes while a takes 2 alone. */
     private fun idleLength(idle: Int, first: Long): Long {
         val a = edgeOf(root, GroupId("p/a"))
@@ -187,7 +206,7 @@ class NetClockProbe {
         try {
             val variants = listOf(
                 Triple("MAIN", false, 0), Triple("KEPT", true, 2), Triple("CLOCK", true, 5),
-                Triple("NET", true, 6), Triple("NETSIGNED", true, 7), Triple("NETALL(control)", true, 8),
+                Triple("NET", true, 6), Triple("NETALL(control)", true, 8), Triple("NETFIFO", true, 9), Triple("NETREWIND", true, 10),
             )
             for ((name, unified, rule) in variants) {
                 spikeUnified = unified
@@ -207,7 +226,7 @@ class NetClockProbe {
                     "NSC $name P1 debtor(60) paused=${setShrinks(60L * 16, true)} stayed=${setShrinks(60L * 16, false)} " +
                         "owed(0) paused=${setShrinks(0L, true)} stayed=${setShrinks(0L, false)}",
                 )
-                println("NSC $name P2 refund-in-gap=${siblingRefund(false)} refund-before-leave=${siblingRefund(true)}")
+                println("NSC $name P2 refund-in-gap=${siblingRefund(false)} refund-before-leave=${siblingRefund(true)} P2c three=${siblingRefundThree()}")
                 println("NSC $name IDLE owed: " + listOf(1, 10, 100, 1000).joinToString { "N=$it:${idleLength(it, 3L)}" } + " level: " + listOf(1, 10, 100, 1000).joinToString { "N=$it:${idleLength(it, 2L)}" })
                 slotRows(name)
             }
