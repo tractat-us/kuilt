@@ -36,6 +36,7 @@ public final class us/tractat/kuilt/math/Int128Kt {
 
 public final class us/tractat/kuilt/math/MulDivKt {
 	public static final fun mulDiv (JJJLus/tractat/kuilt/math/Rounding;)Ljava/lang/Long;
+	public static final fun mulDiv (Lus/tractat/kuilt/math/Int128;JJLus/tractat/kuilt/math/Rounding;)Lus/tractat/kuilt/math/Int128;
 }
 
 public final class us/tractat/kuilt/math/Rounding : java/lang/Enum {

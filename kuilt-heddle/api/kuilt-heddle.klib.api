@@ -201,6 +201,7 @@ sealed interface us.tractat.kuilt.heddle/ScheduleOutcome { // us.tractat.kuilt.h
 
 final class us.tractat.kuilt.heddle/BoundMetrics { // us.tractat.kuilt.heddle/BoundMetrics|null[0]
     constructor <init>(us.tractat.kuilt.heddle/GroupId, kotlin/Long, kotlin/Long, kotlin/Long) // us.tractat.kuilt.heddle/BoundMetrics.<init>|<init>(us.tractat.kuilt.heddle.GroupId;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+    constructor <init>(us.tractat.kuilt.heddle/GroupId, kotlin/Long, kotlin/Long, kotlin/Long, kotlin/Double = ...) // us.tractat.kuilt.heddle/BoundMetrics.<init>|<init>(us.tractat.kuilt.heddle.GroupId;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Double){}[0]
 
     final val configuredWorstCase // us.tractat.kuilt.heddle/BoundMetrics.configuredWorstCase|{}configuredWorstCase[0]
         final fun <get-configuredWorstCase>(): kotlin/Long // us.tractat.kuilt.heddle/BoundMetrics.configuredWorstCase.<get-configuredWorstCase>|<get-configuredWorstCase>(){}[0]
@@ -212,18 +213,23 @@ final class us.tractat.kuilt.heddle/BoundMetrics { // us.tractat.kuilt.heddle/Bo
         final fun <get-observedDeviation>(): kotlin/Long // us.tractat.kuilt.heddle/BoundMetrics.observedDeviation.<get-observedDeviation>|<get-observedDeviation>(){}[0]
     final val parent // us.tractat.kuilt.heddle/BoundMetrics.parent|{}parent[0]
         final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/BoundMetrics.parent.<get-parent>|<get-parent>(){}[0]
+    final val peakPositionFraction // us.tractat.kuilt.heddle/BoundMetrics.peakPositionFraction|{}peakPositionFraction[0]
+        final fun <get-peakPositionFraction>(): kotlin/Double // us.tractat.kuilt.heddle/BoundMetrics.peakPositionFraction.<get-peakPositionFraction>|<get-peakPositionFraction>(){}[0]
 
     final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/BoundMetrics.component1|component1(){}[0]
     final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/BoundMetrics.component2|component2(){}[0]
     final fun component3(): kotlin/Long // us.tractat.kuilt.heddle/BoundMetrics.component3|component3(){}[0]
     final fun component4(): kotlin/Long // us.tractat.kuilt.heddle/BoundMetrics.component4|component4(){}[0]
+    final fun component5(): kotlin/Double // us.tractat.kuilt.heddle/BoundMetrics.component5|component5(){}[0]
     final fun copy(us.tractat.kuilt.heddle/GroupId = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/BoundMetrics // us.tractat.kuilt.heddle/BoundMetrics.copy|copy(us.tractat.kuilt.heddle.GroupId;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+    final fun copy(us.tractat.kuilt.heddle/GroupId = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Double = ...): us.tractat.kuilt.heddle/BoundMetrics // us.tractat.kuilt.heddle/BoundMetrics.copy|copy(us.tractat.kuilt.heddle.GroupId;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Double){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/BoundMetrics.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/BoundMetrics.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/BoundMetrics.toString|toString(){}[0]
 
     final object Companion { // us.tractat.kuilt.heddle/BoundMetrics.Companion|null[0]
         final fun at(us.tractat.kuilt.heddle/EntitlementLedger, us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId>, kotlin.collections/Set<us.tractat.kuilt.heddle/AttachmentId>, us.tractat.kuilt.heddle/HeddleConfig): us.tractat.kuilt.heddle/BoundMetrics // us.tractat.kuilt.heddle/BoundMetrics.Companion.at|at(us.tractat.kuilt.heddle.EntitlementLedger;us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.crdt.ReplicaId>;kotlin.collections.Set<us.tractat.kuilt.heddle.AttachmentId>;us.tractat.kuilt.heddle.HeddleConfig){}[0]
+        final fun at(us.tractat.kuilt.heddle/EntitlementLedger, us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId>, kotlin.collections/Set<us.tractat.kuilt.heddle/AttachmentId>, us.tractat.kuilt.heddle/HeddleConfig, kotlin/Double = ...): us.tractat.kuilt.heddle/BoundMetrics // us.tractat.kuilt.heddle/BoundMetrics.Companion.at|at(us.tractat.kuilt.heddle.EntitlementLedger;us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.crdt.ReplicaId>;kotlin.collections.Set<us.tractat.kuilt.heddle.AttachmentId>;us.tractat.kuilt.heddle.HeddleConfig;kotlin.Double){}[0]
     }
 }
 

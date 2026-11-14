@@ -1,17 +1,23 @@
 public final class us/tractat/kuilt/heddle/BoundMetrics {
 	public static final field Companion Lus/tractat/kuilt/heddle/BoundMetrics$Companion;
+	public synthetic fun <init> (Ljava/lang/String;JJJDILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;JJJDLkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (Ljava/lang/String;JJJLkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1-urUY4Jo ()Ljava/lang/String;
 	public final fun component2 ()J
 	public final fun component3 ()J
 	public final fun component4 ()J
+	public final fun component5 ()D
 	public final fun copy-mLLTQY0 (Ljava/lang/String;JJJ)Lus/tractat/kuilt/heddle/BoundMetrics;
 	public static synthetic fun copy-mLLTQY0$default (Lus/tractat/kuilt/heddle/BoundMetrics;Ljava/lang/String;JJJILjava/lang/Object;)Lus/tractat/kuilt/heddle/BoundMetrics;
+	public final fun copy-p7q8fIo (Ljava/lang/String;JJJD)Lus/tractat/kuilt/heddle/BoundMetrics;
+	public static synthetic fun copy-p7q8fIo$default (Lus/tractat/kuilt/heddle/BoundMetrics;Ljava/lang/String;JJJDILjava/lang/Object;)Lus/tractat/kuilt/heddle/BoundMetrics;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getConfiguredWorstCase ()J
 	public final fun getCurrentBound ()J
 	public final fun getObservedDeviation ()J
 	public final fun getParent-urUY4Jo ()Ljava/lang/String;
+	public final fun getPeakPositionFraction ()D
 	public fun hashCode ()I
 	public final fun isConsistent ()Z
 	public fun toString ()Ljava/lang/String;
@@ -19,6 +25,8 @@ public final class us/tractat/kuilt/heddle/BoundMetrics {
 
 public final class us/tractat/kuilt/heddle/BoundMetrics$Companion {
 	public final fun at-U6Mix1E (Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;Lus/tractat/kuilt/heddle/HeddleConfig;)Lus/tractat/kuilt/heddle/BoundMetrics;
+	public final fun at-yM6ApN8 (Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;Lus/tractat/kuilt/heddle/HeddleConfig;D)Lus/tractat/kuilt/heddle/BoundMetrics;
+	public static synthetic fun at-yM6ApN8$default (Lus/tractat/kuilt/heddle/BoundMetrics$Companion;Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;Lus/tractat/kuilt/heddle/HeddleConfig;DILjava/lang/Object;)Lus/tractat/kuilt/heddle/BoundMetrics;
 }
 
 public abstract interface class us/tractat/kuilt/heddle/ControlConflict {
