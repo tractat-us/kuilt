@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineScope
@@ -13,7 +15,7 @@ import us.tractat.kuilt.core.MuxClientLoom
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.FakeSeam
@@ -67,7 +69,7 @@ class SeamRoomMuxSubscriptionTest {
             memberName = "Joiner",
             scope = backgroundScope,
             clock = { Instant.fromEpochMilliseconds(0L) },
-            device = keyedDevice(),
+            device = RoomDevice.of(fakeKeyStore(0)),
             heartbeatConfig = HeartbeatConfig(),
         )
         try {

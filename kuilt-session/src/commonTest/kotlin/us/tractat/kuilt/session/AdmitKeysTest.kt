@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineScope
@@ -16,7 +18,7 @@ import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.test.assertAll
@@ -36,8 +38,9 @@ import kotlin.time.Instant
  * - the **host intro** carries the host's own key, from its [DeviceKeyStore].
  *
  * Nothing here proves a key is held: in this version every key is the sender's claim. Each logical
- * device gets its own [InMemoryDeviceKeyStore], so every key in a test is distinct and an assertion
- * that one key arrived cannot be satisfied by another's.
+ * device gets its own `fakeKeyStore(n)` under its own number, so every key in a test is distinct and
+ * an assertion that one key arrived cannot be satisfied by another's. The same exchange on real P-256
+ * keys is `RealKeyAdmitTest`, on the JVM.
  */
 class AdmitKeysTest {
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope, store: DeviceKeyStore) =
@@ -46,8 +49,8 @@ class AdmitKeysTest {
     @Test
     fun `the host records the key the joiner's hello named`() = runTest {
         val loom = InMemoryLoom()
-        val hostStore = InMemoryDeviceKeyStore()
-        val bobStore = InMemoryDeviceKeyStore()
+        val hostStore = fakeKeyStore(0)
+        val bobStore = fakeKeyStore(1)
         val host = factory(loom, backgroundScope, hostStore).host(Pattern("HostA"), memberName = "HostA")
         val bob = factory(loom, backgroundScope, bobStore).join(InMemoryTag("Bob"), memberName = "Bob")
 
@@ -65,9 +68,9 @@ class AdmitKeysTest {
     @Test
     fun `the joiner learns the host's key from the host intro`() = runTest {
         val loom = InMemoryLoom()
-        val hostStore = InMemoryDeviceKeyStore()
+        val hostStore = fakeKeyStore(2)
         val host = factory(loom, backgroundScope, hostStore).host(Pattern("HostA"), memberName = "HostA")
-        val bob = factory(loom, backgroundScope, InMemoryDeviceKeyStore()).join(InMemoryTag("Bob"), memberName = "Bob")
+        val bob = factory(loom, backgroundScope, fakeKeyStore(3)).join(InMemoryTag("Bob"), memberName = "Bob")
 
         val hostOnBob = bob.roster.first { it.isNotEmpty() }.single()
         val hostKey = hostStore.deviceKey().id
@@ -87,9 +90,9 @@ class AdmitKeysTest {
     @Test
     fun `members learn each other's keys from the bootstrap and the roster copy`() = runTest {
         val loom = InMemoryLoom()
-        val bobStore = InMemoryDeviceKeyStore()
-        val carolStore = InMemoryDeviceKeyStore()
-        val host = factory(loom, backgroundScope, InMemoryDeviceKeyStore()).host(Pattern("HostA"), memberName = "HostA")
+        val bobStore = fakeKeyStore(4)
+        val carolStore = fakeKeyStore(5)
+        val host = factory(loom, backgroundScope, fakeKeyStore(6)).host(Pattern("HostA"), memberName = "HostA")
         val bob = factory(loom, backgroundScope, bobStore).join(InMemoryTag("Bob"), memberName = "Bob")
         host.roster.first { it.size == 1 }
         val carol = factory(loom, backgroundScope, carolStore).join(InMemoryTag("Carol"), memberName = "Carol")
@@ -180,9 +183,7 @@ class AdmitKeysTest {
     @Test
     fun `every hello names the device key and a fresh nonce`() = runTest {
         val loom = InMemoryLoom()
-        val store = InMemoryDeviceKeyStore()
-        // Made before the virtual-time deadline below is armed: on wasmJs making a key is a
-        // WebCrypto promise, and virtual time runs on while the test body waits for one.
+        val store = fakeKeyStore(7)
         val deviceKey = store.deviceKey().id
         val listener = loom.host(Pattern("Listener"))
         // One collection of the single-collection `incoming`: the first Hello from each of two senders.

@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CompletableDeferred
@@ -15,7 +17,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
@@ -30,7 +32,7 @@ class LoomRoomHostTest {
     @Test
     fun `drives the admit handshake over an in-memory loom under virtual time`() = runTest {
         val loom = InMemoryLoom()
-        val host = LoomRoomHost(loom, Pattern("server"), InMemoryDeviceKeyStore(), clock = zeroClock)
+        val host = LoomRoomHost(loom, Pattern("server"), fakeKeyStore(0), clock = zeroClock)
         val hostRoomReady = CompletableDeferred<Room>()
 
         val hostJob = backgroundScope.launch {
@@ -44,7 +46,7 @@ class LoomRoomHostTest {
             loom = loom,
             scope = backgroundScope,
             clock = zeroClock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = fakeKeyStore(1),
         )
         val joinerRoom = joinerFactory.join(InMemoryTag("server"))
 
@@ -60,7 +62,7 @@ class LoomRoomHostTest {
 
     @Test
     fun `start a second time on the same host throws`() = runTest {
-        val host = LoomRoomHost(InMemoryLoom(), Pattern("dup"), InMemoryDeviceKeyStore(), clock = zeroClock)
+        val host = LoomRoomHost(InMemoryLoom(), Pattern("dup"), fakeKeyStore(2), clock = zeroClock)
 
         val firstStarted = CompletableDeferred<Unit>()
         val job = backgroundScope.launch {
@@ -96,7 +98,7 @@ class LoomRoomHostTest {
     fun `leaves the room on the way out even though the teardown is a cancellation`() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val seam = SuspendingCloseSeam(FakeSeam(selfId = PeerId("host")))
-            val host = LoomRoomHost(SoleSeamLoom(seam), Pattern("shielded"), InMemoryDeviceKeyStore(), clock = zeroClock)
+            val host = LoomRoomHost(SoleSeamLoom(seam), Pattern("shielded"), fakeKeyStore(3), clock = zeroClock)
             val hosting = CompletableDeferred<Unit>()
 
             val hostJob = backgroundScope.launch { host.start { hosting.complete(Unit) } }
