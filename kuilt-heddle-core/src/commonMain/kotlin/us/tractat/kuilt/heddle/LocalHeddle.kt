@@ -267,6 +267,19 @@ public sealed interface LeaseOutcome {
  * The pick's terminal, the lift of [acquire]'s two sets into demand, [admit], [explain] and
  * [entitlement] read this one predicate, so none of them can accept a group the others refuse.
  *
+ * ## Ceilings
+ *
+ * A node of the topology may carry a ceiling, [Topology.Node.maxConcurrent]: the most leases open
+ * beneath it at once. A lease counts at every group its path passes through, a draining one
+ * included. Before a pick builds its demand views, every leaf beneath a group at its ceiling is
+ * dropped from both sets, so the pick goes to a sibling, and the capped group counts as idle at its
+ * parent: it banks no credit while it waits, and wakes clamped once a lease beneath it closes. A
+ * ceiling of `0` pauses everything beneath it. [previewPicks] and [explain] filter the same way,
+ * counting the leases already open and the ones a preview opens. The count is derived from the open
+ * leases on every call, so a ceiling persists nothing and a reload that changes only ceilings
+ * changes no edge. [admit], [extend], [complete] and [apply] charge work that is already running,
+ * so no ceiling refuses them, and lowering one preempts nothing.
+ *
  * ## Asking why
  *
  * [explain] says why a leaf is not what the next [acquire] picks, or that it is, by running that
@@ -509,8 +522,8 @@ public class LocalHeddle private constructor(
      *
      * A pick never reads [startedAt]; it is stored on the lease for the caller's own reconciling.
      *
-     * Returns [AcquireOutcome.NothingEligible] when [eligible] is empty,
-     * [AcquireOutcome.SupplyExhausted] when the root holds less than [reservation] and no capacity
+     * Returns [AcquireOutcome.NothingEligible] when [eligible] is empty, or every leaf in it is
+     * beneath a group at its ceiling (see "Ceilings"), [AcquireOutcome.SupplyExhausted] when the root holds less than [reservation] and no capacity
      * is reconciled, and [AcquireOutcome.NoLiveLineage] when no eligible leaf can be reached. In
      * each of those cases the ledger is unchanged, with no top-up either; only the allocator's wake
      * memory may have moved (see the class KDoc). [AcquireOutcome.PositionCeiling] when a pick on
@@ -668,6 +681,13 @@ public class LocalHeddle private constructor(
      * So it is never refused for supply or at a position ceiling: a seat or a clamp taken at a
      * ceiling saturates there, and the charge lands as the plain [admit]'s does. The equivalence
      * holds wherever that acquire would lease; where it would be refused, this still charges.
+     *
+     * Nor is it refused at a concurrency ceiling (see "Ceilings"), so with ceilings set the
+     * equivalence covers only a [leaf] with no group at its ceiling on its lineage. It observes
+     * [waiting] as that acquire does, every leaf beneath a group at its ceiling counted idle, so
+     * beside a capped sibling the two still agree. For a capped [leaf] they part: the acquire picks
+     * nothing and returns [AcquireOutcome.NothingEligible], while this charges the work and observes
+     * [leaf] as waiting, since it is running.
      *
      * Returns [AcquireOutcome.NoLiveLineage] when [leaf] is not leasable or has no lineage of
      * active edges to the root, as [admit] does. The ledger is then unchanged, but the wake memory
