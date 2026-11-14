@@ -1910,9 +1910,22 @@ public class WarpLogRecordExporter(
      * re-enters it; what that forgetting buys is a bound on [reportedSweepFailures], and **that** is
      * unpinned by any test — a leak of one `Int` per ever-failed-then-succeeded segment would be
      * silent. It is bounded by the ledger either way, so the cost of the gap is small.
+     *
+     * ## A cancellation the store mints is a refused delete
+     *
+     * Work follows every sweep: the rest of the turn in [storeTurn], the rest of recovery in
+     * [loadPersistedState]. So a `CancellationException` a store's own `withTimeout` throws at a
+     * live caller is a refused delete, not an escape, and `ensureActive` lets only this coroutine's
+     * own cancellation through (#3384).
      */
     private suspend fun sweep(number: Long): Boolean {
-        val cause = runCatchingCancellable { store.delete(segmentKey(number)) }.exceptionOrNull()
+        val cause = try {
+            store.delete(segmentKey(number))
+            null
+        } catch (failure: Throwable) {
+            currentCoroutineContext().ensureActive()
+            failure
+        }
         if (cause == null) {
             // Keeps the memory bounded by the LEDGER rather than by "every segment whose delete ever
             // failed" — not a re-arm; see the KDoc for why one is unreachable here.
