@@ -863,11 +863,16 @@ checkpoint's floor would pair with the raised fold. The replicated `HeddleNode`
 stops granting at a saturated parent. Its rebase and refusal surface are tracked
 by #3353. `apply` keeps the weight products in range the same way: an activation
 whose weights would put its parent's `L`, `S`, `G · S` or `S · d` out of `Long`
-is refused with a `StepRefusal`. The replicated ledger is held to the same rule
-where a topology act enters it (§9): the control log refuses a `Prepare` whose
-own weight fails it and an `Activate` that fails it beside the parent's active
-children, and `HeddleNode`'s ungoverned `prepare` and `activate` refuse the same
-on the local view.
+is refused with a `StepRefusal`. Where a topology act enters a replicated ledger
+the same rule is checked, but that does not yet keep the merged ledger in range.
+The control log refuses a `Prepare` whose own weight fails it and an `Activate`
+that fails it beside the parent's active children, on its log-pure projection
+(§9). `heddleStatic` checks its starting tree, and `HeddleNode`'s ungoverned
+`prepare` and `activate` check this peer's view only. Two gaps remain, both
+for the read-side check in `schedule` (#3353). Two ungoverned peers activating
+siblings at once can merge past the budget. And a governed peer's data plane
+can briefly hold an over-budget active set: gossip can bring it a later
+`Activate` before an earlier `Close`.
 
 Why a grid at all, against the exact `Rational` this section used to prescribe:
 a joiner stored the front, a weighted mean whose denominator carries `Σw` of the

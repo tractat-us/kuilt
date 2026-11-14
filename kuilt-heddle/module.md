@@ -102,7 +102,10 @@ and nothing else does:
   64-bit number and every pick there would fail. `prepare` refuses such a weight on its own, and
   `activate` refuses one that only overflows beside its siblings, each answering
   `ControlConflict.WeightBudget`. Every peer decides it from the same log, so every peer refuses.
-  `heddleStatic`'s `prepare` and `activate` refuse the same weights, answering `false`.
+  `heddleStatic` checks the same weights in its starting tree and in `prepare` and `activate`,
+  which answer `false`. But a static peer checks only what it can see itself, so two peers
+  activating siblings at once can still add up past the limit together. Catching that when a pick
+  reads the tree is still to come (#3353).
 - **The everyday path is untouched.** Handing out and charging for work — `schedule`, `reserve`,
   `complete` — never goes through the agreement step, at any rate. That is the whole point:
   agreement appears only at the two rare moments that need it.
