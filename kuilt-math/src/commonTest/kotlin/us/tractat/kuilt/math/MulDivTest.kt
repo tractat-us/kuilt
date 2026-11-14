@@ -47,6 +47,19 @@ class MulDivTest {
     )
 
     @Test
+    fun remainderTakesTheDividendsSignLikeLongRem() = assertAll(
+        { assertEquals(1L, Int128.of(7L) % 2L) },
+        { assertEquals(-1L, Int128.of(-7L) % 2L) },
+        { assertEquals(1L, Int128.of(7L) % -2L) },
+        { assertEquals(0L, Int128.of(Long.MIN_VALUE) % Long.MIN_VALUE) },
+        // 2⁶⁴ mod 3 = 1, and −2⁶⁴ mod 3 = −1.
+        { assertEquals(1L, Int128.fromTwosComplement(1L, 0L) % 3L) },
+        { assertEquals(-1L, (Int128.ZERO - Int128.fromTwosComplement(1L, 0L)) % 3L) },
+        // MAX_VALUE·MAX_VALUE mod (MAX_VALUE − 1) = 1, since MAX_VALUE ≡ 1.
+        { assertEquals(1L, Long.MAX_VALUE.timesWide(Long.MAX_VALUE) % (Long.MAX_VALUE - 1L)) },
+    )
+
+    @Test
     fun aZeroDivisorIsACallerBug() {
         assertFailsWith<IllegalArgumentException> { mulDiv(1L, 1L, 0L, Rounding.FLOOR) }
     }

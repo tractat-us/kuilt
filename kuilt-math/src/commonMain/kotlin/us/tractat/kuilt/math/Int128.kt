@@ -93,6 +93,21 @@ public class Int128 private constructor(
         return if (negative) (0UL - magnitude).toLong() else magnitude.toLong()
     }
 
+    /**
+     * The remainder of `this / divisor` truncated toward zero, as Kotlin's `%` on `Long` defines
+     * it: the result has this value's sign and is smaller than [divisor] in magnitude, so it always
+     * fits in a `Long`. It is what Euclid's algorithm needs to take a gcd of a 128-bit value.
+     *
+     * @throws IllegalArgumentException if [divisor] is zero.
+     */
+    public operator fun rem(divisor: Long): Long {
+        require(divisor != 0L) { "division by zero: $this % 0" }
+        val n = magnitude()
+        val d = if (divisor < 0L) (-divisor).toULong() else divisor.toULong()
+        val r = divideUnsigned(n.high.toULong(), n.low.toULong(), d).remainder // < |divisor| ≤ 2⁶³
+        return if (isNegative) (0UL - r).toLong() else r.toLong()
+    }
+
     override fun compareTo(other: Int128): Int =
         if (high != other.high) high.compareTo(other.high) else compareUnsigned(low, other.low)
 

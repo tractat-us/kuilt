@@ -7,6 +7,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import us.tractat.kuilt.math.compareProducts
 
 /**
  * A sibling's fairness **share**, expressed as a positive integer ratio.
@@ -37,12 +38,12 @@ public class Weight private constructor(
 ) : Comparable<Weight> {
 
     /**
-     * Order by exact cross-multiplication: `a/b <=> c/d` compares `a*d` against
-     * `c*b`. Both products are overflow-checked, so an out-of-range comparison
-     * throws [ArithmeticException] rather than wrapping to a wrong verdict.
+     * Order by exact cross-multiplication: `a/b <=> c/d` compares `a·d` against `c·b`, with both
+     * products formed in 128 bits. Any two `Long`s multiply exactly there, so every pair of weights
+     * orders and none throws (#3313).
      */
     override fun compareTo(other: Weight): Int =
-        checkedMul(numerator, other.denominator).compareTo(checkedMul(other.numerator, denominator))
+        compareProducts(numerator, other.denominator, other.numerator, denominator)
 
     override fun equals(other: Any?): Boolean =
         other is Weight && numerator == other.numerator && denominator == other.denominator

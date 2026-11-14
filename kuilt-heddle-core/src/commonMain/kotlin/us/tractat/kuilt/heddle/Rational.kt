@@ -7,6 +7,10 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.Rounding
+import us.tractat.kuilt.math.compareProducts
+import us.tractat.kuilt.math.timesWide
 
 /**
  * An **exact rational number** — a `numerator/denominator` pair over `Long`, kept
@@ -49,25 +53,38 @@ public class Rational private constructor(
     public val denominator: Long,
 ) : Comparable<Rational> {
 
-    /** The exact sum, reduced. Throws [ArithmeticException] on `Long` overflow. */
-    public operator fun plus(other: Rational): Rational =
-        of(
-            checkedAdd(
-                checkedMul(numerator, other.denominator),
-                checkedMul(other.numerator, denominator),
-            ),
-            checkedMul(denominator, other.denominator),
-        )
+    /**
+     * The exact sum, reduced. Throws [ArithmeticException] only when the **answer** does not fit in
+     * `Long`; see [combine] for why the intermediates never decide that.
+     */
+    public operator fun plus(other: Rational): Rational = combine(other, subtract = false)
 
-    /** The exact difference, reduced. Throws [ArithmeticException] on `Long` overflow. */
-    public operator fun minus(other: Rational): Rational =
-        of(
-            checkedSub(
-                checkedMul(numerator, other.denominator),
-                checkedMul(other.numerator, denominator),
-            ),
-            checkedMul(denominator, other.denominator),
-        )
+    /** The exact difference, reduced. Throws [ArithmeticException] only when the answer does not fit. */
+    public operator fun minus(other: Rational): Rational = combine(other, subtract = true)
+
+    /**
+     * `this ± other` by Knuth's gcd-first method (TAOCP §4.5.1), with the numerator formed in 128
+     * bits. The textbook `(a·d ± c·b) / (b·d)` builds `b·d` before reducing, so `1/2³² + 3/2³²`
+     * threw on the way to `1/2³⁰` (#3313). Here `g = gcd(b, d)` comes out first: the numerator is
+     * `t = a·(d/g) ± c·(b/g)` and the denominator `(b/g)·d`, and since both operands are in lowest
+     * terms the only factor `t` can share with that denominator is one it shares with `g`. So
+     * dividing by `g₂ = gcd(t, g)` leaves the answer in lowest terms, and the only overflow left is
+     * the answer's own.
+     */
+    private fun combine(other: Rational, subtract: Boolean): Rational {
+        val g = gcd(denominator, other.denominator)
+        val thisScale = other.denominator / g
+        val otherScale = denominator / g
+        val left = numerator.timesWide(thisScale)
+        val right = other.numerator.timesWide(otherScale)
+        val t = if (subtract) left - right else left + right
+        if (t == Int128.ZERO) return ZERO
+        val remainder = t % g
+        val g2 = gcd(if (remainder < 0L) -remainder else remainder, g) // |remainder| < g, so no overflow
+        val reduced = t.divideOrNull(g2, Rounding.FLOOR) // exact: g2 divides t
+            ?: throw ArithmeticException("Long overflow: $this ${if (subtract) "-" else "+"} $other")
+        return of(reduced, checkedMul(otherScale, other.denominator / g2))
+    }
 
     /** The exact product, reduced. Throws [ArithmeticException] on `Long` overflow. */
     public operator fun times(other: Rational): Rational =
@@ -80,13 +97,13 @@ public class Rational private constructor(
     }
 
     /**
-     * Order by exact cross-multiplication: `a/b <=> c/d` compares `a*d` against
-     * `c*b`. Both denominators are positive, so no sign flip is needed. Products are
-     * overflow-checked, so an out-of-range comparison throws rather than wrapping to
-     * a wrong verdict.
+     * Order by exact cross-multiplication: `a/b <=> c/d` compares `a·d` against `c·b`. Both
+     * denominators are positive, so no sign flip is needed. The products are formed in 128 bits,
+     * where any two `Long`s multiply exactly, so every pair of rationals orders and none throws
+     * (#3313). A compare that threw used to wedge [Gauge.join] and every pick that sorts by time.
      */
     override fun compareTo(other: Rational): Int =
-        checkedMul(numerator, other.denominator).compareTo(checkedMul(other.numerator, denominator))
+        compareProducts(numerator, other.denominator, other.numerator, denominator)
 
     /**
      * The **exact ceiling** — the least `Long` that is `>= this`. `7/2` ceils to `4`,
@@ -150,6 +167,7 @@ public class Rational private constructor(
         /** The larger of two rationals ([a] if equal). */
         public fun max(a: Rational, b: Rational): Rational = if (a >= b) a else b
 
+        /** The gcd of two non-negative `Long`s, not both zero. */
         private tailrec fun gcd(a: Long, b: Long): Long = if (b == 0L) a else gcd(b, a % b)
     }
 }
