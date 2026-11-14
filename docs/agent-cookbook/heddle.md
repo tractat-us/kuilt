@@ -136,6 +136,28 @@ child have runtime children is tracked by #3314.
     check(Topology.diff(pool, ledger, generation = 0).isEmpty())
 ```
 
+To turn your own config paths into ledger ids and back, without keeping a name map that has to
+track heddle's escaping, use `Topology.findGroupId(GroupPath)` and `Topology.findPath(GroupId)`.
+Neither throws, and they are exact inverses: each returns `null` for anything this topology has no
+group for, including an id a reload has since removed. A `GroupPath` is `Declared(names)` or
+`RuntimeChild(group, name)`, so a runtime child stays apart from a declared sibling of the same
+name, and its `names` read either arm back from just below the root.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleGroupPathRoundTrip -->
+```kotlin
+    // A declared lane and a runtime child share the name `x`, and their paths stay apart.
+    val lane = GroupPath.Declared(listOf("tenants", "x"))
+    val tenant = GroupPath.RuntimeChild(group = listOf("tenants"), name = "x")
+    val laneId = checkNotNull(pool.findGroupId(lane))
+    val tenantId = checkNotNull(pool.findGroupId(tenant))
+    check(laneId == pool.groupId("tenants", "x") && tenantId == pool.runtimeChildId(listOf("tenants"), "x"))
+    check(laneId != tenantId)
+
+    // Back from an id: the arm says whether the last name is a runtime child's.
+    check(pool.findPath(laneId) == lane && pool.findPath(tenantId) == tenant)
+    check(pool.findPath(tenantId)?.names == listOf("tenants", "x"))
+```
+
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleTopologyFromDocument -->
 ```kotlin
     // As decoded from the file: names and weight text, nothing checked yet.

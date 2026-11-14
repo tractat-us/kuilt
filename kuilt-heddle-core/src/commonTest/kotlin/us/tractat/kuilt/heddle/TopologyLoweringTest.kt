@@ -130,6 +130,49 @@ class TopologyLoweringTest {
         )
     }
 
+    /**
+     * The public lookup over the same awkward names: every path [flatteningIsInjectiveOverAwkwardNames]
+     * names maps to the id [Topology.groupId] or [Topology.runtimeChildId] gives it and back, and
+     * every path or id outside this topology reads as `null` rather than as some other group.
+     */
+    @Test
+    fun findPathAndFindGroupIdInvertEachOtherOverAwkwardNames() {
+        val declared = (listOf(emptyList<String>()) + declaredNames.map { listOf(it) } + listOf(listOf("a", "b"), listOf("g", "x"), listOf("g", "!x")))
+            .map { GroupPath.Declared(it) to awkward.groupId(*it.toTypedArray()) }
+        val runtimeNames = listOf("x", "a/b", "!x", "é", "\uD800", "x@1:1#0", "%21x")
+        val runtime = runtimeNames.map { GroupPath.RuntimeChild(listOf("g"), it) to awkward.runtimeChildId(listOf("g"), it) }
+        val pairs = declared + runtime
+        assertAll(
+            { assertEquals(pairs.size, pairs.map { it.second }.toSet().size, "ids collide: ${pairs.map { it.second.value }}") },
+            *pairs.map { (path, id) -> { assertEquals(id, awkward.findGroupId(path), "findGroupId($path)") } }.toTypedArray(),
+            *pairs.map { (path, id) -> { assertEquals(path, awkward.findPath(id), "findPath(${id.value})") } }.toTypedArray(),
+            // A runtime `x` and a declared `x` under the same group: different ids, different arms.
+            { assertEquals(GroupPath.RuntimeChild(listOf("g"), "x"), awkward.findPath(GroupId("root/g/!x"))) },
+            { assertEquals(GroupPath.Declared(listOf("g", "x")), awkward.findPath(GroupId("root/g/x"))) },
+            // Paths this topology has no group for.
+            *listOf(
+                GroupPath.Declared(listOf("nope")),
+                GroupPath.Declared(listOf("a", "nope")),
+                GroupPath.Declared(listOf("a/b", "c")),
+                GroupPath.Declared(listOf("g", "y")),
+                GroupPath.RuntimeChild(listOf("a"), "x"),
+                GroupPath.RuntimeChild(listOf("g", "x"), "y"),
+                GroupPath.RuntimeChild(listOf("nope"), "x"),
+            ).map { path -> { assertNull(awkward.findGroupId(path), "findGroupId($path)") } }.toTypedArray(),
+            // Ids this topology has no group for: another root, a group it does not declare, a
+            // runtime child of an unmarked group, and text in no topology's grammar.
+            *listOf(
+                "other", "other/a", "root/nope", "root/a/nope", "root/a/!x", "root/!x", "root/g/!x/y", "root/g/x/!y",
+                "", "/", "root/", "root//x", "root/a%2fb", "root/%41", "root/g/!", "root/a/b@1:1#0",
+            ).map { text -> { assertNull(awkward.findPath(GroupId(text)), "findPath(\"$text\")") } }.toTypedArray(),
+            // A path that names nothing in any topology cannot be built.
+            { assertFailsWith<IllegalArgumentException> { GroupPath.Declared(listOf("a", "")) } },
+            { assertFailsWith<IllegalArgumentException> { GroupPath.RuntimeChild(emptyList(), "x") } },
+            { assertFailsWith<IllegalArgumentException> { GroupPath.RuntimeChild(listOf("g"), "") } },
+            { assertFailsWith<IllegalArgumentException> { GroupPath.RuntimeChild(listOf(""), "x") } },
+        )
+    }
+
     @Test
     fun generationOfParsesOnlyTheGrammar() {
         val parsed = listOf(

@@ -99,6 +99,42 @@ sealed interface us.tractat.kuilt.heddle/AcquireOutcome { // us.tractat.kuilt.he
 
 sealed interface us.tractat.kuilt.heddle/AdmitOutcome // us.tractat.kuilt.heddle/AdmitOutcome|null[0]
 
+sealed interface us.tractat.kuilt.heddle/GroupPath { // us.tractat.kuilt.heddle/GroupPath|null[0]
+    abstract val names // us.tractat.kuilt.heddle/GroupPath.names|{}names[0]
+        abstract fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/GroupPath.names.<get-names>|<get-names>(){}[0]
+
+    final class Declared : us.tractat.kuilt.heddle/GroupPath { // us.tractat.kuilt.heddle/GroupPath.Declared|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/String>) // us.tractat.kuilt.heddle/GroupPath.Declared.<init>|<init>(kotlin.collections.List<kotlin.String>){}[0]
+
+        final val names // us.tractat.kuilt.heddle/GroupPath.Declared.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/GroupPath.Declared.names.<get-names>|<get-names>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/GroupPath.Declared.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/String> = ...): us.tractat.kuilt.heddle/GroupPath.Declared // us.tractat.kuilt.heddle/GroupPath.Declared.copy|copy(kotlin.collections.List<kotlin.String>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/GroupPath.Declared.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/GroupPath.Declared.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/GroupPath.Declared.toString|toString(){}[0]
+    }
+
+    final class RuntimeChild : us.tractat.kuilt.heddle/GroupPath { // us.tractat.kuilt.heddle/GroupPath.RuntimeChild|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/String>, kotlin/String) // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.<init>|<init>(kotlin.collections.List<kotlin.String>;kotlin.String){}[0]
+
+        final val group // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.group|{}group[0]
+            final fun <get-group>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.group.<get-group>|<get-group>(){}[0]
+        final val name // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.name|{}name[0]
+            final fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.name.<get-name>|<get-name>(){}[0]
+        final val names // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.names|{}names[0]
+            final fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.names.<get-names>|<get-names>(){}[0]
+
+        final fun component1(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.component1|component1(){}[0]
+        final fun component2(): kotlin/String // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.component2|component2(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/String> = ..., kotlin/String = ...): us.tractat.kuilt.heddle/GroupPath.RuntimeChild // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.copy|copy(kotlin.collections.List<kotlin.String>;kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/GroupPath.RuntimeChild.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.heddle/LeaseOutcome|null[0]
     final class Done : us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.heddle/LeaseOutcome.Done|null[0]
         constructor <init>(kotlin/Long, kotlin/Long) // us.tractat.kuilt.heddle/LeaseOutcome.Done.<init>|<init>(kotlin.Long;kotlin.Long){}[0]
@@ -1783,6 +1819,8 @@ final object us.tractat.kuilt.heddle/WeightSerializer : kotlinx.serialization/KS
 
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/attachRuntimeChild(kotlin.collections/List<kotlin/String>, kotlin/String, us.tractat.kuilt.heddle/EntitlementLedger, kotlin/Long): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyStep> // us.tractat.kuilt.heddle/attachRuntimeChild|attachRuntimeChild@us.tractat.kuilt.heddle.Topology(kotlin.collections.List<kotlin.String>;kotlin.String;us.tractat.kuilt.heddle.EntitlementLedger;kotlin.Long){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/detachRuntimeChild(kotlin.collections/List<kotlin/String>, kotlin/String, us.tractat.kuilt.heddle/EntitlementLedger): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyStep> // us.tractat.kuilt.heddle/detachRuntimeChild|detachRuntimeChild@us.tractat.kuilt.heddle.Topology(kotlin.collections.List<kotlin.String>;kotlin.String;us.tractat.kuilt.heddle.EntitlementLedger){}[0]
+final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/findGroupId(us.tractat.kuilt.heddle/GroupPath): us.tractat.kuilt.heddle/GroupId? // us.tractat.kuilt.heddle/findGroupId|findGroupId@us.tractat.kuilt.heddle.Topology(us.tractat.kuilt.heddle.GroupPath){}[0]
+final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/findPath(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/GroupPath? // us.tractat.kuilt.heddle/findPath|findPath@us.tractat.kuilt.heddle.Topology(us.tractat.kuilt.heddle.GroupId){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/groupId(kotlin/Array<out kotlin/String>...): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/groupId|groupId@us.tractat.kuilt.heddle.Topology(kotlin.Array<out|kotlin.String>...){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/lower(kotlin/Long = ...): kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentRecord> // us.tractat.kuilt.heddle/lower|lower@us.tractat.kuilt.heddle.Topology(kotlin.Long){}[0]
 final fun (us.tractat.kuilt.heddle/Topology).us.tractat.kuilt.heddle/runtimeChildId(kotlin.collections/List<kotlin/String>, kotlin/String): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/runtimeChildId|runtimeChildId@us.tractat.kuilt.heddle.Topology(kotlin.collections.List<kotlin.String>;kotlin.String){}[0]

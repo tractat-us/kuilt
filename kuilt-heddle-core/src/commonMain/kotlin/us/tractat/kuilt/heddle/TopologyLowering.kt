@@ -40,6 +40,88 @@ public fun Topology.groupId(vararg path: String): GroupId {
 }
 
 /**
+ * Where a group sits in a [Topology], read from [root][Topology.root] down: a child the config
+ * declares, or a child the consumer created at runtime beneath a marked group.
+ *
+ * The two arms are what keep a runtime child apart from a declared sibling of the same name:
+ * `RuntimeChild(listOf("tenants"), "x")` and `Declared(listOf("tenants", "x"))` are different paths,
+ * and [Topology.findGroupId] gives them different ids.
+ *
+ * Every name is non-empty, because no topology declares or attaches an empty one; a path holding one
+ * names nothing, so it cannot be built.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleGroupPathRoundTrip
+ */
+public sealed interface GroupPath {
+
+    /**
+     * The names from just below the root down to the group, ending with the runtime child's own
+     * name if this is a [RuntimeChild]. `[]` is the root.
+     */
+    public val names: List<String>
+
+    /**
+     * A group the topology declares: [names] from just below the root, `[]` for the root itself.
+     *
+     * @throws IllegalArgumentException if a name is empty.
+     */
+    public data class Declared(override val names: List<String>) : GroupPath {
+        init {
+            require(names.none { it.isEmpty() }) { "a declared path has no empty name: $names" }
+        }
+    }
+
+    /**
+     * A runtime child [name] of the declared group at [group], which is never the root: the root
+     * carries no runtime marker.
+     *
+     * @throws IllegalArgumentException if [group] is empty, or any name is empty.
+     */
+    public data class RuntimeChild(public val group: List<String>, public val name: String) : GroupPath {
+        init {
+            require(group.isNotEmpty()) { "a runtime child's group is below the root" }
+            require(group.none { it.isEmpty() } && name.isNotEmpty()) { "a runtime child's path has no empty name: $group, $name" }
+        }
+
+        override val names: List<String> get() = group + name
+    }
+}
+
+/**
+ * The ledger id of the group at [path], or `null` when this topology has no such group: a
+ * [GroupPath.Declared] it does not declare, or a [GroupPath.RuntimeChild] whose group is not marked
+ * for runtime children. Never throws.
+ *
+ * Gives the same id as [groupId] and [runtimeChildId] wherever they do not throw, and is the exact
+ * inverse of [findPath].
+ *
+ * @sample us.tractat.kuilt.heddle.sampleGroupPathRoundTrip
+ */
+public fun Topology.findGroupId(path: GroupPath): GroupId? = when (path) {
+    is GroupPath.Declared -> GroupId(idOf(path.names)).takeIf { path.names.isEmpty() || declaredAt(path.names) != null }
+    is GroupPath.RuntimeChild -> markerAt(path.group)?.let { GroupId(runtimeChildPath(idOf(path.group), path.name)) }
+}
+
+/**
+ * Where [group] sits in this topology, or `null` unless [group] is exactly an id [findGroupId]
+ * returns for it. Never throws.
+ *
+ * So the two are exact inverses: `findPath(id)` is a path `p` exactly when `findGroupId(p)` is `id`.
+ * An id from a group this topology no longer declares, from a topology with another root, or in no
+ * topology's grammar at all reads as `null`.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleGroupPathRoundTrip
+ */
+public fun Topology.findPath(group: GroupId): GroupPath? {
+    val parsed = pathOf(group) ?: return null
+    val below = parsed.names.drop(1)
+    // `pathOf` puts a runtime segment only at depth two or deeper, so `below` holds its group.
+    val path = if (parsed.runtime) GroupPath.RuntimeChild(below.dropLast(1), below.last()) else GroupPath.Declared(below)
+    // Rebuilding the id checks the root, and that the path is declared or marked here.
+    return path.takeIf { findGroupId(it) == group }
+}
+
+/**
  * The ledger id of the runtime child [name] of the group at [group], read from
  * [root][Topology.root] down.
  *
@@ -74,15 +156,22 @@ internal fun Topology.runtimeChild(group: List<String>, name: String): RuntimeCh
  * @throws IllegalArgumentException at the first step that names no declared child.
  */
 private fun Topology.nodeAt(path: List<String>): Topology.Node {
-    var children = children
+    require(path.isNotEmpty()) { "the root is not a node" }
+    return requireNotNull(declaredAt(path)) { "$path is not a child declared under $root" }
+}
+
+/**
+ * The declared node at [path], read from the root down, or `null` when [path] is empty or names no
+ * declared child. The one walk [nodeAt], [markerAt] and [findGroupId] share.
+ */
+private fun Topology.declaredAt(path: List<String>): Topology.Node? {
+    var nodes = children
     var node: Topology.Node? = null
-    path.forEachIndexed { depth, name ->
-        node = requireNotNull(children.firstOrNull { it.name == name }) {
-            "${path.take(depth + 1)} is not a child declared under $root"
-        }
-        children = (node as? Topology.Group)?.children.orEmpty()
+    for (name in path) {
+        node = nodes.firstOrNull { it.name == name } ?: return null
+        nodes = (node as? Topology.Group)?.children.orEmpty()
     }
-    return requireNotNull(node) { "the root is not a node" }
+    return node
 }
 
 /** The id [path] encodes beneath this topology's root, without checking that it is declared. */
@@ -233,15 +322,8 @@ internal data class GenerationTop(val generation: Long, val edges: Int) {
  * when [path] names no declared group or the group is not marked. Never throws, so the diff can ask
  * about a group the topology no longer declares.
  */
-internal fun Topology.markerAt(path: List<String>): Topology.RuntimeChildren? {
-    var nodes = children
-    var node: Topology.Node? = null
-    for (name in path) {
-        node = nodes.firstOrNull { it.name == name } ?: return null
-        nodes = (node as? Topology.Group)?.children.orEmpty()
-    }
-    return (node as? Topology.Group)?.runtimeChildren
-}
+internal fun Topology.markerAt(path: List<String>): Topology.RuntimeChildren? =
+    (declaredAt(path) as? Topology.Group)?.runtimeChildren
 
 // ── segments ────────────────────────────────────────────────────────────────────────────────────
 
