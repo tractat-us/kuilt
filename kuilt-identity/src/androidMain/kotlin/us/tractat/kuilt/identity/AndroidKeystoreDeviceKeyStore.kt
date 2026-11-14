@@ -201,7 +201,7 @@ internal class AndroidKeystoreDeviceKeyStore(
         if (read is KeystoreRead.Usable) {
             // After the key is made and read back, never before: a crash before this line leaves a key with
             // no marker, which the next launch reads and marks, rather than a marker with no key, which on
-            // Android 11 and earlier would cost two failed launches before the key could be made at all.
+            // Android 11 and earlier would make the next launches wait out an hour before making a key at all.
             markKeyMade()
             return read.key
         }
