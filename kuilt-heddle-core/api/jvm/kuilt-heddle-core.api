@@ -435,6 +435,11 @@ public final class us/tractat/kuilt/heddle/HeddlePolicy {
 	public final fun wakeOffset (Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Weight;J)Lus/tractat/kuilt/heddle/Rational;
 }
 
+public final class us/tractat/kuilt/heddle/KuiltVersion {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/KuiltVersion;
+	public final fun getVERSION ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/heddle/Lease {
 	public synthetic fun <init> (Lus/tractat/kuilt/heddle/LeaseId;Ljava/lang/String;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lus/tractat/kuilt/heddle/LeaseId;
