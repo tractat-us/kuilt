@@ -35,8 +35,12 @@ public class LocalHeddleView internal constructor(
     private val allocator: FairShareAllocator,
     private val capacity: Capacity,
     private val leasable: Leasable,
-    /** Whether the throwaway engines rebase (#3329): off only for a test's twin, which never rebases. */
-    private val rebase: Boolean = true,
+    /**
+     * Whether the throwaway engines rebase (#3329): off only for a test's twin, which never rebases.
+     * Required rather than defaulted: a default on this internal constructor would put a public
+     * synthetic constructor in the JVM ABI.
+     */
+    private val rebase: Boolean,
 ) {
 
     /** An engine over this view's state, with its own copy of the wake memory: it picks and tops up as the engine would next. */
