@@ -1866,10 +1866,13 @@ final value class us.tractat.kuilt.heddle/ServiceUnits : kotlin/Comparable<us.tr
 
 sealed class us.tractat.kuilt.heddle/TopologyDraft { // us.tractat.kuilt.heddle/TopologyDraft|null[0]
     final fun group(kotlin/String, us.tractat.kuilt.heddle/Weight = ..., kotlin/Function1<us.tractat.kuilt.heddle/TopologyDraft.Group, kotlin/Unit>) // us.tractat.kuilt.heddle/TopologyDraft.group|group(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.Function1<us.tractat.kuilt.heddle.TopologyDraft.Group,kotlin.Unit>){}[0]
+    final fun group(kotlin/String, us.tractat.kuilt.heddle/Weight = ..., kotlin/Long, kotlin/Function1<us.tractat.kuilt.heddle/TopologyDraft.Group, kotlin/Unit>) // us.tractat.kuilt.heddle/TopologyDraft.group|group(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.Long;kotlin.Function1<us.tractat.kuilt.heddle.TopologyDraft.Group,kotlin.Unit>){}[0]
     final fun lane(kotlin/String, us.tractat.kuilt.heddle/Weight = ...) // us.tractat.kuilt.heddle/TopologyDraft.lane|lane(kotlin.String;us.tractat.kuilt.heddle.Weight){}[0]
+    final fun lane(kotlin/String, us.tractat.kuilt.heddle/Weight = ..., kotlin/Long) // us.tractat.kuilt.heddle/TopologyDraft.lane|lane(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.Long){}[0]
 
     final class Group : us.tractat.kuilt.heddle/TopologyDraft { // us.tractat.kuilt.heddle/TopologyDraft.Group|null[0]
         final fun runtimeChildren(us.tractat.kuilt.heddle/Weight = ...) // us.tractat.kuilt.heddle/TopologyDraft.Group.runtimeChildren|runtimeChildren(us.tractat.kuilt.heddle.Weight){}[0]
+        final fun runtimeChildren(us.tractat.kuilt.heddle/Weight = ..., kotlin/Long? = ...) // us.tractat.kuilt.heddle/TopologyDraft.Group.runtimeChildren|runtimeChildren(us.tractat.kuilt.heddle.Weight;kotlin.Long?){}[0]
     }
 }
 
