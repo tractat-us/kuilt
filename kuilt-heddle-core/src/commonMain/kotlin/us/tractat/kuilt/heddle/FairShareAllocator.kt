@@ -343,8 +343,8 @@ public class FairShareAllocator(
      *
      * It does nothing at a parent with an unseated child, which has no gauge to raise, or with a
      * child at its ceiling: that position may stand for more, and a stored position at the ceiling
-     * reads there whatever the fold says. Nor while a demanding child is at or below zero, which holds `Δ` at
-     * nothing. The threshold sits far enough below the ceiling that a running engine rebases long
+     * reads there whatever the fold says. Nor while a demanding child is at or below zero, which
+     * holds `Δ` at nothing. The threshold sits far enough below the ceiling that a running engine rebases long
      * before either.
      *
      * The engine never reaches the at-ceiling guard: [pickChildRebasing] rebases only after a
