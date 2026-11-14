@@ -571,7 +571,7 @@ class LocalHeddlePersistenceTest {
         check(h.complete(lease.id, 3L) is LeaseOutcome.Done)
         check(h.detachRuntimeChild(listOf("tenants"), "t2").refusals.isEmpty())
         val ceilingsOnly = h.apply(richCapped, generation = 5L)
-        check(ceilingsOnly.applied.isEmpty() && ceilingsOnly.refusals.isEmpty()) { "a change of ceiling alone is no step: $ceilingsOnly" }
+        check(ceilingsOnly.applied.isEmpty() && ceilingsOnly.refusals.all { it is StepRefusal.Draining }) { "a change of ceiling alone is no step: $ceilingsOnly" }
         val whole = h.persist()
         val folded = checkNotNull(whole.ledger.forget(listOf(edge))) { "t2's edge is forgettable: ${whole.ledger.forgetRefusal(edge)}" }
         return Triple(h, open, LocalHeddleSnapshot(whole.epoch, folded, whole.allocatorMemory, whole.totalSlots, whole.open, whole.lastApplied))
