@@ -190,7 +190,18 @@ class LocalHeddleRebaseTest {
      * of the lifted wakers, and they would take every pick until they caught up.
      */
     @Test
-    fun aNewbornAmongWakersMeetsTheWakerFurthestAhead() {
+    fun aNewbornAmongWakersMeetsTheWakerFurthestAhead() = assertNewbornJoinsLevel(waking = setOf(b, c))
+
+    /**
+     * The same, with `c` left idle: a non-joiner survives, so the front is the idle fallback, `c` at
+     * `−R` in the rebasing engine. The waker `b` is clamped there, and the newborn must be seated
+     * level with it, not at its own origin `R` above (#3329 re-review): the front is raised to the
+     * newborns' origins whenever newborns and wakers join together.
+     */
+    @Test
+    fun aNewbornBesideAWakerAndAnIdleSiblingStartsLevel() = assertNewbornJoinsLevel(waking = setOf(b))
+
+    private fun assertNewbornJoinsLevel(waking: Set<GroupId>) {
         val engine = engine()
         val twin = engine(rebase = false)
         val both = listOf(engine, twin)
@@ -211,10 +222,11 @@ class LocalHeddleRebaseTest {
         for (e in both) check(e.apply(reweighted, generation = 1L).refusals.isEmpty()) { "the reweight landed" }
         check(engine.edgeOf(a) != oldEdge) { "the rig: a's edge is a newborn" }
 
-        val picks = (0 until 40).map { i -> pickOnEach(both, setOf(a, b, c), at = 3L + i) }
+        val waiting = waking + a
+        val picks = (0 until 40).map { i -> pickOnEach(both, waiting, at = 3L + i) }
         assertAll(
             { assertEquals(picks.map { it[1] }, picks.map { it[0] }, "every pick is the twin's") },
-            { assertTrue(picks.any { it[0] == a }, "and the newborn is served") },
+            { assertTrue(waiting.all { lane -> picks.any { it[0] == lane } }, "and nobody waiting starves: ${picks.map { it[0].value }}") },
         )
     }
 
