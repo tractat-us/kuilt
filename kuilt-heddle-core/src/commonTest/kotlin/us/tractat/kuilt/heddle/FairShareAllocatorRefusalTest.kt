@@ -79,13 +79,14 @@ class FairShareAllocatorRefusalTest {
     /**
      * A call that grants and then meets the ceiling reports the grants: progress was made, and the
      * caller learns of the ceiling on the next call. `e1` sits 100 ticks below its ceiling, so the
-     * first grant of 10 units (160 ticks) saturates it and the second pick refuses.
+     * first grant of 10 units (160 ticks) saturates it and the second pick refuses. The rebase is
+     * off: it would bring `e1` back down after that grant, which is what it is for (#3353).
      */
     @Test
     fun aCeilingMetAfterAGrantAnswersDelegatedAndTheNextCallAnswersTheCeiling() {
         val cell = CountingCell(seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 100L))
         check(!cell.current.isAtPositionCeiling(e1)) { "the rig: e1 starts below its ceiling" }
-        val allocator = FairShareAllocator(self, policy)
+        val allocator = FairShareAllocator(self, policy).apply { rebaseEnabled = false }
         val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
         val first = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
         val reachedCeiling = cell.current.isAtPositionCeiling(e1)

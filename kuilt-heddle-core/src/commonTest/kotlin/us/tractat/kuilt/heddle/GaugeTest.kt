@@ -361,16 +361,16 @@ class GaugeTest {
     }
 
     /**
-     * A floor at the ceiling stays at the ceiling whatever the fold says (review of #3352). It was
-     * saturated when it was written and may stand for more, so a fold above the issuance this view
-     * holds, another peer's issuance not yet seen here, must not bring it back below the ceiling
-     * as if it were exact: a pick would then order it.
+     * A floor at the ceiling reads exactly through its fold (#3353). The review of #3352 held it at
+     * the ceiling whatever the fold said, because a seat could store a narrowed front there. No
+     * build ever saturated a floor it wrote, so no legacy floor at the ceiling exists to preserve,
+     * and the hold on an absolute value would turn into credit once a parent's origin passed it.
      */
     @Test
-    fun aFloorAtTheCeilingReadsTheCeilingWhateverTheFold() {
+    fun aFloorAtTheCeilingReadsExactlyThroughItsFold() {
         val atCeiling = ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE)
         val ledger = ledgerWith(weight = Weight.ONE, issued = 5L, gauge = Gauge(atCeiling, folded = 10L))
-        assertEquals(atCeiling, ledger.grossVirtualService(EDGE))
+        assertEquals(atCeiling - Rational.of(5L), ledger.grossVirtualService(EDGE))
     }
 
     /** `Σ w·ev / Σ w` — the front, as [HeddlePolicy] computes it, for the chaining measurement. */
