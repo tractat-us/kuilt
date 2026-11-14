@@ -893,6 +893,12 @@ ceiling, a refusal met after grants answers `Delegated` and keeps the rounds
 already landed, and the next call answers the refusal. The check is the whole
 parent's: it refuses even a pick whose own candidates would fit. The node logs
 one warning, naming the active edges, each time a parent enters that state.
+Either refusal changes nothing, as `LocalHeddle`'s does: the seats, the wake
+clamps and the first pick are worked out on a copy of the allocator and land as
+one patch. A first pick that finds nothing to grant writes nothing either, and
+keeps only what it observed: the wake clamps and who was waiting. So an idle
+`schedule` writes nothing to the replicated ledger, and a newborn is seated by
+the call that first grants at its parent.
 
 Why a grid at all, against the exact `Rational` this section used to prescribe:
 a joiner stored the front, a weighted mean whose denominator carries `Σw` of the
