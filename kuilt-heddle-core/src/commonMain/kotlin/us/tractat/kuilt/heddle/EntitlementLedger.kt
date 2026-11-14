@@ -2377,6 +2377,15 @@ public class EntitlementLedger private constructor(
     @HeddleInternalApi
     public fun hasForgotten(): Boolean = !forgotten.isEmpty()
 
+    /**
+     * Whether any gauge in this ledger has folded returns ([Gauge.returnsFolded] above zero). Only
+     * `LocalHeddle` folds a return (#3360), so a replicated ledger never has: `:kuilt-heddle` reads
+     * this to refuse, at decode, a ledger a peer sent with one. [HeddleInternalApi] because
+     * `internal` cannot cross the module boundary.
+     */
+    @HeddleInternalApi
+    public fun hasFoldedReturns(): Boolean = gauges.values.any { it.returnsFolded != 0L }
+
     /** Every edge id mentioned by any component. */
     internal fun allEdges(): Set<AttachmentId> =
         records.keys + lifecycle.keys + allEdgeCounters().flatMapTo(HashSet()) { it.keys }
