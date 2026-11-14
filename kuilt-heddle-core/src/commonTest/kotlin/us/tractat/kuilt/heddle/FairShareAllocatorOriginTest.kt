@@ -76,6 +76,45 @@ class FairShareAllocatorOriginTest {
     }
 
     /**
+     * An origin raise is a whole number of ticks on every child's grid (#3353): `Δ` is a multiple of
+     * the least common multiple of `d / gcd(d, 16n)`, here `7 / gcd(7, 48) = 7` and
+     * `5 / gcd(5, 16) = 5`, so 35. A raise off a child's grid would shift it by a fraction of a tick,
+     * which the floor in [originTicks] turns into a residue that can move a pick.
+     */
+    @Test
+    fun anOriginRaiseIsWholeTicksOnEveryChildsGrid() {
+        val x = AttachmentRecord(AttachmentId("x"), root, GroupId("x"), Weight.of(3L, 7L))
+        val y = AttachmentRecord(AttachmentId("y"), root, GroupId("y"), Weight.of(1L, 5L))
+        var ledger = withChildren(x, y)
+        ledger = ledger.piece(ledger.mint(MintId("big"), root, self, 1L shl 61).delta)
+        val cell = object : LedgerCell {
+            override var current: EntitlementLedger = ledger
+            override fun mutateOrSkip(transform: (EntitlementLedger) -> us.tractat.kuilt.crdt.Patch<EntitlementLedger>?): Boolean {
+                val patch = transform(current) ?: return false
+                current = current.piece(patch.delta)
+                return true
+            }
+        }
+        val allocator = FairShareAllocator(self, PolicyConfig(quantum = LocalHeddle.MAX_RESERVATION))
+        val origins = ArrayList<Int128>()
+        var calls = 0
+        while (allocator.rebases < 4 && calls < 20_000) {
+            calls++
+            val target = { id: AttachmentId -> (cell.current.edge(id)?.outstanding ?: 0L) + LocalHeddle.MAX_RESERVATION }
+            allocator.schedule(root, cell, earmarked = 0L) { id -> Demand(target(id), LocalHeddle.MAX_RESERVATION) }
+            val o = cell.current.origin(root)
+            if (origins.lastOrNull() != o && o > Int128.ZERO) origins += o
+        }
+        fun onGrid(o: Int128, w: Weight) =
+            us.tractat.kuilt.math.mulDiv(o, 16L * w.numerator, w.denominator, us.tractat.kuilt.math.Rounding.FLOOR) ==
+                us.tractat.kuilt.math.mulDiv(o, 16L * w.numerator, w.denominator, us.tractat.kuilt.math.Rounding.CEILING)
+        assertAll(
+            { assertTrue(allocator.rebases >= 4, "the rig: the parent rebased ${allocator.rebases} times in $calls calls") },
+            { assertTrue(origins.all { onGrid(it, x.weight) && onGrid(it, y.weight) }, "every origin is on both grids: $origins") },
+        )
+    }
+
+    /**
      * The origin join is a `max` on the whole 128-bit value (#3353). `(1, 0)` is 2⁶⁴ and `(0, −1)` is
      * 2⁶⁴ − 1, the low word unsigned; a `max` on each word would assemble `(1, −1)`, which neither
      * side wrote.
