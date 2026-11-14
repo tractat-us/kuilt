@@ -178,15 +178,21 @@ class LocalHeddleCeilingTest {
      */
     @Test
     fun previewsCountTheLeasesTheyOpenAndTheOnesAlreadyOpen() {
-        val h = engine(heavy(cap = 2L))
-        val fresh = h.previewPicks(mapOf(a to 5, b to 5), ab, List(4) { 1L })
-        val freshQueues = h.previewPicks(mapOf(a to List(5) { 1L }, b to List(5) { 1L }), ab)
-        h.lease(setOf(a))
-        val oneOpen = h.previewPicks(mapOf(a to 5, b to 1), ab, List(3) { 1L })
-        val viewed = h.persist().view(policy).previewPicks(mapOf(a to 5, b to 1), ab, List(3) { 1L })
+        val counts = mapOf(a to 5, b to 5)
+        val queues = mapOf(a to List(5) { 1L }, b to List(5) { 1L })
+        val afterOne = mapOf(a to 5, b to 1)
+        fun previews(h: LocalHeddle): List<List<GroupId>> {
+            val fresh = listOf(h.previewPicks(counts, ab, List(4) { 1L }), h.previewPicks(queues, ab))
+            h.lease(setOf(a))
+            val oneOpen = h.previewPicks(afterOne, ab, List(3) { 1L })
+            return fresh + listOf(oneOpen, h.persist().view(policy).previewPicks(afterOne, ab, List(3) { 1L }))
+        }
+        val (fresh, freshQueues, oneOpen, viewed) = previews(engine(heavy(cap = 2L)))
+        val uncapped = previews(engine(heavy(cap = null)))
         assertAll(
-            { assertEquals(listOf(a, a, b, b), fresh) },
-            { assertEquals(listOf(a, a, b, b, b, b, b), freshQueues, "a queue-form preview, once both of a's slots are taken") },
+            { assertEquals(listOf(listOf(a, b, a, a), List(5) { listOf(a, b) }.flatten(), listOf(a, b, a), listOf(a, b, a)), uncapped, "the control") },
+            { assertEquals(listOf(a, b, a, b), fresh, "a's third pick would open a third lease") },
+            { assertEquals(listOf(a, b, a, b, b, b, b), freshQueues, "a queue-form preview, once both of a's slots are taken") },
             { assertEquals(listOf(a, b), oneOpen, "the open lease leaves a one slot, and b's single job ends the list") },
             { assertEquals(oneOpen, viewed, "a view of the snapshot counts the open lease too") },
         )
