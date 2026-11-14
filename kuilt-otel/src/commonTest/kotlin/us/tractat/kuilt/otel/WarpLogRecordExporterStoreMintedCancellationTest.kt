@@ -194,6 +194,7 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val failedAfter = exporter.health.value.failed
         val bodiesBeforeRepair = bodiesAfterRestart(backing)
         val repaired = exporter.export(record(2))
+        val bodiesAfterRepair = bodiesAfterRestart(backing)
 
         assertAll(
             { assertEquals(ExportResult.Success, first) },
@@ -203,7 +204,7 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
             { assertEquals(1L, failedAfter, "the minted write was not counted as a refused write") },
             { assertEquals(listOf("body-0"), bodiesBeforeRepair, "the minted write landed anyway, so nothing was left to repair") },
             { assertEquals(ExportResult.Success, repaired) },
-            { assertEquals(listOf("body-0", "body-1", "body-2"), bodiesAfterRestart(backing), "the next turn did not repair the segment") },
+            { assertEquals(listOf("body-0", "body-1", "body-2"), bodiesAfterRepair, "the next turn did not repair the segment") },
         )
     }
 
@@ -219,13 +220,14 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         store.arm(Op.WRITE, Act.PARK, isSegment)
         val returned = cancelInside(store) { exporter.export(record(1)) }
         val retried = exporter.export(record(1))
+        val bodies = bodiesAfterRestart(backing)
 
         assertAll(
             { assertEquals(1, store.parked, "the rig never parked the segment write") },
             { assertEquals(1, store.cancelled, "the cancellation never landed inside the segment write") },
             { assertNull(returned, "the cancelled export returned instead of being cancelled: $returned") },
             { assertEquals(ExportResult.Success, retried) },
-            { assertEquals(listOf("body-0", "body-1"), bodiesAfterRestart(backing)) },
+            { assertEquals(listOf("body-0", "body-1"), bodies, "the retry after a cancelled write was not durable") },
         )
     }
 
@@ -242,13 +244,14 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         store.arm(Op.DELETE, Act.MINT, isSegment)
         val (results, escapes) = exportUntilFired(exporter, store, from = 0)
         val live = exporter.snapshot().toList()
+        val afterRestart = recovered(backing).snapshot().toList()
 
         assertAll(
             { assertEquals(1, store.minted, "the rig never minted on a sweep in ${results.size} exports") },
             { assertEquals(emptyList(), escapes, "a cancellation the store minted on a sweep escaped export") },
             { assertTrue(results.all { it == ExportResult.Success }, "a minted sweep failed an export: $results") },
             { assertEquals(0L, exporter.health.value.failed, "a minted sweep was reported as a refused write") },
-            { assertEquals(live, recovered(backing).snapshot().toList(), "a minted sweep cost records") },
+            { assertEquals(live, afterRestart, "a minted sweep cost records") },
         )
     }
 
@@ -301,6 +304,7 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val exporter = exporterFor(store)
         val (_, escaped) = escapeOf { exporter.recover() }
         val held = exporter.snapshot().size
+        val afterCleanStart = recovered(backing).snapshot().toList()
 
         assertAll(
             { assertEquals(1, store.minted, "the rig never minted on a segment read") },
@@ -308,7 +312,7 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
             { assertTrue(held in 1 until expected.size, "one unread segment should cost its records alone; held $held of ${expected.size}") },
             { assertEquals(false, exporter.health.value.recoveryFailed) },
             // The unread segment stays named, so the next clean start finds every record.
-            { assertEquals(expected, recovered(backing).snapshot().toList(), "the unread segment was orphaned") },
+            { assertEquals(expected, afterCleanStart, "the unread segment was orphaned") },
         )
     }
 
