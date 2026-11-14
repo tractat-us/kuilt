@@ -128,7 +128,7 @@ class FairShareAllocatorTest {
             demandOf(e1 to competingUnservable, e2 to competingUnservable, e3 to competingUnservable),
         )
         assertAll(
-            { assertEquals(0, granted, "nothing is servable in the joining round") },
+            { assertEquals(AllocationOutcome.NothingToDelegate, granted, "nothing is servable in the joining round") },
             {
                 assertEquals(
                     gaugeOfUnits(200L, folded = 0L),
@@ -222,11 +222,11 @@ class FairShareAllocatorTest {
 
         val granted = allocator.schedule(root, cell, earmarked = 40L, demandOf(e1 to hungry, e2 to hungry))
         assertAll(
-            { assertEquals(6, granted, "60 delegable units at a quantum of 10") },
+            { assertEquals(AllocationOutcome.Delegated(6), granted, "60 delegable units at a quantum of 10") },
             { assertEquals(60L, issued(cell, e1) + issued(cell, e2), "the 40 earmarked units stay at the root") },
             { assertEquals(40L, cell.current.holdings(root, self), "…where the reservation can still spend them") },
         )
-        assertEquals(0, allocator.schedule(root, cell, earmarked = 40L, demandOf(e1 to hungry)), "and a rerun finds nothing")
+        assertEquals(AllocationOutcome.NothingToDelegate, allocator.schedule(root, cell, earmarked = 40L, demandOf(e1 to hungry)), "and a rerun finds nothing")
     }
 
     /**

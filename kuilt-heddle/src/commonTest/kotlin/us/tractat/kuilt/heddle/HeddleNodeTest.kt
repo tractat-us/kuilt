@@ -323,13 +323,13 @@ class HeddleNodeTest {
             assertEquals(ReserveOutcome.NoHoldings, node.reserve(g1, 10L), "a group is not reservable")
             node.advertise(ex, Demand(targetOutstanding = 5L, maximumUsefulGrant = 5L))
             h.pump()
-            assertTrue(node.schedule(g1) > 0, "the allocator hands a group's holdings down")
+            assertIs<ScheduleOutcome.Delegated>(node.schedule(g1), "the allocator hands a group's holdings down")
             h.pump()
 
             // The reload turns g1 into a lane: ex closes. Nothing more goes down it.
             assertTrue(node.close(ex), "rig: ex closes")
             h.pump()
-            assertEquals(0, node.schedule(g1), "the allocator hands nothing down a closing edge")
+            assertEquals(ScheduleOutcome.NothingToDelegate, node.schedule(g1), "the allocator hands nothing down a closing edge")
             val reserved = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L), "g1 is a lane once ex closes")
             node.complete(reserved.id, 6L)
             h.pump()
@@ -350,7 +350,7 @@ class HeddleNodeTest {
             assertEquals(Lifecycle.RETIRED, node.ledger.value.lifecycle(ex), "rig: ex is retired")
 
             // g1 is still a lane: the allocator hands nothing down, and reserve takes g1.
-            assertEquals(0, node.schedule(g1), "the allocator hands nothing down a retired edge")
+            assertEquals(ScheduleOutcome.NothingToDelegate, node.schedule(g1), "the allocator hands nothing down a retired edge")
             val again = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L), "g1 is a lane once ex retires")
             node.complete(again.id, 4L)
             h.pump()
@@ -379,7 +379,7 @@ class HeddleNodeTest {
             h.pump()
             assertEquals(Lifecycle.PREPARED, node.ledger.value.lifecycle(stray.id), "rig: and never activated")
 
-            assertEquals(0, node.schedule(g1), "the allocator hands nothing down a prepared edge")
+            assertEquals(ScheduleOutcome.NothingToDelegate, node.schedule(g1), "the allocator hands nothing down a prepared edge")
             val reserved = assertIs<ReserveOutcome.Reserved>(node.reserve(g1, 10L), "g1 is still a lane")
             node.complete(reserved.id, 4L)
             h.pump()
