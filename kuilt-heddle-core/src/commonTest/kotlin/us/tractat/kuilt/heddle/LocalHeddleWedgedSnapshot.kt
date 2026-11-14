@@ -3,8 +3,8 @@ package us.tractat.kuilt.heddle
 /**
  * A format-1 snapshot that v0.7.4 persisted one pick before it wedged (#3313): four lanes weighted
  * `3/7, 2/5, 1, 3` under one parent, after 30,723 picks with a waiting set that changed between
- * them. Its wake offsets carry denominators up to 72,557,275, its `l0` floor `34594/3` sits off
- * that lane's grid, and on v0.7.4 its next pick overflowed `Long`.
+ * them. Its wake offsets carry denominators up to 72,557,275, and on v0.7.4 its next pick
+ * overflowed `Long`. Its floors are origin seats (`34594/3` is `4942 / (3/7)`), already on the grid.
  *
  * Checked in byte-for-byte as the old engine wrote it, so the restore test proves a snapshot from
  * the field needs no migration. Never regenerate it: a snapshot written by the fixed engine would

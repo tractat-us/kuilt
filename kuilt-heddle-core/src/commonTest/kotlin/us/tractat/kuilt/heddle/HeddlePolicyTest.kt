@@ -22,8 +22,8 @@ class HeddlePolicyTest {
      * [seat] is the edge's virtual-time origin, carried the way production carries it since
      * issue #1752 — a [Gauge] floor with the fold at `0`, so the whole of the edge's issuance
      * is advanced over it. `null` models an edge nothing has seated yet, which reads from its
-     * own origin. An exact [Rational] rather than the `Long` the retired
-     * `AttachmentRecord.initialVirtualTime` was: a gauge floor never has to be rounded.
+     * own origin. A [Rational], like the wire form; one off the edge's 1/16-unit grid is read
+     * rounded up to it, as an older peer's floor would be (#3313).
      */
     private class Sim(
         val id: String,
@@ -410,7 +410,7 @@ class HeddlePolicyTest {
 
         assertAll(
             // The seat is the front rounded up to the newborn's grid, and no further.
-            { assertEquals(Rational.of(175L, 16L), newborn.virtualService(), "⌈(109/10) · 16⌉ = 175 ticks") },
+            { assertEquals(Rational.of(175L, 16L), newborn.virtualService(), "the fixture's 109/10 floor reads ⌈(109/10) · 16⌉ = 175 ticks, where a seat at that front lands") },
             // No penalty: a sliver above V, it is still eligible immediately, because step 3 reads
             // V on the same grid. The retired whole-unit ceiling (11) put it out of the set.
             {

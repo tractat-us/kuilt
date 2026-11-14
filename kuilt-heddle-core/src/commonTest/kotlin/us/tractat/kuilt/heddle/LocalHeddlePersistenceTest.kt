@@ -532,17 +532,17 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
-     * The rich golden is frozen too, and it restores: an engine started from it carries on exactly
-     * as the engine that wrote it would have, through a drain finishing and a reload.
+     * The rich scenario's encoding is pinned, and it restores: an engine started from it carries on
+     * exactly as the engine that wrote it would have, through a drain finishing and a reload.
      */
     @Test
-    fun richFormatOneStillEncodesToItsGoldenAndRestores() {
+    fun richFormatOneEncodesToItsGoldenAndRestores() {
         val (reference, open) = richScenario()
         val text = encode(reference.persist())
         // Decoded inside each arm, so a golden that no longer decodes still prints the new encoding.
-        val golden = { decoded(GOLDEN_FORMAT_1_RICH) }
+        val golden = { decoded(GOLDEN_FORMAT_1_RICH_GRID) }
         assertAll(
-            { assertEquals(GOLDEN_FORMAT_1_RICH, text, "format 1 changed; the rich encoding is now:\n$text\n") },
+            { assertEquals(GOLDEN_FORMAT_1_RICH_GRID, text, "format 1 changed; the rich encoding is now:\n$text\n") },
             { assertEquals(setOf(0L, 1L), golden().leases.map { it.id.epoch }.toSet(), "the rig: open leases from two epochs") },
             { assertTrue(golden().ledger.let { l -> l.allEdges().any { l.lifecycle(it) == Lifecycle.CLOSING } }, "the rig: an edge is draining") },
             { assertTrue(golden().leases.any { it.leaf == tenant }, "the rig: a lease at a runtime child") },
@@ -552,6 +552,26 @@ class LocalHeddlePersistenceTest {
                 val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
                 assertEquals(richContinuation(reference, open), richContinuation(restored, open))
             },
+        )
+    }
+
+    /**
+     * The rich snapshot **v0.7.4 wrote**, byte for byte, still decodes and restores, and the engine
+     * carries on from it through the same drain and reload. Its seat and one wake offset sit off the
+     * 1/16-unit grid (#3313); this engine reads each up to the grid once, so the continuation is not
+     * byte-identical to one from [GOLDEN_FORMAT_1_RICH_GRID], but every call in it completes.
+     */
+    @Test
+    fun richFormatOneThatV074WroteStillRestoresAndCarriesOn() {
+        val (reference, open) = richScenario()
+        val shipped = decoded(GOLDEN_FORMAT_1_RICH)
+        val offGrid = shipped.ledger.gauge(AttachmentId("root/acme@5:2#2"))?.floor
+        val restored = LocalHeddle.restore(shipped, richPolicy, epoch = shipped.epoch + 1)
+        val carriedOn = richContinuation(restored, open)
+        assertAll(
+            // The rig: the shipped bytes really are the pre-grid values.
+            { assertEquals(Rational.of(116L, 15L), offGrid) },
+            { assertEquals(richContinuation(reference, open).size, carriedOn.size, "every call of the continuation ran") },
         )
     }
 

@@ -12,7 +12,7 @@ import kotlin.test.assertEquals
  * byte-for-byte against a checked-in golden vector.
  *
  * Both the input generation ([canonicalPicks], via the platform-independent
- * `kotlin.random.Random` XorWow generator) and the policy's exact-rational selection
+ * `kotlin.random.Random` XorWow generator) and the policy's integer selection
  * are deterministic, so **every** target — JVM, Android, iOS, macOS, wasmJs — must
  * reproduce [GOLDEN] exactly. Any accidental floating-point or platform-dependent
  * arithmetic in the selection path would diverge here. That is the whole point of

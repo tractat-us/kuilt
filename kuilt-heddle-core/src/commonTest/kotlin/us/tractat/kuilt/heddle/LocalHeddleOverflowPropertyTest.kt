@@ -124,10 +124,14 @@ class LocalHeddleOverflowPropertyTest {
             seats++
             // The rig: children seated at their siblings' front rather than at their own origin.
             // The pre-grid seat stored that front, a weighted mean, as it was, and that is what grew.
+            // A gauge's floor in ticks less its fold is the seat's own height above the origin, and
+            // a checkpoint preserves it, so this sees a front seat however often the child ran since.
             val ledger = engine.snapshot().ledger
             for (child in attached) {
                 val edge = ledger.lineageOf(topology.runtimeChildId(rt, child))?.lastOrNull() ?: continue
-                if (ledger.gauge(edge)?.floor?.let { it > Rational.ZERO } == true) seatedAtAFront += child
+                val gauge = ledger.gauge(edge) ?: continue
+                val weight = ledger.record(edge)?.weight ?: continue
+                if (ticksAt(gauge.floor, weight) > GRID * gauge.folded) seatedAtAFront += child
             }
             engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST))
             picks++
@@ -147,8 +151,10 @@ class LocalHeddleOverflowPropertyTest {
             { assertEquals(CHURN_SEATS, seats, "every step attached and seated one child") },
             { assertEquals(CHURN_SEATS, picks, "every step made one pick") },
             { assertEquals(1, restored, "the run went through one persist and restore") },
-            // Measured: 2,138 of 5,000. The rest were seated while no sibling under `rt` was seated yet.
-            { assertTrue(seatedAtAFront.size > CHURN_SEATS / 4, "the rig: children seated at a front, ${seatedAtAFront.size}") },
+            // Measured 208 of 5,000 on the JVM: a child is seated when a descent first passes through
+            // `rt`, and most are seated beside siblings that have not yet run. Seating every child at
+            // its origin instead — the defect's absence — scores 0.
+            { assertTrue(seatedAtAFront.size > 100, "the rig: children seated above their origin, ${seatedAtAFront.size}") },
             { assertEquals(emptyList<String>(), offGridSamples) },
         )
     }
@@ -156,9 +162,10 @@ class LocalHeddleOverflowPropertyTest {
     /**
      * A snapshot v0.7.4 wrote just before it wedged: four lanes `3/7, 2/5, 1, 3` after 30,723 picks
      * under a changing waiting set, its wake offsets carrying denominators up to 72,557,275 and its
-     * next pick overflowing. It restores without migration, because every stored value is read up to
-     * its edge's grid, and picks on — and the first wake offset a pick rewrites lands back on the
-     * grid.
+     * next pick overflowing. It restores without migration, because every stored offset is read up
+     * to its edge's grid, and picks on. Its four floors are origin seats and already on the grid, so
+     * this arm proves the offsets' read; `VirtualPositionTest` covers a checkpoint over an off-grid
+     * floor.
      */
     @Test
     fun aSnapshotThatWedgedOnTheOldArithmeticRestoresAndPicksOn() {
@@ -181,11 +188,9 @@ class LocalHeddleOverflowPropertyTest {
             picks++
         }
         assertAll(
-            // The rig: the snapshot really does carry the fat values that wedged v0.7.4.
-            { assertTrue(fatBefore.size >= 4, "the checked-in snapshot is off the grid: $fatBefore") },
+            // The rig: the snapshot really does carry the four fat wake offsets that wedged v0.7.4.
+            { assertEquals(4, fatBefore.count { it.startsWith("offset") }, "the checked-in offsets are off the grid: $fatBefore") },
             { assertEquals(WEDGED_PICKS, picks, "every step made one pick") },
-            // Gauges are rewritten on grid by every checkpoint; a wake offset by its next wake.
-            { assertEquals(emptyList<String>(), offGrid(engine.snapshot()).filter { it.startsWith("floor") }) },
         )
     }
 
@@ -202,7 +207,8 @@ class LocalHeddleOverflowPropertyTest {
         val random = Random(seed)
 
         var picks = 0
-        var samplesWithAClampedWaker = 0
+        var clamps = 0
+        var offsetsBefore = emptyMap<AttachmentId, Rational>()
         val offGridSamples = ArrayList<String>()
         repeat(PICKS) { step ->
             val size = 1 + random.nextInt(leaves.size)
@@ -218,7 +224,12 @@ class LocalHeddleOverflowPropertyTest {
             picks++
             if (step % SAMPLE_EVERY == 0) {
                 val snapshot = engine.snapshot()
-                if (snapshot.allocatorMemory.wakeOffsets.values.any { it > Rational.ZERO }) samplesWithAClampedWaker++
+                // The rig: stored offsets that rose since the last sample, each a wake clamped to a
+                // new front. Offsets are joined with max, so counting non-zero ones would let one
+                // early clamp satisfy every later sample.
+                val offsets = snapshot.allocatorMemory.wakeOffsets
+                clamps += offsets.count { (edge, offset) -> offset > (offsetsBefore[edge] ?: Rational.ZERO) }
+                offsetsBefore = offsets
                 offGridSamples += offGrid(snapshot)
             }
         }
@@ -227,7 +238,7 @@ class LocalHeddleOverflowPropertyTest {
             { assertEquals(0, engine.snapshot().leases.size, "every lease was completed") },
             // The rig: wakes clamped someone forward. Without one the run never reached the state
             // that overflowed, and its green would prove nothing.
-            { assertTrue(samplesWithAClampedWaker > PICKS / SAMPLE_EVERY / 2, "a clamped waker in $samplesWithAClampedWaker samples") },
+            { assertTrue(clamps > PICKS / SAMPLE_EVERY, "stored offsets rose $clamps times across the samples") },
             { assertEquals(emptyList<String>(), offGridSamples) },
         )
     }
