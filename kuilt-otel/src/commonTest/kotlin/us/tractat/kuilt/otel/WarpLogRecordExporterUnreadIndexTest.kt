@@ -229,6 +229,64 @@ class WarpLogRecordExporterUnreadIndexTest {
         )
     }
 
+    // ---- The active segment: never write over what was not read ----
+
+    /** The active segment's key in [store], from the index it holds. */
+    private suspend fun activeKeyOf(store: RecordingStore): StoreKey =
+        StoreKey(segmentKeyForTest(decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST))).active))
+
+    @Test
+    fun aRefusedActiveSegmentReadNeverOverwritesIt() = runTest {
+        // An unread active segment is sealed as Pinned and a new one opened past `next`, as an
+        // unread sealed segment stays named. Failing closed instead would let one key the store
+        // always refuses stop logging for good. Before this, the export overwrote the key with
+        // only its own record: a probe lost 6 of 30.
+        val checks = Refusal.entries.flatMap { how ->
+            val (backing, persisted) = storeWithThirtyRecords()
+            val activeKey = activeKeyOf(backing)
+            val activeBefore = requireNotNull(backing.read(activeKey)) { "precondition: the active segment was never written" }
+            val store = RefusingStore(backing, Call.READ, { it == activeKey }, times = 1, how = how)
+            val exporter = exporterFor(store)
+
+            exporter.recover()
+            val exported = exporter.export(record(100))
+            val activeAfter = backing.read(activeKey)
+            val afterRestart = bodiesAfterRestart(backing)
+
+            listOf<() -> Unit>(
+                { assertEquals(1, store.refused, "[$how] the active segment read was refused ${store.refused} times, not 1") },
+                { assertEquals(ExportResult.Success, exported, "[$how] an unread active segment stopped the export") },
+                { assertTrue(activeBefore.contentEquals(activeAfter), "[$how] the export wrote over the unread active segment") },
+                { assertEquals(persisted + "body-100", afterRestart, "[$how] records were lost to the unread active segment") },
+            )
+        }
+        assertAll(*checks.toTypedArray())
+    }
+
+    @Test
+    fun anUndecodableActiveSegmentIsKeptAndNeverOverwritten() = runTest {
+        // Bad bytes cost their own records and nothing else, and the exporter keeps working. The
+        // key is sealed as Pinned rather than written over, as an undecodable sealed segment is.
+        val (backing, persisted) = storeWithThirtyRecords()
+        val activeKey = activeKeyOf(backing)
+        val activeBodies = decodeSegmentForTest(requireNotNull(backing.read(activeKey))).toList().map { it.body }
+        val garbage = byteArrayOf(0x7f, 0x00, 0x13)
+        backing.putRaw(activeKey, garbage)
+        val exporter = exporterFor(backing)
+
+        exporter.recover()
+        val exported = exporter.export(record(100))
+        val activeAfter = backing.read(activeKey)
+        val afterRestart = bodiesAfterRestart(backing)
+
+        assertAll(
+            { assertTrue(activeBodies.isNotEmpty(), "precondition: the active segment held no records") },
+            { assertEquals(ExportResult.Success, exported, "an undecodable active segment stopped the export") },
+            { assertTrue(garbage.contentEquals(activeAfter), "the export wrote over the undecodable active segment") },
+            { assertEquals(persisted - activeBodies.toSet() + "body-100", afterRestart) },
+        )
+    }
+
     // ---- The legacy blob: never delete what was not read ----
 
     @Test
