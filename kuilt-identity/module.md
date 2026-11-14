@@ -27,7 +27,9 @@ issued and signed by this host's own key, naming the device that proved it holds
 room, not revoked, not run out. The answer is a `GrantVerdict`, `Valid` or the first thing wrong. A
 host that no longer wants a device back on an old pass revokes it in its `RevocationList`: every
 grant issued to that key before the cutoff stops working, and a fresh one issued after works again.
-Revoking blocks the next return; it does not remove a device that is in the room now.
+Revoking voids passes; it is not a ban. A revoked device that knocks again is a newcomer, and the
+host decides it like any other, so an app that wants a device kept out keeps its own blocked set,
+which it can undo. Revoking does not remove a device that is in the room now.
 
 A host keeps its revocations across a restart with `RevocationList.open(store)`, over a
 `DurableStore` from `:kuilt-store` that the app supplies. Each `revoke` writes the whole list and

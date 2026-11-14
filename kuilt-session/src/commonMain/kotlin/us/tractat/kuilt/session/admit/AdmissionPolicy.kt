@@ -23,6 +23,13 @@ import kotlin.time.Duration.Companion.milliseconds
  * refuse a returning device; revoking its key in [HostAdmission.revocations] makes it a newcomer
  * again, and then the policy decides.
  *
+ * Revoking is not a ban, so do not refuse on it: a revocation cannot be undone, and a policy that
+ * refuses every revoked key keeps that device out for good. Refuse on the app's own blocked set,
+ * which it can undo, and keep that set across restarts as you keep the revocations: a forgotten block
+ * lets a revoked device back in as a newcomer. To keep a device out from its next return, block it
+ * and revoke it: blocking alone leaves a held seat or a pass it holds working, and revoking alone
+ * only sends it back to this policy. Neither removes a device that is in the room now.
+ *
  * [decide] suspends so a policy can look something up, but it must answer within the joiner's admit
  * timeout. It may run concurrently with itself, for two joiners at once.
  *
@@ -166,7 +173,8 @@ public data class GrantTerms(
  * differ.
  *
  * @property policy Decides every newcomer; never asked about a returning device.
- * @property revocations The cutoffs the room checks a returning device's pass against.
+ * @property revocations The cutoffs the room checks a returning device's pass against. They void
+ *   passes; they do not keep a device out, which is the [policy]'s job.
  * @sample us.tractat.kuilt.session.hostAdmissionSample
  */
 public class HostAdmission(

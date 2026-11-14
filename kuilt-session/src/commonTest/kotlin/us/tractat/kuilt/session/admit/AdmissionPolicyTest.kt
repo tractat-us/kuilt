@@ -1,10 +1,13 @@
 package us.tractat.kuilt.session.admit
 
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.GrantScope
+import us.tractat.kuilt.identity.GrantTrust
+import us.tractat.kuilt.identity.GrantVerdict
 import us.tractat.kuilt.session.hostAdmissionSample
 import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.assertAll
@@ -13,6 +16,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.microseconds
@@ -144,25 +148,59 @@ class AdmissionPolicyTest {
         )
     }
 
+    private val forever = AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
+
     @Test
-    fun samplePolicyRefusesTheRevokedThenBefriendsThenDefaults() = keysTest { a, b ->
+    fun sampleRevocationVoidsAFriendsPassButDoesNotBanIt() = keysTest { a, b ->
+        val host = DeviceKey.generate()
         val stranger = DeviceKey.generate().id
         val store = InMemoryDurableStore()
-        val admission = hostAdmissionSample(friends = setOf(a, b), store = store)
-        val forever = AdmissionDecision.Admit(GrantTerms(Duration.INFINITE, GrantReach.AnyRoomOfIssuer))
-        // Before the revocation b is a friend like a, so the refusal below is the revocation's doing.
-        val bBefore = admission.policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
-        admission.revocations.revoke(b, notBefore = 1_700_000_000_001L) // the clock now, plus one
+        val blocked = MutableStateFlow<Set<DidKey>>(emptySet())
+        val admission = hostAdmissionSample(friends = setOf(a, b), blocked = blocked, store = store)
+        val trust = GrantTrust(host.id, admission.revocations)
+        val now = 1_700_000_000_000L
+        val oldPass = Grant.issue(host, b, GrantScope.AnyRoomOfIssuer, issuedAt = now, notAfter = forever.grant.notAfter(now))
+        val oldBefore = trust.verify(oldPass, b, "table-7", now)
+
+        admission.revocations.revoke(b, notBefore = now + 1) // the clock now, plus one
+        val oldAfter = trust.verify(oldPass, b, "table-7", now + 1)
+        // b knocks again as a newcomer, and the policy, which never consults the revocations, admits it.
+        val readmitted = admission.policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
+        val freshPass = Grant.issue(host, b, GrantScope.AnyRoomOfIssuer, issuedAt = now + 1, notAfter = forever.grant.notAfter(now + 1))
         val friend = admission.policy.decide(AdmissionRequest(a, "Ada", deviceId = null))
-        val refused = admission.policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
         val other = admission.policy.decide(AdmissionRequest(stranger, "Cy", deviceId = "laptop"))
-        // The host restarts on the same store: the revocation, and so the refusal, survive.
-        val afterRestart = hostAdmissionSample(friends = setOf(a, b), store = store)
-            .policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
+        // The host restarts on the same store: the revocation survives, and still bans nobody.
+        val restarted = hostAdmissionSample(friends = setOf(a, b), blocked = blocked, store = store)
+        val freshVerdict = trust.verify(freshPass, b, "table-7", now + 2)
+        val oldAfterRestart = GrantTrust(host.id, restarted.revocations).verify(oldPass, b, "table-7", now + 2)
+        val readmittedAfterRestart = restarted.policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
         assertAll(
-            { assertEquals(forever, bBefore) },
+            // The rig fired: the old pass worked, then the revocation voided it.
+            { assertEquals(GrantVerdict.Valid, oldBefore) },
+            { assertEquals(GrantVerdict.Revoked, oldAfter) },
+            { assertEquals(forever, readmitted) },
+            { assertEquals(GrantVerdict.Valid, freshVerdict) },
             { assertEquals(forever, friend) },
-            { assertIs<AdmissionDecision.Reject>(afterRestart) },
+            { assertEquals(AdmissionDecision.Admit(GrantTerms(1.hours, GrantReach.ThisRoom)), other) },
+            { assertEquals(now + 1, restarted.revocations.notBefore(b)) },
+            { assertEquals(GrantVerdict.Revoked, oldAfterRestart) },
+            { assertEquals(forever, readmittedAfterRestart) },
+        )
+    }
+
+    @Test
+    fun sampleBlockedDeviceIsRefusedUntilUnblocked() = keysTest { a, b ->
+        val blocked = MutableStateFlow<Set<DidKey>>(emptySet())
+        val admission = hostAdmissionSample(friends = setOf(a, b), blocked = blocked, store = InMemoryDurableStore())
+        // Before the block b is a friend like a, so the refusal below is the block's doing.
+        val before = admission.policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
+        blocked.value = setOf(b)
+        val refused = admission.policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
+        val friend = admission.policy.decide(AdmissionRequest(a, "Ada", deviceId = null))
+        blocked.value = emptySet()
+        val unblocked = admission.policy.decide(AdmissionRequest(b, "Bea", deviceId = null))
+        assertAll(
+            { assertEquals(forever, before) },
             {
                 // The joiner's view of the refusal is the wire's: the id alone, rebuilt as Unknown, retryable.
                 val code = assertIs<AdmissionDecision.Reject>(refused).code
@@ -171,7 +209,10 @@ class AdmissionPolicyTest {
                 assertEquals(RejectCode.Unknown("not-welcome"), seenByJoiner)
                 assertEquals(true, seenByJoiner.retryable)
             },
-            { assertEquals(AdmissionDecision.Admit(GrantTerms(1.hours, GrantReach.ThisRoom)), other) },
+            { assertEquals(forever, friend) },
+            { assertEquals(forever, unblocked) },
+            // Blocking is the app's own set: it writes nothing to the revocations.
+            { assertNull(admission.revocations.notBefore(b)) },
         )
     }
 }
