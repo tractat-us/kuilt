@@ -42,7 +42,7 @@ Rows pair `;`-separated groups in order.
 |a hard-coded chunk size, a `FrameTooLargeException`|`Room`/`Seam.maxPayloadBytes`, then `PayloadTooLarge`|`fabrics.md#payload-limits`|
 |a `try` inside `onEach { … }.launchIn(scope)`, a pump that dies silently|`Flow.pumpIn` — `PumpFailure.ITEM` vs `UPSTREAM`; `onFailure` returns `PumpVerdict.CONTINUE`/`STOP`|`fabrics.md#long-lived-pumps`|
 |a `MutableStateFlow<SeamState>`, or a `closed` flag beside one|`SeamStateGate`|`fabrics.md#a-seams-terminal-state`|
-|bytes outliving the process, `fsync`-rename dance|`DurableStore` + `StoreKey` (`InMemoryDurableStore`, one per platform); `KuiltVersion`|`fabrics.md#durable-storage`|
+|bytes outliving the process, an `fsync`-rename dance|`DurableStore` + `StoreKey` (`InMemoryDurableStore`, one per platform)|`fabrics.md#durable-storage`|
 |encrypting to a public key, bytes only one recipient can open|`SealedBox.seal`/`open` + `SealPublicKey`/`SealPrivateKey`|`replication.md#sealed-boxes`|
 |a fair-share scheduler, "3× the share"; a quota ledger, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane; config trees, a group id from a path, reloads, a lease per slot or why it waits, orphans, a restart|`HeddlePolicy.pick` + `HeddleNode`, `FairShareAllocator`; `EntitlementLedger` + `HeddleNode.reserve`/`complete`; `heddleGoverned`; `HeddleAdmissionControl`; `Topology.from`/`lower`/`diff`/`findGroupId`/`attachRuntimeChild`, `LocalHeddle` + `apply`/`reconcileLeases`/`persist`/`restore`|`heddle.md#fair-share--placement`|
 |"only run on a GPU / in-region peer", a placement predicate|`Affinity` + `TaskDescriptor.where` + `CapSet`|`warp.md#where-a-task-may-run-location-eligibility`|
