@@ -200,6 +200,22 @@ itself. Do not decode the file twice instead, once into `TopologyDocument` and o
 type. The decode into heddle's type has to ignore your keys, so it ignores a misspelt `weigth` too,
 and that lane quietly gets the default weight `"1"`.
 
+The type is heddle's shape plus your fields. Here `PoolGroup` is the superset of a group (its
+sibling `PoolLane` is the same for a lane, and `PoolFile` holds the root and the children):
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#PoolGroup -->
+```kotlin
+@Serializable
+@SerialName("group")
+internal data class PoolGroup(
+    override val name: String,
+    override val weight: String = "1",
+    val children: List<PoolNode> = emptyList(),
+    val runtimeChildren: String? = null,
+    override val rules: List<String> = emptyList(),
+) : PoolNode
+```
+
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleConsumerProblems -->
 ```kotlin
     // One decode, under a default `Json`: a key neither heddle nor the app knows is an error.
@@ -230,6 +246,13 @@ and that lane quietly gets the default weight `"1"`.
     // the app's `rules` key must be ignored, and so is a misspelt `weigth`, which then reads as "1".
     val typo = """{"root": "pool", "children": [{"type": "lane", "name": "batch", "weigth": "3"}]}"""
     check(Json { ignoreUnknownKeys = true }.decodeFromString<TopologyDocument>(typo).children.single().weight == "1")
+    val refused = try {
+        Json.decodeFromString<PoolFile>(typo)
+        null
+    } catch (e: SerializationException) {
+        e
+    }
+    check(refused != null)
 ```
 
 To write a fixed tree in code instead, use `draft(root) { group(name, weight) { … } }`. It builds
