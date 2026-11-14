@@ -717,9 +717,9 @@ saturated position loses is exactness, so the rule splits by call:
 
 The binding sum is lifetime service under one parent, about `2⁵⁷` units at the
 largest reservation and a weight of `3/7`, so a busy parent does reach it.
-`LocalHeddle` brings positions back down with a rebase (#3329). The replicated
-`HeddleNode` has no rebase yet and stops granting at that parent; its rebase and
-refusal surface are tracked by #3353. `apply` keeps the weight products in range
+Until positions can be brought back down (#3329 for `LocalHeddle`), a parent at
+its ceiling refuses picks for good. The replicated `HeddleNode` stops granting at
+that parent; its rebase and refusal surface are tracked by #3353. `apply` keeps the weight products in range
 the same way: an activation whose weights would put its parent's `L`, `S`,
 `G · S` or `S · d` out of `Long` is refused with a `StepRefusal`.
 
@@ -1103,7 +1103,8 @@ Carried over from the source intact; each is a named property test (§13).
    parent's current virtual time — the front over its *demanding* children,
    not over all its active ones (§7.2) — never with lifetime credit. The
    seat is published on the edge's `Gauge`, not frozen into the record, and is
-   the front rounded **up** to the edge's own grid, under one tick (§7.2).
+   the front rounded **up** to the edge's own grid, under one tick (§7.2), below
+   the position ceiling; at it, the seat lands at the ceiling (§7.1).
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
    clamps forward.
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
@@ -1114,7 +1115,8 @@ Carried over from the source intact; each is a named property test (§13).
    measured in simulation against the configured caps. Discretization is the
    quantum plus the position grid: step 3 admits an edge up to one tick past
    `V`, and a seat or wake clamp lands under one tick above it, each `1/16` of a
-   unit of the edge's own service (§7.1).
+   unit of the edge's own service (§7.1). Below the position ceiling, that is:
+   at it, a seat or clamp lands at the ceiling and every pick there refuses.
 10. **Closure dominance.** A replica that observed CLOSING never again
     delegates across that generation, regardless of merge order.
 11. **Conflicts surface.** Integrity violations converge to the same explicit

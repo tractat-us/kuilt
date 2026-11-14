@@ -279,8 +279,8 @@ hand that to a status page or another thread instead of the engine.
 `NoLiveLineage` or `PositionCeiling` from `acquire`, and `Unknown`, `Stale`,
 `PathDraining`, `SupplyExhausted` or `PositionCeiling` from a lease call.
 `complete` and `admit` are never refused. Each call is all or nothing, with one
-exception: an `acquire` refused for any reason but the ceiling still updates the
-engine's memory of who was waiting.
+exception: an `acquire` refused as `NoLiveLineage` still updates the engine's
+memory of who was waiting, because its pick saw them.
 
 **Exceptions mean a mistake.** An argument out of range throws
 `IllegalArgumentException`. Arithmetic past `Long` throws `ArithmeticException`

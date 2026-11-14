@@ -311,7 +311,8 @@ public object HeddlePolicy {
             val top = considered.maxWith { a, b ->
                 compareVirtual(effectiveTicks(a), a.record.weight, effectiveTicks(b), b.record.weight)
             }
-            return VirtualTime.of(effectiveTicks(top), top.record.weight).atCeilingIf(isAtCeiling(top))
+            // Any saturated child, not only the top: one that reads below the top may truly be above it.
+            return VirtualTime.of(effectiveTicks(top), top.record.weight).atCeilingIf(considered.any { isAtCeiling(it) })
         }
         // A saturated input understates the mean, and a joiner seated or clamped against it would
         // keep that as credit once the input left: the front reads the ceiling instead (#3313).
