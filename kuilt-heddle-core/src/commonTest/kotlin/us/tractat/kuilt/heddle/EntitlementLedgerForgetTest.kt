@@ -185,6 +185,21 @@ class EntitlementLedgerForgetTest {
         assertAll(
             { assertNotEquals(forgotE, forgotOther, "the rig: two different folds") },
             { assertFailsWith<IllegalArgumentException> { forgotE.piece(forgotOther) } },
+            {
+                // An edge outside the topology grammar has no generation, so no floor can name it:
+                // only the fold comparison itself tells these two apart.
+                val x = AttachmentId("x")
+                val withX = closed(
+                    records = mapOf(e to setOf(AttachmentRecord(e, root, c, Weight.ONE)), x to setOf(AttachmentRecord(x, root, GroupId("root/x"), Weight.ONE))),
+                    issued = mapOf(e to counter(r1 to 5L), x to counter(r1 to 2L)),
+                    leafSpent = mapOf(e to counter(r1 to 5L), x to counter(r1 to 2L)),
+                    lifecycle = mapOf(e to Lifecycle.RETIRED, x to Lifecycle.RETIRED),
+                )
+                val one = checkNotNull(withX.forget(listOf(e)))
+                val both = checkNotNull(withX.forget(listOf(e, x)))
+                assertNotEquals(one, both, "the rig: two different folds")
+                assertFailsWith<IllegalArgumentException>("two folds, and no edge resurrected") { one.piece(both) }
+            },
             { assertFailsWith<IllegalArgumentException>("the edge it forgot, back from a ledger that kept it") { forgotE.piece(two) } },
             { assertFailsWith<IllegalArgumentException>("and the other way round") { two.piece(forgotE) } },
             { assertEquals(forgotE, forgotE.piece(forgotE), "the same fold joins to itself") },
