@@ -135,10 +135,12 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     team-signed app with a provisioning profile, so no test binary can reach it (`-34018`); the
     file-based login keychain ignores the accessibility class and travels with Time Machine and
     Migration Assistant. So macOS uses a file store in a non-roaming local directory, with that
-    backup trade stated in its KDoc, and the Keychain store serves iOS. The iOS store runs the TCK in
-    the PR build over a fake Keychain backend (as the Android store does over a fake Keystore); a
-    nightly job boots a simulator and runs it once against the real Keychain, since the default
-    `iosSimulatorArm64Test` spawn has no keychain (`-25291`).
+    backup trade stated in its KDoc, and the Keychain store serves iOS. The iOS store runs the TCK
+    over a fake Keychain backend. **Correction (#3312's review):** that runs locally and in the
+    non-blocking `apple-nightly` job, not in PR CI, whose native job runs on Linux and cannot execute
+    Apple tests; the Android store's fake-Keystore TCK, by contrast, runs per PR. A nightly step boots
+    a simulator and runs the real Keychain once (#3310), since the default `iosSimulatorArm64Test`
+    spawn has no keychain (`-25291`).
 29. **The Android store tells a failing Keystore from a damaged key by the cause; below API 33 it counts
     (Iain, 2026-11-13, #3306's review).** The Keystore's JCA surface answers a passing failure as
     "absent" (`containsAlias` false, `getCertificate` null), so the store reads with `getKey` first and
