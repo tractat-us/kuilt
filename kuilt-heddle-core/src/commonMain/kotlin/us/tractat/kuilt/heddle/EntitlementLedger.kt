@@ -408,8 +408,8 @@ public class EntitlementLedger private constructor(
      * `reconcileStranded` patch touches no term of this read, so it cannot matter whether it lands
      * before or after the edge is seated.
      *
-     * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12 — a
-     *   deterministic throw, never a silent wrap; see [CheckedMath]).
+     * Exact wherever a [Rational] can hold the value; rounded up onto a power-of-two grid where it
+     * cannot (see [ExactTime.toRational]).
      */
     public fun grossVirtualService(id: AttachmentId): Rational? =
         recordOf(id)?.let { grossVirtualService(id, it.weight) }
@@ -419,11 +419,12 @@ public class EntitlementLedger private constructor(
      * `b + committedService / weight`, with the gauge supplying `b` and the fold). `null` if [id]
      * is unknown or divergent.
      *
-     * @throws ArithmeticException if the exact arithmetic would exceed `Long`.
+     * Computed exactly and narrowed once, like [grossVirtualService].
      */
     public fun virtualService(id: AttachmentId): Rational? {
         val w = recordOf(id)?.weight ?: return null
-        return grossVirtualService(id, w) - perWeight(counterValue(returned, id), w)
+        val gross = gauges[id].exactGrossVirtualServiceAt(counterValue(issued, id), w)
+        return (gross - ExactTime.perWeight(counterValue(returned, id), w)).toRational()
     }
 
     /** [grossVirtualService] once the edge's single weight is in hand. */

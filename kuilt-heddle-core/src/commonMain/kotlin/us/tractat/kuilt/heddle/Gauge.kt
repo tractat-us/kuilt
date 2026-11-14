@@ -99,14 +99,8 @@ internal fun perWeight(units: Long, w: Weight): Rational =
  *
  * A second copy of the expression could drift from the checkpoint that has to agree with it — the
  * checkpoint asserts a value the read has to reproduce, so the two are one function or they are a
- * bug waiting.
- *
- * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12 — a deterministic
- *   throw, never a silent wrap; see [CheckedMath]).
+ * bug waiting. It computes in [ExactTime] ([exactGrossVirtualServiceAt]) and narrows once, so it is
+ * exact wherever a [Rational] can hold the result and rounds up otherwise, rather than throwing.
  */
 internal fun Gauge?.grossVirtualServiceAt(baseIssued: Long, weight: Weight): Rational =
-    if (this == null) {
-        perWeight(baseIssued, weight)
-    } else {
-        floor + perWeight(checkedSub(baseIssued, folded), weight)
-    }
+    exactGrossVirtualServiceAt(baseIssued, weight).toRational()
