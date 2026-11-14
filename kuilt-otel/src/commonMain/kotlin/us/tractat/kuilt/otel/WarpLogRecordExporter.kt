@@ -5,6 +5,8 @@ package us.tractat.kuilt.otel
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -63,8 +65,11 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * Each [LogRecord] carries a caller-assigned [LogRecord.recordId] (8 bytes).
  * [export] tracks which record ids have already been inserted: re-exporting a
  * record with the same [LogRecord.recordId] returns [ExportResult.Success]
- * immediately without inserting a duplicate into the [Rga]. The dedup state is
+ * without inserting a duplicate into the [Rga]. The dedup state is
  * rebuilt from the op-log on [recover], so idempotency survives process restarts.
+ * A re-export is not always free: if the first attempt's write never landed (it was
+ * refused, or the call was cancelled), the re-export writes the record before it
+ * reports [ExportResult.Success].
  *
  * ## Key inversion
  *
@@ -504,6 +509,28 @@ public class WarpLogRecordExporter(
      */
     private val reportedSweepFailures: MutableSet<Long> = mutableSetOf()
     private var activeSegment: Rga<LogRecord> = Rga.empty()
+
+    /**
+     * The [activeSegment] instance the store is known to hold under [activeNumber]'s key. Guarded
+     * by [lock].
+     *
+     * [activeSegment] holds ops no key carries exactly when it is **not this instance**
+     * ([activeSegmentUnwritten]). A turn admits its records into [activeSegment] before its write,
+     * so a turn that ends without that write landing — refused, cancelled in [publishApplied], or
+     * failed while its actions were being built — leaves records in memory alone. The next turn
+     * over the same records is a dedup hit or a no-op merge, and before #3350 both returned
+     * `Success` with no write.
+     *
+     * An identity rather than a dirty flag, because of which way a mistake fails. A flag has to be
+     * set at every site that changes [activeSegment], and a site that forgets is a silent loss. Here
+     * every change makes a new [Rga] instance, since `Rga` is immutable, so a forgotten site makes
+     * the segment look unwritten and costs one redundant write. Only the sites that *know* the
+     * store holds the segment assign this: a returned [StoreAction.CommitActive], and the four that
+     * install a segment whose key reads back as the same content ([applyRoll], [install],
+     * [adoptNumberingOnly], and this initializer — an absent key reads as empty).
+     */
+    private var durableActive: Rga<LogRecord> = activeSegment
+
     private var activeNumber: Long = 0
     private var activeOpCount: Int = 0
     private var nextSegmentNumber: Long = 1
@@ -628,8 +655,16 @@ public class WarpLogRecordExporter(
         /** Write [bytes] under [key]. */
         class Put(val key: StoreKey, val bytes: ByteArray) : StoreAction
 
-        /** Advance durable suppression only after these exact active-segment bytes are acknowledged. */
-        class CommitActive(val key: StoreKey, val bytes: ByteArray, val suppression: Suppression) : StoreAction
+        /**
+         * Write [segment]'s [bytes] under [key], and only once that write has returned, advance durable
+         * suppression and record [segment] as what the store holds ([durableActive]).
+         */
+        class CommitActive(
+            val key: StoreKey,
+            val bytes: ByteArray,
+            val suppression: Suppression,
+            val segment: Rga<LogRecord>,
+        ) : StoreAction
 
         /**
          * The **commit point** of a retirement: write [bytes] — an index naming [numbers] under
@@ -1039,6 +1074,7 @@ public class WarpLogRecordExporter(
         nextSegmentNumber = recovered.nextSegmentNumber
         activeNumber = nextSegmentNumber++
         activeSegment = Rga.empty()
+        durableActive = activeSegment
         activeOpCount = 0
         indexPersisted = false
     }
@@ -1057,6 +1093,7 @@ public class WarpLogRecordExporter(
         retiringSegments.clear()
         retiringSegments.addAll(recovered.ledger)
         activeSegment = recovered.activeSegment
+        durableActive = activeSegment
         activeNumber = recovered.activeNumber
         activeOpCount = opCountOf(recovered.activeSegment)
         nextSegmentNumber = recovered.nextSegmentNumber
@@ -1228,7 +1265,11 @@ public class WarpLogRecordExporter(
                 // the whole ~123 KB active segment on every drain cycle while accepting
                 // nothing, forever; and an anti-entropy caller re-exporting an
                 // already-exported page pays a segment rewrite per turn for a no-op.
-                if (admitted.isEmpty() && evictions == 0 && !windowed) {
+                //
+                // "Changed nothing" is about the store, not this turn, though. A dedup hit is
+                // usually the retry of a turn whose write never landed, and its record is then in
+                // `activeSegment` alone; returning Success without writing it is #3350.
+                if (admitted.isEmpty() && evictions == 0 && !windowed && !activeSegmentUnwritten()) {
                     emptyList()
                 } else {
                     pendingWrites(retire = windowed)
@@ -1399,10 +1440,22 @@ public class WarpLogRecordExporter(
      * A sink is a side channel: it must not be able to fail an export, because a caller on the
      * logging path cannot handle one and the record really was applied. Called with neither [lock]
      * nor a store write in flight, and **before** the turn's durable write — see [AppliedOpSink].
+     *
+     * **Whose cancellation is it?** The durable write follows this call, so a sink's failure must
+     * not skip it. A sink can throw a `CancellationException` at a caller whose job is alive — its
+     * own `withTimeout` expiring, say — and `runCatchingCancellable`, which this used until #3350,
+     * rethrew that one too: the export then escaped as a cancellation, wrote nothing, and its
+     * caller completed as cancelled with no trace. `ensureActive` tells the two apart. It throws
+     * only when this coroutine really is cancelled, and that cancellation propagates, leaving the
+     * turn's records in [activeSegment] alone; [activeSegmentUnwritten] is what makes the next turn
+     * write them.
      */
     private suspend fun publishApplied(ops: List<RgaOp<LogRecord>>) {
         if (ops.isEmpty()) return
-        runCatchingCancellable { appliedOps.published(ops) }.onFailure { cause ->
+        try {
+            appliedOps.published(ops)
+        } catch (cause: Throwable) {
+            currentCoroutineContext().ensureActive()
             logger.warn(cause) { "WarpLogRecordExporter: the applied-op sink threw; the export is unaffected" }
         }
     }
@@ -1542,15 +1595,19 @@ public class WarpLogRecordExporter(
      * segment number (#3317). Before, it adopted the remote anyway, so a consumer merging a peer's
      * unchanged log ten times a second spent a number ten times a second.
      *
-     * What it can still owe is this exporter's **own** pending writes. An export whose write was
-     * refused leaves its ops in [activeSegment] and the index marked stale, and reporting
-     * `Success` here would claim the remote is durable when part of it may be those very ops,
-     * echoed back by a peer. So when the index is stale this writes what an export turn would.
-     * One gap is shared with [exportTurn]'s dedup path: a turn that failed before reaching the
-     * store leaves the index current, and then neither path rewrites the active segment.
+     * What it can still owe is this exporter's **own** pending writes. An export whose write never
+     * landed leaves its ops in [activeSegment], and reporting `Success` here would claim the remote
+     * is durable when part of it may be those very ops, echoed back by a peer. So when
+     * [activeSegmentUnwritten] this writes what an export turn would.
+     *
+     * The test is the segment, not [indexPersisted], which is what this checked until #3350. A
+     * refused write does leave the index stale, but a turn cancelled in [publishApplied], or one
+     * that failed while its actions were being built, never reaches the store and leaves the index
+     * current, so the stale index missed both. A stale index with the segment written, as a turn
+     * that swept a retired key leaves it, owes nothing a restart would miss.
      */
     private fun noOpMergeWrites(): List<StoreAction> =
-        if (indexPersisted) emptyList() else pendingWrites(retire = false)
+        if (activeSegmentUnwritten()) pendingWrites(retire = false) else emptyList()
 
     /**
      * Drop every record this exporter holds and delete the segments that held them —
@@ -1728,7 +1785,10 @@ public class WarpLogRecordExporter(
                 is StoreAction.Put -> store.write(action.key, action.bytes)
                 is StoreAction.CommitActive -> {
                     store.write(action.key, action.bytes)
-                    lock.withLock { durableSuppression = durableSuppression.plus(action.suppression) }
+                    lock.withLock {
+                        durableSuppression = durableSuppression.plus(action.suppression)
+                        durableActive = action.segment
+                    }
                 }
                 is StoreAction.CommitRetirement -> {
                     store.write(INDEX_KEY, action.bytes)
@@ -1896,7 +1956,17 @@ public class WarpLogRecordExporter(
         segmentKey(activeNumber),
         cbor.encodeToByteArray(logSerializer, activeSegment),
         Suppression.of(activeSegment),
+        activeSegment,
     )
+
+    /**
+     * Whether [activeSegment] holds ops no key carries — see [durableActive]. Must hold [lock].
+     *
+     * Every turn that would otherwise write nothing asks this first: a dedup-only export turn and a
+     * merge that adds nothing to [log]. Either may be the retry of a turn whose write never landed,
+     * and `Success` is a claim that the record is on disk.
+     */
+    private fun activeSegmentUnwritten(): Boolean = activeSegment !== durableActive
 
     /**
      * **Stage** the seal of a full active segment and the opening of a fresh one, and emit the
@@ -1965,6 +2035,8 @@ public class WarpLogRecordExporter(
         activeNumber = roll.opening
         nextSegmentNumber = maxOf(nextSegmentNumber, roll.opening + 1)
         activeSegment = Rga.empty()
+        // The opened key has never been written, and an absent key reads back as empty.
+        durableActive = activeSegment
         activeOpCount = 0
     }
 
