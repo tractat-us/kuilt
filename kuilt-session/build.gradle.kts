@@ -37,6 +37,8 @@ tasks.withType<Test>().configureEach {
 }
 
 kotlin {
+    // The module that declares @SessionInternalApi is the one place it is not a warning sign.
+    compilerOptions { optIn.add("us.tractat.kuilt.session.SessionInternalApi") }
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-core"))

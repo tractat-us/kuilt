@@ -3,6 +3,7 @@ package us.tractat.kuilt.session.admit
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
 import us.tractat.kuilt.identity.RevocationList
+import us.tractat.kuilt.session.SessionInternalApi
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
@@ -60,15 +61,16 @@ private class OpenPolicy(terms: GrantTerms) : AdmissionPolicy {
 /**
  * A newcomer asking to be let in, as the host's [AdmissionPolicy] sees it.
  *
- * Only the room builds one, after the joiner has proved it holds [key]; that is why the constructor
- * is internal. The three fields are not equally trustworthy:
+ * Only the room builds one in production, after the joiner has proved it holds [key]; that is why
+ * the constructor is gated by [SessionInternalApi]. To test your own policy without a room, build one
+ * with `admissionRequest` from `:kuilt-session-test`. The three fields are not equally trustworthy:
  *
  * - [key] is **proved**: the joiner signed the host's fresh challenge with it. Key a decision on this.
  * - [deviceId] is **bound** to the key, since the joiner signed over it too, but it is still whatever
  *   the device chose to say. It tells you which id this key goes with, not that the id is unique.
  * - [displayName] is the joiner's **say-so** and nothing more. Show it; never decide on it.
  */
-public class AdmissionRequest internal constructor(
+public class AdmissionRequest @SessionInternalApi constructor(
     /** The device key the joiner proved it holds. */
     public val key: DidKey,
     /** The name the joiner asked to be shown under. Unverified. */

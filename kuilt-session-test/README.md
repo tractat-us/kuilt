@@ -51,6 +51,21 @@ val room = factory.host(Pattern("alice"))
 // room.selfId == PeerId("alice"), room.role.value == SessionRole.Host
 ```
 
+## admissionRequest — test your AdmissionPolicy without a room
+
+```kotlin
+@OptIn(AdmissionTestApi::class)
+class MyPolicyTest {
+    @Test
+    fun refusesTheBlocked() = runTest {
+        val decision = myPolicy.decide(admissionRequest(blockedKey, displayName = "Mallory"))
+        assertEquals(AdmissionDecision.Reject(RejectCode.Unknown("blocked")), decision)
+    }
+}
+```
+
+In production only the room builds an `AdmissionRequest`, once the joiner has proved it holds the key. `admissionRequest` skips that proof, which is why it sits behind `@AdmissionTestApi` (`ERROR`-level opt-in, no stability promise). Opt in where you test, never module-wide in production code.
+
 ## Why this module
 
 `:kuilt-test` doubles only `:kuilt-core` types. `FakeRoom` lives here — in its own module — so the dependency arrow stays clean: `kuilt-session-test` depends on `kuilt-session`; `kuilt-test` stays core-only.
