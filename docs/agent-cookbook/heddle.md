@@ -191,6 +191,47 @@ name, and its `names` read either arm back from just below the root.
     check(problem.kind == TopologyProblem.Kind.DUPLICATE_NAME)
 ```
 
+When the same file carries your app's own settings beside the tree, such as rules per lane, decode
+it **once**, strictly, into a type of your own that is heddle's shape plus your fields, and build the
+`TopologyDocument` from it through its public constructors. Check your own fields however you like
+and report what is wrong as `TopologyProblem`s of kind `CONSUMER`, addressed by the same child-index
+`path`, so they sit in one list with what `Topology.from` found; heddle never reports that kind
+itself. Do not decode the file twice instead, once into `TopologyDocument` and once into your own
+type. The decode into heddle's type has to ignore your keys, so it ignores a misspelt `weigth` too,
+and that lane quietly gets the default weight `"1"`.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleConsumerProblems -->
+```kotlin
+    // One decode, under a default `Json`: a key neither heddle nor the app knows is an error.
+    val file = Json.decodeFromString<PoolFile>(text)
+
+    fun PoolNode.document(): TopologyDocument.Node = when (this) {
+        is PoolGroup -> TopologyDocument.Group(name, weight, children.map { it.document() }, runtimeChildren)
+        is PoolLane -> TopologyDocument.Lane(name, weight)
+    }
+    val document = TopologyDocument(file.root, file.children.map { it.document() })
+
+    // The app's own check, addressed the same way: child indices from the root, in written order.
+    fun MutableList<TopologyProblem>.checkRules(nodes: List<PoolNode>, path: List<Int>, names: List<String>) {
+        nodes.forEachIndexed { index, node ->
+            node.rules.filter { it !in listOf("nightly", "weekly") }.forEach { rule ->
+                add(TopologyProblem(path + index, names + node.name, TopologyProblem.Kind.CONSUMER, "no rule is called \"$rule\""))
+            }
+            if (node is PoolGroup) checkRules(node.children, path + index, names + node.name)
+        }
+    }
+    val ours = buildList { checkRules(file.children, emptyList(), listOf(file.root)) }
+    val heddles = (Topology.from(document) as? TopologyParse.Invalid)?.problems.orEmpty()
+    val problems = heddles + ours
+    // One list, one addressing: the second `batch` is both a duplicate and has an unknown rule.
+    check(problems.map { it.path to it.kind } == listOf(listOf(0, 1) to TopologyProblem.Kind.DUPLICATE_NAME, listOf(0, 1) to TopologyProblem.Kind.CONSUMER))
+
+    // Why one strict decode and not two lenient ones: to decode the same file into heddle's type,
+    // the app's `rules` key must be ignored, and so is a misspelt `weigth`, which then reads as "1".
+    val typo = """{"root": "pool", "children": [{"type": "lane", "name": "batch", "weigth": "3"}]}"""
+    check(Json { ignoreUnknownKeys = true }.decodeFromString<TopologyDocument>(typo).children.single().weight == "1")
+```
+
 To write a fixed tree in code instead, use `draft(root) { group(name, weight) { … } }`. It builds
 through the same check and throws `TopologyException` with the problems `from` would list.
 
