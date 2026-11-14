@@ -271,6 +271,10 @@ public final class us/tractat/kuilt/otel/MetricExportResult$Success : us/tractat
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/otel/MetricHistogramOverflowException : us/tractat/kuilt/otel/MetricOverflowException {
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+}
+
 public final class us/tractat/kuilt/otel/MetricKey {
 	public static final field Companion Lus/tractat/kuilt/otel/MetricKey$Companion;
 	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/otel/MetricKind;Ljava/util/Map;)V
@@ -316,6 +320,11 @@ public final class us/tractat/kuilt/otel/MetricKind : java/lang/Enum {
 
 public final class us/tractat/kuilt/otel/MetricKind$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract class us/tractat/kuilt/otel/MetricOverflowException : java/lang/ArithmeticException {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public abstract fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
 }
 
 public abstract interface class us/tractat/kuilt/otel/MetricPoint {
@@ -423,10 +432,10 @@ public final class us/tractat/kuilt/otel/MetricPoint$Sum : us/tractat/kuilt/otel
 	public fun valueHash ()J
 }
 
-public final class us/tractat/kuilt/otel/MetricSumOverflowException : java/lang/ArithmeticException {
+public final class us/tractat/kuilt/otel/MetricSumOverflowException : us/tractat/kuilt/otel/MetricOverflowException {
 	public final fun getBy ()J
 	public final fun getCount ()J
-	public final fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
 }
 
 public abstract interface class us/tractat/kuilt/otel/MetricUpdate {
