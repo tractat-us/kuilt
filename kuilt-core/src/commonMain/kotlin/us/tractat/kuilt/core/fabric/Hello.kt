@@ -222,4 +222,3 @@ public class HelloSelfConnectionException(
  */
 public class HelloUnencodableIdException(cause: Throwable) :
     IllegalArgumentException("Hello cannot encode this PeerId: it is not valid UTF-16", cause)
-
