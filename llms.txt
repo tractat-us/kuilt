@@ -46,6 +46,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Scaling to many peers](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#scaling-to-many-peers)
 - [Dealing cards nobody can peek at](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#dealing-cards-nobody-can-peek-at)
 - [Sealed boxes](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#sealed-boxes)
+- [Counting past what a Long holds](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#counting-past-what-a-long-holds)
 - [Dedup](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#dedup)
 - [Archiving what the live replica forgets](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/replication.md#archiving-what-the-live-replica-forgets)
 - [Session](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/session.md)
@@ -147,6 +148,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 
 ## Modules: Libraries layered on the contract
 
+- [kuilt-math](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-math/module.md): Overflow-safe integer arithmetic for Kotlin Multiplatform: Long operations that answer null instead of wrapping, an exact 128-bit integer, and a multiply-then-divide with the rounding chosen by the caller.
 - [kuilt-crdt](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-crdt/module.md): Delta-state CRDTs — counters, sets, registers, maps, sequences and JSON — as plain serializable values, usable with any transport or none at all.
 - [kuilt-quilter](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-quilter/module.md): Live CRDT replication over a kuilt Seam: delta exchange, causal garbage collection and anti-entropy.
 - [kuilt-store](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-store/module.md): Durable key-to-bytes storage for Kotlin Multiplatform: a write returns only once the bytes will survive a crash, with a crash-safe implementation per platform.

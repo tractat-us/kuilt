@@ -1,5 +1,6 @@
 ---
 paths:
+  - "kuilt-math/**"
   - "kuilt-crdt/**"
   - "kuilt-quilter/**"
   - "kuilt-gossip/**"

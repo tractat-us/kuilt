@@ -689,6 +689,33 @@ came in: `seal` and `open` throw `SealedBoxException`, and the key decoders (`Se
 bytes. A platform whose cryptography cannot run at all (no `crypto.subtle` on an insecure origin),
 or a process that replaced the platform random source, fails with `IllegalStateException`.
 
+## Counting past what a Long holds
+
+**Intent:** a total that must never quietly go wrong — a quota, a running clock, a counter every
+device adds to — or a fraction compared by cross-multiplying. You are about to write `a + b` and hope,
+reach for `Math.addExact` (JVM only), or compare `a * d` against `c * b` with nothing checking that
+either product fits.
+**Primitive:** `:kuilt-math`. `Long.plusOrNull`/`minusOrNull`/`timesOrNull`/`negateOrNull` answer
+`null` where Kotlin's operators wrap; `Long.timesWide` and `compareProducts` form a product exactly
+in an `Int128`; `mulDiv(a, b, divisor, rounding)` divides that product, so only the quotient has to
+fit, and makes you choose `Rounding.FLOOR` or `Rounding.CEILING`.
+
+<!-- verbatim from kuilt-math/src/commonSamples/kotlin/us/tractat/kuilt/math/Samples.kt#sampleMulDiv -->
+```kotlin
+val big = 1L shl 62
+// big · 4 overflows a Long, but big · 4 / 8 = 2⁶¹ does not, and mulDiv only needs the answer to fit.
+assertEquals(1L shl 61, mulDiv(big, 4L, 8L, Rounding.FLOOR))
+assertEquals(3L, mulDiv(7L, 1L, 2L, Rounding.FLOOR))
+assertEquals(4L, mulDiv(7L, 1L, 2L, Rounding.CEILING))
+assertNull(mulDiv(Long.MAX_VALUE, 2L, 1L, Rounding.FLOOR))
+```
+
+Pick the rounding by asking which side may be wrong: round a share **down** so you never hand out
+more than you hold, round a newcomer's position **up** so it never starts ahead of those already
+waiting. A stored value that keeps an exact fraction of other exact fractions grows its denominator
+on every step; round it to a fixed grid when you store it, and keep the exact arithmetic for the
+comparisons. Identical bits on the JVM, Native and wasmJs; no floating point and no `BigInteger`.
+
 ## Dedup
 
 **Intent:** skip a message/id you've already handled ("seenIds", "skip-if-exists").

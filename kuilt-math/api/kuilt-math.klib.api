@@ -1,0 +1,63 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-math>
+final enum class us.tractat.kuilt.math/Rounding : kotlin/Enum<us.tractat.kuilt.math/Rounding> { // us.tractat.kuilt.math/Rounding|null[0]
+    enum entry CEILING // us.tractat.kuilt.math/Rounding.CEILING|null[0]
+    enum entry FLOOR // us.tractat.kuilt.math/Rounding.FLOOR|null[0]
+
+    final val entries // us.tractat.kuilt.math/Rounding.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.math/Rounding> // us.tractat.kuilt.math/Rounding.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): us.tractat.kuilt.math/Rounding // us.tractat.kuilt.math/Rounding.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<us.tractat.kuilt.math/Rounding> // us.tractat.kuilt.math/Rounding.values|values#static(){}[0]
+}
+
+final class us.tractat.kuilt.math/Int128 : kotlin/Comparable<us.tractat.kuilt.math/Int128> { // us.tractat.kuilt.math/Int128|null[0]
+    final val high // us.tractat.kuilt.math/Int128.high|{}high[0]
+        final fun <get-high>(): kotlin/Long // us.tractat.kuilt.math/Int128.high.<get-high>|<get-high>(){}[0]
+    final val isNegative // us.tractat.kuilt.math/Int128.isNegative|{}isNegative[0]
+        final fun <get-isNegative>(): kotlin/Boolean // us.tractat.kuilt.math/Int128.isNegative.<get-isNegative>|<get-isNegative>(){}[0]
+    final val low // us.tractat.kuilt.math/Int128.low|{}low[0]
+        final fun <get-low>(): kotlin/Long // us.tractat.kuilt.math/Int128.low.<get-low>|<get-low>(){}[0]
+    final val sign // us.tractat.kuilt.math/Int128.sign|{}sign[0]
+        final fun <get-sign>(): kotlin/Int // us.tractat.kuilt.math/Int128.sign.<get-sign>|<get-sign>(){}[0]
+
+    final fun compareTo(us.tractat.kuilt.math/Int128): kotlin/Int // us.tractat.kuilt.math/Int128.compareTo|compareTo(us.tractat.kuilt.math.Int128){}[0]
+    final fun divideOrNull(kotlin/Long, us.tractat.kuilt.math/Rounding): kotlin/Long? // us.tractat.kuilt.math/Int128.divideOrNull|divideOrNull(kotlin.Long;us.tractat.kuilt.math.Rounding){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.math/Int128.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.math/Int128.hashCode|hashCode(){}[0]
+    final fun minus(kotlin/Long): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.minus|minus(kotlin.Long){}[0]
+    final fun minus(us.tractat.kuilt.math/Int128): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.minus|minus(us.tractat.kuilt.math.Int128){}[0]
+    final fun plus(kotlin/Long): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.plus|plus(kotlin.Long){}[0]
+    final fun plus(us.tractat.kuilt.math/Int128): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.plus|plus(us.tractat.kuilt.math.Int128){}[0]
+    final fun toLongOrNull(): kotlin/Long? // us.tractat.kuilt.math/Int128.toLongOrNull|toLongOrNull(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.math/Int128.toString|toString(){}[0]
+    final fun unaryMinus(): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.unaryMinus|unaryMinus(){}[0]
+
+    final object Companion { // us.tractat.kuilt.math/Int128.Companion|null[0]
+        final val MAX_VALUE // us.tractat.kuilt.math/Int128.Companion.MAX_VALUE|{}MAX_VALUE[0]
+            final fun <get-MAX_VALUE>(): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.Companion.MAX_VALUE.<get-MAX_VALUE>|<get-MAX_VALUE>(){}[0]
+        final val MIN_VALUE // us.tractat.kuilt.math/Int128.Companion.MIN_VALUE|{}MIN_VALUE[0]
+            final fun <get-MIN_VALUE>(): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.Companion.MIN_VALUE.<get-MIN_VALUE>|<get-MIN_VALUE>(){}[0]
+        final val ONE // us.tractat.kuilt.math/Int128.Companion.ONE|{}ONE[0]
+            final fun <get-ONE>(): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.Companion.ONE.<get-ONE>|<get-ONE>(){}[0]
+        final val ZERO // us.tractat.kuilt.math/Int128.Companion.ZERO|{}ZERO[0]
+            final fun <get-ZERO>(): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.Companion.ZERO.<get-ZERO>|<get-ZERO>(){}[0]
+
+        final fun fromTwosComplement(kotlin/Long, kotlin/Long): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.Companion.fromTwosComplement|fromTwosComplement(kotlin.Long;kotlin.Long){}[0]
+        final fun of(kotlin/Long): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.Companion.of|of(kotlin.Long){}[0]
+    }
+}
+
+final fun (kotlin/Long).us.tractat.kuilt.math/minusOrNull(kotlin/Long): kotlin/Long? // us.tractat.kuilt.math/minusOrNull|minusOrNull@kotlin.Long(kotlin.Long){}[0]
+final fun (kotlin/Long).us.tractat.kuilt.math/negateOrNull(): kotlin/Long? // us.tractat.kuilt.math/negateOrNull|negateOrNull@kotlin.Long(){}[0]
+final fun (kotlin/Long).us.tractat.kuilt.math/plusOrNull(kotlin/Long): kotlin/Long? // us.tractat.kuilt.math/plusOrNull|plusOrNull@kotlin.Long(kotlin.Long){}[0]
+final fun (kotlin/Long).us.tractat.kuilt.math/timesOrNull(kotlin/Long): kotlin/Long? // us.tractat.kuilt.math/timesOrNull|timesOrNull@kotlin.Long(kotlin.Long){}[0]
+final fun (kotlin/Long).us.tractat.kuilt.math/timesWide(kotlin/Long): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/timesWide|timesWide@kotlin.Long(kotlin.Long){}[0]
+final fun us.tractat.kuilt.math/compareProducts(kotlin/Long, kotlin/Long, kotlin/Long, kotlin/Long): kotlin/Int // us.tractat.kuilt.math/compareProducts|compareProducts(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+final fun us.tractat.kuilt.math/mulDiv(kotlin/Long, kotlin/Long, kotlin/Long, us.tractat.kuilt.math/Rounding): kotlin/Long? // us.tractat.kuilt.math/mulDiv|mulDiv(kotlin.Long;kotlin.Long;kotlin.Long;us.tractat.kuilt.math.Rounding){}[0]
