@@ -74,4 +74,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun previewQueuesHolds() = samplePreviewQueues()
+
+    @Test
+    fun snapshotViewHolds() = sampleSnapshotView()
 }
