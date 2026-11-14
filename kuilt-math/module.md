@@ -28,6 +28,9 @@ assertNull(mulDiv(Long.MAX_VALUE, 2L, 1L, Rounding.FLOOR))
 - **`Int128`**, an exact signed 128-bit integer. The product of two `Long`s always fits in one
   (`Long.timesWide`), so comparing two fractions by cross-multiplying (`compareProducts`) is exact
   for every input. A running sum of up to 2⁶⁴ `Long`s fits too, in any order.
+- **`WideSum`**, that running sum kept in place: `add` and `sub` change it without allocating a
+  new `Int128` per term, which matters in a loop over a large ledger. It follows `Int128`'s rule
+  below: a sum that would leave 128 bits throws and leaves the total as it was.
 - **`mulDiv(a, b, divisor, rounding)`**: `a · b / divisor` with the product formed in 128 bits, so
   only the final quotient has to fit in a `Long`. The rounding is a required argument —
   `Rounding.FLOOR` or `Rounding.CEILING` — because the direction is usually the decision: round a
@@ -42,7 +45,7 @@ peer's update — needs to turn that fact into an answer it can return, and a `n
 compiler where an exception is not. Code that genuinely wants the throw writes
 `a.plusOrNull(b) ?: throw ArithmeticException(…)`, and the message is its own.
 
-`Int128` arithmetic is the one place an overflow throws, and how near that is depends on what is
+`Int128` arithmetic, `WideSum`'s included, is the one place an overflow throws, and how near that is depends on what is
 being summed. A sum of `Long`s needs more than 2⁶⁴ terms to leave 128 bits, so getting there is a
 bug, not data. A sum of products is different. Each `timesWide` product can be as large as 2¹²⁶,
 so two of them — `Long.MIN_VALUE` squared, twice — already reach 2¹²⁷ and throw. The difference of
