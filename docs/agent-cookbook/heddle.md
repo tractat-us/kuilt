@@ -468,6 +468,26 @@ Four persistence gotchas the sample is too short to show:
   the old leases settle, `apply` the same topology again to land a removal that was still waiting.
   The `LocalPolicy` is not stored: pass the one the old engine ran with.
 
+A reader that holds only the stored snapshot, such as an admin screen in another process, does not
+need an engine to ask who goes next. `snapshot.view(policy)` returns a `LocalHeddleView` with
+`previewPicks`, `explain` and `entitlement`, and it answers exactly as the engine that took the
+snapshot would have: the engine's own methods are that view over its live state. Do not restore a
+throwaway engine under `epoch + 1` for each question. The policy is required, since a snapshot does
+not keep one; a policy that cannot size the snapshot's `totalSlots` throws, as `restore` does.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleSnapshotView -->
+```kotlin
+    // On the admin screen: decode the stored snapshot and view it with the engine's policy.
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored)
+    val view = decoded.snapshot.view(policy)
+
+    val queued = setOf(heavy, light)
+    check(view.previewPicks(mapOf(heavy to 2, light to 1), eligible = queued, reservations = List(3) { 3L }) == listOf(heavy, light, heavy))
+    check(view.explain(heavy, waiting = queued, eligible = queued) == WaitExplanation.WouldBePickedNext)
+    check(view.entitlement(light, waiting = queued, totalSlots = 3L) == Rational.ONE)
+```
+
 Two fairness gaps are known, both in `LocalHeddle` and both smallest when a lease
 settles at its estimate:
 
