@@ -360,6 +360,19 @@ class GaugeTest {
         )
     }
 
+    /**
+     * A floor at the ceiling stays at the ceiling whatever the fold says (review of #3352). It was
+     * saturated when it was written and may stand for more, so a fold above the issuance this view
+     * holds, another peer's issuance not yet seen here, must not bring it back below the ceiling
+     * as if it were exact: a pick would then order it.
+     */
+    @Test
+    fun aFloorAtTheCeilingReadsTheCeilingWhateverTheFold() {
+        val atCeiling = ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE)
+        val ledger = ledgerWith(weight = Weight.ONE, issued = 5L, gauge = Gauge(atCeiling, folded = 10L))
+        assertEquals(atCeiling, ledger.grossVirtualService(EDGE))
+    }
+
     /** `Σ w·ev / Σ w` — the front, as [HeddlePolicy] computes it, for the chaining measurement. */
     private fun weightedMean(weights: List<Weight>, values: List<Rational>): Rational {
         var weightedSum = Rational.ZERO

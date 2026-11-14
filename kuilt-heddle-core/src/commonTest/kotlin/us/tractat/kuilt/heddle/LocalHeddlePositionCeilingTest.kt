@@ -3,6 +3,8 @@ package us.tractat.kuilt.heddle
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.timesWide
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -263,5 +265,74 @@ class LocalHeddlePositionCeilingTest {
             { assertEquals(ledger, cell.current, "the refused pick wrote nothing") },
             { assertFailsWith<ArithmeticException> { allocator.pickChild(root, ledger, { wants }, { wants }) } },
         )
+    }
+
+    /** Put [lane]'s gross position at exactly [ticks], by raising its floor as [pushTowardCeiling] does. */
+    private fun LocalHeddle.pushTo(lane: GroupId, ticks: Long) {
+        val below = ceilingOf(lane) - ticks
+        pushTowardCeiling(lane, below)
+    }
+
+    /**
+     * A waker clamped to a front past its own ceiling stores the ceiling itself, so it reads as
+     * saturated and the pick refuses (review of #3352). The front on a heavy waker's grid passes
+     * the waker's ceiling long before any sibling reaches its own: with `a` at 1/1000 and `b` at
+     * 1000, `b`'s front is `10⁶` times `a`'s position. An offset of `ceiling − raw − credit`, the
+     * old clamp, reads `16 · credit` ticks under the ceiling as if it were exact, so with any
+     * sleeper credit the pick went ahead on a position that stands for more.
+     */
+    @Test
+    fun aWakerClampedPastItsCeilingSaturatesWhole() {
+        val clampTopology = draft("clamp") {
+            lane("a", Weight.of(1, 1000))
+            lane("b", Weight.of(1000))
+        }
+        val a = clampTopology.groupId("a")
+        val b = clampTopology.groupId("b")
+        val engine = LocalHeddle.fromTopology(clampTopology, LocalPolicy(defaultReservation = 1L, sleeperCredit = 1L), epoch = 1L)
+            .apply { reconcileCapacity(1L) }
+        // b is seen waiting, then idle, so the next pick that sees it waiting clamps it as a waker.
+        for (waiting in listOf(setOf(a, b), setOf(a))) {
+            val lease = (engine.acquire(waiting, waiting, startedAt = 0L) as AcquireOutcome.Acquired).lease
+            engine.complete(lease.id, actualCost = 1L)
+        }
+        engine.pushTo(a, 10_000_000_000_000L)
+        val aWeight = Weight.of(1, 1000)
+        val bWeight = Weight.of(1000)
+        // The rig: a is far below its own ceiling, and b's front, a's position times 10⁶, is past b's.
+        check(engine.grossTicks(a) < positionCeiling(aWeight) / 100) { "a sits well below its ceiling" }
+        check(engine.grossTicks(a).timesWide(1_000_000L) > Int128.of(positionCeiling(bWeight))) { "b's front is past b's ceiling" }
+        assertEquals(AcquireOutcome.PositionCeiling(engine.root), engine.acquire(setOf(a, b), setOf(a, b), startedAt = 1L))
+    }
+
+    /**
+     * A newborn seated against a front that includes a saturated sibling lands at its own ceiling
+     * (review of #3352). The sibling's position reads lower than it stands for, so the front does too;
+     * a seat there would sit behind the true front, and once the saturated sibling left, the newborn
+     * would take the picks that gap is worth, the lifetime credit §10.5 forbids. `admit` must charge,
+     * so it seats, and the seat goes to the penalty end.
+     */
+    @Test
+    fun aSeatAgainstASaturatedFrontLandsAtTheCeiling() {
+        val rtTopology = draft("seat") {
+            lane("a", Weight.ONE)
+            group("rt", Weight.of(2)) { runtimeChildren(Weight.of(3, 2)) }
+        }
+        val rt = listOf("rt")
+        val engine = LocalHeddle.fromTopology(rtTopology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+            .apply { reconcileCapacity(1L) }
+        for (name in listOf("x", "y")) check(engine.attachRuntimeChild(rt, name, generation = 1L).refusals.isEmpty())
+        val x = rtTopology.runtimeChildId(rt, "x")
+        val y = rtTopology.runtimeChildId(rt, "y")
+        // x and y are both observed waiting, so the seat's front is taken over both.
+        repeat(4) {
+            val lease = (engine.acquire(setOf(x, y), setOf(x, y), startedAt = 0L) as AcquireOutcome.Acquired).lease
+            engine.complete(lease.id, actualCost = 1L)
+        }
+        engine.pushTowardCeiling(x, below = 0L)
+        check(engine.attachRuntimeChild(rt, "n", generation = 2L).refusals.isEmpty())
+        val n = rtTopology.runtimeChildId(rt, "n")
+        assertIs<AcquireOutcome.Acquired>(engine.admit(n, startedAt = 1L))
+        assertEquals(engine.ceilingOf(n), engine.grossTicks(n), "the newborn is seated at its own ceiling, not behind the true front")
     }
 }

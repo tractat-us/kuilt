@@ -103,4 +103,25 @@ class VirtualPositionTest {
             },
         )
     }
+
+    /**
+     * The weight budget [LocalHeddle.apply] enforces: four checks, each pinned by a set that fails
+     * it and only it (review of #3352). The other products a pick forms are bounded by these, as
+     * [weightsFitTheBudget]'s KDoc shows, so they have no check of their own to pin.
+     */
+    @Test
+    fun theWeightBudgetRefusesExactlyTheSetsAPickCouldNotOrder() {
+        val p = 4_294_967_311L // primes just over 2³², so their lcm leaves Long
+        val q = 4_294_967_357L
+        assertAll(
+            { assertTrue(weightsFitTheBudget(listOf(Weight.of(1, 2), Weight.of(1, 3), Weight.of(5))), "an ordinary set fits") },
+            { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, p), Weight.of(1, q))), "L, the lcm of the denominators") },
+            { assertTrue(!weightsFitTheBudget(listOf(Weight.of(Long.MAX_VALUE / 2 + 1), Weight.of(Long.MAX_VALUE / 2 + 1))), "S, the sum over L") },
+            { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1L shl 59))), "G · S, the front's denominator in ticks") },
+            { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, 1L shl 40), Weight.ONE)), "S · d, the divisor ticksFor forms") },
+            // Each failing set passes every check before its own, so each arm reaches the one it names.
+            { assertTrue(weightsFitTheBudget(listOf(Weight.of(1L shl 58))), "half the G · S set fits") },
+            { assertTrue(weightsFitTheBudget(listOf(Weight.of(1, 1L shl 20), Weight.ONE)), "a smaller S · d set fits") },
+        )
+    }
 }
