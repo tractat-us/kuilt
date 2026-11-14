@@ -1,7 +1,7 @@
 plugins {
     id("kuilt.kmp-library")
-    // Generates `us.tractat.kuilt.KuiltVersion` into commonMain (#3323). This module is its only
-    // carrier: `:kuilt-core`, `:kuilt-heddle-core`, `:kuilt-crdt`, `:kuilt-store` and `:kuilt-seal`
+    // Generates the string behind `us.tractat.kuilt.KuiltVersion.VERSION` into commonMain (#3323);
+    // the object itself is hand-written in src/commonMain. This module is its only carrier: `:kuilt-core`, `:kuilt-heddle-core`, `:kuilt-crdt`, `:kuilt-store` and `:kuilt-seal`
     // `api` it, so everything built on them reads the one copy.
     id("kuilt.version-constant")
 }
