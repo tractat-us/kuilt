@@ -14,7 +14,8 @@ import kotlin.test.assertTrue
  * where `T` is their committed total. Draws stay inside what the ledger can hold (see
  * `BoundMetricsTest`): an edge carrying service has a weight below 1,000 and `c·b ≤ 2⁵⁸`, with that
  * cap itself drawn often. Each arm counts the draws where the old arithmetic, the reduced share times
- * `T` as a `Long` rational, would have overflowed, so neither can pass on draws that never reached it.
+ * `T` as a `Long` rational, would have overflowed, so neither can pass on draws that never reached it. That count is a lower
+ * bound on the draws the old code threw on, since it models only the `times` step.
  */
 class BoundMetricsOracleTest {
 
@@ -33,7 +34,8 @@ class BoundMetricsOracleTest {
 
     /**
      * A weight near `Long.MAX_VALUE` (#3347) on a demanding child nobody has served yet: no edge can
-     * carry service at that weight, but an unseated one holds it. One child's weight is `a/b` with
+     * carry service at that weight, and the metric reads a parent whose unserved child holds it, though
+ * the scheduler's seat (`checkedMul(16, n)`) would throw there (#3353). One child's weight is `a/b` with
      * `a` past `MAX / b`; the rest are whole numbers small enough that the weight sum
      * `(a + b·Σc)/b` still fits, and they carry the service.
      */

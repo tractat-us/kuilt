@@ -12,10 +12,12 @@ import kotlin.test.assertFailsWith
  * (`share × totalCommitted` as a `Long` rational) overflowed and threw on every later call (#3319).
  *
  * **What the ledger can hold.** An edge that carries service has `16·n` and `16·c` inside `Long`
- * for its weight's numerator `n` and its committed total `c` (`ticksAt`'s scale in `seat` and
- * `delegate`, and `ticksOf`), and `(c / gcd(c, n))·d` inside `Long` for its weight's denominator `d`
- * (`ticksToVirtual`, the gauge `delegate` writes). An edge nobody has delegated to need never be
- * seated, so it takes any weight `prepare` accepts. Every row keeps `n ≤ 2⁵⁸` and `c·d ≤ 2⁵⁸` on an
+ * for its weight's numerator `n` and its committed total `c` (`16·n` is `ticksAt`'s scale and
+ * `ticksToVirtual`'s, reached from `seatAt` and `delegate`; `16·c` is `ticksOf`), and `(c / gcd(c, n))·d` inside `Long` for its weight's denominator `d`
+ * (`ticksToVirtual`, the gauge `delegate` writes). An edge nobody has delegated to still gets seated
+ * before any pick, by `FairShareAllocator.settleJoiners`, through `seatAt` → `ticksToVirtual` →
+ * `checkedMul(16, n)`, which throws for `n ≥ 2⁵⁹`; `prepare` accepts such a weight but the scheduler
+ * cannot advance that parent (#3353 takes the `HeddleNode`-side budget). Every row keeps `n ≤ 2⁵⁸` and `c·d ≤ 2⁵⁸` on an
  * edge that carries service, a margin under all three, so no row sits on a ceiling it is not testing.
  *
  * Every row but the last three reds on the old arithmetic with an `ArithmeticException` from
@@ -46,9 +48,11 @@ class BoundMetricsTest {
     }
 
     /**
-     * A weight near `Long.MAX_VALUE` (#3347). No edge can carry service at that weight, but a
-     * demanding child that has not yet been served can hold it: `prepare` and `activate` accept it
-     * and nothing seats it. Its share `(2⁶³−3)/(2⁶³−1)` times the other child's service passes `2⁶³`.
+     * A weight near `Long.MAX_VALUE` (#3347). No edge can carry service at that weight, and a
+     * demanding child that has not yet been served can hold it: `prepare` and `activate` accept it.
+     * `settleJoiners` would seat it before any pick and `checkedMul(16, n)` would throw, so in this
+     * state `HeddleNode.schedule` throws on every call and the parent is wedged (#3353). The row pins
+     * that the metric still reads a parent the scheduler cannot advance. Its share `(2⁶³−3)/(2⁶³−1)` times the other child's service passes `2⁶³`.
      */
     @Test
     fun anUnservedWeightNearLongMaxAgainstOne() {
@@ -117,8 +121,9 @@ internal fun observedDeviationOf(children: List<Child>): Long = metricsRigOf(chi
 
 /**
  * Builds [observedDeviationOf]'s rig and asserts it, returning the metric call unrun so a test can
- * tell setup from the call. An edge with no committed service is left unseated, as one the scheduler
- * has not yet picked is, so a row can give it a weight no edge could carry service at.
+ * tell setup from the call. An edge with no committed service is left unseated, which the metric
+ * accepts; the scheduler would seat it first and throw on a weight from `2⁵⁹`, so a row can give it
+ * a weight no edge could carry service at (see the class KDoc).
  */
 internal fun metricsRigOf(children: List<Child>): () -> Long {
     val root = GroupId("root")

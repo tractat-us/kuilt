@@ -54,8 +54,10 @@ public data class BoundMetrics(
          * identically on every peer that has merged the same state.
          *
          * @throws ArithmeticException when the demanding children's weight sum, or one demanding
-         * child's reduced share of it, does not fit in a `Long`. Either needs weights whose
-         * numerators, over their common denominator, sum past `Long`.
+         * child's reduced share of it, does not fit in a `Long`. Either needs the weights' common
+         * denominator `L` or their numerator sum `S` over it to pass `Long`. Through `LocalHeddle`,
+         * #3352's apply-time weight budget will refuse (#3352, open) such weight sets; `BoundMetrics`
+         * is still reachable with them through a replicated ledger (`HeddleNode`).
          */
         public fun at(
             ledger: EntitlementLedger,
@@ -94,10 +96,12 @@ public data class BoundMetrics(
          * same value from the same state.
          *
          * @throws ArithmeticException when the demanding weight sum `W`, or a demanding child's
-         * reduced share `w_i/W`, does not fit in a `Long`. Both need the weights, brought to their
-         * common denominator `L`, to have a numerator sum `S` past `Long`: `W` reduced is `S/L`, and a
-         * share reduced is at most `S` over at most `S`. That is the same sum the scheduler forms for
-         * a front over these children, which throws there too. `W` can still fit: `2⁵⁷/3` and `1/192`
+         * reduced share `w_i/W`, does not fit in a `Long`. Both need `L`, the weights' common
+         * denominator, or `S`, their numerators' sum over `L`, to pass `Long`: `W` reduced is `S/L`, and a
+         * share reduced is at most `S` over at most `S`. `L` alone can do it: weights `1/(2³²+1)` and
+         * `1/(2³²−1)` give `S = 2³³` but `L = 2⁶⁴−1`. The scheduler forms the same `L` and `S` for a
+         * front over these children, and `VirtualTime.mean` can throw there too (`pick` and
+         * `frontTime` take their mean over a different set of children). `W` can still fit: `2⁵⁷/3` and `1/192`
          * sum to `S = 2⁶³+1` over `L = 192`, `W` reduces to `((2⁶³+1)/3)/64`, and the first share is
          * `2⁶³/(2⁶³+1)`. A quotient whose reduced form fits never throws.
          */
