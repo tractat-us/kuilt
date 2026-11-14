@@ -165,27 +165,30 @@ internal fun nonNegativeWide(high: Long, low: Long, what: String): Int128 {
 }
 
 /**
- * A parent's **origin**: the virtual time, in whole units, that every pick at the parent subtracts
- * from each child before it orders them (#3353). A max-register: two peers that raised it
- * concurrently keep the higher, so the join is a `max` on the full 128-bit value, never on each
- * word. It is never negative, since a rebase only ever raises it.
+ * What the ledger keeps per parent (#3353): today only the parent's **origin**, the virtual time,
+ * in whole units, that every pick at the parent subtracts from each child before it orders them.
+ * A record rather than a bare value, so a later per-parent value is an appended, defaulted field
+ * rather than a reshape of the map.
  *
- * Stored in the same two-word shape as a [Gauge]'s ticks ([nonNegativeWide]).
+ * The origin is a max-register: two peers that raised it concurrently keep the higher, so the join
+ * is a `max` on the full 128-bit value, never on each word. It is never negative, since a rebase
+ * only ever raises it, and it is stored in the same two-word shape as a [Gauge]'s ticks
+ * ([nonNegativeWide]), each word elided at zero.
  */
 @Serializable
-internal data class Origin(val high: Long, val low: Long) {
+internal data class ParentRecord(val originHigh: Long = 0L, val originLow: Long = 0L) {
     init {
-        nonNegativeWide(high, low, "an origin")
+        nonNegativeWide(originHigh, originLow, "an origin")
     }
 
     /** The origin in whole virtual-time units. */
-    val units: Int128 get() = Int128.fromTwosComplement(high, low)
+    val origin: Int128 get() = Int128.fromTwosComplement(originHigh, originLow)
 
-    /** The higher of the two origins, whole. */
-    fun join(other: Origin): Origin = if (units >= other.units) this else other
+    /** The join, field by field: the higher origin, whole. */
+    fun join(other: ParentRecord): ParentRecord = if (origin >= other.origin) this else other
 
     companion object {
-        fun of(units: Int128): Origin = Origin(units.high, units.low)
+        fun withOrigin(units: Int128): ParentRecord = ParentRecord(units.high, units.low)
     }
 }
 

@@ -82,16 +82,16 @@ class FairShareAllocatorOriginTest {
      */
     @Test
     fun anOriginJoinsWholeNeverWordByWord() {
-        val high = Origin(1L, 0L)
-        val low = Origin(0L, -1L)
+        val high = ParentRecord(1L, 0L)
+        val low = ParentRecord(0L, -1L)
         assertAll(
             { assertEquals(high, high.join(low)) },
             { assertEquals(high, low.join(high)) },
             { assertEquals(low, low.join(low)) },
             {
-                val joined = EntitlementLedger.of(origins = mapOf(root to high.units))
-                    .piece(EntitlementLedger.of(origins = mapOf(root to low.units)))
-                assertEquals(high.units, joined.origin(root))
+                val joined = EntitlementLedger.of(origins = mapOf(root to high.origin))
+                    .piece(EntitlementLedger.of(origins = mapOf(root to low.origin)))
+                assertEquals(high.origin, joined.origin(root))
             },
         )
     }

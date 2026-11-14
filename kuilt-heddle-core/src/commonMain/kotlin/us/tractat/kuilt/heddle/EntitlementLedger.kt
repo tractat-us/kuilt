@@ -237,12 +237,12 @@ public class EntitlementLedger private constructor(
     @Serializable(with = CanonicalMapSerializer::class)
     private val transferRelocOut: Map<PathKey, @Serializable(with = CanonicalMapSerializer::class) Map<ReplicaId, GCounter>> = emptyMap(),
     /**
-     * Each parent's [Origin], the virtual time every pick there subtracts before it orders the
-     * children (#3353). A per-parent max-register. Absent ⇒ zero, and elided when empty, so a
-     * ledger no rebase has touched encodes as it did before.
+     * Each parent's [ParentRecord]: its origin, the virtual time every pick there subtracts before
+     * it orders the children (#3353). Joined per parent, field by field. Absent ⇒ a zero origin,
+     * and elided when empty, so a ledger no rebase has touched encodes as it did before.
      */
     @Serializable(with = CanonicalMapSerializer::class)
-    private val origins: Map<GroupId, Origin> = emptyMap(),
+    private val parents: Map<GroupId, ParentRecord> = emptyMap(),
     /** The fold of every edge this ledger has forgotten; [ForgottenEdges.NONE] on every replicated ledger. */
     private val forgotten: ForgottenEdges = ForgottenEdges.NONE,
     /** An [EdgeIndex] handed over by [piece]; derived state, see [index]. Never encoded, never compared. */
@@ -320,7 +320,7 @@ public class EntitlementLedger private constructor(
                 mine.mergeRows(theirs)
             },
             // The origin max-register: join = max on the whole 128-bit value, per parent (#3353).
-            origins = origins.joinValues(other.origins) { mine, theirs -> mine.join(theirs) },
+            parents = parents.joinValues(other.parents) { mine, theirs -> mine.join(theirs) },
             forgotten = joinForgotten(other),
         )
 
@@ -362,7 +362,7 @@ public class EntitlementLedger private constructor(
     private fun withIndex(index: EdgeIndex): EntitlementLedger = EntitlementLedger(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
         issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
-        transferRelocIn, transferRelocOut, origins, forgotten, carried = index,
+        transferRelocIn, transferRelocOut, parents, forgotten, carried = index,
     )
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -509,7 +509,7 @@ public class EntitlementLedger private constructor(
      * child's position, on the child's own grid, before it orders them (#3353). Zero for a parent no
      * rebase has moved. A max-register, so it only ever rises.
      */
-    public fun origin(parent: GroupId): Int128 = origins[parent]?.units ?: Int128.ZERO
+    public fun origin(parent: GroupId): Int128 = parents[parent]?.origin ?: Int128.ZERO
 
     /**
      * Raise [parent]'s origin to [to]: the whole of a rebase (#3353). It rewrites no gauge. `null`
@@ -2017,7 +2017,7 @@ public class EntitlementLedger private constructor(
     private fun withFreshIndex(): EntitlementLedger = EntitlementLedger(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
         issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
-        transferRelocIn, transferRelocOut, origins, forgotten,
+        transferRelocIn, transferRelocOut, parents, forgotten,
     )
 
     /** The body of [validate], run on [withFreshIndex]'s copy. */
@@ -2306,7 +2306,7 @@ public class EntitlementLedger private constructor(
             gauges = gauges.without(),
             transferRelocIn = transferRelocIn,
             transferRelocOut = transferRelocOut,
-            origins = origins,
+            parents = parents,
             forgotten = ForgottenEdges(outflow, leafSpend, floor),
         )
     }
@@ -2595,7 +2595,7 @@ public class EntitlementLedger private constructor(
     internal fun withoutGauges(): EntitlementLedger = EntitlementLedger(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
         issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges = emptyMap(),
-        transferRelocIn = transferRelocIn, transferRelocOut = transferRelocOut, origins = origins, forgotten = forgotten,
+        transferRelocIn = transferRelocIn, transferRelocOut = transferRelocOut, parents = parents, forgotten = forgotten,
     )
 
     /**
@@ -2631,7 +2631,7 @@ public class EntitlementLedger private constructor(
             gauges == other.gauges &&
             transferRelocIn == other.transferRelocIn &&
             transferRelocOut == other.transferRelocOut &&
-            origins == other.origins &&
+            parents == other.parents &&
             forgotten == other.forgotten
 
     override fun hashCode(): Int {
@@ -2651,7 +2651,7 @@ public class EntitlementLedger private constructor(
         h = 31 * h + gauges.hashCode()
         h = 31 * h + transferRelocIn.hashCode()
         h = 31 * h + transferRelocOut.hashCode()
-        h = 31 * h + origins.hashCode()
+        h = 31 * h + parents.hashCode()
         h = 31 * h + forgotten.hashCode()
         return h
     }
@@ -2662,7 +2662,7 @@ public class EntitlementLedger private constructor(
             "transfers=$transfers, lifecycle=$lifecycle, issuedRelocIn=$issuedRelocIn, " +
             "leafRelocIn=$leafRelocIn, leafRelocOut=$leafRelocOut, " +
             "rollupRelocIn=$rollupRelocIn, rollupRelocOut=$rollupRelocOut, gauges=$gauges, " +
-            "transferRelocIn=$transferRelocIn, transferRelocOut=$transferRelocOut, origins=$origins, forgotten=$forgotten)"
+            "transferRelocIn=$transferRelocIn, transferRelocOut=$transferRelocOut, parents=$parents, forgotten=$forgotten)"
 
     /**
      * The derived topology [index] holds. Every list is sorted by [AttachmentId] and every map is
@@ -2767,7 +2767,7 @@ public class EntitlementLedger private constructor(
             EntitlementLedger(
                 records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
                 issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
-                transferRelocIn, transferRelocOut, origins.mapValues { (_, units) -> Origin.of(units) },
+                transferRelocIn, transferRelocOut, origins.mapValues { (_, units) -> ParentRecord.withOrigin(units) },
                 ForgottenEdges(forgottenOutflow, forgottenLeafSpend, forgottenGenerationFloor),
             )
     }

@@ -293,7 +293,7 @@ class EntitlementLedgerCanonicalEncodingTest {
             gauges = entries(EDGES[0] to GAUGE, EDGES[1] to GAUGE),
             transferRelocIn = matrix(),
             transferRelocOut = matrix(),
-            origins = entries(PARENTS[0] to PlainOrigin(0L, 7L), PARENTS[1] to PlainOrigin(0L, 7L)),
+            parents = entries(PARENTS[0] to PlainParent(originLow = 7L), PARENTS[1] to PlainParent(originLow = 7L)),
         )
     }
 
@@ -343,8 +343,8 @@ class EntitlementLedgerCanonicalEncodingTest {
             "42bf66636f756e7473bf617201ffffff624161bf6172bf66636f756e7473bf617201ffffff624242bf6172bf66636f75" +
             "6e7473bf617201ffffffff707472616e7366657252656c6f634f7574bf60bf624161bf66636f756e7473bf617201ffff" +
             "624242bf66636f756e7473bf617201ffffff624161bf6172bf66636f756e7473bf617201ffffff624242bf6172bf6663" +
-            "6f756e7473bf617201ffffffff676f726967696e73bf624161bf646869676800636c6f7707ff624242bf646869" +
-            "676800636c6f7707ffffff"
+            "6f756e7473bf617201ffffffff67706172656e7473bf624161bf696f726967696e4c6f7707ff624242bf696f7269" +
+            "67696e4c6f7707ffffff"
     }
 }
 
@@ -367,15 +367,15 @@ private class PlainLedgerWire(
     val gauges: Map<AttachmentId, Gauge> = emptyMap(),
     val transferRelocIn: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
     val transferRelocOut: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
-    val origins: Map<GroupId, PlainOrigin> = emptyMap(),
+    val parents: Map<GroupId, PlainParent> = emptyMap(),
 ) {
     fun fields(): List<Any> = listOf(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle, issuedRelocIn,
         leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges, transferRelocIn, transferRelocOut,
-        origins,
+        parents,
     )
 }
 
-/** A parent's origin as the wire carries it (#3353): its two words, the high one first. */
+/** A parent's record as the wire carries it (#3353): its origin's two words, each elided at zero. */
 @Serializable
-private data class PlainOrigin(val high: Long, val low: Long)
+private data class PlainParent(val originHigh: Long = 0L, val originLow: Long = 0L)
