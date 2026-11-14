@@ -116,6 +116,11 @@ collides with a declared child; a detach drains like a removal. `Topology.attach
 `detachRuntimeChild` list the same steps without applying them. A reload that keeps the marker
 keeps the child and its history; one that drops the marker closes it. Every detach leaves a
 retired edge in the ledger for good, so keep a child that comes back often attached between uses.
+A runtime child is always a leaf: it cannot be marked in turn, so a tree you discover while running
+is one level deep under its marked group. For two levels, such as a repository and then its
+authors, declare each repository as a group marked `runtimeChildren`, and `LocalHeddle.apply` a
+new topology as each repository appears; its authors are then runtime children. Letting a runtime
+child have runtime children is tracked by #3314.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleRuntimeChildren -->
 ```kotlin
