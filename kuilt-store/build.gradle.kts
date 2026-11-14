@@ -11,6 +11,9 @@ kotlin {
             // opaque byte arrays; a consumer that wants one should not inherit a CRDT lattice, a
             // serialization format or a logging facade along with it. Anything added here is paid
             // for by every consumer of every implementation, so add nothing that only one needs.
+            // `:kuilt-base` is the exception that costs nothing: it depends on nothing, and `api`
+            // hands every consumer `us.tractat.kuilt.KuiltVersion`.
+            api(project(":kuilt-base"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.atomicfu)
         }

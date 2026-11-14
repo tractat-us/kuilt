@@ -1,8 +1,5 @@
 plugins {
     id("kuilt.kmp-library")
-    // Generates `us.tractat.kuilt.core.KuiltVersion` into commonMain (#3323). `:kuilt-heddle-core`
-    // carries its own copy, since it may not depend on this module; the rest carry none.
-    id("kuilt.version-constant")
     alias(libs.plugins.kotlinSerialization)
 }
 
@@ -47,6 +44,9 @@ tasks.withType<Test>().configureEach {
 kotlin {
     sourceSets {
         commonMain.dependencies {
+            // `api`, so every consumer reads `us.tractat.kuilt.KuiltVersion` without declaring
+            // `:kuilt-base` itself.
+            api(project(":kuilt-base"))
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)

@@ -15,10 +15,12 @@ kotlin {
         val macosArm64Main by getting { dependsOn(appleMain) }
 
         commonMain.dependencies {
-            // No kuilt module: a sealed box is a few suspend functions over byte arrays, and a
-            // consumer that wants one should inherit nothing else with it. The primitives are
-            // cryptography-kotlin's; this module composes them and owns no math. `implementation`,
-            // not `api`: no cryptography-kotlin type appears in the public surface.
+            // No kuilt module but `:kuilt-base`, which depends on nothing and is `api` so a consumer
+            // reads `us.tractat.kuilt.KuiltVersion`: a sealed box is a few suspend functions over
+            // byte arrays, and a consumer that wants one should inherit nothing else with it.
+            api(project(":kuilt-base"))
+            // The primitives are cryptography-kotlin's; this module composes them and owns no math.
+            // `implementation`, not `api`: no cryptography-kotlin type appears in the public surface.
             implementation(libs.cryptography.core)
             // Only for `currentCoroutineContext().ensureActive()`: telling this coroutine's own
             // cancellation from one a provider minted (providerCall), per kuilt's exception rule.
