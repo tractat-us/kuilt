@@ -130,6 +130,15 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     is monotone and cannot be undone, so a policy that refuses every revoked key bans for good. Samples
     and docs keep the two apart: revoking voids the passes already handed out, and an app-owned blocked
     set (which can be undone) is what keeps a device out of ordinary admission.
+28. **macOS keeps the device key in a file; the Keychain store is iOS's (Iain, 2026-11-13, #3225's
+    probe).** On macOS `ThisDeviceOnly` exists only in the data-protection keychain, which needs a
+    team-signed app with a provisioning profile, so no test binary can reach it (`-34018`); the
+    file-based login keychain ignores the accessibility class and travels with Time Machine and
+    Migration Assistant. So macOS uses a file store in a non-roaming local directory, with that
+    backup trade stated in its KDoc, and the Keychain store serves iOS. The iOS store runs the TCK in
+    the PR build over a fake Keychain backend (as the Android store does over a fake Keystore); a
+    nightly job boots a simulator and runs it once against the real Keychain, since the default
+    `iosSimulatorArm64Test` spawn has no keychain (`-25291`).
 
 ## Goals
 
@@ -210,7 +219,7 @@ public interface DeviceKeyStore {
 ```
 
 `InMemoryDeviceKeyStore` everywhere. Platform stores, one slice each: JVM file (takes a directory),
-Apple Keychain, Android Keystore, wasmJs WebCrypto + IndexedDB. `DeviceKeyStore.platform(appId)` is
+iOS Keychain, a macOS file store (Decided 28), Android Keystore, wasmJs WebCrypto + IndexedDB. `DeviceKeyStore.platform(appId)` is
 the one-line default where the platform can find its own storage; on JVM it takes a directory, on
 Android a `Context` (Decided 15).
 
