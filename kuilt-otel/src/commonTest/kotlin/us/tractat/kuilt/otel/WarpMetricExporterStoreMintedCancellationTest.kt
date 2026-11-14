@@ -134,6 +134,7 @@ class WarpMetricExporterStoreMintedCancellationTest {
         val failedAfter = exporter.health.value.failed
         val durableBeforeRepair = sumAfterRestart(backing)
         val repaired = exporter.incrementSum(sum, 4L)
+        val durableAfterRepair = sumAfterRestart(backing)
 
         assertAll(
             { assertEquals(1, store.minted, "the rig minted ${store.minted} cancellations on the write, not one") },
@@ -142,7 +143,7 @@ class WarpMetricExporterStoreMintedCancellationTest {
             { assertEquals(1L, failedAfter, "the minted write was not counted as a refused write") },
             { assertEquals(0L, durableBeforeRepair, "the minted write landed anyway, so nothing was left to repair") },
             { assertEquals(MetricExportResult.Success, repaired) },
-            { assertEquals(7L, sumAfterRestart(backing), "the next write did not carry the refused increment") },
+            { assertEquals(7L, durableAfterRepair, "the next write did not carry the refused increment") },
         )
     }
 

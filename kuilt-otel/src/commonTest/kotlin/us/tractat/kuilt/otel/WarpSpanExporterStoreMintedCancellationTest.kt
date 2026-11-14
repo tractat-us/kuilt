@@ -86,6 +86,7 @@ class WarpSpanExporterStoreMintedCancellationTest {
         val failedAfter = exporter.health.value.failed
         val durableBeforeRepair = idsAfterRestart(backing)
         val repaired = exporter.export(span(2))
+        val durableAfterRepair = idsAfterRestart(backing)
 
         assertAll(
             { assertEquals(1, store.minted, "the rig minted ${store.minted} cancellations on the write, not one") },
@@ -94,7 +95,7 @@ class WarpSpanExporterStoreMintedCancellationTest {
             { assertEquals(1L, failedAfter, "the minted write was not counted as a refused write") },
             { assertEquals(emptySet(), durableBeforeRepair, "the minted write landed anyway, so nothing was left to repair") },
             { assertEquals(ExportResult.Success, repaired) },
-            { assertEquals(setOf(span(1).spanId, span(2).spanId), idsAfterRestart(backing), "the next export did not carry the refused span") },
+            { assertEquals(setOf(span(1).spanId, span(2).spanId), durableAfterRepair, "the next export did not carry the refused span") },
         )
     }
 
