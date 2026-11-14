@@ -33,6 +33,7 @@ kotlin {
             api(project(":kuilt-crdt"))
             api(project(":kuilt-core"))
             api(project(":kuilt-raft"))
+            implementation(project(":kuilt-math"))
             implementation(project(":kuilt-quilter"))
             implementation(project(":kuilt-liveness"))
             implementation(libs.kotlinx.serialization.core)
