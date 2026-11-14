@@ -347,7 +347,7 @@ internal const val LOG_KEY_PREFIX_FOR_TEST: String = "otel.logs"
 internal const val SEGMENT_KEY_PREFIX_FOR_TEST: String = "otel.logs.seg."
 
 /** Segment key `n`, duplicated here because the production helper is private. */
-internal fun segmentKeyForTest(number: Int): String = "$SEGMENT_KEY_PREFIX_FOR_TEST$number"
+internal fun segmentKeyForTest(number: Long): String = "$SEGMENT_KEY_PREFIX_FOR_TEST$number"
 
 private val indexCbor = Cbor { alwaysUseByteString = true }
 
