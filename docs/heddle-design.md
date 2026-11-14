@@ -891,24 +891,21 @@ the rebase: a lowered offset kept without its raised folds would be credit. A
 delegation that is not a pick (`admit`, `extend`, an overrun at `complete`)
 never rebases, so a parent only ever charged that way is never rebased.
 
-**Where the ceiling is still reached.** Three ways, and `PositionCeiling` answers
-all of them:
+**Where the ceiling is still reached.** Two ways, and `PositionCeiling` answers
+both:
 
 - A demanding child that is never served holds `Δ` at zero.
   `LocalHeddlePositionCeilingTest` rigs it.
-- A parent only ever charged through `admit`, `extend` or an overrun, and never
-  picked at, is never rebased.
-- **Returns are never brought down** (#3360). A position less the edge's raw
-  position is its lifetime returned service, `returned · G` ticks, and a rebase
-  moves both together. So an edge reaches its ceiling once its lifetime returned
-  service, reserved but not charged by a `complete` below the reservation or a
-  `cancel`, passes about `positionCeiling(w) / 16` units, about
-  `5.8 × 10¹⁷ / w.denominator`. At the largest reservation charged 1 unit, a
-  weight of `3/7` gets there in about 4,700 leases. A 6 × 10⁵-unit reservation
-  returned in full takes about 1.4 × 10¹¹ leases at that weight. At denominator 1,
-  with milliseconds as the unit, it is about 18 million years of returned time. A
-  workload that charges what it reserves never reaches it. The fix rides #3192's
-  format 2.
+- A `LocalHeddle` parent only ever charged through `admit`, `extend` or an
+  overrun, and never picked at, is never rebased. Every `HeddleNode` delegation
+  is a pick, so this one is `LocalHeddle`'s alone.
+
+**Returns no longer reach it** (#3360). The ceiling is measured on the raw
+position, net of returns and relative to the origin, and the gross position
+under it is 128-bit (#3353). Before that, the gross position was what saturated,
+and it grew by every returned unit as well as every charged one: at the largest
+reservation charged 1 unit, a weight of `3/7` refused after 4,681 leases. It now
+makes 100,000 with no refusal.
 
 A fold rebase is `LocalHeddle`'s alone: under replication a peer that has not
 seen it would seat a newborn at the old front, and a concurrent checkpoint's
