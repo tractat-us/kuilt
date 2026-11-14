@@ -68,7 +68,10 @@ predecessor — that is how links cross machines.
 The clock **must** be recovered from durable storage on restart: a restart that reset
 `seq` to 0 would re-mint dots already used and silently corrupt causality. `tick()`
 stays pure; the caller `persist()`s after a batch is durably exported, and `recover()`s
-at startup.
+at startup. If the store refuses that read, the clock stays **unrecovered**: `tick()` and
+`persist()` throw rather than guess at `seq`, the span exporter saves spans unstamped and
+retries the read on each export, and the first read that lands re-arms the clock. An
+entry that cannot be decoded still starts the clock fresh.
 
 ### The cross-boundary rule
 
