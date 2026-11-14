@@ -1398,6 +1398,8 @@ final class us.tractat.kuilt.heddle/Topology { // us.tractat.kuilt.heddle/Topolo
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Topology.toString|toString(){}[0]
 
     sealed interface Node { // us.tractat.kuilt.heddle/Topology.Node|null[0]
+        abstract val maxConcurrent // us.tractat.kuilt.heddle/Topology.Node.maxConcurrent|{}maxConcurrent[0]
+            abstract fun <get-maxConcurrent>(): kotlin/Long? // us.tractat.kuilt.heddle/Topology.Node.maxConcurrent.<get-maxConcurrent>|<get-maxConcurrent>(){}[0]
         abstract val name // us.tractat.kuilt.heddle/Topology.Node.name|{}name[0]
             abstract fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/Topology.Node.name.<get-name>|<get-name>(){}[0]
         abstract val weight // us.tractat.kuilt.heddle/Topology.Node.weight|{}weight[0]
@@ -1411,9 +1413,12 @@ final class us.tractat.kuilt.heddle/Topology { // us.tractat.kuilt.heddle/Topolo
 
     final class Group : us.tractat.kuilt.heddle/Topology.Node { // us.tractat.kuilt.heddle/Topology.Group|null[0]
         constructor <init>(kotlin/String, us.tractat.kuilt.heddle/Weight, kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node>, us.tractat.kuilt.heddle/Topology.RuntimeChildren? = ...) // us.tractat.kuilt.heddle/Topology.Group.<init>|<init>(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>;us.tractat.kuilt.heddle.Topology.RuntimeChildren?){}[0]
+        constructor <init>(kotlin/String, us.tractat.kuilt.heddle/Weight, kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node>, us.tractat.kuilt.heddle/Topology.RuntimeChildren? = ..., kotlin/Long? = ...) // us.tractat.kuilt.heddle/Topology.Group.<init>|<init>(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>;us.tractat.kuilt.heddle.Topology.RuntimeChildren?;kotlin.Long?){}[0]
 
         final val children // us.tractat.kuilt.heddle/Topology.Group.children|{}children[0]
             final fun <get-children>(): kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> // us.tractat.kuilt.heddle/Topology.Group.children.<get-children>|<get-children>(){}[0]
+        final val maxConcurrent // us.tractat.kuilt.heddle/Topology.Group.maxConcurrent|{}maxConcurrent[0]
+            final fun <get-maxConcurrent>(): kotlin/Long? // us.tractat.kuilt.heddle/Topology.Group.maxConcurrent.<get-maxConcurrent>|<get-maxConcurrent>(){}[0]
         final val name // us.tractat.kuilt.heddle/Topology.Group.name|{}name[0]
             final fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/Topology.Group.name.<get-name>|<get-name>(){}[0]
         final val runtimeChildren // us.tractat.kuilt.heddle/Topology.Group.runtimeChildren|{}runtimeChildren[0]
@@ -1425,7 +1430,9 @@ final class us.tractat.kuilt.heddle/Topology { // us.tractat.kuilt.heddle/Topolo
         final fun component2(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Topology.Group.component2|component2(){}[0]
         final fun component3(): kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> // us.tractat.kuilt.heddle/Topology.Group.component3|component3(){}[0]
         final fun component4(): us.tractat.kuilt.heddle/Topology.RuntimeChildren? // us.tractat.kuilt.heddle/Topology.Group.component4|component4(){}[0]
+        final fun component5(): kotlin/Long? // us.tractat.kuilt.heddle/Topology.Group.component5|component5(){}[0]
         final fun copy(kotlin/String = ..., us.tractat.kuilt.heddle/Weight = ..., kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> = ..., us.tractat.kuilt.heddle/Topology.RuntimeChildren? = ...): us.tractat.kuilt.heddle/Topology.Group // us.tractat.kuilt.heddle/Topology.Group.copy|copy(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>;us.tractat.kuilt.heddle.Topology.RuntimeChildren?){}[0]
+        final fun copy(kotlin/String = ..., us.tractat.kuilt.heddle/Weight = ..., kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> = ..., us.tractat.kuilt.heddle/Topology.RuntimeChildren? = ..., kotlin/Long? = ...): us.tractat.kuilt.heddle/Topology.Group // us.tractat.kuilt.heddle/Topology.Group.copy|copy(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>;us.tractat.kuilt.heddle.Topology.RuntimeChildren?;kotlin.Long?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Topology.Group.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Topology.Group.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Topology.Group.toString|toString(){}[0]
@@ -1448,7 +1455,10 @@ final class us.tractat.kuilt.heddle/Topology { // us.tractat.kuilt.heddle/Topolo
 
     final class Lane : us.tractat.kuilt.heddle/Topology.Node { // us.tractat.kuilt.heddle/Topology.Lane|null[0]
         constructor <init>(kotlin/String, us.tractat.kuilt.heddle/Weight = ...) // us.tractat.kuilt.heddle/Topology.Lane.<init>|<init>(kotlin.String;us.tractat.kuilt.heddle.Weight){}[0]
+        constructor <init>(kotlin/String, us.tractat.kuilt.heddle/Weight = ..., kotlin/Long? = ...) // us.tractat.kuilt.heddle/Topology.Lane.<init>|<init>(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.Long?){}[0]
 
+        final val maxConcurrent // us.tractat.kuilt.heddle/Topology.Lane.maxConcurrent|{}maxConcurrent[0]
+            final fun <get-maxConcurrent>(): kotlin/Long? // us.tractat.kuilt.heddle/Topology.Lane.maxConcurrent.<get-maxConcurrent>|<get-maxConcurrent>(){}[0]
         final val name // us.tractat.kuilt.heddle/Topology.Lane.name|{}name[0]
             final fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/Topology.Lane.name.<get-name>|<get-name>(){}[0]
         final val weight // us.tractat.kuilt.heddle/Topology.Lane.weight|{}weight[0]
@@ -1456,7 +1466,9 @@ final class us.tractat.kuilt.heddle/Topology { // us.tractat.kuilt.heddle/Topolo
 
         final fun component1(): kotlin/String // us.tractat.kuilt.heddle/Topology.Lane.component1|component1(){}[0]
         final fun component2(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Topology.Lane.component2|component2(){}[0]
+        final fun component3(): kotlin/Long? // us.tractat.kuilt.heddle/Topology.Lane.component3|component3(){}[0]
         final fun copy(kotlin/String = ..., us.tractat.kuilt.heddle/Weight = ...): us.tractat.kuilt.heddle/Topology.Lane // us.tractat.kuilt.heddle/Topology.Lane.copy|copy(kotlin.String;us.tractat.kuilt.heddle.Weight){}[0]
+        final fun copy(kotlin/String = ..., us.tractat.kuilt.heddle/Weight = ..., kotlin/Long? = ...): us.tractat.kuilt.heddle/Topology.Lane // us.tractat.kuilt.heddle/Topology.Lane.copy|copy(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.Long?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Topology.Lane.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Topology.Lane.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Topology.Lane.toString|toString(){}[0]
@@ -1477,12 +1489,17 @@ final class us.tractat.kuilt.heddle/Topology { // us.tractat.kuilt.heddle/Topolo
 
     final class RuntimeChildren { // us.tractat.kuilt.heddle/Topology.RuntimeChildren|null[0]
         constructor <init>(us.tractat.kuilt.heddle/Weight) // us.tractat.kuilt.heddle/Topology.RuntimeChildren.<init>|<init>(us.tractat.kuilt.heddle.Weight){}[0]
+        constructor <init>(us.tractat.kuilt.heddle/Weight, kotlin/Long? = ...) // us.tractat.kuilt.heddle/Topology.RuntimeChildren.<init>|<init>(us.tractat.kuilt.heddle.Weight;kotlin.Long?){}[0]
 
+        final val maxConcurrent // us.tractat.kuilt.heddle/Topology.RuntimeChildren.maxConcurrent|{}maxConcurrent[0]
+            final fun <get-maxConcurrent>(): kotlin/Long? // us.tractat.kuilt.heddle/Topology.RuntimeChildren.maxConcurrent.<get-maxConcurrent>|<get-maxConcurrent>(){}[0]
         final val weight // us.tractat.kuilt.heddle/Topology.RuntimeChildren.weight|{}weight[0]
             final fun <get-weight>(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Topology.RuntimeChildren.weight.<get-weight>|<get-weight>(){}[0]
 
         final fun component1(): us.tractat.kuilt.heddle/Weight // us.tractat.kuilt.heddle/Topology.RuntimeChildren.component1|component1(){}[0]
+        final fun component2(): kotlin/Long? // us.tractat.kuilt.heddle/Topology.RuntimeChildren.component2|component2(){}[0]
         final fun copy(us.tractat.kuilt.heddle/Weight = ...): us.tractat.kuilt.heddle/Topology.RuntimeChildren // us.tractat.kuilt.heddle/Topology.RuntimeChildren.copy|copy(us.tractat.kuilt.heddle.Weight){}[0]
+        final fun copy(us.tractat.kuilt.heddle/Weight = ..., kotlin/Long? = ...): us.tractat.kuilt.heddle/Topology.RuntimeChildren // us.tractat.kuilt.heddle/Topology.RuntimeChildren.copy|copy(us.tractat.kuilt.heddle.Weight;kotlin.Long?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Topology.RuntimeChildren.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Topology.RuntimeChildren.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/Topology.RuntimeChildren.toString|toString(){}[0]
@@ -1535,6 +1552,8 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.toString|toString(){}[0]
 
     sealed interface Node { // us.tractat.kuilt.heddle/TopologyDocument.Node|null[0]
+        abstract val maxConcurrent // us.tractat.kuilt.heddle/TopologyDocument.Node.maxConcurrent|{}maxConcurrent[0]
+            abstract fun <get-maxConcurrent>(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Node.maxConcurrent.<get-maxConcurrent>|<get-maxConcurrent>(){}[0]
         abstract val name // us.tractat.kuilt.heddle/TopologyDocument.Node.name|{}name[0]
             abstract fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Node.name.<get-name>|<get-name>(){}[0]
         abstract val weight // us.tractat.kuilt.heddle/TopologyDocument.Node.weight|{}weight[0]
@@ -1548,13 +1567,18 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
 
     final class Group : us.tractat.kuilt.heddle/TopologyDocument.Node { // us.tractat.kuilt.heddle/TopologyDocument.Group|null[0]
         constructor <init>(kotlin/String, kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., kotlin/String? = ...) // us.tractat.kuilt.heddle/TopologyDocument.Group.<init>|<init>(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;kotlin.String?){}[0]
+        constructor <init>(kotlin/String, kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., kotlin/String? = ..., kotlin/Long? = ..., kotlin/Long? = ...) // us.tractat.kuilt.heddle/TopologyDocument.Group.<init>|<init>(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;kotlin.String?;kotlin.Long?;kotlin.Long?){}[0]
 
         final val children // us.tractat.kuilt.heddle/TopologyDocument.Group.children|{}children[0]
             final fun <get-children>(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> // us.tractat.kuilt.heddle/TopologyDocument.Group.children.<get-children>|<get-children>(){}[0]
+        final val maxConcurrent // us.tractat.kuilt.heddle/TopologyDocument.Group.maxConcurrent|{}maxConcurrent[0]
+            final fun <get-maxConcurrent>(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Group.maxConcurrent.<get-maxConcurrent>|<get-maxConcurrent>(){}[0]
         final val name // us.tractat.kuilt.heddle/TopologyDocument.Group.name|{}name[0]
             final fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Group.name.<get-name>|<get-name>(){}[0]
         final val runtimeChildren // us.tractat.kuilt.heddle/TopologyDocument.Group.runtimeChildren|{}runtimeChildren[0]
             final fun <get-runtimeChildren>(): kotlin/String? // us.tractat.kuilt.heddle/TopologyDocument.Group.runtimeChildren.<get-runtimeChildren>|<get-runtimeChildren>(){}[0]
+        final val runtimeChildrenMaxConcurrent // us.tractat.kuilt.heddle/TopologyDocument.Group.runtimeChildrenMaxConcurrent|{}runtimeChildrenMaxConcurrent[0]
+            final fun <get-runtimeChildrenMaxConcurrent>(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Group.runtimeChildrenMaxConcurrent.<get-runtimeChildrenMaxConcurrent>|<get-runtimeChildrenMaxConcurrent>(){}[0]
         final val weight // us.tractat.kuilt.heddle/TopologyDocument.Group.weight|{}weight[0]
             final fun <get-weight>(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Group.weight.<get-weight>|<get-weight>(){}[0]
 
@@ -1562,7 +1586,10 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
         final fun component2(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Group.component2|component2(){}[0]
         final fun component3(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> // us.tractat.kuilt.heddle/TopologyDocument.Group.component3|component3(){}[0]
         final fun component4(): kotlin/String? // us.tractat.kuilt.heddle/TopologyDocument.Group.component4|component4(){}[0]
+        final fun component5(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Group.component5|component5(){}[0]
+        final fun component6(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Group.component6|component6(){}[0]
         final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., kotlin/String? = ...): us.tractat.kuilt.heddle/TopologyDocument.Group // us.tractat.kuilt.heddle/TopologyDocument.Group.copy|copy(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;kotlin.String?){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., kotlin/String? = ..., kotlin/Long? = ..., kotlin/Long? = ...): us.tractat.kuilt.heddle/TopologyDocument.Group // us.tractat.kuilt.heddle/TopologyDocument.Group.copy|copy(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;kotlin.String?;kotlin.Long?;kotlin.Long?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyDocument.Group.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyDocument.Group.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Group.toString|toString(){}[0]
@@ -1585,7 +1612,10 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
 
     final class Lane : us.tractat.kuilt.heddle/TopologyDocument.Node { // us.tractat.kuilt.heddle/TopologyDocument.Lane|null[0]
         constructor <init>(kotlin/String, kotlin/String = ...) // us.tractat.kuilt.heddle/TopologyDocument.Lane.<init>|<init>(kotlin.String;kotlin.String){}[0]
+        constructor <init>(kotlin/String, kotlin/String = ..., kotlin/Long? = ...) // us.tractat.kuilt.heddle/TopologyDocument.Lane.<init>|<init>(kotlin.String;kotlin.String;kotlin.Long?){}[0]
 
+        final val maxConcurrent // us.tractat.kuilt.heddle/TopologyDocument.Lane.maxConcurrent|{}maxConcurrent[0]
+            final fun <get-maxConcurrent>(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Lane.maxConcurrent.<get-maxConcurrent>|<get-maxConcurrent>(){}[0]
         final val name // us.tractat.kuilt.heddle/TopologyDocument.Lane.name|{}name[0]
             final fun <get-name>(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.name.<get-name>|<get-name>(){}[0]
         final val weight // us.tractat.kuilt.heddle/TopologyDocument.Lane.weight|{}weight[0]
@@ -1593,7 +1623,9 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
 
         final fun component1(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.component1|component1(){}[0]
         final fun component2(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.component2|component2(){}[0]
+        final fun component3(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Lane.component3|component3(){}[0]
         final fun copy(kotlin/String = ..., kotlin/String = ...): us.tractat.kuilt.heddle/TopologyDocument.Lane // us.tractat.kuilt.heddle/TopologyDocument.Lane.copy|copy(kotlin.String;kotlin.String){}[0]
+        final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/Long? = ...): us.tractat.kuilt.heddle/TopologyDocument.Lane // us.tractat.kuilt.heddle/TopologyDocument.Lane.copy|copy(kotlin.String;kotlin.String;kotlin.Long?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyDocument.Lane.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyDocument.Lane.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyDocument.Lane.toString|toString(){}[0]
@@ -1662,6 +1694,7 @@ final class us.tractat.kuilt.heddle/TopologyProblem { // us.tractat.kuilt.heddle
         enum entry EMPTY_GROUP // us.tractat.kuilt.heddle/TopologyProblem.Kind.EMPTY_GROUP|null[0]
         enum entry EMPTY_NAME // us.tractat.kuilt.heddle/TopologyProblem.Kind.EMPTY_NAME|null[0]
         enum entry INVALID_WEIGHT // us.tractat.kuilt.heddle/TopologyProblem.Kind.INVALID_WEIGHT|null[0]
+        enum entry NEGATIVE_MAX_CONCURRENT // us.tractat.kuilt.heddle/TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT|null[0]
 
         final val entries // us.tractat.kuilt.heddle/TopologyProblem.Kind.entries|#static{}entries[0]
             final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.heddle/TopologyProblem.Kind> // us.tractat.kuilt.heddle/TopologyProblem.Kind.entries.<get-entries>|<get-entries>#static(){}[0]
