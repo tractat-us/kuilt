@@ -66,6 +66,17 @@ class BoundMetricsTest {
         assertEquals(1L, deviation(Weight.ONE, Weight.of(2L), committed1 = 0L, committed2 = 1L))
     }
 
+    /**
+     * An over-served child is as far off its share as an under-served one. With two children the
+     * gaps are equal and opposite, so only three can tell a magnitude from a signed gap: here they
+     * are `+1, +1, −2`.
+     */
+    @Test
+    fun anOverServedChildCountsByMagnitude() {
+        val equal = listOf(0L, 0L, 3L).map { Child(Weight.ONE, it) }
+        assertEquals(2L, observedDeviationOf(equal))
+    }
+
     private fun deviation(w1: Weight, w2: Weight, total: Long): Long =
         deviation(w1, w2, committed1 = total / 2, committed2 = total - total / 2)
 
