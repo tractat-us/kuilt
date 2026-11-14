@@ -141,8 +141,8 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     Apple tests; the Android store's fake-Keystore TCK, by contrast, runs per PR. A nightly step boots
     a simulator and runs the real Keychain once (#3310), since the default `iosSimulatorArm64Test`
     spawn has no keychain (`-25291`).
-29. **The Android store tells a failing Keystore from a damaged key by the cause; below API 33 it counts
-    (Iain, 2026-11-13, #3306's review).** The Keystore's JCA surface answers a passing failure as
+29. **The Android store tells a failing Keystore from a damaged key by the cause, and waits an hour
+    when it cannot tell (Iain, 2026-11-13, #3306's reviews).** The Keystore's JCA surface answers a passing failure as
     "absent" (`containsAlias` false, `getCertificate` null), so the store reads with `getKey` first and
     treats a null certificate beside a key as a fault, never as "half-made", on API 31+. On API 33+ a
     load or sign failure is judged by its `android.security.KeyStoreException` cause. **Amended (Iain,
@@ -153,7 +153,7 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     `UnrecoverableKeyException` with no `KeyStoreException` cause replaces it, as does a
     `KeyPermanentlyInvalidatedException` on every version; any other failure, unflagged code 10
     included (AOSP's KeyMint bucket mixes `INVALID_KEY_BLOB` with passing TEE faults), is a failure
-    of unknown cause. Below API 33 every failure but the last is of unknown cause. **Amended again
+    of unknown cause. Below API 33, where no cause can be read, every failure except a `KeyPermanentlyInvalidatedException` is of unknown cause. **Amended again
     (Iain, 2026-11-13, #3306's re-review: "simplicity, not perverse corner cases"):** a failure of
     unknown cause replaces the key once the Keystore has been failing for at least an hour with no
     successful read in between. The store keeps one timestamp beside the grants, the start of the
