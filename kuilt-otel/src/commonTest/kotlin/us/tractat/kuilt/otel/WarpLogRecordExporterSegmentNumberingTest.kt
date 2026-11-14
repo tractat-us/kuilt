@@ -163,6 +163,29 @@ class WarpLogRecordExporterSegmentNumberingTest {
         )
     }
 
+    @Test
+    fun aNoOpMergeAfterARefusedExportStillWritesTheExportedRecords() = runTest {
+        // A peer echoes back records this exporter failed to persist. The merge adds nothing to
+        // the log, but reporting Success while the store lacks those records would be a lie.
+        val backing = RecordingStore()
+        val store = WriteRefusingStore(backing)
+        val exporter = exporterFor(store, segmentOps = 64)
+        exporter.export(record(0))
+        store.refuseWrites()
+        val refused = exporter.export(record(1))
+        store.allowWrites()
+        val echo = exporter.merge(exporter.snapshot())
+
+        val restarted = exporterFor(backing, segmentOps = 64).also { it.recover() }
+        val bodies = restarted.snapshot().toList().map { it.body }
+
+        assertAll(
+            { assertTrue(refused is ExportResult.Failure, "the rig never refused the export: $refused") },
+            { assertEquals(ExportResult.Success, echo) },
+            { assertEquals(listOf("body-0", "body-1"), bodies, "the echoed merge reported Success over a lost record") },
+        )
+    }
+
     // ---- The index refuses a number it would hand out twice ----
 
     @Test
