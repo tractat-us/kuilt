@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -11,7 +13,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Tag
@@ -97,7 +99,7 @@ internal fun referenceResumeHarness(
         loom = loom,
         scope = scope.backgroundScope,
         clock = { Instant.fromEpochMilliseconds(scope.testScheduler.currentTime) },
-        deviceKeyStore = InMemoryDeviceKeyStore(),
+        deviceKeyStore = fakeKeyStore(0),
         heartbeatConfig = heartbeatConfig,
         reconnectControllerFactory = { roomId, controllerScope, clock ->
             val real = DefaultJoinerReconnectController(

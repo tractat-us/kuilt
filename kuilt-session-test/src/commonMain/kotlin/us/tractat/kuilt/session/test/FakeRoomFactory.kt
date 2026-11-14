@@ -3,8 +3,9 @@ package us.tractat.kuilt.session.test
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Tag
-import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DidKey
+import us.tractat.kuilt.identity.test.TestOnlyKeyScheme
+import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
 import us.tractat.kuilt.session.MemberIdentity
@@ -70,6 +71,7 @@ public class FakeRoomFactory : RoomFactory {
  * val frame = joiner.incoming.first()   // RoomFrame(sender=PeerId("host"), payload=[1,2,3])
  * ```
  */
+@OptIn(TestOnlyKeyScheme::class)
 public suspend fun fakeRoomPair(
     hostId: PeerId = PeerId("host"),
     joinerId: PeerId = PeerId("joiner"),
@@ -77,13 +79,17 @@ public suspend fun fakeRoomPair(
     val host = FakeRoom(selfId = hostId, initialRole = SessionRole.Host)
     val joiner = FakeRoom(selfId = joinerId, initialRole = SessionRole.Joiner)
     joiner.setRoomId(host.roomId.value)
-    // Two devices, so two keys: each side's roster entry for the other carries the other's.
-    seedRoster(room = host, peerId = joinerId, displayName = joinerId.value, key = DeviceKey.generate().id)
-    seedRoster(room = joiner, peerId = hostId, displayName = hostId.value, key = DeviceKey.generate().id)
+    // Two devices, so two keys: each side's roster entry for the other carries the other's. Fake
+    // keys, named without suspending, so a pair on wasmJs never waits on WebCrypto for one.
+    seedRoster(room = host, peerId = joinerId, displayName = joinerId.value, key = fakeDidKey(JOINER_DEVICE))
+    seedRoster(room = joiner, peerId = hostId, displayName = hostId.value, key = fakeDidKey(HOST_DEVICE))
     wireDelivery(sender = host, receiver = joiner)
     wireDelivery(sender = joiner, receiver = host)
     return host to joiner
 }
+
+private const val HOST_DEVICE = 0
+private const val JOINER_DEVICE = 1
 
 private suspend fun seedRoster(room: FakeRoom, peerId: PeerId, displayName: String, key: DidKey) {
     val member = Member(

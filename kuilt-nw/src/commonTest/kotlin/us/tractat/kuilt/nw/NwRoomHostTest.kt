@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.nw
 
 import kotlinx.coroutines.CompletableDeferred
@@ -9,7 +11,7 @@ import kotlinx.coroutines.yield
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.runCatchingCancellable
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.Room
 import kotlin.test.Test
 import kotlin.test.assertNotNull
@@ -20,7 +22,7 @@ class NwRoomHostTest {
     @Test
     fun `start hands a Room to onRoom and suspends until cancelled`() = runTest {
         val loom = InMemoryLoom()
-        val host = NwRoomHost(loom, Pattern("test-room"), InMemoryDeviceKeyStore())
+        val host = NwRoomHost(loom, Pattern("test-room"), fakeKeyStore(0))
         val received = CompletableDeferred<Room>()
 
         coroutineScope {
@@ -36,7 +38,7 @@ class NwRoomHostTest {
 
     @Test
     fun `start a second time on the same host throws`() = runTest {
-        val host = NwRoomHost(InMemoryLoom(), Pattern("dup"), InMemoryDeviceKeyStore())
+        val host = NwRoomHost(InMemoryLoom(), Pattern("dup"), fakeKeyStore(1))
 
         coroutineScope {
             val firstStarted = CompletableDeferred<Unit>()

@@ -119,6 +119,8 @@ kotlin {
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
             implementation(project(":kuilt-conformance"))
+            // Fake device keys for the rooms these tests build: no WebCrypto wait on wasmJs.
+            implementation(project(":kuilt-identity-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
         // Mirror the manual appleMain wiring for the test compilations so any

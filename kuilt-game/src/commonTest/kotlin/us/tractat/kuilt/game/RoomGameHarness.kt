@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.game
 
@@ -10,7 +10,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -52,11 +52,12 @@ internal suspend fun adopt3PeerMeshRoom(
     clock: () -> Instant,
 ): MeshRoomFixture {
     val faulty = FaultyLoom(InMemoryLoom(), scope)
-    fun factory() = SeamRoomFactory(
+    // One device per peer: the host is device 0 and each member the next.
+    fun factory(device: Int) = SeamRoomFactory(
         loom = faulty,
         scope = scope,
         clock = clock,
-        deviceKeyStore = InMemoryDeviceKeyStore(),
+        deviceKeyStore = fakeKeyStore(device),
         heartbeatConfig = heartbeat,
     )
 
@@ -65,10 +66,10 @@ internal suspend fun adopt3PeerMeshRoom(
     val s2 = faulty.weave(Rendezvous.Existing(InMemoryTag("g")))
     val s3 = faulty.weave(Rendezvous.Existing(InMemoryTag("g")))
 
-    val memberDeferred = listOf(s2, s3).map { seam ->
-        scope.async { factory().adopt(seam, SessionRole.Joiner, memberName = seam.selfId.value) }
+    val memberDeferred = listOf(s2, s3).mapIndexed { index, seam ->
+        scope.async { factory(device = index + 1).adopt(seam, SessionRole.Joiner, memberName = seam.selfId.value) }
     }
-    val hostRoom = factory().adopt(s1, SessionRole.Host, memberName = "Host")
+    val hostRoom = factory(device = 0).adopt(s1, SessionRole.Host, memberName = "Host")
     val members = memberDeferred.map { it.await() }
 
     // Host admitted both members → detectors are running for each.

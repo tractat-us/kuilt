@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.conformance
 
 import kotlinx.coroutines.CancellationException
@@ -24,7 +26,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultyLoom
@@ -2176,16 +2178,18 @@ public abstract class RoomConformanceSuite {
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(clockMs) }
         val innerLoom = InMemoryLoom()
         val faultyLoom = FaultyLoom(innerLoom, scope)
-        val factory = SeamRoomFactory(
+        // Fake device keys, so the suite stays on virtual time on wasmJs, where a real key is a
+        // WebCrypto promise. The host is one device and every joiner the harness makes is another.
+        fun factory(device: Int) = SeamRoomFactory(
             loom = faultyLoom,
             scope = scope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = fakeKeyStore(device),
             heartbeatConfig = fastHeartbeatConfig,
         )
         return RoomHarness(
-            hostFactory = factory,
-            joinerFactory = factory,
+            hostFactory = factory(device = 0),
+            joinerFactory = factory(device = 1),
             faults = FaultInjection.Supported(faultyLoom),
             clock = clock,
             advanceClock = { ms -> clockMs += ms },
