@@ -337,6 +337,39 @@ class LocalHeddlePositionCeilingTest {
     }
 
     /**
+     * The same waker, observed by an `admit` with a waiting set (#3320). An admission is never
+     * refused, so it charges, and the clamp it takes past the waker's ceiling saturates rather than
+     * throwing: the stored offset is the ceiling itself, and the next pick refuses as it would have.
+     */
+    @Test
+    fun anAdmitThatClampsAWakerPastItsCeilingChargesAndTheClampSaturates() {
+        val clampTopology = draft("clamp") {
+            lane("a", Weight.of(1, 1000))
+            lane("b", Weight.of(1000))
+        }
+        val a = clampTopology.groupId("a")
+        val b = clampTopology.groupId("b")
+        val engine = LocalHeddle.fromTopology(clampTopology, LocalPolicy(defaultReservation = 1L, sleeperCredit = 1L), epoch = 1L)
+            .apply { reconcileCapacity(1L) }
+        for (waiting in listOf(setOf(a, b), setOf(a))) {
+            val lease = (engine.acquire(waiting, waiting, startedAt = 0L) as AcquireOutcome.Acquired).lease
+            engine.complete(lease.id, actualCost = 1L)
+        }
+        engine.pushTo(a, 10_000_000_000_000L)
+        val bWeight = Weight.of(1000)
+        val bEdge = engine.edgeOf(b)
+        check(engine.snapshot().allocatorMemory.demandingObserved[bEdge] == false) { "the rig: b was last observed idle" }
+        check(engine.grossTicks(a).timesWide(1_000_000L) > Int128.of(positionCeiling(bWeight))) { "b's front is past b's ceiling" }
+        val admitted = engine.admit(a, setOf(a, b), startedAt = 1L)
+        val offset = engine.snapshot().allocatorMemory.wakeOffsets[bEdge]
+        assertAll(
+            { assertIs<AcquireOutcome.Acquired>(admitted) },
+            { assertEquals(positionCeiling(bWeight), offset?.let { ticksAt(it, bWeight) }, "b's clamp is held at its ceiling") },
+            { assertEquals(AcquireOutcome.PositionCeiling(engine.root), engine.acquire(setOf(a, b), setOf(b), startedAt = 2L)) },
+        )
+    }
+
+    /**
      * A newborn seated against a front that includes a saturated sibling lands at its own ceiling
      * (review of #3352). The sibling's position reads lower than it stands for, so the front does too;
      * a seat there would sit behind the true front, and once the saturated sibling left, the newborn

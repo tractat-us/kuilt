@@ -593,6 +593,14 @@ public class LocalHeddle private constructor(
         AcquireOutcome.Acquired(open(leaf, path, reservation, startedAt))
     }
 
+    /** STUB for the red-on-old-code commit: the old [admit], which drops [waiting]. */
+    public fun admit(
+        leaf: GroupId,
+        waiting: Set<GroupId>,
+        startedAt: Long,
+        reservation: Long = policy.defaultReservation,
+    ): AdmitOutcome = admit(leaf, startedAt, reservation)
+
     /**
      * Reserve [amount] more for [lease], down the path it was opened on. Not a new pick.
      *
