@@ -1,33 +1,18 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.WideSum
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
+/**
+ * What this module builds on `:kuilt-math`'s [WideSum]: a sum that stays exact whatever the order
+ * of its terms, then narrows to a `Long` with a throw. The accumulator's own arithmetic, carries and
+ * refusals included, is tested in `:kuilt-math`.
+ */
 class WideSumTest {
-
-    @Test
-    fun carriesAndBorrowsAcrossTheLowWord() {
-        val pastMax = WideSum().apply {
-            add(Long.MAX_VALUE)
-            add(Long.MAX_VALUE)
-            add(2L)
-        }.toInt128()
-        val belowMin = WideSum().apply {
-            add(Long.MIN_VALUE)
-            sub(1L)
-        }.toInt128()
-        assertAll(
-            // 2·(2⁶³ − 1) + 2 = 2⁶⁴: one carry into the high word, a zero low word.
-            { assertEquals(Int128.fromTwosComplement(1L, 0L), pastMax) },
-            { assertEquals(Int128.fromTwosComplement(-1L, Long.MAX_VALUE), belowMin) },
-            { assertEquals(Int128.ZERO, pastMax - Int128.fromTwosComplement(1L, 0L)) },
-            { assertEquals(Int128.of(-1L), Int128.ZERO - 1L) },
-            { assertEquals(Int128.of(Long.MIN_VALUE), belowMin + 1L) },
-        )
-    }
 
     @Test
     fun orderDoesNotDecideWhetherItFits() {
