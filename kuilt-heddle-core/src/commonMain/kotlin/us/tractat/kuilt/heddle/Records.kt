@@ -12,9 +12,10 @@ import kotlinx.serialization.Serializable
  * the front became every peer's permanent fact — and a proposer reading a partial view froze a
  * wrong one irrecoverably (#1713). The origin now lives in the replicated [Gauge] register, which
  * every peer may write from its own view and whose componentwise join resolves the readings by
- * `max` instead of preserving them. Two consequences worth knowing: the seat is an exact
- * [Rational] rather than a rounded `Long`, so the old `⌈V⌉` rounding rule is simply gone; and a
- * record built by hand can no longer express a seat at all, so there is nothing to get wrong.
+ * `max` instead of preserving them. Two consequences worth knowing: the seat is the front rounded
+ * up to the edge's own grid, under one tick of its service rather than the whole unit the old
+ * `⌈V⌉` rule cost (#3313, [TICKS_PER_UNIT]); and a record built by hand can no longer express a
+ * seat at all, so there is nothing to get wrong.
  *
  * Records are immutable and grow-only. In a healthy ledger one [AttachmentId] maps
  * to exactly one record, but the merge **never collapses divergent records under

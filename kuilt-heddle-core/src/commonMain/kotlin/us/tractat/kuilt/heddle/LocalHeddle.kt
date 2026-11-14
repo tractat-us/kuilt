@@ -327,11 +327,11 @@ public sealed interface LeaseOutcome {
  * [IllegalArgumentException], a reservation or extension above [MAX_RESERVATION] included.
  *
  * Arithmetic that would leave `Long` throws [ArithmeticException] rather than wrapping, and one
- * place it is reachable is a lifetime ceiling on service. A pick compares virtual times as exact
- * rationals over `Long`, and their numerators grow with the service a parent has handed down,
- * scaled by its children's weights. So the total service under one parent is bounded, and the bound
- * depends on the weights. In one measurement, integer weights 3 : 1 ran past 2^60 units, while
- * fractional weights 3/7 : 2/5 threw near 2^56. A throw changes nothing, so once a parent is past
+ * place it is reachable is a lifetime ceiling on an edge's **position**: its service in ticks of
+ * 1/16 of a unit, which a joiner inherits from the front it is seated at, scaled by its weight
+ * against its siblings'. So the service under one parent is bounded, the bound depends on the
+ * weights, and it no longer depends on how often the waiting set changes (#3313): positions are
+ * whole ticks, so no join can grow a denominator. A throw changes nothing, so once a parent is past
  * its ceiling every later [acquire] there throws too.
  *
  * A state the engine's own invariants rule out throws [IllegalStateException]: that is a bug in

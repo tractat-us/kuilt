@@ -424,7 +424,8 @@ public class EntitlementLedger private constructor(
      */
     public fun virtualService(id: AttachmentId): Rational? {
         val w = recordOf(id)?.weight ?: return null
-        return grossVirtualService(id, w) - perWeight(counterValue(returned, id), w)
+        val gross = gauges[id].grossTicksAt(counterValue(issued, id), w)
+        return ticksToVirtual(checkedSub(gross, ticksOf(counterValue(returned, id))), w)
     }
 
     /** [grossVirtualService] once the edge's single weight is in hand. */
@@ -1521,9 +1522,22 @@ public class EntitlementLedger private constructor(
      */
     public fun seat(edge: AttachmentId, front: Rational): Patch<EntitlementLedger>? {
         val w = recordOf(edge)?.weight ?: return null
+        return seatAt(edge, ticksAt(front, w))
+    }
+
+    /**
+     * [seat] at a position already on [edge]'s grid: [ticks] of its own service, the
+     * `⌈V · w · G⌉` a scheduler reads off its front ([VirtualTime.ticksFor]). The floor written is
+     * `max(ticks, baseIssued · G)` ticks, stored as the virtual time it stands for, so it is on the
+     * grid and every later read of it is exact. Rounding the front up to [ticks] is the only
+     * rounding a seat does (design §7.2).
+     */
+    internal fun seatAt(edge: AttachmentId, ticks: Long): Patch<EntitlementLedger>? {
+        val w = recordOf(edge)?.weight ?: return null
         if (edge in gauges) return null
         val observed = counterValue(issued, edge)
-        return Patch(of(gauges = mapOf(edge to Gauge(Rational.max(front, perWeight(observed, w)), observed))))
+        val floor = ticksToVirtual(maxOf(ticks, ticksOf(observed)), w)
+        return Patch(of(gauges = mapOf(edge to Gauge(floor, observed))))
     }
 
     /**

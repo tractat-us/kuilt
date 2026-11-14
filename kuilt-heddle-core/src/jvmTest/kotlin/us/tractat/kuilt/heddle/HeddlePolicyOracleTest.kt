@@ -13,7 +13,11 @@ import kotlin.test.assertTrue
  *
  * The oracle re-derives EEVDF selection from scratch using `java.math.BigInteger`
  * rationals — a genuinely different number type and code path from the production
- * `Long`-backed [Rational], with no overflow ceiling and no shared reduction logic.
+ * `Long` positions and 128-bit cross-products, with no overflow ceiling and no shared
+ * reduction logic. It models the policy as design §7 now states it (#3313): each edge's
+ * position is whole ticks of its own service, `G = 16` per unit, a floor is read as
+ * `⌈floor · w · G⌉`, and step 3 keeps `p ≤ ⌈V · w · G⌉`. The grid constant is restated here
+ * rather than read from production, so a change to it reds this test too.
  * Over a seeded, randomized sequence of demand/spend/return perturbations across
  * several small sibling sets, the two must choose the *same* grant every round. Any
  * discrepancy in candidate filtering, weighted-mean eligibility, deadline ordering, or
@@ -93,6 +97,12 @@ class HeddlePolicyOracleTest {
     private data class Rat(val n: BigInteger, val d: BigInteger) : Comparable<Rat> {
         operator fun plus(o: Rat) = Rat(n * o.d + o.n * d, d * o.d)
         override fun compareTo(other: Rat): Int = (n * other.d).compareTo(other.n * d)
+
+        /** The least integer `>= this`. */
+        fun ceil(): BigInteger {
+            val (q, r) = n.divideAndRemainder(d)
+            return if (r.signum() > 0) q + BigInteger.ONE else q
+        }
         companion object {
             fun of(v: Long) = Rat(BigInteger.valueOf(v), BigInteger.ONE)
             fun of(nn: Long, dd: Long): Rat {
@@ -106,7 +116,9 @@ class HeddlePolicyOracleTest {
     private fun oraclePick(edges: List<PolicyEdge>, config: PolicyConfig, holdings: Long): Grant? {
         if (holdings <= 0L) return null
 
-        data class Cand(val id: AttachmentId, val q: Long, val ev: Rat, val weight: Weight)
+        data class Cand(val id: AttachmentId, val q: Long, val p: BigInteger, val weight: Weight)
+
+        val g = BigInteger.valueOf(16L)
 
         val cands = edges.mapNotNull { e ->
             val outstanding = e.summary.outstanding
@@ -116,44 +128,47 @@ class HeddlePolicyOracleTest {
             val q = listOf(config.quantum, need, e.demand.maximumUsefulGrant, holdings, capRoom).min()
             if (q <= 0L) return@mapNotNull null
             val w = e.record.weight
-            // ev = grossEv − returned/w, with grossEv = floor + (baseIssued − folded)/w (issue #1752);
-            // an absent gauge means the edge reads from its own origin. Offset is ZERO in this scenario.
-            // Re-derived here from the gauge's own fields rather than from any kuilt-heddle helper, so
-            // the oracle stays an independent second implementation of the read.
-            val gross = e.gauge.let { g ->
-                if (g == null) {
-                    Rat.of(e.baseIssued * w.denominator, w.numerator)
-                } else {
-                    Rat.of(g.floor.numerator, g.floor.denominator) +
-                        Rat.of((e.baseIssued - g.folded) * w.denominator, w.numerator)
-                }
-            }
-            val ev = gross + Rat.of(-e.summary.returned * w.denominator, w.numerator)
-            Cand(e.record.id, q, ev, w)
+            // p = ⌈floor · w · G⌉ + G · (baseIssued − folded) − G · returned, in ticks of the edge's
+            // own service (issue #1752's read, on the #3313 grid); an absent gauge means the edge
+            // reads from its own origin. Offset is ZERO in this scenario. Re-derived here from the
+            // gauge's own fields rather than from any kuilt-heddle helper, so the oracle stays an
+            // independent second implementation of the read.
+            val floorTicks = e.gauge?.let { gauge ->
+                Rat(
+                    BigInteger.valueOf(gauge.floor.numerator) * BigInteger.valueOf(w.numerator) * g,
+                    BigInteger.valueOf(gauge.floor.denominator) * BigInteger.valueOf(w.denominator),
+                ).ceil() - g * BigInteger.valueOf(gauge.folded)
+            } ?: BigInteger.ZERO
+            val p = floorTicks + g * BigInteger.valueOf(e.baseIssued - e.summary.returned)
+            Cand(e.record.id, q, p, w)
         }
         if (cands.isEmpty()) return null
 
-        // V = Σ w·ev / Σ w
-        var wev = Rat.of(0L)
+        // V = Σ w·ev / Σ w, and w·ev = p / G, so V = Σ p / (G · Σ w).
+        var psum = BigInteger.ZERO
         var wsum = Rat.of(0L)
         for (c in cands) {
-            val w = Rat.of(c.weight.numerator, c.weight.denominator)
-            wev = wev + Rat(w.n * c.ev.n, w.d * c.ev.d)
-            wsum = wsum + w
+            psum += c.p
+            wsum = wsum + Rat.of(c.weight.numerator, c.weight.denominator)
         }
-        val v = Rat(wev.n * wsum.d, wev.d * wsum.n) // wev / wsum
+        val v = Rat(psum * wsum.d, g * wsum.n)
+        fun evOf(c: Cand) = Rat(c.p * BigInteger.valueOf(c.weight.denominator), g * BigInteger.valueOf(c.weight.numerator))
 
         // §7.3 step 3's eligible set is never empty, confirmed here in **unbounded** arithmetic:
         // `v` is the weighted mean of these same candidates over strictly positive weights, so it
         // is never below their minimum. The production policy asserts the same thing; mirroring
         // its old `ifEmpty { minBy }` fallback here would have made this oracle blind to it (#1737).
+        // Eligibility at grid resolution: p ≤ ⌈V · w · G⌉, V rounded the way a seat rounds it.
         eligibilityRounds++
-        val eligible = cands.filter { it.ev <= v }
+        val eligible = cands.filter { c ->
+            val ceiling = Rat(v.n * BigInteger.valueOf(c.weight.numerator) * g, v.d * BigInteger.valueOf(c.weight.denominator)).ceil()
+            c.p <= ceiling
+        }
         assertTrue(eligible.isNotEmpty(), "empty eligible set at v=$v over $cands")
 
         // deadline = ev + q * den / num ; tie-break by id
         val winner = eligible.minWith(
-            compareBy<Cand> { c -> c.ev + Rat.of(c.q * c.weight.denominator, c.weight.numerator) }
+            compareBy<Cand> { c -> evOf(c) + Rat.of(c.q * c.weight.denominator, c.weight.numerator) }
                 .thenBy { it.id },
         )
         return Grant(winner.id, winner.q)

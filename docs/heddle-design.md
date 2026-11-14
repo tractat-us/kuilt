@@ -578,9 +578,25 @@ advancing its virtual clock.
 Because the numerator is *committed* service, a grant advances the child's
 virtual position the moment it is issued — hoarding is charged (the
 over-allocation loop the source warns about is closed), and `release` walks
-the child back and restores eligibility. Comparisons are exact: integer
-cross-multiplication with overflow checks. Never per-child independent
-rounding.
+the child back and restores eligibility.
+
+**An edge's virtual time is kept as a position on its own grid** (#3313,
+#3231): a `Long` count of ticks of the edge's own service, `G = 16` ticks per
+unit, standing for the virtual time `p / (G · w)`. Issuance, returns and sleeper
+credit are whole units, so they move a position by whole ticks, exactly. Across
+edges nothing is divided: a weighted mean stays an unreduced sum of positions
+over a sum of weights, and two edges compare by integer cross-multiplication in
+128 bits. Only the two joins of §7.2 round, and both round up.
+
+Why a grid at all, against the exact `Rational` this section used to prescribe:
+a joiner stored the front, a weighted mean whose denominator carries `Σw` of the
+set it was taken over, and the next front averaged that value in again. Every
+join could multiply a stored denominator by another `Σw`, so a pick overflowed
+`Long` within tens of picks once the waiting set changed between them, and the
+overflowed state persisted. A position's denominator is fixed by its edge's
+weight, so it cannot grow. The grid is `2⁻⁴` because each bit of it comes out of
+the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
+0.0170 against 0.0167 exact, and a finer grid buys nothing a test can see.
 
 ### 7.2 Neutral creation and no idle credit
 
@@ -598,13 +614,32 @@ rounding.
   froze a wrong one irrecoverably (issue #1713). A published reading is corrected
   by a better-informed one instead.
 
-  A gauge floor is an exact `Rational`, so **there is no rounding rule**. The
-  earlier design seated at `⌈V⌉` because the record's seat was a `Long` and the
-  direction carried a fairness sign — flooring would have seated the newborn
-  *behind* the front, the lifetime credit §10.5 forbids, so the ceiling was chosen
-  as the side that can only give a turn up, at a bounded `0 ≤ ⌈V⌉ − V < 1` cost.
-  Neither the credit nor that sliver of penalty exists now: the newborn lands on
-  the front exactly. `EntitlementLedger.seat` is the single implementation.
+  **The seat rounds up, to the newborn's own grid: `⌈V · w · G⌉` ticks.**
+  Flooring would seat the newborn *behind* the front, the lifetime credit §10.5
+  forbids, so up is the side that can only give a turn away, at a cost under one
+  tick: `1/16` of a unit at weight 1, against the whole unit the record-era
+  `⌈V⌉` cost. §7.3 step 3 reads `V` on the same grid, so that sliver never keeps
+  a newborn out of the round it joins. `EntitlementLedger.seat` is the single
+  implementation; the floor it writes is the position as a `Rational`, so the
+  wire form is unchanged and every later read of it is exact.
+
+  This reverses #1752's 2026-07-30 ruling, which kept the floor an exact
+  `Rational` and warned that a fixed-point floor would have to round **down**,
+  because a `ceil` at every checkpoint would compound into real inflation. That
+  premise does not hold here, because checkpoints do not round. A checkpoint
+  writes the floor plus the issuance since the fold, which is whole units and so
+  whole ticks; reading an on-grid floor back is exact; and only the seat and the
+  wake clamp round, each once per join. A floor written off the grid, by a peer
+  older than #3313, is rounded up once, on read, and the next checkpoint writes it
+  back on the grid. Rounding up is monotone, so it commutes with the join's `max`
+  and peers that merge in any order still read the same position.
+
+  Two consequences of mixed versions, accepted rather than fenced. An old and a
+  new peer can read the same state up to one tick apart, because the new one rounds
+  an off-grid floor up and the old one does not. And an un-upgraded peer keeps
+  writing exact fronts into floors, so the denominators in its own state keep
+  growing toward the overflow this change fixes; a new peer that merges those
+  floors reads them on its grid and is unaffected.
 - **No unlimited idle credit:** when a child goes from not-demanding to
   demanding, a local wake offset clamps it forward:
 
@@ -612,6 +647,12 @@ rounding.
   virtualOffset = max(0, parentVirtualTime − v_raw(e) − sleeperCredit / w(e))
   effectiveVirtualService(e) = v_raw(e) + virtualOffset
   ```
+
+  On the waker's grid that is `max(0, ⌈V · w · G⌉ − p − sleeperCredit · G)`
+  ticks, the same up-rounding the seat takes. Sleeper credit is service units,
+  so it scales onto the grid by `G` like any other service. The stored offset is
+  joined with `max` on the grid and kept there, so it never carries a front's
+  denominator into the next one.
 
   Default `sleeperCredit = 0`. `parentVirtualTime` here is the front defined
   just below, taken with the waker itself — and every sibling waking in the
@@ -699,24 +740,28 @@ Per allocation round at one parent, on one peer:
    localHoldings, perChildOutstandingCap)`, dropping `q == 0`.
 2. **Parent virtual time:** the weighted mean
    `V = Σ w(e)·effectiveVirtualService(e) / Σ w(e)` over the fixed candidate
-   set — the *trimmed* one from step 1. This is the same arithmetic as §7.2's
-   seating front over a deliberately different set: the front drops the
-   quantum trims, this step keeps them, so the two values coincide only when
-   no trim binds.
-3. **Eligibility:** `effectiveVirtualService(e) ≤ V`. This set is never
-   empty, and that is a **theorem, not an expectation** (#1737): `V` is the
-   weighted mean of the *same* candidate set over strictly positive weights,
-   so it is never below that set's minimum — and no rounding can eat the
-   margin, because the comparison is exact integer cross-multiplication that
-   *throws* on overflow rather than returning a wrong order (§7.1). An empty
-   set could therefore only mean step 2's mean was taken over a different set
-   than this filter, or a non-positive weight was admitted; either leaves the
-   round's whole ordering untrustworthy, so the implementation **asserts and
-   fails loudly** rather than silently substituting the minimum and
-   scheduling on regardless.
+   set — the *trimmed* one from step 1. On positions that is
+   `Σ p(e) / (G · Σ w(e))`, kept unreduced (§7.1). This is the same arithmetic
+   as §7.2's seating front over a deliberately different set: the front drops
+   the quantum trims, this step keeps them, so the two values coincide only
+   when no trim binds.
+3. **Eligibility:** `p(e) ≤ ⌈V · w(e) · G⌉` — `effectiveVirtualService(e) ≤ V`
+   read on the edge's own grid, with `V` rounded the way a seat rounds it
+   (#3313). Exact eligibility would keep a joiner seated a sliver above the
+   front out of the very round it joined; this keeps it in, and admits nothing
+   more than one tick past `V`. The set is never empty, and that is a
+   **theorem, not an expectation** (#1737): `V` is the weighted mean of the
+   *same* candidate set over strictly positive weights, so the candidate with
+   the least virtual time has `p ≤ V · w · G`, and the ceiling only widens that.
+   An empty set could therefore only mean step 2's mean was taken over a
+   different set than this filter, or a non-positive weight was admitted;
+   either leaves the round's whole ordering untrustworthy, so the
+   implementation **asserts and fails loudly** rather than silently
+   substituting the minimum and scheduling on regardless.
 4. **Deadline:** among eligible candidates pick minimum
-   `(effectiveVirtualService(e) + q/w(e), attachmentId)` — the stable id is
-   the deterministic tie-break.
+   `(effectiveVirtualService(e) + q/w(e), attachmentId)` — on the grid, the
+   position `p + q · G` at weight `w`, compared by 128-bit cross-multiplication.
+   The stable id is the deterministic tie-break.
 5. **Delegate `q`**, apply the patch locally *before* the next selection;
    repeat until holdings, demand, caps, or a per-cycle limit stop the loop.
 
@@ -913,8 +958,8 @@ Carried over from the source intact; each is a named property test (§13).
 5. **Neutral attachment initialization.** A new generation starts at the
    parent's current virtual time — the front over its *demanding* children,
    not over all its active ones (§7.2) — never with lifetime credit. The
-   seat is published on the edge's `Gauge` as an exact `Rational`, not frozen
-   into the record, so there is no rounding rule to state (§7.2).
+   seat is published on the edge's `Gauge`, not frozen into the record, and is
+   the front rounded **up** to the edge's own grid, under one tick (§7.2).
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
    clamps forward.
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;

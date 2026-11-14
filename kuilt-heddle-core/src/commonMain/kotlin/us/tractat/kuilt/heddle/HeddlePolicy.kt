@@ -108,21 +108,23 @@ public object HeddlePolicy {
      * Pick the single child to delegate the next quantum to, or `null` when no child
      * is both eligible and demanding.
      *
-     * The steps, all in exact rational arithmetic (design §7.3):
+     * The steps, on each edge's position `p` — whole ticks of its own service, its virtual time
+     * being `p / (G · w)` (design §7.1, [TICKS_PER_UNIT]):
      * 1. **Candidates** — edges whose `additionalNeed = targetOutstanding − outstanding`
      *    is positive, each with a quantum trimmed to demand, holdings, and the caps;
      *    a zero quantum drops the edge.
      * 2. **Parent virtual time** — the weighted mean `V = Σ w·ev / Σ w` over the fixed
-     *    candidate set, where `ev` is [effectiveVirtualService].
-     * 3. **Eligibility** — keep candidates with `ev ≤ V`. Non-empty *by construction*: `V`
-     *    is the weighted mean of these same candidates' `ev` over strictly positive weights,
-     *    so `min(ev) ≤ V` always holds, and no rounding can lose the margin — the arithmetic
-     *    is exact and an overflow throws rather than returning a wrong order. An empty set
-     *    would mean step 2 averaged a *different* set than this filter, or admitted a
-     *    non-positive weight; either makes the round's whole ordering untrustworthy, so it
-     *    fails loudly instead of scheduling against it (design §7.3 step 3).
-     * 4. **Deadline** — among the eligible, the minimum `(ev + q/w, attachmentId)`; the
-     *    stable id is the deterministic tie-break.
+     *    candidate set, kept unreduced as `Σ p / (G · Σ w)` ([VirtualTime.mean]).
+     * 3. **Eligibility** — keep candidates with `p ≤ ⌈V · w · G⌉`: `ev ≤ V` read on the edge's
+     *    own grid, `V` rounded the way a seat rounds it. Non-empty *by construction*: `V` is
+     *    the weighted mean of these same candidates over strictly positive weights, so the
+     *    candidate with the least `ev` has `p ≤ V · w · G`, and the ceiling only widens that.
+     *    An empty set would mean step 2 averaged a *different* set than this filter, or
+     *    admitted a non-positive weight; either makes the round's whole ordering
+     *    untrustworthy, so it fails loudly instead of scheduling against it (design §7.3
+     *    step 3).
+     * 4. **Deadline** — among the eligible, the minimum `(ev + q/w, attachmentId)`, compared by
+     *    128-bit cross-multiplication; the stable id is the deterministic tie-break.
      *
      * @param edges the parent's immediate children.
      * @param config the round's quantum and caps.
@@ -137,29 +139,29 @@ public object HeddlePolicy {
         // 1. Candidates with their trimmed quantum.
         val candidates = edges.mapNotNull { edge ->
             val q = quantumFor(edge, config, localHoldings)
-            if (q <= 0L) null else Candidate(edge, q, effectiveVirtualService(edge))
+            if (q <= 0L) null else Candidate(edge, q, effectiveTicks(edge))
         }
         if (candidates.isEmpty()) return null
 
         // 2. Weighted-mean parent virtual time V = Σ w·ev / Σ w, over the *trimmed* candidate set
         //    (§7.3 step 2 specifies the candidate set, so this is the correct input here). [front]
-        //    shares this same helper but takes it over the **untrimmed** demanding set, so the two
+        //    shares this same mean but takes it over the **untrimmed** demanding set, so the two
         //    values coincide only when no quantum trim binds — they are not one number.
-        val v = weightedMeanVirtualTime(candidates.map { it.edge })
+        val v = meanOf(candidates.map { it.edge })
 
-        // 3. Eligible candidates: ev ≤ V. Non-empty is a theorem, not a hope: [v] is the
-        //    weighted mean of *these* candidates over strictly positive weights, so it is never
-        //    below their minimum, and the comparison is exact (an overflow throws rather than
-        //    rounding an order away). Substituting the minimum and carrying on — what design
-        //    §7.3 step 3 used to prescribe — would schedule against an ordering just proved
-        //    untrustworthy, and do it silently; the assertion names the state instead (#1737).
-        val eligible = candidates.filter { it.virtualService <= v }
+        // 3. Eligible candidates: p ≤ ⌈V·w·G⌉. Non-empty is a theorem, not a hope: [v] is the
+        //    weighted mean of *these* candidates over strictly positive weights, so the least `ev`
+        //    is never above it, and reading V up to the grid can only admit more. Substituting the
+        //    minimum and carrying on — what design §7.3 step 3 used to prescribe — would schedule
+        //    against an ordering just proved untrustworthy, and do it silently; the assertion
+        //    names the state instead (#1737).
+        val eligible = candidates.filter { it.ticks <= v.ticksFor(it.edge.record.weight) }
         check(eligible.isNotEmpty()) {
             val listed = candidates.joinToString { c ->
-                "${c.edge.record.id.value} ev=${c.virtualService} w=${c.edge.record.weight}"
+                "${c.edge.record.id.value} p=${c.ticks} w=${c.edge.record.weight}"
             }
-            "no eligible candidate at V=$v: min(ev) ≤ V is a theorem of step 2's weighted mean, " +
-                "so this is a policy bug (was the mean taken over a different set?). Candidates: $listed"
+            "no eligible candidate at V=${v.toRational()}: min(ev) ≤ V is a theorem of step 2's weighted " +
+                "mean, so this is a policy bug (was the mean taken over a different set?). Candidates: $listed"
         }
 
         // 4. Earliest virtual deadline first, stable id tie-break.
@@ -180,8 +182,9 @@ public object HeddlePolicy {
      * observed when it asserted it, so a stale seat is self-limiting rather than a permanent lie;
      * an edge nothing has seated yet reads from its own origin. The numerator stays *committed*
      * (not merely spent) service, so a grant advances the child the instant it is issued —
-     * hoarding is charged — and a return walks it back. Exact rational; never rounded, at either
-     * end: the seat is a [Rational] too, which is why the old `⌈V⌉` creation rule is gone.
+     * hoarding is charged — and a return walks it back. On the edge's own grid: whole ticks of
+     * its service ([TICKS_PER_UNIT]), returned as the virtual time they stand for. Only a seat or
+     * a wake clamp rounds (design §7.2); this read is exact for every floor this module writes.
      *
      * **This is the whole of the policy's virtual-time input.** It shares
      * [grossVirtualServiceAt] with [EntitlementLedger.grossVirtualService] and with the checkpoint
@@ -190,10 +193,15 @@ public object HeddlePolicy {
      *
      * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12).
      */
-    public fun virtualService(edge: PolicyEdge): Rational {
-        val weight = edge.record.weight
-        return edge.gauge.grossVirtualServiceAt(edge.baseIssued, weight) - perWeight(edge.summary.returned, weight)
-    }
+    public fun virtualService(edge: PolicyEdge): Rational = ticksToVirtual(rawTicks(edge), edge.record.weight)
+
+    /** [virtualService] as a position: whole ticks of the edge's own service. */
+    internal fun rawTicks(edge: PolicyEdge): Long =
+        checkedSub(edge.gauge.grossTicksAt(edge.baseIssued, edge.record.weight), ticksOf(edge.summary.returned))
+
+    /** The position a pick reads: [rawTicks] plus the scheduler-local wake clamp, both in ticks. */
+    internal fun effectiveTicks(edge: PolicyEdge): Long =
+        checkedAdd(rawTicks(edge), ticksAt(edge.virtualOffset, edge.record.weight))
 
     /**
      * Is [edge] **currently competing** — does its child want more service than it already
@@ -258,21 +266,36 @@ public object HeddlePolicy {
      * @return the front, or `null` when no edge survives [excluding] and there is therefore no
      *   set to take a front of.
      */
-    public fun front(edges: List<PolicyEdge>, excluding: Set<AttachmentId> = emptySet()): Rational? {
+    public fun front(edges: List<PolicyEdge>, excluding: Set<AttachmentId> = emptySet()): Rational? =
+        frontTime(edges, excluding)?.toRational()
+
+    /**
+     * [front] kept unreduced, for the two writers that use it: a joiner of weight `w` is seated, or
+     * clamped, at [VirtualTime.ticksFor] on its own grid. The [Rational] form is for diagnostics;
+     * dividing it out is what used to grow every stored denominator (#3313).
+     */
+    internal fun frontTime(edges: List<PolicyEdge>, excluding: Set<AttachmentId> = emptySet()): VirtualTime? {
         val considered = if (excluding.isEmpty()) edges else edges.filterNot { it.record.id in excluding }
         if (considered.isEmpty()) return null
         val demanding = considered.filter { isDemanding(it) }
         // Nothing competing ⇒ no mean to take; fall back to the max, which can only give up.
-        if (demanding.isEmpty()) return considered.maxOf { effectiveVirtualService(it) }
-        return weightedMeanVirtualTime(demanding)
+        if (demanding.isEmpty()) {
+            val top = considered.maxWith { a, b ->
+                compareVirtual(effectiveTicks(a), a.record.weight, effectiveTicks(b), b.record.weight)
+            }
+            return VirtualTime.of(effectiveTicks(top), top.record.weight)
+        }
+        return meanOf(demanding)
     }
 
     /**
      * The forward clamp applied when a child transitions idle→demanding
-     * (design §7.2): `max(0, front − vRaw − sleeperCredit / weight)`. Adding this
-     * offset to [virtualService] clamps the waker up to the current front (with default
-     * `sleeperCredit = 0`, exactly to the front), so it cannot claim a backlog of idle
-     * virtual time. The result is the [PolicyEdge.virtualOffset] the caller stores.
+     * (design §7.2): `max(0, front − vRaw − sleeperCredit / weight)`, on the waker's own grid:
+     * `max(0, ⌈front · w · G⌉ − p − sleeperCredit · G)` ticks. Adding this offset to
+     * [virtualService] clamps the waker up to the current front (with default
+     * `sleeperCredit = 0`, to the front rounded up to its grid), so it cannot claim a backlog of
+     * idle virtual time. The result is the [PolicyEdge.virtualOffset] the caller stores, on the
+     * grid, so reading it back is exact.
      *
      * @param front the parent's virtual time at the moment of waking — [front], with the waker
      *   itself (and any co-waker) excluded.
@@ -280,14 +303,16 @@ public object HeddlePolicy {
      * @param weight the edge's weight.
      * @param sleeperCredit bounded credit the waker may keep (default `0`).
      */
-    public fun wakeOffset(front: Rational, vRaw: Rational, weight: Weight, sleeperCredit: Long): Rational {
-        val creditInVirtual = Rational.of(checkedMul(sleeperCredit, weight.denominator), weight.numerator)
-        return Rational.max(Rational.ZERO, front - vRaw - creditInVirtual)
-    }
+    public fun wakeOffset(front: Rational, vRaw: Rational, weight: Weight, sleeperCredit: Long): Rational =
+        ticksToVirtual(wakeOffsetTicks(ticksAt(front, weight), ticksAt(vRaw, weight), sleeperCredit), weight)
 
-    /** Effective virtual service: [virtualService] plus the scheduler-local wake clamp. */
-    private fun effectiveVirtualService(edge: PolicyEdge): Rational =
-        virtualService(edge) + edge.virtualOffset
+    /**
+     * [wakeOffset] in ticks: how far a waker at [rawTicks] moves up to reach [frontTicks], less
+     * [sleeperCredit] whole units it may keep. Sleeper credit is in service units, not virtual
+     * time, so it scales onto the grid by `G` like any other service.
+     */
+    internal fun wakeOffsetTicks(frontTicks: Long, rawTicks: Long, sleeperCredit: Long): Long =
+        maxOf(0L, checkedSub(checkedSub(frontTicks, rawTicks), ticksOf(sleeperCredit)))
 
     /**
      * The trimmed quantum for [edge] this round: the smallest of the configured quantum,
@@ -316,42 +341,32 @@ public object HeddlePolicy {
     }
 
     /**
-     * `V = Σ w·ev / Σ w` over [edges] (design §7.3 step 2), exact rational. The one arithmetic
-     * shared by [pick]'s step 2 and [front] — over *different* sets, though: [pick] passes its
-     * trimmed candidates, [front] the untrimmed demanding ones. [edges] must be non-empty.
+     * `V = Σ w·ev / Σ w` over [edges] (design §7.3 step 2), kept unreduced as `Σ p / (G · Σ w)`.
+     * The one arithmetic shared by [pick]'s step 2 and [front] — over *different* sets, though:
+     * [pick] passes its trimmed candidates, [front] the untrimmed demanding ones. [edges] must be
+     * non-empty.
      */
-    private fun weightedMeanVirtualTime(edges: List<PolicyEdge>): Rational {
-        var weightedSum = Rational.ZERO
-        var weightSum = Rational.ZERO
-        for (e in edges) {
-            val w = Rational.of(e.record.weight.numerator, e.record.weight.denominator)
-            weightedSum += w * effectiveVirtualService(e)
-            weightSum += w
-        }
-        return weightedSum / weightSum
-    }
+    private fun meanOf(edges: List<PolicyEdge>): VirtualTime =
+        VirtualTime.mean(edges.map { effectiveTicks(it) }, edges.map { it.record.weight })
 
     /**
-     * Order candidates by virtual deadline `ev + q/w`, then by attachment id. The id
-     * tie-break is the deterministic symmetry-breaker: identical deadlines resolve the
-     * same way on every replica.
+     * Order candidates by virtual deadline `ev + q/w`, then by attachment id. On the grid the
+     * deadline is the position `p + q · G` at weight `w`, and two are compared by 128-bit
+     * cross-multiplication. The id tie-break is the deterministic symmetry-breaker: identical
+     * deadlines resolve the same way on every replica.
      */
     private val deadlineThenId: Comparator<Candidate> = Comparator { a, b ->
-        val da = a.deadline()
-        val db = b.deadline()
-        val byDeadline = da.compareTo(db)
+        val byDeadline = compareVirtual(a.deadline(), a.edge.record.weight, b.deadline(), b.edge.record.weight)
         if (byDeadline != 0) byDeadline else a.edge.record.id.compareTo(b.edge.record.id)
     }
 
     private class Candidate(
         val edge: PolicyEdge,
         val quantum: Long,
-        val virtualService: Rational,
+        /** The candidate's effective position, in ticks of its own service. */
+        val ticks: Long,
     ) {
-        /** Virtual deadline `ev + q/w = ev + q * den / num`. */
-        fun deadline(): Rational {
-            val weight = edge.record.weight
-            return virtualService + Rational.of(checkedMul(quantum, weight.denominator), weight.numerator)
-        }
+        /** The deadline as a position on this edge's grid: `p + q · G`. */
+        fun deadline(): Long = checkedAdd(ticks, ticksOf(quantum))
     }
 }

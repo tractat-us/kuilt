@@ -111,16 +111,18 @@ class HeddlePolicyTest {
     /**
      * The tightest boundary for step 3: with a single candidate, `V` is *exactly* that
      * candidate's effective virtual service, so `ev ≤ V` holds only by equality — and holds,
-     * because `V` is an exact [Rational] rather than a float. Nothing rounds, which is why
-     * §7.3 step 3's old "if rounding ever yields no eligible candidate" fallback describes a
-     * state this policy cannot enter (#1737).
+     * because the comparison is integer cross-multiplication rather than a float, and a lone
+     * position reads `⌈V · w · G⌉ = p` exactly. That is why §7.3 step 3's old "if rounding ever
+     * yields no eligible candidate" fallback describes a state this policy cannot enter (#1737).
      */
     @Test
     fun theLoneCandidateIsEligibleByExactEquality() {
-        // ev = 5 + 11/(3/7) = 92/3 — deliberately non-integral, so equality is not free.
+        // A floor of 5 is not on a 3/7-weight grid: 5 · (3/7) · 16 = 34²⁄₇ ticks, read up to 35
+        // (#3313). With 11 units issued, p = 35 + 176 = 211 ticks, so ev = 211 / (16 · 3/7) = 1477/48.
+        // Deliberately non-integral, so equality is not free.
         val only = Sim("o", Weight.of(3L, 7L), seat = Rational.of(5L), issued = 11L, spent = 11L)
         assertAll(
-            { assertEquals(Rational.of(92L, 3L), only.virtualService()) },
+            { assertEquals(Rational.of(1477L, 48L), only.virtualService()) },
             { assertEquals(only.virtualService(), front(listOf(only))) },
             { assertEquals(Grant(AttachmentId("o"), 4L), pick(listOf(only), PolicyConfig(quantum = 4L))) },
         )
@@ -133,7 +135,8 @@ class HeddlePolicyTest {
      *
      *  - **the theorem** — `min(ev) ≤ V`, which is what makes the empty set unreachable: `V` is
      *    the weighted mean of the *same* candidate set over strictly positive weights;
-     *  - **the winner is eligible** — step 4 never selects from outside `ev ≤ V`.
+     *  - **the winner is eligible** — step 4 never selects from outside `p ≤ ⌈V · w · G⌉`, the
+     *    eligibility rule read on the winner's own grid (#3313).
      *
      * If the invariant ever broke, `pick` itself would throw and fail this sweep — that is what
      * the assertion buys over the old silent fallback, which would have absorbed it.
@@ -164,9 +167,11 @@ class HeddlePolicyTest {
                 // The pick itself throws if its own eligible set came out empty.
                 val grant = assertNotNull(pick(children, config), "no trim binds here, so a grant is always due")
                 val winner = children.first { it.id == grant.attachment.value }
+                val toTicks = Rational.of(TICKS_PER_UNIT * winner.weight.numerator, winner.weight.denominator)
+                val winnerTicks = winner.effectiveVirtualService() * toTicks
                 assertTrue(
-                    winner.effectiveVirtualService() <= v,
-                    "winner ${winner.id} at ev=${winner.effectiveVirtualService()} is above V=$v",
+                    winnerTicks <= Rational.of((v * toTicks).ceil()),
+                    "winner ${winner.id} at p=$winnerTicks is above ⌈V·w·G⌉ for V=$v",
                 )
                 rounds++
                 if (evs.any { it > v }) roundsWhereEligibilityBound++
@@ -367,34 +372,32 @@ class HeddlePolicyTest {
 
     /**
      * Neutral creation at a **genuinely fractional** parent virtual time (design §7.2, §10.5) —
-     * and the receipt that moving the seat into the [Gauge] retired a rounding rule rather than
-     * merely relocating it (issue #1752).
+     * and the receipt that the seat's rounding costs no turn (issues #1752, #3313).
      *
-     * `V = Σ w·ev / Σ w` is a [Rational] and is almost never integral. While the seat lived on
-     * `AttachmentRecord` it was a `Long`, so creation had to round, and the direction carried a
-     * fairness sign: rounding *down* seated the newborn **behind** the front — the "lifetime
-     * credit" §10.5 forbids — so the rule was the ceiling, accepting a bounded sliver of penalty
-     * (`0 ≤ ⌈V⌉ − V < 1`) as the conservative side. A [Gauge.floor] is a `Rational`, so there is
-     * no side to pick: the newborn lands on the front **exactly**, and both the credit and the
-     * sliver of penalty are gone. [neutralCreationGivesNoHeadStart] cannot see any of this — it
-     * creates at `V = 30/1`, where every rounding rule and the exact seat all agree.
+     * `V = Σ w·ev / Σ w` is almost never on the newborn's grid. A seat rounds it **up** to the
+     * next tick, `⌈V · w · G⌉`: rounding *down* would seat the newborn **behind** the front — the
+     * "lifetime credit" §10.5 forbids — so up is the side that can only give a turn away, and the
+     * sliver is under one tick (`1/16` of a unit at weight 1), against the whole unit `⌈V⌉` once
+     * cost. Step 3 reads `V` on the same grid, `p ≤ ⌈V · w · G⌉`, so the sliver cannot push the
+     * newborn out of the round it joins. [neutralCreationGivesNoHeadStart] cannot see any of
+     * this — it creates at `V = 30/1`, where every rounding rule agrees.
      *
-     * Here two near-converged siblings put the parent at `V = 109/10`, where the old floor (`10`)
-     * and ceiling (`11`) sat either side of the answer.
+     * Here two near-converged siblings put the parent at `V = 109/10`: 174²⁄₅ ticks, so the
+     * newborn is seated at 175.
      *
      * **What this test does and does not prove.** Asserting `newborn.virtualService() == v` would
      * be worthless here — the fixture *sets* the seat to `v` and the read is `v + (0−0)/w`, so it
      * restates itself. The seating decision lives in [EntitlementLedger.seat], and
      * `HeddleControlPlaneTest.theSchedulerSeatsAJoinerAtTheFrontAndSchedulesItFromThere` and
      * `HeddleNodeTest.aNewbornAndAWakerInOneRoundAreSeatedOnTheSameFront` are what pin it. What is
-     * observable *here*, at the policy, is the consequence the rounding rule used to cost: a
-     * newborn seated exactly on the front is **eligible** in the round it was created in, where the
-     * old `⌈V⌉ = 11` put it at `11 > V' = 120/11` and therefore outside the eligible set — a
-     * penalty, bounded but real. It is eligible and still does not win, which is the whole of what
-     * §10.5 asks for in both directions.
+     * observable *here*, at the policy, is the consequence a rounding rule can cost: a newborn
+     * seated a sliver above the front is still **eligible** in the round it was created in,
+     * where the old whole-unit `⌈V⌉ = 11` put it at `11 > V' = 120/11` and therefore outside the
+     * eligible set — a penalty, bounded but real. It is eligible and still does not win, which is
+     * the whole of what §10.5 asks for in both directions.
      */
     @Test
-    fun neutralCreationAtFractionalVirtualTimeLandsExactlyOnTheFront() {
+    fun neutralCreationAtFractionalVirtualTimeIsEligibleInItsCreationRound() {
         // ev(l) = 11/1 and ev(h) = 98/9, so V = (1·11 + 9·(98/9)) / (1 + 9) = 109/10.
         val light = Sim("l", Weight.ONE, issued = 11L, spent = 11L)
         val heavy = Sim("h", Weight.of(9), issued = 98L, spent = 98L)
@@ -406,15 +409,21 @@ class HeddlePolicyTest {
         val round = listOf(light, heavy, newborn)
 
         assertAll(
-            // No penalty: seated on the front it is eligible immediately. Seating at the retired
-            // ceiling (11) would put it above the round's V and out of the eligible set entirely.
+            // The seat is the front rounded up to the newborn's grid, and no further.
+            { assertEquals(Rational.of(175L, 16L), newborn.virtualService(), "⌈(109/10) · 16⌉ = 175 ticks") },
+            // No penalty: a sliver above V, it is still eligible immediately, because step 3 reads
+            // V on the same grid. The retired whole-unit ceiling (11) put it out of the set.
             {
+                val roundV = effectiveParentVirtualTime(round)
+                val toTicks = Rational.of(TICKS_PER_UNIT, 1L)
                 assertTrue(
-                    newborn.effectiveVirtualService() <= effectiveParentVirtualTime(round),
+                    newborn.effectiveVirtualService() * toTicks <= Rational.of((roundV * toTicks).ceil()),
                     "a newborn seated on the front must be eligible in its creation round: " +
-                        "ev=${newborn.effectiveVirtualService()} vs V=${effectiveParentVirtualTime(round)}",
+                        "ev=${newborn.effectiveVirtualService()} vs V=$roundV",
                 )
             },
+            // And the sliver is real: exact eligibility (ev ≤ V) would have excluded it.
+            { assertTrue(newborn.effectiveVirtualService() > effectiveParentVirtualTime(round)) },
             // No credit either: it still does not take the round it was created in. The heavier
             // sibling's deadline (98/9 + 1/9 = 11) beats the newborn's (109/10 + 1 = 119/10).
             {
