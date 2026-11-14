@@ -58,7 +58,7 @@ class WarpLogRecordExporterSegmentNumberingTest {
     private fun segmentKeys(store: RecordingStore): Set<String> =
         store.keys().filter { it.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }.toSet()
 
-    private fun indexOf(store: RecordingStore): LogSegmentIndex =
+    private suspend fun indexOf(store: RecordingStore): LogSegmentIndex =
         decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)))
 
     // ---- The number must not wrap ----
