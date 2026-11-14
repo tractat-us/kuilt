@@ -69,6 +69,9 @@ public data class Topology(public val root: String, public val children: List<No
      * @property children the children declared in the config, in the order written.
      * @property runtimeChildren set when the consumer adds children to this group while running;
      *   `null` when the group has only its declared [children]. A group with it may declare none.
+     *   Each runtime child is a leaf, one level below this group: it cannot be marked itself, so
+     *   it never has children of its own. Declared groups nest to any depth; runtime ones do not
+     *   yet, and letting them is tracked by #3314.
      */
     @Serializable
     @SerialName("group")

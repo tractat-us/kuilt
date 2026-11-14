@@ -152,7 +152,8 @@ independently consumable. Both modules are published and constrained by
 ## 1. Two hierarchies, kept separate
 
 **The logical scheduling tree** is data, not schema — groups created, closed,
-and reparented at runtime, any depth, no fixed level names:
+and reparented at runtime, any depth, no fixed level names (today a child the app
+creates while running is always a leaf; §11.1 says where that stands):
 
 ```text
 root
@@ -998,6 +999,13 @@ Which runtime children exist is the ledger's to say, and the diff owns them as i
 declared edges: under a marker the new tree keeps, an attached child is kept, history
 and all; a new marker weight regenerates it on a new edge; and when the marker goes, or
 its group does, the child is closed. Each detach leaves a retired edge behind for good.
+
+A runtime child is a leaf, one level below its marked group: it cannot carry a marker
+itself, so nothing discovered while running has children of its own. §1's "any depth"
+is met today by declared groups, which nest freely and reshape on a reload, and not
+yet by runtime ones. A tree found at runtime two levels deep (say, a repository and
+then its authors) has to declare each repository as a marked group and reload as
+each one appears. Letting a runtime child have runtime children is tracked by #3314.
 
 ---
 

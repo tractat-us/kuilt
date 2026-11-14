@@ -78,6 +78,10 @@ public sealed class TopologyDraft {
          * [weight]. A marked group may declare no children of its own. Call it at most once per
          * group: a group has one runtime weight.
          *
+         * Each child the app creates here is a leaf, one level below this group: a runtime child
+         * cannot be marked in turn, so it never has children of its own. Declared groups nest to
+         * any depth; runtime ones do not yet, and letting them is tracked by #3314.
+         *
          * @throws IllegalStateException when this group is already marked.
          */
         public fun runtimeChildren(weight: Weight = Weight.ONE) {
