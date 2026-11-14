@@ -97,7 +97,7 @@ public data class Topology(public val root: String, public val children: List<No
         @Serializable(with = TopologyWeightSerializer::class) override val weight: Weight,
         public val children: List<Node>,
         @SerialName("runtimeChildren") public val template: ChildTemplate? = null,
-        @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
+        override val maxConcurrent: Long? = null,
     ) : Node
 
     /**

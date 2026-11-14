@@ -1468,7 +1468,6 @@ final class us.tractat.kuilt.heddle/Topology { // us.tractat.kuilt.heddle/Topolo
     }
 
     final class Group : us.tractat.kuilt.heddle/Topology.Node { // us.tractat.kuilt.heddle/Topology.Group|null[0]
-        constructor <init>(kotlin/String, us.tractat.kuilt.heddle/Weight, kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node>, us.tractat.kuilt.heddle/Topology.ChildTemplate? = ...) // us.tractat.kuilt.heddle/Topology.Group.<init>|<init>(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>;us.tractat.kuilt.heddle.Topology.ChildTemplate?){}[0]
         constructor <init>(kotlin/String, us.tractat.kuilt.heddle/Weight, kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node>, us.tractat.kuilt.heddle/Topology.ChildTemplate? = ..., kotlin/Long? = ...) // us.tractat.kuilt.heddle/Topology.Group.<init>|<init>(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>;us.tractat.kuilt.heddle.Topology.ChildTemplate?;kotlin.Long?){}[0]
 
         final val children // us.tractat.kuilt.heddle/Topology.Group.children|{}children[0]
@@ -1487,7 +1486,6 @@ final class us.tractat.kuilt.heddle/Topology { // us.tractat.kuilt.heddle/Topolo
         final fun component3(): kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> // us.tractat.kuilt.heddle/Topology.Group.component3|component3(){}[0]
         final fun component4(): us.tractat.kuilt.heddle/Topology.ChildTemplate? // us.tractat.kuilt.heddle/Topology.Group.component4|component4(){}[0]
         final fun component5(): kotlin/Long? // us.tractat.kuilt.heddle/Topology.Group.component5|component5(){}[0]
-        final fun copy(kotlin/String = ..., us.tractat.kuilt.heddle/Weight = ..., kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> = ..., us.tractat.kuilt.heddle/Topology.ChildTemplate? = ...): us.tractat.kuilt.heddle/Topology.Group // us.tractat.kuilt.heddle/Topology.Group.copy|copy(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>;us.tractat.kuilt.heddle.Topology.ChildTemplate?){}[0]
         final fun copy(kotlin/String = ..., us.tractat.kuilt.heddle/Weight = ..., kotlin.collections/List<us.tractat.kuilt.heddle/Topology.Node> = ..., us.tractat.kuilt.heddle/Topology.ChildTemplate? = ..., kotlin/Long? = ...): us.tractat.kuilt.heddle/Topology.Group // us.tractat.kuilt.heddle/Topology.Group.copy|copy(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.collections.List<us.tractat.kuilt.heddle.Topology.Node>;us.tractat.kuilt.heddle.Topology.ChildTemplate?;kotlin.Long?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Topology.Group.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Topology.Group.hashCode|hashCode(){}[0]
@@ -1620,7 +1618,6 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
     }
 
     final class Group : us.tractat.kuilt.heddle/TopologyDocument.Node { // us.tractat.kuilt.heddle/TopologyDocument.Group|null[0]
-        constructor <init>(kotlin/String, kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ...) // us.tractat.kuilt.heddle/TopologyDocument.Group.<init>|<init>(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?){}[0]
         constructor <init>(kotlin/String, kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ..., kotlin/Long? = ...) // us.tractat.kuilt.heddle/TopologyDocument.Group.<init>|<init>(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?;kotlin.Long?){}[0]
 
         final val children // us.tractat.kuilt.heddle/TopologyDocument.Group.children|{}children[0]
@@ -1639,7 +1636,6 @@ final class us.tractat.kuilt.heddle/TopologyDocument { // us.tractat.kuilt.heddl
         final fun component3(): kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> // us.tractat.kuilt.heddle/TopologyDocument.Group.component3|component3(){}[0]
         final fun component4(): us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? // us.tractat.kuilt.heddle/TopologyDocument.Group.component4|component4(){}[0]
         final fun component5(): kotlin/Long? // us.tractat.kuilt.heddle/TopologyDocument.Group.component5|component5(){}[0]
-        final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ...): us.tractat.kuilt.heddle/TopologyDocument.Group // us.tractat.kuilt.heddle/TopologyDocument.Group.copy|copy(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?){}[0]
         final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin.collections/List<us.tractat.kuilt.heddle/TopologyDocument.Node> = ..., us.tractat.kuilt.heddle/TopologyDocument.ChildTemplate? = ..., kotlin/Long? = ...): us.tractat.kuilt.heddle/TopologyDocument.Group // us.tractat.kuilt.heddle/TopologyDocument.Group.copy|copy(kotlin.String;kotlin.String;kotlin.collections.List<us.tractat.kuilt.heddle.TopologyDocument.Node>;us.tractat.kuilt.heddle.TopologyDocument.ChildTemplate?;kotlin.Long?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/TopologyDocument.Group.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/TopologyDocument.Group.hashCode|hashCode(){}[0]

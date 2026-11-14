@@ -1458,8 +1458,8 @@ wake clamp (`settleJoiners`), with no banked credit (§10 invariant 6).
   open leases' paths names; the acquire that follows never picks it; and
   `entitlement` shares every slot among the uncapped leaves.
 
-**Compatibility.** A new property on a public data class changes its
-constructor and `copy` in binary, so the old constructors are kept.
+**Compatibility.** `Lane` keeps its old constructors; the group and template
+shapes broke deliberately in #3368 (no 0.7.4 caller).
 
 **Why it belongs in heddle.** The preview counts the leases it opens against a
 ceiling, and `explain` reports "at ceiling" as its own reason. A gate in the

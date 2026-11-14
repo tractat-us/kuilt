@@ -30,7 +30,7 @@ internal sealed interface Leasable {
 
     /**
      * What [topology] declares: each of its lanes, and each attached child of a group it gives a
-     * template. An attached child is declared by its name alone; whether it is attached is the ledger's
+     * template. A child under a template is declared by its name alone; whether it is attached is the ledger's
      * to say, and a leaf with no ACTIVE lineage is never reached anyway.
      */
     class ByTopology(val topology: Topology) : Leasable {

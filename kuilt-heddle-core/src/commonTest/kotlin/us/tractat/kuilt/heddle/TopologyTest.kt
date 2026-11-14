@@ -121,7 +121,7 @@ class TopologyTest {
                     )
                 }
             }.toTypedArray(),
-            // The template.s weight is a property of the group itself.
+            // The template's weight is a property of the group itself.
             { assertEquals(listOf(Key(listOf(0), INVALID_WEIGHT)), markerProblems.keys()) },
         )
     }

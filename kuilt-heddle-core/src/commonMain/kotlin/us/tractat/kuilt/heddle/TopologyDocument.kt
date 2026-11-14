@@ -62,7 +62,7 @@ public data class TopologyDocument(public val root: String, public val children:
         override val weight: String = "1",
         public val children: List<Node> = emptyList(),
         public val template: ChildTemplate? = null,
-        @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
+        override val maxConcurrent: Long? = null,
     ) : Node
 
     /**
