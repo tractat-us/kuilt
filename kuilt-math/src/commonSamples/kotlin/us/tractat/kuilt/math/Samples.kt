@@ -1,6 +1,7 @@
 package us.tractat.kuilt.math
 
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -30,4 +31,19 @@ fun sampleMulDiv() {
     assertEquals(3L, mulDiv(7L, 1L, 2L, Rounding.FLOOR))
     assertEquals(4L, mulDiv(7L, 1L, 2L, Rounding.CEILING))
     assertNull(mulDiv(Long.MAX_VALUE, 2L, 1L, Rounding.FLOOR))
+}
+
+/** Keep a running total whose partial sums may leave `Long`, without allocating per term. */
+fun sampleWideSum() {
+    val total = WideSum()
+    total.add(Long.MAX_VALUE)
+    total.add(Long.MAX_VALUE) // the partial sum has left Long; nothing is lost
+    total.sub(Long.MAX_VALUE)
+    assertEquals(Long.MAX_VALUE, total.toInt128().toLongOrNull())
+
+    // Two of the widest products leave 128 bits: refused, never wrapped, and the total is kept.
+    val products = WideSum()
+    products.add(Long.MIN_VALUE.timesWide(Long.MIN_VALUE))
+    assertFailsWith<ArithmeticException> { products.add(Long.MIN_VALUE.timesWide(Long.MIN_VALUE)) }
+    assertEquals(Long.MIN_VALUE.timesWide(Long.MIN_VALUE), products.toInt128())
 }
