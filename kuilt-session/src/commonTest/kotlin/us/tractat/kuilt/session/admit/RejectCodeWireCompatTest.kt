@@ -34,7 +34,7 @@ class RejectCodeWireCompatTest {
 
     @Test
     fun `a codeless reject still encodes to the pre-1572 bytes`() {
-        assertEquals(goldenCodelessReject, AdmitMessage.encode(AdmitMessage.Reject("resume-rejected")).toHex())
+        assertEquals(goldenCodelessReject, AdmitMessage.encode(AdmitMessage.Reject("resume-rejected")).toHexString())
     }
 
     @Test
@@ -70,8 +70,6 @@ class RejectCodeWireCompatTest {
         assertTrue(RejectCode.ResumeWindowNotYetOpen.retryable)
         assertTrue(RejectCode.Unknown("").retryable)
     }
-
-    private fun ByteArray.toHex(): String = joinToString("") { b -> (b.toInt() and 0xFF).toString(16).padStart(2, '0') }
 
     private fun String.hexToBytes(): ByteArray =
         ByteArray(length / 2) { i -> substring(i * 2, i * 2 + 2).toInt(16).toByte() }
