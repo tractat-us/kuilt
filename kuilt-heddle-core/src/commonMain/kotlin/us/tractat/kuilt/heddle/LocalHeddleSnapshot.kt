@@ -126,14 +126,17 @@ public class LocalHeddleSnapshot internal constructor(
         "LocalHeddleSnapshot(root=${root.value}, epoch=$epoch, totalSlots=$totalSlots, leases=${open.size}, $allocatorMemory, lastApplied=$lastApplied)"
 
     public companion object {
-        /** The format this release writes. */
-        public const val FORMAT_VERSION: Int = 1
+        /**
+         * The format this release writes. Format 2 adds the ledger's record of the edges it has
+         * forgotten (#3192); v0.7.4 wrote format 1.
+         */
+        public const val FORMAT_VERSION: Int = 2
 
         /**
          * Every format this release reads, oldest first: its own, and the one the release before it
-         * wrote. Format 1 is the first, so today that is format 1 alone.
+         * wrote.
          */
-        public val SUPPORTED_FORMAT_VERSIONS: List<Int> = listOf(1)
+        public val SUPPORTED_FORMAT_VERSIONS: List<Int> = listOf(1, 2)
     }
 }
 
@@ -211,9 +214,38 @@ public sealed interface RestoreResult {
  * - a change that cannot be made that way (a rename, a removal, a new meaning for a field) needs a
  *   frozen surrogate of the nested type under this class, which format 1 then reads through, and
  *   only after that the change to the live type.
+ *
+ * This release reads format 1 and never writes it, so there is no way back from a snapshot to this
+ * surrogate.
  */
 @Serializable
 private class SnapshotFormat1(
+    val epoch: Long,
+    val totalSlots: Long,
+    val ledger: EntitlementLedger,
+    val allocatorMemory: AllocatorMemory,
+    val leases: List<LeaseFormat1>,
+    val lastApplied: Topology,
+) {
+    /** The snapshot, and throws [IllegalArgumentException] when the ledger carries a fold, which format 1 predates. */
+    fun toSnapshot(): LocalHeddleSnapshot {
+        require(!ledger.hasForgotten()) { "a format-1 snapshot carries forgotten edges, which format 1 predates" }
+        return LocalHeddleSnapshot(epoch, ledger, allocatorMemory, totalSlots, leases.map { it.toPersisted(ledger) }, lastApplied)
+    }
+}
+
+/**
+ * Format 2, field for field and in wire order: format 1's fields, unchanged. What format 2 adds is
+ * nested in the ledger, where a format-1 reader cannot have looked for it: the record of the edges
+ * the ledger has forgotten (#3192). It is a surrogate of its own, beside [SnapshotFormat1], so that
+ * this one can change before format 2 ships while format 1's stays frozen.
+ *
+ * The open leases reuse [LeaseFormat1], which is frozen with format 1 and so cannot move under
+ * this format either. The same rule as [SnapshotFormat1]'s applies to the nested serializers once
+ * format 2 has shipped.
+ */
+@Serializable
+private class SnapshotFormat2(
     val epoch: Long,
     val totalSlots: Long,
     val ledger: EntitlementLedger,
@@ -225,7 +257,7 @@ private class SnapshotFormat1(
         LocalHeddleSnapshot(epoch, ledger, allocatorMemory, totalSlots, leases.map { it.toPersisted(ledger) }, lastApplied)
 
     companion object {
-        fun of(snapshot: LocalHeddleSnapshot): SnapshotFormat1 = SnapshotFormat1(
+        fun of(snapshot: LocalHeddleSnapshot): SnapshotFormat2 = SnapshotFormat2(
             epoch = snapshot.epoch,
             totalSlots = snapshot.totalSlots,
             ledger = snapshot.ledger,
@@ -237,8 +269,9 @@ private class SnapshotFormat1(
 }
 
 /**
- * One open lease in format 1: its id, reservation so far, start time, and path, root edge first.
- * The leaf is not stored: it is the child of the path's last edge, so the two cannot disagree.
+ * One open lease in format 1, and in format 2: its id, reservation so far, start time, and path,
+ * root edge first. The leaf is not stored: it is the child of the path's last edge, so the two
+ * cannot disagree.
  */
 @Serializable
 private class LeaseFormat1(
@@ -281,7 +314,8 @@ internal object LocalHeddleSnapshotSerializer : KSerializer<LocalHeddleSnapshot>
     private const val ELEMENTS = 2
 
     /**
-     * A LIST of exactly two elements, `formatVersion` an `Int` and `state` format 1's surrogate:
+     * A LIST of exactly two elements, `formatVersion` an `Int` and `state` the surrogate of the
+     * format this release writes, [LocalHeddleSnapshot.FORMAT_VERSION]:
      * the fixed-shape list the library's `StructureKind.LIST` documentation allows for. LIST, so
      * that every format reads it in order. Its own name and its own element types, so that schema
      * tooling and descriptor-driven formats see what is actually written.
@@ -289,13 +323,13 @@ internal object LocalHeddleSnapshotSerializer : KSerializer<LocalHeddleSnapshot>
     @OptIn(InternalSerializationApi::class)
     override val descriptor: SerialDescriptor = buildSerialDescriptor("us.tractat.kuilt.heddle.LocalHeddleSnapshot", StructureKind.LIST) {
         element("formatVersion", Int.serializer().descriptor)
-        element("state", SnapshotFormat1.serializer().descriptor)
+        element("state", SnapshotFormat2.serializer().descriptor)
     }
 
     override fun serialize(encoder: Encoder, value: LocalHeddleSnapshot) {
         encoder.encodeCollection(descriptor, collectionSize = ELEMENTS) {
             encodeIntElement(descriptor, VERSION, LocalHeddleSnapshot.FORMAT_VERSION)
-            encodeSerializableElement(descriptor, STATE, SnapshotFormat1.serializer(), SnapshotFormat1.of(value))
+            encodeSerializableElement(descriptor, STATE, SnapshotFormat2.serializer(), SnapshotFormat2.of(value))
         }
     }
 
@@ -341,6 +375,7 @@ internal object LocalHeddleSnapshotSerializer : KSerializer<LocalHeddleSnapshot>
     /** `state` as format [version] wrote it. One arm per entry of [LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS]. */
     private fun decodeState(decoder: CompositeDecoder, version: Int): LocalHeddleSnapshot = when (version) {
         1 -> decoder.decodeSerializableElement(descriptor, STATE, SnapshotFormat1.serializer()).toSnapshot()
+        2 -> decoder.decodeSerializableElement(descriptor, STATE, SnapshotFormat2.serializer()).toSnapshot()
         else -> throw UnsupportedSnapshotFormat(version)
     }
 }

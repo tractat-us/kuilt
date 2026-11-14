@@ -462,7 +462,8 @@ cannot move `state` ahead of the version. Equal snapshots encode to equal bytes.
 
 `LocalHeddleSnapshot.FORMAT_VERSION` is the format this release writes.
 `SUPPORTED_FORMAT_VERSIONS` lists the formats it reads: its own and the one
-before it. Format 1 is the first, so today both say 1.
+before it. This release writes format 2 and reads formats 1 and 2, so a
+snapshot stored by v0.7.4, which wrote format 1, still restores.
 
 `decode` reads the version first and never throws for what the bytes hold.
 It gives one of three answers:
