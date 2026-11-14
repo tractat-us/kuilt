@@ -87,9 +87,11 @@ public data class Gauge(
     @Serializable(with = RationalSerializer::class)
     public val floor: Rational,
     public val folded: Long,
+    public val returnsFolded: Long = 0L,
 ) {
     init {
         require(folded >= 0L) { "Gauge folded must be non-negative, was $folded" }
+        require(returnsFolded >= 0L) { "Gauge returnsFolded must be non-negative, was $returnsFolded" }
     }
 
     /**
@@ -97,7 +99,7 @@ public data class Gauge(
      * independently. See the class KDoc for why this is not a lexicographic pick.
      */
     public fun join(other: Gauge): Gauge =
-        Gauge(Rational.max(floor, other.floor), maxOf(folded, other.folded))
+        Gauge(Rational.max(floor, other.floor), maxOf(folded, other.folded), maxOf(returnsFolded, other.returnsFolded))
 }
 
 /**

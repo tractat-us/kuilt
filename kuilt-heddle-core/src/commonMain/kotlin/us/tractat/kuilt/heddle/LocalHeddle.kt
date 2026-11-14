@@ -1205,6 +1205,13 @@ public class LocalHeddle private constructor(
      */
     internal var rebaseForTest: Boolean = true
 
+    /**
+     * Whether a return folds into the gauges of the edges it crosses (#3360). Off only in a test's
+     * twin, to show a run reaches the ceiling without it and picks the same until then. Not engine
+     * state: a [restore] starts with it on.
+     */
+    internal var foldReturnsForTest: Boolean = true
+
     /** How many rebases moved this engine's positions, counting only calls it kept: the witness a test reads. */
     internal val rebasesForTest: Int get() = allocator.rebasesForTest
 
