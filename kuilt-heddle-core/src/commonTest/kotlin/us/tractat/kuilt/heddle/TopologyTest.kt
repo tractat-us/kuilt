@@ -2,6 +2,7 @@ package us.tractat.kuilt.heddle
 
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import us.tractat.kuilt.heddle.TopologyProblem.Kind.CONSUMER
 import us.tractat.kuilt.heddle.TopologyProblem.Kind.DUPLICATE_NAME
 import us.tractat.kuilt.heddle.TopologyProblem.Kind.EMPTY_GROUP
 import us.tractat.kuilt.heddle.TopologyProblem.Kind.EMPTY_NAME
@@ -61,6 +62,26 @@ class TopologyTest {
             },
             { assertTrue(problems.all { it.detail.isNotBlank() }, "every problem says what is wrong: $problems") },
         )
+    }
+
+    /**
+     * [TopologyProblem.Kind.CONSUMER] is the app's, never heddle's. The document reaches every kind
+     * heddle reports, so this reds both if `from` starts reporting the app's kind and if heddle
+     * gains a kind this fixture never reaches.
+     */
+    @Test
+    fun fromReportsEveryKindButTheConsumers() {
+        val document = TopologyDocument(
+            root = "",
+            children = listOf(
+                TopologyDocument.Group("acme", "3", children = listOf(lane("batch"), lane("batch"))),
+                TopologyDocument.Group("idle", runtimeChildren = "0"),
+                TopologyDocument.Group("empty"),
+                lane("x", weight = "0"),
+            ),
+        )
+
+        assertEquals(TopologyProblem.Kind.entries.toSet() - CONSUMER, invalid(document).map { it.kind }.toSet())
     }
 
     @Test
