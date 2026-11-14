@@ -669,3 +669,69 @@ reason. A lane is charged **per execution**, so a task two peers both run under 
     check(untagged.lane == Lane.ROOT)
     check(admission.admit(untagged) === AdmissionTicket.NOOP)
 ```
+
+## Migrating from runtimeChildren to template
+
+**Intent:** you wrote code or config against v0.7.4's "runtime children" and are moving to the
+current release. The idea is unchanged: a group whose children your app attaches while it runs.
+Only the names moved, and one config key now fails quietly if you leave it alone.
+**Primitive:** `Topology.Group.template` (a `Topology.ChildTemplate`), `LocalHeddle.attach` and
+`detach`.
+
+| In v0.7.4 | Now |
+|---|---|
+| config `runtimeChildren: "1"` | `template: { weight: "1" }` |
+| config `runtimeChildrenMaxConcurrent: 2` | `template: { maxConcurrent: 2 }`, inside the template |
+| `TopologyDocument.Group.runtimeChildren: String?` | `template: TopologyDocument.ChildTemplate?` |
+| `TopologyDraft.Group.runtimeChildren(...)` | `template(weight, maxConcurrent)` |
+| `Topology.RuntimeChildren`, `Group.runtimeChildren` | `Topology.ChildTemplate`, `Group.template` |
+| `attachRuntimeChild` / `detachRuntimeChild`, on `LocalHeddle` and on `Topology` | `attach` / `detach` |
+| `Topology.runtimeChildId` | `Topology.attachedChildId` |
+| `GroupPath.RuntimeChild` | `GroupPath.Attached` |
+
+The config in the new shape, written once for a group that caps all its repos together and each
+attached repo on its own:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleChildTemplateDocument -->
+```kotlin
+    val text = """
+        {"root": "pool", "children": [
+          {"type": "group", "name": "repos", "maxConcurrent": 8, "template": {"maxConcurrent": 2}}
+        ]}
+    """
+    val written = Json.decodeFromString<TopologyDocument>(text)
+    val repos = (Topology.from(written) as TopologyParse.Valid).topology.children.single() as Topology.Group
+    check(repos.maxConcurrent == 8L)
+    check(repos.template == Topology.ChildTemplate(Weight.ONE, maxConcurrent = 2L))
+```
+
+What behaves differently:
+
+- **An old config key is dropped, not refused, by a lenient decoder.** A strict decode throws on
+  `runtimeChildren`. A decoder built with `ignoreUnknownKeys = true` discards it, so the group
+  loads with no template and nothing can be attached under it, with no config error when it has
+  declared children. Decode strictly. This test pins both outcomes; its `json` is the strict one:
+
+<!-- verbatim from kuilt-heddle-core/src/commonTest/kotlin/us/tractat/kuilt/heddle/TopologyTest.kt#aVersionSevenFourMarkerIsRefusedStrictlyAndDroppedLeniently -->
+```kotlin
+    val old = """{"root":"root","children":[{"type":"group","name":"tenants","children":[{"type":"lane","name":"x"}],"runtimeChildren":"1"}]}"""
+    val lenient = Json { ignoreUnknownKeys = true }
+    val dropped = Topology.from(lenient.decodeFromString(TopologyDocument.serializer(), old))
+    val tenants = assertIs<Topology.Group>(assertIs<TopologyParse.Valid>(dropped).topology.children.single())
+
+    assertAll(
+        { assertFailsWith<SerializationException> { json.decodeFromString(TopologyDocument.serializer(), old) } },
+        { assertNull(tenants.template) },
+        { assertEquals(listOf("x"), tenants.children.map { it.name }) },
+    )
+```
+
+- **The ceiling lives inside the template.** v0.7.4 kept it beside the marker, and dropped it with
+  no warning when the marker was missing. That document can no longer be written.
+- **`template: {}` is a template.** It attaches children at weight 1 with no ceiling.
+- **Saved snapshots are untouched.** The stored name is still `runtimeChildren`, so a snapshot
+  from v0.7.4 restores, and one this release writes reads back the same bytes. Only your config
+  text and your code change.
+
+The call-site change is a rename, so there is no "before" block to quote: the old names no longer
+compile. The working `attach` and `detach` are in the sample under the `template` paragraph above.
