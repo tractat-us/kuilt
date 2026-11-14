@@ -174,6 +174,84 @@ class LocalHeddlePropertyTest {
         )
     }
 
+    /**
+     * The queues `previewPicks` lists the leaves the real loop over those queues picks, and changes
+     * nothing (#3321). The real loop is what a caller with those queues does: `acquire` at the slot's
+     * reservation, `extend` by `head − reservation` when the winner's head is larger, then pop the
+     * head. Heads straddle the reservation and the weights are mixed. Even seeds reconcile a capacity;
+     * odd ones hold a fixed supply, so some loops end on an `acquire` refused for supply and some on
+     * an `extend`, whose pick is then in neither list.
+     */
+    @Test
+    fun queuePreviewEqualsTheRealLoop() {
+        var picked = 0
+        var extendedPicks = 0
+        var drained = 0
+        var endedOnAcquire = 0
+        var endedOnExtend = 0
+        var headsMattered = 0
+        for (seed in 0 until QUEUE_PREVIEW_SEEDS) {
+            val rng = Random(seed)
+            val r = 2L + rng.nextInt(3)
+            val policy = LocalPolicy(defaultReservation = r)
+            val h = if (seed % 2 == 0) {
+                engineOver(ledger, root, supply = 0, policy = policy).also { it.reconcileCapacity(1L + rng.nextInt(3)) }
+            } else {
+                engineOver(ledger, root, supply = 40L + rng.nextInt(80), policy = policy)
+            }
+            repeat(20) { step ->
+                val open = h.snapshot().leases
+                if (open.size < 3) {
+                    val waiting = subset(rng, leaves)
+                    h.acquire(waiting.toSet(), waiting.filter { rng.nextBoolean() }.toSet(), step.toLong(), 1L + rng.nextInt(4))
+                } else {
+                    h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(6).toLong())
+                }
+            }
+            val queues = leaves.associateWith { List(rng.nextInt(5)) { 1L + rng.nextInt(7) } }
+            val eligible = leaves.filter { rng.nextInt(4) != 0 }.toSet()
+
+            val before = h.snapshot()
+            val preview = h.previewPicks(queues, eligible)
+            val after = h.snapshot()
+            val byCount = h.previewPicks(queues.mapValues { it.value.size }, eligible, List(queues.values.sumOf { it.size }) { r })
+            if (byCount != preview) headsMattered++
+
+            val remaining = leaves.associateWith { ArrayDeque(queues.getValue(it)) }
+            val real = ArrayList<GroupId>()
+            while (true) {
+                val waiting = leaves.filter { remaining.getValue(it).isNotEmpty() }
+                val out = h.acquire(waiting.toSet(), waiting.filter { it in eligible }.toSet(), startedAt = 0L, reservation = r)
+                if (out == AcquireOutcome.NothingEligible) drained++
+                if (out == AcquireOutcome.SupplyExhausted || out is AcquireOutcome.PositionCeiling) endedOnAcquire++
+                if (out !is AcquireOutcome.Acquired) break
+                val head = remaining.getValue(out.lease.leaf).removeFirst()
+                if (head > r) {
+                    if (h.extend(out.lease.id, head - r) !is LeaseOutcome.Done) {
+                        endedOnExtend++
+                        break
+                    }
+                    extendedPicks++
+                }
+                real += out.lease.leaf
+            }
+            assertAll(
+                { assertEquals(real, preview, "seed $seed: the preview is what the real loop did") },
+                { assertSame(before.ledger, after.ledger, "seed $seed: the preview left the ledger alone") },
+                { assertEquals(before, after, "seed $seed: and the leases and the wake memory") },
+            )
+            picked += preview.size
+        }
+        assertAll(
+            { assertTrue(picked > QUEUE_PREVIEW_SEEDS, "previews picked something: $picked") },
+            { assertTrue(extendedPicks > 0, "some pick was extended to its head: $extendedPicks") },
+            { assertTrue(drained > 0, "some loop ran until nothing it could pick was queued: $drained") },
+            { assertTrue(endedOnAcquire > 0, "some loop ended on a refused acquire: $endedOnAcquire") },
+            { assertTrue(endedOnExtend > 0, "some loop ended on a refused extend: $endedOnExtend") },
+            { assertTrue(headsMattered > 0, "the heads changed some preview from the count-based one: $headsMattered") },
+        )
+    }
+
     private fun parentOf(leaf: GroupId): GroupId = if (leaf == leaves[0] || leaf == leaves[1]) p else q
 
     /**
@@ -378,6 +456,7 @@ class LocalHeddlePropertyTest {
         const val SEEDS = 200
         const val STEPS = 60
         const val PREVIEW_SEEDS = 100
+        const val QUEUE_PREVIEW_SEEDS = 200
         const val RESHAPE_STEPS = 80
 
         val RIG = listOf(

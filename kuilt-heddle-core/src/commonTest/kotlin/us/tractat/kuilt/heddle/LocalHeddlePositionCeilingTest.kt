@@ -221,6 +221,37 @@ class LocalHeddlePositionCeilingTest {
         )
     }
 
+    /**
+     * A queues preview stops at a position-ceiling refusal from either call it makes (#3321): the
+     * acquire, when a sibling of the pick is saturated, or the extend that takes the lease up to its
+     * head, when that delegation would cross. In the second the acquire landed, and its pick is
+     * still left out. Each arm has a control that differs only in the refusal.
+     */
+    @Test
+    fun aQueuePreviewStopsAtTheCeiling() {
+        val queues = mapOf(a to listOf(1L), b to listOf(1L))
+        val unsaturated = engine().apply { warmUp() }.previewPicks(queues, setOf(b), reservation = 1L)
+        val saturated = engine().apply { warmUp() }
+        saturated.pushTowardCeiling(a, below = 0L)
+
+        // One unit is 16 ticks: 17 under, an acquire of 1 lands one tick under, and an extend crosses.
+        val crossing = engine()
+        crossing.pushTowardCeiling(a, below = 17L)
+        val before = crossing.snapshot()
+        val withoutExtend = crossing.previewPicks(mapOf(a to listOf(1L)), setOf(a), reservation = 1L)
+        val withExtend = crossing.previewPicks(mapOf(a to listOf(2L)), setOf(a), reservation = 1L)
+        val unchanged = crossing.snapshot() == before
+        val lease = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a), setOf(a), startedAt = 0L, reservation = 1L)).lease
+        assertAll(
+            { assertEquals(listOf(b), unsaturated, "the control: b is picked when a is not saturated") },
+            { assertEquals(emptyList(), saturated.previewPicks(queues, setOf(b), reservation = 1L)) },
+            { assertEquals(listOf(a), withoutExtend, "the control: the acquire alone lands") },
+            { assertEquals(emptyList(), withExtend) },
+            { assertTrue(unchanged, "neither preview moved the engine") },
+            { assertEquals(LeaseOutcome.PositionCeiling(root), crossing.extend(lease.id, 1L), "the rig: the extend is what refuses") },
+        )
+    }
+
     @Test
     fun aWeightSetOverTheBudgetIsRefusedAtApply() {
         // Two primes just over 2³², so the lcm of the denominators leaves Long.

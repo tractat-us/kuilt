@@ -5,6 +5,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -187,6 +188,76 @@ class LocalHeddleSupplyTest {
             { assertEquals(false, previewChanged, "the preview minted nothing for real") },
             { assertEquals(12, preview.size, "the preview ran past the empty root") },
             { assertEquals(leased, preview) },
+        )
+    }
+
+    /**
+     * With no capacity, a queues preview stops where the root can no longer fund the slot's
+     * reservation, though every queue still has work in it (#3321).
+     */
+    @Test
+    fun aQueuePreviewStopsWhereSupplyRunsOut() {
+        val h = engineOver(threeLeaves, root, supply = 7L, policy = policy(reservation = 2L))
+        val queues = mapOf(a to List(4) { 2L }, b to List(4) { 2L }, c to List(4) { 2L })
+        val preview = h.previewPicks(queues, setOf(a, b, c))
+        val leased = List(3) { h.lease(setOf(a, b, c), reservation = 2L).leaf }
+        assertAll(
+            { assertEquals(leased, preview, "three picks of 2 out of 7") },
+            { assertEquals(AcquireOutcome.SupplyExhausted, h.acquire(setOf(a, b, c), setOf(a, b, c), startedAt = 0L, reservation = 2L)) },
+        )
+    }
+
+    /**
+     * A pick whose acquire lands but whose extend to the head is refused is left out of a queues
+     * preview, and the preview ends there (#3321): the caller's loop would hold that lease on less
+     * than its job needs. On the real engine, the rig: the second acquire lands and its extend is
+     * what runs out.
+     */
+    @Test
+    fun aPickWhoseExtendIsRefusedIsLeftOut() {
+        val h = engineOver(oneLeaf, root, supply = 5L, policy = policy(reservation = 2L))
+        val preview = h.previewPicks(mapOf(a to listOf(2L, 6L)), setOf(a))
+        h.lease(setOf(a), reservation = 2L)
+        val second = h.lease(setOf(a), reservation = 2L)
+        assertAll(
+            { assertEquals(listOf(a), preview) },
+            { assertEquals(LeaseOutcome.SupplyExhausted, h.extend(second.id, 4L), "the second pick's extend ran out") },
+        )
+    }
+
+    /**
+     * A head below the reservation is charged the reservation, since a lease cannot shrink (#3321):
+     * the preview with a's heads at 1 is the preview with them at the reservation, which is the
+     * count-based preview at that reservation. The rig: a's heads above the reservation do change
+     * the order, so the heads are read.
+     */
+    @Test
+    fun aHeadBelowTheReservationIsChargedTheReservation() {
+        val h = engineOver(threeLeaves, root, supply = 10_000L, policy = policy(reservation = 3L))
+        fun queues(aHead: Long) = mapOf(a to List(6) { aHead }, b to List(6) { 3L }, c to List(6) { 3L })
+        val all = setOf(a, b, c)
+        val below = h.previewPicks(queues(1L), all)
+        val atReservation = h.previewPicks(queues(3L), all)
+        val above = h.previewPicks(queues(7L), all)
+        val byCount = h.previewPicks(mapOf(a to 6, b to 6, c to 6), all, List(18) { 3L })
+        val real = List(18) { h.lease(all, reservation = 3L) }
+        assertAll(
+            { assertEquals(atReservation, below) },
+            { assertEquals(byCount, below) },
+            { assertEquals(real.map { it.leaf }, below) },
+            { assertTrue(real.all { it.reserved == 3L }, "every lease the real loop opened holds 3") },
+            { assertNotEquals(below, above, "a's heads above the reservation change the order") },
+        )
+    }
+
+    /** Every queued reservation is checked before anything runs, not only the heads a pick reaches. */
+    @Test
+    fun aQueuedReservationOutOfRangeThrows() {
+        val h = engineOver(oneLeaf, root, supply = 10L, policy = policy(reservation = 2L))
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { h.previewPicks(mapOf(a to listOf(0L)), setOf(a)) } },
+            { assertFailsWith<IllegalArgumentException> { h.previewPicks(mapOf(a to listOf(2L, LocalHeddle.MAX_RESERVATION + 1L)), setOf(a)) } },
+            { assertFailsWith<IllegalArgumentException> { h.previewPicks(emptyMap<GroupId, List<Long>>(), setOf(a), reservation = 0L) } },
         )
     }
 
