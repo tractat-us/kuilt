@@ -1,0 +1,47 @@
+public final class us/tractat/kuilt/math/CheckedLongKt {
+	public static final fun minusOrNull (JJ)Ljava/lang/Long;
+	public static final fun negateOrNull (J)Ljava/lang/Long;
+	public static final fun plusOrNull (JJ)Ljava/lang/Long;
+	public static final fun timesOrNull (JJ)Ljava/lang/Long;
+}
+
+public final class us/tractat/kuilt/math/Int128 : java/lang/Comparable {
+	public static final field Companion Lus/tractat/kuilt/math/Int128$Companion;
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/math/Int128;)I
+	public final fun divideOrNull (JLus/tractat/kuilt/math/Rounding;)Ljava/lang/Long;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHigh ()J
+	public final fun getLow ()J
+	public fun hashCode ()I
+	public final fun minus (J)Lus/tractat/kuilt/math/Int128;
+	public final fun minus (Lus/tractat/kuilt/math/Int128;)Lus/tractat/kuilt/math/Int128;
+	public final fun plus (J)Lus/tractat/kuilt/math/Int128;
+	public final fun plus (Lus/tractat/kuilt/math/Int128;)Lus/tractat/kuilt/math/Int128;
+	public final fun toLongOrNull ()Ljava/lang/Long;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/math/Int128$Companion {
+	public final fun fromTwosComplement (JJ)Lus/tractat/kuilt/math/Int128;
+	public final fun getZERO ()Lus/tractat/kuilt/math/Int128;
+	public final fun of (J)Lus/tractat/kuilt/math/Int128;
+}
+
+public final class us/tractat/kuilt/math/Int128Kt {
+	public static final fun compareProducts (JJJJ)I
+	public static final fun timesWide (JJ)Lus/tractat/kuilt/math/Int128;
+}
+
+public final class us/tractat/kuilt/math/MulDivKt {
+	public static final fun mulDiv (JJJLus/tractat/kuilt/math/Rounding;)Ljava/lang/Long;
+}
+
+public final class us/tractat/kuilt/math/Rounding : java/lang/Enum {
+	public static final field CEILING Lus/tractat/kuilt/math/Rounding;
+	public static final field FLOOR Lus/tractat/kuilt/math/Rounding;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/math/Rounding;
+	public static fun values ()[Lus/tractat/kuilt/math/Rounding;
+}
+

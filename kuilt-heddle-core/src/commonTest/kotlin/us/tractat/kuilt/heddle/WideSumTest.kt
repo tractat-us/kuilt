@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -20,9 +21,9 @@ class WideSumTest {
         }.toInt128()
         assertAll(
             // 2·(2⁶³ − 1) + 2 = 2⁶⁴: one carry into the high word, a zero low word.
-            { assertEquals(Int128(1L, 0L), pastMax) },
-            { assertEquals(Int128(-1L, Long.MAX_VALUE), belowMin) },
-            { assertEquals(Int128.ZERO, pastMax - Int128(1L, 0L)) },
+            { assertEquals(Int128.fromTwosComplement(1L, 0L), pastMax) },
+            { assertEquals(Int128.fromTwosComplement(-1L, Long.MAX_VALUE), belowMin) },
+            { assertEquals(Int128.ZERO, pastMax - Int128.fromTwosComplement(1L, 0L)) },
             { assertEquals(Int128.of(-1L), Int128.ZERO - 1L) },
             { assertEquals(Int128.of(Long.MIN_VALUE), belowMin + 1L) },
         )

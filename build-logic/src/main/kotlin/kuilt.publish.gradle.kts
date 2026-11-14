@@ -107,6 +107,10 @@ fun moduleDescription(module: String): String = when (module) {
             "MuxSeam channel multiplexing and CompositeLoom multipath bonding."
 
     // ── Libraries layered on the contract ────────────────────────────────────
+    "kuilt-math" ->
+        "Overflow-safe integer arithmetic for Kotlin Multiplatform: Long operations that answer " +
+            "null instead of wrapping, an exact 128-bit integer, and a multiply-then-divide with " +
+            "the rounding chosen by the caller."
     "kuilt-crdt" ->
         "Delta-state CRDTs — counters, sets, registers, maps, sequences and JSON — as plain " +
             "serializable values, usable with any transport or none at all."

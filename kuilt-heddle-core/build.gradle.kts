@@ -14,6 +14,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-crdt"))
+            implementation(project(":kuilt-math"))
             implementation(libs.kotlinx.serialization.core)
             // The positive control for `verifyHeddleCoreDependencies` below: plant a forbidden
             // dependency and the check must go red. Run it as
