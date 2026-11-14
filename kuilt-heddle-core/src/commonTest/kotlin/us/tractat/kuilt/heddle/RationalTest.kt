@@ -92,6 +92,62 @@ class RationalTest {
         )
     }
 
+    /**
+     * A product or quotient whose answer fits is returned, even when the straight-across products
+     * leave `Long` (#3347). `times` and `div` cancel each numerator against the other operand's
+     * denominator before multiplying, so the only overflow left is the answer's own.
+     */
+    @Test
+    fun aProductOrQuotientThatFitsIsReturnedWhateverItsIntermediates() {
+        val big = (1L shl 62) + 1L // ≡ 2 (mod 3), so big/3 is in lowest terms
+        val h = (1L shl 61) + 1L // ≡ 3 (mod 7)
+        assertAll(
+            // big/3 × 3/big = 1. Forming big·3 first used to throw.
+            { assertEquals(Rational.ONE, Rational.of(big, 3) * Rational.of(3, big)) },
+            // big ÷ (big/3) = 3. Forming big·3 first used to throw.
+            { assertEquals(Rational.of(3), Rational.of(big) / Rational.of(big, 3)) },
+            // A negative divisor moves its sign onto the numerator.
+            { assertEquals(Rational.of(-3), Rational.of(big) / Rational.of(-big, 3)) },
+            // A share w/W of fractional weights, as BoundMetrics forms it: (h/7) ÷ (2h/7) = 1/2 with
+            // h = 2⁶¹ + 1, coprime to 7. Forming h·7 first used to throw.
+            { assertEquals(Rational.of(1, 2), Rational.of(h, 7) / Rational.of(2 * h, 7)) },
+            // Long.MIN_VALUE has no magnitude in Long. Nothing cancels against 3, so it passes through
+            // with its sign; and against itself it cancels to 1.
+            { assertEquals(Rational.of(Long.MIN_VALUE, 3), Rational.of(Long.MIN_VALUE) * Rational.of(1, 3)) },
+            { assertEquals(Rational.of(big), Rational.of(Long.MIN_VALUE) / Rational.of(Long.MIN_VALUE, big)) },
+            { assertEquals(Rational.of(1, big), Rational.of(Long.MIN_VALUE, big) / Rational.of(Long.MIN_VALUE)) },
+        )
+    }
+
+    /** The answer itself not fitting is still a throw: `times` and `div` keep their contract. */
+    @Test
+    fun aProductOrQuotientThatDoesNotFitStillThrows() {
+        assertAll(
+            { assertFailsWith<ArithmeticException> { Rational.of(Long.MAX_VALUE) * Rational.of(2) } },
+            { assertFailsWith<ArithmeticException> { Rational.of(1, Long.MAX_VALUE) * Rational.of(1, 2) } },
+            { assertFailsWith<ArithmeticException> { Rational.of(Long.MAX_VALUE) / Rational.of(1, 2) } },
+            // −MIN_VALUE is not a Long: the sign cannot move onto a denominator of 2⁶³.
+            { assertFailsWith<ArithmeticException> { Rational.ONE / Rational.of(Long.MIN_VALUE) } },
+        )
+    }
+
+    /**
+     * `Long.MIN_VALUE` has no magnitude in `Long`, so reducing it by a gcd of magnitudes threw even
+     * when the reduced answer fits (#3347). Only a value that is itself `2⁶³` still throws.
+     */
+    @Test
+    fun aMinValueNumeratorReducesWhenTheAnswerFits() {
+        assertAll(
+            { assertEquals(Long.MIN_VALUE, Rational.of(Long.MIN_VALUE, 3).numerator) },
+            { assertEquals(3L, Rational.of(Long.MIN_VALUE, 3).denominator) },
+            { assertEquals(Rational.of(-1L shl 61), Rational.of(Long.MIN_VALUE, 4)) },
+            { assertEquals(Rational.of(1L shl 62), Rational.of(Long.MIN_VALUE, -2)) },
+            { assertEquals(Rational.ONE, Rational.of(Long.MIN_VALUE, Long.MIN_VALUE)) },
+            { assertFailsWith<ArithmeticException> { Rational.of(Long.MIN_VALUE, -1) } },
+            { assertFailsWith<ArithmeticException> { Rational.of(1, Long.MIN_VALUE) } },
+        )
+    }
+
     @Test
     fun maxPicksLarger() {
         assertEquals(Rational.of(1, 2), Rational.max(Rational.of(1, 3), Rational.of(1, 2)))
