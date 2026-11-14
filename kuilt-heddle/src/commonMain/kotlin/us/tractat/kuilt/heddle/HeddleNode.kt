@@ -365,15 +365,18 @@ public class HeddleNode internal constructor(
      * child's virtual position is a `Long` of 1/16-unit ticks, and it grows with the service handed
      * down under the parent over its lifetime, so it is bounded. Past the bound it saturates instead
      * of throwing (#3313). A pick that would have to order a saturated position is refused, and
-     * the rounds stop at that parent, so [schedule] returns what it granted before, `0` from then
-     * on. This node has no rebase to bring the positions back down, and it does not yet say why it
-     * stopped; both are tracked by #3353. At [LocalHeddle.MAX_RESERVATION]-size grants and a weight
-     * of `3/7`, the bound is about 9,000 grants, some 2⁵⁷ units of service.
+     * the rounds stop at that parent: a call that granted first answers [ScheduleOutcome.Delegated],
+     * and every call after it [ScheduleOutcome.PositionCeiling]. This node has no rebase to bring the
+     * positions back down yet (#3353). At [LocalHeddle.MAX_RESERVATION]-size grants and a weight of
+     * `3/7`, the bound is about 9,000 grants, some 2⁵⁷ units of service.
      *
-     * @return the count of grants applied this call.
+     * @return [ScheduleOutcome.Delegated] with the count of grants applied this call,
+     *   [ScheduleOutcome.NothingToDelegate] when none was, or [ScheduleOutcome.PositionCeiling] or
+     *   [ScheduleOutcome.WeightBudget] when [parent]'s children cannot be ordered. Never
+     *   [GateClosed]: a static node has no write gate.
      */
-    public fun schedule(parent: GroupId): Int = lock.withLock {
-        allocator.schedule(parent, ledgerCell, earmarked = earmarks[parent] ?: 0L, demand = ::liveDemand)
+    public fun schedule(parent: GroupId): ScheduleOutcome = lock.withLock {
+        allocator.schedule(parent, ledgerCell, earmarked = earmarks[parent] ?: 0L, demand = ::liveDemand).toScheduleOutcome()
     }
 
     /**

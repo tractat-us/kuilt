@@ -252,13 +252,12 @@ public class GovernedHeddleNode internal constructor(
 
     /**
      * Run allocation rounds at [parent], delegating holdings toward demand ([HeddleNode.schedule]).
-     * Answers [ScheduleOutcome.Delegated] with the grant count, [ScheduleOutcome.NothingToDelegate]
-     * when the gate is open but no holdings move, or [GateClosed] — delegating nothing — while the
-     * [isWritable] boot gate is closed.
+     * Answers what [HeddleNode.schedule] answers while the gate is open, or [GateClosed] —
+     * delegating nothing — while the [isWritable] boot gate is closed.
      */
     public fun schedule(parent: GroupId): ScheduleOutcome =
         when (val reason = control.writeGateClosedBecause) {
-            null -> scheduleOutcomeOf(node.schedule(parent))
+            null -> node.schedule(parent)
             else -> GateClosed(self, reason)
         }
 
@@ -549,7 +548,3 @@ public class GovernedHeddleNode internal constructor(
      * distinct, log-serialized recovery: see [reconcile].     */
     public val revocation: RevocationSeam get() = control.revocation
 }
-
-/** Lift [HeddleNode.schedule]'s grant count into a [ScheduleOutcome]; zero grants is its own arm. */
-private fun scheduleOutcomeOf(grants: Int): ScheduleOutcome =
-    if (grants == 0) ScheduleOutcome.NothingToDelegate else ScheduleOutcome.Delegated(grants)

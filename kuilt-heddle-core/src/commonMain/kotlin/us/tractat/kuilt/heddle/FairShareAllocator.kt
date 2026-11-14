@@ -149,15 +149,16 @@ public class FairShareAllocator(
      * @param demand the current appetite of one child edge, [Demand.NONE] for an edge that wants
      *   nothing. Asked once per active child each time the policy input is built, so it should
      *   answer from live state rather than a copy taken before the call.
-     * @return the count of grants applied this call. It stops early, with nothing written for the
-     *   pick it stops at, when a child of [parent] reaches its position ceiling (#3313).
+     * @return [AllocationOutcome.Delegated] with the count of grants applied this call, or
+     *   [AllocationOutcome.NothingToDelegate] when none was. It stops early, with nothing written
+     *   for the pick it stops at, when a child of [parent] reaches its position ceiling (#3313).
      */
     public fun schedule(
         parent: GroupId,
         ledger: LedgerCell,
         earmarked: Long,
         demand: (AttachmentId) -> Demand,
-    ): Int {
+    ): AllocationOutcome {
         settleJoiners(parent, ledger, demand)
         var grants = 0
         while (grants < MAX_ROUNDS_PER_CALL) {
@@ -177,7 +178,7 @@ public class FairShareAllocator(
             if (!applied) break
             grants++
         }
-        return grants
+        return if (grants == 0) AllocationOutcome.NothingToDelegate else AllocationOutcome.Delegated(grants)
     }
 
     /**
@@ -721,6 +722,48 @@ public class FairShareAllocator(
         /** A backstop against a policy that never runs dry; one call never applies more grants. */
         const val MAX_ROUNDS_PER_CALL: Int = 100_000
     }
+}
+
+/**
+ * What one [FairShareAllocator.schedule] call did at a parent: delegated something, found nothing to
+ * delegate, or stopped because the parent cannot be ordered at all.
+ *
+ * The two refusals are separate arms because they clear differently. [NothingToDelegate] is the
+ * ordinary answer, and it clears by itself once holdings or demand arrive. [PositionCeiling] and
+ * [WeightBudget] are properties of the parent's children, and they last until those change.
+ */
+public sealed interface AllocationOutcome {
+
+    /**
+     * [grants] allocation rounds landed, each a delegation down the tree. Always positive: zero
+     * grants is [NothingToDelegate], never `Delegated(0)`. A call that granted and then met a
+     * refusal answers this, and the next call answers the refusal.
+     */
+    public data class Delegated(public val grants: Int) : AllocationOutcome {
+        init {
+            require(grants > 0) { "Delegated needs at least one grant, was $grants; zero is NothingToDelegate" }
+        }
+    }
+
+    /**
+     * The allocator ran and delegated nothing: it found no holdings to move toward any demand, no
+     * child wants anything, or no child is seated yet.
+     */
+    public data object NothingToDelegate : AllocationOutcome
+
+    /**
+     * A child of [parent] holds a position at its ceiling, so no pick there orders exactly, and none
+     * was made (#3313). Nothing was written for the refused pick.
+     */
+    public data class PositionCeiling(public val parent: GroupId) : AllocationOutcome
+
+    /**
+     * [parent]'s active children carry weights whose products a pick forms leave `Long`, so no pick
+     * there can be computed (#3353). Nothing was written. A replicated ledger can hold such a set
+     * however carefully each write was checked: two peers can each activate a child that fits on its
+     * own view, and the merge of the two does not fit.
+     */
+    public data class WeightBudget(public val parent: GroupId) : AllocationOutcome
 }
 
 /**
