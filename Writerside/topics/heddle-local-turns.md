@@ -85,7 +85,8 @@ offset = max(0, front − ev − sleeperCredit / w)
 
 `front` is the weighted average `ev` of the siblings that kept competing, with
 every waker left out. If none of them is competing, the largest `ev` among them
-stands in, and if the waker has no other siblings, nothing is clamped. The engine keeps the largest offset a child has ever been given, so a
+stands in. If every child is waking or new, they all start level with the one
+furthest ahead. A child's offset never shrinks against its siblings', so a
 second wake cannot hand back credit the first one took. `sleeperCredit` is the
 idle credit a waker may keep, set on `LocalPolicy`, and it defaults to zero.
 
@@ -186,11 +187,14 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
   reservation at the leaf instead of returning it up the path.
 - **A ceiling the engine stays clear of.** Each child's progress is a `Long`
   count of sixteenths of a unit, and it has a ceiling. Long before a busy fork
-  gets there, the engine moves all its children back down by the same amount,
-  so nobody's turn changes. A fork reaches the ceiling only while one waiting
-  child is never served. Then `acquire` and `extend` at that fork return
-  `PositionCeiling` and change nothing, while `admit` and `complete` still
-  charge. Pick a coarse unit anyway, minutes or seconds rather than
+  gets there, a pick moves all its children back down by the same amount, so
+  nobody's turn changes. A fork can still get there in three ways. One waiting
+  child is never served. Or the fork is only ever charged through `admit`,
+  `extend` or an overrun, and never picked at. Or one child's reserved but
+  uncharged time adds up past about `5.8 × 10¹⁷` units, divided by its weight's
+  denominator. A team that charges what it reserves never meets the last one.
+  At the ceiling, `acquire` and `extend` at that fork return `PositionCeiling`
+  and change nothing, while `admit` and `complete` still charge. Pick a coarse unit anyway, minutes or seconds rather than
   nanoseconds: one reservation can be at most 2⁴⁴ units.
 
 **Sizing estimates.** The estimate and straddle effects both vanish for a lease

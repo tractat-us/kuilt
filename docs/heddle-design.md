@@ -669,8 +669,9 @@ create any.
 ### 7.1 Virtual service
 
 For active edge `e` with weight `w(e)`, the baseline `b(e)` is read off the edge's
-replicated `Gauge` rather than off its record — a floor paired with the base issuance
-the writer had observed when it asserted that floor:
+replicated `Gauge` rather than off its record — a floor paired with a fold: the base
+issuance the writer had observed when it asserted that floor, or, in a `LocalHeddle`
+ledger, a fold a rebase has raised above it (below):
 
 ```text
 gross(e) = floor(e) + (baseIssued(e) − folded(e)) / w(e)     (no gauge ⇒ baseIssued(e) / w(e))
@@ -726,7 +727,7 @@ lane's offset at pick 1,189, while its gross position is at 1.4% of the ceiling.
 
 **So `LocalHeddle` rebases a parent long before then (#3329).** Once any child's
 gross or effective position passes `R = ceiling / 16`, every active child comes
-down by one virtual time `Δ`:
+down by one virtual time `Δ`, an idle one only as far as `−R`:
 
 - `Δ` is a whole multiple of `L`, the least common multiple of the children's
   weight denominators, so `Δ · w · G` is a whole number of units on every grid.
@@ -736,10 +737,14 @@ down by one virtual time `Δ`:
   units, and then its **gauge fold**. Raising the fold by `k` units lowers the
   read `⌈floor · w · G⌉ + (issued − folded) · G` by exactly `k · G` ticks.
 - An idle child comes down no further than `−R`. Anything further would be
-  credit, and its next wake clamp takes all of it back, since a child lifted to
-  `−R` sits at least `R` behind a front at or above zero.
-- It does nothing while a child is at its ceiling, since that position may stand
-  for more, or while a demanding child sits at zero, which holds `Δ` at nothing.
+  credit. Its next wake clamp takes all of it back when the engine saw the child
+  go idle and the sleeper credit is below `R`, since a child lifted to `−R` sits
+  at least `R` behind a front at or above zero. Otherwise the lift stands, as a
+  penalty and never as credit: a child never observed idle is not clamped, and a
+  sleeper credit of `R` or more keeps part of it.
+- It does nothing while a child is unseated, which has no gauge to raise, while
+  a child is at its ceiling, since that position may stand for more, or while a
+  demanding child sits at zero, which holds `Δ` at nothing.
 
 **The fold, not the floor.** The gauge joins its fold by `max`, so a raised fold
 survives every later checkpoint and merge. A lowered floor would be undone by the
@@ -758,11 +763,31 @@ sides of the `max`. On the seven-lane run, a twin with no rebase makes the same
 1,188 picks across 14 rebases and then refuses. The rebasing engine runs 100,000
 picks, peaking at 6.2% of its ceiling.
 
-The rebase runs inside the pick, after the seat-and-wake step: before it, a seat
-would count an unclamped waker's stale position in the front (#1752). It also
-runs before each delegation a path makes. The ceiling is still reachable. A
-demanding child that is never served holds `Δ` at zero, and `PositionCeiling`
-covers that case; `LocalHeddlePositionCeilingTest` rigs it.
+The rebase runs inside the pick, after the seat-and-wake step, and only once the
+pick has a grant. Before that step, a seat would count an unclamped waker's stale
+position in the front (#1752). It comes back as a value, the raised folds and the
+lowered offsets together, and the engine keeps both or neither. A call refused
+after it, with `NoLiveLineage` say, keeps what its picks observed and no part of
+the rebase: a lowered offset kept without its raised folds would be credit. A
+delegation that is not a pick (`admit`, `extend`, an overrun at `complete`)
+never rebases, so a parent only ever charged that way is never rebased.
+
+**Where the ceiling is still reached.** Two ways, and `PositionCeiling` answers
+both:
+
+- A demanding child that is never served holds `Δ` at zero.
+  `LocalHeddlePositionCeilingTest` rigs it.
+- **Returns are never brought down** (#3360). A position less the edge's raw
+  position is its lifetime returned service, `returned · G` ticks, and a rebase
+  moves both together. So an edge reaches its ceiling once its lifetime returned
+  service, reserved but not charged by a `complete` below the reservation or a
+  `cancel`, passes about `positionCeiling(w) / 16` units, about
+  `5.8 × 10¹⁷ / w.denominator`. At the largest reservation charged 1 unit, a
+  weight of `3/7` gets there in about 4,700 leases. A 6 × 10⁵-unit reservation
+  returned in full takes about 1.4 × 10¹¹ leases at that weight. At denominator 1,
+  with milliseconds as the unit, it is about 18 million years of returned time. A
+  workload that charges what it reserves never reaches it. The fix rides #3192's
+  format 2.
 
 The rebase is `LocalHeddle`'s alone. Under replication, a peer that has not yet
 seen a rebase would seat a newborn at the old front, and a concurrent
@@ -915,6 +940,17 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   join's `max`. A low reading is absorbed instead of frozen, so the fence and both
   of its residuals are gone, and a node with no control plane no longer needs to
   tell the two situations apart.
+
+  **When every active child is joining and at least one is waking, the front is
+  the joiner furthest ahead** (#3329 review). A waker counts at its effective
+  position and a newborn at its own origin. Every waker is clamped there and
+  every newborn seated there, so the cohort starts level. No waker keeps idle
+  credit over another (§10.6), and none over a newborn. The newborns count
+  because a seat cannot go below the edge's own origin. The rule used to leave
+  the wakers unclamped and seat each newborn at its origin. A rebase can lift
+  idle children to `−R`, and that old rule then put a newborn about `R` ahead of
+  the wakers, which took every pick until they caught up. With nobody waking, a
+  cohort of newborns is still seated each at its own origin, as above.
 
 ### 7.3 Selection
 
