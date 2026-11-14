@@ -13,6 +13,9 @@ import us.tractat.kuilt.math.timesOrNull
  */
 internal var spikeLagRule: Int = 0
 
+/** SPIKE (#3376): Fable's UNIFIED front (#3353 slice 4), as in `af173-probe-switch.diff` rule 2. */
+internal var spikeUnified: Boolean = false
+
 /** SPIKE (#3376): the most positive lag, in service units, a departure keeps; `null` for none. */
 internal var spikeLagCap: Long? = null
 
@@ -563,8 +566,16 @@ public class FairShareAllocator(
             .filter { HeddlePolicy.isDemanding(it) && demandingObserved[it.record.id] == false }
             .mapTo(HashSet()) { it.record.id }
         val joiners = HashSet(unseated).apply { addAll(wakers) }
-        val taken = if (joiners.isEmpty()) null else HeddlePolicy.frontTime(edges, excluding = joiners) ?: joinersFront(edges, joiners, wakers)
-        val front = if (taken != null && wakers.isNotEmpty()) atLeastTheNewborns(taken, edges, unseated) else taken
+        val front = if (spikeUnified) {
+            when {
+                joiners.isEmpty() -> null
+                edges.any { it.record.id !in joiners && HeddlePolicy.isDemanding(it) } -> HeddlePolicy.frontTime(edges, excluding = joiners)
+                else -> joinersFront(edges, edges.mapTo(HashSet()) { it.record.id }, joiners)
+            }
+        } else {
+            val taken = if (joiners.isEmpty()) null else HeddlePolicy.frontTime(edges, excluding = joiners) ?: joinersFront(edges, joiners, wakers)
+            if (taken != null && wakers.isNotEmpty()) atLeastTheNewborns(taken, edges, unseated) else taken
+        }
 
         if (unseated.isNotEmpty()) {
             ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
