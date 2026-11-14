@@ -268,19 +268,19 @@ class EntitlementLedgerForgetTest {
         "root",
         listOf(
             Topology.Lane("a"),
-            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
-            Topology.Group("pool", Weight.of(2), emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.of(3, 2))),
+            Topology.Group("tenants", Weight.ONE, emptyList(), template = Topology.ChildTemplate(Weight.ONE)),
+            Topology.Group("pool", Weight.of(2), emptyList(), template = Topology.ChildTemplate(Weight.of(3, 2))),
         ),
     )
     private val marked = listOf(listOf("tenants"), listOf("pool"))
     private val names = listOf("t0", "t1", "t2", "t3")
     private val policy = LocalPolicy(defaultReservation = 2L)
 
-    /** What the test knows of one engine: which runtime children it attached, in attach order. */
+    /** What the test knows of one engine: which attached children it attached, in attach order. */
     private class History(val h: LocalHeddle, val attached: MutableList<Pair<List<String>, String>> = ArrayList())
 
     private fun leasable(history: History): Set<GroupId> =
-        setOf(tree.groupId("a")) + history.attached.map { (g, n) -> tree.runtimeChildId(g, n) }
+        setOf(tree.groupId("a")) + history.attached.map { (g, n) -> tree.attachedChildId(g, n) }
 
     /** One random step: attach, detach, acquire, complete, extend or cancel. */
     private fun step(history: History, r: Random, at: Long): Any {
@@ -289,13 +289,13 @@ class EntitlementLedgerForgetTest {
         return when (r.nextInt(10)) {
             0, 1 -> {
                 val child = marked[r.nextInt(marked.size)] to names[r.nextInt(names.size)]
-                val out = h.attachRuntimeChild(child.first, child.second, generation = r.nextLong(0L, 3L))
+                val out = h.attach(child.first, child.second, generation = r.nextLong(0L, 3L))
                 if (child !in history.attached) history.attached += child
                 out
             }
             2 -> if (history.attached.isEmpty()) "idle" else {
                 val (g, n) = history.attached.removeAt(r.nextInt(history.attached.size))
-                h.detachRuntimeChild(g, n)
+                h.detach(g, n)
             }
             3, 4, 5 -> {
                 val all = leasable(history)
@@ -320,7 +320,7 @@ class EntitlementLedgerForgetTest {
      * group's holdings for every replica, `leafSpentTotal`, `mintedTotal`, the generation floor,
      * `hasChildEdges`, every other edge's summary and lifecycle, and a clean `validate()`. Then an
      * engine restored from the forgotten ledger runs in lockstep with one restored from the whole
-     * ledger: the same calls give the same outcomes, holdings and totals, and a runtime child
+     * ledger: the same calls give the same outcomes, holdings and totals, and an attached child
      * attached again gets an edge above every generation either ever held.
      *
      * The draws walk sorted lists, so the trajectory is the same on every target (#2592).

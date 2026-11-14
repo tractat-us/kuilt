@@ -287,10 +287,10 @@ class LocalHeddleTest {
     }
 
     /**
-     * The descent ends only at an eligible group (#3193 review). `pool` declares runtime children and
+     * The descent ends only at an eligible group (#3193 review). `pool` declares attached children and
      * nothing else. `pool/!c` is attached and leased, then detached while its lease is open: the
      * retire is refused, so `pool → c` stays CLOSING with `root → pool` ACTIVE, and the ledger now
-     * reads `pool` as a leaf. `pool` is not eligible, so it is not leased, and the runtime child
+     * reads `pool` as a leaf. `pool` is not eligible, so it is not leased, and the attached child
      * behind the closing edge is not reachable: the sibling `s` is leased instead. The detach is
      * applied through the test seam, since L1 has no `apply`.
      */
@@ -308,10 +308,10 @@ class LocalHeddleTest {
         val unchanged = h.snapshot().ledger
         val beside = (0 until 4).map { h.lease(setOf(runtime, s)).leaf }
         assertAll(
-            { assertEquals(runtime, open.leaf, "the rig: the runtime child was leased") },
+            { assertEquals(runtime, open.leaf, "the rig: the attached child was leased") },
             { assertEquals(null, before.retire(poolC.id), "the rig: its retire is refused while the lease is open") },
             { assertTrue(before.activeChildren(pool).isEmpty(), "the rig: pool has no active child, so the ledger reads it as a leaf") },
-            { assertEquals(AcquireOutcome.NoLiveLineage(root), alone, "neither pool nor its runtime child is a place the descent can end") },
+            { assertEquals(AcquireOutcome.NoLiveLineage(root), alone, "neither pool nor its attached child is a place the descent can end") },
             { assertSame(before, unchanged) },
             { assertEquals(listOf(s, s, s, s), beside, "the sibling is leased instead") },
             { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(open.id, 2L), "the open lease still settles") },

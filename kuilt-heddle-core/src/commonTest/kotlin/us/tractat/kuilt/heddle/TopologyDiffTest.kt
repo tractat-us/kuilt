@@ -161,7 +161,7 @@ class TopologyDiffTest {
 
     /**
      * A ceiling is engine configuration, not ledger state: changing only `maxConcurrent`, on a group,
-     * a lane or a runtime marker with a child attached, keeps every edge and emits no step.
+     * a lane or a template with a child attached, keeps every edge and emits no step.
      *
      * This is a **pin**: it cannot red until enforcement reads the ceiling, because `diff` has
      * nothing to emit for a ceiling today. It exists so the day that changes, this test is the one
@@ -173,17 +173,17 @@ class TopologyDiffTest {
             "root",
             listOf(
                 Group("acme", Weight.of(3), listOf(Lane("interactive", Weight.of(3), maxConcurrent = cap), Lane("batch")), maxConcurrent = cap),
-                Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.of(markerWeight), maxConcurrent = cap)),
+                Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.of(markerWeight), maxConcurrent = cap)),
             ),
         )
-        val tenant = tree(null).runtimeChildId(listOf("tenants"), "t1")
+        val tenant = tree(null).attachedChildId(listOf("tenants"), "t1")
         val booted = served(bootFrom(tree(null)))
-        val ledger = applyAll(tree(null).attachRuntimeChild(listOf("tenants"), "t1", booted, generation = 1), booted).ledger
+        val ledger = applyAll(tree(null).attach(listOf("tenants"), "t1", booted, generation = 1), booted).ledger
 
         assertAll(
-            { assertEquals(1, ledger.liveInto(tenant).size, "the rig: a runtime child is attached") },
+            { assertEquals(1, ledger.liveInto(tenant).size, "the rig: an attached child is attached") },
             { assertEquals(emptyList(), Topology.diff(tree(null), ledger, generation = 2), "the rig: the uncapped tree is reached") },
-            { assertTrue(Topology.diff(tree(null, markerWeight = 2L), ledger, generation = 2).isNotEmpty(), "the rig: the diff sees the marker") },
+            { assertTrue(Topology.diff(tree(null, markerWeight = 2L), ledger, generation = 2).isNotEmpty(), "the rig: the diff sees the template") },
             *listOf(0L, 1L, 3L, Long.MAX_VALUE).map { cap ->
                 { assertEquals(emptyList(), Topology.diff(tree(cap), ledger, generation = 2), "ceiling $cap") }
             }.toTypedArray(),
@@ -423,8 +423,8 @@ class TopologyDiffTest {
     fun edgesTheDiffDoesNotOwnAreLeftAlone() {
         var ledger = bootFrom(fairness())
         val foreign = listOf(
-            // A runtime child is not on this list: since Task 5 the diff owns those, and closes one
-            // under a group that is not marked (`diffClosesRuntimeChildrenWhenTheMarkerGoes`).
+            // An attached child is not on this list: since Task 5 the diff owns those, and closes one
+            // under a group with no template (`diffClosesAttachedChildrenWhenTheTemplateGoes`).
             AttachmentRecord(e("e#99"), GroupId("root"), GroupId("elsewhere"), Weight.ONE),
             record("pool/a@1:1#0", GroupId("pool/a"), 1),
         )

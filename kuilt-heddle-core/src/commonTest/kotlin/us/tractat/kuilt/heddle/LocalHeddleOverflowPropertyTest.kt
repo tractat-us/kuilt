@@ -88,10 +88,10 @@ class LocalHeddleOverflowPropertyTest {
     }
 
     /**
-     * The seat, the second way in, which needs no wake at all: a runtime child attaches and is seated
+     * The seat, the second way in, which needs no wake at all: an attached child attaches and is seated
      * at its parent's front, the same weighted mean, written into its gauge floor in the ledger. While
      * its siblings are waiting each seat carried their `Σ w` into the floor's denominator, so churning
-     * runtime children — attach one, detach the oldest — under a waiting set of *every attached
+     * attached children — attach one, detach the oldest — under a waiting set of *every attached
      * child* overflowed after 19–39 seats, and the floor survived a persist and restore with it.
      *
      * Every attached child always waits, so nothing ever idles and wakes: the wake path is not what
@@ -99,10 +99,10 @@ class LocalHeddleOverflowPropertyTest {
      * the run carries on from the restored one.
      */
     @Test
-    fun churningRuntimeChildrenUnderAHeldWaitingSetNeverOverflows() {
+    fun churningAttachedChildrenUnderAHeldWaitingSetNeverOverflows() {
         val topology = draft("churn") {
             lane("a", Weight.of(3))
-            group("rt", Weight.of(2)) { runtimeChildren(Weight.of(3, 2)) }
+            group("rt", Weight.of(2)) { template(Weight.of(3, 2)) }
         }
         val policy = LocalPolicy(defaultReservation = 1L)
         var engine = LocalHeddle.fromTopology(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
@@ -118,9 +118,9 @@ class LocalHeddleOverflowPropertyTest {
 
         for (step in 0 until CHURN_SEATS) {
             val name = "c$step"
-            check(engine.attachRuntimeChild(rt, name, generation = step.toLong()).refusals.isEmpty()) { "attach $name" }
+            check(engine.attach(rt, name, generation = step.toLong()).refusals.isEmpty()) { "attach $name" }
             attached.addLast(name)
-            val waiting = (attached.map { topology.runtimeChildId(rt, it) } + a).toSet()
+            val waiting = (attached.map { topology.attachedChildId(rt, it) } + a).toSet()
             val outcome = try {
                 engine.acquire(waiting, waiting, startedAt = step.toLong(), reservation = 1L)
             } catch (e: ArithmeticException) {
@@ -134,7 +134,7 @@ class LocalHeddleOverflowPropertyTest {
             // a checkpoint preserves it, so this sees a front seat however often the child ran since.
             val ledger = engine.snapshot().ledger
             for (child in attached) {
-                val edge = ledger.lineageOf(topology.runtimeChildId(rt, child))?.lastOrNull() ?: continue
+                val edge = ledger.lineageOf(topology.attachedChildId(rt, child))?.lastOrNull() ?: continue
                 val gauge = ledger.gauge(edge) ?: continue
                 val weight = ledger.record(edge)?.weight ?: continue
                 if (ticksAt(gauge.floor, weight) > GRID * gauge.folded) seatedAtAFront += child
@@ -142,7 +142,7 @@ class LocalHeddleOverflowPropertyTest {
             engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST))
             picks++
             if (attached.size > CHURN_WIDTH) {
-                check(engine.detachRuntimeChild(rt, attached.removeFirst()).refusals.isEmpty()) { "detach at seat $seats" }
+                check(engine.detach(rt, attached.removeFirst()).refusals.isEmpty()) { "detach at seat $seats" }
             }
             if (step % SAMPLE_EVERY == 0) offGridSamples += offGrid(engine.snapshot())
             if (step == CHURN_SEATS / 2) {

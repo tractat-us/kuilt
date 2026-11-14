@@ -2,7 +2,7 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.heddle.Topology.Group
 import us.tractat.kuilt.heddle.Topology.Lane
-import us.tractat.kuilt.heddle.Topology.RuntimeChildren
+import us.tractat.kuilt.heddle.Topology.ChildTemplate
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -115,15 +115,15 @@ class LocalHeddleCeilingTest {
         )
     }
 
-    /** On a runtime marker the ceiling caps each child on its own, not all of them together. */
+    /** On a template the ceiling caps each child on its own, not all of them together. */
     @Test
-    fun aRuntimeMarkerCapsEachChildOnItsOwn() {
-        val t = Topology("root", listOf(Group("tenants", Weight.ONE, emptyList(), RuntimeChildren(Weight.ONE, maxConcurrent = 1L))))
+    fun aTemplateCapsEachChildOnItsOwn() {
+        val t = Topology("root", listOf(Group("tenants", Weight.ONE, emptyList(), ChildTemplate(Weight.ONE, maxConcurrent = 1L))))
         val h = engine(t)
-        check(h.attachRuntimeChild(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
-        check(h.attachRuntimeChild(listOf("tenants"), "t2", generation = 1L).refusals.isEmpty())
-        val t1 = t.runtimeChildId(listOf("tenants"), "t1")
-        val t2 = t.runtimeChildId(listOf("tenants"), "t2")
+        check(h.attach(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
+        check(h.attach(listOf("tenants"), "t2", generation = 1L).refusals.isEmpty())
+        val t1 = t.attachedChildId(listOf("tenants"), "t1")
+        val t2 = t.attachedChildId(listOf("tenants"), "t2")
         val first = h.pick(setOf(t1))
         val again = h.acquire(setOf(t1, t2), setOf(t1), startedAt = 0L)
         val sibling = h.pick(setOf(t1, t2))

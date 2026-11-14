@@ -6,8 +6,8 @@ package us.tractat.kuilt.heddle
  *
  * Being a leaf is not enough, and the ledger alone cannot say more. A group whose children are all
  * inactive reads as a leaf ([EntitlementLedger.isLeaf]) whether it is a declared lane or a group
- * that simply has nothing attached right now, such as a group marked for runtime children before
- * the first one arrives. Only the [Topology] tells the two apart, so the engine keeps one.
+ * that simply has nothing attached right now, such as a group with a template before
+ * its first child is attached. Only the [Topology] tells the two apart, so the engine keeps one.
  *
  * A group is **leasable** when it is a leaf and this declares it. That one predicate is what
  * [LocalHeddle.acquire] ends a descent at, what lifts a waiting or eligible name into demand, and
@@ -20,8 +20,8 @@ internal sealed interface Leasable {
 
     /**
      * The most leases that may be open beneath [group] at once, or `null` for no ceiling: its
-     * node's [Topology.Node.maxConcurrent], or for a runtime child, its group's
-     * [Topology.RuntimeChildren.maxConcurrent], which caps each child on its own.
+     * node's [Topology.Node.maxConcurrent], or for an attached child, its group's
+     * [Topology.ChildTemplate.maxConcurrent], which caps each child on its own.
      */
     fun ceilingOf(group: GroupId): Long?
 
@@ -29,19 +29,19 @@ internal sealed interface Leasable {
     val hasCeilings: Boolean
 
     /**
-     * What [topology] declares: each of its lanes, and each runtime child of a group it marks for
-     * them. A runtime child is declared by its name alone; whether it is attached is the ledger's
+     * What [topology] declares: each of its lanes, and each attached child of a group it gives a
+     * template. A child under a template is declared by its name alone; whether it is attached is the ledger's
      * to say, and a leaf with no ACTIVE lineage is never reached anyway.
      */
     class ByTopology(val topology: Topology) : Leasable {
         private val lanes = HashSet<GroupId>()
-        private val marked = HashSet<GroupId>()
+        private val templated = HashSet<GroupId>()
 
         /** The ceiling of each declared group and lane that has one. */
         private val ceilings = HashMap<GroupId, Long>()
 
-        /** The ceiling each runtime child of a marked group takes, by that group, where its marker sets one. */
-        private val runtimeCeilings = HashMap<GroupId, Long>()
+        /** The ceiling each attached child takes from its group's template, by that group, where the template sets one. */
+        private val templateCeilings = HashMap<GroupId, Long>()
 
         init {
             fun walk(parent: String, nodes: List<Topology.Node>) {
@@ -51,9 +51,9 @@ internal sealed interface Leasable {
                     when (node) {
                         is Topology.Lane -> lanes += GroupId(id)
                         is Topology.Group -> {
-                            node.runtimeChildren?.let { marker ->
-                                marked += GroupId(id)
-                                marker.maxConcurrent?.let { runtimeCeilings[GroupId(id)] = it }
+                            node.template?.let { template ->
+                                templated += GroupId(id)
+                                template.maxConcurrent?.let { templateCeilings[GroupId(id)] = it }
                             }
                             walk(id, node.children)
                         }
@@ -64,13 +64,13 @@ internal sealed interface Leasable {
         }
 
         override fun declares(group: GroupId): Boolean =
-            group in lanes || (pathOf(group)?.runtime == true && GroupId(group.value.substringBeforeLast('/')) in marked)
+            group in lanes || (pathOf(group)?.attached == true && GroupId(group.value.substringBeforeLast('/')) in templated)
 
         override fun ceilingOf(group: GroupId): Long? =
-            ceilings[group] ?: runtimeCeilings.takeIf { it.isNotEmpty() && pathOf(group)?.runtime == true }
+            ceilings[group] ?: templateCeilings.takeIf { it.isNotEmpty() && pathOf(group)?.attached == true }
                 ?.get(GroupId(group.value.substringBeforeLast('/')))
 
-        override val hasCeilings: Boolean get() = ceilings.isNotEmpty() || runtimeCeilings.isNotEmpty()
+        override val hasCeilings: Boolean get() = ceilings.isNotEmpty() || templateCeilings.isNotEmpty()
     }
 
     /**

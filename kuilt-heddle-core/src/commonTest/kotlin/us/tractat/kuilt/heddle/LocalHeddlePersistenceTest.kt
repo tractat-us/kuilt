@@ -328,7 +328,7 @@ class LocalHeddlePersistenceTest {
 
     /**
      * The topology comes back with the engine, so the restored one leases exactly what the persisted
-     * one did. The draft marks `pool` for runtime children and attaches none, so `pool` reads as a
+     * one did. The draft gives `pool` a template and attaches none, so `pool` reads as a
      * leaf in the ledger and only the topology says it is not leasable. An engine that leased every
      * leaf after a restore would admit work there. The lane is the control: it is still leasable, so
      * the refusal is about `pool`, not a restored engine that leases nothing.
@@ -339,7 +339,7 @@ class LocalHeddlePersistenceTest {
             "root",
             listOf(
                 Topology.Lane("lane"),
-                Topology.Group("pool", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
+                Topology.Group("pool", Weight.ONE, emptyList(), template = Topology.ChildTemplate(Weight.ONE)),
             ),
         )
         val pool = draft.groupId("pool")
@@ -353,7 +353,7 @@ class LocalHeddlePersistenceTest {
                 assertEquals(
                     listOf<Any>(AcquireOutcome.NoLiveLineage(pool), AcquireOutcome.NoLiveLineage(pool)),
                     listOf(before, restored.admit(pool, startedAt = 1L)),
-                    "a marked group with nothing attached is refused before the restore and after it",
+                    "a group with a template with nothing attached is refused before the restore and after it",
                 )
             },
             { assertIs<AcquireOutcome.Acquired>(restored.admit(draft.groupId("lane"), startedAt = 2L), "the control: the lane still leases") },
@@ -487,8 +487,8 @@ class LocalHeddlePersistenceTest {
 
     /**
      * The tree the rich scenario runs: `acme` (a nested group at a fractional weight, holding a group
-     * and a lane), `tenants` (marked for runtime children), and, while [withSpare], a lane `spare`.
-     * While [capped], `acme`, `interactive` and the runtime marker each carry a ceiling.
+     * and a lane), `tenants` (given a template), and, while [withSpare], a lane `spare`.
+     * While [capped], `acme`, `interactive` and the template each carry a ceiling.
      */
     private fun richTree(acmeWeight: Weight, withSpare: Boolean, capped: Boolean = false): Topology = Topology(
         "root",
@@ -502,7 +502,7 @@ class LocalHeddlePersistenceTest {
                 ),
                 maxConcurrent = 3L.takeIf { capped },
             ),
-            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE, maxConcurrent = 2L.takeIf { capped })),
+            Topology.Group("tenants", Weight.ONE, emptyList(), template = Topology.ChildTemplate(Weight.ONE, maxConcurrent = 2L.takeIf { capped })),
             Topology.Lane("spare").takeIf { withSpare },
         ),
     )
@@ -513,7 +513,7 @@ class LocalHeddlePersistenceTest {
     /** [richAfter] with ceilings, high enough that no call of the scenarios meets them: what format 2's rich golden last applied. */
     private val richCapped = richTree(Weight.of(5, 2), withSpare = false, capped = true)
     private val richPolicy = LocalPolicy(defaultReservation = 2L)
-    private val tenant = richBefore.runtimeChildId(listOf("tenants"), "t1")
+    private val tenant = richBefore.attachedChildId(listOf("tenants"), "t1")
     private val richLeaves = setOf(richBefore.groupId("acme", "interactive"), richBefore.groupId("acme", "batch", "x"), richBefore.groupId("acme", "batch", "y"), tenant)
 
     /**
@@ -528,7 +528,7 @@ class LocalHeddlePersistenceTest {
      */
     private fun richScenario(forgets: Boolean = true): Pair<LocalHeddle, List<Lease>> {
         val h = LocalHeddle.fromTopology(richBefore, richPolicy, epoch = 0L).also { it.reconcileCapacity(4L); it.forgetsForTest = forgets }
-        check(h.attachRuntimeChild(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
+        check(h.attach(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
         val interactive = h.lease(setOf(richBefore.groupId("acme", "interactive")), reservation = 2L, startedAt = 10L)
         val spare = h.lease(setOf(richBefore.groupId("spare")), reservation = 3L, startedAt = 11L)
         val inTenant = h.lease(setOf(tenant), reservation = 1L, startedAt = 12L)
@@ -557,10 +557,10 @@ class LocalHeddlePersistenceTest {
         return outcomes
     }
 
-    private val departed = richBefore.runtimeChildId(listOf("tenants"), "t2")
+    private val departed = richBefore.attachedChildId(listOf("tenants"), "t2")
 
     /**
-     * The rich scenario, then a second runtime child `t2` attached under `tenants`, leased, settled
+     * The rich scenario, then a second attached child `t2` attached under `tenants`, leased, settled
      * and detached, so its edge retires with its books closed, then a reload that changes only
      * ceilings ([richCapped]), which moves no edge. With [forgets], the detach's own swap forgets
      * that edge, and prunes it from the allocator's memory. What format 2 adds over format 1: the
@@ -568,10 +568,10 @@ class LocalHeddlePersistenceTest {
      */
     private fun richFoldedScenario(forgets: Boolean): Pair<LocalHeddle, List<Lease>> {
         val (h, open) = richScenario(forgets)
-        check(h.attachRuntimeChild(listOf("tenants"), "t2", generation = 4L).refusals.isEmpty())
+        check(h.attach(listOf("tenants"), "t2", generation = 4L).refusals.isEmpty())
         val lease = h.lease(setOf(departed), reservation = 2L, startedAt = 30L)
         check(h.complete(lease.id, 3L) is LeaseOutcome.Done)
-        check(h.detachRuntimeChild(listOf("tenants"), "t2").refusals.isEmpty())
+        check(h.detach(listOf("tenants"), "t2").refusals.isEmpty())
         val ceilingsOnly = h.apply(richCapped, generation = 5L)
         check(ceilingsOnly.applied.isEmpty() && ceilingsOnly.refusals.all { it is StepRefusal.Draining }) { "a change of ceiling alone is no step: $ceilingsOnly" }
         return h to open
@@ -609,7 +609,7 @@ class LocalHeddlePersistenceTest {
             { assertEquals(GOLDEN_FORMAT_2_RICH, text, "format 2 changed; the rich encoding is now:\n$text\n") },
             { assertEquals(setOf(0L, 1L), golden().leases.map { it.id.epoch }.toSet(), "the rig: open leases from two epochs") },
             { assertTrue(golden().ledger.let { l -> l.allEdges().any { l.lifecycle(it) == Lifecycle.CLOSING } }, "the rig: an edge is draining") },
-            { assertTrue(golden().leases.any { it.leaf == tenant }, "the rig: a lease at a runtime child") },
+            { assertTrue(golden().leases.any { it.leaf == tenant }, "the rig: a lease at an attached child") },
             { assertEquals(richCapped, golden().lastApplied, "the rig: the topology last applied is the reload's, with its ceilings") },
             { assertTrue(golden().ledger.hasForgotten() && edge !in golden().ledger.allEdges(), "the rig: t2's edge is forgotten") },
             { assertTrue("\"forgotten\":" in GOLDEN_FORMAT_2_RICH, "the rig: the fold is in the bytes") },
@@ -627,10 +627,10 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
-     * Format 2's rich golden carries a ceiling on a group, a lane and a runtime marker, and an engine
+     * Format 2's rich golden carries a ceiling on a group, a lane and a template, and an engine
      * restored from it enforces each one, told apart by the ceiling `explain` names (#3324). The
      * golden has two leases open beneath `acme` (ceiling 3), one of them at `interactive` (ceiling
-     * 2), and one at the runtime child `t1` (ceiling 2 each).
+     * 2), and one at the attached child `t1` (ceiling 2 each).
      */
     @Test
     fun formatTwosGoldenCarriesACeiling() {
@@ -640,7 +640,7 @@ class LocalHeddlePersistenceTest {
         val interactive = richBefore.groupId("acme", "interactive")
         val x = richBefore.groupId("acme", "batch", "x")
         val y = richBefore.groupId("acme", "batch", "y")
-        val t1 = richBefore.runtimeChildId(listOf("tenants"), "t1")
+        val t1 = richBefore.attachedChildId(listOf("tenants"), "t1")
         val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
         fun only(leaf: GroupId) = restored.acquire(setOf(leaf), setOf(leaf), startedAt = 0L)
         fun why(leaf: GroupId) = restored.explain(leaf, setOf(leaf), setOf(leaf))
@@ -658,7 +658,7 @@ class LocalHeddlePersistenceTest {
         val tenantWhy = why(t1)
         assertAll(
             { assertTrue("\"maxConcurrent\":3" in GOLDEN_FORMAT_2_RICH, "the ceiling is in the bytes") },
-            { assertEquals(listOf(3L, 2L, 2L), listOf(acme.maxConcurrent, acme.children.first { it.name == "interactive" }.maxConcurrent, tenants.runtimeChildren?.maxConcurrent)) },
+            { assertEquals(listOf(3L, 2L, 2L), listOf(acme.maxConcurrent, acme.children.first { it.name == "interactive" }.maxConcurrent, tenants.template?.maxConcurrent)) },
             { assertEquals(listOf(1, 1, 1), listOf(interactive, y, t1).map { leaf -> snapshot.leases.count { it.leaf == leaf } }, "the rig: the leases open in the golden") },
             { assertIs<AcquireOutcome.Acquired>(second) },
             { assertEquals(WaitExplanation.AtCeiling(richBefore.groupId("acme"), 3L), bothFull, "both full: the topmost is named") },
@@ -667,7 +667,7 @@ class LocalHeddlePersistenceTest {
             { assertIs<AcquireOutcome.Acquired>(underAcme) },
             { assertEquals(WaitExplanation.AtCeiling(richBefore.groupId("acme"), 3L), acmeWhy, "the group's ceiling") },
             { assertIs<AcquireOutcome.Acquired>(tenant) },
-            { assertEquals(WaitExplanation.AtCeiling(t1, 2L), tenantWhy, "the runtime marker's ceiling, on t1 alone") },
+            { assertEquals(WaitExplanation.AtCeiling(t1, 2L), tenantWhy, "the template's ceiling, on t1 alone") },
         )
     }
 
@@ -896,7 +896,7 @@ class LocalHeddlePersistenceTest {
      * A persist and restore at a random point of a random sequence is invisible: from then on every
      * outcome and the books after every step match an engine that never persisted. The sequence
      * mixes lease operations with reloads, a reweight (which moves open leases), a removal (which
-     * drains), a new weight on a runtime marker, and attaching and detaching runtime children, so a
+     * drains), a new weight on a template, and attaching and detaching attached children, so a
      * restore lands mid-drain and after a reload as well as on a quiet tree. Leases are addressed by
      * their place in the open list, which is id order in both: the restored engine's own ids come
      * after every restored one, as later sequence numbers do in the reference.
@@ -908,21 +908,21 @@ class LocalHeddlePersistenceTest {
             listOf(
                 Topology.Group("p", Weight.of(pWeight), listOfNotNull(Topology.Lane("a/b", Weight.of(3)), Topology.Lane("#3").takeIf { withHash3 })),
                 Topology.Group("q", Weight.ONE, listOf(Topology.Lane("c-7f3a"), Topology.Lane("é#%@", Weight.of(2)))),
-                Topology.Group("r", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.of(markerWeight))),
+                Topology.Group("r", Weight.ONE, emptyList(), template = Topology.ChildTemplate(Weight.of(markerWeight))),
             ),
         )
         val base = tree()
         val drafts = listOf(base, tree(pWeight = 3L), tree(withHash3 = false), tree(markerWeight = 2L))
         val runtime = listOf("x", "y")
         val leaves = listOf(base.groupId("p", "a/b"), base.groupId("p", "#3"), base.groupId("q", "c-7f3a"), base.groupId("q", "é#%@")) +
-            runtime.map { base.runtimeChildId(listOf("r"), it) }
+            runtime.map { base.attachedChildId(listOf("r"), it) }
         val wide = LocalPolicy(defaultReservation = 3L)
         var restores = 0
         var withLeasesOpen = 0
         var withAWakeOffset = 0
         var midDrain = 0
         var afterAReload = 0
-        var withARuntimeLease = 0
+        var withAnAttachedLease = 0
         var drains = 0
         var compared = 0
         for (seed in 0 until SEEDS) {
@@ -937,7 +937,7 @@ class LocalHeddlePersistenceTest {
                     if (persisted.allocatorMemory.wakeOffsets.values.any { it != Rational.ZERO }) withAWakeOffset++
                     if (persisted.ledger.allEdges().any { persisted.ledger.lifecycle(it) == Lifecycle.CLOSING }) midDrain++
                     if (persisted.lastApplied != base) afterAReload++
-                    if (persisted.leases.any { it.leaf.value.startsWith("root/r/") }) withARuntimeLease++
+                    if (persisted.leases.any { it.leaf.value.startsWith("root/r/") }) withAnAttachedLease++
                     subject = throughJson(subject, wide)
                     restores++
                 }
@@ -974,12 +974,12 @@ class LocalHeddlePersistenceTest {
                     }
                     kind == 6 -> {
                         val name = runtime[rng.nextInt(runtime.size)]
-                        shape(reference.attachRuntimeChild(listOf("r"), name, step.toLong())) to
-                            shape(subject.attachRuntimeChild(listOf("r"), name, step.toLong()))
+                        shape(reference.attach(listOf("r"), name, step.toLong())) to
+                            shape(subject.attach(listOf("r"), name, step.toLong()))
                     }
                     else -> {
                         val name = runtime[rng.nextInt(runtime.size)]
-                        shape(reference.detachRuntimeChild(listOf("r"), name)) to shape(subject.detachRuntimeChild(listOf("r"), name))
+                        shape(reference.detach(listOf("r"), name)) to shape(subject.detach(listOf("r"), name))
                     }
                 }
                 if (expected != actual) fail("seed $seed step $step (restored at $cut): $expected, but $actual")
@@ -996,7 +996,7 @@ class LocalHeddlePersistenceTest {
             { assertTrue(drains > 0, "the rig: some reload left an edge draining, $drains") },
             { assertTrue(midDrain > 0, "the rig: some restore landed mid-drain, $midDrain") },
             { assertTrue(afterAReload > 0, "the rig: some restore came after a reload, $afterAReload") },
-            { assertTrue(withARuntimeLease > 0, "the rig: some restore carried a lease at a runtime child, $withARuntimeLease") },
+            { assertTrue(withAnAttachedLease > 0, "the rig: some restore carried a lease at an attached child, $withAnAttachedLease") },
         )
     }
 

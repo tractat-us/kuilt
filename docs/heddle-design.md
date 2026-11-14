@@ -153,7 +153,7 @@ independently consumable. Both modules are published and constrained by
 
 **The logical scheduling tree** is data, not schema — groups created, closed,
 and reparented at runtime, any depth, no fixed level names (today a child the app
-creates while running is always a leaf; §11.1 says where that stands):
+attaches while running is always a leaf; §11.1 says where that stands):
 
 ```text
 root
@@ -634,14 +634,14 @@ release goes under that one bump.
 #### As built: the engine forgets
 
 `LocalHeddle` forgets automatically, with no new API, in the swap that lands
-each `apply`, `attachRuntimeChild` and `detachRuntimeChild`. That swap forgets:
+each `apply`, `attach` and `detach`. That swap forgets:
 
 - every RETIRED edge `forgetRefusal` passes and no open lease's path crosses.
   Every one, not only the edges this swap retired, so a ledger restored from a
   v0.7.4 snapshot compacts in its first swap;
 - every PREPARED edge the topology in force does not want: a diff of that
   topology would leave it prepared and name it in no step. It moves the floor and
-  gives its parent a row, nothing else. A runtime child's prepared edge is kept
+  gives its parent a row, nothing else. An attached child's prepared edge is kept
   unless the child has another edge the diff adopts, since a prepared edge may be
   what says the child is attached.
 
@@ -685,9 +685,9 @@ of adopting the old one.
   usually holds something, and `CHILD_HOLDS` refuses the old edge while it does.
   Only a child that is gone for good compacts reliably.
 - **A group whose children were forgotten is never forgotten itself.** Its row
-  in the fold keeps it counting as having child edges, and leaves go first. A
-  runtime child is always a leaf, so this bites a declared group removed after
-  its runtime children came and went.
+  in the fold keeps it counting as having child edges, and leaves go first. An
+  attached child is always a leaf, so this bites a declared group removed after
+  its attached children came and went.
 
 ## 6. Demand is an `EphemeralMap`, and that is not an accident
 
@@ -1326,7 +1326,7 @@ val fairness = draft("pool") {
         // A ceiling: never more than two batch jobs at once, however idle the pool is.
         lane("batch", maxConcurrent = 2)
     }
-    group("tenants") { runtimeChildren() }
+    group("tenants") { template() }
 }
 ```
 
@@ -1345,24 +1345,24 @@ parent's front. A rename or a move is a delete plus an add (§5.3). The steps ar
 applied by an interpreter that holds the ledger's only writer; the contracts it must
 keep are on `TopologyStep`.
 
-Children the consumer creates while running hang under a group marked with
-`runtimeChildren`, in their own id namespace (`pool/tenants/!c-7f3a`), so a runtime
-name never collides with a declared one. `Topology.attachRuntimeChild(group, name,
-ledger, generation)` and `detachRuntimeChild(group, name, ledger)` list the steps for
-one child, at the marker's weight, numbered by the same generation floor as the diff.
-Which runtime children exist is the ledger's to say, and the diff owns them as it owns
-declared edges: under a marker the new tree keeps, an attached child is kept, history
-and all; a new marker weight regenerates it on a new edge; and when the marker goes, or
+Children the consumer attaches while running hang under a group with a
+`template`, in their own id namespace (`pool/tenants/!c-7f3a`), so an attached
+name never collides with a declared one. `Topology.attach(group, name,
+ledger, generation)` and `detach(group, name, ledger)` list the steps for
+one child, at the template's weight, numbered by the same generation floor as the diff.
+Which attached children exist is the ledger's to say, and the diff owns them as it owns
+declared edges: under a template the new tree keeps, an attached child is kept, history
+and all; a new template weight regenerates it on a new edge; and when the template goes, or
 its group does, the child is closed. Each detach retires the child's edge, and the
-engine forgets it in the same swap once its books close (§5.5), so a runtime child
+engine forgets it in the same swap once its books close (§5.5), so an attached child
 can be detached whenever it goes idle.
 
-A runtime child is a leaf, one level below its marked group: it cannot carry a marker
+An attached child is a leaf, one level below its group: it cannot carry a template
 itself, so nothing discovered while running has children of its own. §1's "any depth"
 is met today by declared groups, which nest freely and reshape on a reload, and not
-yet by runtime ones. A tree found at runtime two levels deep (say, a repository and
-then its authors) has to declare each repository as a marked group and reload as
-each one appears. Letting a runtime child have runtime children is tracked by #3314.
+yet by attached ones. A tree found while running two levels deep (say, a repository and
+then its authors) has to declare each repository as a group with a template and reload as
+each one appears. Letting an attached child have attached children is tracked by #3314.
 
 ### 11.2 A ceiling: "run no more than N of these"
 
@@ -1389,13 +1389,25 @@ Decided in #3324, and built in three parts: declaring it (#3358), enforcing it
 (#3364) and reporting it (#3367).
 
 **Declaring it.** `maxConcurrent: Long? = null` on `Topology.Group`,
-`Topology.Lane` and `Topology.RuntimeChildren`, mirrored in `TopologyDocument`.
+`Topology.Lane` and `Topology.ChildTemplate`, mirrored in `TopologyDocument`.
 `null` means no ceiling, and nothing changes.
 
-- On `RuntimeChildren` it caps **each** attached child, not all of them together.
+- On a group's `template` (`ChildTemplate`) it caps **each** attached child, not
+  all of them together; the group's own `maxConcurrent` caps them all together.
+  A document writes the per-child ceiling inside the template, so it cannot be
+  written on a group that has none (#3368):
+
+  ```yaml
+  - type: group
+    name: repos
+    maxConcurrent: 8                # all repos together
+    template: { maxConcurrent: 2 }  # each attached repo
+  ```
+
 - **0 means pause:** picks stop under that node. It is not a problem.
-- A negative value is the one new `TopologyProblem.Kind`.
-- In a `draft`, `group`, `lane` and `runtimeChildren` each take it as
+- A negative value is the one new `TopologyProblem.Kind`. A negative
+  `template.maxConcurrent` is reported at the group's address.
+- In a `draft`, `group`, `lane` and `template` each take it as
   `maxConcurrent: Long?`, so a value read from config passes straight through.
 - The ceiling lives in the engine, read from the topology last applied
   (`lastApplied`), not in the ledger. `Topology.diff` keeps an existing edge by its
@@ -1446,8 +1458,8 @@ wake clamp (`settleJoiners`), with no banked credit (§10 invariant 6).
   open leases' paths names; the acquire that follows never picks it; and
   `entitlement` shares every slot among the uncapped leaves.
 
-**Compatibility.** A new property on a public data class changes its
-constructor and `copy` in binary, so the old constructors are kept.
+**Compatibility.** `Lane` keeps its old constructors; the group and template
+shapes broke deliberately in #3368 (no 0.7.4 caller).
 
 **Why it belongs in heddle.** The preview counts the leases it opens against a
 ceiling, and `explain` reports "at ceiling" as its own reason. A gate in the
@@ -1474,12 +1486,11 @@ and never decides whether the caller runs anything.
 - Treating a ceiling of 0 as a problem: it means pause (#3324).
 - `AT_CEILING` before `SUPPLY_EXHAUSTED`, and `POSITION_CEILING` after it
   (#3324, #3313).
-
-#### Open
-
-- A document's `runtimeChildrenMaxConcurrent` on a group that does not mark
-  runtime children is dropped without a word. Reporting it needs a second new
-  `TopologyProblem.Kind`, and this section allows only one. Tracked by #3368.
+- A per-child ceiling written beside the template rather than inside it: a
+  document once had both a marker and a separate ceiling field, and dropped the
+  ceiling without a word when the marker was missing. Nesting it in `template`
+  makes that document impossible to write, so no second problem kind is needed
+  (#3368).
 
 ### 11.3 Previewing the next picks
 
