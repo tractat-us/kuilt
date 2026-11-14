@@ -140,8 +140,8 @@ class TopologyGroupPathPropertyTest {
         }
         return names.map { name ->
             if (depth < 2 && r.nextInt(2) == 0) {
-                val marked = r.nextInt(3) == 0
-                Group(name, Weight.ONE, randomChildren(r, depth + 1), if (template) ChildTemplate(Weight.ONE) else null)
+                val withTemplate = r.nextInt(3) == 0
+                Group(name, Weight.ONE, randomChildren(r, depth + 1), if (withTemplate) ChildTemplate(Weight.ONE) else null)
             } else {
                 Lane(name)
             }

@@ -247,14 +247,14 @@ class TopologyTest {
     }
 
     @Test
-    fun acceptsAMarkedGroupWithNoDeclaredChildren() {
-        val marked = Topology.Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.of(2)))
+    fun acceptsATemplateGroupWithNoDeclaredChildren() {
+        val templated = Topology.Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.of(2)))
 
         assertAll(
-            { assertEquals(listOf(template), Topology("root", listOf(template)).children) },
+            { assertEquals(listOf(templated), Topology("root", listOf(templated)).children) },
             {
                 val document = TopologyDocument("root", listOf(TopologyDocument.Group("tenants", template = TopologyDocument.ChildTemplate("2"))))
-                assertEquals(TopologyParse.Valid(Topology("root", listOf(template))), Topology.from(document))
+                assertEquals(TopologyParse.Valid(Topology("root", listOf(templated))), Topology.from(document))
             },
         )
     }

@@ -236,7 +236,7 @@ public object TopologyWeightSerializer : KSerializer<Weight>   // a STRING: "3" 
   - `constructingInvalidTopologyThrowsWithAllProblems`.
   - `topologyJsonRoundTrips`.
   - `decodingAnInvalidTopologyThrows` (the strict type, through the read path).
-  - `acceptsAMarkedGroupWithNoDeclaredChildren`.
+  - `acceptsATemplateGroupWithNoDeclaredChildren`.
   - `sameNameAtDifferentDepthsIsAllowed`.
 - [ ] **Step 2: Run them and watch them fail.** `… ./gradlew :kuilt-heddle-core:jvmTest --tests "*TopologyTest*"`.
 - [ ] **Step 3: Implement.** The KDoc opens with "the tree you write in a config file", and says a rename or move is a delete plus an add.
