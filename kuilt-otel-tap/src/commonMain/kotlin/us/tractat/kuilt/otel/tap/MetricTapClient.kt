@@ -2,6 +2,9 @@
 
 package us.tractat.kuilt.otel.tap
 
+import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.atomicfu.locks.reentrantLock
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -15,12 +18,18 @@ import us.tractat.kuilt.otel.MetricCatalog
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.quilter.Quilter
 
+private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.tap.MetricTapClient")
+
 /**
  * A reconstructed snapshot of a device's metric buffer — the CRDTs collapsed to the plain
  * numbers they report.
  *
  * A histogram reports a distribution rather than one number, so [histograms] carries the
  * sketch itself: ask it for [DDSketch.quantile] or [DDSketch.count].
+ *
+ * [sums] leaves out, with a WARN naming it the first time, a series whose replicas' counts add up past
+ * [Long.MAX_VALUE] (#3318): the total has no `Long` to be, and one such series must not stop
+ * [MetricTapClient.pull] or [MetricTapClient.tail] reporting every other one.
  */
 public data class MetricSnapshot(
     public val sums: Map<MetricKey, Long>,
@@ -92,7 +101,7 @@ public class MetricTapClient(
     public suspend fun pull(): MetricSnapshot = withTimeout(config.pullTimeout) {
         seam.awaitRemotePeer()
         val firstNonEmpty = replicator.state.first { it.isNotEmpty() }
-        collapse(replicator.state.settle(config.pullSettleStep, firstNonEmpty))
+        collapse(replicator.state.settle(config.pullSettleStep, firstNonEmpty), leftOut)
     }
 
     /**
@@ -101,17 +110,10 @@ public class MetricTapClient(
      * on collection, then continues until the collector is cancelled.
      */
     public fun tail(): Flow<MetricSnapshot> =
-        replicator.state.map { collapse(it) }.distinctUntilChanged()
+        replicator.state.map { collapse(it, leftOut) }.distinctUntilChanged()
 
-    private fun collapse(cat: MetricCatalog) = MetricSnapshot(
-        sums = cat.sums.mapValues { it.value.value },
-        doubleSums = cat.doubleSums.mapValues { it.value.value },
-        // LWWRegister.value is nullable; a replicated gauge entry always carries a value
-        // (the key exists only because setGauge wrote one). requireNotNull, never `!!`.
-        gauges = cat.gauges.mapValues { requireNotNull(it.value.value) { "gauge ${it.key} has no value" } },
-        cardinalities = cat.cardinalities.mapValues { it.value.estimate() },
-        histograms = cat.histograms,
-    )
+    /** The sum series already reported left out of a snapshot, WARNed once each (#3318). */
+    private val leftOut = LeftOutSums()
 
     private fun MetricCatalog.isNotEmpty(): Boolean =
         sums.isNotEmpty() || doubleSums.isNotEmpty() || gauges.isNotEmpty() || cardinalities.isNotEmpty() ||
@@ -119,5 +121,50 @@ public class MetricTapClient(
 
     override fun onClose() {
         replicator.close()
+    }
+}
+
+/**
+ * Collapse each CRDT in [cat] to the number it reports; see [MetricSnapshot] for what is left out.
+ * A left-out series is logged at WARN the first time [leftOut] sees it and at DEBUG after that.
+ */
+internal fun collapse(cat: MetricCatalog, leftOut: LeftOutSums): MetricSnapshot = MetricSnapshot(
+    sums = buildMap {
+        cat.sums.forEach { (key, counter) ->
+            val total = counter.valueOrNull()
+            if (total == null) {
+                val line = { "MetricTapClient: sum series ${key.name} ${key.attributes} left out: its total passes Long.MAX_VALUE" }
+                if (leftOut.firstSighting(key, cat.sums.keys)) logger.warn(line) else logger.debug(line)
+            } else {
+                put(key, total)
+            }
+        }
+    },
+    doubleSums = cat.doubleSums.mapValues { it.value.value },
+    // LWWRegister.value is nullable; a replicated gauge entry always carries a value
+    // (the key exists only because setGauge wrote one). requireNotNull, never `!!`.
+    gauges = cat.gauges.mapValues { requireNotNull(it.value.value) { "gauge ${it.key} has no value" } },
+    cardinalities = cat.cardinalities.mapValues { it.value.estimate() },
+    histograms = cat.histograms,
+)
+
+/**
+ * The sum series a snapshot has already left out, so each is WARNed once rather than on every
+ * collapse a [MetricTapClient.tail] makes (#3318). A total past [Long.MAX_VALUE] stays past it, so
+ * every later collapse meets the same series again.
+ *
+ * Bounded by the live series: each sighting first forgets every key not in the live set it is
+ * given. Guarded by a lock rather than by a dispatcher, since a [MetricTapClient.pull] and any
+ * number of [MetricTapClient.tail] collectors may collapse at once. `:kuilt-otel` keeps the same
+ * set for its own sites; it is `internal` there, hence this copy.
+ */
+internal class LeftOutSums {
+    private val lock = reentrantLock()
+    private val seen = HashSet<MetricKey>()
+
+    /** Whether this is [key]'s first sighting since it was last outside [live]. */
+    fun firstSighting(key: MetricKey, live: Set<MetricKey>): Boolean = lock.withLock {
+        seen.retainAll(live)
+        seen.add(key)
     }
 }

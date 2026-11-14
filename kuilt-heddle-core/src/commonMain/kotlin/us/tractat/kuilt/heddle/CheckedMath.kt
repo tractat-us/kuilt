@@ -9,7 +9,8 @@ import us.tractat.kuilt.math.timesOrNull
  * Overflow-checked `Long` arithmetic that **throws** rather than wraps (design §10.12). A
  * fair-share tally that silently wrapped past [Long.MAX_VALUE] would report authority nobody was
  * ever granted, so every add and multiply that could overflow in this module routes through here.
- * [us.tractat.kuilt.crdt.GCounter.inc] itself is unchecked, so the guarding happens at this layer.
+ * [us.tractat.kuilt.crdt.GCounter.inc] and `value` refuse an overflow themselves (#3318), but this
+ * module's tallies are mostly its own arithmetic over slot counts, so the guarding happens here.
  *
  * The arithmetic is `:kuilt-math`'s, which answers `null` on overflow; these turn that `null` into
  * the throw this module's callers were written against. New code that can turn an overflow into a

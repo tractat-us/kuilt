@@ -55,6 +55,9 @@ public class WarpOtlpBridge(
     private val telemetry: WarpTelemetry,
     private val clock: Clock,
 ) {
+    /** The sum and histogram series already reported skipped, each WARNed once (#3318). */
+    private val skippedSums = FirstSightings()
+    private val skippedHistograms = FirstSightings()
 
     /**
      * Drain everything the edge is missing, across all three signals.
@@ -93,8 +96,11 @@ public class WarpOtlpBridge(
         }
 
         // ── Metrics ──────────────────────────────────────────────────────────
-        val points = renderMetricPoints(telemetry.metrics.snapshotAll(), nowEpochNanos())
-        val metrics = attempt(OtlpSignal.METRICS, buffered = points.isNotEmpty()) {
+        // Rendered inside the leg (#3318): whatever rendering throws fails the metric leg only,
+        // never the spans and logs already drained above or the drain itself.
+        val catalog = telemetry.metrics.snapshotAll()
+        val metrics = attempt(OtlpSignal.METRICS, buffered = catalog.hasMetricSeries()) {
+            val points = renderMetricPoints(catalog, nowEpochNanos(), skippedSums, skippedHistograms)
             val digest = edge.metricDigest()
             val delta = points.filterTo(mutableSetOf()) { digest.versions[it.key] != it.valueHash() }
             if (delta.isNotEmpty()) edge.sendMetrics(delta)
@@ -178,10 +184,28 @@ private fun classify(spans: SignalOutcome, logs: SignalOutcome, metrics: SignalO
  * [nowEpochNanos] as each point's observation time. Sums use `startEpochNanos = 0`
  * (OTLP "unknown start" — acceptable for a cumulative total the collector tracks).
  * A gauge that has never been written (`value == null`) is skipped.
+ *
+ * So is a series whose counts no longer fit in a `Long`, with a line naming it, at WARN the first
+ * time [skippedSums] or [skippedHistograms] sees it and at DEBUG after that: a sum whose
+ * replicas' slots add up past [Long.MAX_VALUE], which an OTLP integer sum cannot carry, or a
+ * histogram one of whose counts does (#3318). Skipping it costs that one series; failing the
+ * render would cost every metric series, on every drain, for as long as the counter exists.
  */
-internal fun renderMetricPoints(catalog: MetricCatalog, nowEpochNanos: Long): List<MetricPoint> = buildList {
+internal fun renderMetricPoints(
+    catalog: MetricCatalog,
+    nowEpochNanos: Long,
+    skippedSums: FirstSightings,
+    skippedHistograms: FirstSightings,
+): List<MetricPoint> = buildList {
     catalog.sums.forEach { (key, counter) ->
-        add(MetricPoint.Sum(key, counter.value, startEpochNanos = 0L, timeEpochNanos = nowEpochNanos))
+        val total = counter.valueOrNull()
+        if (total == null) {
+            skippedSums.report(logger, key, catalog.sums.keys) {
+                "WarpOtlpBridge: sum series ${key.name} ${key.attributes} skipped: its total passes Long.MAX_VALUE"
+            }
+            return@forEach
+        }
+        add(MetricPoint.Sum(key, total, startEpochNanos = 0L, timeEpochNanos = nowEpochNanos))
     }
     catalog.doubleSums.forEach { (key, counter) ->
         add(MetricPoint.DoubleSum(key, counter.value, startEpochNanos = 0L, timeEpochNanos = nowEpochNanos))
@@ -194,6 +218,21 @@ internal fun renderMetricPoints(catalog: MetricCatalog, nowEpochNanos: Long): Li
         add(MetricPoint.Cardinality(key, hll.estimate(), timeEpochNanos = nowEpochNanos))
     }
     catalog.histograms.forEach { (key, sketch) ->
-        add(sketch.toExponentialHistogramPoint(key, startEpochNanos = 0L, timeEpochNanos = nowEpochNanos))
+        // Nothing in here suspends, and ArithmeticException is not a CancellationException, so
+        // this narrow catch cannot swallow a cancellation.
+        val point = try {
+            sketch.toExponentialHistogramPoint(key, startEpochNanos = 0L, timeEpochNanos = nowEpochNanos)
+        } catch (overflow: ArithmeticException) {
+            skippedHistograms.report(logger, key, catalog.histograms.keys) {
+                "WarpOtlpBridge: histogram series ${key.name} ${key.attributes} skipped: $overflow"
+            }
+            return@forEach
+        }
+        add(point)
     }
 }
+
+/** Whether [renderMetricPoints] has any series to consider: the metric leg's "anything buffered". */
+private fun MetricCatalog.hasMetricSeries(): Boolean =
+    sums.isNotEmpty() || doubleSums.isNotEmpty() || cardinalities.isNotEmpty() || histograms.isNotEmpty() ||
+        gauges.values.any { it.value != null }

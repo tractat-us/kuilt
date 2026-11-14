@@ -17,7 +17,9 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.MetricKey
+import us.tractat.kuilt.otel.MetricExportResult
 import us.tractat.kuilt.otel.MetricKind
+import us.tractat.kuilt.otel.MetricSumOverflowException
 import us.tractat.kuilt.otel.WarpMetricExporter
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.InMemoryDurableStore
@@ -27,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -169,6 +172,96 @@ class KuiltMetricExporterBatchTest {
             { assertEquals(0L, recovered.sumValue(sumKey("requests", "/a"))) },
             { assertEquals(0.5, recovered.doubleSumValue(sumKey("cpu.seconds", "/a"))) },
             { assertEquals(19.0, recovered.gaugeValue(gaugeKey("temp", "/b"))) },
+        )
+    }
+    /**
+     * A counter whose count on this replica has reached [Long.MAX_VALUE] sends an increment in every
+     * export, and `record` refuses any batch carrying it (#3318). That series is left out and the
+     * rest of the export recorded again: the gauge lands, and the other counter holds exactly one
+     * copy of its delta, because the refused attempt applied nothing.
+     */
+    @Test
+    fun aSaturatedSumSeriesIsLeftOutAndTheRestOfTheExportLandsOnce() = runTest {
+        val store = CountingStore()
+        val exp = WarpMetricExporter(replica = ReplicaId("dev"), store = store)
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val saturated = sumKey("requests", "/a")
+        assertEquals(MetricExportResult.Success, exp.incrementSum(saturated, Long.MAX_VALUE - 1L))
+        val rigRefuses = exp.incrementSum(saturated, 3L)
+        val saturatedExport = listOf(
+            metric("requests", MetricDataType.LONG_SUM, deltaCounter(listOf(longPoint(3L, "/a"), longPoint(4L, "/b")))),
+            metric("temp", MetricDataType.DOUBLE_GAUGE, ImmutableGaugeData.create(listOf(doublePoint(21.5, "/a")))),
+        )
+
+        val code = bridge.export(saturatedExport)
+        runCurrent()
+
+        val recovered = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
+        assertAll(
+            {
+                val refusal = assertIs<MetricExportResult.Failure>(rigRefuses, "the rig: the series really is saturated")
+                assertIs<MetricSumOverflowException>(refusal.cause)
+            },
+            { assertTrue(code.isSuccess, "a saturated series is not an export failure") },
+            { assertEquals(21.5, exp.gaugeValue(gaugeKey("temp", "/a"))) },
+            { assertEquals(4L, exp.sumValue(sumKey("requests", "/b")), "one copy of the delta, not two") },
+            { assertEquals(Long.MAX_VALUE - 1L, exp.sumValue(saturated)) },
+            { assertEquals(4L, recovered.sumValue(sumKey("requests", "/b")), "and it is on disk") },
+        )
+    }
+
+    /**
+     * A long sum and a double sum share a name and attributes but are different counters. Leaving the
+     * saturated long one out must not take the double one with it.
+     */
+    @Test
+    fun aSaturatedLongSumKeepsTheDoubleSumThatSharesItsKey() = runTest {
+        val exp = WarpMetricExporter(replica = ReplicaId("dev"), store = CountingStore())
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val shared = sumKey("requests", "/a")
+        assertEquals(MetricExportResult.Success, exp.incrementSum(shared, Long.MAX_VALUE - 1L))
+        val rigRefuses = exp.incrementSum(shared, 3L)
+        val sharedExport = listOf(
+            metric("requests", MetricDataType.LONG_SUM, deltaCounter(listOf(longPoint(3L, "/a")))),
+            metric("requests", MetricDataType.DOUBLE_SUM, deltaCounter(listOf(doublePoint(0.5, "/a")))),
+        )
+
+        val code = bridge.export(sharedExport)
+        runCurrent()
+
+        assertAll(
+            { assertIs<MetricExportResult.Failure>(rigRefuses, "the rig: the long series really is saturated") },
+            { assertTrue(code.isSuccess) },
+            { assertEquals(0.5, exp.doubleSumValue(shared), "the double point landed") },
+            { assertEquals(Long.MAX_VALUE - 1L, exp.sumValue(shared)) },
+        )
+    }
+
+    /** Two saturated series in one export are both left out, and every other point lands once. */
+    @Test
+    fun twoSaturatedSeriesAreBothLeftOutAndTheRestLandsOnce() = runTest {
+        val exp = WarpMetricExporter(replica = ReplicaId("dev"), store = CountingStore())
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        listOf("/a", "/b").forEach { r ->
+            assertEquals(MetricExportResult.Success, exp.incrementSum(sumKey("requests", r), Long.MAX_VALUE - 1L))
+            assertIs<MetricExportResult.Failure>(exp.incrementSum(sumKey("requests", r), 3L), "the rig: $r saturated")
+        }
+        val twoExport = listOf(
+            metric("requests", MetricDataType.LONG_SUM, deltaCounter(listOf(longPoint(3L, "/a"), longPoint(4L, "/b"), longPoint(6L, "/c")))),
+            metric("cpu.seconds", MetricDataType.DOUBLE_SUM, deltaCounter(listOf(doublePoint(0.5, "/a")))),
+            metric("temp", MetricDataType.DOUBLE_GAUGE, ImmutableGaugeData.create(listOf(doublePoint(21.5, "/a")))),
+        )
+
+        val code = bridge.export(twoExport)
+        runCurrent()
+
+        assertAll(
+            { assertTrue(code.isSuccess) },
+            { assertEquals(Long.MAX_VALUE - 1L, exp.sumValue(sumKey("requests", "/a"))) },
+            { assertEquals(Long.MAX_VALUE - 1L, exp.sumValue(sumKey("requests", "/b"))) },
+            { assertEquals(6L, exp.sumValue(sumKey("requests", "/c")), "once, not twice") },
+            { assertEquals(0.5, exp.doubleSumValue(sumKey("cpu.seconds", "/a"))) },
+            { assertEquals(21.5, exp.gaugeValue(gaugeKey("temp", "/a"))) },
         )
     }
 }

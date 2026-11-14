@@ -698,6 +698,15 @@ final class us.tractat.kuilt.otel/MetricKey { // us.tractat.kuilt.otel/MetricKey
     }
 }
 
+final class us.tractat.kuilt.otel/MetricSumOverflowException : kotlin/ArithmeticException { // us.tractat.kuilt.otel/MetricSumOverflowException|null[0]
+    final val by // us.tractat.kuilt.otel/MetricSumOverflowException.by|{}by[0]
+        final fun <get-by>(): kotlin/Long // us.tractat.kuilt.otel/MetricSumOverflowException.by.<get-by>|<get-by>(){}[0]
+    final val count // us.tractat.kuilt.otel/MetricSumOverflowException.count|{}count[0]
+        final fun <get-count>(): kotlin/Long // us.tractat.kuilt.otel/MetricSumOverflowException.count.<get-count>|<get-count>(){}[0]
+    final val key // us.tractat.kuilt.otel/MetricSumOverflowException.key|{}key[0]
+        final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricSumOverflowException.key.<get-key>|<get-key>(){}[0]
+}
+
 final class us.tractat.kuilt.otel/PersistenceHealth { // us.tractat.kuilt.otel/PersistenceHealth|null[0]
     constructor <init>(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Boolean = ..., kotlin/Throwable? = ...) // us.tractat.kuilt.otel/PersistenceHealth.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Boolean;kotlin.Throwable?){}[0]
 

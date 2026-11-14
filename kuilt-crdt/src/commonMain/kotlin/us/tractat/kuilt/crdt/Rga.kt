@@ -598,7 +598,7 @@ public class Rga<V> private constructor(
      *
      * That is the amortisation `WarpLogRecordExporter` needs to stop paying a Θ(N)
      * append per log record (#2194), and it needs no persistent data structure and no
-     * new dependency on this deliberately dependency-free module. It does **not**
+     * new dependency on this deliberately lean module. It does **not**
      * remove the Θ(N) term — one `ops` copy per run remains, which is #2193's Phase 3A.
      *
      * When this really is an append — `after` is the last element of the **full**

@@ -8,6 +8,9 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(libs.kotlinx.serialization.core)
+            // Overflow-checked counting (#3318). Not `api`: no `:kuilt-math` type is on this
+            // module's public surface. `:kuilt-math` itself depends on nothing.
+            implementation(project(":kuilt-math"))
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))

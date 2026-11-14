@@ -1450,6 +1450,7 @@ final class us.tractat.kuilt.crdt/GCounter : us.tractat.kuilt.crdt/Quilted<us.tr
     final fun piece(us.tractat.kuilt.crdt/GCounter): us.tractat.kuilt.crdt/GCounter // us.tractat.kuilt.crdt/GCounter.piece|piece(us.tractat.kuilt.crdt.GCounter){}[0]
     final fun replicas(): kotlin.collections/Set<us.tractat.kuilt.crdt/ReplicaId> // us.tractat.kuilt.crdt/GCounter.replicas|replicas(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.crdt/GCounter.toString|toString(){}[0]
+    final fun valueOrNull(): kotlin/Long? // us.tractat.kuilt.crdt/GCounter.valueOrNull|valueOrNull(){}[0]
 
     final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.crdt/GCounter> { // us.tractat.kuilt.crdt/GCounter.$serializer|null[0]
         final val descriptor // us.tractat.kuilt.crdt/GCounter.$serializer.descriptor|{}descriptor[0]

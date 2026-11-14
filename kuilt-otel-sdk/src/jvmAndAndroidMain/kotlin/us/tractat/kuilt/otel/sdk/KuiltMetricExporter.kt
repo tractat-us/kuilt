@@ -16,12 +16,15 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.otel.MetricExportResult
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricKind
+import us.tractat.kuilt.otel.MetricSumOverflowException
 import us.tractat.kuilt.otel.MetricUpdate
 import us.tractat.kuilt.otel.WarpMetricExporter
+import java.util.concurrent.ConcurrentHashMap
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetricExporter")
 
@@ -92,6 +95,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it), and so is a
  *   NaN delta (WARN). Either is one dropped point, never a failed export: the export is one
  *   batch, so a point it could not apply would otherwise take every other point with it.
+ * - a monotonic sum whose count on this replica cannot grow past [Long.MAX_VALUE] is dropped from
+ *   the export (WARN the first time) for the same reason: `record` refuses the whole batch for it, so the export
+ *   is recorded again without that series, and every other point lands once.
  * - a sum whose own temporality is not the one asked for above — a cumulative counter, or a
  *   delta UpDownCounter, from a reader with its own temporality selector — is **dropped**
  *   (WARN). Added, the first would count its running total again each collection; stored,
@@ -127,12 +133,19 @@ public class KuiltMetricExporter @JvmOverloads constructor(
 
     private val queue = Channel<Batch>(Channel.UNLIMITED)
 
+    /** The saturated sum series already dropped once; see [firstDrop]. Declared before [drain], which reads it. */
+    private val dropped: MutableSet<MetricKey> = ConcurrentHashMap.newKeySet()
+
     private val drain = scope.launch {
         for (batch in queue) {
             val ok = runCatchingCancellable {
                 val updates = ArrayList<MetricUpdate>()
                 batch.metrics.forEach { collectUpdates(it, updates) }
-                exporter.record(updates) is MetricExportResult.Success
+                recordWithoutSaturatedSums(updates) is MetricExportResult.Success
+            }.onFailure { failure ->
+                // Unexpected, unlike a refused write (which record() returns and logs itself), so
+                // the throwable is the diagnosis: keep it.
+                logger.warn(failure) { "KuiltMetricExporter: export of ${batch.metrics.size} metrics failed" }
             }.getOrDefault(false)
             if (ok) batch.code.succeed() else batch.code.fail()
         }
@@ -157,6 +170,62 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             if (cause == null || cause is CancellationException) code.succeed() else code.fail()
         }
         return code
+    }
+
+    /**
+     * [WarpMetricExporter.record] the export, leaving out each sum series it refuses as saturated.
+     *
+     * `record` refuses a whole batch, applying nothing, when one increment would carry this
+     * replica's count for its series past [Long.MAX_VALUE] (a [MetricSumOverflowException]). A
+     * delta counter that has reached that point sends an increment in every export, so passing the
+     * refusal on would drop every other point of every export from then on. Instead the refused
+     * series' updates are taken out and the rest recorded again. A refused attempt applied
+     * nothing, so the retry counts every other point exactly once, histogram updates included:
+     * only long increments are taken out, so they pass through every retry untouched.
+     *
+     * Only the series' long increments leave: a double sum under the same name and attributes is a
+     * different counter and is not refused. The loop ends: every refusal names a long increment
+     * still in the batch, and it leaves with the retry, so there is at most one retry per distinct
+     * series; a `check` pins that a refusal never names anything else. Any other result, a store refusal
+     * included, is returned as it is.
+     *
+     * A saturated series is dropped from every export from then on, so the line saying so is at
+     * WARN only the first time; see [firstDrop].
+     */
+    private suspend fun recordWithoutSaturatedSums(updates: List<MetricUpdate>): MetricExportResult {
+        var remaining = updates
+        while (true) {
+            val result = exporter.record(remaining)
+            val saturated = ((result as? MetricExportResult.Failure)?.cause as? MetricSumOverflowException)?.key
+            if (saturated == null) return result
+            // The refused key names an increment of the batch it was given, and that increment
+            // leaves below, so every pass shrinks `remaining`. Were that untrue the loop would
+            // spin; fail loudly instead.
+            check(remaining.any { it is MetricUpdate.IncrementSum && it.key == saturated }) {
+                "record refused sum series ${saturated.name} ${saturated.attributes} as saturated, " +
+                    "but the batch carries no long increment to it"
+            }
+            val line = {
+                "KuiltMetricExporter: dropping this export's increments to sum series ${saturated.name} " +
+                    "${saturated.attributes}: this replica's count for it cannot grow past Long.MAX_VALUE"
+            }
+            if (firstDrop(saturated)) logger.warn(line) else logger.debug(line)
+            remaining = remaining.filterNot { it is MetricUpdate.IncrementSum && it.key == saturated }
+        }
+    }
+
+    /**
+     * Whether [key] is being dropped for the first time, so its line goes out at WARN once and at
+     * DEBUG after that. Under `installLogCapture` a WARN per export would itself be a durable log
+     * record, shipped on the next drain, for as long as the series lives.
+     *
+     * Bounded by the live sum series: a series the exporter no longer holds, evicted or cleared,
+     * is forgotten first. A concurrent set, not dispatcher confinement, although only the drain
+     * coroutine calls this today.
+     */
+    private fun firstDrop(key: MetricKey): Boolean {
+        dropped.removeIf { exporter.sumSnapshot(it) == GCounter.ZERO }
+        return dropped.add(key)
     }
 
     /**

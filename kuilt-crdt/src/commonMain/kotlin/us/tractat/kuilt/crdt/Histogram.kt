@@ -1,6 +1,7 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.math.Int128
 
 /**
  * An explicit-bucket histogram: you choose the bucket boundaries up front —
@@ -59,7 +60,12 @@ public class Histogram private constructor(
     private val negativeSum: GCounterDouble,
 ) : Quilted<Histogram> {
 
-    /** Total number of recorded values. Always equals `bucketCounts.sum()`. */
+    /**
+     * Total number of recorded values. Always equals `bucketCounts.sum()`.
+     *
+     * @throws ArithmeticException if one bucket's count, summed across replicas, does not fit in
+     *   a `Long` (#3318). The sum across buckets is not yet checked, tracked by #3343.
+     */
     public val count: Long get() = buckets.values.sumOf { it.value }
 
     /** The sum of all recorded values (for the mean), computed replica-order-deterministically. */
@@ -69,6 +75,8 @@ public class Histogram private constructor(
      * Per-bucket counts as a dense list of size `boundaries.size + 1` — bucket
      * `i` in the OTLP upper-inclusive convention (see class docs). This is the
      * `bucket_counts` array of an OTLP `HistogramDataPoint`.
+     *
+     * @throws ArithmeticException if a bucket's count, summed across replicas, does not fit in a `Long` (#3318).
      */
     public val bucketCounts: List<Long>
         get() = List(boundaries.size + 1) { index -> buckets[index]?.value ?: 0L }
@@ -84,6 +92,7 @@ public class Histogram private constructor(
      * As with [GCounter], two peers must never share a [ReplicaId].
      *
      * @throws IllegalArgumentException if [value] is NaN or infinite.
+     * @throws ArithmeticException if [replica]'s slot in the bucket would pass [Long.MAX_VALUE] (#3318).
      */
     public fun record(replica: ReplicaId, value: Double): Patch<Histogram> {
         require(value.isFinite()) { "Histogram values must be finite, was $value" }
@@ -136,7 +145,9 @@ public class Histogram private constructor(
         return result
     }
 
-    override fun toString(): String = "Histogram(boundaries=$boundaries, counts=$bucketCounts, sum=$sum)"
+    // Exact counts, not [bucketCounts]: a histogram whose counts do not fit in a `Long` must still print.
+    override fun toString(): String =
+        "Histogram(boundaries=$boundaries, counts=${List(boundaries.size + 1) { buckets[it]?.exactValue ?: Int128.ZERO }}, sum=$sum)"
 
     /** Bucket index for [value]: the first `i` with `value <= boundaries[i]`, else the overflow bucket. */
     private fun bucketIndex(value: Double): Int {

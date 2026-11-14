@@ -118,6 +118,60 @@ class WarpMetricExporterBatchTest {
         )
     }
 
+    /**
+     * A batch whose sum increments to one series add up past what this replica's count can take
+     * is refused whole (#3318): each increment fits on its own, only the two together overflow.
+     * Nothing is applied in memory and nothing is written, the gauge and the other series
+     * included, so the batch is never half-applied.
+     */
+    @Test
+    fun aBatchWhoseSumIncrementsOverflowTogetherIsRefusedWhole() = runTest {
+        val store = RecordingStore()
+        val exporter = exporter(store)
+        assertEquals(MetricExportResult.Success, exporter.incrementSum(requests, Long.MAX_VALUE - 5L))
+        val memoryBefore = exporter.snapshotAll()
+        val writesBefore = store.writesByKey()
+        val fitsAlone = listOf(
+            MetricUpdate.SetGauge(queue, 1.0, timestamp = 1L),
+            MetricUpdate.IncrementSum(requestsB, 1L),
+            MetricUpdate.IncrementSum(requests, 3L),
+        )
+
+        val result = exporter.record(fitsAlone + MetricUpdate.IncrementSum(requests, 3L))
+
+        val cause = assertIs<MetricSumOverflowException>(assertIs<MetricExportResult.Failure>(result).cause)
+        val memoryAfter = exporter.snapshotAll()
+        val writesAfter = store.writesByKey()
+        // The control: without its last increment the same batch fits, so the refusal above is the
+        // overflow and not a rig that refuses everything.
+        val control = exporter.record(fitsAlone)
+        assertAll(
+            { assertEquals(requests, cause.key) },
+            { assertEquals(Long.MAX_VALUE - 2L, cause.count, "the batch's own earlier increment is counted") },
+            { assertEquals(3L, cause.by) },
+            { assertEquals(memoryBefore, memoryAfter, "nothing applied in memory") },
+            { assertEquals(writesBefore, writesAfter, "nothing written") },
+            { assertEquals(MetricExportResult.Success, control) },
+            { assertEquals(Long.MAX_VALUE - 2L, exporter.sumValue(requests)) },
+        )
+    }
+
+    @Test
+    fun aSingleSumIncrementThatWouldOverflowIsRefusedAndAppliesNothing() = runTest {
+        val store = RecordingStore()
+        val exporter = exporter(store)
+        exporter.incrementSum(requests, Long.MAX_VALUE - 5L)
+        val writesBefore = store.writesByKey()
+
+        val result = exporter.incrementSum(requests, 6L)
+
+        assertAll(
+            { assertIs<MetricSumOverflowException>(assertIs<MetricExportResult.Failure>(result).cause) },
+            { assertEquals(Long.MAX_VALUE - 5L, exporter.sumValue(requests)) },
+            { assertEquals(writesBefore, store.writesByKey()) },
+        )
+    }
+
     @Test
     fun anEmptyBatchSucceedsWithoutWriting() = runTest {
         val store = RecordingStore()
