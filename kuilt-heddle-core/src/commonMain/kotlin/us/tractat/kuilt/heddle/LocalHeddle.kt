@@ -703,6 +703,49 @@ public class LocalHeddle private constructor(
     }
 
     /**
+     * Who would go next, with each leaf's own next job: the leaves a caller's loop over [queues]
+     * would pick, in order, if nothing else happened in between. Changes nothing, not even the wake
+     * memory.
+     *
+     * [queues] lists each leaf's queued jobs by their reservations, head first. A leaf counts as
+     * waiting while its list is not empty. Each pick does what that caller does: [acquire] with
+     * [reservation] among the waiting leaves in [eligible], then, when the winner's head is larger
+     * than [reservation], [extend] the lease by the difference, then pop the head. [extend] makes
+     * no pick, so the order is the one the slot's own reservation decides, and the head sets only
+     * what the lease holds: `max(reservation, head)`. A head below [reservation] holds
+     * [reservation], since a lease cannot shrink.
+     *
+     * The list ends when no waiting leaf is eligible, or at the first call that is refused, a
+     * `PositionCeiling` refusal included. When the acquire lands and its extend is the call
+     * refused, that pick is left out: the caller's lease would hold less than its job needs.
+     *
+     * @throws IllegalArgumentException when [reservation] or any queued reservation, not only a
+     *   head, is not in `1..`[MAX_RESERVATION].
+     * @sample us.tractat.kuilt.heddle.samplePreviewQueues
+     */
+    public fun previewPicks(
+        queues: Map<GroupId, List<Long>>,
+        eligible: Set<GroupId>,
+        reservation: Long = policy.defaultReservation,
+    ): List<GroupId> {
+        requireReservation("reservation", reservation)
+        for ((leaf, queue) in queues) queue.forEach { requireReservation("a queued reservation of ${leaf.value}", it) }
+        val scratch = scratch(ledger)
+        val remaining = queues.mapValuesTo(HashMap()) { (_, queue) -> ArrayDeque(queue) }
+        val picks = ArrayList<GroupId>()
+        while (true) {
+            val waitingNow = remaining.filterValues { it.isNotEmpty() }.keys
+            val eligibleNow = eligible.filterTo(HashSet()) { it in waitingNow }
+            val out = scratch.acquire(waitingNow, eligibleNow, startedAt = 0L, reservation = reservation)
+            if (out !is AcquireOutcome.Acquired) break
+            val head = remaining.getValue(out.lease.leaf).removeFirst()
+            if (head > reservation && scratch.extend(out.lease.id, head - reservation) !is LeaseOutcome.Done) break
+            picks += out.lease.leaf
+        }
+        return picks
+    }
+
+    /**
      * Why [leaf] is not, or is, what the next [acquire] on these same arguments picks. Changes
      * nothing, not even the wake memory.
      *

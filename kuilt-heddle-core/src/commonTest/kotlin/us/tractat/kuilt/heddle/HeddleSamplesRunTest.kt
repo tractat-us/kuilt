@@ -71,4 +71,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun kuiltVersionHolds() = sampleKuiltVersion()
+
+    @Test
+    fun previewQueuesHolds() = samplePreviewQueues()
 }

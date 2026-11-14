@@ -240,7 +240,12 @@ class LocalHeddleSupplyTest {
         val atReservation = h.previewPicks(queues(3L), all)
         val above = h.previewPicks(queues(7L), all)
         val byCount = h.previewPicks(mapOf(a to 6, b to 6, c to 6), all, List(18) { 3L })
-        val real = List(18) { h.lease(all, reservation = 3L) }
+        // The real loop, for queues(1L): no head is above 3, so no lease is extended.
+        val left = mutableMapOf(a to 6, b to 6, c to 6)
+        val real = List(18) {
+            h.lease(listOf(a, b, c).filter { left.getValue(it) > 0 }.toSet(), reservation = 3L)
+                .also { lease -> left[lease.leaf] = left.getValue(lease.leaf) - 1 }
+        }
         assertAll(
             { assertEquals(atReservation, below) },
             { assertEquals(byCount, below) },
