@@ -44,8 +44,8 @@ goes to web while both teams have work queued. Groups nest, so web could split i
 both called `builds`, and they are still different lanes, because an id is the
 whole path.
 
-A group marked with `template()` is one whose children your program names
-while it runs: one per customer, say, all at the same weight. When the tree comes from
+A group with a `template()` takes children your program attaches while it
+runs: one per customer, say, all at the same weight. When the tree comes from
 an admin's file rather than code, decode a `TopologyDocument` and call
 `Topology.from`, which lists every problem with an address instead of throwing.
 
@@ -253,7 +253,7 @@ agents. When the deploy finishes, deploys compete again, starting level like a
 team that went quiet, not owed the turns they sat out.
 
 A ceiling of `0` pauses a lane. On a group it counts every build beneath it, and
-on attached children it caps each child on its own. When several are full on the
+in a group's template it caps each attached child on its own. When several are full on the
 way down, `explain` names the one nearest the top. A ceiling never stops or
 refuses a build that is already running.
 
@@ -327,7 +327,7 @@ changed. The team itself starts again at its new weight, level with the line.
 It is neither owed for its past nor charged for it.
 
 Forks open and close while the farm runs, so the tree cannot list them. A group
-marked with `template()` takes children your program names as it goes:
+with a `template()` takes children your program attaches as it goes:
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleBuildFarm -->
 

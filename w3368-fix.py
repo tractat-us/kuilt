@@ -5,48 +5,29 @@ def edit(p, pairs):
         s=s.replace(a,b)
     open(p,'w').write(s)
 
-edit('docs/heddle-design.md',[
-("""Children the consumer creates while running hang under a group marked with
-`template`, in their own id namespace (`pool/tenants/!c-7f3a`), so a runtime
-name never collides with a declared one.""","""Children the consumer attaches while running hang under a group with a
-`template`, in their own id namespace (`pool/tenants/!c-7f3a`), so an attached
-name never collides with a declared one."""),
-("""is met today by declared groups, which nest freely and reshape on a reload, and not
-yet by runtime ones. A tree found at runtime two levels deep (say, a repository and""",
-"""is met today by declared groups, which nest freely and reshape on a reload, and not
-yet by attached ones. A tree found while running two levels deep (say, a repository and"""),
-("""- On `ChildTemplate` it caps **each** attached child, not all of them together.
-- **0 means pause:** picks stop under that node. It is not a problem.
-- A negative value is the one new `TopologyProblem.Kind`.""",
-"""- On a group's `template` (`ChildTemplate`) it caps **each** attached child, not
-  all of them together; the group's own `maxConcurrent` caps them all together.
-  A document writes the per-child ceiling inside the template, so it cannot be
-  written on a group that has none (#3368):
-
-  ```yaml
-  - type: group
-    name: repos
-    maxConcurrent: 8                # all repos together
-    template: { maxConcurrent: 2 }  # each attached repo
-  ```
-
-- **0 means pause:** picks stop under that node. It is not a problem.
-- A negative value is the one new `TopologyProblem.Kind`. A negative
-  `template.maxConcurrent` is reported at the group's address."""),
-("""- `AT_CEILING` before `SUPPLY_EXHAUSTED`, and `POSITION_CEILING` after it
-  (#3324, #3313).
-
-#### Open
-
-- A document's `runtimeChildrenMaxConcurrent` on a group that does not mark
-  attached children is dropped without a word. Reporting it needs a second new
-  `TopologyProblem.Kind`, and this section allows only one. Tracked by #3368.
-""","""- `AT_CEILING` before `SUPPLY_EXHAUSTED`, and `POSITION_CEILING` after it
-  (#3324, #3313).
-- A per-child ceiling written beside the template rather than inside it: a
-  document once had both a marker and a separate ceiling field, and dropped the
-  ceiling without a word when the marker was missing. Nesting it in `template`
-  makes that document impossible to write, so no second problem kind is needed
-  (#3368).
-"""),
+edit('docs/agent-cookbook/heddle.md',[
+("""a lane, or at an attached child of a group with a template: a group that happens to have nothing attached,
+such as a group with a template before its first attached child, is never leased, and `admit` and `explain`""",
+"""a lane, or at an attached child of a group with a template: a group that happens to have nothing
+attached, such as a group with a template before its first child is attached, is never leased, and
+`admit` and `explain`"""),
+("""in your own loop beside the engine: set `maxConcurrent` on that group, lane or template (`0`
+pauses it).""","""in your own loop beside the engine: set `maxConcurrent` on that group or lane, or inside a group's
+`template` to cap each attached child on its own (`0` pauses it)."""),
+])
+edit('Writerside/topics/heddle-local.md',[
+("""A group marked with `template()` is one whose children your program names
+while it runs: one per customer, say, all at the same weight.""",
+"""A group with a `template()` takes children your program attaches while it
+runs: one per customer, say, all at the same weight."""),
+("""on attached children it caps each child on its own.""","""in a group's template it caps each attached child on its own."""),
+("""Forks open and close while the farm runs, so the tree cannot list them. A group
+marked with `template()` takes children your program names as it goes:""",
+"""Forks open and close while the farm runs, so the tree cannot list them. A group
+with a `template()` takes children your program attaches as it goes:"""),
+])
+edit('kuilt-heddle-core/module.md',[
+("""- **No more than N of these at once.** A `maxConcurrent` on a group, a lane or a
+  template is a ceiling:""","""- **No more than N of these at once.** A `maxConcurrent` on a group, a lane or a
+  group's template is a ceiling:"""),
 ])
