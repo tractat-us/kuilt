@@ -125,6 +125,7 @@ public class LocalHeddleSnapshot internal constructor(
         allocator = FairShareAllocator(LocalHeddle.SELF, LocalHeddle.policyConfig(policy), allocatorMemory),
         capacity = Capacity.sized(totalSlots, policy),
         leasable = Leasable.ByTopology(lastApplied),
+        rebase = true,
     )
 
     override fun equals(other: Any?): Boolean =

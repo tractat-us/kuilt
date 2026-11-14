@@ -23,6 +23,10 @@ import kotlin.test.assertTrue
  * since a run that gets there by picks takes thousands of maximum-size leases. Every arm first
  * asserts that its lane is where the rig put it, so a refusal is the ceiling's doing and not a
  * fixture that never got there.
+ *
+ * The engine rebases a parent long before a child gets there (#3329), so an arm that wants the
+ * ceiling keeps a demanding sibling near its origin: the rebase can move no demanding child below
+ * zero, so that sibling holds it at nothing, the one way a running engine still reaches the ceiling.
  */
 class LocalHeddlePositionCeilingTest {
 
@@ -124,12 +128,16 @@ class LocalHeddlePositionCeilingTest {
         // No warm-up: a carries no wake offset, so the pick itself reads a below its ceiling and
         // only the delegation can be what crosses.
         val engine = engine()
-        check(engine.snapshot().allocatorMemory.wakeOffsets.isEmpty()) { "a fresh engine has no wake offsets" }
+        // One pick with a and b both waiting seats b near its origin and wakes nobody. b then
+        // waits beside a, which holds the rebase at nothing.
+        val seating = (engine.acquire(setOf(a, b), setOf(a, b), startedAt = 99L) as AcquireOutcome.Acquired).lease
+        engine.complete(seating.id, actualCost = 1L)
+        check(engine.snapshot().allocatorMemory.wakeOffsets.isEmpty()) { "nobody has woken, so there are no wake offsets" }
         // One unit is 16 ticks: one tick under the ceiling, a pick of a is still exact, and its
         // delegation is what would cross.
         engine.pushTowardCeiling(a, below = 1L)
         val stateBefore = engine.snapshot()
-        val refused = engine.acquire(setOf(a), setOf(a), startedAt = 100L)
+        val refused = engine.acquire(setOf(a, b), setOf(a), startedAt = 100L)
         assertAll(
             { assertEquals(AcquireOutcome.PositionCeiling(root), refused) },
             { assertEquals(stateBefore, engine.snapshot()) },
@@ -140,7 +148,9 @@ class LocalHeddlePositionCeilingTest {
     @Test
     fun anExtendAcrossTheCeilingRefusesTypedAndChangesNothing() {
         val engine = engine()
-        val lease = (engine.acquire(setOf(a), setOf(a), startedAt = 100L) as AcquireOutcome.Acquired).lease
+        // An extend never rebases, only a pick does, so its delegation is what crosses. b waits
+        // beside a near its origin all the same, which also holds the acquire's rebase at nothing.
+        val lease = (engine.acquire(setOf(a, b), setOf(a), startedAt = 100L) as AcquireOutcome.Acquired).lease
         engine.pushTowardCeiling(a, below = 1L)
         val stateBefore = engine.snapshot()
         val bytesBefore = engine.bytes()
@@ -235,13 +245,18 @@ class LocalHeddlePositionCeilingTest {
         saturated.pushTowardCeiling(a, below = 0L)
 
         // One unit is 16 ticks: 17 under, an acquire of 1 lands one tick under, and an extend crosses.
+        // b waits beside a, never eligible, at its origin: it holds the rebase's shift at zero
+        // (#3329), the one way a running engine still reaches the ceiling, so a is not brought down.
+        // One pick with both waiting seats b near its origin first.
         val crossing = engine()
+        val seating = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a, b), setOf(a), startedAt = 0L)).lease
+        crossing.complete(seating.id, actualCost = 1L)
         crossing.pushTowardCeiling(a, below = 17L)
         val before = crossing.snapshot()
-        val withoutExtend = crossing.previewPicks(mapOf(a to listOf(1L)), setOf(a), reservation = 1L)
-        val withExtend = crossing.previewPicks(mapOf(a to listOf(2L)), setOf(a), reservation = 1L)
+        val withoutExtend = crossing.previewPicks(mapOf(a to listOf(1L), b to listOf(1L)), setOf(a), reservation = 1L)
+        val withExtend = crossing.previewPicks(mapOf(a to listOf(2L), b to listOf(1L)), setOf(a), reservation = 1L)
         val unchanged = crossing.snapshot() == before
-        val lease = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a), setOf(a), startedAt = 0L, reservation = 1L)).lease
+        val lease = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a, b), setOf(a), startedAt = 0L, reservation = 1L)).lease
         assertAll(
             { assertEquals(listOf(b), unsaturated, "the control: b is picked when a is not saturated") },
             { assertEquals(emptyList(), saturated.previewPicks(queues, setOf(b), reservation = 1L)) },

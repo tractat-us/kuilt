@@ -53,9 +53,10 @@ class LocalHeddleOverflowPropertyTest {
      * waiting. Before the fix the pick threw at cycle 4,995, about `2⁵⁶` units of service under the
      * parent, and every later acquire there threw too.
      *
-     * Now the run passes that cycle and goes on to a's **position ceiling**, a little past cycle
-     * 9,000 at these weights, where the acquire is refused with a typed outcome instead of throwing
-     * (#3313's slice 4). Raising that ceiling is #3329's rebase, which this arm does not assume.
+     * Now every one of [CEILING_CYCLES] cycles picks. Unrebased, a's **position** would reach its
+     * ceiling a little past cycle 9,000 at these weights and the acquire would be refused there
+     * (#3313's slice 4); the engine rebases the parent long before that, so it never gets there
+     * (#3329).
      */
     @Test
     fun fractionalWeightsPickPastTheOldServiceCeiling() {
@@ -67,16 +68,11 @@ class LocalHeddleOverflowPropertyTest {
             .apply { reconcileCapacity(1L) }
         val lanes = listOf(topology.groupId("a"), topology.groupId("b"))
         val picked = IntArray(lanes.size)
-        var refusal: AcquireOutcome? = null
         for (cycle in 0 until CEILING_CYCLES) {
             val outcome = try {
                 engine.acquire(lanes.toSet(), lanes.toSet(), startedAt = cycle.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
             } catch (e: ArithmeticException) {
                 throw AssertionError("cycle ${cycle + 1} threw $e", e)
-            }
-            if (outcome is AcquireOutcome.PositionCeiling) {
-                refusal = outcome
-                break
             }
             check(outcome is AcquireOutcome.Acquired) { "cycle ${cycle + 1}: expected a lease, got $outcome" }
             picked[lanes.indexOf(outcome.lease.leaf)]++
@@ -84,8 +80,7 @@ class LocalHeddleOverflowPropertyTest {
         }
         val picks = picked.sum()
         assertAll(
-            { assertTrue(picks > OLD_SERVICE_CEILING, "the run passed the old ceiling at cycle $OLD_SERVICE_CEILING: $picks picks") },
-            { assertTrue(refusal == null || refusal == AcquireOutcome.PositionCeiling(topology.groupId()), "a refusal names the parent: $refusal") },
+            { assertEquals(CEILING_CYCLES, picks, "every cycle picked, past the old ceiling at cycle $OLD_SERVICE_CEILING and the position ceiling") },
             // 3/7 : 2/5 is 15 : 14.
             { assertTrue(picked.all { it > picks / 3 }, "both lanes are served near 15 : 14: ${picked.toList()}") },
             { assertEquals(emptyList<String>(), offGrid(engine.snapshot())) },

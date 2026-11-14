@@ -2,6 +2,10 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.Rounding
+import us.tractat.kuilt.math.mulDiv
+import us.tractat.kuilt.math.plusOrNull
+import us.tractat.kuilt.math.timesOrNull
 
 /**
  * Where a [FairShareAllocator] reads the ledger and lands its writes.
@@ -103,7 +107,15 @@ public class FairShareAllocator(
     internal fun fork(): FairShareAllocator = FairShareAllocator(self, policy).also {
         it.wakeOffsets.putAll(wakeOffsets)
         it.demandingObserved.putAll(demandingObserved)
+        it.rebasesForTest = rebasesForTest
     }
+
+    /**
+     * How many rebases this allocator has [adopt]ed: the witness a test reads that its rig fired. Not
+     * part of [memory], so an allocator built from one starts at zero.
+     */
+    internal var rebasesForTest: Int = 0
+        private set
 
     /** The demanding state [edge] was last observed in, or `null` when it has never been observed. */
     internal fun lastObservedDemanding(edge: AttachmentId): Boolean? = demandingObserved[edge]
@@ -199,6 +211,50 @@ public class FairShareAllocator(
     }
 
     /**
+     * [pickChild], and then, only when it grants, [parent] [rebased] on the settled ledger: the form
+     * [LocalHeddle] calls (#3329). The grant is the one [pickChild] made; the rebase changes no pick,
+     * and that is checked on the rebased state before it is returned.
+     *
+     * The order is the point. The rebase runs after the seat-and-wake step, so every child already
+     * carries a gauge seated at a front that leaves the wakers out, and every waker its clamp: a
+     * rebase before that step would count a waker's stale position in a newborn's seat, the lifetime
+     * credit #1752 removed. And it runs only once there is a grant, so a pick that finds nothing
+     * rebases nothing.
+     *
+     * Nothing here changes this allocator beyond what [pickChild] observes. The rebase comes back as
+     * a value, the raised folds in [RebasingPick.pick]'s ledger and the lowered wake offsets beside
+     * them, and the two are adopted together, by [adopt], only when the caller keeps that ledger. A
+     * caller that drops the ledger, because a deeper level refused, say, drops the offsets with it:
+     * keeping a lowered offset without its raised folds would hand the child its offset back as
+     * credit.
+     *
+     * @throws IllegalStateException if the rebased state would pick differently, a bug in the rebase.
+     */
+    internal fun pickChildRebasing(
+        parent: GroupId,
+        ledger: EntitlementLedger,
+        waiting: (AttachmentId) -> Demand,
+        eligible: (AttachmentId) -> Demand,
+    ): RebasingPick? {
+        val pick = pickChild(parent, ledger, waiting, eligible) ?: return null
+        val rebase = rebased(parent, pick.ledger, waiting) ?: return RebasingPick(settled = pick.ledger, pick = pick, rebase = null)
+        val again = pickOne(rebase.ledger, parent, earmarked = 0L, eligible, rebase.offsets)
+        check(again == pick.grant) { "the rebase at ${parent.value} changed the pick from ${pick.grant} to $again" }
+        return RebasingPick(settled = pick.ledger, pick = ChildPick(rebase.ledger, pick.grant), rebase = rebase)
+    }
+
+    /**
+     * Take [rebase]'s lowered wake offsets as this allocator's own: the half of a rebase that is
+     * not in the ledger. Call it exactly when the ledger [rebase] raised the folds of is kept.
+     */
+    internal fun adopt(rebase: Rebase) {
+        for ((id, offset) in rebase.offsets) {
+            if (offset == Rational.ZERO) wakeOffsets.remove(id) else wakeOffsets[id] = offset
+        }
+        rebasesForTest++
+    }
+
+    /**
      * The step [pickChild] takes before it picks, and nothing more: seat the newborns and clamp the
      * wakers at [parent], reading [waiting], and observe who was waiting. For a delegation that is
      * not a pick but must leave the wake memory as the pick would have ([LocalHeddle.admit] with a
@@ -232,6 +288,128 @@ public class FairShareAllocator(
     }
 
     /**
+     * [ledger] with [parent]'s active children moved down by one common virtual time `Δ`, once one
+     * of them has climbed past its [rebaseThreshold]; `null` when nothing moved (#3329). For a single
+     * writer only: [LocalHeddle] calls it, and the replicated [schedule] never does (#3353).
+     *
+     * ## What moves: the effective position
+     *
+     * A pick reads an edge's **effective** position, its raw position plus the wake offset this
+     * allocator stores for it ([HeddlePolicy.effectiveTicks]), so that is what comes down, and what
+     * the threshold and `Δ` are measured on. The two parts come down differently:
+     * - **the wake offset first**, in whole units. It is a difference, the front less the raw
+     *   position at the last wake, and it only grows while a child idles between picks: a busy lane
+     *   that waits half the time carries an offset many times its own service, and left alone it
+     *   reaches the ceiling while the raw position is a hundredth of the way there.
+     * - **then the gauge's fold**. A raw position reads `⌈floor · w · G⌉ + (issued − folded) · G`
+     *   ([grossTicksAt]), so raising the fold by `k` units lowers it by exactly `k · G` ticks. The
+     *   gauge joins its fold by `max`, so a raised fold survives every later checkpoint, where a
+     *   lowered floor would be undone by the next one: a checkpoint `delegate` writes reads this
+     *   very gauge, so until issuance passes the raised fold it asserts a lower floor at a lower
+     *   fold, and the join keeps the pair that reads the same.
+     *
+     * ## Why it changes no pick
+     *
+     * `Δ` is a whole multiple of `L`, the least common multiple of the children's weight
+     * denominators, so `Δ · w · G` is a whole number of units' worth of ticks on every child's grid.
+     * Every demanding child's effective position comes down by exactly that, so the weighted mean
+     * over them comes down by `Δ`, and `⌈V · w · G⌉` by exactly `Δ · w · G`: eligibility, deadlines
+     * and seats are unchanged. The next wake clamp is unchanged too. It stores
+     * `max(carried, front − raw)`, and taking `a` ticks off the carried offset while the raw position
+     * comes down `a` fewer takes `a` off both sides of the `max`. The pick sequence is the one an
+     * engine with no ceiling would make.
+     *
+     * ## How far
+     *
+     * `Δ` is the largest multiple of `L` no greater than the smallest effective virtual time among the
+     * children [demand] says are **demanding**, so none of them goes below zero. A child that is not
+     * demanding comes down at most to `−`[rebaseThreshold]. Anything further would be credit its wake
+     * clamp takes back when it next competes (§10.6), and the clamp does take it all back: a child
+     * lifted there is at least `R` behind a front at or above zero, so its next clamp exceeds the
+     * offset it carries by more than the lift, for a child this allocator has seen idle and with a
+     * sleeper credit below `R`. Otherwise the lift is a penalty, never credit. Left alone, an idle
+     * child would be carried toward `Long`'s other end one rebase at a time.
+     *
+     * It does nothing at a parent with an unseated child, which has no gauge to raise, or with a
+     * child at its ceiling: that position may stand for more, and a floor at the ceiling stays there
+     * whatever the fold says. Nor while a demanding child is at or below zero, which holds `Δ` at
+     * nothing. The threshold sits far enough below the ceiling that a running engine rebases long
+     * before either.
+     *
+     * The engine never reaches the at-ceiling guard: [pickChildRebasing] rebases only after a
+     * grant, and a pick over a child at its ceiling throws before it grants. The guard stays as a
+     * precondition for a direct caller, which is what `aParentWithAChildAtItsCeilingIsNotRebased`
+     * tests.
+     *
+     * It changes nothing itself: the result is the rebased ledger and the offsets to adopt with it
+     * ([adopt]).
+     */
+    internal fun rebased(parent: GroupId, ledger: EntitlementLedger, demand: (AttachmentId) -> Demand): Rebase? {
+        val edges = policyEdges(ledger, parent, demand)
+        if (edges.none { pastRebaseThreshold(it) }) return null
+        if (edges.any { it.gauge == null || HeddlePolicy.isAtCeiling(it) }) return null
+        val l = lcmOfDenominators(edges) ?: return null
+        val steps = edges.filter { HeddlePolicy.isDemanding(it) }.minOfOrNull { stepsOf(it, l) ?: return null } ?: return null
+        if (steps <= 0L) return null
+        val gauges = LinkedHashMap<AttachmentId, Gauge>()
+        val offsets = LinkedHashMap<AttachmentId, Rational>()
+        for (edge in edges) {
+            val w = edge.record.weight
+            val full = steps.timesOrNull(l / w.denominator)?.timesOrNull(w.numerator)?.timesOrNull(TICKS_PER_UNIT) ?: return null
+            val move = if (HeddlePolicy.isDemanding(edge)) full else minOf(full, roomAboveFloor(edge))
+            if (move == 0L) continue
+            // The wake offset first, in whole units: it is a difference that only grows while the
+            // child idles, so a rebase that left it would let it reach the ceiling on its own.
+            val offset = ticksAt(edge.virtualOffset, w)
+            val absorbed = minOf(offset.floorDiv(TICKS_PER_UNIT) * TICKS_PER_UNIT, move)
+            if (absorbed > 0L) offsets[edge.record.id] = ticksToVirtual(offset - absorbed, w)
+            val shift = (move - absorbed) / TICKS_PER_UNIT
+            if (shift == 0L) continue
+            val gauge = checkNotNull(edge.gauge) { "${edge.record.id.value} was seated above" }
+            gauges[edge.record.id] = Gauge(gauge.floor, gauge.folded.plusOrNull(shift) ?: return null)
+        }
+        if (gauges.isEmpty() && offsets.isEmpty()) return null
+        return Rebase(if (gauges.isEmpty()) ledger else ledger.piece(EntitlementLedger.of(gauges = gauges)), offsets)
+    }
+
+    /** Whether [edge]'s gross or effective position has climbed past its [rebaseThreshold]. */
+    private fun pastRebaseThreshold(edge: PolicyEdge): Boolean {
+        val w = edge.record.weight
+        val threshold = rebaseThreshold(w)
+        return edge.gauge.grossTicksAt(edge.baseIssued, w) >= threshold || HeddlePolicy.effectiveTicks(edge) >= threshold
+    }
+
+    /** The least common multiple of [edges]' weight denominators, or `null` when it leaves `Long`. */
+    private fun lcmOfDenominators(edges: List<PolicyEdge>): Long? {
+        var l = 1L
+        for (edge in edges) {
+            val d = edge.record.weight.denominator
+            l = (l / gcdOf(l, d)).timesOrNull(d) ?: return null
+        }
+        return l
+    }
+
+    /**
+     * [edge]'s effective virtual time in whole steps of `l`: `⌊p / (G · w · l)⌋`, computed as
+     * `⌊⌊p · d / (n · l)⌋ / G⌋`, or `null` when `n · l` or the quotient leaves `Long`.
+     */
+    private fun stepsOf(edge: PolicyEdge, l: Long): Long? {
+        val w = edge.record.weight
+        val inUnits = mulDiv(HeddlePolicy.effectiveTicks(edge), w.denominator, w.numerator.timesOrNull(l) ?: return null, Rounding.FLOOR)
+            ?: return null
+        return inUnits.floorDiv(TICKS_PER_UNIT)
+    }
+
+    /**
+     * How far, in ticks and in whole units, [edge]'s effective position can come down before it
+     * passes below `−`[rebaseThreshold]: `⌊(p + R) / G⌋ · G`, and none when it is already there.
+     */
+    private fun roomAboveFloor(edge: PolicyEdge): Long {
+        val above = HeddlePolicy.effectiveTicks(edge).plusOrNull(rebaseThreshold(edge.record.weight)) ?: Long.MAX_VALUE
+        return maxOf(0L, above.floorDiv(TICKS_PER_UNIT)) * TICKS_PER_UNIT
+    }
+
+    /**
      * [parent]'s **current virtual time** `V` in [ledger] — this allocator's front (design §7.2;
      * issue #1688). `null` when [parent] has no active children in [ledger].
      *
@@ -250,7 +428,7 @@ public class FairShareAllocator(
      * not an active child of [parent]. A diagnostic, like [virtualTime]: it observes nothing.
      */
     internal fun effectiveVirtualService(ledger: EntitlementLedger, parent: GroupId, edge: AttachmentId): Rational? =
-        policyEdges(ledger, parent) { Demand.NONE }
+        policyEdges(ledger, parent, demand = { Demand.NONE })
             .firstOrNull { it.record.id == edge }
             ?.let { ticksToVirtual(HeddlePolicy.effectiveTicks(it), it.record.weight) }
 
@@ -272,10 +450,11 @@ public class FairShareAllocator(
         parent: GroupId,
         earmarked: Long,
         demand: (AttachmentId) -> Demand,
+        offsets: Map<AttachmentId, Rational> = emptyMap(),
     ): Grant? {
         val localHoldings = s.holdings(parent, self) - earmarked
         if (localHoldings <= 0L) return null
-        val edges = policyEdges(s, parent, demand).filter { it.gauge != null }
+        val edges = policyEdges(s, parent, demand, offsets).filter { it.gauge != null }
         if (edges.isEmpty()) return null
         return HeddlePolicy.pick(edges, policy, localHoldings)
     }
@@ -295,6 +474,7 @@ public class FairShareAllocator(
         s: EntitlementLedger,
         parent: GroupId,
         demand: (AttachmentId) -> Demand,
+        offsets: Map<AttachmentId, Rational> = emptyMap(),
     ): List<PolicyEdge> {
         return s.activeChildren(parent).mapNotNull { summary ->
             val record = s.record(summary.attachment) ?: return@mapNotNull null
@@ -304,7 +484,7 @@ public class FairShareAllocator(
                 demand = demand(summary.attachment),
                 gauge = s.gauge(summary.attachment),
                 baseIssued = s.baseIssuance(summary.attachment),
-                virtualOffset = wakeOffsets[summary.attachment] ?: Rational.ZERO,
+                virtualOffset = offsets[summary.attachment] ?: wakeOffsets[summary.attachment] ?: Rational.ZERO,
             )
         }
     }
@@ -326,16 +506,19 @@ public class FairShareAllocator(
      * join only ever ratchets up — which is exactly the §10.5 lifetime credit the seat exists to
      * deny. [HeddlePolicy.front]'s KDoc states the rule; this is the one place that has to honour it.
      *
-     * **A `null` front means every active child is a joiner**, i.e. nobody is left to be level with,
+     * **When every active child is a joiner and one of them is waking**, the front is the joiner
+     * furthest ahead ([joinersFront]): every waker is clamped to it and every newborn seated there
+     * (#3329 review). Otherwise a rebase that lifted idle children to `−R` would leave a newborn
+     * `R` ahead of them.
+     *
+     * **A `null` front means every active child is a newborn**, i.e. nobody is left to be level with,
      * and the seat bump then writes [Rational.ZERO]. That is not a guess: [EntitlementLedger.seat]
      * stores `max(front, baseIssued / w)`, so a zero front seats an edge exactly where it already
      * reads, pinning it without moving it. Pinning is the point — it stops a sibling that happens to
      * be served first from becoming the front the *others* are then seated behind, which is how a
      * cohort of newborns would otherwise be split by nothing but pick order. And if this view is
      * merely stale rather than genuinely empty, the componentwise join repairs it: a better-informed
-     * peer's higher floor wins the `max`, so the low reading is absorbed rather than frozen. A
-     * `null` front leaves the wakers unclamped, which is the same judgement in the other direction —
-     * there is no one to be clamped *to*.
+     * peer's higher floor wins the `max`, so the low reading is absorbed rather than frozen.
      *
      * Publishes at most one patch.
      */
@@ -350,13 +533,54 @@ public class FairShareAllocator(
             .filter { HeddlePolicy.isDemanding(it) && demandingObserved[it.record.id] == false }
             .mapTo(HashSet()) { it.record.id }
         val joiners = HashSet(unseated).apply { addAll(wakers) }
-        val front = if (joiners.isEmpty()) null else HeddlePolicy.frontTime(edges, excluding = joiners)
+        val taken = if (joiners.isEmpty()) null else HeddlePolicy.frontTime(edges, excluding = joiners) ?: joinersFront(edges, joiners, wakers)
+        val front = if (taken != null && wakers.isNotEmpty()) atLeastTheNewborns(taken, edges, unseated) else taken
 
         if (unseated.isNotEmpty()) {
             ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
         }
         if (front != null) clampWakers(edges, wakers, front)
         for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
+    }
+
+    /**
+     * The front when every active child is joining and at least one of them is waking: the joiner
+     * furthest ahead, a waker at its effective position or a newborn at its own origin (#3329
+     * review). Every waker is clamped to it and every newborn seated there, so the joiners start
+     * level: no waker keeps idle credit over another (§10.6), and none over a newborn.
+     *
+     * The newborns count because a seat cannot go below the edge's own origin
+     * ([EntitlementLedger.seatAt]). Wakers a rebase lifted to `−R` sit below every newborn's
+     * origin, and a front taken over the wakers alone would seat the newborn `R` ahead of them.
+     *
+     * `null` when nobody is waking: a cohort of newborns is then seated each at its own origin.
+     */
+    private fun joinersFront(edges: List<PolicyEdge>, joiners: Set<AttachmentId>, wakers: Set<AttachmentId>): VirtualTime? {
+        if (wakers.isEmpty()) return null
+        val joining = edges.filter { it.record.id in joiners }
+        val top = joining.maxWith { a, b ->
+            compareVirtual(HeddlePolicy.effectiveTicks(a), a.record.weight, HeddlePolicy.effectiveTicks(b), b.record.weight)
+        }
+        return VirtualTime.of(HeddlePolicy.effectiveTicks(top), top.record.weight).atCeilingIf(joining.any { HeddlePolicy.isAtCeiling(it) })
+    }
+
+    /**
+     * [front], or the origin of the newborn of [unseated] furthest ahead when that is later (#3329
+     * re-review). A newborn's seat cannot go below its own origin ([EntitlementLedger.seatAt]), so
+     * when newborns and wakers join together, a front below a newborn's origin would seat the
+     * newborn there and clamp the wakers lower, leaving them credit over it. The front an idle
+     * fallback reads can be that low: a rebase lifts an idle child only to `−R`. Raised to the
+     * origin, the wakers are clamped where the newborn is seated. Usually a no-op: a fresh edge's
+     * origin is zero, and a front is at or above zero.
+     */
+    private fun atLeastTheNewborns(front: VirtualTime, edges: List<PolicyEdge>, unseated: Set<AttachmentId>): VirtualTime {
+        val newborns = edges.filter { it.record.id in unseated }
+        if (newborns.isEmpty()) return front
+        val top = newborns.maxWith { a, b ->
+            compareVirtual(HeddlePolicy.effectiveTicks(a), a.record.weight, HeddlePolicy.effectiveTicks(b), b.record.weight)
+        }
+        val origin = HeddlePolicy.effectiveTicks(top)
+        return if (origin > front.ticksFor(top.record.weight)) VirtualTime.of(origin, top.record.weight) else front
     }
 
     /**
@@ -410,11 +634,13 @@ public class FairShareAllocator(
      *
      * All wakers are excluded from the front together, not just each from its own: two siblings
      * waking in the same round would otherwise average each other's stale virtual service into
-     * the front and both keep the credit. A `null` front means nothing survived the exclusion —
-     * every **active** child under the parent is a waker, so nobody ran ahead of anybody and there
-     * is nothing to clamp to. Surviving children that are merely *idle* do not produce a `null`:
+     * the front and both keep the credit. When nothing survives the exclusion, every **active**
+     * child under the parent is joining, and the front is the joiner furthest ahead
+     * ([joinersFront]), so the wakers are clamped level with each other and with any newborn
+     * (#3329 review). Surviving children that are merely *idle* do not empty the set:
      * [HeddlePolicy.front] falls back to the maximum effective virtual service across them, the
-     * bound that can only ever give a turn up (§7.2).
+     * bound that can only ever give a turn up (§7.2). Either way, when newborns join beside the
+     * wakers, the front is raised to the newborns' origins ([atLeastTheNewborns]).
      *
      * **The stored offset is joined with `max`, never replaced** (issue #1714). [HeddlePolicy.front]
      * is a weighted mean over whoever is competing *right now*, and that mean is not monotone
@@ -423,13 +649,18 @@ public class FairShareAllocator(
      * — handing back credit the earlier clamp forfeited and dropping its effective virtual service.
      * Joining keeps the promise made two paragraphs up (a forward offset can only give a turn up)
      * across every wake, and it is the same invariant CFS/EEVDF hold by materialising vruntime so
-     * it never decreases. The join is a high-water mark, not a sum, so a long-lived child cannot
+     * it never decreases against the siblings'. The join is a high-water mark, not a sum, so a long-lived child cannot
      * accumulate an unbounded penalty; and the one-directional stance of §10.5 — credit forbidden,
      * a sliver of penalty merely undesirable — is what makes keeping the larger offset the safe
-     * side when the front genuinely regresses. Nothing else lowers a stored offset: an edge is
-     * forgotten only when it leaves the active set, which
+     * side when the front genuinely regresses. Two other things lower a stored offset. An edge is
+     * forgotten when it leaves the active set, which
      * [EntitlementLedger.activate][EntitlementLedger.activate] makes permanent (closure dominance,
-     * §10.10), so a cleared clamp can never come back to an edge that will compete again.
+     * §10.10), so a cleared clamp can never come back to an edge that will compete again. And
+     * a rebase takes whole units off it ([rebased], [adopt]), by exactly as much as it leaves the
+     * edge's raw position where it was: the effective position comes down with its siblings', and the next clamp's
+     * `max` loses the same amount on both sides, so no turn moves (#3329). The offset is the front
+     * less the raw position at the last wake, so for a child that idles between picks it grows by
+     * every stretch sat out; without the rebase it would reach the ceiling on its own.
      *
      * The demanding state is sampled **once per scheduling round, at entry**, before any grant
      * lands. Sampling again after the loop would mark a child that its own grants had just
@@ -492,3 +723,17 @@ public data class ChildPick(
     public val ledger: EntitlementLedger,
     public val grant: Grant,
 )
+
+/**
+ * One rebase (#3329): [ledger] with the raised gauge folds, and the wake offsets it lowered,
+ * [offsets], each the new stored value, zero for one taken off entirely. The two halves are one
+ * change: a caller keeps [ledger] and [FairShareAllocator.adopt]s this together, or neither.
+ */
+internal class Rebase(val ledger: EntitlementLedger, val offsets: Map<AttachmentId, Rational>)
+
+/**
+ * One [FairShareAllocator.pickChildRebasing] result: [pick], whose ledger is rebased when [rebase]
+ * is not `null`, and [settled], the same ledger before the rebase, which reads right against the
+ * allocator's wake offsets until [rebase] is adopted.
+ */
+internal class RebasingPick(val settled: EntitlementLedger, val pick: ChildPick, val rebase: Rebase?)
