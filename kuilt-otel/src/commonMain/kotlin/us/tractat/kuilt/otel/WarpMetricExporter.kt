@@ -545,7 +545,10 @@ public class WarpMetricExporter(
             is MetricUpdate.AddCardinality,
             is MetricUpdate.RecordHistogram,
             -> Unit
-            is MetricUpdate.AddExponentialHistogram -> Unit
+            is MetricUpdate.AddExponentialHistogram -> require(update.scale >= histogramScale) {
+                "AddExponentialHistogram for ${update.key.name} is at scale ${update.scale}, coarser than this " +
+                    "exporter's histogramScale $histogramScale; its buckets cannot be split without losing accuracy"
+            }
         }
     }
 
@@ -581,7 +584,41 @@ public class WarpMetricExporter(
             histograms[update.key] = current.piece(current.add(replica, update.value).delta)
             StoredKind.HISTOGRAMS
         }
-        is MetricUpdate.AddExponentialHistogram -> TODO("#3291: apply")
+        is MetricUpdate.AddExponentialHistogram -> {
+            maybeEvictForNewKey(update.key, histograms)
+            val current = histograms.getOrPut(update.key) { histogramPrototype }
+            val shift = update.scale - histogramScale
+            val patch = current.addBuckets(
+                replica,
+                positive = sketchBuckets(update.positiveOffset, update.positiveCounts, shift),
+                negative = sketchBuckets(update.negativeOffset, update.negativeCounts, shift),
+                zeroCount = update.zeroCount,
+            )
+            histograms[update.key] = current.piece(patch.delta)
+            StoredKind.HISTOGRAMS
+        }
+    }
+
+    /**
+     * Re-index one sign's OTLP buckets, `offset + i` at a scale [shift] steps finer than
+     * [histogramScale], into the sketch's own indices at [histogramScale].
+     *
+     * Dropping [shift] steps of scale merges each run of `2^shift` buckets into one, so OTLP index
+     * `j` becomes `j >> shift` — the floor of `j / 2^shift`. It must be the **arithmetic** shift:
+     * integer division truncates toward zero, which puts a negative odd index one bucket too high.
+     * The sketch's index is the OTLP index plus one, the inverse of the OTLP render. The arithmetic
+     * is in `Long` so an absurd offset cannot wrap; anything past the sketch's range is clamped by
+     * [DDSketch.addBuckets].
+     */
+    private fun sketchBuckets(offset: Int, counts: List<Long>, shift: Int): Map<Int, Long> {
+        val out = LinkedHashMap<Int, Long>()
+        counts.forEachIndexed { i, n ->
+            if (n == 0L) return@forEachIndexed
+            val index = ((offset.toLong() + i) shr shift) + 1L
+            val clamped = index.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
+            out[clamped] = (out[clamped] ?: 0L) + n
+        }
+        return out
     }
 
     /** Encode one kind's whole map. Called inside [lock]. */

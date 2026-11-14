@@ -8,6 +8,7 @@ import io.opentelemetry.sdk.metrics.Base2ExponentialHistogramOptions
 import io.opentelemetry.sdk.metrics.InstrumentType
 import io.opentelemetry.sdk.metrics.data.AggregationTemporality
 import io.opentelemetry.sdk.metrics.data.DoublePointData
+import io.opentelemetry.sdk.metrics.data.ExponentialHistogramPointData
 import io.opentelemetry.sdk.metrics.data.LongPointData
 import io.opentelemetry.sdk.metrics.data.MetricData
 import io.opentelemetry.sdk.metrics.data.MetricDataType
@@ -166,6 +167,14 @@ public class KuiltMetricExporter @JvmOverloads constructor(
         }
 
     /**
+     * An exponential histogram capped at the buffer's scale for `HISTOGRAM` instruments, so the
+     * SDK hands over buckets that map onto the buffer's sketches exactly; the SDK's own default for
+     * every other instrument. See the class KDoc.
+     */
+    override fun getDefaultAggregation(instrumentType: InstrumentType): Aggregation =
+        if (instrumentType == InstrumentType.HISTOGRAM) histogramAggregation else Aggregation.defaultAggregation()
+
+    /**
      * Append one metric's points to [into] as [MetricUpdate]s. A dropped metric — unsupported, or a
      * sum with the wrong temporality — adds none, which is not a failure.
      */
@@ -190,7 +199,17 @@ public class KuiltMetricExporter @JvmOverloads constructor(
                 md.longGaugeData.points.forEach { gauge(name, it.attributes, it.value.toDouble(), it.epochNanos, into) }
             MetricDataType.DOUBLE_GAUGE ->
                 md.doubleGaugeData.points.forEach { gauge(name, it.attributes, it.value, it.epochNanos, into) }
-            MetricDataType.EXPONENTIAL_HISTOGRAM -> Unit
+            MetricDataType.EXPONENTIAL_HISTOGRAM -> {
+                val h = md.exponentialHistogramData
+                if (h.aggregationTemporality != AggregationTemporality.DELTA) {
+                    logger.warn {
+                        "KuiltMetricExporter: dropping exponential histogram '$name' — it arrived " +
+                            "${h.aggregationTemporality} and the bridge adds deltas; register it on a reader that asks the exporter"
+                    }
+                    return
+                }
+                h.points.forEach { histogram(name, it, into) }
+            }
             MetricDataType.HISTOGRAM ->
                 logger.warn {
                     "KuiltMetricExporter: dropping explicit-bucket histogram '$name' — no one value stands for a " +
@@ -199,6 +218,31 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             MetricDataType.SUMMARY ->
                 logger.warn { "KuiltMetricExporter: dropping summary '$name' — quantiles do not merge" }
         }
+    }
+
+    /**
+     * One delta point of an exponential histogram, as the bucket counts to add — unless it is
+     * coarser than the buffer's scale, when it is dropped with a WARN rather than handed to
+     * `WarpMetricExporter.record`, which would refuse the whole export for it.
+     */
+    private fun histogram(name: String, p: ExponentialHistogramPointData, into: MutableList<MetricUpdate>) {
+        if (p.scale < exporter.histogramScale) {
+            logger.warn {
+                "KuiltMetricExporter: dropping ${p.count} values of histogram '$name' — the SDK lowered its scale to " +
+                    "${p.scale}, below the buffer's ${exporter.histogramScale}, and its buckets cannot be split; " +
+                    "raise maxBuckets (now $maxBuckets) if this spread is normal"
+            }
+            return
+        }
+        into += MetricUpdate.AddExponentialHistogram(
+            key = MetricKey(name, MetricKind.EXPONENTIAL_HISTOGRAM, attrs(p.attributes)),
+            scale = p.scale,
+            zeroCount = p.zeroCount,
+            positiveOffset = p.positiveBuckets.offset,
+            positiveCounts = p.positiveBuckets.bucketCounts,
+            negativeOffset = p.negativeBuckets.offset,
+            negativeCounts = p.negativeBuckets.bucketCounts,
+        )
     }
 
     /**

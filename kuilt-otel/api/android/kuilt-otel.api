@@ -440,6 +440,29 @@ public final class us/tractat/kuilt/otel/MetricUpdate$AddCardinality : us/tracta
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/otel/MetricUpdate$AddExponentialHistogram : us/tractat/kuilt/otel/MetricUpdate {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;IJILjava/util/List;ILjava/util/List;)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component2 ()I
+	public final fun component3 ()J
+	public final fun component4 ()I
+	public final fun component5 ()Ljava/util/List;
+	public final fun component6 ()I
+	public final fun component7 ()Ljava/util/List;
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;IJILjava/util/List;ILjava/util/List;)Lus/tractat/kuilt/otel/MetricUpdate$AddExponentialHistogram;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricUpdate$AddExponentialHistogram;Lus/tractat/kuilt/otel/MetricKey;IJILjava/util/List;ILjava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricUpdate$AddExponentialHistogram;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getNegativeCounts ()Ljava/util/List;
+	public final fun getNegativeOffset ()I
+	public final fun getPositiveCounts ()Ljava/util/List;
+	public final fun getPositiveOffset ()I
+	public final fun getScale ()I
+	public final fun getZeroCount ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/otel/MetricUpdate$IncrementSum : us/tractat/kuilt/otel/MetricUpdate {
 	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;J)V
 	public synthetic fun <init> (Lus/tractat/kuilt/otel/MetricKey;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -749,6 +772,7 @@ public final class us/tractat/kuilt/otel/WarpMetricExporter {
 	public final fun gaugeSnapshot (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/crdt/LWWRegister;
 	public final fun gaugeValue (Lus/tractat/kuilt/otel/MetricKey;)Ljava/lang/Double;
 	public final fun getHealth ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getHistogramScale ()I
 	public final fun histogramQuantile (Lus/tractat/kuilt/otel/MetricKey;D)Ljava/lang/Double;
 	public final fun histogramSnapshot (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/crdt/DDSketch;
 	public final fun incrementSum (Lus/tractat/kuilt/otel/MetricKey;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;

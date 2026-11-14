@@ -175,7 +175,41 @@ public class DDSketch private constructor(
         negative: Map<Int, Long>,
         zeroCount: Long,
     ): Patch<DDSketch> {
-        TODO("#3291: addBuckets")
+        require(zeroCount >= 0L) { "DDSketch zeroCount must not be negative, was $zeroCount" }
+        positive.forEach { (index, n) -> require(n >= 0L) { "DDSketch positive bucket $index count must not be negative, was $n" } }
+        negative.forEach { (index, n) -> require(n >= 0L) { "DDSketch negative bucket $index count must not be negative, was $n" } }
+        val lowest = bucketIndex(minIndexedValue)
+        val highest = bucketIndex(maxIndexedValue)
+        var toZeros = zeroCount
+        var toOverflow = 0L
+        // Fold each sign's counts onto the indices `add` could have produced, then increment once per cell.
+        fun clamped(buckets: Map<Int, Long>): Map<Int, Long> {
+            val out = LinkedHashMap<Int, Long>()
+            for ((index, n) in buckets) {
+                if (n == 0L) continue
+                when {
+                    index < lowest -> toZeros += n
+                    index > highest -> {
+                        toOverflow += n
+                        out[highest] = (out[highest] ?: 0L) + n
+                    }
+                    else -> out[index] = (out[index] ?: 0L) + n
+                }
+            }
+            return out
+        }
+        fun cells(store: Map<Int, GCounter>, counts: Map<Int, Long>): Map<Int, GCounter> =
+            counts.mapValues { (index, n) -> (store[index] ?: GCounter.ZERO).inc(replica, n).delta }
+        val positiveCells = cells(this.positive, clamped(positive))
+        val negativeCells = cells(this.negative, clamped(negative))
+        return Patch(
+            delta(
+                positive = positiveCells,
+                negative = negativeCells,
+                zeros = if (toZeros > 0L) zeros.inc(replica, toZeros).delta else GCounter.ZERO,
+                overflows = if (toOverflow > 0L) overflows.inc(replica, toOverflow).delta else GCounter.ZERO,
+            ),
+        )
     }
 
     /**
