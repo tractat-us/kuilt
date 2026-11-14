@@ -248,13 +248,14 @@ so send them as cumulative.
   is suppressed by an explicit compaction record instead. *In memory* that is one bodiless
   `(id -> id)` pair per element. *On disk it is not bodiless at all:* nothing prunes a
   compaction record, so a segment carrying one is pinned, and a pinned segment is retained
-  **entire** — every record it holds, bodies included, permanently. Two shapes reach it. A
+  **entire** — every record it holds, bodies included, permanently. Three shapes reach it. A
   sealed segment that happened to be active when a pass minted one keeps its full
   `DEFAULT_LOG_SEGMENT_OPS` operations (~123 KB at the defaults) forever. And
-  `WarpLogRecordExporter.merge` persists the peer's op-log verbatim under a key of its own,
+  `WarpLogRecordExporter.merge` persists the remote's op-log verbatim under a key of its own,
   so merging from a peer that has itself windowed a foreign author's records — which is any
   peer in a steady-state mesh — pins that peer's whole log: megabytes per merge at the
-  default `DEFAULT_MAX_LOG_RECORDS`. So the gossip path is growth, not a bound, and a replica
+  default `DEFAULT_MAX_LOG_RECORDS`. And the first merge after a failed one persists this
+  replica's whole merged log instead of the remote's, so the stranded ops reach disk. So the gossip path is growth, not a bound, and a replica
   that gossips accumulates it for as long as the process lives. Bounding it needs the same
   causal-stability argument tombstone collection does; consolidation — rewriting a pinned
   segment's compaction record forward so the segment can go — was considered and declined,

@@ -214,14 +214,16 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * in-memory bound is priced in.** A foreign author's dots are covered by an explicit
  * [RgaOp.Compact], nothing prunes one, and any segment carrying one is therefore pinned — where
  * pinned means retained **entire**: every [RgaOp.Insert] it holds, bodies included, for the life
- * of the store. Two shapes reach it:
+ * of the store. Three shapes reach it:
  *
  * - a sealed segment that happened to be active when a pass minted a `Compact` keeps its full
  *   [segmentOps] ops — ~123 KB at [DEFAULT_LOG_SEGMENT_OPS]; and
  * - a [merge] persists the remote op-log **verbatim** under a key of its own, so merging from a
  *   peer whose log carries a `Compact` — which any peer that has itself windowed a foreign
  *   author's dots does, i.e. any peer in a steady-state mesh — pins that peer's whole log. At
- *   [DEFAULT_MAX_LOG_RECORDS] that is megabytes per merge.
+ *   [DEFAULT_MAX_LOG_RECORDS] that is megabytes per merge; and
+ * - the first merge after a failed one persists this replica's **whole merged log**, not the
+ *   remote's, so the stranded ops reach disk; if that log carries a `Compact` it is pinned too.
  *
  * So the on-disk total settles for a replica fed by [export] and grows in **whole records** for
  * one fed by gossip — a coarser split than the in-memory bound's. Consolidation — rewriting a
@@ -550,14 +552,15 @@ public class WarpLogRecordExporter(
      * A merge joins the remote into [log] before its adopted segment is written, so a merge whose
      * turn then failed leaves those ops in memory alone. A retry of that same merge, the usual
      * next step for gossip, changes nothing in memory, and without this it would be skipped as
-     * a no-op and return `Success` for ops no key holds (#3317). Nothing short of persisting that
-     * remote again carries them: an export writes only the active segment, and a later merge
-     * adopts only its own remote.
+     * a no-op and return `Success` for ops no key holds (#3317). An export does not carry them,
+     * since it writes only the active segment.
      *
-     * So it is **sticky**. A merge turn sets it before it changes [log], and only a successful
-     * turn that found it clear clears it again. Once a merge has failed, every later merge adopts,
-     * no-op or not, as every merge did before #3317, until the next process start, whose [log] is
-     * by definition what the store holds.
+     * A merge turn sets it before it changes [log]. A turn that finds it set adopts the **whole**
+     * merged [log] rather than its own remote, so whichever merge comes next, a retry of the failed
+     * one or any other, carries the stranded ops; any successful merge turn then clears it. One
+     * refused merge therefore costs one extra adopt of the whole log, which is pinned on disk if
+     * the log carries an `RgaOp.Compact`. It no longer costs an adopt per merge until restart, as
+     * it did when only a turn that had found the flag clear could clear it (#3349).
      */
     private var logHoldsUncarriedMerge: Boolean = false
 
@@ -730,7 +733,8 @@ public class WarpLogRecordExporter(
         ) : StoreAction
 
         /**
-         * The **commit point** of a merge's adopted segment: write [bytes] — the peer's whole log —
+         * The **commit point** of a merge's adopted segment: write [bytes] — the remote's op-log, or
+         * this replica's whole merged log on the first merge after a failed one —
          * under [number]'s key and, only once that write has *returned*, seal [number] into the
          * layout in memory with [content] ([applyAdopt]).
          *
@@ -1517,7 +1521,9 @@ public class WarpLogRecordExporter(
      * into this exporter's state, then flush the merged result to [store].
      *
      * Idempotent: merging the same [Rga] twice produces the same result. A merge that adds
-     * nothing to this exporter's log writes no segment and spends no segment number.
+     * nothing to this exporter's log writes no segment and spends no segment number. The one
+     * exception is the first merge after a failed one, which persists the whole log so the failed
+     * merge's records reach the store.
      *
      * **[remote]'s whole operation log is published to [AppliedOpSink]** — see that type, and
      * `publishApplied`'s call site below, for why the merge path publishes at all and why it
@@ -1531,17 +1537,21 @@ public class WarpLogRecordExporter(
 
     /** [merge]'s write turn: build the actions, then apply them. Must hold [writeMutex]. */
     private suspend fun mergeTurn(remote: Rga<LogRecord>): ExportResult {
-        var clearedBeforeTurn = false
         val actions = runCatchingCancellable {
             lock.withLock {
                 val merged = log.piece(remote)
-                if (merged == log && !logHoldsUncarriedMerge) return@withLock noOpMergeWrites()
-                clearedBeforeTurn = !logHoldsUncarriedMerge
+                // The flag first: while it is set the turn adopts whatever the comparison says, so
+                // the O(log) equality is worth paying only when it decides something.
+                if (!logHoldsUncarriedMerge && merged == log) return@withLock noOpMergeWrites()
+                // An earlier merge's ops may be in memory alone, and this remote need not carry
+                // them. The whole log does, so this turn's success covers everything and may clear
+                // the flag (#3349). Adopting only `remote` here is what made the flag sticky.
+                val persisting = if (logHoldsUncarriedMerge) merged else remote
                 logHoldsUncarriedMerge = true
                 log = merged
                 // A remote insert can land anywhere, including after the local tail.
                 rebuildDerivedState()
-                val adopted = adoptRemoteSegment(remote)
+                val adopted = adoptRemoteSegment(persisting)
                 // A merge is the only path that can push the buffer past the cap without
                 // evicting (see [exportTurn]), and under DROP_NEWEST it is the ONLY path that can
                 // grow the log at all — that policy never evicts, so the eviction counter
@@ -1583,7 +1593,9 @@ public class WarpLogRecordExporter(
         val result = commit(actions) { cause ->
             logger.error(cause) { "WarpLogRecordExporter: durable write failed during merge" }
         }
-        if (result is ExportResult.Success && clearedBeforeTurn) lock.withLock { logHoldsUncarriedMerge = false }
+        // Every op `log` got from a merge is now on disk: this turn adopted either the remote, when
+        // nothing earlier was uncarried, or the whole log.
+        if (result is ExportResult.Success) lock.withLock { logHoldsUncarriedMerge = false }
         return if (result is ExportResult.Success) storeSucceeded() else result
     }
 
@@ -2042,6 +2054,9 @@ public class WarpLogRecordExporter(
 
     /**
      * Persist [remote]'s op-log as a sealed segment of its own. Must hold [lock].
+     *
+     * [remote] is the peer's log, or this exporter's whole merged log when an earlier merge left
+     * ops in memory alone; see [logHoldsUncarriedMerge].
      *
      * A merge is the one path that cannot append incrementally — remote ops land
      * anywhere in the sequence — so it pays O(remote) once, which is what it already
