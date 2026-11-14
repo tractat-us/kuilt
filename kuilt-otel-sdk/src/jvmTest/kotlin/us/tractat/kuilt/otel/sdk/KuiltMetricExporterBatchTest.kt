@@ -9,6 +9,9 @@ import io.opentelemetry.sdk.metrics.data.MetricData
 import io.opentelemetry.sdk.metrics.data.MetricDataType
 import io.opentelemetry.sdk.metrics.data.PointData
 import io.opentelemetry.sdk.metrics.internal.data.ImmutableDoublePointData
+import io.opentelemetry.sdk.metrics.internal.data.ImmutableExponentialHistogramBuckets
+import io.opentelemetry.sdk.metrics.internal.data.ImmutableExponentialHistogramData
+import io.opentelemetry.sdk.metrics.internal.data.ImmutableExponentialHistogramPointData
 import io.opentelemetry.sdk.metrics.internal.data.ImmutableGaugeData
 import io.opentelemetry.sdk.metrics.internal.data.ImmutableLongPointData
 import io.opentelemetry.sdk.metrics.internal.data.ImmutableSumData
@@ -20,6 +23,7 @@ import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricExportResult
 import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.MetricSumOverflowException
+import us.tractat.kuilt.otel.MetricUpdate
 import us.tractat.kuilt.otel.WarpMetricExporter
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.InMemoryDurableStore
@@ -236,6 +240,70 @@ class KuiltMetricExporterBatchTest {
             { assertEquals(Long.MAX_VALUE - 1L, exp.sumValue(shared)) },
         )
     }
+
+    /**
+     * A saturated histogram series (#3354): this replica's slot in one of its buckets is one short
+     * of [Long.MAX_VALUE], and every export carries more for it. The series is left out and the
+     * rest of each export lands exactly once, in this export and the next. Before the fix the
+     * histogram update threw part-way through `record`, and every export failed.
+     */
+    @Test
+    fun aSaturatedHistogramSeriesIsLeftOutAndTheRestOfEveryExportLandsOnce() = runTest {
+        val store = CountingStore()
+        val exp = WarpMetricExporter(replica = ReplicaId("dev"), store = store)
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val latency = MetricKey("latency", MetricKind.EXPONENTIAL_HISTOGRAM)
+        val scale = exp.histogramScale
+        val seeded = exp.record(listOf(histogramUpdate(latency, scale, offset = 10, count = Long.MAX_VALUE - 1L)))
+        val export = listOf(
+            metric("requests", MetricDataType.LONG_SUM, deltaCounter(listOf(longPoint(4L, "/b")))),
+            metric("latency", MetricDataType.EXPONENTIAL_HISTOGRAM, deltaHistogram(scale, offset = 10, count = 3L)),
+            metric("temp", MetricDataType.DOUBLE_GAUGE, ImmutableGaugeData.create(listOf(doublePoint(21.5, "/a")))),
+        )
+
+        val first = bridge.export(export)
+        runCurrent()
+        val second = bridge.export(export)
+        runCurrent()
+
+        val recovered = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
+        assertAll(
+            { assertEquals(MetricExportResult.Success, seeded, "the rig: the slot was seeded") },
+            {
+                assertEquals(
+                    Long.MAX_VALUE - 1L,
+                    exp.histogramSnapshot(latency).positiveBuckets[11],
+                    "the rig: the slot is one short, and the export's 3 never landed",
+                )
+            },
+            { assertTrue(first.isSuccess, "a saturated histogram is not an export failure") },
+            { assertTrue(second.isSuccess, "nor on the next export") },
+            { assertEquals(8L, exp.sumValue(sumKey("requests", "/b")), "one copy of each export's delta") },
+            { assertEquals(21.5, exp.gaugeValue(gaugeKey("temp", "/a"))) },
+            { assertEquals(8L, recovered.sumValue(sumKey("requests", "/b")), "and it is on disk") },
+        )
+    }
+
+    /** One positive OTLP bucket at [offset] and [scale] holding [count], for [key]. */
+    private fun histogramUpdate(key: MetricKey, scale: Int, offset: Int, count: Long) =
+        MetricUpdate.AddExponentialHistogram(
+            key, scale = scale, zeroCount = 0L,
+            positiveOffset = offset, positiveCounts = listOf(count),
+            negativeOffset = 0, negativeCounts = emptyList(),
+        )
+
+    /** A delta exponential histogram with no attributes and one positive bucket at [offset] holding [count]. */
+    private fun deltaHistogram(scale: Int, offset: Int, count: Long) = ImmutableExponentialHistogramData.create(
+        AggregationTemporality.DELTA,
+        listOf(
+            ImmutableExponentialHistogramPointData.create(
+                scale, 0.0, 0L, false, 0.0, false, 0.0,
+                ImmutableExponentialHistogramBuckets.create(scale, offset, listOf(count)),
+                ImmutableExponentialHistogramBuckets.create(scale, 0, emptyList()),
+                0L, 1_000L, Attributes.empty(), emptyList(),
+            ),
+        ),
+    )
 
     /** Two saturated series in one export are both left out, and every other point lands once. */
     @Test

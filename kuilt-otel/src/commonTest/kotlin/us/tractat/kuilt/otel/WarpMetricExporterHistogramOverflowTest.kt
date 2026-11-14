@@ -112,5 +112,7 @@ class WarpMetricExporterHistogramOverflowTest {
         )
 
         assertRefusedWhole(store, exporter, each)
+        assertEquals(MetricExportResult.Success, exporter.record(each.take(2)), "the control: two of the three fit")
+        assertEquals(Long.MAX_VALUE, exporter.histogramSnapshot(latency).positiveBuckets[11])
     }
 }
