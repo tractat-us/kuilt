@@ -69,22 +69,23 @@ private fun wire(
 }
 
 /**
- * A seeds [Long.MAX_VALUE] and gives it all to C; B seeds 1 and gives it to C. C then holds 2⁶³,
- * one past [Long.MAX_VALUE], and A and B hold nothing. The same rig as `BoundedCounterTest`'s.
+ * C holds 2⁶³, one past [Long.MAX_VALUE], and A and B hold [kept] each. A seeds [Long.MAX_VALUE] and
+ * gives C all but [kept]; B seeds `2·kept + 1` and gives C `kept + 1`. At `kept = 0` it is the same
+ * rig as `BoundedCounterTest`'s.
  */
-private fun receivedPastLongMax(a: ReplicaId, b: ReplicaId, c: ReplicaId): BoundedCounter {
-    val seeded = BoundedCounter.init(mapOf(a to Long.MAX_VALUE, b to 1L))
-    val fromA = seeded.piece(checkNotNull(seeded.transfer(a, c, Long.MAX_VALUE)).delta)
-    return fromA.piece(checkNotNull(fromA.transfer(b, c, 1L)).delta)
+private fun receivedPastLongMax(a: ReplicaId, b: ReplicaId, c: ReplicaId, kept: Long): BoundedCounter {
+    val seeded = BoundedCounter.init(mapOf(a to Long.MAX_VALUE, b to 2 * kept + 1L))
+    val fromA = seeded.piece(checkNotNull(seeded.transfer(a, c, Long.MAX_VALUE - kept)).delta)
+    return fromA.piece(checkNotNull(fromA.transfer(b, c, kept + 1L)).delta)
 }
 
 class BoundedCounterTransferCoordinatorOversizedQuotaTest {
 
     /**
-     * A and B start at 0, so both borrow at once, and the only peer with anything to give is C, at 2⁶³.
-     * Each borrow ranks C, C's collector answers both requests, and C's own quota observer runs on
-     * every state it sees. Then C spends down to 0 and must borrow back, which only its observer can
-     * start, so C's observer has to have survived the 2⁶³ state.
+     * A and B each spend their last unit, so both borrow, and the only peer with anything to give is
+     * C, at 2⁶³. Each borrow ranks C, C's collector answers both requests, and C's own quota observer
+     * runs on every state it sees. Then C spends down to 0 and must borrow back, which only its
+     * observer can start, so C's observer has to have survived the 2⁶³ state.
      */
     @Test
     fun everyPumpSurvivesAPeerHoldingPastLongMaxValue() = runTest(UnconfinedTestDispatcher()) {
@@ -95,7 +96,7 @@ class BoundedCounterTransferCoordinatorOversizedQuotaTest {
         val a = ReplicaId(rawA.selfId.value)
         val b = ReplicaId(rawB.selfId.value)
         val c = ReplicaId(rawC.selfId.value)
-        val initial = receivedPastLongMax(a, b, c)
+        val initial = receivedPastLongMax(a, b, c, kept = 1L)
 
         val config = BoundedCounterTransferConfig(
             lowWaterThreshold = 0L,
@@ -109,12 +110,17 @@ class BoundedCounterTransferCoordinatorOversizedQuotaTest {
         val wiredC = wire(rawC, c, initial, config, null, backgroundScope)
         testScheduler.advanceUntilIdle()
 
+        // Each spends its last unit once the room has formed, so each borrow sees C as a peer.
+        wiredA.quilter.apply(checkNotNull(wiredA.quilter.state.value.trySpend(a, 1L)))
+        wiredB.quilter.apply(checkNotNull(wiredB.quilter.state.value.trySpend(b, 1L)))
+        testScheduler.advanceUntilIdle()
+
         val borrowed = wiredC.quilter.state.value
         val qA = borrowed.quota(a)
         val qB = borrowed.quota(b)
         assertAll(
-            { assertEquals(0L, initial.quota(a), "the rig: A starts with nothing") },
-            { assertEquals(0L, initial.quota(b), "the rig: B starts with nothing") },
+            { assertEquals(1L, initial.quota(a), "the rig: A starts with its last unit") },
+            { assertEquals(1L, initial.quota(b), "the rig: B starts with its last unit") },
             { assertFailsWith<ArithmeticException>("the rig: C's quota does not fit in a Long") { initial.quota(c) } },
             { assertTrue(qA > 0L, "A's borrow ranked C and C's collector answered it; A holds $qA") },
             { assertTrue(qB > 0L, "B's borrow ranked C and C's collector answered it; B holds $qB") },
@@ -151,7 +157,7 @@ class BoundedCounterTransferCoordinatorOversizedQuotaTest {
             val a = ReplicaId(rawA.selfId.value)
             val b = ReplicaId(rawB.selfId.value)
             val c = ReplicaId(rawC.selfId.value)
-            val initial = receivedPastLongMax(a, b, c)
+            val initial = receivedPastLongMax(a, b, c, kept = 0L)
 
             // No quota is ever at or below -1, so no borrow fires.
             val config = BoundedCounterTransferConfig(
