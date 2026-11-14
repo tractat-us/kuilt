@@ -10,6 +10,8 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.GCounter
@@ -107,6 +109,42 @@ class EntitlementLedgerCanonicalEncodingTest {
                     assertEquals(hex(forward), hex(backward), "${arm.name}: the merge order reached the wire")
                 }
             }.toTypedArray(),
+        )
+    }
+
+    /**
+     * The seventeenth component, `forgotten`, at each of its levels. It cannot ride the arms above:
+     * two different folds do not merge, since forgetting is one writer's act (#3192), so no fold of
+     * operands can build it. The same fold is built instead from maps whose entries were inserted in
+     * opposite orders, which is the order a merge would otherwise have handed the encoder.
+     */
+    @Test
+    fun theForgottenFoldEncodesTheSameWhicheverOrderItsEntriesWereInserted() {
+        fun <K, V> inserted(keys: List<K>, value: (K) -> V): Map<K, V> = keys.associateWithTo(LinkedHashMap(), value)
+
+        fun folded(forward: Boolean): EntitlementLedger {
+            fun <T> order(list: List<T>) = if (forward) list else list.reversed()
+            return EntitlementLedger.of(
+                forgottenOutflow = inserted(order(PARENTS)) { inserted(order(DONORS)) { 1L } },
+                forgottenLeafSpend = inserted(order(DONORS)) { 2L },
+                forgottenGenerationFloor = 3L,
+            )
+        }
+
+        val forward = folded(forward = true)
+        val backward = folded(forward = false)
+        val plain = MapSerializer(GroupId.serializer(), Long.serializer())
+        assertAll(
+            {
+                assertNotEquals(
+                    Cbor.encodeToByteArray(plain, inserted(PARENTS) { 1L }).toHexString(),
+                    Cbor.encodeToByteArray(plain, inserted(PARENTS.reversed()) { 1L }).toHexString(),
+                    "the rig: the two insertion orders reach a plain encoder",
+                )
+            },
+            { assertEquals(forward, backward, "the folds themselves disagree, so bytes prove nothing") },
+            { assertEquals(hex(forward), hex(backward), "the insertion order reached the wire") },
+            { assertEquals(forward, Cbor.decodeFromByteArray(serializer, Cbor.encodeToByteArray(serializer, forward)), "a fold round-trips") },
         )
     }
 
@@ -262,6 +300,7 @@ class EntitlementLedgerCanonicalEncodingTest {
         val EDGES = COLLIDING.map(::AttachmentId)
         val MINTS = COLLIDING.map(::MintId)
         val DONORS = COLLIDING.map(::ReplicaId)
+        val PARENTS = COLLIDING.map(::GroupId)
         val DONOR = ReplicaId("r")
         val COUNTER = GCounter.of(ReplicaId("r") to 1L)
         val MINT = MintRecord(GroupId("root"), ReplicaId("r"), 1L)
