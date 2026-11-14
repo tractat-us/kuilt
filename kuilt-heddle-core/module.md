@@ -41,7 +41,7 @@ The rest of the surface, by what you would ask it:
   making them, from a count per leaf or from each leaf's queue of job estimates;
   `explain` returns a `WaitExplanation`; `entitlement` is a group's
   fair share as an exact `Rational`. A reader holding only a stored snapshot
-  asks the same three of `snapshot.view(policy)`, with no engine.
+  asks the same three of `LocalHeddleSnapshot.view(policy)` (from `persist()`), with no engine.
 - **Other endings.** `extend` reserves more for a job still running, `cancel`
   charges nothing, and `admit` charges work that started without a pick.
 - **The tree changes.** `apply` takes a whole new `Topology` and returns an
