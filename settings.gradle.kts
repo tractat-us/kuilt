@@ -78,6 +78,7 @@ if (!s3CacheAccessKey.isNullOrBlank()) {
 }
 
 include(":kuilt-bom")
+include(":kuilt-base")
 include(":kuilt-core")
 include(":kuilt-liveness")
 include(":kuilt-test")

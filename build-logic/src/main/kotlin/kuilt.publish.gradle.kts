@@ -102,6 +102,9 @@ publishing {
 // configuration until it says what it is.
 fun moduleDescription(module: String): String = when (module) {
     // ── Contract & core ──────────────────────────────────────────────────────
+    "kuilt-base" ->
+        "The small base most kuilt modules stand on, with no dependencies of its own: " +
+            "KuiltVersion, the version of the kuilt that is running."
     "kuilt-core" ->
         "The kuilt contract — Loom, Seam and Swatch — with the InMemoryLoom reference fabric, " +
             "MuxSeam channel multiplexing and CompositeLoom multipath bonding."

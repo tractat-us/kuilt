@@ -1,5 +1,6 @@
 ---
 paths:
+  - "kuilt-base/**"
   - "kuilt-core/**"
   - "kuilt-stream/**"
   - "kuilt-tcp/**"

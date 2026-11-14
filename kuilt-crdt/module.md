@@ -2,8 +2,9 @@
 
 A delta-state CRDT zoo. Provides `Quilted<S>` value types only —
 no transport dependency. Live replication over a `Seam` lives in `:kuilt-quilter`.
-It depends on kotlinx-serialization and on `:kuilt-math`, which itself depends on
-nothing; the counters use it to refuse an overflow instead of wrapping.
+It depends on kotlinx-serialization, on `:kuilt-math`, which itself depends on nothing and
+which the counters use to refuse an overflow instead of wrapping, and on `:kuilt-base`, which
+depends on nothing either and carries `KuiltVersion`.
 
 ## The zoo
 

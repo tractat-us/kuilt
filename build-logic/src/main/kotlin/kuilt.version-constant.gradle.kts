@@ -1,17 +1,15 @@
-// kuilt.version-constant — generates `KuiltVersion.VERSION` into the module's commonMain (#3323).
+// kuilt.version-constant — generates the string behind `us.tractat.kuilt.KuiltVersion.VERSION` into
+// the module's commonMain (#3323). `KuiltVersion` itself is hand-written; see GenerateKuiltVersion.
 //
-// Applied AFTER kuilt.kmp-library, by the modules `GenerateKuiltVersion.CARRIERS` names, today
-// `:kuilt-core` and `:kuilt-heddle-core`. Not every module depends on `:kuilt-core`: `:kuilt-crdt`,
-// `:kuilt-store` and `:kuilt-seal` depend on no kuilt module, and `:kuilt-heddle-core` bans the
-// coroutines `:kuilt-core` would bring, so a single carrier would leave its consumers without one.
-// Each carrier generates its copy into its own package (the mapping gives it), because one class
-// in one package from two jars is a split package. The modules below `:kuilt-core` (no kuilt
-// dependency, or only such ones) carry none. The value is the version of the module that carries
-// it; importing the BOM keeps every module at that version. Applying this
-// plugin to a module missing from the mapping fails here, at configuration.
+// Applied AFTER kuilt.kmp-library, by `:kuilt-base` alone (`GenerateKuiltVersion.CARRIER`), and
+// applying it anywhere else fails here, at configuration. `:kuilt-base` depends on nothing, so the
+// modules that need the value `api` it rather than carrying a copy each: `:kuilt-heddle-core` can
+// take it without the coroutines `:kuilt-core` would bring, and one class in one package from two
+// jars, a split package, cannot arise. The value is the version of `:kuilt-base`; importing the BOM
+// keeps every module at that version.
 //
-// It is a plain `val`, not a `const`: a `const` is inlined into consumers and would put the
-// version in the carrier's ABI (see GenerateKuiltVersion).
+// `VERSION` is a plain `val` over an `internal const`: a public `const` is inlined into consumers
+// and would put the version in the carrier's ABI (see GenerateKuiltVersion).
 //
 // The value is `project.version`, which the root build sets for every project before any
 // subproject evaluates — the same value the publications take their coordinates from. It is read
@@ -26,7 +24,7 @@
 // hand below (kuilt.warp-ops has the same rule for its KSP output). Omitting it is loud, not
 // silent: Gradle refuses the graph with an implicit-dependency error naming both tasks. The IDE's
 // `prepareKotlinIdeaImport` gets the same edge, so a Gradle sync generates the file instead of
-// leaving `KuiltVersion` unresolved in the editor until the first build.
+// leaving `GENERATED_VERSION` unresolved in the editor until the first build.
 
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.gradle.process.CommandLineArgumentProvider
@@ -38,22 +36,22 @@ class PublishedPomArgument(
     override fun asArguments(): Iterable<String> = listOf("-Dkuilt.publishedPom=${pom.get().asFile.absolutePath}")
 }
 
-val kuiltVersionPackage: String = GenerateKuiltVersion.CARRIERS[path] ?: throw GradleException(
-    "kuilt.version-constant is applied to $path, which GenerateKuiltVersion.CARRIERS does not name. " +
-        "Add it there with the package its KuiltVersion goes in; the generated KDoc lists every carrier from that map.",
-)
+if (path != GenerateKuiltVersion.CARRIER) {
+    throw GradleException(
+        "kuilt.version-constant is applied to $path, but only ${GenerateKuiltVersion.CARRIER} carries " +
+            "KuiltVersion. Depend on it with `api(project(\"${GenerateKuiltVersion.CARRIER}\"))` instead: " +
+            "a second copy would be a second class to keep in step, or a split package.",
+    )
+}
 
 val generateKuiltVersion = tasks.register<GenerateKuiltVersion>("generateKuiltVersion") {
     group = "build setup"
-    description = "Writes KuiltVersion.kt, carrying the version this build publishes, into commonMain."
-    packageName.set(kuiltVersionPackage)
+    description = "Writes GeneratedVersion.kt, the version this build publishes, into commonMain."
     libraryVersion.set(project.version.toString())
-    samples.from(fileTree("src/commonSamples/kotlin") { include("**/*.kt") })
-    // NOT under `build/generated`: Dokka's `suppressGeneratedFiles` defaults to true and drops
-    // everything there, so `KuiltVersion` was absent from the API reference, KDoc and `@sample`
-    // included. Measured: the file sat in commonMain's Dokka `sourceRoots` and in its
-    // `suppressedFiles`, and no page was rendered. Moving the output leaves that default in force for
-    // anything else a module generates.
+    // Not under `build/generated`, where Dokka's `suppressGeneratedFiles` (default true) drops
+    // everything. That once hid the whole generated `KuiltVersion` from the API reference; now the
+    // documented object is hand-written and only an `internal` constant is generated, so the location
+    // no longer decides what Dokka shows, and it stays here rather than move for no gain.
     outputDirectory.set(layout.buildDirectory.dir("kuilt-version/commonMain/kotlin"))
 }
 
@@ -71,8 +69,8 @@ tasks.matching { it.name == "prepareKotlinIdeaImport" }.configureEach {
     dependsOn(generateKuiltVersion)
 }
 
-// Each carrier's `KuiltVersionTest` compares the generated `KuiltVersion.VERSION` with the version
-// the published POM declares, so it needs that POM built and its path. The POM task is wired as an
+// `KuiltVersionTest` compares `KuiltVersion.VERSION` with the version the published POM
+// declares, so it needs that POM built and its path. The POM task is wired as an
 // input, which gives both the edge and a rerun when the version changes. Resolved inside the lazy
 // `jvmTest` configuration, by which point KGP and maven-publish have registered the publication.
 tasks.withType<Test>().configureEach {

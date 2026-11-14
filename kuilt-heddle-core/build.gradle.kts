@@ -5,9 +5,6 @@ import org.gradle.api.artifacts.result.ResolvedDependencyResult
 
 plugins {
     id("kuilt.kmp-library")
-    // Generates `us.tractat.kuilt.heddle.KuiltVersion` into commonMain (#3323). Its own copy, since
-    // this module may not depend on `:kuilt-core`, which carries the other one.
-    id("kuilt.version-constant")
     alias(libs.plugins.kotlinSerialization)
 }
 
@@ -16,6 +13,9 @@ kotlin {
     compilerOptions { optIn.add("us.tractat.kuilt.heddle.HeddleInternalApi") }
     sourceSets {
         commonMain.dependencies {
+            // `api`, so a `LocalHeddle` app reads `us.tractat.kuilt.KuiltVersion` without declaring
+            // `:kuilt-base`. It depends on nothing, so the check below has nothing to object to.
+            api(project(":kuilt-base"))
             api(project(":kuilt-crdt"))
             implementation(project(":kuilt-math"))
             implementation(libs.kotlinx.serialization.core)
