@@ -44,7 +44,7 @@ public fun Topology.groupId(vararg path: String): GroupId {
  * declares, or a child the consumer created at runtime beneath a marked group.
  *
  * The two arms are what keep a runtime child apart from a declared sibling of the same name:
- * `AttachedChild(listOf("tenants"), "x")` and `Declared(listOf("tenants", "x"))` are different paths,
+ * `Attached(listOf("tenants"), "x")` and `Declared(listOf("tenants", "x"))` are different paths,
  * and [Topology.findGroupId] gives them different ids.
  *
  * Every name is non-empty, because no topology declares or attaches an empty one; a path holding one
@@ -56,7 +56,7 @@ public sealed interface GroupPath {
 
     /**
      * The names from just below the root down to the group, ending with the runtime child's own
-     * name if this is a [AttachedChild]. `[]` is the root.
+     * name if this is an [Attached]. `[]` is the root.
      */
     public val names: List<String>
 
@@ -77,7 +77,7 @@ public sealed interface GroupPath {
      *
      * @throws IllegalArgumentException if [group] is empty, or any name is empty.
      */
-    public data class AttachedChild(public val group: List<String>, public val name: String) : GroupPath {
+    public data class Attached(public val group: List<String>, public val name: String) : GroupPath {
         init {
             require(group.isNotEmpty()) { "a runtime child's group is below the root" }
             require(group.none { it.isEmpty() } && name.isNotEmpty()) { "a runtime child's path has no empty name: $group, $name" }
