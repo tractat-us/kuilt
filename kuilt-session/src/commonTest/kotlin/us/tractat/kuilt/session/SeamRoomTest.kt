@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CompletableDeferred
@@ -17,7 +19,7 @@ import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -34,9 +36,13 @@ import kotlin.time.Duration.Companion.seconds
  * No wall-clock. No randomness.
  */
 class SeamRoomTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
+
     private fun loom() = InMemoryLoom()
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
-        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = InMemoryDeviceKeyStore())
+        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = fakeKeyStore(nextDevice++))
 
     // ── Role ──────────────────────────────────────────────────────────────────
 
@@ -362,7 +368,7 @@ class SeamRoomTest {
         runTest {
             val clock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
             val failingLoom = FailingLoom(IllegalStateException("loom closed"))
-            val factory = SeamRoomFactory(failingLoom, backgroundScope, clock, InMemoryDeviceKeyStore())
+            val factory = SeamRoomFactory(failingLoom, backgroundScope, clock, fakeKeyStore(nextDevice++))
 
             val result = runCatchingCancellable { factory.host(Pattern("Alice")) }
 
