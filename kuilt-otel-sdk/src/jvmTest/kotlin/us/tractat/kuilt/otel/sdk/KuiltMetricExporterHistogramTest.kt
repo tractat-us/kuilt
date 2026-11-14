@@ -75,7 +75,8 @@ class KuiltMetricExporterHistogramTest {
 
     private fun Collection<MetricData>.named(name: String): MetricData = single { it.name == name }
 
-    private fun MetricData.scale(): Int = exponentialHistogramData.points.single().scale
+    /** The scale of the one exponential-histogram point, or null when the SDK sent none — an explicit histogram, say. */
+    private fun MetricData.scale(): Int? = exponentialHistogramData.points.singleOrNull()?.scale
 
     private fun logUniform(rng: Random, n: Int, min: Double, max: Double): List<Double> =
         List(n) { exp(rng.nextDouble(ln(min), ln(max))) }
@@ -177,7 +178,7 @@ class KuiltMetricExporterHistogramTest {
         val delivered = collect(sdk)
 
         assertAll(
-            { assertTrue(delivered.named("latency").scale() < exp.histogramScale, "precondition: the SDK lowered the scale") },
+            { assertTrue(delivered.named("latency").scale()?.let { it < exp.histogramScale } == true, "precondition: the SDK lowered the scale") },
             { assertEquals(0L, exp.histogramSnapshot(latency).count, "the coarse point was dropped") },
             { assertEquals(2L, exp.sumValue(MetricKey("requests", MetricKind.SUM)), "the counter in the same export landed") },
         )
@@ -198,7 +199,7 @@ class KuiltMetricExporterHistogramTest {
         val narrowScale = collect(sdk).named("latency").scale()
 
         assertAll(
-            { assertTrue(wideScale < exp.histogramScale, "precondition: the wide interval was coarsened") },
+            { assertTrue(wideScale?.let { it < exp.histogramScale } == true, "precondition: the wide interval was coarsened, was $wideScale") },
             { assertEquals(exp.histogramScale, narrowScale, "delta restarts each interval at the top scale") },
             { assertEquals(3L, exp.histogramSnapshot(latency).count, "the narrow interval landed") },
         )
