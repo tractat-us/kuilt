@@ -109,6 +109,28 @@ class WarpCausalClockRefusedRecoveryTest {
         )
     }
 
+    /**
+     * The re-arm is a join, not a replace: the span exporter's retry can race a second retry, and a
+     * read older than what the clock has already minted must not wind it back.
+     */
+    @Test
+    fun aReadOlderThanWhatTheClockMintedDoesNotWindItBack() = runTest {
+        val store = InMemoryDurableStore()
+        val durable = durableClockAtTwo(store)
+        val clock = WarpCausalClock(replica)
+
+        clock.recover(store)
+        val minted = listOf(clock.tick().dot, clock.tick().dot)
+        clock.recover(store)
+        val next = clock.tick().dot
+        val used = durable + minted + next
+
+        assertAll(
+            { assertEquals(listOf(3L, 4L), minted.map { it.seq }, "the rig: the clock did not mint past the entry") },
+            { assertEquals(used.size, used.toSet().size, "a second read wound the clock back: $used") },
+        )
+    }
+
     @Test
     fun aCorruptEntryStillStartsTheClockFresh() = runTest {
         val store = InMemoryDurableStore()
@@ -197,6 +219,28 @@ class WarpCausalClockRefusedRecoveryTest {
             { assertEquals(1, refusedReads, "the rig did not refuse the clock's recovery read") },
             { assertEquals(ExportResult.Success, cleared, "the span half of the clear did not land") },
             { assertEquals(Dot(replica, 3L), next, "the clear overwrote the durable seq") },
+        )
+    }
+
+    /** The clear retries the read too, so once it lands the clear's empty frontier is what persists. */
+    @Test
+    fun aClearRetriesARefusedClockReadAndPersistsItsEmptyFrontier() = runTest {
+        val backing = InMemoryDurableStore()
+        durableClockAtTwo(backing)
+        val store = CancellationScriptedStore(backing)
+        store.arm(StoreCall.READ, StoreAct.MINT) { it == clockKey }
+        val clock = WarpCausalClock(replica)
+        val exporter = WarpSpanExporter(replica, store, causalClock = clock)
+
+        clock.recover(store)
+        val cleared = exporter.clear()
+        val persisted = WarpCausalClock(replica).also { it.recover(backing) }
+
+        assertAll(
+            { assertEquals(1, store.minted, "the rig never minted on the clock's recovery read") },
+            { assertEquals(ExportResult.Success, cleared) },
+            { assertEquals(emptySet(), persisted.frontier(), "the clear left the pre-clear frontier durable") },
+            { assertEquals(Dot(replica, 3L), persisted.tick().dot, "the clear overwrote the durable seq") },
         )
     }
 }
