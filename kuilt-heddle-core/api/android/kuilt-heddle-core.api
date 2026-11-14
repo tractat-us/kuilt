@@ -818,6 +818,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddleSnapshot {
 	public final fun getTotalSlots ()J
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+	public final fun view (Lus/tractat/kuilt/heddle/LocalPolicy;)Lus/tractat/kuilt/heddle/LocalHeddleView;
 }
 
 public final class us/tractat/kuilt/heddle/LocalHeddleSnapshot$Companion {
@@ -840,6 +841,15 @@ public final class us/tractat/kuilt/heddle/LocalHeddleState {
 	public final fun getLedger ()Lus/tractat/kuilt/heddle/EntitlementLedger;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LocalHeddleView {
+	public final fun entitlement-lUmtw0Q (Ljava/lang/String;Ljava/util/Set;J)Lus/tractat/kuilt/heddle/Rational;
+	public final fun explain-mLLTQY0 (Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;J)Lus/tractat/kuilt/heddle/WaitExplanation;
+	public static synthetic fun explain-mLLTQY0$default (Lus/tractat/kuilt/heddle/LocalHeddleView;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/WaitExplanation;
+	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;J)Ljava/util/List;
+	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;Ljava/util/List;)Ljava/util/List;
+	public static synthetic fun previewPicks$default (Lus/tractat/kuilt/heddle/LocalHeddleView;Ljava/util/Map;Ljava/util/Set;JILjava/lang/Object;)Ljava/util/List;
 }
 
 public final class us/tractat/kuilt/heddle/LocalPolicy {

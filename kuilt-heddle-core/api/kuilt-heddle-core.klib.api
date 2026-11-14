@@ -1162,6 +1162,7 @@ final class us.tractat.kuilt.heddle/LocalHeddleSnapshot { // us.tractat.kuilt.he
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LocalHeddleSnapshot.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LocalHeddleSnapshot.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LocalHeddleSnapshot.toString|toString(){}[0]
+    final fun view(us.tractat.kuilt.heddle/LocalPolicy): us.tractat.kuilt.heddle/LocalHeddleView // us.tractat.kuilt.heddle/LocalHeddleSnapshot.view|view(us.tractat.kuilt.heddle.LocalPolicy){}[0]
 
     final object Companion { // us.tractat.kuilt.heddle/LocalHeddleSnapshot.Companion|null[0]
         final const val FORMAT_VERSION // us.tractat.kuilt.heddle/LocalHeddleSnapshot.Companion.FORMAT_VERSION|{}FORMAT_VERSION[0]
@@ -1194,6 +1195,13 @@ final class us.tractat.kuilt.heddle/LocalHeddleState { // us.tractat.kuilt.heddl
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LocalHeddleState.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LocalHeddleState.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LocalHeddleState.toString|toString(){}[0]
+}
+
+final class us.tractat.kuilt.heddle/LocalHeddleView { // us.tractat.kuilt.heddle/LocalHeddleView|null[0]
+    final fun entitlement(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/LocalHeddleView.entitlement|entitlement(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
+    final fun explain(us.tractat.kuilt.heddle/GroupId, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long = ...): us.tractat.kuilt.heddle/WaitExplanation // us.tractat.kuilt.heddle/LocalHeddleView.explain|explain(us.tractat.kuilt.heddle.GroupId;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
+    final fun previewPicks(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin.collections/List<kotlin/Long>>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin/Long = ...): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LocalHeddleView.previewPicks|previewPicks(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.collections.List<kotlin.Long>>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.Long){}[0]
+    final fun previewPicks(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin/Int>, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, kotlin.collections/List<kotlin/Long>): kotlin.collections/List<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/LocalHeddleView.previewPicks|previewPicks(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.Int>;kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>;kotlin.collections.List<kotlin.Long>){}[0]
 }
 
 final class us.tractat.kuilt.heddle/LocalPolicy { // us.tractat.kuilt.heddle/LocalPolicy|null[0]
