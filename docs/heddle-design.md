@@ -1307,7 +1307,8 @@ Carried over from the source intact; each is a named property test (§13).
    reservation's captured path crosses an edge of the strand it re-homes.
 5. **Neutral attachment initialization.** A new generation starts at the
    parent's current virtual time — the front over its *demanding* children,
-   not over all its active ones (§7.2) — never with lifetime credit. The
+   not over all its active ones, or the furthest-ahead child when no child but
+   the joiners is demanding (§7.2) — never with lifetime credit. The
    seat is published on the edge's `Gauge`, not frozen into the record, and is
    the front rounded **up** to the edge's own grid, under one tick (§7.2). It is
    stored exactly and uncapped (#3353). Only the front it is taken from is still
