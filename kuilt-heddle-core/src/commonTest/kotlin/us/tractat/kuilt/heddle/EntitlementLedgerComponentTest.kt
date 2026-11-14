@@ -4,6 +4,7 @@ import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -225,12 +226,20 @@ class EntitlementLedgerComponentTest {
      * Spelled as a merge of two *distinct* single-component ledgers: the result must differ from
      * both. If `piece` omitted `b`'s component, `a.piece(b)` would compare equal to `a` and red
      * here, naming both.
+     *
+     * `forgotten` is the one component that is not a lattice: a fold is one writer's own, so a
+     * ledger that holds none refuses one, loudly, rather than adopting it (design §5.5). It survives
+     * the join in the other direction only, as the receiver's own, which the swapped pair checks.
      */
     @Test
     fun everyComponentSurvivesTheJoin() {
         for (a in LEDGER_COMPONENTS) {
             for (b in LEDGER_COMPONENTS) {
                 if (a.name == b.name) continue
+                if (b.name == "forgotten") {
+                    assertFailsWith<IllegalArgumentException>("a `${a.name}` ledger adopted a fold it did not write") { a.ledger.piece(b.ledger) }
+                    continue
+                }
                 val merged = a.ledger.piece(b.ledger)
                 assertNotEquals(
                     a.ledger,
