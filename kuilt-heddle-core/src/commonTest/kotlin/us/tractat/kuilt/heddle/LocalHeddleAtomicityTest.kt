@@ -69,6 +69,8 @@ class LocalHeddleAtomicityTest {
         }
         assertFailsWith<IllegalStateException> { failing.acquire(waiting, waiting, startedAt = 100L) }
         failing.afterPickForTest = {}
+        val stateAfter = failing.snapshot()
+        val bytesAfter = failing.bytes()
 
         val next = failing.acquire(waiting, waiting, startedAt = 101L)
         val twinNext = twin.acquire(waiting, waiting, startedAt = 101L)
@@ -77,8 +79,8 @@ class LocalHeddleAtomicityTest {
             // The rig: part-way through, the call had changed the engine, so an unchanged engine
             // afterwards is the rollback's doing and not a call that never got going.
             { assertNotEquals(stateBefore, stateMidCall, "the failing call had moved the engine before it threw") },
-            { assertEquals(stateBefore, failing.snapshot(), "the state is as it was before the call") },
-            { assertContentEquals(bytesBefore, failing.bytes(), "the snapshot encodes as it did before the call") },
+            { assertEquals(stateBefore, stateAfter, "the state is as it was before the call") },
+            { assertContentEquals(bytesBefore, bytesAfter, "the snapshot encodes as it did before the call") },
             { assertEquals(twinNext, next, "the next call does what it would have done had the failed one never run") },
             { assertContentEquals(twin.bytes(), failing.bytes(), "and leaves the engine where the twin's is") },
         )
