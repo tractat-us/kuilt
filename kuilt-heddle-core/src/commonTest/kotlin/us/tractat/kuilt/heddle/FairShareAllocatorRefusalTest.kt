@@ -127,4 +127,44 @@ class FairShareAllocatorRefusalTest {
             { assertEquals(memoryBefore, allocator.memory, "and the allocator observed nothing") },
         )
     }
+
+    /**
+     * The same set, completed by a merge that lands **between two rounds** of one call: the replicated
+     * cell takes inbound writes between the allocator's own. The round after the merge stops, the
+     * call reports the grant it made, and the next call names the budget.
+     */
+    @Test
+    fun aSetThatGoesOverBudgetBetweenRoundsStopsTheCall() {
+        val base = withChildren(
+            flat(mint = 100L),
+            AttachmentRecord(AttachmentId("heavy"), root, GroupId("g-heavy"), Weight.of(1L shl 57, 3L)),
+        )
+        val light = AttachmentRecord(AttachmentId("light"), root, GroupId("g-light"), Weight.of(1L, 192L))
+        val fromB = withChildren(base, light)
+        val cell = object : LedgerCell {
+            override var current: EntitlementLedger = base
+            var merged = false
+
+            override fun mutateOrSkip(transform: (EntitlementLedger) -> Patch<EntitlementLedger>?): Boolean {
+                val patch = transform(current) ?: return false
+                current = current.piece(patch.delta)
+                // Once the allocator has delegated, B's activation arrives, before the next round.
+                if (!merged && current.edge(e1)?.issued?.let { it > 0L } == true) {
+                    current = current.piece(fromB)
+                    merged = true
+                }
+                return true
+            }
+        }
+        val allocator = FairShareAllocator(self, policy)
+        val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
+        val first = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
+        val second = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
+        assertAll(
+            { assertTrue(cell.merged, "the rig: the merge landed inside the first call") },
+            { assertEquals(AllocationOutcome.Delegated(1), first, "the round before the merge granted, the one after stopped") },
+            { assertEquals(10L, cell.current.edge(e1)?.issued, "one quantum, not two") },
+            { assertEquals(AllocationOutcome.WeightBudget(root), second, "the next call names the budget") },
+        )
+    }
 }
