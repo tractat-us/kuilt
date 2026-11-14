@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,8 @@ import us.tractat.kuilt.quilter.MonotonicMillis
 import us.tractat.kuilt.quilter.Quilter
 import kotlin.jvm.JvmInline
 import kotlin.time.Instant
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleNode")
 
 /** Identity of one local reservation — a leaf earmark awaiting completion (design §4.4). */
 @JvmInline
@@ -384,9 +387,26 @@ public class HeddleNode internal constructor(
      *   [ScheduleOutcome.NothingToDelegate] when none was, or [ScheduleOutcome.PositionCeiling] or
      *   [ScheduleOutcome.WeightBudget] when [parent]'s children cannot be ordered. Never
      *   [GateClosed]: a static node has no write gate.
+     *
+     * A parent that starts answering [ScheduleOutcome.WeightBudget] is also logged, once, at
+     * `warn`, naming its active edges and their weights, so a caller that discards the outcome
+     * still sees it. It logs again only after some call there answers anything else.
      */
     public fun schedule(parent: GroupId): ScheduleOutcome = lock.withLock {
-        allocator.schedule(parent, ledgerCell, earmarked = earmarks[parent] ?: 0L, demand = ::liveDemand).toScheduleOutcome()
+        val outcome = allocator.schedule(parent, ledgerCell, earmarked = earmarks[parent] ?: 0L, demand = ::liveDemand)
+            .toScheduleOutcome()
+        if (outcome !is ScheduleOutcome.WeightBudget) {
+            overBudgetParents.remove(parent)
+        } else if (overBudgetParents.add(parent)) {
+            weightBudgetWarningsForTest++
+            val s = ledger.value
+            val edges = s.activeChildren(parent).joinToString { c -> "${c.attachment.value} (${s.record(c.attachment)?.weight})" }
+            logger.warn {
+                "heddle: no pick at ${parent.value} can be computed, its active children's weights put a " +
+                    "pick's sums out of Long; nothing is delegated there until one closes. Active: $edges"
+            }
+        }
+        outcome
     }
 
     /**

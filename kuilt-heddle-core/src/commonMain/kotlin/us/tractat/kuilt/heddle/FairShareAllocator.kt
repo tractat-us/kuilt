@@ -447,7 +447,9 @@ public class FairShareAllocator(
 
     /**
      * [parent]'s **current virtual time** `V` in [ledger] — this allocator's front (design §7.2;
-     * issue #1688). `null` when [parent] has no active children in [ledger].
+     * issue #1688). `null` when [parent] has no active children in [ledger], and `null` too when
+     * their weights fail [weightsFitTheBudget], where no front can be computed and [schedule]
+     * answers [AllocationOutcome.WeightBudget] (#3353).
      *
      * A **diagnostic**: it depends on [demand] and on this allocator's non-replicated wake clamps,
      * so two peers legitimately read different values at the same instant.
@@ -456,7 +458,8 @@ public class FairShareAllocator(
         ledger: EntitlementLedger,
         parent: GroupId,
         demand: (AttachmentId) -> Demand,
-    ): Rational? = HeddlePolicy.front(policyEdges(ledger, parent, demand))
+    ): Rational? =
+        if (childWeightsFit(ledger, parent)) HeddlePolicy.front(policyEdges(ledger, parent, demand)) else null
 
     /**
      * [edge]'s effective virtual service as a pick at [parent] would read it in [ledger]: its
