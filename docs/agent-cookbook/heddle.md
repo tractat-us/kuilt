@@ -451,8 +451,8 @@ Four persistence gotchas the sample is too short to show:
   `kotlinx-serialization-cbor`. Both are tested, CBOR's definite- and indefinite-length arrays
   included. **Not ProtoBuf**: it encodes a snapshot, but `decode` answers `Corrupt`, since it
   cannot read back the ledger's maps whose values are maps. `FORMAT_VERSION` is what this
-  release writes and `SUPPORTED_FORMAT_VERSIONS` what it reads; format 1 is the first, so both are
-  1 today, and a release that adds format 2 reads 1 and 2.
+  release writes and `SUPPORTED_FORMAT_VERSIONS` what it reads: format 2 today, reading 1 and 2,
+  so a snapshot v0.7.4 stored as format 1 still restores.
 - **What `decode` checks.** The envelope's shape and version, then consistency: every open lease
   has a positive reservation, an epoch no later than the snapshot's and a path that is its leaf's
   one live lineage from the root, over edges the ledger holds and none retired; leases in id order;

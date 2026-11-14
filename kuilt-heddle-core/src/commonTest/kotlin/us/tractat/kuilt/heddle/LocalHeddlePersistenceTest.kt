@@ -26,7 +26,8 @@ import kotlin.test.fail
 
 /**
  * [LocalHeddle.persist], [LocalHeddle.restore] and [LocalHeddle.decode] (#3173, plan Task P with
- * Amendments 7–10). The golden snapshot of format 1 is [GOLDEN_FORMAT_1].
+ * Amendments 7–10). This release writes format 2, pinned by [GOLDEN_FORMAT_2], and still reads
+ * format 1, which v0.7.4 wrote: [GOLDEN_FORMAT_1] and its siblings are decode-only.
  */
 class LocalHeddlePersistenceTest {
 
@@ -156,11 +157,11 @@ class LocalHeddlePersistenceTest {
     @Test
     fun aCborElementPastTheStateIsCorrupt() {
         val bytes = Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), wakerScenario().first.persist())
-        // `9F 01 <state> FF`: an indefinite-length array, the version, the state, the break.
+        // `9F 02 <state> FF`: an indefinite-length array, the version, the state, the break.
         val state = bytes.copyOfRange(2, bytes.size - 1)
         val extra = bytes.copyOfRange(0, bytes.size - 1) + state + bytes.copyOfRange(bytes.size - 1, bytes.size)
         assertAll(
-            { assertEquals(listOf(0x9F, 0x01), bytes.take(2).map { it.toInt() and 0xFF }, "the rig: an indefinite-length array, version 1 first") },
+            { assertEquals(listOf(0x9F, 0x02), bytes.take(2).map { it.toInt() and 0xFF }, "the rig: an indefinite-length array, version 2 first") },
             { assertEquals(0xFF, bytes.last().toInt() and 0xFF, "the rig: closed by a break") },
             { assertIs<RestoreResult.Restored>(LocalHeddle.decode(bytes, Cbor), "the rig: the untouched bytes decode") },
             {
@@ -191,8 +192,8 @@ class LocalHeddlePersistenceTest {
 
     /**
      * A format that writes each collection's size before its elements and reads sequentially reads
-     * the envelope too. Read without its size, the `2` in front is taken for the version, and every
-     * snapshot comes back as `UnsupportedVersion(2)`.
+     * the envelope too. Read without its size, the `2` in front is taken for the version and the real
+     * version for the start of the state, so no snapshot would come back `Restored`.
      */
     @Test
     fun snapshotRoundTripsThroughASizePrefixedFormat() {
@@ -200,7 +201,7 @@ class LocalHeddlePersistenceTest {
         val bytes = SizePrefixedFormat.encodeToByteArray(LocalHeddleSnapshot.serializer(), snapshot)
         assertAll(
             { assertEquals(listOf<Byte>(0, 0, 0, 2), bytes.take(4), "the rig: the format wrote the envelope's size first") },
-            { assertEquals(listOf<Byte>(0, 0, 0, 1), bytes.slice(4..7), "the rig: and the version after it") },
+            { assertEquals(listOf<Byte>(0, 0, 0, 2), bytes.slice(4..7), "the rig: and the version after it") },
             { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytes, SizePrefixedFormat)) },
         )
     }
@@ -411,51 +412,65 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
-     * Format 1 is frozen: the scenario still encodes to the golden, byte for byte. A change to any
-     * serializer inside a snapshot, the ledger's, the allocator memory's and the topology's included,
-     * reds here, and then the choice is deliberate. Before the format has shipped, regenerate the
-     * golden from the message, which carries the current encoding. After, a field added to a nested
-     * type takes a default and leaves the bytes alone; any other nested change needs a frozen surrogate
-     * of that type under `SnapshotFormat1`, because a new top-level format alone does not keep format
-     * 1's nested values readable.
+     * Format 2 adds nothing the waker scenario writes, so its golden and format 1's hold one
+     * snapshot: the bump changed what a snapshot may carry, not what this one means.
      */
     @Test
-    fun formatOneStillEncodesToTheGolden() {
-        val text = encode(wakerScenario().first.persist())
-        assertEquals(GOLDEN_FORMAT_1, text, "format 1 changed; the encoding is now:\n$text\n")
+    fun formatOneAndFormatTwoGoldensHoldTheSameSnapshot() {
+        assertAll(
+            { assertTrue(GOLDEN_FORMAT_2.startsWith("[2,") && GOLDEN_FORMAT_1.startsWith("[1,"), "the rig: one golden per format") },
+            { assertEquals(decoded(GOLDEN_FORMAT_1), decoded(GOLDEN_FORMAT_2)) },
+        )
     }
 
     /**
-     * Format 1 is frozen in CBOR too, both ways: the JSON golden's snapshot encodes to the CBOR
-     * golden byte for byte, and the CBOR golden decodes to that snapshot. The same choice as
-     * [formatOneStillEncodesToTheGolden] applies when it reds.
+     * The format this release writes is pinned: the scenario encodes to the golden, byte for byte.
+     * A change to any serializer inside a snapshot, the ledger's, the allocator memory's and the
+     * topology's included, reds here, and then the choice is deliberate. Before format 2 has
+     * shipped, regenerate the golden from the message, which carries the current encoding. After,
+     * a field added to a nested type takes a default and leaves the bytes alone; any other nested
+     * change needs a frozen surrogate of that type under the format's surrogate, because a new
+     * top-level format alone does not keep an earlier format's nested values readable.
+     */
+    @Test
+    fun theCurrentFormatEncodesToItsGolden() {
+        val text = encode(wakerScenario().first.persist())
+        assertEquals(GOLDEN_FORMAT_2, text, "format 2 changed; the encoding is now:\n$text\n")
+    }
+
+    /**
+     * The current format is pinned in CBOR too, both ways: the JSON golden's snapshot encodes to the
+     * CBOR golden byte for byte, and the CBOR golden decodes to that snapshot. Format 1's CBOR golden
+     * still decodes to the same snapshot. The same choice as [theCurrentFormatEncodesToItsGolden]
+     * applies when it reds.
      */
     @OptIn(ExperimentalSerializationApi::class)
     @Test
-    fun formatOneStillEncodesToTheCborGolden() {
-        val snapshot = decoded(GOLDEN_FORMAT_1)
+    fun theCurrentFormatEncodesToItsCborGolden() {
+        val snapshot = decoded(GOLDEN_FORMAT_2)
         val hex = hexOf(Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), snapshot))
         assertAll(
-            { assertEquals(GOLDEN_FORMAT_1_CBOR, hex, "format 1 changed in CBOR; the encoding is now:\n$hex\n") },
-            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_1_CBOR), Cbor)) },
+            { assertEquals(GOLDEN_FORMAT_2_CBOR, hex, "format 2 changed in CBOR; the encoding is now:\n$hex\n") },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_2_CBOR), Cbor)) },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_1_CBOR), Cbor), "format 1's CBOR still reads") },
         )
     }
 
     /**
      * A CBOR writer that states each array's length up front (`82`, not `9f … ff`) is read too, and
-     * a definite-length array of three, `83 01 S S`, is refused by its stated size before anything
+     * a definite-length array of three, `83 02 S S`, is refused by its stated size before anything
      * past the version is read.
      */
     @OptIn(ExperimentalSerializationApi::class)
     @Test
     fun definiteLengthCborRoundTripsAndAThreeElementArrayIsCorrupt() {
         val definite = Cbor { useDefiniteLengthEncoding = true }
-        val snapshot = decoded(GOLDEN_FORMAT_1)
+        val snapshot = decoded(GOLDEN_FORMAT_2)
         val bytes = definite.encodeToByteArray(LocalHeddleSnapshot.serializer(), snapshot)
         val state = bytes.copyOfRange(2, bytes.size)
-        val three = byteArrayOf(0x83.toByte(), 0x01) + state + state
+        val three = byteArrayOf(0x83.toByte(), 0x02) + state + state
         assertAll(
-            { assertEquals(listOf(0x82, 0x01), bytes.take(2).map { it.toInt() and 0xFF }, "the rig: a definite-length array of two, version 1 first") },
+            { assertEquals(listOf(0x82, 0x02), bytes.take(2).map { it.toInt() and 0xFF }, "the rig: a definite-length array of two, version 2 first") },
             { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytes, definite)) },
             { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytes, Cbor), "a default reader reads it as well") },
             {
@@ -536,13 +551,13 @@ class LocalHeddlePersistenceTest {
      * exactly as the engine that wrote it would have, through a drain finishing and a reload.
      */
     @Test
-    fun richFormatOneEncodesToItsGoldenAndRestores() {
+    fun richCurrentFormatEncodesToItsGoldenAndRestores() {
         val (reference, open) = richScenario()
         val text = encode(reference.persist())
         // Decoded inside each arm, so a golden that no longer decodes still prints the new encoding.
-        val golden = { decoded(GOLDEN_FORMAT_1_RICH_GRID) }
+        val golden = { decoded(GOLDEN_FORMAT_2_RICH) }
         assertAll(
-            { assertEquals(GOLDEN_FORMAT_1_RICH_GRID, text, "format 1 changed; the rich encoding is now:\n$text\n") },
+            { assertEquals(GOLDEN_FORMAT_2_RICH, text, "format 2 changed; the rich encoding is now:\n$text\n") },
             { assertEquals(setOf(0L, 1L), golden().leases.map { it.id.epoch }.toSet(), "the rig: open leases from two epochs") },
             { assertTrue(golden().ledger.let { l -> l.allEdges().any { l.lifecycle(it) == Lifecycle.CLOSING } }, "the rig: an edge is draining") },
             { assertTrue(golden().leases.any { it.leaf == tenant }, "the rig: a lease at a runtime child") },
@@ -552,6 +567,23 @@ class LocalHeddlePersistenceTest {
                 val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
                 assertEquals(richContinuation(reference, open), richContinuation(restored, open))
             },
+        )
+    }
+
+    /**
+     * The rich scenario as format 1, on the 1/16-unit grid (#3313): never written by a release, but
+     * the same snapshot the current format writes, and an engine restored from it carries on exactly
+     * as the engine that wrote it would have.
+     */
+    @Test
+    fun richFormatOneOnTheGridStillRestoresAndCarriesOn() {
+        val (reference, open) = richScenario()
+        val snapshot = decoded(GOLDEN_FORMAT_1_RICH_GRID)
+        val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
+        assertAll(
+            { assertTrue(GOLDEN_FORMAT_1_RICH_GRID.startsWith("[1,"), "the rig: format 1") },
+            { assertEquals(reference.persist(), snapshot, "the same snapshot the current format writes") },
+            { assertEquals(richContinuation(reference, open), richContinuation(restored, open)) },
         )
     }
 
@@ -602,17 +634,22 @@ class LocalHeddlePersistenceTest {
 
     @Test
     fun corruptBytesAreNamedNotThrown() {
-        val golden = GOLDEN_FORMAT_1
+        assertAll(*(corruptionChecks(GOLDEN_FORMAT_1, version = 1) + corruptionChecks(GOLDEN_FORMAT_2, version = 2)).toTypedArray())
+    }
+
+    /** One check per way [golden], a snapshot of format [version], can be corrupted. */
+    private fun corruptionChecks(golden: String, version: Int): List<() -> Unit> {
+        val prefix = "[$version,"
         val pathToA = "\"path\":[\"${edgeTo(a).value}\"]"
         val cases = listOf(
             "not json" to "x",
             "truncated" to golden.substring(0, golden.length / 2),
             "no version" to "[]",
-            "no state" to "[1]",
-            "the old object envelope" to "{\"formatVersion\":1,\"state\":" + golden.removePrefix("[1,").dropLast(1) + "}",
-            "state before version" to "[" + golden.removePrefix("[1,").dropLast(1) + ",1]",
+            "no state" to "[$version]",
+            "the old object envelope" to "{\"formatVersion\":$version,\"state\":" + golden.removePrefix(prefix).dropLast(1) + "}",
+            "state before version" to "[" + golden.removePrefix(prefix).dropLast(1) + ",$version]",
             // A well-formed second state, so only the "past its state" refusal can catch it.
-            "an element past the state" to golden.dropLast(1) + "," + golden.removePrefix("[1,").dropLast(1) + "]",
+            "an element past the state" to golden.dropLast(1) + "," + golden.removePrefix(prefix).dropLast(1) + "]",
             "a lease on an edge the ledger lacks" to golden.replace(pathToA, "\"path\":[\"root/z@1:1#0\"]"),
             "a lease from a later epoch" to golden.replaceFirst("\"leases\":[{\"epoch\":0,", "\"leases\":[{\"epoch\":5,"),
             "a topology rooted elsewhere" to golden.replace("\"lastApplied\":{\"root\":\"root\"", "\"lastApplied\":{\"root\":\"elsewhere\""),
@@ -620,7 +657,7 @@ class LocalHeddlePersistenceTest {
         )
         // One per `require` a decoded snapshot runs, each pinned to its own reason.
         val requires = listOf(
-            Triple("a negative epoch", golden.replaceFirst("[1,{\"epoch\":0,", "[1,{\"epoch\":-1,"), "epoch must be non-negative"),
+            Triple("a negative epoch", golden.replaceFirst("$prefix{\"epoch\":0,", "$prefix{\"epoch\":-1,"), "epoch must be non-negative"),
             Triple("a negative sequence number", golden.replaceFirst("\"seq\":50,", "\"seq\":-50,"), "negative sequence number"),
             Triple("ids not strictly increasing", golden.replaceFirst("\"seq\":51,", "\"seq\":50,"), "strictly increasing id order"),
             Triple("a reservation of 0", golden.replaceFirst("\"reserved\":1,", "\"reserved\":0,"), "not a positive amount"),
@@ -629,20 +666,20 @@ class LocalHeddlePersistenceTest {
             Triple("a path across a retired edge", golden.replaceFirst("\"lifecycle\":{\"${edgeTo(a).value}\":\"ACTIVE\"", "\"lifecycle\":{\"${edgeTo(a).value}\":\"RETIRED\""), "which is retired"),
             Triple("negative capacity", golden.replace("\"totalSlots\":2,", "\"totalSlots\":-2,"), "totalSlots must be non-negative"),
         )
-        val checks = buildList<() -> Unit> {
+        return buildList {
+            add { assertIs<RestoreResult.Restored>(LocalHeddle.decode(golden, Json), "the rig: format $version's golden decodes") }
             for ((name, text) in cases) {
-                add { assertTrue(text != golden, "the rig: $name changed the text") }
-                add { assertIs<RestoreResult.Corrupt>(LocalHeddle.decode(text, Json), name) }
+                add { assertTrue(text != golden, "the rig: format $version, $name changed the text") }
+                add { assertIs<RestoreResult.Corrupt>(LocalHeddle.decode(text, Json), "format $version, $name") }
             }
             for ((name, text, reason) in requires) {
-                add { assertTrue(text != golden, "the rig: $name changed the text") }
+                add { assertTrue(text != golden, "the rig: format $version, $name changed the text") }
                 add {
                     val out = LocalHeddle.decode(text, Json)
-                    assertTrue(out is RestoreResult.Corrupt && reason in out.reason, "$name: expected Corrupt naming \"$reason\", got $out")
+                    assertTrue(out is RestoreResult.Corrupt && reason in out.reason, "format $version, $name: expected Corrupt naming \"$reason\", got $out")
                 }
             }
         }
-        assertAll(*checks.toTypedArray())
     }
 
     @Test
