@@ -948,9 +948,10 @@ public class LocalHeddle private constructor(
         require(new.groupId() == root) {
             "the topology's root ${new.groupId().value} is not this engine's ${root.value}: a change of root is not a reload"
         }
-        val result = run(Topology.diff(new, ledger, generation))
+        val steps = Topology.diff(new, ledger, generation)
+        // Before the run, so the swap forgets what [new] does not want, not what the old topology did not.
         leasable = Leasable.ByTopology(new)
-        result
+        run(steps)
     }
 
     /**
@@ -986,6 +987,7 @@ public class LocalHeddle private constructor(
      * child whose change cannot land names it, and the unit is attempted again without any of that
      * child's steps, so the child is left exactly as it was. Each round leaves out at least one more
      * child, so this ends, and the one swap is the attempt in which every child left in landed.
+     * That swap also forgets what it can ([forgetQuiesced]).
      */
     private fun run(steps: List<TopologyStep>): ApplyResult {
         val left = LinkedHashMap<GroupId, StepRefusal>()
@@ -999,10 +1001,41 @@ public class LocalHeddle private constructor(
                 is Trial.Landed -> {
                     ledger = trial.ledger
                     for ((id, path) in trial.moved) open[id] = open.getValue(id).copy(path = path)
+                    forgetQuiesced()
                     return ApplyResult(trial.applied, (trial.refusals + left.values).sortedBy { it.child })
                 }
             }
         }
+    }
+
+    /**
+     * Forget every edge the ledger can, in the swap [run] lands (design §5.5), so an engine whose
+     * children come and go stays the size of what it holds now rather than of everything it ever
+     * held. Two kinds of edge go:
+     * - every RETIRED edge [EntitlementLedger.forgetRefusal] passes: a leaf's, with its books
+     *   closed. Every one, not only the ones this swap retired, so a ledger restored from a
+     *   snapshot written before the engine forgot compacts in its first swap;
+     * - every PREPARED edge the topology in force does not want ([Topology.unwantedPrepared]),
+     *   which carries nothing, so only the generation floor moves.
+     *
+     * An edge on an open lease's path is never forgotten, though no lease's path holds either kind:
+     * [run] has just checked that every path is its leaf's live lineage. The allocator's memory of
+     * each forgotten edge goes in the same swap, since its own pruning needs the edge's record.
+     *
+     * Reads every edge's lifecycle once, and the counters once for all the candidates together.
+     * What forgetting changes and what it does not is on [EntitlementLedger.forget].
+     */
+    private fun forgetQuiesced() {
+        if (!forgetsForTest) return
+        val quiesced = ledger.quiescedEdges()
+        if (quiesced.isEmpty()) return
+        val crossed = open.values.flatMapTo(HashSet()) { it.path }
+        val (prepared, retired) = quiesced.filter { it !in crossed }.partition { ledger.lifecycle(it) == Lifecycle.PREPARED }
+        val unwanted = (leasable as? Leasable.ByTopology)?.topology?.unwantedPrepared(prepared, ledger).orEmpty()
+        val doomed = ledger.forgettable(retired + unwanted)
+        if (doomed.isEmpty()) return
+        ledger = checkNotNull(ledger.forget(doomed)) { "the ledger refused to forget ${doomed.map { it.value }}, each of which it passed" }
+        allocator.forget(doomed.toHashSet())
     }
 
     /**
@@ -1140,6 +1173,12 @@ public class LocalHeddle private constructor(
      * as one with a step the ledger refuses outright.
      */
     internal fun applyStepsForTest(steps: List<TopologyStep>): ApplyResult = atomically { run(steps) }
+
+    /**
+     * Whether [run]'s swap forgets ([forgetQuiesced]); `true` unless a test turns it off, to compare
+     * an engine that forgets with one that keeps everything. Not engine state.
+     */
+    internal var forgetsForTest: Boolean = true
 
     /**
      * Called after each level's pick, once the wake memory has moved and before the delegation: the

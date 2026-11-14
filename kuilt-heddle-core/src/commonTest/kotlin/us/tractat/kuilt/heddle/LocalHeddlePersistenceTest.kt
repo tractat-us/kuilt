@@ -227,7 +227,7 @@ class LocalHeddlePersistenceTest {
     /**
      * A snapshot taken mid-drain restores, and the drain finishes after it. A removal with a lease
      * open leaves its edge CLOSING; the lease's path crosses that edge. Restored, the lease completes,
-     * and applying the same topology again retires the edge.
+     * and applying the same topology again retires the edge, and the same swap forgets it (#3192).
      */
     @Test
     fun aDrainingRemovalRetiresAfterARestore() {
@@ -248,7 +248,8 @@ class LocalHeddlePersistenceTest {
             { assertEquals(listOf(leftover), persisted.leases) },
             { assertEquals(LeaseOutcome.Done(1L, 0L), done, "the lease completes after the restore") },
             { assertEquals(emptyList(), second.refusals, "and the same topology applied again lands") },
-            { assertEquals(Lifecycle.RETIRED, restored.snapshot().ledger.lifecycle(edge), "the edge retired") },
+            { assertTrue(TopologyStep.Retire(edge, spare) in second.applied, "the edge retired: $second") },
+            { assertEquals(null, restored.snapshot().ledger.lifecycle(edge), "and its swap forgot it") },
         )
     }
 
@@ -521,10 +522,12 @@ class LocalHeddlePersistenceTest {
      * `acme/interactive`, `spare`, `t1` and `acme/batch/x`; a reload reweights `acme`, moving the two
      * leases under it onto its new edge, and removes `spare`, which drains with its lease open; the
      * `batch/x` lease is cancelled; the engine is restored under epoch 1 and leases once more, so the
-     * open leases span two epochs. Returns that engine and its open leases.
+     * open leases span two epochs. Returns that engine and its open leases. With [forgets] false
+     * both engines keep every edge ([LocalHeddle.forgetsForTest]); nothing here is forgettable
+     * either way, since the one retired edge is a group's.
      */
-    private fun richScenario(): Pair<LocalHeddle, List<Lease>> {
-        val h = LocalHeddle.fromTopology(richBefore, richPolicy, epoch = 0L).also { it.reconcileCapacity(4L) }
+    private fun richScenario(forgets: Boolean = true): Pair<LocalHeddle, List<Lease>> {
+        val h = LocalHeddle.fromTopology(richBefore, richPolicy, epoch = 0L).also { it.reconcileCapacity(4L); it.forgetsForTest = forgets }
         check(h.attachRuntimeChild(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
         val interactive = h.lease(setOf(richBefore.groupId("acme", "interactive")), reservation = 2L, startedAt = 10L)
         val spare = h.lease(setOf(richBefore.groupId("spare")), reservation = 3L, startedAt = 11L)
@@ -535,7 +538,7 @@ class LocalHeddlePersistenceTest {
         check(reload.refusals.single() is StepRefusal.Draining) { "spare drains: $reload" }
         check(h.capturedPath(interactive.id) != pathBefore) { "the reweight moved the interactive lease" }
         check(h.cancel(x.id) == LeaseOutcome.Done(0L, 0L)) { "cancelled" }
-        val restored = throughJson(h, richPolicy)
+        val restored = throughJson(h, richPolicy).also { it.forgetsForTest = forgets }
         val later = restored.lease(setOf(richBefore.groupId("acme", "batch", "y")), reservation = 2L, startedAt = 20L)
         return restored to listOf(interactive, spare, inTenant, later)
     }
@@ -559,41 +562,45 @@ class LocalHeddlePersistenceTest {
     /**
      * The rich scenario, then a second runtime child `t2` attached under `tenants`, leased, settled
      * and detached, so its edge retires with its books closed, then a reload that changes only
-     * ceilings ([richCapped]), which moves no edge. Returns that engine, its open leases, and its
-     * snapshot with `t2`'s edge forgotten: what format 2 adds over format 1, the fold (#3192) and
-     * the ceilings (#3324).
+     * ceilings ([richCapped]), which moves no edge. With [forgets], the detach's own swap forgets
+     * that edge, and prunes it from the allocator's memory. What format 2 adds over format 1: the
+     * fold (#3192) and the ceilings (#3324). Returns that engine and its open leases.
      */
-    private fun richFoldedScenario(): Triple<LocalHeddle, List<Lease>, LocalHeddleSnapshot> {
-        val (h, open) = richScenario()
+    private fun richFoldedScenario(forgets: Boolean): Pair<LocalHeddle, List<Lease>> {
+        val (h, open) = richScenario(forgets)
         check(h.attachRuntimeChild(listOf("tenants"), "t2", generation = 4L).refusals.isEmpty())
-        val edge = checkNotNull(h.snapshot().ledger.lineageOf(departed)).last()
         val lease = h.lease(setOf(departed), reservation = 2L, startedAt = 30L)
         check(h.complete(lease.id, 3L) is LeaseOutcome.Done)
         check(h.detachRuntimeChild(listOf("tenants"), "t2").refusals.isEmpty())
         val ceilingsOnly = h.apply(richCapped, generation = 5L)
         check(ceilingsOnly.applied.isEmpty() && ceilingsOnly.refusals.all { it is StepRefusal.Draining }) { "a change of ceiling alone is no step: $ceilingsOnly" }
-        val whole = h.persist()
-        val folded = checkNotNull(whole.ledger.forget(listOf(edge))) { "t2's edge is forgettable: ${whole.ledger.forgetRefusal(edge)}" }
-        return Triple(h, open, LocalHeddleSnapshot(whole.epoch, folded, whole.allocatorMemory, whole.totalSlots, whole.open, whole.lastApplied))
+        return h to open
     }
 
-    /** [continuation] with the books' rows for [departed] and its edge left out, the only rows a fold removes. */
-    private fun List<Any>.withoutDeparted(edge: AttachmentId): List<Any> {
+    /**
+     * [continuation]'s books with only the rows for the edges and groups [subject] still holds: what
+     * an engine that never forgot has and one that forgets does not.
+     */
+    private fun List<Any>.rowsHeldBy(subject: LocalHeddle): List<Any> {
+        val ledger = subject.snapshot().ledger
+        val edges = ledger.allEdges()
+        val groups = groupsOf(ledger).toSet()
         val books = last() as List<*>
-        val edges = (books[0] as List<*>).filterNot { (it as EdgeSummary?)?.attachment == edge }
-        val holdings = (books[1] as List<*>).filterNot { (it as Pair<*, *>).first == departed }
-        return dropLast(1) + listOf(listOf(edges, holdings) + books.drop(2))
+        val edgeRows = (books[0] as List<*>).filter { (it as EdgeSummary?)?.attachment in edges }
+        val holdings = (books[1] as List<*>).filter { (it as Pair<*, *>).first in groups }
+        return dropLast(1) + listOf(listOf(edgeRows, holdings) + books.drop(2))
     }
 
     /**
      * The rich scenario's encoding is pinned, with a fold in it, and it restores: an engine started
-     * from it carries on exactly as the engine that wrote it, which never forgot, would have, through
-     * a drain finishing and a reload. The books agree on every row but the forgotten edge's and its
-     * child's, which the fold no longer holds.
+     * from it carries on exactly as one that went through the same calls and never forgot, through a
+     * drain finishing and a reload. The books agree on every row the restored engine still holds; it
+     * forgets `spare`'s edge too, once the reload retires it.
      */
     @Test
     fun richCurrentFormatEncodesToItsGoldenAndRestores() {
-        val (reference, open, snapshot) = richFoldedScenario()
+        val (reference, open) = richFoldedScenario(forgets = false)
+        val snapshot = richFoldedScenario(forgets = true).first.persist()
         val edge = checkNotNull(reference.snapshot().ledger.inboundEdges(departed).singleOrNull())
         val text = encode(snapshot)
         // Decoded inside each arm, so a golden that no longer decodes still prints the new encoding.
@@ -606,10 +613,15 @@ class LocalHeddlePersistenceTest {
             { assertEquals(richCapped, golden().lastApplied, "the rig: the topology last applied is the reload's, with its ceilings") },
             { assertTrue(golden().ledger.hasForgotten() && edge !in golden().ledger.allEdges(), "the rig: t2's edge is forgotten") },
             { assertTrue("\"forgotten\":" in GOLDEN_FORMAT_2_RICH, "the rig: the fold is in the bytes") },
+            { assertTrue(edge.value !in GOLDEN_FORMAT_2_RICH, "the allocator's memory of t2's edge went with it") },
             { assertTrue((reference.snapshot().ledger.edge(edge)?.spent ?: 0L) > 0L, "the rig: the forgotten edge had spent something") },
             {
                 val restored = LocalHeddle.restore(golden(), richPolicy, epoch = snapshot.epoch + 1)
-                assertEquals(richContinuation(reference, open).withoutDeparted(edge), richContinuation(restored, open))
+                val expected = richContinuation(reference, open)
+                val actual = richContinuation(restored, open)
+                assertEquals(expected.rowsHeldBy(restored), actual)
+                val dropped = (expected.last() as List<*>)[0] as List<*>
+                assertTrue(dropped.size >= ((actual.last() as List<*>)[0] as List<*>).size + 2, "the rig: the reference kept t2's and spare's edges")
             },
         )
     }

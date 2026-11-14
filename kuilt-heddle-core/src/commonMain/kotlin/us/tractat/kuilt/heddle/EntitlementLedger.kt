@@ -915,9 +915,16 @@ public class EntitlementLedger private constructor(
      * known** to this ledger — each generation is prepared exactly once; changing a
      * weight or parent mints a *new* id, never re-preparing an old one. No entitlement
      * may cross a prepared edge until [activate].
+     *
+     * Also `null` for an id in the topology grammar at or below the generation of every edge
+     * this ledger has forgotten (design §5.5): it may be one of them, and [piece] would throw on
+     * the patch at its resurrection guard. The floor cannot tell a forgotten id from one this
+     * ledger never held, so it refuses both, which costs nothing, since every id a diff or an
+     * attach prepares is numbered above the floor.
      */
     public fun prepare(record: AttachmentRecord): Patch<EntitlementLedger>? {
         if (isKnown(record.id)) return null
+        if (generationOf(record.id)?.let { it <= forgotten.generationFloor } == true) return null
         return Patch(
             of(
                 records = mapOf(record.id to setOf(record)),
@@ -2202,7 +2209,9 @@ public class EntitlementLedger private constructor(
      * That it will never activate is the caller's precondition, not something this checks. A later
      * activation of the forgotten id is not silent: [activate] finds no record and refuses it, and an
      * activation delta built elsewhere and pieced in names an id at or below the forgotten floor, so
-     * [piece] throws at the resurrection guard.
+     * [piece] throws at the resurrection guard. A later [prepare] of any id at or below that floor,
+     * the forgotten one included, returns `null`, so the refusal comes where the prepare is asked
+     * rather than as a throw from the guard when its patch is pieced.
      *
      * Either way its parent gets a row in the folded outflow, empty when nothing netted, and that
      * row is what keeps the parent counting as having child edges ([hasChildEdges]), as it did while
@@ -2220,7 +2229,8 @@ public class EntitlementLedger private constructor(
     internal fun forget(edges: Collection<AttachmentId>): EntitlementLedger? {
         val doomed = edges.toSet()
         if (doomed.isEmpty()) return this
-        if (doomed.any { forgetRefusal(it) != null }) return null
+        val replicas = allReplicas()
+        if (doomed.any { forgetRefusal(it, replicas) != null }) return null
 
         val outflow = forgotten.outflow.mapValuesTo(HashMap()) { (_, row) -> HashMap(row) }
         val leafSpend = HashMap(forgotten.leafSpend)
@@ -2275,7 +2285,28 @@ public class EntitlementLedger private constructor(
      * Whether an open lease's path crosses the edge is the engine's question, not the ledger's; with
      * nothing outstanding, no lease is charging it.
      */
-    internal fun forgetRefusal(edge: AttachmentId): ForgetRefusal? {
+    internal fun forgetRefusal(edge: AttachmentId): ForgetRefusal? = forgetRefusal(edge, allReplicas())
+
+    /**
+     * The edges among [candidates] that [forget] would take, in their order: each one's
+     * [forgetRefusal] is `null`. Reads [allReplicas], a pass over every edge, once for all of them
+     * rather than once each.
+     */
+    internal fun forgettable(candidates: Collection<AttachmentId>): List<AttachmentId> {
+        if (candidates.isEmpty()) return emptyList()
+        val replicas = allReplicas()
+        return candidates.filter { forgetRefusal(it, replicas) == null }
+    }
+
+    /**
+     * The edges a [forget] could take at all: those whose lifecycle is RETIRED or PREPARED,
+     * sorted. One pass over the lifecycle register, which reads no counter.
+     */
+    internal fun quiescedEdges(): List<AttachmentId> =
+        lifecycle.entries.filter { it.value == Lifecycle.RETIRED || it.value == Lifecycle.PREPARED }.map { it.key }.sorted()
+
+    /** [forgetRefusal] with [allReplicas] already read, as [replicas]. */
+    private fun forgetRefusal(edge: AttachmentId, replicas: Set<ReplicaId>): ForgetRefusal? {
         if (!isKnown(edge)) return ForgetRefusal.UNKNOWN
         if (generationOf(edge) == null) return ForgetRefusal.NOT_IN_GRAMMAR
         val record = recordOf(edge) ?: return ForgetRefusal.NOT_ONE_RECORD
@@ -2297,7 +2328,7 @@ public class EntitlementLedger private constructor(
         if (replicas.any { netInflow(edge, it) < 0L || effLeafSpentSlot(edge, it) < 0L }) return ForgetRefusal.NEGATIVE_FOLD
         if (edge(edge)?.outstanding != 0L) return ForgetRefusal.OUTSTANDING
         if (replicas.any { strandedOn(edge, it) != 0L }) return ForgetRefusal.STRANDED
-        if (allReplicas().any { holdings(record.child, it) != 0L }) return ForgetRefusal.CHILD_HOLDS
+        if (replicas.any { holdings(record.child, it) != 0L }) return ForgetRefusal.CHILD_HOLDS
         return null
     }
 

@@ -117,6 +117,17 @@ public class FairShareAllocator(
     internal var rebasesForTest: Int = 0
         private set
 
+    /**
+     * Drop everything this allocator remembers about [edges]: the ones its ledger has just
+     * forgotten ([EntitlementLedger.forget], design §5.5). [forgetDepartedChildren] cannot do it
+     * later, since it finds an edge's parent through the edge's record, which forgetting removes,
+     * so without this a forgotten edge's entries would stay for good.
+     */
+    internal fun forget(edges: Set<AttachmentId>) {
+        wakeOffsets.keys.removeAll(edges)
+        demandingObserved.keys.removeAll(edges)
+    }
+
     /** The demanding state [edge] was last observed in, or `null` when it has never been observed. */
     internal fun lastObservedDemanding(edge: AttachmentId): Boolean? = demandingObserved[edge]
 
