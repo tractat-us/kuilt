@@ -1,7 +1,7 @@
 package us.tractat.kuilt.heddle
 
 /**
- * Samples for [KuiltVersion], cited by its generated KDoc and by the agent cookbook.
+ * Samples for [KuiltVersion], cited by the generated KDoc of this module's `KuiltVersion`.
  *
  * Compiled as part of commonTest, so a rename breaks the build rather than the page.
  */

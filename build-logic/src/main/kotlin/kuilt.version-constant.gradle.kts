@@ -5,8 +5,9 @@
 // `:kuilt-store` and `:kuilt-seal` depend on no kuilt module, and `:kuilt-heddle-core` bans the
 // coroutines `:kuilt-core` would bring, so a single carrier would leave its consumers without one.
 // Each carrier generates its copy into its own package (the mapping gives it), because one class
-// in one package from two jars is a split package. The other modules carry none: every module
-// publishes at one version, aligned by the BOM, so either copy names them all. Applying this
+// in one package from two jars is a split package. The modules below `:kuilt-core` (no kuilt
+// dependency, or only such ones) carry none. The value is the version of the module that carries
+// it; importing the BOM keeps every module at that version. Applying this
 // plugin to a module missing from the mapping fails here, at configuration.
 //
 // It is a plain `val`, not a `const`: a `const` is inlined into consumers and would put the
@@ -28,6 +29,14 @@
 // leaving `KuiltVersion` unresolved in the editor until the first build.
 
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
+import org.gradle.process.CommandLineArgumentProvider
+
+/** Hands a test JVM the published POM's path, keyed on its content rather than where it sits. */
+class PublishedPomArgument(
+    @get:InputFile @get:PathSensitive(PathSensitivity.NONE) val pom: Provider<RegularFile>,
+) : CommandLineArgumentProvider {
+    override fun asArguments(): Iterable<String> = listOf("-Dkuilt.publishedPom=${pom.get().asFile.absolutePath}")
+}
 
 val kuiltVersionPackage: String = GenerateKuiltVersion.CARRIERS[path] ?: throw GradleException(
     "kuilt.version-constant is applied to $path, which GenerateKuiltVersion.CARRIERS does not name. " +
@@ -69,7 +78,9 @@ tasks.matching { it.name == "prepareKotlinIdeaImport" }.configureEach {
 tasks.withType<Test>().configureEach {
     if (name == "jvmTest") {
         val pomTask = tasks.named<GenerateMavenPom>("generatePomFileForKotlinMultiplatformPublication")
-        inputs.files(pomTask).withPropertyName("publishedPom").withPathSensitivity(PathSensitivity.NONE)
-        systemProperty("kuilt.publishedPom", pomTask.get().destination.absolutePath)
+        // The path travels through an argument provider whose POM is a path-insensitive `@InputFile`,
+        // so the checkout's absolute path is not a `jvmTest` cache key, while the provider still
+        // carries the producing task's edge.
+        jvmArgumentProviders.add(PublishedPomArgument(layout.file(pomTask.map { it.destination })))
     }
 }

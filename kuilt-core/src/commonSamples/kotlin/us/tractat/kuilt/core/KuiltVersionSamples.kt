@@ -1,7 +1,7 @@
 package us.tractat.kuilt.core
 
 /**
- * Samples for [KuiltVersion], cited by the agent cookbook.
+ * Samples for [KuiltVersion], cited by this module's generated `KuiltVersion` KDoc and by the agent cookbook.
  *
  * Compiled as part of commonTest, so a rename breaks the build rather than the page.
  */

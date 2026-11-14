@@ -83,6 +83,14 @@ abstract class GenerateKuiltVersion : DefaultTask() {
             ":kuilt-heddle-core" to "us.tractat.kuilt.heddle",
         )
 
+        init {
+            // Runs when the plugin first reads CARRIERS, so configuration fails, not a later task.
+            require(CARRIERS.values.toSet().size == CARRIERS.size) {
+                "Two GenerateKuiltVersion.CARRIERS share a package ($CARRIERS): their KuiltVersion classes " +
+                    "would have the same fully qualified name, a split package across two jars."
+            }
+        }
+
         /** The sample each carrier's KDoc cites, in the carrier's own package and `commonSamples`. */
         const val SAMPLE_NAME: String = "sampleKuiltVersion"
 
@@ -99,8 +107,9 @@ abstract class GenerateKuiltVersion : DefaultTask() {
             | * build, `<line>.0-dev.<run>` from a snapshot, and the tag's `x.y.z` from a release.
             | *
             | * Two modules carry a `KuiltVersion`: $carriers.
-            | * The other modules carry none, and need none: every kuilt module publishes at this one
-            | * version, which the BOM keeps aligned, so either copy names them all.
+            | * The modules below `:kuilt-core`, those with no kuilt dependency or only such ones, carry none.
+            | * The value is the version of the module that carries it; import the BOM to keep every
+            | * kuilt module at that version.
             | *
             | * It is deliberately a plain `val`, not a `const`, for two reasons. A `const` is copied into
             | * the code that reads it when that code compiles, so it would name the kuilt a consumer
