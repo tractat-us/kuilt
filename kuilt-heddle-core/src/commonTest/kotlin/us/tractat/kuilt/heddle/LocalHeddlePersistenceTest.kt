@@ -339,7 +339,7 @@ class LocalHeddlePersistenceTest {
             "root",
             listOf(
                 Topology.Lane("lane"),
-                Topology.Group("pool", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
+                Topology.Group("pool", Weight.ONE, emptyList(), template = Topology.ChildTemplate(Weight.ONE)),
             ),
         )
         val pool = draft.groupId("pool")
@@ -502,7 +502,7 @@ class LocalHeddlePersistenceTest {
                 ),
                 maxConcurrent = 3L.takeIf { capped },
             ),
-            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE, maxConcurrent = 2L.takeIf { capped })),
+            Topology.Group("tenants", Weight.ONE, emptyList(), template = Topology.ChildTemplate(Weight.ONE, maxConcurrent = 2L.takeIf { capped })),
             Topology.Lane("spare").takeIf { withSpare },
         ),
     )
@@ -513,7 +513,7 @@ class LocalHeddlePersistenceTest {
     /** [richAfter] with ceilings, high enough that no call of the scenarios meets them: what format 2's rich golden last applied. */
     private val richCapped = richTree(Weight.of(5, 2), withSpare = false, capped = true)
     private val richPolicy = LocalPolicy(defaultReservation = 2L)
-    private val tenant = richBefore.runtimeChildId(listOf("tenants"), "t1")
+    private val tenant = richBefore.attachedChildId(listOf("tenants"), "t1")
     private val richLeaves = setOf(richBefore.groupId("acme", "interactive"), richBefore.groupId("acme", "batch", "x"), richBefore.groupId("acme", "batch", "y"), tenant)
 
     /**
@@ -528,7 +528,7 @@ class LocalHeddlePersistenceTest {
      */
     private fun richScenario(forgets: Boolean = true): Pair<LocalHeddle, List<Lease>> {
         val h = LocalHeddle.fromTopology(richBefore, richPolicy, epoch = 0L).also { it.reconcileCapacity(4L); it.forgetsForTest = forgets }
-        check(h.attachRuntimeChild(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
+        check(h.attach(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
         val interactive = h.lease(setOf(richBefore.groupId("acme", "interactive")), reservation = 2L, startedAt = 10L)
         val spare = h.lease(setOf(richBefore.groupId("spare")), reservation = 3L, startedAt = 11L)
         val inTenant = h.lease(setOf(tenant), reservation = 1L, startedAt = 12L)
@@ -557,7 +557,7 @@ class LocalHeddlePersistenceTest {
         return outcomes
     }
 
-    private val departed = richBefore.runtimeChildId(listOf("tenants"), "t2")
+    private val departed = richBefore.attachedChildId(listOf("tenants"), "t2")
 
     /**
      * The rich scenario, then a second runtime child `t2` attached under `tenants`, leased, settled
@@ -568,10 +568,10 @@ class LocalHeddlePersistenceTest {
      */
     private fun richFoldedScenario(forgets: Boolean): Pair<LocalHeddle, List<Lease>> {
         val (h, open) = richScenario(forgets)
-        check(h.attachRuntimeChild(listOf("tenants"), "t2", generation = 4L).refusals.isEmpty())
+        check(h.attach(listOf("tenants"), "t2", generation = 4L).refusals.isEmpty())
         val lease = h.lease(setOf(departed), reservation = 2L, startedAt = 30L)
         check(h.complete(lease.id, 3L) is LeaseOutcome.Done)
-        check(h.detachRuntimeChild(listOf("tenants"), "t2").refusals.isEmpty())
+        check(h.detach(listOf("tenants"), "t2").refusals.isEmpty())
         val ceilingsOnly = h.apply(richCapped, generation = 5L)
         check(ceilingsOnly.applied.isEmpty() && ceilingsOnly.refusals.all { it is StepRefusal.Draining }) { "a change of ceiling alone is no step: $ceilingsOnly" }
         return h to open
@@ -640,7 +640,7 @@ class LocalHeddlePersistenceTest {
         val interactive = richBefore.groupId("acme", "interactive")
         val x = richBefore.groupId("acme", "batch", "x")
         val y = richBefore.groupId("acme", "batch", "y")
-        val t1 = richBefore.runtimeChildId(listOf("tenants"), "t1")
+        val t1 = richBefore.attachedChildId(listOf("tenants"), "t1")
         val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
         fun only(leaf: GroupId) = restored.acquire(setOf(leaf), setOf(leaf), startedAt = 0L)
         fun why(leaf: GroupId) = restored.explain(leaf, setOf(leaf), setOf(leaf))
@@ -658,7 +658,7 @@ class LocalHeddlePersistenceTest {
         val tenantWhy = why(t1)
         assertAll(
             { assertTrue("\"maxConcurrent\":3" in GOLDEN_FORMAT_2_RICH, "the ceiling is in the bytes") },
-            { assertEquals(listOf(3L, 2L, 2L), listOf(acme.maxConcurrent, acme.children.first { it.name == "interactive" }.maxConcurrent, tenants.runtimeChildren?.maxConcurrent)) },
+            { assertEquals(listOf(3L, 2L, 2L), listOf(acme.maxConcurrent, acme.children.first { it.name == "interactive" }.maxConcurrent, tenants.template?.maxConcurrent)) },
             { assertEquals(listOf(1, 1, 1), listOf(interactive, y, t1).map { leaf -> snapshot.leases.count { it.leaf == leaf } }, "the rig: the leases open in the golden") },
             { assertIs<AcquireOutcome.Acquired>(second) },
             { assertEquals(WaitExplanation.AtCeiling(richBefore.groupId("acme"), 3L), bothFull, "both full: the topmost is named") },
@@ -908,14 +908,14 @@ class LocalHeddlePersistenceTest {
             listOf(
                 Topology.Group("p", Weight.of(pWeight), listOfNotNull(Topology.Lane("a/b", Weight.of(3)), Topology.Lane("#3").takeIf { withHash3 })),
                 Topology.Group("q", Weight.ONE, listOf(Topology.Lane("c-7f3a"), Topology.Lane("é#%@", Weight.of(2)))),
-                Topology.Group("r", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.of(markerWeight))),
+                Topology.Group("r", Weight.ONE, emptyList(), template = Topology.ChildTemplate(Weight.of(markerWeight))),
             ),
         )
         val base = tree()
         val drafts = listOf(base, tree(pWeight = 3L), tree(withHash3 = false), tree(markerWeight = 2L))
         val runtime = listOf("x", "y")
         val leaves = listOf(base.groupId("p", "a/b"), base.groupId("p", "#3"), base.groupId("q", "c-7f3a"), base.groupId("q", "é#%@")) +
-            runtime.map { base.runtimeChildId(listOf("r"), it) }
+            runtime.map { base.attachedChildId(listOf("r"), it) }
         val wide = LocalPolicy(defaultReservation = 3L)
         var restores = 0
         var withLeasesOpen = 0
@@ -974,12 +974,12 @@ class LocalHeddlePersistenceTest {
                     }
                     kind == 6 -> {
                         val name = runtime[rng.nextInt(runtime.size)]
-                        shape(reference.attachRuntimeChild(listOf("r"), name, step.toLong())) to
-                            shape(subject.attachRuntimeChild(listOf("r"), name, step.toLong()))
+                        shape(reference.attach(listOf("r"), name, step.toLong())) to
+                            shape(subject.attach(listOf("r"), name, step.toLong()))
                     }
                     else -> {
                         val name = runtime[rng.nextInt(runtime.size)]
-                        shape(reference.detachRuntimeChild(listOf("r"), name)) to shape(subject.detachRuntimeChild(listOf("r"), name))
+                        shape(reference.detach(listOf("r"), name)) to shape(subject.detach(listOf("r"), name))
                     }
                 }
                 if (expected != actual) fail("seed $seed step $step (restored at $cut): $expected, but $actual")

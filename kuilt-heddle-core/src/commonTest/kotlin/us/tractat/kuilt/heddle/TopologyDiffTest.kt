@@ -173,12 +173,12 @@ class TopologyDiffTest {
             "root",
             listOf(
                 Group("acme", Weight.of(3), listOf(Lane("interactive", Weight.of(3), maxConcurrent = cap), Lane("batch")), maxConcurrent = cap),
-                Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.of(markerWeight), maxConcurrent = cap)),
+                Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.of(markerWeight), maxConcurrent = cap)),
             ),
         )
-        val tenant = tree(null).runtimeChildId(listOf("tenants"), "t1")
+        val tenant = tree(null).attachedChildId(listOf("tenants"), "t1")
         val booted = served(bootFrom(tree(null)))
-        val ledger = applyAll(tree(null).attachRuntimeChild(listOf("tenants"), "t1", booted, generation = 1), booted).ledger
+        val ledger = applyAll(tree(null).attach(listOf("tenants"), "t1", booted, generation = 1), booted).ledger
 
         assertAll(
             { assertEquals(1, ledger.liveInto(tenant).size, "the rig: a runtime child is attached") },

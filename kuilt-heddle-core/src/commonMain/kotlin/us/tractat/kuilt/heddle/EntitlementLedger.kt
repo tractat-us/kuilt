@@ -2632,7 +2632,7 @@ public class EntitlementLedger private constructor(
      *   [children], exact. Zero entries are absent.
      * @property generationTop the highest topology-grammar generation over [allEdges], retired edges
      *   included, and how many edges carry it: the floor [Topology.diff] and
-     *   [Topology.attachRuntimeChild] number new edges above, read here without a pass over every edge.
+     *   [Topology.attach] number new edges above, read here without a pass over every edge.
      */
     private class EdgeIndex(
         val children: Map<GroupId, List<AttachmentId>>,

@@ -634,7 +634,7 @@ release goes under that one bump.
 #### As built: the engine forgets
 
 `LocalHeddle` forgets automatically, with no new API, in the swap that lands
-each `apply`, `attachRuntimeChild` and `detachRuntimeChild`. That swap forgets:
+each `apply`, `attach` and `detach`. That swap forgets:
 
 - every RETIRED edge `forgetRefusal` passes and no open lease's path crosses.
   Every one, not only the edges this swap retired, so a ledger restored from a
@@ -1326,7 +1326,7 @@ val fairness = draft("pool") {
         // A ceiling: never more than two batch jobs at once, however idle the pool is.
         lane("batch", maxConcurrent = 2)
     }
-    group("tenants") { runtimeChildren() }
+    group("tenants") { template() }
 }
 ```
 
@@ -1346,9 +1346,9 @@ applied by an interpreter that holds the ledger's only writer; the contracts it 
 keep are on `TopologyStep`.
 
 Children the consumer creates while running hang under a group marked with
-`runtimeChildren`, in their own id namespace (`pool/tenants/!c-7f3a`), so a runtime
-name never collides with a declared one. `Topology.attachRuntimeChild(group, name,
-ledger, generation)` and `detachRuntimeChild(group, name, ledger)` list the steps for
+`template`, in their own id namespace (`pool/tenants/!c-7f3a`), so a runtime
+name never collides with a declared one. `Topology.attach(group, name,
+ledger, generation)` and `detach(group, name, ledger)` list the steps for
 one child, at the marker's weight, numbered by the same generation floor as the diff.
 Which runtime children exist is the ledger's to say, and the diff owns them as it owns
 declared edges: under a marker the new tree keeps, an attached child is kept, history
@@ -1389,13 +1389,13 @@ Decided in #3324, and built in three parts: declaring it (#3358), enforcing it
 (#3364) and reporting it (#3367).
 
 **Declaring it.** `maxConcurrent: Long? = null` on `Topology.Group`,
-`Topology.Lane` and `Topology.RuntimeChildren`, mirrored in `TopologyDocument`.
+`Topology.Lane` and `Topology.ChildTemplate`, mirrored in `TopologyDocument`.
 `null` means no ceiling, and nothing changes.
 
-- On `RuntimeChildren` it caps **each** attached child, not all of them together.
+- On `ChildTemplate` it caps **each** attached child, not all of them together.
 - **0 means pause:** picks stop under that node. It is not a problem.
 - A negative value is the one new `TopologyProblem.Kind`.
-- In a `draft`, `group`, `lane` and `runtimeChildren` each take it as
+- In a `draft`, `group`, `lane` and `template` each take it as
   `maxConcurrent: Long?`, so a value read from config passes straight through.
 - The ceiling lives in the engine, read from the topology last applied
   (`lastApplied`), not in the ledger. `Topology.diff` keeps an existing edge by its

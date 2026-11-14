@@ -236,7 +236,7 @@ public sealed interface LeaseOutcome {
  *
  * Start one with [fromTopology], and change the tree while it runs with [apply]: a reload is one
  * unit, a reweight moves the leases open under it onto the new edge, and a removal drains (see
- * [apply]). Runtime children come and go with [attachRuntimeChild] and [detachRuntimeChild].
+ * [apply]). Runtime children come and go with [attach] and [detach].
  *
  * ## How a pick works
  *
@@ -966,7 +966,7 @@ public class LocalHeddle private constructor(
 
     /**
      * Attach the runtime child [name] to the group at [group], read from the root down, at the
-     * weight the topology's marker on that group gives ([Topology.attachRuntimeChild]). Applied as
+     * weight the topology's marker on that group gives ([Topology.attach]). Applied as
      * one unit, like [apply]. Attaching a child that is already attached does nothing; attaching one
      * whose detach is still draining gives it a new edge and moves its draining leases onto it.
      *
@@ -974,11 +974,11 @@ public class LocalHeddle private constructor(
      *   runtime children, [name] is empty, or [generation] is negative.
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
-    public fun attachRuntimeChild(group: List<String>, name: String, generation: Long): ApplyResult =
-        atomically { run(topology().attachRuntimeChild(group, name, ledger, generation)) }
+    public fun attach(group: List<String>, name: String, generation: Long): ApplyResult =
+        atomically { run(topology().attach(group, name, ledger, generation)) }
 
     /**
-     * Detach the runtime child [name] from the group at [group] ([Topology.detachRuntimeChild]):
+     * Detach the runtime child [name] from the group at [group] ([Topology.detach]):
      * closed at once, and retired once its open leases complete, until when it is
      * [StepRefusal.Draining].
      *
@@ -986,8 +986,8 @@ public class LocalHeddle private constructor(
      *   runtime children, or [name] is empty.
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
-    public fun detachRuntimeChild(group: List<String>, name: String): ApplyResult =
-        atomically { run(topology().detachRuntimeChild(group, name, ledger)) }
+    public fun detach(group: List<String>, name: String): ApplyResult =
+        atomically { run(topology().detach(group, name, ledger)) }
 
     private fun topology(): Topology =
         checkNotNull((leasable as? Leasable.ByTopology)?.topology) { "an engine over a hand-built ledger has no topology" }

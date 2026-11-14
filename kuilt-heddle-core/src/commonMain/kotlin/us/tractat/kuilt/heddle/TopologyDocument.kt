@@ -45,13 +45,11 @@ public data class TopologyDocument(public val root: String, public val children:
     /**
      * A group of children that share its slice between them.
      *
-     * @property runtimeChildren the weight text for children the consumer creates while running,
-     *   or `null` when the group has only the [children] written here. A group with the marker may
-     *   declare no children of its own.
-     * @property maxConcurrent the group's ceiling; `null` for none.
-     * @property runtimeChildrenMaxConcurrent the ceiling on **each** runtime child, as
-     *   [Topology.RuntimeChildren.maxConcurrent]. It belongs to the [runtimeChildren] marker, and is
-     *   dropped when the group has none.
+     * @property template what each child the consumer attaches while running gets, or `null` when
+     *   the group has only the [children] written here. A group with a template may declare no
+     *   children of its own. `template: {}` attaches children at weight 1 with no ceiling.
+     * @property maxConcurrent the group's ceiling, over all its children together; `null` for none.
+     * @sample us.tractat.kuilt.heddle.sampleChildTemplateDocument
      */
     @Serializable
     @SerialName("group")
@@ -59,10 +57,22 @@ public data class TopologyDocument(public val root: String, public val children:
         override val name: String,
         override val weight: String = "1",
         public val children: List<Node> = emptyList(),
-        public val runtimeChildren: String? = null,
+        public val template: ChildTemplate? = null,
         @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
-        @IntroducedAt("0.7.5") public val runtimeChildrenMaxConcurrent: Long? = null,
     ) : Node
+
+    /**
+     * A group's template for its attached children, as written; see [Topology.ChildTemplate].
+     *
+     * @property weight each attached child's share, as text: `"3"` or `"3/2"`.
+     * @property maxConcurrent the ceiling on **each** attached child, not on all of them together;
+     *   `null` for none. The group's own [Group.maxConcurrent] caps them all together.
+     */
+    @Serializable
+    public data class ChildTemplate(
+        public val weight: String = "1",
+        public val maxConcurrent: Long? = null,
+    )
 
     /**
      * A leaf of the tree: work is charged here.

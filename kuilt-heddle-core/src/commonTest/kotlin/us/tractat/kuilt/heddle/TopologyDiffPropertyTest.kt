@@ -4,7 +4,7 @@ import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.heddle.Topology.Group
 import us.tractat.kuilt.heddle.Topology.Lane
 import us.tractat.kuilt.heddle.Topology.Node
-import us.tractat.kuilt.heddle.Topology.RuntimeChildren
+import us.tractat.kuilt.heddle.Topology.ChildTemplate
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -131,7 +131,7 @@ class TopologyDiffPropertyTest {
                 val applied = applyChecked(steps, ledger, tally, failures, "seed $seed link $link")
                 if (applied.refused.isNotEmpty()) failures += "seed $seed link $link refused ${applied.refused}"
                 ledger = applied.ledger
-                attached = attached.filter { markerAt(next, it.group) != null }
+                attached = attached.filter { templateAt(next, it.group) != null }
             }
             failures += checkConverged(seed, history.last(), ledger, emptyList(), attached)
             loops++
@@ -192,7 +192,7 @@ class TopologyDiffPropertyTest {
                 refusals += applied.refused.size
                 moved += applied.reconciled.size
                 ledger = applied.ledger
-                attached = attached.filter { markerAt(target, it.group) != null }
+                attached = attached.filter { templateAt(target, it.group) != null }
                 if (r.nextBoolean()) ledger = drainAll(ledger)
             }
             // Drained, one diff finishes the job: nothing is refused and nothing is left over.
@@ -236,8 +236,8 @@ class TopologyDiffPropertyTest {
     ): List<String> = buildList {
         if (refused.isNotEmpty()) add("seed $seed refused $refused")
         val runtime = attached.mapNotNull { a ->
-            val marker = markerAt(target, a.group) ?: return@mapNotNull null
-            ActiveTriple(target.groupId(*a.group.toTypedArray()), target.runtimeChildId(a.group, a.name), marker.weight)
+            val marker = templateAt(target, a.group) ?: return@mapNotNull null
+            ActiveTriple(target.groupId(*a.group.toTypedArray()), target.attachedChildId(a.group, a.name), marker.weight)
         }
         val expected = (bootFrom(target).activeTriples() + runtime).sortedWith(compareBy<ActiveTriple> { it.child }.thenBy { it.parent })
         val actual = ledger.activeTriples()
@@ -360,7 +360,7 @@ class TopologyDiffPropertyTest {
         traffic: Boolean = false,
         checkFresh: (List<TopologyStep>, EntitlementLedger, String) -> Unit = { _, _, _ -> },
     ): Churned {
-        val marked = groupPaths(t.children, emptyList()).filter { markerAt(t, it) != null }
+        val marked = groupPaths(t.children, emptyList()).filter { templateAt(t, it) != null }
         if (marked.isEmpty()) return Churned(ledger, attached)
         var current = ledger
         val now = attached.toMutableList()
@@ -370,13 +370,13 @@ class TopologyDiffPropertyTest {
             if (detach) {
                 val gone = now.removeAt(r.nextInt(now.size))
                 tally.detached += gone
-                ask = { l -> t.detachRuntimeChild(gone.group, gone.name, l) }
+                ask = { l -> t.detach(gone.group, gone.name, l) }
             } else {
                 val child = Attached(marked[r.nextInt(marked.size)], runtimeNames[r.nextInt(runtimeNames.size)])
                 if (child in tally.detached && child !in now) tally.reattaches++
                 if (child !in now) now += child
                 val generation = r.nextLong(0, 3)
-                ask = { l -> t.attachRuntimeChild(child.group, child.name, l, generation) }
+                ask = { l -> t.attach(child.group, child.name, l, generation) }
                 tally.attaches++
             }
             val steps = ask(current)
@@ -403,11 +403,11 @@ class TopologyDiffPropertyTest {
         where: String,
     ) {
         for (child in attached) {
-            if (markerAt(t, child.group) == null) continue
-            val id = t.runtimeChildId(child.group, child.name)
+            if (templateAt(t, child.group) == null) continue
+            val id = t.attachedChildId(child.group, child.name)
             val prepared = ledger.allEdges().any { ledger.record(it)?.child == id && ledger.lifecycle(it) == Lifecycle.PREPARED }
             if (!prepared) continue
-            val ask = { l: EntitlementLedger -> t.detachRuntimeChild(child.group, child.name, l) }
+            val ask = { l: EntitlementLedger -> t.detach(child.group, child.name, l) }
             val detach = ask(ledger)
             checkPrefixes(detach, ledger, ask, tally, failures, "$where detach $child")
             applyChecked(detach, ledger, tally, failures, "$where detach $child")
@@ -448,14 +448,14 @@ class TopologyDiffPropertyTest {
         return applied
     }
 
-    private fun markerAt(t: Topology, path: List<String>): RuntimeChildren? {
+    private fun templateAt(t: Topology, path: List<String>): ChildTemplate? {
         var nodes = t.children
         var node: Node? = null
         for (name in path) {
             node = nodes.firstOrNull { it.name == name } ?: return null
             nodes = (node as? Group)?.children.orEmpty()
         }
-        return (node as? Group)?.runtimeChildren
+        return (node as? Group)?.template
     }
 
     private fun groupPaths(nodes: List<Node>, prefix: List<String>): List<List<String>> =
@@ -473,13 +473,13 @@ class TopologyDiffPropertyTest {
     private fun randomNode(r: Random, name: String, depth: Int): Node {
         val weight = Weight.of(1L + r.nextInt(4))
         return if (depth < 3 && r.nextInt(3) == 0) {
-            Group(name, weight, randomChildren(r, depth + 1), runtimeChildren = randomMarker(r))
+            Group(name, weight, randomChildren(r, depth + 1), template = randomMarker(r))
         } else {
             Lane(name, weight)
         }
     }
 
-    private fun randomMarker(r: Random): RuntimeChildren? = if (r.nextBoolean()) RuntimeChildren(Weight.of(1L + r.nextInt(3))) else null
+    private fun randomMarker(r: Random): ChildTemplate? = if (r.nextBoolean()) ChildTemplate(Weight.of(1L + r.nextInt(3))) else null
 
     /** One to three edits: a reweight, removal, addition, lane-to-group, group-to-lane, marker change or a fresh tree. */
     private fun mutate(t: Topology, r: Random): Topology {
@@ -510,9 +510,9 @@ class TopologyDiffPropertyTest {
             3 -> if (node is Lane && path.size < 3) t.update(path) { Group(it.name, it.weight, listOf(Lane(names[r.nextInt(names.size)]))) } else t
             4 -> if (node is Group) t.update(path) { Lane(it.name, it.weight) } else t
             // Mark or unmark the group, or reweight its runtime children.
-            5 -> if (node is Group) t.update(path) { (it as Group).copy(runtimeChildren = if (it.runtimeChildren == null) randomMarker(r) else null) } else t
-            6 -> if (node is Group && node.runtimeChildren != null) {
-                t.update(path) { (it as Group).copy(runtimeChildren = RuntimeChildren(Weight.of(node.runtimeChildren.weight.numerator % 3 + 1))) }
+            5 -> if (node is Group) t.update(path) { (it as Group).copy(template = if (it.template == null) randomMarker(r) else null) } else t
+            6 -> if (node is Group && node.template != null) {
+                t.update(path) { (it as Group).copy(template = ChildTemplate(Weight.of(node.template.weight.numerator % 3 + 1))) }
             } else {
                 t
             }
@@ -557,7 +557,7 @@ class TopologyDiffPropertyTest {
      */
     private fun traffic(ledger: EntitlementLedger, t: Topology, attached: List<Attached>, r: Random, tally: Tally): EntitlementLedger {
         var current = ledger
-        val runtime = attached.map { t.runtimeChildId(it.group, it.name) }
+        val runtime = attached.map { t.attachedChildId(it.group, it.name) }
         val lanes = nodePaths(t.children, emptyList())
             .filter { nodeAt(t.children, it) is Lane }
             .map { t.groupId(*it.toTypedArray()) } + runtime

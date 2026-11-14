@@ -4,7 +4,7 @@ import kotlinx.serialization.json.Json
 import us.tractat.kuilt.heddle.Topology.Group
 import us.tractat.kuilt.heddle.Topology.Lane
 import us.tractat.kuilt.heddle.Topology.Node
-import us.tractat.kuilt.heddle.Topology.RuntimeChildren
+import us.tractat.kuilt.heddle.Topology.ChildTemplate
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -119,7 +119,7 @@ class LocalHeddleApplyPropertyTest {
         /** Every group a lease may end at, by the test's own reading of the topology: lanes and attached runtime children. */
         fun declared(): List<GroupId> =
             lanePaths(topology.children, emptyList()).map { topology.groupId(*it.toTypedArray()) } +
-                attached.map { (g, n) -> topology.runtimeChildId(g, n) }
+                attached.map { (g, n) -> topology.attachedChildId(g, n) }
 
         /** Every group of the tree, declared or not, and every runtime child attached: what `explain` is asked about. */
         fun everyGroup(): List<GroupId> =
@@ -127,12 +127,12 @@ class LocalHeddleApplyPropertyTest {
 
         /** One to three attaches or detaches under the marked groups, through the engine. */
         fun churn(r: Random, tally: Tally) {
-            val marked = groupPaths(topology.children, emptyList()).filter { markerAt(topology, it) != null }
+            val marked = groupPaths(topology.children, emptyList()).filter { templateAt(topology, it) != null }
             if (marked.isEmpty()) return
             repeat(1 + r.nextInt(3)) {
                 if (attached.isNotEmpty() && r.nextInt(3) == 0) {
                     val (g, n) = attached.removeAt(r.nextInt(attached.size))
-                    h.detachRuntimeChild(g, n)
+                    h.detach(g, n)
                     // Half the time it comes straight back: with a lease open there, mid-drain.
                     if (r.nextBoolean()) attach(g to n, r)
                 } else {
@@ -144,7 +144,7 @@ class LocalHeddleApplyPropertyTest {
 
         private fun attach(child: Pair<List<String>, String>, r: Random) {
             val before = h.snapshot().ledger
-            val result = h.attachRuntimeChild(child.first, child.second, generation = r.nextLong(0, 3))
+            val result = h.attach(child.first, child.second, generation = r.nextLong(0, 3))
             countReaddsMidDrain(before, result)
             if (child !in attached) attached += child
         }
@@ -168,7 +168,7 @@ class LocalHeddleApplyPropertyTest {
 
         /** Open up to [n] leases at random declared leaves, one acquire each. */
         fun openLeases(r: Random, n: Int) = repeat(n) {
-            val runtime = attached.map { (g, name) -> topology.runtimeChildId(g, name) }
+            val runtime = attached.map { (g, name) -> topology.attachedChildId(g, name) }
             // Half the leases go to a runtime child when one is attached, so its re-homes are reached.
             val leaves = if (runtime.isNotEmpty() && r.nextBoolean()) runtime else declared()
             // A tree of marked groups with nothing attached yet declares no leaf at all.
@@ -197,7 +197,7 @@ class LocalHeddleApplyPropertyTest {
             val expectedToWait = replacementsThatMustWait(Topology.diff(to, before.ledger, generation), before)
             val result = h.apply(to, generation)
             topology = to
-            attached.retainAll { (g, _) -> markerAt(to, g) != null }
+            attached.retainAll { (g, _) -> templateAt(to, g) != null }
             val after = h.snapshot()
             for (lease in after.leases) {
                 if (h.capturedPath(lease.id) == paths[lease.id]) continue
@@ -304,7 +304,7 @@ class LocalHeddleApplyPropertyTest {
         fun checkConverged(at: String) {
             val l = h.snapshot().ledger
             val runtime = attached.map { (g, n) ->
-                ActiveTriple(topology.groupId(*g.toTypedArray()), topology.runtimeChildId(g, n), checkNotNull(markerAt(topology, g)).weight)
+                ActiveTriple(topology.groupId(*g.toTypedArray()), topology.attachedChildId(g, n), checkNotNull(templateAt(topology, g)).weight)
             }
             val expected = (bootFrom(topology).activeTriples() + runtime).sortedWith(compareBy<ActiveTriple> { it.child }.thenBy { it.parent })
             if (l.activeTriples() != expected) fail("active ${l.activeTriples()} != $expected at $at")
@@ -343,8 +343,8 @@ class LocalHeddleApplyPropertyTest {
         return if (depth < 3 && r.nextInt(3) == 0) {
             // A quarter of the groups are marked and declare nothing: a leaf the ledger cannot tell
             // from a lane until a runtime child attaches, which is what the leasable predicate decides.
-            if (r.nextInt(4) == 0) return Group(name, weight, emptyList(), runtimeChildren = RuntimeChildren(Weight.of(1L + r.nextInt(3))))
-            Group(name, weight, randomChildren(r, depth + 1), runtimeChildren = if (r.nextBoolean()) RuntimeChildren(Weight.of(1L + r.nextInt(3))) else null)
+            if (r.nextInt(4) == 0) return Group(name, weight, emptyList(), template = ChildTemplate(Weight.of(1L + r.nextInt(3))))
+            Group(name, weight, randomChildren(r, depth + 1), template = if (r.nextBoolean()) ChildTemplate(Weight.of(1L + r.nextInt(3))) else null)
         } else {
             Lane(name, weight)
         }
@@ -364,7 +364,7 @@ class LocalHeddleApplyPropertyTest {
         return when (r.nextInt(8)) {
             0, 1, 2 -> t.update(path) { it.withWeight(Weight.of(it.weight.numerator % 4 + 1)) }
             // A marked group may lose its last declared child; any other group keeps one.
-            3 -> if (siblingsOf(t, path).size > 1 || (path.size > 1 && markerAt(t, path.dropLast(1)) != null)) t.update(path) { null } else t
+            3 -> if (siblingsOf(t, path).size > 1 || (path.size > 1 && templateAt(t, path.dropLast(1)) != null)) t.update(path) { null } else t
             4 -> {
                 val parent = if (node is Group) path else path.dropLast(1)
                 val taken = (if (parent.isEmpty()) t.children else (nodeAt(t.children, parent) as Group).children).map { it.name }
@@ -380,7 +380,7 @@ class LocalHeddleApplyPropertyTest {
             6 -> if (node is Group) t.update(path) { Lane(it.name, it.weight) } else t
             else -> if (node is Group) {
                 // Unmarking a group that declares nothing would leave it empty, so it stays marked.
-                t.update(path) { (it as Group).copy(runtimeChildren = if (it.runtimeChildren == null || it.children.isEmpty()) RuntimeChildren(Weight.ONE) else null) }
+                t.update(path) { (it as Group).copy(template = if (it.template == null || it.children.isEmpty()) ChildTemplate(Weight.ONE) else null) }
             } else {
                 t
             }
@@ -409,14 +409,14 @@ class LocalHeddleApplyPropertyTest {
     private fun siblingsOf(t: Topology, path: List<String>): List<Node> =
         if (path.size == 1) t.children else (nodeAt(t.children, path.dropLast(1)) as Group).children
 
-    private fun markerAt(t: Topology, path: List<String>): RuntimeChildren? {
+    private fun templateAt(t: Topology, path: List<String>): ChildTemplate? {
         var nodes = t.children
         var node: Node? = null
         for (name in path) {
             node = nodes.firstOrNull { it.name == name } ?: return null
             nodes = (node as? Group)?.children.orEmpty()
         }
-        return (node as? Group)?.runtimeChildren
+        return (node as? Group)?.template
     }
 
     private fun Topology.update(path: List<String>, f: (Node) -> Node?): Topology = Topology(root, children.update(path, f))

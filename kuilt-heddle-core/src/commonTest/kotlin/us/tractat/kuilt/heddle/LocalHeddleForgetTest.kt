@@ -17,7 +17,7 @@ class LocalHeddleForgetTest {
     private val tree = Topology(
         "root",
         listOf(
-            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
+            Topology.Group("tenants", Weight.ONE, emptyList(), template = Topology.ChildTemplate(Weight.ONE)),
             Topology.Lane("steady"),
         ),
     )
@@ -30,10 +30,10 @@ class LocalHeddleForgetTest {
 
     /** Attach `u[i]`, serve one lease there, settle it, and detach it: one user arriving and leaving. */
     private fun LocalHeddle.cycle(i: Int) {
-        check(attachRuntimeChild(tenants, "u$i", generation = 0L).refusals.isEmpty()) { "attach u$i" }
-        val lease = lease(setOf(tree.runtimeChildId(tenants, "u$i")), reservation = 2L, startedAt = i.toLong())
+        check(attach(tenants, "u$i", generation = 0L).refusals.isEmpty()) { "attach u$i" }
+        val lease = lease(setOf(tree.attachedChildId(tenants, "u$i")), reservation = 2L, startedAt = i.toLong())
         check(complete(lease.id, 1L + i % 3) is LeaseOutcome.Done) { "complete u$i" }
-        check(detachRuntimeChild(tenants, "u$i").refusals.isEmpty()) { "detach u$i" }
+        check(detach(tenants, "u$i").refusals.isEmpty()) { "detach u$i" }
     }
 
     /**
@@ -58,7 +58,7 @@ class LocalHeddleForgetTest {
     private fun reloaded(marker: Long, steady: Long): Topology = Topology(
         "root",
         listOf(
-            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.of(marker))),
+            Topology.Group("tenants", Weight.ONE, emptyList(), template = Topology.ChildTemplate(Weight.of(marker))),
             Topology.Lane("steady", Weight.of(steady)),
         ),
     )
@@ -71,12 +71,12 @@ class LocalHeddleForgetTest {
         return when (r.nextInt(12)) {
             0, 1 -> names[r.nextInt(names.size)].let { n ->
                 if (n !in attached) attached += n
-                h.attachRuntimeChild(tenants, n, generation = r.nextLong(0L, 3L))
+                h.attach(tenants, n, generation = r.nextLong(0L, 3L))
             }
-            2, 3 -> if (attached.isEmpty()) "idle" else h.detachRuntimeChild(tenants, attached.removeAt(r.nextInt(attached.size)))
+            2, 3 -> if (attached.isEmpty()) "idle" else h.detach(tenants, attached.removeAt(r.nextInt(attached.size)))
             4 -> h.apply(reloaded(marker = 1L + r.nextInt(2), steady = 1L + r.nextInt(2)), generation = r.nextLong(0L, 3L))
             5, 6, 7 -> {
-                val all = (attached.sorted().map { tree.runtimeChildId(tenants, it) } + tree.groupId("steady")).toSet()
+                val all = (attached.sorted().map { tree.attachedChildId(tenants, it) } + tree.groupId("steady")).toSet()
                 h.acquire(all, all.filterTo(LinkedHashSet()) { r.nextBoolean() }.ifEmpty { all }, at, 1L + r.nextInt(3))
             }
             8 -> if (open.isEmpty()) "idle" else h.extend(open[r.nextInt(open.size)].id, 1L + r.nextInt(2))
@@ -162,7 +162,7 @@ class LocalHeddleForgetTest {
         val kept = writer.persist()
         val h = LocalHeddle.restore(kept, policy, epoch = 1L)
         val before = h.snapshot().ledger
-        check(h.attachRuntimeChild(tenants, "late", generation = 0L).refusals.isEmpty())
+        check(h.attach(tenants, "late", generation = 0L).refusals.isEmpty())
         val after = h.snapshot()
         val retired = before.allEdges().filter { before.lifecycle(it) == Lifecycle.RETIRED }
         assertAll(
@@ -189,7 +189,7 @@ class LocalHeddleForgetTest {
         val stale = AttachmentRecord(attachmentIdOf(steady, Weight.of(2), 5L), tree.groupId(), steady, Weight.of(2))
         h.reshapeForTest { l -> l.piece(checkNotNull(l.prepare(stale)).delta) }
         val before = h.snapshot().ledger
-        check(h.attachRuntimeChild(tenants, "u", generation = 0L).refusals.isEmpty())
+        check(h.attach(tenants, "u", generation = 0L).refusals.isEmpty())
         val after = h.snapshot().ledger
         val reweighted = Topology("root", listOf(tree.children[0], Topology.Lane("steady", Weight.of(2))))
         val reload = h.apply(reweighted, generation = 0L)
@@ -210,7 +210,7 @@ class LocalHeddleForgetTest {
 
     /** Put a prepared edge into the runtime child [name] at [weight] and [generation], as a snapshot could carry one. */
     private fun LocalHeddle.prepareRuntime(name: String, weight: Long, generation: Long): AttachmentId {
-        val child = tree.runtimeChildId(tenants, name)
+        val child = tree.attachedChildId(tenants, name)
         val record = AttachmentRecord(attachmentIdOf(child, Weight.of(weight), generation), tree.groupId("tenants"), child, Weight.of(weight))
         reshapeForTest { l -> l.piece(checkNotNull(l.prepare(record)).delta) }
         return record.id
@@ -228,16 +228,16 @@ class LocalHeddleForgetTest {
         val h = engine()
         val u = h.prepareRuntime("u", weight = 1L, generation = 5L)
         val w = h.prepareRuntime("w", weight = 2L, generation = 6L)
-        check(h.attachRuntimeChild(tenants, "v", generation = 0L).refusals.isEmpty())
+        check(h.attach(tenants, "v", generation = 0L).refusals.isEmpty())
         val kept = h.snapshot().ledger
         val reload = h.apply(tree, generation = 0L)
         val after = h.snapshot().ledger
-        val wChild = tree.runtimeChildId(tenants, "w")
+        val wChild = tree.attachedChildId(tenants, "w")
         assertAll(
             { assertEquals(Lifecycle.PREPARED, kept.lifecycle(u), "the attach of v kept u's adoptable edge") },
             { assertEquals(Lifecycle.PREPARED, kept.lifecycle(w), "and w's, its only one") },
             { assertTrue(reload.refusals.isEmpty(), "the reload lands: $reload") },
-            { assertEquals(u, after.lineageOf(tree.runtimeChildId(tenants, "u"))?.last(), "u is attached on the edge it had") },
+            { assertEquals(u, after.lineageOf(tree.attachedChildId(tenants, "u"))?.last(), "u is attached on the edge it had") },
             {
                 val lineage = after.lineageOf(wChild).orEmpty()
                 assertTrue(lineage.isNotEmpty() && after.record(lineage.last())?.weight == Weight.ONE, "w is attached at the marker's weight: $lineage")
@@ -257,7 +257,7 @@ class LocalHeddleForgetTest {
         val old = h.prepareRuntime("u", weight = 1L, generation = 5L)
         val reload = h.apply(reloaded(marker = 2L, steady = 1L), generation = 0L)
         val after = h.snapshot().ledger
-        val lineage = after.lineageOf(tree.runtimeChildId(tenants, "u")).orEmpty()
+        val lineage = after.lineageOf(tree.attachedChildId(tenants, "u")).orEmpty()
         assertAll(
             { assertTrue(reload.refusals.isEmpty(), "the reload lands: $reload") },
             { assertTrue(lineage.isNotEmpty() && after.record(lineage.last())?.weight == Weight.of(2), "the rig: u is attached at weight 2: $lineage") },
@@ -275,10 +275,10 @@ class LocalHeddleForgetTest {
     @Test
     fun forgettingComposesWithARebase() {
         val users = listOf("u0", "u1", "u2")
-        val ids = users.map { tree.runtimeChildId(tenants, it) }
+        val ids = users.map { tree.attachedChildId(tenants, it) }
         fun twin(forgets: Boolean) = engine().also { h ->
             h.forgetsForTest = forgets
-            users.forEach { check(h.attachRuntimeChild(tenants, it, generation = 0L).refusals.isEmpty()) }
+            users.forEach { check(h.attach(tenants, it, generation = 0L).refusals.isEmpty()) }
             ids.forEach { check(h.complete(h.lease(setOf(it), reservation = 1L).id, 1L) is LeaseOutcome.Done) }
             val edge = checkNotNull(h.snapshot().ledger.lineageOf(ids[0])).last()
             val target = 2 * (positionCeiling(Weight.ONE) / 16)
@@ -296,8 +296,8 @@ class LocalHeddleForgetTest {
         val reference = twin(forgets = false)
         val departed = checkNotNull(subject.snapshot().ledger.lineageOf(ids[2])).last()
         val rememberedBefore = departed in subject.snapshot().allocatorMemory.demandingObserved
-        check(subject.detachRuntimeChild(tenants, "u2").refusals.isEmpty())
-        check(reference.detachRuntimeChild(tenants, "u2").refusals.isEmpty())
+        check(subject.detach(tenants, "u2").refusals.isEmpty())
+        check(reference.detach(tenants, "u2").refusals.isEmpty())
         val after = subject.snapshot()
         val picks = (0 until 40).map { i ->
             listOf(subject, reference).map { h ->

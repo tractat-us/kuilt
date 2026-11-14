@@ -46,14 +46,14 @@ class TopologyDraftTest {
                 lane("batch", maxConcurrent = 0L)
                 lane("interactive")
             }
-            group("tenants") { runtimeChildren(Weight.of(2), maxConcurrent = 1L) }
+            group("tenants") { template(Weight.of(2), maxConcurrent = 1L) }
         }
 
         val handBuilt = Topology(
             "root",
             listOf(
                 Topology.Group("acme", Weight.ONE, listOf(Topology.Lane("batch", maxConcurrent = 0L), Topology.Lane("interactive")), maxConcurrent = 3L),
-                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.of(2), maxConcurrent = 1L)),
+                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.of(2), maxConcurrent = 1L)),
             ),
         )
 
@@ -66,11 +66,11 @@ class TopologyDraftTest {
         val none: Long? = null
         val drafted = draft("root") {
             group("acme", maxConcurrent = none) { lane("batch", maxConcurrent = none) }
-            group("tenants") { runtimeChildren(maxConcurrent = none) }
+            group("tenants") { template(maxConcurrent = none) }
         }
         val plain = draft("root") {
             group("acme") { lane("batch") }
-            group("tenants") { runtimeChildren() }
+            group("tenants") { template() }
         }
         assertEquals(plain, drafted)
     }
@@ -79,18 +79,18 @@ class TopologyDraftTest {
     fun runtimeChildrenMarkTheGroupTheyAreDeclaredIn() {
         val drafted = draft("pool") {
             group("tenants", Weight.of(3, 2)) {
-                runtimeChildren(Weight.of(2))
-                group("inner") { runtimeChildren() }
+                template(Weight.of(2))
+                group("inner") { template() }
             }
         }
 
         val tenants = assertIs<Topology.Group>(drafted.children.single())
         assertAll(
             { assertEquals(Weight.of(3, 2), tenants.weight) },
-            { assertEquals(Topology.RuntimeChildren(Weight.of(2)), tenants.runtimeChildren) },
+            { assertEquals(Topology.ChildTemplate(Weight.of(2)), tenants.template) },
             {
                 val inner = assertIs<Topology.Group>(tenants.children.single())
-                assertEquals(Topology.RuntimeChildren(Weight.ONE), inner.runtimeChildren)
+                assertEquals(Topology.ChildTemplate(Weight.ONE), inner.template)
             },
         )
     }
@@ -150,8 +150,8 @@ class TopologyDraftTest {
         val thrown = assertFailsWith<IllegalStateException> {
             draft("root") {
                 group("tenants") {
-                    runtimeChildren(Weight.of(2))
-                    runtimeChildren(Weight.of(3))
+                    template(Weight.of(2))
+                    template(Weight.of(3))
                 }
             }
         }

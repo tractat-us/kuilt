@@ -52,7 +52,7 @@ The rest of the surface, by what you would ask it:
   charges nothing, and `admit` charges work that started without a pick.
 - **The tree changes.** `apply` takes a whole new `Topology` and returns an
   `ApplyResult`, whose `StepRefusal`s name what is still draining.
-  `attachRuntimeChild` and `detachRuntimeChild` add and remove children the
+  `attach` and `detach` add and remove children the
   program names as it runs.
 - **Something crashed.** `reconcileLeases` compares the open leases with the work
   still running and reports a `LeaseReconciliation`.

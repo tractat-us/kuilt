@@ -21,7 +21,7 @@ internal sealed interface Leasable {
     /**
      * The most leases that may be open beneath [group] at once, or `null` for no ceiling: its
      * node's [Topology.Node.maxConcurrent], or for a runtime child, its group's
-     * [Topology.RuntimeChildren.maxConcurrent], which caps each child on its own.
+     * [Topology.ChildTemplate.maxConcurrent], which caps each child on its own.
      */
     fun ceilingOf(group: GroupId): Long?
 
@@ -51,7 +51,7 @@ internal sealed interface Leasable {
                     when (node) {
                         is Topology.Lane -> lanes += GroupId(id)
                         is Topology.Group -> {
-                            node.runtimeChildren?.let { marker ->
+                            node.template?.let { marker ->
                                 marked += GroupId(id)
                                 marker.maxConcurrent?.let { runtimeCeilings[GroupId(id)] = it }
                             }

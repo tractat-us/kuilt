@@ -77,7 +77,7 @@ class TopologyTest {
             root = "",
             children = listOf(
                 TopologyDocument.Group("acme", "3", children = listOf(lane("batch"), lane("batch"), lane(""))),
-                TopologyDocument.Group("idle", runtimeChildren = "0"),
+                TopologyDocument.Group("idle", template = "0"),
                 TopologyDocument.Group("empty"),
                 lane("x", weight = "0"),
                 TopologyDocument.Lane("capped", maxConcurrent = -1L),
@@ -105,7 +105,7 @@ class TopologyTest {
         }
         val rejected = listOf("0", "-1", "x", "1/0", "", "3/", "/2", "1/2/3", " 3", "+3", "99999999999999999999")
         val markerProblems = invalid(
-            TopologyDocument("root", listOf(TopologyDocument.Group("tenants", runtimeChildren = "0"))),
+            TopologyDocument("root", listOf(TopologyDocument.Group("tenants", template = "0"))),
         )
 
         assertAll(
@@ -136,7 +136,7 @@ class TopologyTest {
                     "3",
                     children = listOf(lane("interactive", "3/2"), lane("batch")),
                 ),
-                TopologyDocument.Group("tenants", runtimeChildren = "2"),
+                TopologyDocument.Group("tenants", template = "2"),
                 lane("hobby"),
             ),
         )
@@ -148,7 +148,7 @@ class TopologyTest {
                     Weight.of(3),
                     children = listOf(Topology.Lane("interactive", Weight.of(3, 2)), Topology.Lane("batch")),
                 ),
-                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.of(2))),
+                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.of(2))),
                 Topology.Lane("hobby", Weight.ONE),
             ),
         )
@@ -194,7 +194,7 @@ class TopologyTest {
                     Weight.of(3),
                     children = listOf(Topology.Lane("é#%@", Weight.of(3, 2)), Topology.Lane("a/b")),
                 ),
-                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.of(2))),
+                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.of(2))),
             ),
         )
 
@@ -248,12 +248,12 @@ class TopologyTest {
 
     @Test
     fun acceptsAMarkedGroupWithNoDeclaredChildren() {
-        val marked = Topology.Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.of(2)))
+        val marked = Topology.Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.of(2)))
 
         assertAll(
             { assertEquals(listOf(marked), Topology("root", listOf(marked)).children) },
             {
-                val document = TopologyDocument("root", listOf(TopologyDocument.Group("tenants", runtimeChildren = "2")))
+                val document = TopologyDocument("root", listOf(TopologyDocument.Group("tenants", template = "2")))
                 assertEquals(TopologyParse.Valid(Topology("root", listOf(marked))), Topology.from(document))
             },
         )
@@ -315,14 +315,14 @@ class TopologyTest {
             "root",
             listOf(
                 TopologyDocument.Group("acme", children = listOf(TopologyDocument.Lane("batch", maxConcurrent = cap)), maxConcurrent = cap),
-                TopologyDocument.Group("tenants", runtimeChildren = "1", runtimeChildrenMaxConcurrent = cap),
+                TopologyDocument.Group("tenants", template = "1", runtimeChildrenMaxConcurrent = cap),
             ),
         )
         fun built(cap: Long) = Topology(
             "root",
             listOf(
                 Topology.Group("acme", Weight.ONE, listOf(Topology.Lane("batch", maxConcurrent = cap)), maxConcurrent = cap),
-                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.ONE, maxConcurrent = cap)),
+                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.ONE, maxConcurrent = cap)),
             ),
         )
         val negative = listOf(
@@ -343,7 +343,7 @@ class TopologyTest {
 
     /**
      * A runtime-children ceiling belongs to the marker: a document group with a ceiling but no
-     * `runtimeChildren` drops it, and the topology built is the same as one without it.
+     * `template` drops it, and the topology built is the same as one without it.
      */
     @Test
     fun aRuntimeChildrenCeilingWithoutAMarkerIsDropped() {
@@ -355,7 +355,7 @@ class TopologyTest {
 
         assertAll(
             { assertEquals(Topology.from(document(null)), parsed) },
-            { assertEquals(null, ((parsed as TopologyParse.Valid).topology.children.single() as Topology.Group).runtimeChildren) },
+            { assertEquals(null, ((parsed as TopologyParse.Valid).topology.children.single() as Topology.Group).template) },
         )
     }
 
@@ -366,17 +366,17 @@ class TopologyTest {
             "root",
             listOf(
                 Topology.Group("acme", Weight.ONE, listOf(Topology.Lane("batch", maxConcurrent = 2L)), maxConcurrent = 3L),
-                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.ONE, maxConcurrent = 0L)),
+                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.ONE, maxConcurrent = 0L)),
             ),
         )
         val document = TopologyDocument(
             "root",
             listOf(
                 TopologyDocument.Group("acme", children = listOf(TopologyDocument.Lane("batch", maxConcurrent = 2L)), maxConcurrent = 3L),
-                TopologyDocument.Group("tenants", runtimeChildren = "1", runtimeChildrenMaxConcurrent = 0L),
+                TopologyDocument.Group("tenants", template = "1", runtimeChildrenMaxConcurrent = 0L),
             ),
         )
-        val uncapped = Topology("root", listOf(Topology.Group("tenants", Weight.ONE, listOf(Topology.Lane("a")), Topology.RuntimeChildren(Weight.ONE))))
+        val uncapped = Topology("root", listOf(Topology.Group("tenants", Weight.ONE, listOf(Topology.Lane("a")), Topology.ChildTemplate(Weight.ONE))))
         val encoded = json.encodeToString(Topology.serializer(), capped)
 
         assertAll(
@@ -400,12 +400,12 @@ class TopologyTest {
         fun Topology.Node.ceilings(): List<Long?> = when (this) {
             is Topology.Lane -> listOf(maxConcurrent)
             is Topology.Group ->
-                listOf(maxConcurrent) + listOfNotNull(runtimeChildren).map { it.maxConcurrent } + children.flatMap { it.ceilings() }
+                listOf(maxConcurrent) + listOfNotNull(template).map { it.maxConcurrent } + children.flatMap { it.ceilings() }
         }
         val ceilings = lastApplied.children.flatMap { it.ceilings() }
 
         assertAll(
-            { assertTrue(lastApplied.children.any { it is Topology.Group && it.runtimeChildren != null }, "the rig: a marked group") },
+            { assertTrue(lastApplied.children.any { it is Topology.Group && it.template != null }, "the rig: a marked group") },
             { assertEquals(7, ceilings.size, "the rig: three groups, three lanes and a marker were walked: $ceilings") },
             { ceilings.forEach { assertNull(it) } },
         )

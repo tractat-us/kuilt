@@ -29,14 +29,14 @@ class LocalHeddleViewTest {
                 listOf(Topology.Group("batch", Weight.ONE, listOf(Topology.Lane("x"), Topology.Lane("y", Weight.of(2)))), Topology.Lane("interactive")),
             ),
             Topology.Lane("solo"),
-            Topology.Group("pool", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
-            Topology.Group("tenants", Weight.of(1, 2), emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
+            Topology.Group("pool", Weight.ONE, emptyList(), template = Topology.ChildTemplate(Weight.ONE)),
+            Topology.Group("tenants", Weight.of(1, 2), emptyList(), template = Topology.ChildTemplate(Weight.ONE)),
         ),
     )
 
     private val before = tree(Weight.of(3, 2))
     private val after = tree(Weight.of(5, 2))
-    private val tenant = before.runtimeChildId(listOf("tenants"), "t1")
+    private val tenant = before.attachedChildId(listOf("tenants"), "t1")
     private val leaves = listOf(before.groupId("acme", "batch", "x"), before.groupId("acme", "batch", "y"), before.groupId("acme", "interactive"), before.groupId("solo"), tenant)
 
     /** What a caller may name as waiting: every leaf, plus `pool`, a leaf that is no lane, and `acme`, a group with active children. */
@@ -113,7 +113,7 @@ class LocalHeddleViewTest {
     private fun history(seed: Int, policy: LocalPolicy): LocalHeddle {
         val rng = Random(seed)
         val h = LocalHeddle.fromTopology(before, policy, epoch = rng.nextLong(0L, 5L))
-        check(h.attachRuntimeChild(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
+        check(h.attach(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
         if (seed % 2 == 0) h.reconcileCapacity(1L + rng.nextInt(4)) else h.mintSupply(30L + rng.nextInt(60))
         repeat(STEPS) { step ->
             if (seed % 3 == 0 && step == STEPS / 2) h.apply(after, generation = 2L)

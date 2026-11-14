@@ -125,7 +125,7 @@ These override the task sections below where they differ.
 
 11. **What L3 settled, and the shapes P and #3238 bring** (from #3249's spec review, #3247 and #3248, 2026-11-13). These override the task sections and Amendments 6, 9 and 10 where they differ.
    - **One leasable predicate.** A group is leasable when it `isLeaf` and the last applied `Topology` declares it: a Lane, or a runtime child of a marked group, attached through an ACTIVE lineage. A group that is not leasable answers `NoLiveLineage(at)`. No `Kind` arm is added.
-   - **Boot is an `apply`.** `fromTopology` applies onto an empty ledger at generation 0, and `fresh` is removed. `attachRuntimeChild` and `detachRuntimeChild` are the engine entry points for Task 5's lists. The engine needs its last applied topology, so P's `lastApplied` is a **non-null** `Topology`. Only the internal, test-only `over` builds an engine without one.
+   - **Boot is an `apply`.** `fromTopology` applies onto an empty ledger at generation 0, and `fresh` is removed. `attach` and `detach` are the engine entry points for Task 5's lists. The engine needs its last applied topology, so P's `lastApplied` is a **non-null** `Topology`. Only the internal, test-only `over` builds an engine without one.
    - **One swap, with refusals per child (the leave-out model).** A child that is left out drops all of its steps and blocks its ancestors' retires. A draining removal keeps its steps up to the retire that was refused. `TopologyStep`'s KDoc says so.
    - **A replacement is a child whose list both retires one edge and activates another**: a reweight, a new weight on a runtime marker, or a re-add mid-drain, whether declared or runtime. Its open leases move, draining ones included. Amendment 6's rule narrows to "only a new edge for the same `GroupId` re-homes". A reparent or a rename changes the `GroupId`, so it never re-homes (R12). *Confirmed by @keddie, 2026-11-13.*
    - **R1 as built.** Release up the old path, run the steps in order, re-delegate down the new lineage seat-first, check every path against its lineage, then swap. Step 4's "re-delegate before the retire" cannot be written; "before the reconcile" and "keep the old path" stand in for it. `releaseIdleBelow` is removed.
@@ -195,7 +195,7 @@ These override the task sections below where they differ.
 @Serializable public data class TopologyDocument(public val root: String, public val children: List<Node>) {
     @Serializable public sealed interface Node { public val name: String; public val weight: String }
     @Serializable @SerialName("group") public data class Group(override val name: String, override val weight: String = "1",
-        public val children: List<Node> = emptyList(), public val runtimeChildren: String? = null) : Node   // marker weight text
+        public val children: List<Node> = emptyList(), public val template: String? = null) : Node   // marker weight text
     @Serializable @SerialName("lane") public data class Lane(override val name: String, override val weight: String = "1") : Node
 }
 /** The checked value: constructible only valid. */
@@ -203,10 +203,10 @@ These override the task sections below where they differ.
     @Serializable public sealed interface Node { public val name: String; public val weight: Weight }
     @Serializable @SerialName("group") public data class Group(override val name: String,
         @Serializable(with = TopologyWeightSerializer::class) override val weight: Weight,
-        public val children: List<Node>, public val runtimeChildren: RuntimeChildren? = null) : Node
+        public val children: List<Node>, public val template: ChildTemplate? = null) : Node
     @Serializable @SerialName("lane") public data class Lane(override val name: String,
         @Serializable(with = TopologyWeightSerializer::class) override val weight: Weight = Weight.ONE) : Node
-    @Serializable public data class RuntimeChildren(@Serializable(with = TopologyWeightSerializer::class) public val weight: Weight)
+    @Serializable public data class ChildTemplate(@Serializable(with = TopologyWeightSerializer::class) public val weight: Weight)
     public companion object {
         public fun from(document: TopologyDocument): TopologyParse
         public fun problems(root: String, children: List<Node>): List<TopologyProblem>
@@ -249,7 +249,7 @@ public object TopologyWeightSerializer : KSerializer<Weight>   // a STRING: "3" 
 **Files:** create `TopologyLowering.kt`, `TopologyLoweringTest.kt` and `TopologyTestSupport.kt`. Modify the cookbook (one sentence), the skill row (`Topology.lower`), and the API dump.
 
 **Interfaces (produced):**
-- `public fun Topology.groupId(vararg path: String): GroupId`, and `public fun Topology.runtimeChildId(group: List<String>, name: String): GroupId`.
+- `public fun Topology.groupId(vararg path: String): GroupId`, and `public fun Topology.attachedChildId(group: List<String>, name: String): GroupId`.
 - `public fun Topology.lower(generation: Long = 0L): List<AttachmentRecord>`, sorted by id.
 - Internal:
   - `escapeSegment`: every UTF-8 byte outside `[A-Za-z0-9._~-]` becomes `%XX`.
@@ -276,7 +276,7 @@ public object TopologyWeightSerializer : KSerializer<Weight>   // a STRING: "3" 
 
 ### Task 3: `draft { }` [after Task 1; independent, off the consumer's path]
 
-`draft(root) { group(name, weight) { lane(...); runtimeChildren(weight) } }` returns a `Topology`. Problems surface as `TopologyException`. A second `runtimeChildren` in one group throws. Add the `@sample` (`sampleTopologyDraft`) and a cookbook mention. Tests: `draftEqualsTheValueItDescribes` (§11.1) and `draftProblemsArePathAddressed`. Same verification and docs rules as above. Commit "heddle-core: the draft builder over Topology (#3173)".
+`draft(root) { group(name, weight) { lane(...); template(weight) } }` returns a `Topology`. Problems surface as `TopologyException`. A second `template` in one group throws. Add the `@sample` (`sampleTopologyDraft`) and a cookbook mention. Tests: `draftEqualsTheValueItDescribes` (§11.1) and `draftProblemsArePathAddressed`. Same verification and docs rules as above. Commit "heddle-core: the draft builder over Topology (#3173)".
 
 ---
 
@@ -360,7 +360,7 @@ internal fun EntitlementLedger.reconcileLocally(child: GroupId): Relocation   //
 
 ### Task 5: Runtime children [after Task 4]
 
-`Topology.attachRuntimeChild(group, name, ledger, generation)` returns `[Prepare, Activate]`, `[Activate]` or `[]` at the marker's weight. `detachRuntimeChild(group, name, ledger)` returns `[Close, Retire]`, `[Retire]` or `[]`. Both live in the `!` namespace (Task 2), so **a name never collides with a declared child, and nothing on the build path throws for it**. They throw only when the group is unmarked or the name is empty.
+`Topology.attach(group, name, ledger, generation)` returns `[Prepare, Activate]`, `[Activate]` or `[]` at the marker's weight. `detach(group, name, ledger)` returns `[Close, Retire]`, `[Retire]` or `[]`. Both live in the `!` namespace (Task 2), so **a name never collides with a declared child, and nothing on the build path throws for it**. They throw only when the group is unmarked or the name is empty.
 
 In `diff`, owned runtime children under a group that is still marked are desired at `new`'s marker weight. A changed weight regenerates them, and a removed marker closes them.
 

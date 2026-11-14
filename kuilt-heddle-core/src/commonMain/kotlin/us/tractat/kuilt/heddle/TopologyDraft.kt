@@ -24,7 +24,7 @@ public annotation class TopologyDraftDsl
  * }
  * ```
  *
- * A `maxConcurrent` beside a group, a lane or a runtime marker is its ceiling, the most leases open
+ * A `maxConcurrent` beside a group, a lane or a group's template is its ceiling, the most leases open
  * beneath it at once ([Topology.Node.maxConcurrent]); leave it out, or pass `null`, for none.
  *
  * The draft is only a way to write the tree down. The value it returns is built through the
@@ -39,8 +39,8 @@ public annotation class TopologyDraftDsl
  * @param root the name of the group at the top of the tree.
  * @param block declares the root's children, in order.
  * @throws TopologyException when the tree is invalid: an empty or repeated name, or a group with
- *   no children that is not marked for [runtime children][TopologyDraft.Group.runtimeChildren].
- * @throws IllegalStateException when one group calls [TopologyDraft.Group.runtimeChildren] twice.
+ *   no children and no [template][TopologyDraft.Group.template].
+ * @throws IllegalStateException when one group calls [TopologyDraft.Group.template] twice.
  * @sample us.tractat.kuilt.heddle.sampleTopologyDraft
  */
 public fun draft(root: String, block: TopologyDraft.() -> Unit): Topology =
@@ -59,7 +59,7 @@ public sealed class TopologyDraft {
 
     // A ceiling is a second overload rather than a defaulted parameter: this class is sealed, not
     // final, so `@IntroducedAt` cannot restore the old signature, and the old one stays by hand.
-    // The ceiling is a required `Long?`, as on [Group.runtimeChildren], so a value read from config
+    // The ceiling is a required `Long?`, as on [Topology.Node.maxConcurrent], so a value read from config
     // passes straight through, `null` for none, and a call without it still picks the first overload.
 
     /** Declares a group named [name] with [weight] among its siblings, whose children [block] declares. */
@@ -90,34 +90,34 @@ public sealed class TopologyDraft {
 
     private fun addGroup(name: String, weight: Weight, maxConcurrent: Long?, block: Group.() -> Unit) {
         val group = Group(name).apply(block)
-        children += Topology.Group(name, weight, group.written(), group.runtime, maxConcurrent)
+        children += Topology.Group(name, weight, group.written(), group.template, maxConcurrent)
     }
 
     internal fun written(): List<Topology.Node> = children.toList()
 
     internal class Root : TopologyDraft()
 
-    /** The scope inside [group]: declares the group's children, and may mark it for runtime children. */
+    /** The scope inside [group]: declares the group's children, and may give it a template for attached ones. */
     public class Group internal constructor(private val name: String) : TopologyDraft() {
 
-        internal var runtime: Topology.RuntimeChildren? = null
+        internal var template: Topology.ChildTemplate? = null
             private set
 
         /**
-         * Marks this group as one whose children the app creates while running, each with
+         * Gives this group a template for the children the app attaches while running, each with
          * [weight] and at most [maxConcurrent] leases open on it at once (`null` for no ceiling): the
-         * ceiling caps each child on its own, not all of them together. A marked group may declare
-         * no children of its own. Call it at most once per group: a group has one runtime weight.
+         * ceiling caps each child on its own, not all of them together. A group with a template may
+         * declare no children of its own. Call it at most once per group: a group has one template.
          *
-         * Each child the app creates here is a leaf, one level below this group: a runtime child
-         * cannot be marked in turn, so it never has children of its own. Declared groups nest to
-         * any depth; runtime ones do not yet, and letting them is tracked by #3314.
+         * Each child the app attaches here is a leaf, one level below this group: an attached child
+         * carries no template of its own, so it never has children. Declared groups nest to any
+         * depth; attached ones do not yet, and letting them is tracked by #3314.
          *
-         * @throws IllegalStateException when this group is already marked.
+         * @throws IllegalStateException when this group already has a template.
          */
-        public fun runtimeChildren(weight: Weight = Weight.ONE, @IntroducedAt("0.7.5") maxConcurrent: Long? = null) {
-            check(runtime == null) { "group \"$name\" already marks runtime children with ${runtime?.weight}" }
-            runtime = Topology.RuntimeChildren(weight, maxConcurrent)
+        public fun template(weight: Weight = Weight.ONE, maxConcurrent: Long? = null) {
+            check(template == null) { "group \"$name\" already has a template, $template" }
+            template = Topology.ChildTemplate(weight, maxConcurrent)
         }
     }
 }

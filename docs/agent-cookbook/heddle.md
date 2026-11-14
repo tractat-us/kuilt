@@ -94,7 +94,7 @@ child), so every subtree is reported even beneath two children named alike or no
 a child named `#3` or `a/b` is never mistaken for an index or a second level. `names` along the
 path is for display only. A `Topology` that exists is valid: its constructor,
 `copy` and its decoder all throw `TopologyException` on the same problems. Mark a group with
-`runtimeChildren` when the app creates its children while running; their names are opaque to
+`template` when the app creates its children while running; their names are opaque to
 heddle. Renaming or moving a child is a delete plus an add, and the new child starts with no
 fairness history. `Topology.lower(generation)` turns the checked tree into the `AttachmentRecord`s
 a ledger is prepared with, sorted, under ids that are the same on every target and never collide
@@ -109,30 +109,30 @@ them in one call, under your lock, against the ledger it diffed (see
 [A fair-share tree in one process](#a-fair-share-tree-in-one-process)). The list is what it runs,
 and what a preview would show.
 
-Children the app creates while running go under a group marked `runtimeChildren`. On an engine,
-`LocalHeddle.attachRuntimeChild(group, name, generation)` and `detachRuntimeChild(group, name)`
+Children the app creates while running go under a group marked `template`. On an engine,
+`LocalHeddle.attach(group, name, generation)` and `detach(group, name)`
 attach and detach one child, at the marker's weight, under a name of any spelling that never
-collides with a declared child; a detach drains like a removal. `Topology.attachRuntimeChild` and
-`detachRuntimeChild` list the same steps without applying them. A reload that keeps the marker
+collides with a declared child; a detach drains like a removal. `Topology.attach` and
+`detach` list the same steps without applying them. A reload that keeps the marker
 keeps the child and its history; one that drops the marker closes it. A detach's own swap forgets
 the child's retired edge once its books close, so detach a child whenever it goes idle.
 A runtime child is always a leaf: it cannot be marked in turn, so a tree you discover while running
 is one level deep under its marked group. For two levels, such as a repository and then its
-authors, declare each repository as a group marked `runtimeChildren`, and `LocalHeddle.apply` a
+authors, declare each repository as a group marked `template`, and `LocalHeddle.apply` a
 new topology as each repository appears; its authors are then runtime children. Letting a runtime
 child have runtime children is tracked by #3314.
 
-<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleRuntimeChildren -->
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleAttachedChildren -->
 ```kotlin
     // Named like the declared lane `x`, and still its own child: runtime names have their own namespace.
-    val tenant = pool.runtimeChildId(listOf("tenants"), "x")
+    val tenant = pool.attachedChildId(listOf("tenants"), "x")
     check(tenant != pool.groupId("tenants", "x"))
-    val attach = pool.attachRuntimeChild(listOf("tenants"), "x", ledger, generation = 0)
+    val attach = pool.attach(listOf("tenants"), "x", ledger, generation = 0)
     check(attach.map { it::class } == listOf(TopologyStep.Prepare::class, TopologyStep.Activate::class))
     check((attach.first() as TopologyStep.Prepare).record.weight == Weight.of(2))
     apply(attach)
     // Asking again is harmless, and a reload that keeps the marker keeps the child.
-    check(pool.attachRuntimeChild(listOf("tenants"), "x", ledger, generation = 0).isEmpty())
+    check(pool.attach(listOf("tenants"), "x", ledger, generation = 0).isEmpty())
     check(Topology.diff(pool, ledger, generation = 0).isEmpty())
 ```
 
@@ -140,17 +140,17 @@ To turn your own config paths into ledger ids and back, without keeping a name m
 track heddle's escaping, use `Topology.findGroupId(GroupPath)` and `Topology.findPath(GroupId)`.
 Neither throws, and they are exact inverses: each returns `null` for anything this topology has no
 group for, including an id a reload has since removed. A `GroupPath` is `Declared(names)` or
-`RuntimeChild(group, name)`, so a runtime child stays apart from a declared sibling of the same
+`AttachedChild(group, name)`, so a runtime child stays apart from a declared sibling of the same
 name, and its `names` read either arm back from just below the root.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleGroupPathRoundTrip -->
 ```kotlin
     // A declared lane and a runtime child share the name `x`, and their paths stay apart.
     val lane = GroupPath.Declared(listOf("tenants", "x"))
-    val tenant = GroupPath.RuntimeChild(group = listOf("tenants"), name = "x")
+    val tenant = GroupPath.Attached(group = listOf("tenants"), name = "x")
     val laneId = checkNotNull(pool.findGroupId(lane))
     val tenantId = checkNotNull(pool.findGroupId(tenant))
-    check(laneId == pool.groupId("tenants", "x") && tenantId == pool.runtimeChildId(listOf("tenants"), "x"))
+    check(laneId == pool.groupId("tenants", "x") && tenantId == pool.attachedChildId(listOf("tenants"), "x"))
     check(laneId != tenantId)
 
     // Back from an id: the arm says whether the last name is a runtime child's.
@@ -172,7 +172,7 @@ name, and its `names` read either arm back from just below the root.
                     TopologyDocument.Lane("batch"),
                 ),
             ),
-            TopologyDocument.Group(name = "tenants", runtimeChildren = "1"),
+            TopologyDocument.Group(name = "tenants", template = "1"),
         ),
     )
     val parsed = Topology.from(written)
@@ -211,7 +211,7 @@ internal data class PoolGroup(
     override val name: String,
     override val weight: String = "1",
     val children: List<PoolNode> = emptyList(),
-    val runtimeChildren: String? = null,
+    val template: String? = null,
     override val rules: List<String> = emptyList(),
 ) : PoolNode
 ```
@@ -222,7 +222,7 @@ internal data class PoolGroup(
     val file = Json.decodeFromString<PoolFile>(text)
 
     fun PoolNode.document(): TopologyDocument.Node = when (this) {
-        is PoolGroup -> TopologyDocument.Group(name, weight, children.map { it.document() }, runtimeChildren)
+        is PoolGroup -> TopologyDocument.Group(name, weight, children.map { it.document() }, template)
         is PoolLane -> TopologyDocument.Lane(name, weight)
     }
     val document = TopologyDocument(file.root, file.children.map { it.document() })
@@ -266,7 +266,7 @@ through the same check and throws `TopologyException` with the problems `from` w
             // A ceiling: never more than two batch jobs at once, however idle the pool is.
             lane("batch", maxConcurrent = 2)
         }
-        group("tenants") { runtimeChildren() }
+        group("tenants") { template() }
     }
 ```
 
@@ -430,7 +430,7 @@ again later and only what is left runs. A removal under a reweighted group wins:
 waits too, and changes nothing until those leases finish. Settle a dead job's lease through
 `reconcileLeases` so it never holds a reload up. **A rename or a move is a delete plus an add**:
 the new group starts with no history, and the old one drains under its old name.
-`attachRuntimeChild` and `detachRuntimeChild` run the same way. Re-attaching a child whose detach
+`attach` and `detach` run the same way. Re-attaching a child whose detach
 is still draining moves its leases onto the new edge.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalReload -->

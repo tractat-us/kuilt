@@ -268,8 +268,8 @@ class EntitlementLedgerForgetTest {
         "root",
         listOf(
             Topology.Lane("a"),
-            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
-            Topology.Group("pool", Weight.of(2), emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.of(3, 2))),
+            Topology.Group("tenants", Weight.ONE, emptyList(), template = Topology.ChildTemplate(Weight.ONE)),
+            Topology.Group("pool", Weight.of(2), emptyList(), template = Topology.ChildTemplate(Weight.of(3, 2))),
         ),
     )
     private val marked = listOf(listOf("tenants"), listOf("pool"))
@@ -280,7 +280,7 @@ class EntitlementLedgerForgetTest {
     private class History(val h: LocalHeddle, val attached: MutableList<Pair<List<String>, String>> = ArrayList())
 
     private fun leasable(history: History): Set<GroupId> =
-        setOf(tree.groupId("a")) + history.attached.map { (g, n) -> tree.runtimeChildId(g, n) }
+        setOf(tree.groupId("a")) + history.attached.map { (g, n) -> tree.attachedChildId(g, n) }
 
     /** One random step: attach, detach, acquire, complete, extend or cancel. */
     private fun step(history: History, r: Random, at: Long): Any {
@@ -289,13 +289,13 @@ class EntitlementLedgerForgetTest {
         return when (r.nextInt(10)) {
             0, 1 -> {
                 val child = marked[r.nextInt(marked.size)] to names[r.nextInt(names.size)]
-                val out = h.attachRuntimeChild(child.first, child.second, generation = r.nextLong(0L, 3L))
+                val out = h.attach(child.first, child.second, generation = r.nextLong(0L, 3L))
                 if (child !in history.attached) history.attached += child
                 out
             }
             2 -> if (history.attached.isEmpty()) "idle" else {
                 val (g, n) = history.attached.removeAt(r.nextInt(history.attached.size))
-                h.detachRuntimeChild(g, n)
+                h.detach(g, n)
             }
             3, 4, 5 -> {
                 val all = leasable(history)

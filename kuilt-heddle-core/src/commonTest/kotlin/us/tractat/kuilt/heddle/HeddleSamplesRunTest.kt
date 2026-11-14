@@ -43,7 +43,10 @@ class HeddleSamplesRunTest {
     fun topologyDiffHolds() = sampleTopologyDiff()
 
     @Test
-    fun runtimeChildrenHold() = sampleRuntimeChildren()
+    fun attachedChildrenHold() = sampleAttachedChildren()
+
+    @Test
+    fun childTemplateDocumentHolds() = sampleChildTemplateDocument()
 
     @Test
     fun groupPathRoundTripHolds() = sampleGroupPathRoundTrip()

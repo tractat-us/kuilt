@@ -44,7 +44,7 @@ goes to web while both teams have work queued. Groups nest, so web could split i
 both called `builds`, and they are still different lanes, because an id is the
 whole path.
 
-A group marked with `runtimeChildren()` is one whose children your program names
+A group marked with `template()` is one whose children your program names
 while it runs: one per customer, say, all at the same weight. When the tree comes from
 an admin's file rather than code, decode a `TopologyDocument` and call
 `Topology.from`, which lists every problem with an address instead of throwing.
@@ -309,7 +309,7 @@ check(running is AcquireOutcome.Acquired)
 val grown = draft("farm") {
     group("web", Weight.of(2)) { lane("builds") }
     group("mobile") { lane("builds") }
-    group("forks") { runtimeChildren() }
+    group("forks") { template() }
 }
 check(heddle.apply(grown, generation = 1L).refusals.isEmpty())
 // The running build moved onto web's new weight, and finishes as if nothing happened.
@@ -327,27 +327,27 @@ changed. The team itself starts again at its new weight, level with the line.
 It is neither owed for its past nor charged for it.
 
 Forks open and close while the farm runs, so the tree cannot list them. A group
-marked with `runtimeChildren()` takes children your program names as it goes:
+marked with `template()` takes children your program names as it goes:
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleBuildFarm -->
 
 ```kotlin
 // A contributor opens a fork. Attach it, and it can be leased like any lane.
-check(heddle.attachRuntimeChild(listOf("forks"), "ana", generation = 2L).refusals.isEmpty())
-val ana = grown.runtimeChildId(listOf("forks"), "ana")
+check(heddle.attach(listOf("forks"), "ana", generation = 2L).refusals.isEmpty())
+val ana = grown.attachedChildId(listOf("forks"), "ana")
 val forkBuild = heddle.acquire(setOf(ana), setOf(ana), startedAt = 103L)
 check(forkBuild is AcquireOutcome.Acquired && forkBuild.lease.leaf == ana)
 // The fork closes while its build runs. It takes no new builds, and waits for this one.
-val closing = heddle.detachRuntimeChild(listOf("forks"), "ana").refusals.single()
+val closing = heddle.detach(listOf("forks"), "ana").refusals.single()
 check(closing is StepRefusal.Draining && closing.child == ana && closing.blockingLeases == listOf(forkBuild.lease))
 check(heddle.acquire(setOf(ana), setOf(ana), startedAt = 104L) is AcquireOutcome.NoLiveLineage)
 check(heddle.complete(forkBuild.lease.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
 // Its last build is done, so the same detach now finishes.
-check(heddle.detachRuntimeChild(listOf("forks"), "ana").refusals.isEmpty())
+check(heddle.detach(listOf("forks"), "ana").refusals.isEmpty())
 ```
 
 A group is named by its path from the top, here `listOf("forks")`, and the
-child by its own name. `runtimeChildId` turns the pair into the id you lease
+child by its own name. `attachedChildId` turns the pair into the id you lease
 with. Every child of `forks` gets the weight its marker gives, 1 by default.
 
 **Taking something out waits for its builds.** A fork you detach, or a lane a

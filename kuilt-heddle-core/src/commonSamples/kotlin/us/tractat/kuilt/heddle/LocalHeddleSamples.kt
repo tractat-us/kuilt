@@ -273,24 +273,24 @@ internal fun sampleBuildFarm() {
     val grown = draft("farm") {
         group("web", Weight.of(2)) { lane("builds") }
         group("mobile") { lane("builds") }
-        group("forks") { runtimeChildren() }
+        group("forks") { template() }
     }
     check(heddle.apply(grown, generation = 1L).refusals.isEmpty())
     // The running build moved onto web's new weight, and finishes as if nothing happened.
     check(heddle.complete(running.lease.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
 
     // A contributor opens a fork. Attach it, and it can be leased like any lane.
-    check(heddle.attachRuntimeChild(listOf("forks"), "ana", generation = 2L).refusals.isEmpty())
-    val ana = grown.runtimeChildId(listOf("forks"), "ana")
+    check(heddle.attach(listOf("forks"), "ana", generation = 2L).refusals.isEmpty())
+    val ana = grown.attachedChildId(listOf("forks"), "ana")
     val forkBuild = heddle.acquire(setOf(ana), setOf(ana), startedAt = 103L)
     check(forkBuild is AcquireOutcome.Acquired && forkBuild.lease.leaf == ana)
     // The fork closes while its build runs. It takes no new builds, and waits for this one.
-    val closing = heddle.detachRuntimeChild(listOf("forks"), "ana").refusals.single()
+    val closing = heddle.detach(listOf("forks"), "ana").refusals.single()
     check(closing is StepRefusal.Draining && closing.child == ana && closing.blockingLeases == listOf(forkBuild.lease))
     check(heddle.acquire(setOf(ana), setOf(ana), startedAt = 104L) is AcquireOutcome.NoLiveLineage)
     check(heddle.complete(forkBuild.lease.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
     // Its last build is done, so the same detach now finishes.
-    check(heddle.detachRuntimeChild(listOf("forks"), "ana").refusals.isEmpty())
+    check(heddle.detach(listOf("forks"), "ana").refusals.isEmpty())
 
     // Two builds are running when the agent host restarts. It comes back running only one of
     // them, and one build the engine never leased.

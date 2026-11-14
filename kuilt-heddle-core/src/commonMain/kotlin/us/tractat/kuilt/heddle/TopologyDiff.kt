@@ -79,13 +79,13 @@ public sealed interface TopologyStep {
  * it no longer wants, and activate the replacements.
  *
  * **Ownership comes from the ledger.** Every edge in [ledger] whose id is in the form
- * [Topology.lower] or [Topology.attachRuntimeChild] writes, and whose child lies under [new]'s
+ * [Topology.lower] or [Topology.attach] writes, and whose child lies under [new]'s
  * root, belongs to the diff — whichever
  * topology wrote it, and whether or not the caller still has that topology. So an edge left
  * closing by an earlier reload is still retired by this one, and a diff after a restart needs
  * nothing but the ledger.
  *
- * **Runtime children** ([Topology.attachRuntimeChild]) are owned the same way, and which of them
+ * **Runtime children** ([Topology.attach]) are owned the same way, and which of them
  * exist is the ledger's to say, not [new]'s. Under a group [new] still marks, an attached child —
  * one with an active edge, or a prepared one waiting for a drain — keeps its edge at the marker's
  * weight, so a reload that leaves the marker alone leaves the child alone, history and all, and a
@@ -154,7 +154,7 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
     val edgesByChild = ledger.ownedEdges(new.root).groupBy { it.record.child }
     val wants = new.declaredChildren().associateBy { it.child } + edgesByChild.mapNotNull { (child, edges) ->
         val path = pathOf(child)?.takeIf { it.runtime } ?: return@mapNotNull null
-        val marker = new.markerAt(path.names.drop(1).dropLast(1)) ?: return@mapNotNull null
+        val marker = new.templateAt(path.names.drop(1).dropLast(1)) ?: return@mapNotNull null
         if (!edges.attached()) return@mapNotNull null
         child to WantedChild(child, parentOf(child), marker.weight, group = false)
     }
@@ -205,7 +205,7 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
         val want = declared[child] ?: run {
             if (path?.runtime != true) return@filter true
             // No attached() check: the candidate is itself a PREPARED edge in [edges].
-            val marker = markerAt(path.names.drop(1).dropLast(1)) ?: return@filter false
+            val marker = templateAt(path.names.drop(1).dropLast(1)) ?: return@filter false
             WantedChild(child, parentOf(child), marker.weight, group = false)
         }
         val adopted = edges.adoptable(want)
@@ -234,14 +234,14 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
  *
  * @param generation a counter, `>= 0`, for the edge this attach prepares.
  * @throws IllegalArgumentException if [group] does not name a group marked with
- *   [runtimeChildren][Topology.Group.runtimeChildren], if [name] is empty, if [generation] is
+ *   [template][Topology.Group.template], if [name] is empty, if [generation] is
  *   negative, or if [ledger] belongs to another root, as [Topology.Companion.diff] refuses it.
  *   Nothing else about [name] is refused.
- * @sample us.tractat.kuilt.heddle.sampleRuntimeChildren
+ * @sample us.tractat.kuilt.heddle.sampleAttachedChildren
  */
-public fun Topology.attachRuntimeChild(group: List<String>, name: String, ledger: EntitlementLedger, generation: Long): List<TopologyStep> {
+public fun Topology.attach(group: List<String>, name: String, ledger: EntitlementLedger, generation: Long): List<TopologyStep> {
     require(generation >= 0L) { "a generation is >= 0, was $generation" }
-    val runtime = runtimeChild(group, name)
+    val runtime = attachedChild(group, name)
     requireSameRoot(ledger)
     val want = WantedChild(runtime.id, runtime.parent, runtime.marker.weight, group = false)
     val edges = ledger.ownedEdgesInto(runtime.id, root)
@@ -263,11 +263,11 @@ public fun Topology.attachRuntimeChild(group: List<String>, name: String, ledger
  * is applied as one unit (see [TopologyStep]).
  *
  * @throws IllegalArgumentException if [group] does not name a group marked with
- *   [runtimeChildren][Topology.Group.runtimeChildren], if [name] is empty, or if [ledger] belongs
+ *   [template][Topology.Group.template], if [name] is empty, or if [ledger] belongs
  *   to another root.
  */
-public fun Topology.detachRuntimeChild(group: List<String>, name: String, ledger: EntitlementLedger): List<TopologyStep> {
-    val child = runtimeChild(group, name).id
+public fun Topology.detach(group: List<String>, name: String, ledger: EntitlementLedger): List<TopologyStep> {
+    val child = attachedChild(group, name).id
     requireSameRoot(ledger)
     val planned = ArrayList<Planned>()
     planned.planRemoval(ledger.ownedEdgesInto(child, root), abandonPrepared = true)
@@ -380,7 +380,7 @@ private class OwnedEdge(val record: AttachmentRecord, val generation: Long, val 
 
 /**
  * Every edge of this ledger whose id is exactly what [Topology.lower] or
- * [Topology.attachRuntimeChild] prints for its record, whose child is a group under [root], and
+ * [Topology.attach] prints for its record, whose child is a group under [root], and
  * whose parent is the group one level up. Sorted by id. A divergent edge has no single record, so it
  * is not owned: the diff cannot act on it, and [EntitlementLedger.validate] reports it.
  */

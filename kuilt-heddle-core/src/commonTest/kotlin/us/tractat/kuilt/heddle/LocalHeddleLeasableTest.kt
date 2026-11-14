@@ -2,7 +2,7 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.heddle.Topology.Group
 import us.tractat.kuilt.heddle.Topology.Lane
-import us.tractat.kuilt.heddle.Topology.RuntimeChildren
+import us.tractat.kuilt.heddle.Topology.ChildTemplate
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,20 +23,20 @@ class LocalHeddleLeasableTest {
         "root",
         listOf(
             Group("acme", Weight.ONE, listOf(Lane("batch"))),
-            Group("pool", Weight.ONE, emptyList(), runtimeChildren = RuntimeChildren(Weight.ONE)),
-            Group("tenants", Weight.ONE, emptyList(), runtimeChildren = RuntimeChildren(Weight.ONE)),
+            Group("pool", Weight.ONE, emptyList(), template = ChildTemplate(Weight.ONE)),
+            Group("tenants", Weight.ONE, emptyList(), template = ChildTemplate(Weight.ONE)),
             Lane("s"),
         ),
     )
     private val acme = t.groupId("acme")
     private val pool = t.groupId("pool")
     private val s = t.groupId("s")
-    private val c = t.runtimeChildId(listOf("tenants"), "c-7f3a")
+    private val c = t.attachedChildId(listOf("tenants"), "c-7f3a")
 
     /** The tree with `c-7f3a` attached under `tenants` and `acme → batch` closed, with [supply] at the root. */
     private fun engine(supply: Long = 100L): LocalHeddle {
         var l = bootFrom(t)
-        l = applyAll(t.attachRuntimeChild(listOf("tenants"), "c-7f3a", l, generation = 0L), l).also {
+        l = applyAll(t.attach(listOf("tenants"), "c-7f3a", l, generation = 0L), l).also {
             assertEquals(emptyList(), it.refused, "the rig: the attach applies")
         }.ledger
         val batchEdge = assertNotNull(l.lineageOf(t.groupId("acme", "batch"))).last()

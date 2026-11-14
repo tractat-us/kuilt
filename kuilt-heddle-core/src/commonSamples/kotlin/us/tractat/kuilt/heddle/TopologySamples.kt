@@ -25,7 +25,8 @@ internal fun sampleTopologyFromDocument() {
                     TopologyDocument.Lane("batch"),
                 ),
             ),
-            TopologyDocument.Group(name = "tenants", runtimeChildren = "1"),
+            // A template: the app attaches children here while running, each at weight 1.
+            TopologyDocument.Group(name = "tenants", template = TopologyDocument.ChildTemplate()),
         ),
     )
     val parsed = Topology.from(written)
@@ -56,7 +57,7 @@ internal fun sampleTopologyDraft() {
             // A ceiling: never more than two batch jobs at once, however idle the pool is.
             lane("batch", maxConcurrent = 2)
         }
-        group("tenants") { runtimeChildren() }
+        group("tenants") { template() }
     }
     check(fairness.children.map { it.name } == listOf("acme", "tenants"))
     check((fairness.children[0] as Topology.Group).children.map { it.maxConcurrent } == listOf(null, 2L))
@@ -114,16 +115,16 @@ internal fun sampleTopologyDiff() {
 }
 
 /**
- * Children the app creates while running: [Topology.attachRuntimeChild] names one by any string and
- * lists the steps that add it, at the weight the group's marker gives, and a reload that keeps the
- * marker keeps the child.
+ * Children the app attaches while running: [Topology.attach] names one by any string and lists the
+ * steps that add it, at the weight the group's template gives, and a reload that keeps the template
+ * keeps the child.
  */
 @Suppress("unused")
-internal fun sampleRuntimeChildren() {
+internal fun sampleAttachedChildren() {
     val pool = draft("pool") {
         group("tenants") {
             lane("x")
-            runtimeChildren(Weight.of(2))
+            template(Weight.of(2))
         }
     }
     var ledger = EntitlementLedger.bootstrap(pool.groupId(), mapOf(ReplicaId("me") to 100L), "boot")
@@ -141,21 +142,38 @@ internal fun sampleRuntimeChildren() {
     }
     apply(Topology.diff(pool, ledger, generation = 0))
 
-    // Named like the declared lane `x`, and still its own child: runtime names have their own namespace.
-    val tenant = pool.runtimeChildId(listOf("tenants"), "x")
+    // Named like the declared lane `x`, and still its own child: attached names have their own namespace.
+    val tenant = pool.attachedChildId(listOf("tenants"), "x")
     check(tenant != pool.groupId("tenants", "x"))
-    val attach = pool.attachRuntimeChild(listOf("tenants"), "x", ledger, generation = 0)
+    val attach = pool.attach(listOf("tenants"), "x", ledger, generation = 0)
     check(attach.map { it::class } == listOf(TopologyStep.Prepare::class, TopologyStep.Activate::class))
     check((attach.first() as TopologyStep.Prepare).record.weight == Weight.of(2))
     apply(attach)
-    // Asking again is harmless, and a reload that keeps the marker keeps the child.
-    check(pool.attachRuntimeChild(listOf("tenants"), "x", ledger, generation = 0).isEmpty())
+    // Asking again is harmless, and a reload that keeps the template keeps the child.
+    check(pool.attach(listOf("tenants"), "x", ledger, generation = 0).isEmpty())
     check(Topology.diff(pool, ledger, generation = 0).isEmpty())
 
     // Detached, it is closed and retired; attached again, it gets a fresh edge.
-    apply(pool.detachRuntimeChild(listOf("tenants"), "x", ledger))
+    apply(pool.detach(listOf("tenants"), "x", ledger))
     check(ledger.lineageOf(tenant) == null)
-    check(pool.attachRuntimeChild(listOf("tenants"), "x", ledger, generation = 0).first() is TopologyStep.Prepare)
+    check(pool.attach(listOf("tenants"), "x", ledger, generation = 0).first() is TopologyStep.Prepare)
+}
+
+/**
+ * A group's template in a config file: `maxConcurrent` beside the group caps all its attached
+ * children together, and `maxConcurrent` inside the template caps each one on its own.
+ */
+@Suppress("unused")
+internal fun sampleChildTemplateDocument() {
+    val text = """
+        {"root": "pool", "children": [
+          {"type": "group", "name": "repos", "maxConcurrent": 8, "template": {"maxConcurrent": 2}}
+        ]}
+    """
+    val written = Json.decodeFromString<TopologyDocument>(text)
+    val repos = (Topology.from(written) as TopologyParse.Valid).topology.children.single() as Topology.Group
+    check(repos.maxConcurrent == 8L)
+    check(repos.template == Topology.ChildTemplate(Weight.ONE, maxConcurrent = 2L))
 }
 
 /**
@@ -168,25 +186,25 @@ internal fun sampleGroupPathRoundTrip() {
     val pool = draft("pool") {
         group("tenants") {
             lane("x")
-            runtimeChildren()
+            template()
         }
     }
-    // A declared lane and a runtime child share the name `x`, and their paths stay apart.
+    // A declared lane and an attached child share the name `x`, and their paths stay apart.
     val lane = GroupPath.Declared(listOf("tenants", "x"))
-    val tenant = GroupPath.RuntimeChild(group = listOf("tenants"), name = "x")
+    val tenant = GroupPath.Attached(group = listOf("tenants"), name = "x")
     val laneId = checkNotNull(pool.findGroupId(lane))
     val tenantId = checkNotNull(pool.findGroupId(tenant))
-    check(laneId == pool.groupId("tenants", "x") && tenantId == pool.runtimeChildId(listOf("tenants"), "x"))
+    check(laneId == pool.groupId("tenants", "x") && tenantId == pool.attachedChildId(listOf("tenants"), "x"))
     check(laneId != tenantId)
 
-    // Back from an id: the arm says whether the last name is a runtime child's.
+    // Back from an id: the arm says whether the last name is an attached child's.
     check(pool.findPath(laneId) == lane && pool.findPath(tenantId) == tenant)
     check(pool.findPath(tenantId)?.names == listOf("tenants", "x"))
     check(pool.findPath(pool.groupId()) == GroupPath.Declared(emptyList()))
 
     // Not in this topology: `null`, never an exception.
     check(pool.findGroupId(GroupPath.Declared(listOf("tenants", "y"))) == null)
-    check(pool.findGroupId(GroupPath.RuntimeChild(listOf("tenants", "x"), "y")) == null)
+    check(pool.findGroupId(GroupPath.Attached(listOf("tenants", "x"), "y")) == null)
     check(pool.findPath(GroupId("elsewhere/tenants")) == null)
 }
 
@@ -210,7 +228,7 @@ internal data class PoolGroup(
     override val name: String,
     override val weight: String = "1",
     val children: List<PoolNode> = emptyList(),
-    val runtimeChildren: String? = null,
+    val template: TopologyDocument.ChildTemplate? = null,
     override val rules: List<String> = emptyList(),
 ) : PoolNode
 
@@ -241,7 +259,7 @@ internal fun sampleConsumerProblems() {
     val file = Json.decodeFromString<PoolFile>(text)
 
     fun PoolNode.document(): TopologyDocument.Node = when (this) {
-        is PoolGroup -> TopologyDocument.Group(name, weight, children.map { it.document() }, runtimeChildren)
+        is PoolGroup -> TopologyDocument.Group(name, weight, children.map { it.document() }, template)
         is PoolLane -> TopologyDocument.Lane(name, weight)
     }
     val document = TopologyDocument(file.root, file.children.map { it.document() })

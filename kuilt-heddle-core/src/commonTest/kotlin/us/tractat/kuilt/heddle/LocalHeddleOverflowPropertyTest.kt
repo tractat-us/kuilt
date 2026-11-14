@@ -102,7 +102,7 @@ class LocalHeddleOverflowPropertyTest {
     fun churningRuntimeChildrenUnderAHeldWaitingSetNeverOverflows() {
         val topology = draft("churn") {
             lane("a", Weight.of(3))
-            group("rt", Weight.of(2)) { runtimeChildren(Weight.of(3, 2)) }
+            group("rt", Weight.of(2)) { template(Weight.of(3, 2)) }
         }
         val policy = LocalPolicy(defaultReservation = 1L)
         var engine = LocalHeddle.fromTopology(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
@@ -118,9 +118,9 @@ class LocalHeddleOverflowPropertyTest {
 
         for (step in 0 until CHURN_SEATS) {
             val name = "c$step"
-            check(engine.attachRuntimeChild(rt, name, generation = step.toLong()).refusals.isEmpty()) { "attach $name" }
+            check(engine.attach(rt, name, generation = step.toLong()).refusals.isEmpty()) { "attach $name" }
             attached.addLast(name)
-            val waiting = (attached.map { topology.runtimeChildId(rt, it) } + a).toSet()
+            val waiting = (attached.map { topology.attachedChildId(rt, it) } + a).toSet()
             val outcome = try {
                 engine.acquire(waiting, waiting, startedAt = step.toLong(), reservation = 1L)
             } catch (e: ArithmeticException) {
@@ -134,7 +134,7 @@ class LocalHeddleOverflowPropertyTest {
             // a checkpoint preserves it, so this sees a front seat however often the child ran since.
             val ledger = engine.snapshot().ledger
             for (child in attached) {
-                val edge = ledger.lineageOf(topology.runtimeChildId(rt, child))?.lastOrNull() ?: continue
+                val edge = ledger.lineageOf(topology.attachedChildId(rt, child))?.lastOrNull() ?: continue
                 val gauge = ledger.gauge(edge) ?: continue
                 val weight = ledger.record(edge)?.weight ?: continue
                 if (ticksAt(gauge.floor, weight) > GRID * gauge.folded) seatedAtAFront += child
@@ -142,7 +142,7 @@ class LocalHeddleOverflowPropertyTest {
             engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST))
             picks++
             if (attached.size > CHURN_WIDTH) {
-                check(engine.detachRuntimeChild(rt, attached.removeFirst()).refusals.isEmpty()) { "detach at seat $seats" }
+                check(engine.detach(rt, attached.removeFirst()).refusals.isEmpty()) { "detach at seat $seats" }
             }
             if (step % SAMPLE_EVERY == 0) offGridSamples += offGrid(engine.snapshot())
             if (step == CHURN_SEATS / 2) {

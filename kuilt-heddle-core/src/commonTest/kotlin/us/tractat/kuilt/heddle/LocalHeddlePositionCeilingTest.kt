@@ -395,22 +395,22 @@ class LocalHeddlePositionCeilingTest {
     fun aSeatAgainstASaturatedFrontLandsAtTheCeiling() {
         val rtTopology = draft("seat") {
             lane("a", Weight.ONE)
-            group("rt", Weight.of(2)) { runtimeChildren(Weight.of(3, 2)) }
+            group("rt", Weight.of(2)) { template(Weight.of(3, 2)) }
         }
         val rt = listOf("rt")
         val engine = LocalHeddle.fromTopology(rtTopology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
             .apply { reconcileCapacity(1L) }
-        for (name in listOf("x", "y")) check(engine.attachRuntimeChild(rt, name, generation = 1L).refusals.isEmpty())
-        val x = rtTopology.runtimeChildId(rt, "x")
-        val y = rtTopology.runtimeChildId(rt, "y")
+        for (name in listOf("x", "y")) check(engine.attach(rt, name, generation = 1L).refusals.isEmpty())
+        val x = rtTopology.attachedChildId(rt, "x")
+        val y = rtTopology.attachedChildId(rt, "y")
         // x and y are both observed waiting, so the seat's front is taken over both.
         repeat(4) {
             val lease = (engine.acquire(setOf(x, y), setOf(x, y), startedAt = 0L) as AcquireOutcome.Acquired).lease
             engine.complete(lease.id, actualCost = 1L)
         }
         engine.pushTowardCeiling(x, below = 0L)
-        check(engine.attachRuntimeChild(rt, "n", generation = 2L).refusals.isEmpty())
-        val n = rtTopology.runtimeChildId(rt, "n")
+        check(engine.attach(rt, "n", generation = 2L).refusals.isEmpty())
+        val n = rtTopology.attachedChildId(rt, "n")
         assertIs<AcquireOutcome.Acquired>(engine.admit(n, startedAt = 1L))
         assertEquals(engine.ceilingOf(n), engine.grossTicks(n), "the newborn is seated at its own ceiling, not behind the true front")
     }

@@ -3,7 +3,7 @@ package us.tractat.kuilt.heddle
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.heddle.Topology.Group
 import us.tractat.kuilt.heddle.Topology.Lane
-import us.tractat.kuilt.heddle.Topology.RuntimeChildren
+import us.tractat.kuilt.heddle.Topology.ChildTemplate
 import us.tractat.kuilt.heddle.TopologyStep.Activate
 import us.tractat.kuilt.heddle.TopologyStep.Prepare
 import us.tractat.kuilt.heddle.TopologyStep.Reconcile
@@ -45,7 +45,7 @@ class LocalHeddleApplyTest {
                 ),
             ),
             if (hobby) Group("hobby", Weight.ONE, listOf(Lane("default"))) else null,
-            Group("tenants", Weight.of(tenantsW), emptyList(), runtimeChildren = RuntimeChildren(Weight.ONE)),
+            Group("tenants", Weight.of(tenantsW), emptyList(), template = ChildTemplate(Weight.ONE)),
             if (s) Lane("s") else null,
         ),
     )
@@ -58,7 +58,7 @@ class LocalHeddleApplyTest {
     private val default = t.groupId("hobby", "default")
     private val s = t.groupId("s")
     private val x = GroupId("${batch.value}/x")
-    private val c = t.runtimeChildId(listOf("tenants"), "c-7f3a")
+    private val c = t.attachedChildId(listOf("tenants"), "c-7f3a")
 
     private fun engine(topology: Topology = t): LocalHeddle =
         LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 2L), epoch = 0L).also { it.reconcileCapacity(4L) }
@@ -341,7 +341,7 @@ class LocalHeddleApplyTest {
     @Test
     fun runtimeLeavesUnderAReweightedParentAreRehomed() {
         val h = engine()
-        val attached = h.attachRuntimeChild(listOf("tenants"), "c-7f3a", generation = 0L)
+        val attached = h.attach(listOf("tenants"), "c-7f3a", generation = 0L)
         val lease = h.lease(setOf(c), reservation = 2L)
         val runtimeEdge = h.edgeInto(c)
         val result = h.apply(tree(tenantsW = 2), generation = 2L)
@@ -365,12 +365,12 @@ class LocalHeddleApplyTest {
     @Test
     fun reattachMidDrainMovesTheDrainingLeaseOntoTheNewEdge() {
         val h = engine()
-        h.attachRuntimeChild(listOf("tenants"), "c-7f3a", generation = 0L)
+        h.attach(listOf("tenants"), "c-7f3a", generation = 0L)
         val lease = h.lease(setOf(c), reservation = 2L)
         val oldEdge = h.edgeInto(c)
-        val detached = h.detachRuntimeChild(listOf("tenants"), "c-7f3a")
+        val detached = h.detach(listOf("tenants"), "c-7f3a")
         val draining = h.extend(lease.id, 1L)
-        val again = h.attachRuntimeChild(listOf("tenants"), "c-7f3a", generation = 0L)
+        val again = h.attach(listOf("tenants"), "c-7f3a", generation = 0L)
         val l = h.snapshot().ledger
         val newEdge = h.edgeInto(c)
         assertAll(

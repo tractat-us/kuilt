@@ -3,7 +3,7 @@ package us.tractat.kuilt.heddle
 import us.tractat.kuilt.heddle.Topology.Group
 import us.tractat.kuilt.heddle.Topology.Lane
 import us.tractat.kuilt.heddle.Topology.Node
-import us.tractat.kuilt.heddle.Topology.RuntimeChildren
+import us.tractat.kuilt.heddle.Topology.ChildTemplate
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -27,7 +27,7 @@ import kotlin.test.assertTrue
  * - either is non-null exactly when the tree has that group, judged by this file's own walk;
  *
  * and every path the tree declares or can attach resolves, to the id [Topology.groupId] or
- * [Topology.runtimeChildId] gives it. The third law is not implied by the first two: a pair that
+ * [Topology.attachedChildId] gives it. The third law is not implied by the first two: a pair that
  * resolved every path in the id grammar, this tree's or not, would satisfy both.
  *
  * Every draw is from a `List` this file built, so a seed walks the same trajectory on every target,
@@ -51,7 +51,7 @@ class TopologyGroupPathPropertyTest {
             val other = randomTree(r, root)
 
             val resolvable = declaredPaths(t.children, emptyList()).map { GroupPath.Declared(it) to t.groupId(*it.toTypedArray()) } +
-                runtimePaths(t, r).map { GroupPath.RuntimeChild(it.first, it.second) to t.runtimeChildId(it.first, it.second) }
+                runtimePaths(t, r).map { GroupPath.Attached(it.first, it.second) to t.attachedChildId(it.first, it.second) }
             for ((path, id) in resolvable) {
                 if (t.findGroupId(path) != id) failures += "seed $seed: findGroupId($path) = ${t.findGroupId(path)}, groupId gives ${id.value}"
                 if (t.findPath(id) != path) failures += "seed $seed: findPath(${id.value}) = ${t.findPath(id)}, expected $path"
@@ -60,7 +60,7 @@ class TopologyGroupPathPropertyTest {
             val ids = resolvable.map { it.second }
             if (ids.toSet().size != ids.size) failures += "seed $seed: ids collide ${ids.map { it.value }}"
             tally.collisions += resolvable.count { (path, _) ->
-                path is GroupPath.RuntimeChild && GroupPath.Declared(path.names) in resolvable.map { it.first }
+                path is GroupPath.Attached && GroupPath.Declared(path.names) in resolvable.map { it.first }
             }
 
             // Which paths this tree has a group for, read off the tree by this file's own walk: the
@@ -69,12 +69,12 @@ class TopologyGroupPathPropertyTest {
             val markedHere = markedGroups(t.children, emptyList()).map { it.first }
             fun here(path: GroupPath): Boolean = when (path) {
                 is GroupPath.Declared -> path.names in declaredHere
-                is GroupPath.RuntimeChild -> path.group in markedHere
+                is GroupPath.Attached -> path.group in markedHere
             }
 
             // Paths and ids from a sibling tree, and edits of real ids: most are not this tree's.
             val foreignPaths = declaredPaths(other.children, emptyList()).map { GroupPath.Declared(it) } +
-                runtimePaths(other, r).map { GroupPath.RuntimeChild(it.first, it.second) }
+                runtimePaths(other, r).map { GroupPath.Attached(it.first, it.second) }
             for (path in foreignPaths) {
                 val id = t.findGroupId(path)
                 if ((id != null) != here(path)) failures += "seed $seed: findGroupId($path) = $id, but the tree ${if (here(path)) "has" else "has no"} such group"
@@ -119,7 +119,7 @@ class TopologyGroupPathPropertyTest {
         fun resolved(path: GroupPath) {
             when (path) {
                 is GroupPath.Declared -> declared++
-                is GroupPath.RuntimeChild -> runtime++
+                is GroupPath.Attached -> runtime++
             }
         }
     }
@@ -141,7 +141,7 @@ class TopologyGroupPathPropertyTest {
         return names.map { name ->
             if (depth < 2 && r.nextInt(2) == 0) {
                 val marked = r.nextInt(3) == 0
-                Group(name, Weight.ONE, randomChildren(r, depth + 1), if (marked) RuntimeChildren(Weight.ONE) else null)
+                Group(name, Weight.ONE, randomChildren(r, depth + 1), if (marked) ChildTemplate(Weight.ONE) else null)
             } else {
                 Lane(name)
             }
@@ -171,7 +171,7 @@ class TopologyGroupPathPropertyTest {
     private fun markedGroups(nodes: List<Node>, prefix: List<String>): List<Pair<List<String>, Group>> =
         nodes.filterIsInstance<Group>().flatMap { group ->
             val path = prefix + group.name
-            (if (group.runtimeChildren != null) listOf(path to group) else emptyList()) + markedGroups(group.children, path)
+            (if (group.template != null) listOf(path to group) else emptyList()) + markedGroups(group.children, path)
         }
 
     /** Ids one edit away from [id]: a segment dropped or added, the runtime marker moved, a byte changed. */

@@ -39,9 +39,10 @@ import kotlinx.serialization.encoding.Encoder
  * The same name may appear at different depths: `acme/batch` and `hobby/batch` are different
  * children.
  *
- * Its encoded shape, [Node] and [RuntimeChildren] included, is part of [LocalHeddleSnapshot]'s
+ * Its encoded shape, [Node] and [ChildTemplate] included, is part of [LocalHeddleSnapshot]'s
  * format 1, which stores the topology an engine last applied: a field added here takes a default,
- * and any other change needs a frozen surrogate there first.
+ * and any other change needs a frozen surrogate there first. A rename keeps the old serial name:
+ * [Group.template] is still written as `runtimeChildren`, the name v0.7.4 stored.
  *
  * @property root the name of the group at the top of the tree.
  * @property children the root's children, in the order written.
@@ -81,11 +82,11 @@ public data class Topology(public val root: String, public val children: List<No
      * A group of children that divide its slice between them.
      *
      * @property children the children declared in the config, in the order written.
-     * @property runtimeChildren set when the consumer adds children to this group while running;
-     *   `null` when the group has only its declared [children]. A group with it may declare none.
-     *   Each runtime child is a leaf, one level below this group: it cannot be marked itself, so
-     *   it never has children of its own. Declared groups nest to any depth; runtime ones do not
-     *   yet, and letting them is tracked by #3314.
+     * @property template set when the consumer attaches children to this group while running, and
+     *   what each attached child gets; `null` when the group has only its declared [children]. A
+     *   group with a template may declare none. Each attached child is a leaf, one level below this
+     *   group: it carries no template of its own, so it never has children. Declared groups nest
+     *   to any depth; attached ones do not yet, and letting them is tracked by #3314.
      * @property maxConcurrent the most leases open beneath this group at once, counted across all
      *   its children; `null` for no ceiling, `0` to pause it.
      */
@@ -95,7 +96,7 @@ public data class Topology(public val root: String, public val children: List<No
         override val name: String,
         @Serializable(with = TopologyWeightSerializer::class) override val weight: Weight,
         public val children: List<Node>,
-        public val runtimeChildren: RuntimeChildren? = null,
+        @SerialName("runtimeChildren") public val template: ChildTemplate? = null,
         @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
     ) : Node
 
@@ -114,16 +115,21 @@ public data class Topology(public val root: String, public val children: List<No
     ) : Node
 
     /**
-     * Marks a group whose children are created at runtime. Every such child gets [weight]. Its
-     * name is an opaque string the consumer chooses: heddle attaches no meaning to it.
+     * A group's template for the children the consumer attaches to it while running
+     * ([LocalHeddle.attach]). Every attached child gets [weight] and [maxConcurrent]. Its name is
+     * an opaque string the consumer chooses: heddle attaches no meaning to it.
      *
-     * @property maxConcurrent the most leases open on **each** runtime child at once, not on all of
-     *   them together; `null` for no ceiling, `0` to pause every one. Never negative.
+     * @property weight each attached child's share relative to its siblings, declared or attached.
+     * @property maxConcurrent the most leases open on **each** attached child at once, not on all
+     *   of them together; `null` for no ceiling, `0` to pause every one. Never negative. The
+     *   group's own [Group.maxConcurrent] caps them all together.
      */
     @Serializable
-    public data class RuntimeChildren(
+    public data class ChildTemplate(
+        // No default on weight: `encodeDefaults = false` would then drop `"weight":"1"`, and the
+        // snapshot goldens stored with v0.7.4 always carry it.
         @Serializable(with = TopologyWeightSerializer::class) public val weight: Weight,
-        @IntroducedAt("0.7.5") public val maxConcurrent: Long? = null,
+        public val maxConcurrent: Long? = null,
     )
 
     public companion object {
@@ -176,7 +182,7 @@ public sealed interface TopologyParse {
  * `a/b` can never be mistaken for an index or for two levels.
  *
  * A problem about a child's name or weight and a problem about that same child as a group (an empty
- * group, a bad runtime-children weight) share its path; problems at one path are told apart by [kind] and [detail].
+ * group, a bad weight in its template) share its path; problems at one path are told apart by [kind] and [detail].
  *
  * @property path the child indices from the root to the node this problem concerns; `[]` is the
  *   root. Every index is `>= 0`.
@@ -208,7 +214,7 @@ public data class TopologyProblem(
         /** A name is already used by an earlier sibling. */
         DUPLICATE_NAME,
 
-        /** A group has no children and is not marked for runtime children. */
+        /** A group has no children and no template to attach any by. */
         EMPTY_GROUP,
 
         /** A weight is not a positive whole number or ratio, such as `"3"` or `"3/2"`. */
@@ -216,7 +222,7 @@ public data class TopologyProblem(
 
         /**
          * A `maxConcurrent` ceiling is negative. `0` is not a problem: it pauses the node. Reported
-         * at the node's own path, or at the group's path for its runtime children's ceiling.
+         * at the node's own path, or at the group's path for the ceiling in its template.
          */
         NEGATIVE_MAX_CONCURRENT,
 
@@ -284,9 +290,8 @@ private fun Topology.Node.written(): TopologyDocument.Node = when (this) {
         name,
         weight.text(),
         children.map { it.written() },
-        runtimeChildren?.weight?.text(),
-        maxConcurrent = maxConcurrent,
-        runtimeChildrenMaxConcurrent = runtimeChildren?.maxConcurrent,
+        template?.let { TopologyDocument.ChildTemplate(it.weight.text(), it.maxConcurrent) },
+        maxConcurrent,
     )
     is Topology.Lane -> TopologyDocument.Lane(name, weight.text(), maxConcurrent)
 }
@@ -297,7 +302,7 @@ private fun TopologyDocument.Node.checked(): Topology.Node = when (this) {
         name,
         checkedWeight(weight),
         children.map { it.checked() },
-        runtimeChildren?.let { Topology.RuntimeChildren(checkedWeight(it), runtimeChildrenMaxConcurrent) },
+        template?.let { Topology.ChildTemplate(checkedWeight(it.weight), it.maxConcurrent) },
         maxConcurrent,
     )
     is TopologyDocument.Lane -> Topology.Lane(name, checkedWeight(weight), maxConcurrent)
@@ -310,7 +315,7 @@ private fun documentProblems(root: String, children: List<TopologyDocument.Node>
     buildList {
         val at = Address(emptyList(), listOf(root))
         if (root.isEmpty()) add(at.problem(TopologyProblem.Kind.EMPTY_NAME, "the root has no name"))
-        walkGroup(at, children, runtimeChildren = null, runtimeChildrenMaxConcurrent = null)
+        walkGroup(at, children, template = null)
     }
 
 /** Where a node sits: its child indices from the root, and the names along the way for display. */
@@ -322,17 +327,17 @@ private class Address(val path: List<Int>, val names: List<String>) {
 private fun MutableList<TopologyProblem>.walkGroup(
     group: Address,
     children: List<TopologyDocument.Node>,
-    runtimeChildren: String?,
-    runtimeChildrenMaxConcurrent: Long?,
+    template: TopologyDocument.ChildTemplate?,
 ) {
-    if (runtimeChildren != null && parseWeightText(runtimeChildren) == null) {
-        add(group.problem(TopologyProblem.Kind.INVALID_WEIGHT, "runtime children weight ${quoted(runtimeChildren)} $NOT_A_WEIGHT"))
+    if (template != null && parseWeightText(template.weight) == null) {
+        add(group.problem(TopologyProblem.Kind.INVALID_WEIGHT, "template weight ${quoted(template.weight)} $NOT_A_WEIGHT"))
     }
-    if (runtimeChildrenMaxConcurrent != null && runtimeChildrenMaxConcurrent < 0L) {
-        add(group.problem(TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT, "runtime children maxConcurrent $runtimeChildrenMaxConcurrent $NEGATIVE_CEILING"))
+    val templateCeiling = template?.maxConcurrent
+    if (templateCeiling != null && templateCeiling < 0L) {
+        add(group.problem(TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT, "template maxConcurrent $templateCeiling $NEGATIVE_CEILING"))
     }
-    if (children.isEmpty() && runtimeChildren == null) {
-        add(group.problem(TopologyProblem.Kind.EMPTY_GROUP, "the group has no children and is not marked for runtime children"))
+    if (children.isEmpty() && template == null) {
+        add(group.problem(TopologyProblem.Kind.EMPTY_GROUP, "the group has no children and no template to attach any by"))
     }
     // Looked up by name only; problems are emitted in index order, never in map order.
     val firstIndexOf = HashMap<String, Int>()
@@ -354,7 +359,7 @@ private fun MutableList<TopologyProblem>.walkGroup(
             add(at.problem(TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT, "maxConcurrent $ceiling $NEGATIVE_CEILING"))
         }
         if (child is TopologyDocument.Group) {
-            walkGroup(at, child.children, child.runtimeChildren, child.runtimeChildrenMaxConcurrent)
+            walkGroup(at, child.children, child.template)
         }
     }
 }
