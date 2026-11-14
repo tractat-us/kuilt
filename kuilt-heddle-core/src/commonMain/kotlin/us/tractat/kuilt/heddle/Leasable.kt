@@ -29,8 +29,8 @@ internal sealed interface Leasable {
     val hasCeilings: Boolean
 
     /**
-     * What [topology] declares: each of its lanes, and each attached child of a group it marks for
-     * them. An attached child is declared by its name alone; whether it is attached is the ledger's
+     * What [topology] declares: each of its lanes, and each attached child of a group it gives a
+     * template. An attached child is declared by its name alone; whether it is attached is the ledger's
      * to say, and a leaf with no ACTIVE lineage is never reached anyway.
      */
     class ByTopology(val topology: Topology) : Leasable {

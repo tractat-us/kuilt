@@ -265,10 +265,10 @@ public sealed interface LeaseOutcome {
  * ## What a lease ends at
  *
  * A lease ends only at a **leasable** group: a leaf (no ACTIVE child edge) that the topology
- * declares a lane, or an attached child of a group it marks for them. Being a leaf is not enough. A
+ * declares a lane, or an attached child of a group it gives a template. Being a leaf is not enough. A
  * group whose children are all inactive reads as a leaf in the ledger, and only the topology can
- * tell a lane from a group that has nothing attached right now, such as a group with a template before its
- * first attached child arrives. That group is never leased, and work named at it is never wanted.
+ * tell a lane from a group that has nothing attached right now, such as a group with a template
+ * before its first child is attached. That group is never leased, and work named at it is never wanted.
  * The pick's terminal, the lift of [acquire]'s two sets into demand, [admit], [explain] and
  * [entitlement] read this one predicate, so none of them can accept a group the others refuse.
  *
@@ -965,13 +965,13 @@ public class LocalHeddle private constructor(
     }
 
     /**
-     * Attach the attached child [name] to the group at [group], read from the root down, at the
-     * weight the topology's marker on that group gives ([Topology.attach]). Applied as
+     * Attach the child [name] to the group at [group], read from the root down, with the weight and
+     * ceiling that group's template in the topology gives ([Topology.attach]). Applied as
      * one unit, like [apply]. Attaching a child that is already attached does nothing; attaching one
      * whose detach is still draining gives it a new edge and moves its draining leases onto it.
      *
-     * @throws IllegalArgumentException if [group] does not name a group the topology marks for
-     *   attached children, [name] is empty, or [generation] is negative.
+     * @throws IllegalArgumentException if [group] does not name a group the topology gives a
+     *   template, [name] is empty, or [generation] is negative.
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun attach(group: List<String>, name: String, generation: Long): ApplyResult =
@@ -982,8 +982,8 @@ public class LocalHeddle private constructor(
      * closed at once, and retired once its open leases complete, until when it is
      * [StepRefusal.Draining].
      *
-     * @throws IllegalArgumentException if [group] does not name a group the topology marks for
-     *   attached children, or [name] is empty.
+     * @throws IllegalArgumentException if [group] does not name a group the topology gives a
+     *   template, or [name] is empty.
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun detach(group: List<String>, name: String): ApplyResult =

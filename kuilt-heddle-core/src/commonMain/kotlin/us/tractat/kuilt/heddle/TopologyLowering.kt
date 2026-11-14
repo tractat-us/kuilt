@@ -6,7 +6,7 @@ package us.tractat.kuilt.heddle
 //
 //   root                    "root"
 //   declared child          "<parent>/<escaped name>"
-//   attached child           "<parent>/!<escaped name>"
+//   attached child          "<parent>/!<escaped name>"
 //
 // and an edge's id is "<child>@<numerator>:<denominator>#<generation>".
 //
@@ -41,7 +41,7 @@ public fun Topology.groupId(vararg path: String): GroupId {
 
 /**
  * Where a group sits in a [Topology], read from [root][Topology.root] down: a child the config
- * declares, or a child the consumer created at runtime beneath a group with a template.
+ * declares, or a child the consumer attached while running beneath a group with a template.
  *
  * The two arms are what keep an attached child apart from a declared sibling of the same name:
  * `Attached(listOf("tenants"), "x")` and `Declared(listOf("tenants", "x"))` are different paths,
@@ -89,8 +89,8 @@ public sealed interface GroupPath {
 
 /**
  * The ledger id of the group at [path], or `null` when this topology has no such group: a
- * [GroupPath.Declared] it does not declare, or a [GroupPath.Attached] whose group is not marked
- * for attached children. Never throws.
+ * [GroupPath.Declared] it does not declare, or a [GroupPath.Attached] whose group has no
+ * template. Never throws.
  *
  * Gives the same id as [groupId] and [attachedChildId] wherever they do not throw, and is the exact
  * inverse of [findPath].
@@ -115,9 +115,9 @@ public fun Topology.findGroupId(path: GroupPath): GroupId? = when (path) {
 public fun Topology.findPath(group: GroupId): GroupPath? {
     val parsed = pathOf(group) ?: return null
     val below = parsed.names.drop(1)
-    // `pathOf` puts a runtime segment only at depth two or deeper, so `below` holds its group.
+    // `pathOf` puts an attached segment only at depth two or deeper, so `below` holds its group.
     val path = if (parsed.attached) GroupPath.Attached(below.dropLast(1), below.last()) else GroupPath.Declared(below)
-    // Rebuilding the id checks the root, and that the path is declared or marked here.
+    // Rebuilding the id checks the root, and that the path is declared, or under a template, here.
     return path.takeIf { findGroupId(it) == group }
 }
 
@@ -128,17 +128,17 @@ public fun Topology.findPath(group: GroupId): GroupPath? {
  * [name] is opaque: any non-empty string, chosen by the consumer. An attached child lives in its own
  * namespace, so one named like a declared sibling still gets a different id.
  *
- * @throws IllegalArgumentException if [group] does not name a group marked with
+ * @throws IllegalArgumentException if [group] does not name a group with a
  *   [template][Topology.Group.template], or [name] is empty.
  */
 public fun Topology.attachedChildId(group: List<String>, name: String): GroupId = attachedChild(group, name).id
 
-/** An attached child's [id], its [parent] group's id, and the [marker] that group carries. */
+/** An attached child's [id], its [parent] group's id, and the [template] that group carries. */
 internal class AttachedChild(val id: GroupId, val parent: GroupId, val template: Topology.ChildTemplate)
 
 /**
- * The attached child [name] of the group at [group], checked once: [group] names a marked declared
- * group and [name] is non-empty.
+ * The attached child [name] of the group at [group], checked once: [group] names a declared group
+ * with a template and [name] is non-empty.
  *
  * @throws IllegalArgumentException otherwise, as [Topology.attachedChildId] documents.
  */
@@ -187,7 +187,7 @@ private fun Topology.idOf(path: List<String>): String =
  * rest. Lowering is deterministic: the same tree and generation give the same list on every
  * target.
  *
- * Attached children are not lowered; the consumer creates them while running.
+ * Attached children are not lowered; the consumer attaches them while running.
  *
  * @param generation a counter, `>= 0`, that tells this lowering's edges from an earlier one's.
  * @throws IllegalArgumentException if [generation] is negative.
@@ -207,7 +207,7 @@ public fun Topology.lower(generation: Long = 0L): List<AttachmentRecord> {
 }
 
 /**
- * A group id read back into names: [names] runs from the root down, and [runtime] says the last
+ * A group id read back into names: [names] runs from the root down, and [attached] says the last
  * name is an attached child's. The inverse of [Topology.groupId] and [Topology.attachedChildId], so a
  * status page can name a group the current topology no longer declares.
  */
@@ -324,7 +324,7 @@ internal data class GenerationTop(val generation: Long, val edges: Int) {
 
 /**
  * The template of the declared group at [path], read from the root down, or `null`
- * when [path] names no declared group or the group is not marked. Never throws, so the diff can ask
+ * when [path] names no declared group or the group has none. Never throws, so the diff can ask
  * about a group the topology no longer declares.
  */
 internal fun Topology.templateAt(path: List<String>): Topology.ChildTemplate? =

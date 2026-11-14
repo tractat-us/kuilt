@@ -86,12 +86,12 @@ public sealed interface TopologyStep {
  * nothing but the ledger.
  *
  * **Attached children** ([Topology.attach]) are owned the same way, and which of them
- * exist is the ledger's to say, not [new]'s. Under a group [new] still marks, an attached child —
+ * exist is the ledger's to say, not [new]'s. Under a group that keeps its template in [new], an attached child —
  * one with an active edge, or a prepared one waiting for a drain — keeps its edge at the template's
  * weight, so a reload that leaves the template alone leaves the child alone, history and all, and a
  * new template weight gives it a new edge. Under a group that lost its template, or is gone, every
  * attached child is closed and retired, prepared edges included, so it does not come back if the
- * marker does.
+ * template does.
  *
  * **Re-entrant.** The result is a function of [ledger], [new] and [generation] alone. Apply any
  * prefix of it, call `diff` again with the same [generation], and you get exactly the rest; a
@@ -188,7 +188,7 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
  *   when there is one: otherwise this prepared edge may be what says the child is attached, and
  *   forgetting it would detach the child.
  *
- * An attached child whose marker is gone is never in it, since the diff closes and retires its
+ * An attached child whose group's template is gone is never in it, since the diff closes and retires its
  * prepared edges. Forgetting one of these changes this diff not at all, but a later one: a diff
  * that wants the edge back, at the same weight, prepares a new edge above the generation floor
  * where it would have adopted the old one. Reads [candidates]' children's own edges from the
@@ -215,8 +215,8 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
 }
 
 /**
- * The steps that attach the attached child [name] to the group at [group], read from
- * [root][Topology.root] down, at the weight this topology's marker on that group gives: `[Prepare,
+ * The steps that attach the child [name] to the group at [group], read from
+ * [root][Topology.root] down, at the weight that group's template in this topology gives: `[Prepare,
  * Activate]` for a new child, `[Activate]` when only the prepare landed, and `[]` when it is
  * already attached. [name] is opaque and lives in its own namespace, so it never collides with a
  * declared child, however it is spelt.
@@ -233,7 +233,7 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
  * ledger carries that floor, so an attach reads no more of it than the child's own edges.
  *
  * @param generation a counter, `>= 0`, for the edge this attach prepares.
- * @throws IllegalArgumentException if [group] does not name a group marked with
+ * @throws IllegalArgumentException if [group] does not name a group with a
  *   [template][Topology.Group.template], if [name] is empty, if [generation] is
  *   negative, or if [ledger] belongs to another root, as [Topology.Companion.diff] refuses it.
  *   Nothing else about [name] is refused.
@@ -251,7 +251,7 @@ public fun Topology.attach(group: List<String>, name: String, ledger: Entitlemen
 }
 
 /**
- * The steps that detach the attached child [name] from the group at [group]: `[Close, Retire]` for
+ * The steps that detach the child [name] from the group at [group]: `[Close, Retire]` for
  * an attached child, `[Retire]` when it is already closing, and `[]` when there is nothing left to
  * do. A retire is refused while the child's work is outstanding; detach again, or diff, once it has
  * drained.
@@ -262,7 +262,7 @@ public fun Topology.attach(group: List<String>, name: String, ledger: Entitlemen
  * bring the child back. Until that retire lands the child has two live inbound edges, so the list
  * is applied as one unit (see [TopologyStep]).
  *
- * @throws IllegalArgumentException if [group] does not name a group marked with
+ * @throws IllegalArgumentException if [group] does not name a group with a
  *   [template][Topology.Group.template], if [name] is empty, or if [ledger] belongs
  *   to another root.
  */
@@ -311,7 +311,7 @@ private fun MutableList<Planned>.planWanted(
 }
 
 /**
- * Close and retire every live edge of a child nothing wants. With [abandonPrepared] — a runtime
+ * Close and retire every live edge of a child nothing wants. With [abandonPrepared] — an attached
  * child — its prepared edges are closed and retired too, since for an attached child a prepared edge
  * is the record that it is wanted.
  */
