@@ -312,12 +312,12 @@ public class FairShareAllocator(
      *   position at the last wake, and it only grows while a child idles between picks: a busy lane
      *   that waits half the time carries an offset many times its own service, and left alone it
      *   reaches the ceiling while the raw position is a hundredth of the way there.
-     * - **then the gauge's fold**. A raw position reads `⌈floor · w · G⌉ + (issued − folded) · G`
-     *   ([grossTicksAt]), so raising the fold by `k` units lowers it by exactly `k · G` ticks. The
-     *   gauge joins its fold by `max`, so a raised fold survives every later checkpoint, where a
-     *   lowered floor would be undone by the next one: a checkpoint `delegate` writes reads this
-     *   very gauge, so until issuance passes the raised fold it asserts a lower floor at a lower
-     *   fold, and the join keeps the pair that reads the same.
+     * - **then the gauge's fold**. A raw position reads `max(⌈floor · w · G⌉, ticks) +
+     *   (issued − folded) · G` ([grossTicksAt]), so raising the fold by `k` units lowers it by
+     *   exactly `k · G` ticks. The gauge joins its fold by `max`, so a raised fold survives every
+     *   later checkpoint, where a lowered position would be undone by the next one: a checkpoint
+     *   `delegate` writes reads this very gauge, so until issuance passes the raised fold it asserts
+     *   a lower position at a lower fold, and the join keeps the pair that reads the same.
      *
      * ## Why it changes no pick
      *
@@ -452,7 +452,7 @@ public class FairShareAllocator(
      * Such an edge reads `ev = baseIssued / w = 0`, which makes it maximally eligible; and if it
      * won, [EntitlementLedger.delegate] would write its checkpoint at that origin,
      * [EntitlementLedger.seat] would then refuse it forever (a gauge exists), and the componentwise
-     * join could never lift a floor that is already the minimum. One merge landing at the wrong
+     * join could never lift a position that is already the minimum. One merge landing at the wrong
      * instant would hand a child permanent lifetime credit. Deferring it to the next [schedule]
      * costs one round and cannot.
      */
@@ -513,8 +513,8 @@ public class FairShareAllocator(
      * bank the difference. Seating them in two passes over two fronts is the same defect wearing a
      * schedule: with a runner at `ev = 200` and a waker at `0`, a seat-then-clamp order seats a
      * newborn at `100` and then clamps the waker to `mean(200, 100) = 150`, when both belong at
-     * `200`. The newborn's share of that is **permanent** — it is frozen into a [Gauge.floor] the
-     * join only ever ratchets up — which is exactly the §10.5 lifetime credit the seat exists to
+     * `200`. The newborn's share of that is **permanent** — it is frozen into the [Gauge]'s
+     * position, which the join only ever ratchets up — which is exactly the §10.5 lifetime credit the seat exists to
      * deny. [HeddlePolicy.front]'s KDoc states the rule; this is the one place that has to honour it.
      *
      * **When every active child is a joiner and one of them is waking**, the front is the joiner
@@ -529,7 +529,7 @@ public class FairShareAllocator(
      * be served first from becoming the front the *others* are then seated behind, which is how a
      * cohort of newborns would otherwise be split by nothing but pick order. And if this view is
      * merely stale rather than genuinely empty, the componentwise join repairs it: a better-informed
-     * peer's higher floor wins the `max`, so the low reading is absorbed rather than frozen.
+     * peer's higher position wins the `max`, so the low reading is absorbed rather than frozen.
      *
      * Publishes at most one patch.
      */

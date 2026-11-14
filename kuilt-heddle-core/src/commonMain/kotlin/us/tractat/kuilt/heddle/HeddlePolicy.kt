@@ -192,13 +192,13 @@ public object HeddlePolicy {
      * ev      = grossEv − returned / w
      * ```
      *
-     * `P` is the gauge's position, `max(⌈floor · w · G⌉, ticks)`, carried with the issuance the writer had actually
-     * observed when it asserted it, so a stale seat is self-limiting rather than a permanent lie;
+     * `P` is the gauge's position, `max(⌈floor · w · G⌉, ticks)`, carried with the issuance the
+     * writer had actually observed when it asserted it, so a stale seat is self-limiting rather than a permanent lie;
      * an edge nothing has seated yet reads from its own origin. The numerator stays *committed*
      * (not merely spent) service, so a grant advances the child the instant it is issued —
      * hoarding is charged — and a return walks it back. On the edge's own grid: whole ticks of
      * its service ([TICKS_PER_UNIT]), returned as the virtual time they stand for. Only a seat or
-     * a wake clamp rounds (design §7.2); this read is exact for every floor this module writes.
+     * a wake clamp rounds (design §7.2); this read is exact for every position this module writes.
      *
      * **This is the whole of the policy's virtual-time input.** It shares
      * [grossVirtualServiceAt] with [EntitlementLedger.grossVirtualService] and with the checkpoint
@@ -249,7 +249,7 @@ public object HeddlePolicy {
      * The parent's **current virtual time** — the front of the set of children competing under
      * it right now (design §7.2, §7.3 step 2). This is the value a *joiner* is seated at, under
      * one rule for both kinds of joiner: [EntitlementLedger.seat] writes it into a newborn's
-     * [Gauge] floor, and [wakeOffset] clamps a waking child up to it.
+     * [Gauge] as its position, and [wakeOffset] clamps a waking child up to it.
      *
      * The set is the **demanding candidates** ([isDemanding]), not every ACTIVE child. The two
      * differ the moment a sibling idles, and the difference has a fairness sign in *both*
@@ -279,7 +279,7 @@ public object HeddlePolicy {
      * replicated, so two peers can and do compute different fronts. That used to be safe only by
      * **carriage**: the finished record travelled in the log entry, one proposer's reading became
      * everyone's permanent fact, and a proposer reading a partial view froze a wrong one for good
-     * (issue #1713). The seat now goes into the [Gauge], whose join resolves by `max` on the floor
+     * (issue #1713). The seat now goes into the [Gauge], whose join resolves by `max` on the position
      * rather than preserving the reading — so every peer that still sees the edge unseated may
      * publish its own front and the readings converge instead of racing (issue #1752). A stale
      * peer's low reading is absorbed; a peer that has seen more wins.
