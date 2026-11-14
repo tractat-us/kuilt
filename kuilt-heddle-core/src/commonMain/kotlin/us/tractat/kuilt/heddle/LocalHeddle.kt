@@ -104,7 +104,12 @@ public sealed interface AcquireOutcome {
     /** A lease was opened. */
     public data class Acquired(public val lease: Lease) : AcquireOutcome, AdmitOutcome
 
-    /** No leaf was eligible for this slot. Nothing changed. */
+    /**
+     * No leaf was eligible for this slot: the eligible set was empty, or every leaf in it a pick
+     * could end at is beneath a node at its concurrency ceiling ([Topology.Node.maxConcurrent];
+     * see "Ceilings" on [LocalHeddle]). [LocalHeddle.explain] names that node for each such leaf,
+     * as [WaitExplanation.AtCeiling]. Nothing changed, the wake memory included.
+     */
     public data object NothingEligible : AcquireOutcome
 
     /**
@@ -274,8 +279,11 @@ public sealed interface LeaseOutcome {
  * included. Before a pick builds its demand views, every leaf beneath a group at its ceiling is
  * dropped from both sets, so the pick goes to a sibling, and the capped group counts as idle at its
  * parent: it banks no credit while it waits, and wakes clamped once a lease beneath it closes. A
- * ceiling of `0` pauses everything beneath it. [previewPicks] and [explain] filter the same way,
- * counting the leases already open and the ones a preview opens. The count is derived from the open
+ * ceiling of `0` pauses everything beneath it. When every eligible leaf is capped, [acquire]
+ * returns [AcquireOutcome.NothingEligible]. [previewPicks] filters the same way, counting the
+ * leases already open and the ones a preview opens; [explain] tells a capped leaf
+ * [WaitExplanation.AtCeiling], naming the capped group nearest the root; and [entitlement] owes a
+ * capped leaf nothing, so its siblings share its slots. The count is derived from the open
  * leases on every call, so a ceiling persists nothing and a reload that changes only ceilings
  * changes no edge. [admit], [extend], [complete] and [apply] charge work that is already running,
  * so no ceiling refuses them, and lowering one preempts nothing.
@@ -523,7 +531,8 @@ public class LocalHeddle private constructor(
      * A pick never reads [startedAt]; it is stored on the lease for the caller's own reconciling.
      *
      * Returns [AcquireOutcome.NothingEligible] when [eligible] is empty, or every leaf in it is
-     * beneath a group at its ceiling (see "Ceilings"), [AcquireOutcome.SupplyExhausted] when the root holds less than [reservation] and no capacity
+     * beneath a group at its ceiling (see "Ceilings"; a name no pick can end at is still
+     * [AcquireOutcome.NoLiveLineage]), [AcquireOutcome.SupplyExhausted] when the root holds less than [reservation] and no capacity
      * is reconciled, and [AcquireOutcome.NoLiveLineage] when no eligible leaf can be reached. In
      * each of those cases the ledger is unchanged, with no top-up either; only the allocator's wake
      * memory may have moved (see the class KDoc). [AcquireOutcome.PositionCeiling] when a pick on
@@ -626,13 +635,14 @@ public class LocalHeddle private constructor(
     /**
      * [waiting] and [eligible] without every leaf beneath a group at its ceiling: what a pick
      * builds its demand views over, so a capped group is wanted by nobody and counts as idle at its
-     * parent. The sets themselves when the topology sets no ceiling. The one filter [acquire], the
+     * parent. A name no pick can end at stays, so it is still reported as it is with no ceiling.
+     * The sets themselves when the topology sets no ceiling. The one filter [acquire], the
      * observing [admit] and a [LocalHeddleView]'s questions share.
      */
     internal fun belowCeilings(waiting: Set<GroupId>, eligible: Set<GroupId>): Pair<Set<GroupId>, Set<GroupId>> {
         if (!leasable.hasCeilings) return waiting to eligible
         val counts = openBeneath()
-        val waitingNow = ledger.belowCeilings(waiting, counts, leasable)
+        val waitingNow = ledger.belowCeilings(waiting, counts, root, leasable)
         return waitingNow to eligible.filterTo(HashSet()) { it in waitingNow }
     }
 
