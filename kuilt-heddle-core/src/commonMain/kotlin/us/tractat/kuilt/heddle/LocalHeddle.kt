@@ -226,7 +226,8 @@ public sealed interface LeaseOutcome {
  * the tree and reserves an estimated cost for it. When the work finishes, [complete] charges what
  * it really cost and hands back what it did not use. Cost is time, by convention, in whatever unit
  * the caller counts in. A lease that runs long is [extend]ed, or charged its overrun at the end;
- * a charge is never refused. Work another scheduler already started is [admit]ted, with no pick.
+ * a charge is never refused. Work another scheduler already started is [admit]ted, with no pick;
+ * pass the waiting set to [admit] and the wake memory observes it as the pick would have.
  *
  * Start one with [fromTopology], and change the tree while it runs with [apply]: a reload is one
  * unit, a reweight moves the leases open under it onto the new edge, and a removal drains (see
@@ -292,7 +293,9 @@ public sealed interface LeaseOutcome {
  *
  * **The ordinary refusals keep one change, the allocator's wake memory.** An [acquire] refused with
  * [AcquireOutcome.NoLiveLineage] leaves the ledger as it was, but the pick it tried at the root
- * observed who was waiting, and forgetting that would treat the next observation as the first. A
+ * observed who was waiting, and forgetting that would treat the next observation as the first. So
+ * does the `NoLiveLineage` of the [admit] overload that takes a waiting set, which observes it at
+ * the root. A
  * ceiling refusal keeps nothing, because its pick could not order the children it observed.
  *
  * ## Supply
@@ -588,6 +591,59 @@ public class LocalHeddle private constructor(
         val (funded, minted) = fund(base, reservation)
         val local = seatThenDelegate(funded, path, reservation, observedDemand(reservation))
             ?: return@atomically AcquireOutcome.NoLiveLineage(leaf)
+        ledger = local
+        forcedMints += minted
+        AcquireOutcome.Acquired(open(leaf, path, reservation, startedAt))
+    }
+
+    /**
+     * [admit], observing [waiting] on the way: charge work another scheduler already started at
+     * [leaf], and leave the wake memory as `acquire(waiting, eligible = {leaf})` would have (#3320).
+     * For a caller whose work is always started elsewhere: the plain [admit] observes nothing, so
+     * a group it saw idle that comes back is never clamped as a waker.
+     *
+     * At each group down [leaf]'s lineage it seats the newborns and clamps the wakers against
+     * [waiting], as that pick does, then delegates [reservation] down the lineage without picking.
+     * So it is never refused for supply or at a position ceiling: a seat or a clamp taken at a
+     * ceiling saturates there, and the charge lands as the plain [admit]'s does. The equivalence
+     * holds wherever that acquire would lease; where it would be refused, this still charges.
+     *
+     * Returns [AcquireOutcome.NoLiveLineage] when [leaf] is not leasable or has no lineage of
+     * active edges to the root, as [admit] does. The ledger is then unchanged, but the wake memory
+     * has observed [waiting] at the root, as the refused acquire's pick would have when the engine can
+     * fund the reservation; where it cannot, that acquire returns [AcquireOutcome.SupplyExhausted]
+     * and observes nothing.
+     *
+     * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION], or
+     *   [leaf] is not in [waiting].
+     * @sample us.tractat.kuilt.heddle.sampleBuildFarm
+     */
+    public fun admit(
+        leaf: GroupId,
+        waiting: Set<GroupId>,
+        startedAt: Long,
+        reservation: Long = policy.defaultReservation,
+    ): AdmitOutcome = atomically {
+        requireReservation("reservation", reservation)
+        require(leaf in waiting) { "leaf must be in waiting" }
+        val base = ledger
+        val seen = demands(base, waiting, setOf(leaf), reservation).waiting
+        if (!base.canEndAt(leaf)) {
+            // The refused acquire's pick observes at the root before it finds nothing to pick.
+            allocator.settle(root, base, seen)
+            return@atomically AcquireOutcome.NoLiveLineage(leaf)
+        }
+        val path = checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }
+
+        val (funded, minted) = fund(base, reservation)
+        var local = funded
+        for (edge in path) {
+            val parent = checkNotNull(local.record(edge)) { "lineage edge ${edge.value} has no record" }.parent
+            local = allocator.settle(parent, local, seen)
+            local = checkNotNull(seatThenDelegate(local, listOf(edge), reservation, seen)) {
+                "the delegation of $reservation down ${edge.value}, admitted down a live lineage, was refused"
+            }
+        }
         ledger = local
         forcedMints += minted
         AcquireOutcome.Acquired(open(leaf, path, reservation, startedAt))

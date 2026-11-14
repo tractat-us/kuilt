@@ -773,6 +773,8 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public static synthetic fun acquire$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/util/Set;Ljava/util/Set;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AcquireOutcome;
 	public final fun admit-lUmtw0Q (Ljava/lang/String;JJ)Lus/tractat/kuilt/heddle/AdmitOutcome;
 	public static synthetic fun admit-lUmtw0Q$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AdmitOutcome;
+	public final fun admit-mLLTQY0 (Ljava/lang/String;Ljava/util/Set;JJ)Lus/tractat/kuilt/heddle/AdmitOutcome;
+	public static synthetic fun admit-mLLTQY0$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;Ljava/util/Set;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AdmitOutcome;
 	public final fun apply (Lus/tractat/kuilt/heddle/Topology;J)Lus/tractat/kuilt/heddle/ApplyResult;
 	public final fun attachRuntimeChild (Ljava/util/List;Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ApplyResult;
 	public final fun cancel (Lus/tractat/kuilt/heddle/LeaseId;)Lus/tractat/kuilt/heddle/LeaseOutcome;
