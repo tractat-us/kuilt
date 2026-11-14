@@ -540,11 +540,11 @@ bounds the size.
 
 Three other readers need a retired edge:
 
-- **conservation.** `leafSpentTotal()` sums each edge's effective leaf spend over
-  every edge, retired included;
-- **the generation floor.** It is one global maximum over every edge, retired
-  included, so that no id is ever reused;
-- **`Topology.diff`'s `hasChildEdges` test,** which asks whether a group has any
+- **Conservation.** `leafSpentTotal()` sums each edge's effective leaf spend over
+  every edge, retired included.
+- **The generation floor.** It is one global maximum over every edge, retired
+  included, so that no id is ever reused.
+- **`Topology.diff`'s `hasChildEdges` test.** It asks whether a group has any
   child edge in any lifecycle, to decide whether a reload needs a `Reconcile`.
 
 #### The design: fold, then forget
