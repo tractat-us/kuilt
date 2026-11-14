@@ -11,3 +11,21 @@ internal fun Gauge.assertedAt(w: Weight): Rational = ticksToVirtual(storedTicks(
 
 /** A ticks-only gauge asserting [units] of its own service at weight one, at [folded]. */
 internal fun gaugeOfUnits(units: Long, folded: Long): Gauge = gaugeAt(Int128.of(units * TICKS_PER_UNIT), folded)
+
+/**
+ * [this] ledger with every gauge rewritten as the ticks-only gauge it reads as, at the same fold.
+ * A ledger an older build wrote, with its positions in [Gauge.floor], then compares equal to the
+ * same ledger this build writes, where a seat and a checkpoint store [Gauge.ticks] (#3353).
+ */
+internal fun EntitlementLedger.withGaugesAsTicks(): EntitlementLedger {
+    val asTicks = allEdges().mapNotNull { edge ->
+        val gauge = gauge(edge) ?: return@mapNotNull null
+        val w = checkNotNull(record(edge)?.weight) { "a gauge on ${edge.value} with no single record" }
+        edge to gaugeAt(gauge.storedTicks(w), gauge.folded)
+    }.toMap()
+    return withoutGauges().piece(EntitlementLedger.of(gauges = asTicks))
+}
+
+/** [this] snapshot with its ledger's gauges rewritten as [EntitlementLedger.withGaugesAsTicks] does. */
+internal fun LocalHeddleSnapshot.withGaugesAsTicks(): LocalHeddleSnapshot =
+    LocalHeddleSnapshot(epoch, ledger.withGaugesAsTicks(), allocatorMemory, totalSlots, open, lastApplied)
