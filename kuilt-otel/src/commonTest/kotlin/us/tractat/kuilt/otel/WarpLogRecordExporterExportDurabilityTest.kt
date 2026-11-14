@@ -48,7 +48,7 @@ class WarpLogRecordExporterExportDurabilityTest {
     private fun exporterFor(store: DurableStore, sink: AppliedOpSink = AppliedOpSink.Discarding) =
         WarpLogRecordExporter(replica = replica, store = store, maxRecords = 1_000, segmentOps = 64, appliedOps = sink)
 
-    private suspend fun bodiesAfterRestart(store: DurableStore): List<String> =
+    private suspend fun bodiesAfterRestart(store: DurableStore): List<String?> =
         exporterFor(store).also { it.recover() }.snapshot().toList().map { it.body }
 
     /**
