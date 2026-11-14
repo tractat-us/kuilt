@@ -7,8 +7,9 @@ import org.gradle.api.tasks.TaskAction
 
 /**
  * Writes `KuiltVersion.kt`, the `commonMain` source carrying the library's own version as a
- * `public const val`, so a consumer that records which kuilt wrote something reads it instead of
- * hand-copying a string that drifts on every upgrade (#3323).
+ * `public val` (deliberately not `const`, see the generated KDoc), so a consumer that records which
+ * kuilt wrote something reads it instead of hand-copying a string that drifts on every upgrade
+ * (#3323).
  *
  * [libraryVersion] is an `@Input`, so a `-Pversion=…` override reruns this task and the compile
  * tasks behind it rather than serving the previous version's source. The value is checked against
@@ -50,20 +51,21 @@ abstract class GenerateKuiltVersion : DefaultTask() {
             |package $pkg
             |
             |/**
-            | * The version of kuilt this artifact was built as.
+            | * The version of the kuilt that is running.
             | *
             | * It is the same string the build publishes the artifact under: `<line>.0-dev` from a local
             | * build, `<line>.0-dev.<run>` from a snapshot, and the tag's `x.y.z` from a release. Every
-            | * kuilt module depends on `:kuilt-core`, so this one constant names the version of all of them
+            | * kuilt module depends on `:kuilt-core`, so this one value names the version of all of them
             | * when the BOM keeps them aligned.
             | *
-            | * Being a `const val`, it is inlined into the code that reads it at that code's compile time.
-            | * It names the kuilt a consumer compiled against, which is the version it resolved unless the
-            | * jar is swapped underneath an already-built binary.
+            | * It is deliberately a plain `val`, not a `const`, for two reasons. A `const` is copied into
+            | * the code that reads it when that code compiles, so it would name the kuilt a consumer
+            | * compiled against rather than the one actually running. And a `const` puts its value in
+            | * this module's ABI, so every release would recompile every module built against it.
             | */
             |public object KuiltVersion {
-            |    /** The kuilt version, for example `0.7.0-dev`, `0.7.0-dev.412` or `0.7.4`. */
-            |    public const val VERSION: String = "$version"
+            |    /** The running kuilt's version, for example `0.7.0-dev`, `0.7.0-dev.412` or `0.7.4`. */
+            |    public val VERSION: String = "$version"
             |}
             |""".trimMargin()
     }
