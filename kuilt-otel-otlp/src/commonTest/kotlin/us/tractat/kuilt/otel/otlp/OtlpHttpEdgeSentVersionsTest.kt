@@ -185,9 +185,11 @@ class OtlpHttpEdgeSentVersionsTest {
     }
 
     /**
-     * The cache is observed through a direct [OtlpHttpEdge.sendMetrics] after the failure: a send
-     * folds onto the cache without a digest call refreshing it from disk first, so a cache that took
-     * the failed point would write it into the sent-set here.
+     * The cache is observed through a direct [OtlpHttpEdge.sendMetrics] after the failure. A send
+     * re-reads disk before it writes, but keeps the cached map when the bytes still match, so a
+     * cache that took the failed point while keeping the old bytes would write it into the sent-set
+     * here. A cache folded together with new bytes is not visible to any test: the byte check sees
+     * the mismatch and decodes disk again, so the fold changes nothing.
      */
     @Test
     fun aFailedPostLeavesDiskAndCacheUnchangedAndTheNextDrainResends() = runTest {
@@ -226,9 +228,11 @@ class OtlpHttpEdgeSentVersionsTest {
     }
 
     /**
-     * Observed the same way: the second send folds onto the cache without a refresh, so a cache
-     * folded on the acknowledged POST alone would write `a` into the sent-set although the send that
-     * carried it recorded nothing.
+     * Observed the same way, with the same blind spot: a cache folded on the acknowledged POST while
+     * keeping the bytes it came from would write `a` into the sent-set although the send that
+     * carried it recorded nothing. A cache set to the refused write's own bytes is corrected by the
+     * next write's byte check, so folding before rather than after the store's write is not
+     * observable here.
      */
     @Test
     fun anAcknowledgedPostWhoseWriteIsRefusedDoesNotFoldTheCache() = runTest {
