@@ -10,7 +10,7 @@ package us.tractat.kuilt.math
  * question left is whether the final answer fits back in a `Long` — which [toLongOrNull] and
  * [divideOrNull] answer with `null` rather than a wrapped value.
  *
- * Arithmetic between two `Int128`s ([plus], [minus], [unaryMinus]) throws [ArithmeticException] if
+ * Arithmetic between two `Int128`s ([plus], [minus]) throws [ArithmeticException] if
  * it leaves 128 bits. Reaching that from `Long` inputs takes about 2⁶³ terms, so a throw there is a
  * caller bug rather than a data condition, and it is never a silent wrap.
  *
@@ -30,15 +30,7 @@ public class Int128 private constructor(
     public val low: Long,
 ) : Comparable<Int128> {
 
-    /** `true` when this value is below zero. */
-    public val isNegative: Boolean get() = high < 0L
-
-    /** `-1`, `0` or `1`, the sign of this value. */
-    public val sign: Int get() = when {
-        high < 0L -> -1
-        high == 0L && low == 0L -> 0
-        else -> 1
-    }
+    private val isNegative: Boolean get() = high < 0L
 
     /** The exact sum. Throws [ArithmeticException] if it leaves 128 bits. */
     public operator fun plus(other: Int128): Int128 {
@@ -65,9 +57,6 @@ public class Int128 private constructor(
 
     /** The exact difference with a `Long`. Throws [ArithmeticException] if it leaves 128 bits. */
     public operator fun minus(other: Long): Int128 = minus(of(other))
-
-    /** The negation. Throws [ArithmeticException] for [MIN_VALUE], whose negation is 2¹²⁷. */
-    public operator fun unaryMinus(): Int128 = ZERO - this
 
     /** This value as a `Long`, or `null` when it does not fit in one. */
     public fun toLongOrNull(): Long? = if (high == (low shr 63)) low else null
@@ -143,14 +132,11 @@ public class Int128 private constructor(
         /** Zero. */
         public val ZERO: Int128 = Int128(0L, 0L)
 
-        /** One. */
-        public val ONE: Int128 = Int128(0L, 1L)
+        /** The largest value, 2¹²⁷ − 1. Internal: nothing outside this module needs it yet. */
+        internal val MAX_VALUE: Int128 = Int128(Long.MAX_VALUE, -1L)
 
-        /** The largest value, 2¹²⁷ − 1. */
-        public val MAX_VALUE: Int128 = Int128(Long.MAX_VALUE, -1L)
-
-        /** The smallest value, −2¹²⁷. */
-        public val MIN_VALUE: Int128 = Int128(Long.MIN_VALUE, 0L)
+        /** The smallest value, −2¹²⁷. Internal: nothing outside this module needs it yet. */
+        internal val MIN_VALUE: Int128 = Int128(Long.MIN_VALUE, 0L)
 
         /** The `Long` [value], widened. */
         public fun of(value: Long): Int128 = Int128(value shr 63, value)

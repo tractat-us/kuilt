@@ -20,12 +20,8 @@ final enum class us.tractat.kuilt.math/Rounding : kotlin/Enum<us.tractat.kuilt.m
 final class us.tractat.kuilt.math/Int128 : kotlin/Comparable<us.tractat.kuilt.math/Int128> { // us.tractat.kuilt.math/Int128|null[0]
     final val high // us.tractat.kuilt.math/Int128.high|{}high[0]
         final fun <get-high>(): kotlin/Long // us.tractat.kuilt.math/Int128.high.<get-high>|<get-high>(){}[0]
-    final val isNegative // us.tractat.kuilt.math/Int128.isNegative|{}isNegative[0]
-        final fun <get-isNegative>(): kotlin/Boolean // us.tractat.kuilt.math/Int128.isNegative.<get-isNegative>|<get-isNegative>(){}[0]
     final val low // us.tractat.kuilt.math/Int128.low|{}low[0]
         final fun <get-low>(): kotlin/Long // us.tractat.kuilt.math/Int128.low.<get-low>|<get-low>(){}[0]
-    final val sign // us.tractat.kuilt.math/Int128.sign|{}sign[0]
-        final fun <get-sign>(): kotlin/Int // us.tractat.kuilt.math/Int128.sign.<get-sign>|<get-sign>(){}[0]
 
     final fun compareTo(us.tractat.kuilt.math/Int128): kotlin/Int // us.tractat.kuilt.math/Int128.compareTo|compareTo(us.tractat.kuilt.math.Int128){}[0]
     final fun divideOrNull(kotlin/Long, us.tractat.kuilt.math/Rounding): kotlin/Long? // us.tractat.kuilt.math/Int128.divideOrNull|divideOrNull(kotlin.Long;us.tractat.kuilt.math.Rounding){}[0]
@@ -37,15 +33,8 @@ final class us.tractat.kuilt.math/Int128 : kotlin/Comparable<us.tractat.kuilt.ma
     final fun plus(us.tractat.kuilt.math/Int128): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.plus|plus(us.tractat.kuilt.math.Int128){}[0]
     final fun toLongOrNull(): kotlin/Long? // us.tractat.kuilt.math/Int128.toLongOrNull|toLongOrNull(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.math/Int128.toString|toString(){}[0]
-    final fun unaryMinus(): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.unaryMinus|unaryMinus(){}[0]
 
     final object Companion { // us.tractat.kuilt.math/Int128.Companion|null[0]
-        final val MAX_VALUE // us.tractat.kuilt.math/Int128.Companion.MAX_VALUE|{}MAX_VALUE[0]
-            final fun <get-MAX_VALUE>(): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.Companion.MAX_VALUE.<get-MAX_VALUE>|<get-MAX_VALUE>(){}[0]
-        final val MIN_VALUE // us.tractat.kuilt.math/Int128.Companion.MIN_VALUE|{}MIN_VALUE[0]
-            final fun <get-MIN_VALUE>(): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.Companion.MIN_VALUE.<get-MIN_VALUE>|<get-MIN_VALUE>(){}[0]
-        final val ONE // us.tractat.kuilt.math/Int128.Companion.ONE|{}ONE[0]
-            final fun <get-ONE>(): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.Companion.ONE.<get-ONE>|<get-ONE>(){}[0]
         final val ZERO // us.tractat.kuilt.math/Int128.Companion.ZERO|{}ZERO[0]
             final fun <get-ZERO>(): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.math/Int128.Companion.ZERO.<get-ZERO>|<get-ZERO>(){}[0]
 

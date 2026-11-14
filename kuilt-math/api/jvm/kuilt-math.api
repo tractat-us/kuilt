@@ -13,23 +13,17 @@ public final class us/tractat/kuilt/math/Int128 : java/lang/Comparable {
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getHigh ()J
 	public final fun getLow ()J
-	public final fun getSign ()I
 	public fun hashCode ()I
-	public final fun isNegative ()Z
 	public final fun minus (J)Lus/tractat/kuilt/math/Int128;
 	public final fun minus (Lus/tractat/kuilt/math/Int128;)Lus/tractat/kuilt/math/Int128;
 	public final fun plus (J)Lus/tractat/kuilt/math/Int128;
 	public final fun plus (Lus/tractat/kuilt/math/Int128;)Lus/tractat/kuilt/math/Int128;
 	public final fun toLongOrNull ()Ljava/lang/Long;
 	public fun toString ()Ljava/lang/String;
-	public final fun unaryMinus ()Lus/tractat/kuilt/math/Int128;
 }
 
 public final class us/tractat/kuilt/math/Int128$Companion {
 	public final fun fromTwosComplement (JJ)Lus/tractat/kuilt/math/Int128;
-	public final fun getMAX_VALUE ()Lus/tractat/kuilt/math/Int128;
-	public final fun getMIN_VALUE ()Lus/tractat/kuilt/math/Int128;
-	public final fun getONE ()Lus/tractat/kuilt/math/Int128;
 	public final fun getZERO ()Lus/tractat/kuilt/math/Int128;
 	public final fun of (J)Lus/tractat/kuilt/math/Int128;
 }

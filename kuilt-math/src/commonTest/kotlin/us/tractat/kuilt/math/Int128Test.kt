@@ -19,7 +19,7 @@ class Int128Test {
         { assertEquals(Int128.fromTwosComplement(-1L, Long.MAX_VALUE), Int128.of(Long.MIN_VALUE) - 1L) },
         { assertEquals(Int128.of(-1L), Int128.ZERO - 1L) },
         { assertEquals(Int128.ZERO, two64 - two64) },
-        { assertEquals(Int128.of(Long.MIN_VALUE), -(Int128.of(Long.MAX_VALUE) + 1L)) },
+        { assertEquals(Int128.of(Long.MIN_VALUE), Int128.ZERO - (Int128.of(Long.MAX_VALUE) + 1L)) },
     )
 
     @Test
@@ -27,8 +27,8 @@ class Int128Test {
         { assertFailsWith<ArithmeticException> { Int128.MAX_VALUE + 1L } },
         { assertFailsWith<ArithmeticException> { Int128.MIN_VALUE - 1L } },
         { assertFailsWith<ArithmeticException> { Int128.MAX_VALUE - Int128.MIN_VALUE } },
-        { assertFailsWith<ArithmeticException> { -Int128.MIN_VALUE } },
-        { assertEquals(Int128.MIN_VALUE, -Int128.MAX_VALUE - 1L) },
+        { assertFailsWith<ArithmeticException> { Int128.ZERO - Int128.MIN_VALUE } },
+        { assertEquals(Int128.MIN_VALUE, Int128.ZERO - Int128.MAX_VALUE - 1L) },
     )
 
     @Test
@@ -47,9 +47,6 @@ class Int128Test {
         { assertTrue(Int128.MIN_VALUE < Int128.of(Long.MIN_VALUE)) },
         { assertTrue(Int128.MAX_VALUE > two64) },
         { assertEquals(0, Int128.of(42L).compareTo(Int128.of(42L))) },
-        { assertEquals(-1, Int128.of(-7L).sign) },
-        { assertEquals(0, Int128.ZERO.sign) },
-        { assertEquals(1, two64.sign) },
     )
 
     @Test
