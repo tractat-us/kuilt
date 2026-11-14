@@ -48,7 +48,7 @@ class LocalHeddleExplainTest {
             { assertEquals(WaitExplanation.NotWaiting, broke.explain(root, all, all)) },
             {
                 assertEquals(
-                    listOf("NOT_WAITING", "NOT_ELIGIBLE", "NO_LIVE_LINEAGE", "SUPPLY_EXHAUSTED", "POSITION_CEILING", "BEHIND_AT_LEVEL", "WOULD_BE_PICKED_NEXT"),
+                    listOf("NOT_WAITING", "NOT_ELIGIBLE", "NO_LIVE_LINEAGE", "AT_CEILING", "SUPPLY_EXHAUSTED", "POSITION_CEILING", "BEHIND_AT_LEVEL", "WOULD_BE_PICKED_NEXT"),
                     WaitExplanation.Kind.entries.map { it.name },
                     "the arms' order is part of the API",
                 )
@@ -297,8 +297,10 @@ class LocalHeddleExplainTest {
             { assertTrue(acquires > SEEDS * STEPS / 3, "the explain-then-acquire arm ran: $acquires") },
             // A position ceiling takes some 2⁵⁶ units of service under one parent, which no history
             // here reaches: LocalHeddlePositionCeilingTest pins explain and acquire agreeing there.
-            { assertTrue(seen.indices.all { it == absent || it == CEILING || seen[it] > 0 }, "every rig fired: ${RIG.indices.joinToString { "${RIG[it]}=${seen[it]}" }}") },
+            // No topology here declares a concurrency ceiling: LocalHeddleCeilingTest pins AT_CEILING.
+            { assertTrue(seen.indices.all { it == absent || it == CEILING || it == AT_CEILING || seen[it] > 0 }, "every rig fired: ${RIG.indices.joinToString { "${RIG[it]}=${seen[it]}" }}") },
             { assertEquals(0, seen[CEILING], "no history here reaches a position ceiling") },
+            { assertEquals(0, seen[AT_CEILING], "no history here declares a concurrency ceiling") },
             { assertEquals(0, seen[absent], "${RIG[absent]} never fires in the $label arm") },
         )
     }
@@ -419,6 +421,7 @@ class LocalHeddleExplainTest {
 
         /** One counter per [WaitExplanation.Kind], by ordinal, then the shapes that matter most. */
         val CEILING = WaitExplanation.Kind.POSITION_CEILING.ordinal
+        val AT_CEILING = WaitExplanation.Kind.AT_CEILING.ordinal
         val RIG = WaitExplanation.Kind.entries.map { it.name } + listOf("behindBelowRoot", "behindClosing", "gainedAChild", "wakerEligible", "fundedByTopUp")
         val BEHIND_BELOW_ROOT = WaitExplanation.Kind.entries.size
         val BEHIND_CLOSING = BEHIND_BELOW_ROOT + 1

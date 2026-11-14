@@ -58,6 +58,9 @@ class HeddleSamplesRunTest {
     fun explainWaitHolds() = sampleExplainWait()
 
     @Test
+    fun concurrencyCeilingHolds() = sampleConcurrencyCeiling()
+
+    @Test
     fun reconcileLeasesHolds() = sampleReconcileLeases()
 
     @Test

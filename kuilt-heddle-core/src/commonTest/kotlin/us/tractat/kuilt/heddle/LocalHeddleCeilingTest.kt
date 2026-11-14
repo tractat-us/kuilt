@@ -4,15 +4,18 @@ import us.tractat.kuilt.heddle.Topology.Group
 import us.tractat.kuilt.heddle.Topology.Lane
 import us.tractat.kuilt.heddle.Topology.RuntimeChildren
 import us.tractat.kuilt.test.assertAll
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * A ceiling is enforced (#3324, design §11.2): a pick drops every leaf beneath a node whose open
  * leases have reached its `maxConcurrent` from both the waiting and the eligible set, so the node
  * counts as idle at its parent and wakes clamped. `admit`, `extend` and `complete` are never refused.
+ * And it is reported: `explain` names the ceiling a leaf waits on, and `entitlement` owes it nothing.
  */
 class LocalHeddleCeilingTest {
 
@@ -198,21 +201,197 @@ class LocalHeddleCeilingTest {
         )
     }
 
-    /** `explain` agrees with the acquire: a capped leaf is dropped from the eligible set, and the pick goes to its sibling. */
+    /**
+     * `explain` names the ceiling a capped leaf waits on, and agrees with the acquire, which skips
+     * it for its sibling. The answer comes before the supply check, so it holds on an engine with no
+     * supply at all.
+     */
     @Test
-    fun explainAgreesWithTheAcquireAtACeiling() {
+    fun explainNamesTheCeilingTheAcquireSkipsALeafFor() {
         val h = engine(heavy(cap = 1L))
         h.lease(setOf(a))
         val ofCapped = h.explain(a, ab, ab)
         val ofSibling = h.explain(b, ab, ab)
         val onlyCapped = h.explain(a, setOf(a), setOf(a))
         val viewed = h.persist().view(policy)
+        val broke = LocalHeddle.fromTopology(heavy(cap = 0L), policy, epoch = 0L)
         assertAll(
-            { assertEquals(WaitExplanation.NotEligible, ofCapped) },
+            { assertEquals(WaitExplanation.AtCeiling(a, 1L), ofCapped) },
+            { assertEquals(WaitExplanation.Kind.AT_CEILING, ofCapped.kind) },
             { assertEquals(WaitExplanation.WouldBePickedNext, ofSibling) },
-            { assertEquals(WaitExplanation.NotEligible, onlyCapped, "every eligible leaf capped, and explain does not throw") },
-            { assertEquals(ofSibling, viewed.explain(b, ab, ab)) },
+            { assertEquals(WaitExplanation.AtCeiling(a, 1L), onlyCapped, "every eligible leaf capped, and explain does not throw") },
+            { assertEquals(listOf(ofCapped, ofSibling), listOf(viewed.explain(a, ab, ab), viewed.explain(b, ab, ab)), "a view of the snapshot agrees") },
+            { assertEquals(WaitExplanation.AtCeiling(a, 0L), broke.explain(a, ab, ab), "a ceiling outranks an empty root") },
+            { assertEquals(WaitExplanation.SupplyExhausted, broke.explain(b, ab, ab), "the control: the uncapped sibling is told the supply") },
             { assertEquals(b, h.pick(ab), "the acquire it explains") },
+        )
+    }
+
+    /**
+     * With two groups capped on one lineage, `explain` names the topmost, the one the whole subtree
+     * waits on. `acme` holds `x` (ceiling 1); one lease at `x` fills `x`, and fills `acme` too when
+     * its ceiling is 1.
+     */
+    @Test
+    fun explainNamesTheTopmostCappedGroupOnTheLineage() {
+        fun tree(acmeCap: Long) = Topology(
+            "root",
+            listOf(Group("acme", Weight.ONE, listOf(Lane("x", maxConcurrent = 1L), Lane("y")), maxConcurrent = acmeCap), Lane("b")),
+        )
+        val t = tree(1L)
+        val acme = t.groupId("acme")
+        val x = t.groupId("acme", "x")
+        val y = t.groupId("acme", "y")
+        val all = setOf(x, y, t.groupId("b"))
+        fun reasons(acmeCap: Long): List<WaitExplanation> {
+            val h = engine(tree(acmeCap))
+            h.lease(setOf(x))
+            return listOf(h.explain(x, all, all), h.explain(y, all, all))
+        }
+        val (xBoth, yBoth) = reasons(acmeCap = 1L)
+        val (xLane, yLane) = reasons(acmeCap = 2L)
+        assertAll(
+            { assertEquals(WaitExplanation.AtCeiling(acme, 1L), xBoth, "both are full: the topmost is named") },
+            { assertEquals(WaitExplanation.AtCeiling(acme, 1L), yBoth, "y waits on acme, not on x") },
+            { assertEquals(WaitExplanation.AtCeiling(x, 1L), xLane, "the control: only the lane is full") },
+            { assertTrue(yLane !is WaitExplanation.AtCeiling, "and y is not capped: $yLane") },
+        )
+    }
+
+    /**
+     * A name no pick can end at is still `NoLiveLineage` beneath a capped group, from `explain` and
+     * from `acquire` alike, exactly as it is with no ceiling: a ceiling never hides a misnamed leaf.
+     */
+    @Test
+    fun aGroupNamedAsALeafIsNoLiveLineageBeneathACeilingToo() {
+        fun tree(cap: Long?) = Topology(
+            "root",
+            listOf(Group("acme", Weight.ONE, listOf(Lane("x"), Lane("y")), maxConcurrent = cap), Lane("b")),
+        )
+        val t = tree(null)
+        val root = t.groupId()
+        val acme = t.groupId("acme")
+        val waiting = setOf(acme, t.groupId("b"))
+        fun answers(cap: Long?): List<Any> {
+            val h = engine(tree(cap))
+            return listOf(h.acquire(waiting, setOf(acme), startedAt = 0L), h.explain(acme, waiting, setOf(acme)))
+        }
+        assertAll(
+            { assertEquals(listOf<Any>(AcquireOutcome.NoLiveLineage(root), WaitExplanation.NoLiveLineage(acme)), answers(null), "the control: no ceiling") },
+            { assertEquals(answers(null), answers(0L), "paused") },
+            { assertEquals(answers(null), answers(2L), "below its ceiling") },
+        )
+    }
+
+    /**
+     * A capped leaf does not compete, so `entitlement` owes it nothing and its sibling the whole
+     * share, from the engine and from a view of its snapshot alike.
+     */
+    @Test
+    fun entitlementOwesACappedLeafNothing() {
+        fun shares(cap: Long?): List<Rational> {
+            val h = engine(heavy(cap))
+            h.lease(setOf(a))
+            val view = h.persist().view(policy)
+            return listOf(h.entitlement(a, ab, 11L), h.entitlement(b, ab, 11L), view.entitlement(a, ab, 11L), view.entitlement(b, ab, 11L))
+        }
+        assertAll(
+            { assertEquals(listOf(Rational.of(10L), Rational.ONE, Rational.of(10L), Rational.ONE), shares(cap = 2L), "the control: below its ceiling, a competes") },
+            { assertEquals(listOf(Rational.ZERO, Rational.of(11L), Rational.ZERO, Rational.of(11L)), shares(cap = 1L)) },
+        )
+    }
+
+    /**
+     * Across random histories under random ceilings, `explain` answers `AtCeiling` exactly for an
+     * eligible leaf with a node at its ceiling on its path, naming the topmost, counted here from
+     * the open leases rather than by the engine. The acquire that follows never picks such a leaf,
+     * picks the one `explain` called `WouldBePickedNext`, and finds nothing eligible only when every
+     * eligible leaf is capped. `entitlement` owes a capped leaf nothing and shares every slot among
+     * the rest.
+     */
+    @Test
+    fun explainAndEntitlementAgreeWithTheAcquireUnderCeilings() {
+        val caps = listOf(null, 0L, 1L, 2L)
+        var atCeiling = 0
+        var topmostAbove = 0
+        var picks = 0
+        var allCapped = 0
+        for (seed in 0 until 120) {
+            val rng = Random(seed)
+            val xCap = caps.random(rng)
+            val acmeCap = caps.random(rng)
+            val bCap = caps.random(rng)
+            val t = Topology(
+                "root",
+                listOf(
+                    Group("acme", Weight.of(3), listOf(Lane("x", maxConcurrent = xCap), Lane("y")), maxConcurrent = acmeCap),
+                    Lane("b", maxConcurrent = bCap),
+                    Lane("c"),
+                ),
+            )
+            val acme = t.groupId("acme")
+            val x = t.groupId("acme", "x")
+            val y = t.groupId("acme", "y")
+            val lb = t.groupId("b")
+            val lc = t.groupId("c")
+            val leaves = listOf(x, y, lb, lc)
+            // Each leaf's capped-or-not nodes, top-down, and the ceilings the topology declares on them.
+            val above = mapOf(x to listOf(acme, x), y to listOf(acme), lb to listOf(lb), lc to emptyList())
+            val limit = mapOf(acme to acmeCap, x to xCap, lb to bCap)
+            val h = engine(t)
+            repeat(30) { step ->
+                val open = h.snapshot().leases
+                if (open.isNotEmpty() && rng.nextInt(3) == 0) {
+                    check(h.complete(open[rng.nextInt(open.size)].id, 1L) is LeaseOutcome.Done)
+                    return@repeat
+                }
+                val at = "seed $seed step $step"
+                val waiting = leaves.filter { rng.nextInt(4) != 0 }.toSet()
+                val eligible = waiting.filter { rng.nextInt(3) != 0 }.toSet()
+                val count = HashMap<GroupId, Int>()
+                for (lease in open) for (g in above.getValue(lease.leaf)) count[g] = (count[g] ?: 0) + 1
+                fun capOf(leaf: GroupId): WaitExplanation.AtCeiling? = above.getValue(leaf).firstNotNullOfOrNull { g ->
+                    limit[g]?.takeIf { (count[g] ?: 0) >= it }?.let { WaitExplanation.AtCeiling(g, it) }
+                }
+                val reasons = leaves.associateWith { h.explain(it, waiting, eligible) }
+                for (leaf in eligible) {
+                    val expected = capOf(leaf)
+                    if (expected != null) {
+                        atCeiling++
+                        if (expected.group != leaf) topmostAbove++
+                        assertEquals(expected, reasons[leaf], "$at: ${leaf.value}")
+                    } else {
+                        assertTrue(reasons[leaf] !is WaitExplanation.AtCeiling, "$at: ${leaf.value} is not capped, told ${reasons[leaf]}")
+                    }
+                }
+                val competing = waiting.filter { capOf(it) == null }
+                val shares = leaves.associateWith { h.entitlement(it, waiting, 12L) }
+                assertAll(
+                    { assertTrue(waiting.filter { capOf(it) != null }.all { shares[it] == Rational.ZERO }, "$at: a capped leaf is owed nothing: $shares") },
+                    {
+                        val whole = if (competing.isEmpty()) Rational.ZERO else Rational.of(12L)
+                        assertEquals(whole, competing.fold(Rational.ZERO) { sum, it -> sum + shares.getValue(it) }, "$at: the rest share every slot")
+                    },
+                )
+                when (val out = h.acquire(waiting, eligible, startedAt = 0L)) {
+                    is AcquireOutcome.Acquired -> {
+                        picks++
+                        assertEquals(WaitExplanation.WouldBePickedNext, reasons[out.lease.leaf], "$at: the pick")
+                    }
+                    AcquireOutcome.NothingEligible -> {
+                        if (eligible.isNotEmpty()) allCapped++
+                        assertTrue(eligible.all { capOf(it) != null }, "$at: nothing eligible, though $eligible is not all capped")
+                    }
+                    else -> fail("$at: an engine with capacity and four live lanes gave $out")
+                }
+            }
+        }
+        println("CEILING-AGREES atCeiling=$atCeiling topmostAbove=$topmostAbove picks=$picks allCapped=$allCapped")
+        assertAll(
+            { assertTrue(atCeiling > 100,"the rig: capped leaves were explained: $atCeiling") },
+            { assertTrue(topmostAbove > 20, "the rig: a group above the leaf was the one named: $topmostAbove") },
+            { assertTrue(picks > 300, "the rig: the acquires picked: $picks") },
+            { assertTrue(allCapped > 10, "the rig: every eligible leaf was capped: $allCapped") },
         )
     }
 }

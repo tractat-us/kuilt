@@ -61,6 +61,34 @@ internal fun sampleExplainWait() {
 }
 
 /**
+ * Run no more than one deploy at once, however idle the rest of the pool is: a ceiling. While a
+ * deploy runs, the next slot goes to builds, `explain` names the ceiling, and builds are owed every
+ * slot. Once the deploy finishes, deploys compete again.
+ */
+@Suppress("unused")
+internal fun sampleConcurrencyCeiling() {
+    val tree = draft("pool") {
+        lane("deploys", Weight.of(3), maxConcurrent = 1)
+        lane("builds")
+    }
+    val deploys = tree.groupId("deploys")
+    val builds = tree.groupId("builds")
+    val heddle = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 4L)
+    val queued = setOf(deploys, builds)
+
+    val deploy = (heddle.acquire(queued, queued, startedAt = 0L) as AcquireOutcome.Acquired).lease
+    check(deploy.leaf == deploys)
+    // Deploys weigh three times as much, but one is already running, its ceiling.
+    check(heddle.explain(deploys, waiting = queued, eligible = queued) == WaitExplanation.AtCeiling(deploys, limit = 1L))
+    check(heddle.entitlement(builds, waiting = queued, totalSlots = 4L) == Rational.of(4L))
+    check((heddle.acquire(queued, queued, startedAt = 1L) as AcquireOutcome.Acquired).lease.leaf == builds)
+
+    heddle.complete(deploy.id, actualCost = 1L)
+    check(heddle.explain(deploys, waiting = queued, eligible = queued) == WaitExplanation.WouldBePickedNext)
+}
+
+/**
  * After a crash, some work the engine still holds a lease for is gone. Ask which, settle each
  * orphan at the time it ran, capped at what it was granted, and the books balance again.
  */

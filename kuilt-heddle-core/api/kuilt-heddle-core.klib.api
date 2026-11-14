@@ -639,6 +639,7 @@ sealed interface us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.h
         abstract fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.kind.<get-kind>|<get-kind>(){}[0]
 
     final enum class Kind : kotlin/Enum<us.tractat.kuilt.heddle/WaitExplanation.Kind> { // us.tractat.kuilt.heddle/WaitExplanation.Kind|null[0]
+        enum entry AT_CEILING // us.tractat.kuilt.heddle/WaitExplanation.Kind.AT_CEILING|null[0]
         enum entry BEHIND_AT_LEVEL // us.tractat.kuilt.heddle/WaitExplanation.Kind.BEHIND_AT_LEVEL|null[0]
         enum entry NOT_ELIGIBLE // us.tractat.kuilt.heddle/WaitExplanation.Kind.NOT_ELIGIBLE|null[0]
         enum entry NOT_WAITING // us.tractat.kuilt.heddle/WaitExplanation.Kind.NOT_WAITING|null[0]
@@ -652,6 +653,24 @@ sealed interface us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.h
 
         final fun valueOf(kotlin/String): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.Kind.valueOf|valueOf#static(kotlin.String){}[0]
         final fun values(): kotlin/Array<us.tractat.kuilt.heddle/WaitExplanation.Kind> // us.tractat.kuilt.heddle/WaitExplanation.Kind.values|values#static(){}[0]
+    }
+
+    final class AtCeiling : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId, kotlin/Long) // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.<init>|<init>(us.tractat.kuilt.heddle.GroupId;kotlin.Long){}[0]
+
+        final val group // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.group|{}group[0]
+            final fun <get-group>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.group.<get-group>|<get-group>(){}[0]
+        final val kind // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.kind|{}kind[0]
+            final fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.kind.<get-kind>|<get-kind>(){}[0]
+        final val limit // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.limit|{}limit[0]
+            final fun <get-limit>(): kotlin/Long // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.limit.<get-limit>|<get-limit>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/WaitExplanation.AtCeiling // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.copy|copy(us.tractat.kuilt.heddle.GroupId;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.AtCeiling.toString|toString(){}[0]
     }
 
     final class BehindAtLevel : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel|null[0]
@@ -1866,9 +1885,9 @@ final value class us.tractat.kuilt.heddle/ServiceUnits : kotlin/Comparable<us.tr
 
 sealed class us.tractat.kuilt.heddle/TopologyDraft { // us.tractat.kuilt.heddle/TopologyDraft|null[0]
     final fun group(kotlin/String, us.tractat.kuilt.heddle/Weight = ..., kotlin/Function1<us.tractat.kuilt.heddle/TopologyDraft.Group, kotlin/Unit>) // us.tractat.kuilt.heddle/TopologyDraft.group|group(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.Function1<us.tractat.kuilt.heddle.TopologyDraft.Group,kotlin.Unit>){}[0]
-    final fun group(kotlin/String, us.tractat.kuilt.heddle/Weight = ..., kotlin/Long, kotlin/Function1<us.tractat.kuilt.heddle/TopologyDraft.Group, kotlin/Unit>) // us.tractat.kuilt.heddle/TopologyDraft.group|group(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.Long;kotlin.Function1<us.tractat.kuilt.heddle.TopologyDraft.Group,kotlin.Unit>){}[0]
+    final fun group(kotlin/String, us.tractat.kuilt.heddle/Weight = ..., kotlin/Long?, kotlin/Function1<us.tractat.kuilt.heddle/TopologyDraft.Group, kotlin/Unit>) // us.tractat.kuilt.heddle/TopologyDraft.group|group(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.Long?;kotlin.Function1<us.tractat.kuilt.heddle.TopologyDraft.Group,kotlin.Unit>){}[0]
     final fun lane(kotlin/String, us.tractat.kuilt.heddle/Weight = ...) // us.tractat.kuilt.heddle/TopologyDraft.lane|lane(kotlin.String;us.tractat.kuilt.heddle.Weight){}[0]
-    final fun lane(kotlin/String, us.tractat.kuilt.heddle/Weight = ..., kotlin/Long) // us.tractat.kuilt.heddle/TopologyDraft.lane|lane(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.Long){}[0]
+    final fun lane(kotlin/String, us.tractat.kuilt.heddle/Weight = ..., kotlin/Long?) // us.tractat.kuilt.heddle/TopologyDraft.lane|lane(kotlin.String;us.tractat.kuilt.heddle.Weight;kotlin.Long?){}[0]
 
     final class Group : us.tractat.kuilt.heddle/TopologyDraft { // us.tractat.kuilt.heddle/TopologyDraft.Group|null[0]
         final fun runtimeChildren(us.tractat.kuilt.heddle/Weight = ...) // us.tractat.kuilt.heddle/TopologyDraft.Group.runtimeChildren|runtimeChildren(us.tractat.kuilt.heddle.Weight){}[0]

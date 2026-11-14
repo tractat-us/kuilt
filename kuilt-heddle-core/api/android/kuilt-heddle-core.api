@@ -1513,14 +1513,14 @@ public final class us/tractat/kuilt/heddle/TopologyDocument$Node$Companion {
 }
 
 public abstract class us/tractat/kuilt/heddle/TopologyDraft {
-	public final fun group (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;JLkotlin/jvm/functions/Function1;)V
+	public final fun group (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;Lkotlin/jvm/functions/Function1;)V
 	public final fun group (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Lkotlin/jvm/functions/Function1;)V
-	public static synthetic fun group$default (Lus/tractat/kuilt/heddle/TopologyDraft;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;JLkotlin/jvm/functions/Function1;ILjava/lang/Object;)V
+	public static synthetic fun group$default (Lus/tractat/kuilt/heddle/TopologyDraft;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)V
 	public static synthetic fun group$default (Lus/tractat/kuilt/heddle/TopologyDraft;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)V
 	public final fun lane (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;)V
-	public final fun lane (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;J)V
+	public final fun lane (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;)V
 	public static synthetic fun lane$default (Lus/tractat/kuilt/heddle/TopologyDraft;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;ILjava/lang/Object;)V
-	public static synthetic fun lane$default (Lus/tractat/kuilt/heddle/TopologyDraft;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;JILjava/lang/Object;)V
+	public static synthetic fun lane$default (Lus/tractat/kuilt/heddle/TopologyDraft;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;ILjava/lang/Object;)V
 }
 
 public final class us/tractat/kuilt/heddle/TopologyDraft$Group : us/tractat/kuilt/heddle/TopologyDraft {
@@ -1684,6 +1684,20 @@ public abstract interface class us/tractat/kuilt/heddle/WaitExplanation {
 	public abstract fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
 }
 
+public final class us/tractat/kuilt/heddle/WaitExplanation$AtCeiling : us/tractat/kuilt/heddle/WaitExplanation {
+	public synthetic fun <init> (Ljava/lang/String;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy-jc7CSWg (Ljava/lang/String;J)Lus/tractat/kuilt/heddle/WaitExplanation$AtCeiling;
+	public static synthetic fun copy-jc7CSWg$default (Lus/tractat/kuilt/heddle/WaitExplanation$AtCeiling;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/WaitExplanation$AtCeiling;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGroup-urUY4Jo ()Ljava/lang/String;
+	public fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public final fun getLimit ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/heddle/WaitExplanation$BehindAtLevel : us/tractat/kuilt/heddle/WaitExplanation {
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1-urUY4Jo ()Ljava/lang/String;
@@ -1705,6 +1719,7 @@ public final class us/tractat/kuilt/heddle/WaitExplanation$BehindAtLevel : us/tr
 }
 
 public final class us/tractat/kuilt/heddle/WaitExplanation$Kind : java/lang/Enum {
+	public static final field AT_CEILING Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
 	public static final field BEHIND_AT_LEVEL Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
 	public static final field NOT_ELIGIBLE Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
 	public static final field NOT_WAITING Lus/tractat/kuilt/heddle/WaitExplanation$Kind;

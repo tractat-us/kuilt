@@ -129,22 +129,33 @@ internal fun Map<GroupId, Int>.plusCounts(more: Map<GroupId, Int>): Map<GroupId,
     if (more.isEmpty()) this else HashMap(this).also { sum -> for ((group, n) in more) sum[group] = (sum[group] ?: 0) + n }
 
 /**
- * [leaves] without every leaf whose lineage meets a group **at its ceiling**: one whose open leases,
- * as [open] counts them, have reached its [Leasable.ceilingOf], so a ceiling of `0` always holds.
- * What a pick filters its waiting and eligible sets through before it builds its demand views: a
- * capped subtree is wanted by nobody, so it counts as idle at its parent and wakes clamped.
- *
- * A leaf with no live lineage is kept: no pick reaches it, and the demand lift drops it anyway.
- * Returns [leaves] itself when [leasable] declares no ceiling.
+ * The ceiling [leaf] waits on: the group nearest the root on its lineage that is **at its
+ * ceiling**, one whose open leases, as [open] counts them, have reached its [Leasable.ceilingOf], so
+ * a ceiling of `0` always holds. `null` when no group on the lineage is, when [leaf] has no lineage,
+ * or when [leasable] declares no ceiling. The one test [belowCeilings] and [LocalHeddleView.explain]
+ * share, so a leaf the pick drops is the leaf `explain` names a ceiling for.
  */
-internal fun EntitlementLedger.belowCeilings(leaves: Set<GroupId>, open: Map<GroupId, Int>, leasable: Leasable): Set<GroupId> {
+internal fun EntitlementLedger.ceilingOver(leaf: GroupId, open: Map<GroupId, Int>, leasable: Leasable): WaitExplanation.AtCeiling? {
+    if (!leasable.hasCeilings) return null
+    for (edge in lineageOf(leaf) ?: return null) {
+        val group = checkNotNull(record(edge)) { "lineage edge ${edge.value} has no record" }.child
+        val limit = leasable.ceilingOf(group) ?: continue
+        if ((open[group] ?: 0) >= limit) return WaitExplanation.AtCeiling(group, limit)
+    }
+    return null
+}
+
+/**
+ * [leaves] without every leaf a pick could end at whose lineage meets a group at its ceiling
+ * ([ceilingOver]). What a pick filters its waiting and eligible sets through before it builds its
+ * demand views: a capped subtree is wanted by nobody, so it counts as idle at its parent and wakes
+ * clamped.
+ *
+ * A name no pick can end at ([canEndAt] from [root]) is kept, capped or not, so the pick and
+ * `explain` report it as they would with no ceiling, as `NoLiveLineage`; the demand lift drops it
+ * anyway. Returns [leaves] itself when [leasable] declares no ceiling.
+ */
+internal fun EntitlementLedger.belowCeilings(leaves: Set<GroupId>, open: Map<GroupId, Int>, root: GroupId, leasable: Leasable): Set<GroupId> {
     if (!leasable.hasCeilings) return leaves
-    val atCeiling = HashMap<GroupId, Boolean>()
-    fun capped(group: GroupId): Boolean = atCeiling.getOrPut(group) {
-        leasable.ceilingOf(group)?.let { limit -> (open[group] ?: 0) >= limit } ?: false
-    }
-    return leaves.filterTo(HashSet()) { leaf ->
-        val lineage = lineageOf(leaf) ?: return@filterTo true
-        lineage.none { edge -> capped(checkNotNull(record(edge)) { "lineage edge ${edge.value} has no record" }.child) }
-    }
+    return leaves.filterTo(HashSet()) { leaf -> ceilingOver(leaf, open, leasable) == null || !canEndAt(leaf, root, leasable) }
 }

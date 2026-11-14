@@ -69,7 +69,10 @@ public data class Topology(public val root: String, public val children: List<No
          * `0` pauses it: nothing beneath it is picked. Never negative. A [LocalHeddle] running this
          * topology picks nothing beneath a child whose open leases have reached it, and counts the
          * child idle at its parent until they drop below; it refuses no charge for work already
-         * running there.
+         * running there. [LocalHeddle.explain] tells a leaf waiting on it
+         * [WaitExplanation.AtCeiling].
+         *
+         * @sample us.tractat.kuilt.heddle.sampleConcurrencyCeiling
          */
         public val maxConcurrent: Long?
     }

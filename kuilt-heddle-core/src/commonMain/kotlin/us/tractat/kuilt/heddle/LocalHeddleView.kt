@@ -139,8 +139,9 @@ public class LocalHeddleView internal constructor(
      * The reasons are checked in [WaitExplanation.Kind] order, and the first that holds is the
      * answer: [leaf] is not in [waiting], not in [eligible], cannot be reached (the same test the
      * pick applies, so a leaf behind a closing edge, a group with an active child, and a group that
-     * is not leasable are each [WaitExplanation.NoLiveLineage]), or the root cannot fund
-     * [reservation]. Past those, the answer is the pick itself, run on a throwaway engine with the
+     * is not leasable are each [WaitExplanation.NoLiveLineage]), is beneath a group at its
+     * concurrency ceiling ([WaitExplanation.AtCeiling], naming the one nearest the root), or the root
+     * cannot fund [reservation]. Past those, the answer is the pick itself, run on a throwaway engine with the
      * wake memory, so a group waking from idle is clamped here exactly as the acquire would clamp
      * it: [WaitExplanation.WouldBePickedNext] when the pick ends at [leaf],
      * [WaitExplanation.PositionCeiling] when it is refused at a position ceiling on the way, and
@@ -164,12 +165,12 @@ public class LocalHeddleView internal constructor(
         if (leaf !in waiting) return WaitExplanation.NotWaiting
         if (leaf !in eligible) return WaitExplanation.NotEligible
         if (!ledger.canEndAt(leaf, root, leasable)) return WaitExplanation.NoLiveLineage(leaf)
+        ledger.ceilingOver(leaf, openBeneath, leasable)?.let { return it }
         val trial = scratch()
-        // The pick drops a leaf beneath a group at its ceiling from both sets, so for it the leaf is
-        // not eligible on this slot. Until the explanation can name the ceiling (#3324), that is the
-        // answer, and it agrees with the acquire, which never picks it.
+        // The pick drops every other capped leaf from both sets. This one is not capped, by the
+        // check above against the same counts the trial starts from, so it is still eligible.
         val (waitingNow, eligibleNow) = trial.belowCeilings(waiting, eligible)
-        if (leaf !in eligibleNow) return WaitExplanation.NotEligible
+        check(leaf in eligibleNow) { "${leaf.value} is below every ceiling, yet the pick drops it" }
         val base = trial.fundedBase(reservation) ?: return WaitExplanation.SupplyExhausted
 
         val demands = trial.demands(base, waitingNow, eligibleNow, reservation)
@@ -216,8 +217,10 @@ public class LocalHeddleView internal constructor(
      * "Competing" is the set a pick takes its front over: an ACTIVE child counts when a leaf of
      * [waiting] that a pick could end at lies under it. So work no descent can reach, behind a
      * closing edge, at a group with an active child or at one that is not leasable, competes for
-     * nothing and is owed nothing, and it takes nothing from its siblings' shares. `0` when [leaf]
-     * is not in [waiting], or is not a leaf a pick could end at.
+     * nothing and is owed nothing, and it takes nothing from its siblings' shares. So does work
+     * beneath a group at its concurrency ceiling ([WaitExplanation.AtCeiling]), which no pick goes to
+     * until a lease beneath that group closes. `0` when [leaf] is not in [waiting], is not a leaf a
+     * pick could end at, or is beneath a group at its ceiling.
      *
      * A share, not a promise: the slots a leaf gets over a run track it only while the waiting set
      * holds still, and a leaf that is waiting but rarely eligible gets less.
@@ -229,8 +232,10 @@ public class LocalHeddleView internal constructor(
     public fun entitlement(leaf: GroupId, waiting: Set<GroupId>, totalSlots: Long): Rational {
         require(totalSlots >= 0L) { "totalSlots must be non-negative, was $totalSlots" }
         val base = ledger
-        if (leaf !in waiting || !base.canEndAt(leaf, root, leasable)) return Rational.ZERO
-        val competing = base.reachable(waiting, root, leasable)
+        // The waiting set the pick builds its demand over: a capped leaf is wanted by nobody.
+        val wanted = base.belowCeilings(waiting, openBeneath, root, leasable)
+        if (leaf !in wanted || !base.canEndAt(leaf, root, leasable)) return Rational.ZERO
+        val competing = base.reachable(wanted, root, leasable)
         var share = Rational.of(totalSlots)
         for (edge in checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }) {
             val record = checkNotNull(base.record(edge)) { "lineage edge ${edge.value} has no record" }

@@ -53,11 +53,13 @@ internal fun sampleTopologyDraft() {
     val fairness = draft("pool") {
         group("acme", Weight.of(3)) {
             lane("interactive", Weight.of(3, 2))
-            lane("batch")
+            // A ceiling: never more than two batch jobs at once, however idle the pool is.
+            lane("batch", maxConcurrent = 2)
         }
         group("tenants") { runtimeChildren() }
     }
     check(fairness.children.map { it.name } == listOf("acme", "tenants"))
+    check((fairness.children[0] as Topology.Group).children.map { it.maxConcurrent } == listOf(null, 2L))
 
     // A repeated lane is not built: the whole tree is refused, with every problem in it.
     val refused = try {

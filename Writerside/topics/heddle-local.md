@@ -222,6 +222,41 @@ waiting but cannot run on this agent is not quiet, and keeps its place. A team
 with a build still running but nothing queued is quiet, and that case has
 [one known gap](#how-fair-is-it).
 
+## No more than one at once
+
+Some work should never run twice at the same time, however many agents are
+free. Deploys are a good example. Give that lane a ceiling with `maxConcurrent`:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleConcurrencyCeiling -->
+
+```kotlin
+val tree = draft("pool") {
+    lane("deploys", Weight.of(3), maxConcurrent = 1)
+    lane("builds")
+}
+// …
+val deploy = (heddle.acquire(queued, queued, startedAt = 0L) as AcquireOutcome.Acquired).lease
+check(deploy.leaf == deploys)
+// Deploys weigh three times as much, but one is already running, its ceiling.
+check(heddle.explain(deploys, waiting = queued, eligible = queued) == WaitExplanation.AtCeiling(deploys, limit = 1L))
+check(heddle.entitlement(builds, waiting = queued, totalSlots = 4L) == Rational.of(4L))
+check((heddle.acquire(queued, queued, startedAt = 1L) as AcquireOutcome.Acquired).lease.leaf == builds)
+
+heddle.complete(deploy.id, actualCost = 1L)
+check(heddle.explain(deploys, waiting = queued, eligible = queued) == WaitExplanation.WouldBePickedNext)
+```
+
+While one deploy runs, the next agent goes to builds, though deploys weigh three
+times as much. `explain` answers `AtCeiling` and names the lane and its limit.
+A capped lane is owed nothing while it waits, so builds are owed all four
+agents. When the deploy finishes, deploys compete again, starting level like a
+team that went quiet, not owed the turns they sat out.
+
+A ceiling of `0` pauses a lane. On a group it counts every build beneath it, and
+on runtime children it caps each child on its own. When several are full on the
+way down, `explain` names the one nearest the top. A ceiling never stops or
+refuses a build that is already running.
+
 ## Better estimates, and other endings
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleBuildFarm -->
