@@ -19,7 +19,7 @@
 5. **D3m (confirmed): `Topology` carries no mint plan, and supply is not part of the admin's view.** The engine tops up supply inside `acquire`/`extend` against a watermark. Total capacity sizes that watermark.
 6. **D6:** `LocalHeddle` is not thread-safe and uses no atomicfu. An immutable `snapshot()` lets status and persistence readers avoid the caller's scheduling lock.
 7. **D7:** reconcile by lease, not by executor. `reconcileLeases(live, now)` reports mismatches in both directions, with each orphan's elapsed cost from its stored `startedAt` (Amendment 8). The consumer completes each orphan at its elapsed cost. An orphan never blocks a reload.
-8. **Q6:** one lease per slot. The consumer owns concurrency, so the engine has no slot gate and no executor view. It keeps only total capacity, for supply sizing. Task C runs before L1's API is frozen, because Task C is the evidence for that API.
+8. **Q6:** one lease per slot. The consumer owns concurrency, so the engine has no slot gate and no executor view. It keeps only total capacity, for supply sizing. *Amended 2026-11-13 (#3324):* this does not forbid a per-node ceiling (`docs/heddle-design.md` §11.2). A ceiling filters candidates using the engine's own open leases, and never decides whether the caller runs anything. Task C runs before L1's API is frozen, because Task C is the evidence for that API.
 9. **R1: a reweight moves open leases with it (Option A).** In one all-or-nothing step, the engine:
    - releases each open lease's reservation up the old path;
    - retires the old edge, which is now at outstanding 0;

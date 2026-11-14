@@ -1120,6 +1120,101 @@ yet by runtime ones. A tree found at runtime two levels deep (say, a repository 
 then its authors) has to declare each repository as a marked group and reload as
 each one appears. Letting a runtime child have runtime children is tracked by #3314.
 
+### 11.2 A ceiling: "run no more than N of these"
+
+An operator sometimes wants to say "never run more than three of these at once"
+about one part of the tree: three builds of one repository, say, however idle
+the rest of the machines are. That is a ceiling. It gives up keeping every slot
+busy, on purpose, and only where someone set it. Without one in heddle, the
+caller has to enforce it outside, beside the fairness it interacts with. This
+section records how a ceiling will be declared and enforced in the
+single-process engine, `LocalHeddle` (`kuilt-heddle-core/module.md`).
+
+#### As built: the engine owns no concurrency
+
+`LocalHeddle` opens one lease per slot it picks, and the caller owns
+concurrency: the engine keeps only total capacity, to size its supply. The
+nearest existing knob, `PolicyConfig.perChildOutstandingCap`, is a different
+concept. It is one figure for the whole policy, counted in service units, and it
+trims a grant (§7.3 step 1) rather than skipping a candidate. `LocalHeddle` pins
+it at `Long.MAX_VALUE`.
+
+#### The design: filter the candidates
+
+Decided in #3324, and not yet built.
+
+**Declaring it.** `maxConcurrent: Long? = null` on `Topology.Group`,
+`Topology.Lane` and `Topology.RuntimeChildren`, mirrored in `TopologyDocument`.
+`null` means no ceiling, and nothing changes.
+
+- On `RuntimeChildren` it caps **each** attached child, not all of them together.
+- **0 means pause:** picks stop under that node. It is not a problem.
+- A negative value is the one new `TopologyProblem.Kind`.
+- The ceiling lives in the engine, read from the topology last applied
+  (`lastApplied`), not in the ledger. `Topology.diff` keeps an existing edge by its
+  weight, so it emits no step for a change of ceiling: no new edge and no
+  history reset.
+
+**Counting.** In leases: the open leases whose captured path passes through the
+node, draining ones included. That is derived from the engine's open leases, so
+nothing new is persisted. The scratch engine `explain` and `previewPicks` run on
+must carry the open leases too; today it starts with none.
+
+**Enforcement.** Before a pick builds its demand views, every leaf under a node
+at its ceiling is dropped from `waiting` and from `eligible`.
+
+- `admit`, `extend`, `complete`, and an `apply` that moves leases are never
+  refused.
+- Lowering a ceiling preempts nothing. Running leases finish, and picks resume
+  once the count is under the ceiling.
+
+**Fairness.** A node at its ceiling, or paused, counts as idle at its parent.
+When it can take work again it wakes at the parent's front through the existing
+wake clamp (`settleJoiners`), with no banked credit (§10 invariant 6).
+
+**Reporting.**
+
+- `explain` gains a `WaitExplanation` arm of kind `AT_CEILING`, carrying the
+  capped group and its limit. Its place in the order is after `NO_LIVE_LINEAGE`,
+  before `SUPPLY_EXHAUSTED`, relative order with the overflow fix's arm agreed in
+  that PR (#3313).
+- `entitlement` treats a node at its ceiling as not competing.
+- When every waiting leaf is capped, `acquire` returns the existing
+  `NothingEligible`, whose KDoc widens to say so. There is no new
+  `AcquireOutcome` arm.
+
+**Compatibility.** A new property on a public data class changes its
+constructor and `copy` in binary, so the old constructors are kept.
+
+**Why it belongs in heddle.** The preview counts the leases it opens against a
+ceiling, and `explain` reports "at ceiling" as its own reason. A gate in the
+caller could do neither.
+
+**The plan's ruling Q6 still holds.** Q6 says the engine has no slot gate. A
+ceiling is not one: it filters candidates using the engine's own open leases,
+and never decides whether the caller runs anything.
+
+#### Settled — don't reopen
+
+- Reusing `perChildOutstandingCap` as the per-node form: it is policy-wide,
+  counted in service units, and trims a grant rather than skipping a candidate
+  (#3324).
+- Counting reserved cost instead of leases (#3324).
+- Keeping the ceiling in the ledger: it is engine configuration, so changing it
+  emits no topology step (#3324).
+- Letting a capped node bank credit while it is skipped: it counts as idle and
+  wakes at the front (#3324).
+- Refusing `admit`, `extend`, `complete` or a lease-moving `apply` at a ceiling,
+  or preempting when one is lowered (#3324).
+- A new `AcquireOutcome` arm for "everything is capped": `NothingEligible`
+  covers it (#3324).
+- Treating a ceiling of 0 as a problem: it means pause (#3324).
+
+#### Open
+
+- Where `AT_CEILING` sits relative to the arm the overflow fix adds to
+  `WaitExplanation`. Tracked by #3313.
+
 ---
 
 ## 12. What was dropped from the source, and what is genuinely new
