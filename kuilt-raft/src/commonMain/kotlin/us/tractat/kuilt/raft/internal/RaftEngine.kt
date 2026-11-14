@@ -3486,16 +3486,14 @@ internal class RaftEngine(
         readIndexTracker.onNoOpCommitted(state.currentCommitIndex).forEach { it() }
         // Config-commit side effects AFTER commitIndex is bumped — safe to call appendConfigEntry.
         committedConfigEntry?.let { onConfigCommitted(it) }
-        // #3123, §4.2.2: a leader steps down once a configuration excluding it is committed. [onConfigCommitted]
-        // does this only when that configuration is the last one committed in this window; this reads the
-        // same condition from live state, so a leader outside the committed membership cannot persist by any
-        // route that bypasses it. It reads the committed configuration, never only the latest: §4.2.2 has the
-        // removed leader wait for C_new to commit before it steps down.
-        //
-        // Measured inert: deleting this leaves the module green. With the election gate in [promotable] the only
-        // reachable firing is a Simple(C_new) that is the window's last config entry, where [onConfigCommitted]
-        // has already stepped down. Retained because it reads the condition from live state rather than from
-        // which entry happened to be last in the window, so it outlives that argument.
+        // §4.2.2 / §6.4.1: a leader steps down once a configuration excluding it as a voter is committed. This
+        // is the ONE step-down site for that condition (#3123). [onConfigCommitted] used to carry a second copy
+        // keyed on the window's last config entry; this one reads the condition from live state, so a leader
+        // outside the committed membership cannot persist by a route that bypasses the window's last entry. It
+        // reads the committed configuration, never only the latest: §4.2.2 has the removed leader wait for
+        // C_new to commit before it steps down. It runs after [onConfigCommitted], so a changeMembership caller
+        // is completed before the leader relinquishes. Pinned by the self-removal tests
+        // (`MembershipTest.removeLeader_stepsDownRemovedFromConfig_survivorsElect` and siblings).
         if (_role.value is RaftRole.Leader && !promotable) {
             debug { "advanceCommit: leader not promotable (removal committed) — stepping down (RemovedFromConfig)" }
             stepDownToFollower(StepDownReason.RemovedFromConfig)
@@ -4139,8 +4137,8 @@ internal class RaftEngine(
             // last config entry in the log, so `membershipState is Joint` is exactly the condition "no
             // Simple(C_new) follows the Joint yet." Appending a second C_new diverges from the existing
             // one and wedges replication in an infinite AppendEntries backup loop. Skipping is safe —
-            // C_new already exists; the Simple branch completes the deferred and runs the step-down when
-            // that existing C_new commits.
+            // C_new already exists; the Simple branch completes the deferred when that existing C_new
+            // commits, and [advanceCommit] then steps a removed leader down.
             //
             // WHO actually reaches the false branch is a **follower**, on every ordinary voter-set
             // change — not the new-leader-inherits-a-Joint case this comment used to name. That case is
@@ -4169,11 +4167,8 @@ internal class RaftEngine(
             debug { "onConfigCommitted: Simple committed — completing pendingConfigChange with $result" }
             pendingConfigChange?.complete(result)
             pendingConfigChange = null
-            // §6.4.1: if self is not in the new voter set, step down (removed-leader case).
-            if (_role.value is RaftRole.Leader && transport.selfId !in payload.new.voters) {
-                debug { "onConfigCommitted: self not in new voters — stepping down (RemovedFromConfig)" }
-                stepDownToFollower(StepDownReason.RemovedFromConfig)
-            }
+            // A removed leader's step-down is not here: [advanceCommit] does it from live state, after this
+            // returns (#3123).
         }
     }
 
