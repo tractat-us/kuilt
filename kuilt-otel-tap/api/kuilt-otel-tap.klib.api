@@ -38,13 +38,16 @@ sealed interface us.tractat.kuilt.otel.tap.admit/TapAdmitMessage { // us.tractat
     }
 
     final class Proof : us.tractat.kuilt.otel.tap.admit/TapAdmitMessage { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof|null[0]
-        constructor <init>(kotlinx.io.bytestring/ByteString) // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.<init>|<init>(kotlinx.io.bytestring.ByteString){}[0]
+        constructor <init>(kotlinx.io.bytestring/ByteString, kotlinx.io.bytestring/ByteString) // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.<init>|<init>(kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString){}[0]
 
+        final val proverNonce // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.proverNonce|{}proverNonce[0]
+            final fun <get-proverNonce>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.proverNonce.<get-proverNonce>|<get-proverNonce>(){}[0]
         final val tag // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.tag|{}tag[0]
             final fun <get-tag>(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.tag.<get-tag>|<get-tag>(){}[0]
 
         final fun component1(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.component1|component1(){}[0]
-        final fun copy(kotlinx.io.bytestring/ByteString = ...): us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.copy|copy(kotlinx.io.bytestring.ByteString){}[0]
+        final fun component2(): kotlinx.io.bytestring/ByteString // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.component2|component2(){}[0]
+        final fun copy(kotlinx.io.bytestring/ByteString = ..., kotlinx.io.bytestring/ByteString = ...): us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.copy|copy(kotlinx.io.bytestring.ByteString;kotlinx.io.bytestring.ByteString){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.toString|toString(){}[0]
@@ -59,6 +62,9 @@ sealed interface us.tractat.kuilt.otel.tap.admit/TapAdmitMessage { // us.tractat
         }
 
         final object Companion { // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.Companion|null[0]
+            final const val TAG_BYTES // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.Companion.TAG_BYTES|{}TAG_BYTES[0]
+                final fun <get-TAG_BYTES>(): kotlin/Int // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.Companion.TAG_BYTES.<get-TAG_BYTES>|<get-TAG_BYTES>(){}[0]
+
             final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof> // us.tractat.kuilt.otel.tap.admit/TapAdmitMessage.Proof.Companion.serializer|serializer(){}[0]
         }
     }
@@ -103,10 +109,12 @@ sealed interface us.tractat.kuilt.otel.tap.admit/TapAdmitMessage { // us.tractat
 
 sealed interface us.tractat.kuilt.otel.tap/LogTapAdmission { // us.tractat.kuilt.otel.tap/LogTapAdmission|null[0]
     final class Present : us.tractat.kuilt.otel.tap/LogTapAdmission { // us.tractat.kuilt.otel.tap/LogTapAdmission.Present|null[0]
-        constructor <init>(kotlin/String) // us.tractat.kuilt.otel.tap/LogTapAdmission.Present.<init>|<init>(kotlin.String){}[0]
+        constructor <init>(kotlin/String, kotlin.random/Random = ...) // us.tractat.kuilt.otel.tap/LogTapAdmission.Present.<init>|<init>(kotlin.String;kotlin.random.Random){}[0]
 
         final val code // us.tractat.kuilt.otel.tap/LogTapAdmission.Present.code|{}code[0]
             final fun <get-code>(): kotlin/String // us.tractat.kuilt.otel.tap/LogTapAdmission.Present.code.<get-code>|<get-code>(){}[0]
+        final val random // us.tractat.kuilt.otel.tap/LogTapAdmission.Present.random|{}random[0]
+            final fun <get-random>(): kotlin.random/Random // us.tractat.kuilt.otel.tap/LogTapAdmission.Present.random.<get-random>|<get-random>(){}[0]
     }
 
     final class Verify : us.tractat.kuilt.otel.tap/LogTapAdmission { // us.tractat.kuilt.otel.tap/LogTapAdmission.Verify|null[0]

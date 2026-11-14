@@ -3,7 +3,10 @@
 package us.tractat.kuilt.otel.tap
 
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.core.InMemoryLoom
@@ -12,6 +15,8 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.WarpLogRecordExporter
 import us.tractat.kuilt.otel.tap.admit.LogTapJoinToken
+import us.tractat.kuilt.otel.tap.admit.SendCountingSeam
+import us.tractat.kuilt.otel.tap.admit.TapAdmitMessage
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.store.InMemoryDurableStore
 import kotlin.random.Random
@@ -19,8 +24,10 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -52,7 +59,7 @@ class GatedTapEndToEndTest {
         val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
         val loom = InMemoryLoom()
         host = installLogTap(loom, exporterWith(3), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
-        val c = LogTapClient(loom.join(InMemoryTag("puller")), backgroundScope, config, LogTapAdmission.Present(token.code))
+        val c = LogTapClient(loom.join(InMemoryTag("puller")), backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
             .also { client = it }
 
         val pulled = c.pull()
@@ -60,12 +67,46 @@ class GatedTapEndToEndTest {
         assertEquals(listOf("log 1", "log 2", "log 3"), pulled.map { it.body })
     }
 
+    /**
+     * The harm in the terms a user sees: the laptop hosts, a stranger floods it with challenges and
+     * reads nothing, and then the phone joins. The pull has to finish anyway.
+     */
+    @Test
+    fun aStrangerWhoStopsReadingDoesNotStopThePull() = runTest(UnconfinedTestDispatcher()) {
+        val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
+        val loom = InMemoryLoom()
+        val pullerSeam = SendCountingSeam(loom.host(config.pattern))
+        val c = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
+            .also { client = it }
+        val stranger = loom.join(InMemoryTag("stranger"))
+
+        var sent = 0
+        while (pullerSeam.parkedTo(stranger.selfId) == 0) {
+            check(sent < 10_000) { "rig: $sent challenges and the fabric still takes every answer" }
+            val nonce = ByteString(Random(sent).nextBytes(TapAdmitMessage.Challenge.NONCE_BYTES))
+            stranger.sendTo(pullerSeam.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
+            sent++
+            runCurrent()
+        }
+
+        host = installLogTapJoining(
+            loom,
+            exporterWith(3),
+            backgroundScope,
+            InMemoryTag("device"),
+            config,
+            LogTapAdmission.Verify(token, clock, Random(7)),
+        )
+
+        assertEquals(listOf("log 1", "log 2", "log 3"), c.pull().map { it.body })
+    }
+
     @Test
     fun wrongCodeNeverConvergesThePull() = runTest(UnconfinedTestDispatcher()) {
         val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
         val loom = InMemoryLoom()
         host = installLogTap(loom, exporterWith(3), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
-        val c = LogTapClient(loom.join(InMemoryTag("attacker")), backgroundScope, config, LogTapAdmission.Present("WRONGGGG"))
+        val c = LogTapClient(loom.join(InMemoryTag("attacker")), backgroundScope, config, LogTapAdmission.Present("WRONGGGG", Random(11)))
             .also { client = it }
 
         // The host never admits the attacker, so it never sends its buffer; pull() times out.
@@ -81,7 +122,7 @@ class GatedTapEndToEndTest {
         val loom = InMemoryLoom()
         val pattern = us.tractat.kuilt.core.Pattern("inverted")
         // Laptop hosts the rendezvous AND is the puller.
-        val laptop = LogTapClient(loom.host(pattern), backgroundScope, config, LogTapAdmission.Present(token.code))
+        val laptop = LogTapClient(loom.host(pattern), backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
             .also { client = it }
         // Device joins and offers its buffer.
         host = installLogTapJoining(
@@ -90,6 +131,98 @@ class GatedTapEndToEndTest {
         )
 
         assertEquals(listOf("log 1", "log 2", "log 3", "log 4"), laptop.pull().map { it.body })
+    }
+
+    /**
+     * Lock-out (#1865): a stranger reaches the hosting laptop first and challenges it. The laptop
+     * used to answer only the first peer to challenge it, so the device behind the stranger was
+     * never answered and the pull could never finish.
+     */
+    @Test
+    fun aStrangerChallengingFirstDoesNotLockOutARoleInvertedPull() = runTest(UnconfinedTestDispatcher()) {
+        val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
+        val loom = InMemoryLoom()
+        val laptopSeam = loom.host(us.tractat.kuilt.core.Pattern("inverted"))
+        val laptop = LogTapClient(laptopSeam, backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
+            .also { client = it }
+        val stranger = loom.join(InMemoryTag("stranger"))
+        val answers = mutableListOf<TapAdmitMessage.Proof>()
+        backgroundScope.launch {
+            stranger.incoming.collect { swatch ->
+                (TapAdmitMessage.decode(swatch.toByteArray()) as? TapAdmitMessage.Proof)?.let { answers += it }
+            }
+        }
+        val nonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES))
+        stranger.sendTo(laptopSeam.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
+        assertEquals(1, answers.size, "rig: the stranger's challenge must have reached the laptop first")
+
+        host = installLogTapJoining(
+            loom, exporterWith(4), backgroundScope, InMemoryTag("inverted"), config,
+            LogTapAdmission.Verify(token, clock, Random(9)),
+        )
+
+        assertEquals(listOf("log 1", "log 2", "log 3", "log 4"), laptop.pull().map { it.body })
+    }
+
+    /** The plain topology's half: with a stranger on the mesh, the device still admits its puller. */
+    @Test
+    fun aStrangerOnTheMeshDoesNotStopAPlainPull() = runTest(UnconfinedTestDispatcher()) {
+        val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
+        val loom = InMemoryLoom()
+        host = installLogTap(loom, exporterWith(3), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
+        val stranger = loom.join(InMemoryTag("stranger"))
+        val pullerSeam = loom.join(InMemoryTag("puller"))
+        val nonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES))
+        stranger.sendTo(pullerSeam.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
+        val puller = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
+            .also { client = it }
+
+        assertEquals(listOf("log 1", "log 2", "log 3"), puller.pull().map { it.body })
+    }
+
+    /**
+     * A known limit, pinned so the claim about it is a measurement. The gate guards the device and not
+     * the puller: a puller's gate is transparent, so on a fabric where joiners reach each other, its
+     * replicator hands what it has pulled to any peer that turns up, code or no code. The device never
+     * admitted this stranger, and the stranger reads the logs anyway. See "The honest limitations" in
+     * `module.md`. If this reds because the puller stopped leaking, delete it and fix that section.
+     */
+    @Test
+    fun aStrangerJoiningAfterThePullReadsWhatThePullerHolds() = runTest(UnconfinedTestDispatcher()) {
+        val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
+        val loom = InMemoryLoom()
+        host = installLogTap(loom, exporterWith(1), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
+        val pullerSeam = loom.join(InMemoryTag("puller"))
+        val puller = LogTapClient(pullerSeam, backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
+            .also { client = it }
+        assertEquals(listOf("log 1"), puller.pull().map { it.body }, "rig: the honest puller must have pulled")
+
+        val stranger = loom.join(InMemoryTag("stranger"))
+        val replicated = mutableListOf<String>()
+        backgroundScope.launch {
+            stranger.incoming.collect { swatch ->
+                val frame = swatch.toByteArray()
+                if (swatch.sender == pullerSeam.selfId && !TapAdmitMessage.isAdmitFrame(frame)) {
+                    replicated += frame.decodeToString()
+                }
+            }
+        }
+        delay(1.seconds) // suspends for real, so the collector above gets to run
+
+        assertTrue(replicated.any { "log 1" in it }, "the stranger must be reading the log body off the puller")
+    }
+
+    /** The other half of the same limit: nothing tells a puller that what it pulled came from a device. */
+    @Test
+    fun aStrangerCanHandThePullerLogsTheDeviceNeverWrote() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val puller = LogTapClient(
+            loom.host(us.tractat.kuilt.core.Pattern("forged")), backgroundScope, config, LogTapAdmission.Present("CODE1234", Random(11)),
+        ).also { client = it }
+
+        host = installLogTapJoining(loom, exporterWith(1), backgroundScope, InMemoryTag("forged"), config, LogTapAdmission.Open)
+
+        assertEquals(listOf("log 1"), puller.pull().map { it.body }, "the puller takes what an unauthenticated peer offers")
     }
 
     @Test

@@ -27,11 +27,25 @@ import us.tractat.kuilt.otel.tap.TapCbor
  * Flow (offering side = *verifier*, holds the code; pulling side = *prover*):
  * ```
  * verifier → prover : Challenge(nonce)
- * prover   → verifier: Proof(HMAC-SHA256(code, nonce))
+ * prover   → verifier: Proof(proverNonce, tag)   // tag: see admissionTag
  * verifier → prover : Reject(reason)   // on mismatch/expiry; otherwise the peer is surfaced
  * ```
- * The code never appears on the wire — only the [Proof] tag derived from it does, and a
- * fresh per-attempt [Challenge.nonce] makes a captured [Proof] useless for replay.
+ * The code never appears on the wire — only the [Proof] tag derived from it does. The tag covers a
+ * nonce from each side and both peers' ids. A captured [Proof] is good for no later exchange because
+ * the verifier's nonce is fresh each time, a forwarded one names the wrong verifier unless the
+ * forwarder wears the right ids, and the prover's nonce means a challenger cannot compute the input
+ * ahead of time. It does not stop a replay: it travels in the frame and the verifier keeps no record
+ * of the ones it has seen.
+ *
+ * The frames carry no direction and no role. Which way a proof runs is in the ids the tag covers, so
+ * two peers could run the exchange at each other at once with no change to this format.
+ *
+ * ## Mixed versions refuse, on purpose
+ *
+ * A peer from before this format shares the wire and not the handshake, and nothing downgrades. An
+ * old [Proof] has no `proverNonce`, so it does not decode here and is dropped. A current [Proof] has a
+ * key an old decoder does not know, and its tag is not one an old verifier computes. Both ends see a
+ * pull that never converges.
  */
 @Serializable
 public sealed interface TapAdmitMessage {
@@ -45,18 +59,18 @@ public sealed interface TapAdmitMessage {
      * invariant holds on **every** path, encode and decode alike, and a new consumer cannot
      * forget it.
      *
-     * It is load-bearing because the prover MACs this value verbatim
-     * (`HMAC-SHA256(code, nonce)`) and hands the tag back. Leaving the width to the sender let a
-     * peer decide how many bytes of the MAC input existed — a zero-length nonce erased it
-     * entirely, so the tag degenerated to `HMAC(code, "")`, carrying no per-attempt freshness at
-     * all. A width is a quantity and could be clamped; a nonce is not: a wrong-width nonce is
-     * proof of a malformed or forged challenge, and padding or truncating it to [NONCE_BYTES]
-     * would launder that proof into a valid-looking challenge. The frame is dropped instead —
-     * [decode] returns `null`, which `TokenGatedSeam` already treats as "do not answer".
+     * It is load-bearing because the prover MACs this value verbatim and hands the tag back. Leaving
+     * the width to the sender let a peer decide how many bytes of the MAC input existed — a
+     * zero-length nonce erased it entirely, and with variable widths the two nonces in the MAC input
+     * could trade bytes across their boundary. A width is a quantity and could be clamped; a nonce
+     * is not: a wrong-width nonce is proof of a malformed or forged challenge, and padding or
+     * truncating it to [NONCE_BYTES] would launder that proof into a valid-looking challenge. The
+     * frame is dropped instead — [decode] returns `null`, which `TokenGatedSeam` already treats as
+     * "do not answer".
      *
      * Enforcing the width does **not** make the nonce unpredictable: it is still chosen wholly by
-     * the sender, so a peer can pick a fixed 16-byte value and precompute against it (#1865). See
-     * the "Entropy ↔ TTL" note on [LogTapJoinToken].
+     * the sender. What stops a peer picking a fixed value and precomputing against it is the prover's
+     * own nonce in [Proof], not this check.
      */
     @Serializable
     @SerialName("challenge")
@@ -75,12 +89,34 @@ public sealed interface TapAdmitMessage {
         }
     }
 
-    /** Prover → verifier: `HMAC-SHA256(code, nonce)` proving knowledge of the join code. */
+    /**
+     * Prover → verifier: proof of the join code, good for this one exchange.
+     *
+     * [proverNonce] is [Challenge.NONCE_BYTES] bytes the prover drew from a secure source when it
+     * answered, and [tag] is [TAG_BYTES] bytes. Both widths are enforced here for the reason
+     * [Challenge] gives: the verifier feeds [proverNonce] straight into a MAC input whose encoding
+     * relies on that width to be unambiguous.
+     */
     @Serializable
     @SerialName("proof")
     public data class Proof(
+        @Serializable(with = TapByteStringSerializer::class) val proverNonce: ByteString,
         @Serializable(with = TapByteStringSerializer::class) val tag: ByteString,
-    ) : TapAdmitMessage
+    ) : TapAdmitMessage {
+        init {
+            require(proverNonce.size == Challenge.NONCE_BYTES) {
+                "malformed Proof: proverNonce is ${proverNonce.size} bytes, expected exactly ${Challenge.NONCE_BYTES}"
+            }
+            require(tag.size == TAG_BYTES) {
+                "malformed Proof: tag is ${tag.size} bytes, expected exactly $TAG_BYTES"
+            }
+        }
+
+        public companion object {
+            /** Width of an HMAC-SHA256 tag, in bytes. */
+            public const val TAG_BYTES: Int = 32
+        }
+    }
 
     /** Verifier → prover: admission refused (bad tag or expired token). */
     @Serializable
@@ -109,8 +145,9 @@ public sealed interface TapAdmitMessage {
          * frame (an application/replication frame) or fail to decode (malformed).
          *
          * "Malformed" includes a frame that decodes structurally but violates a wire invariant —
-         * a [Challenge] whose nonce is not [Challenge.NONCE_BYTES] wide throws out of the
-         * constructor kotlinx-serialization calls, and is dropped here like any other garbage.
+         * a [Challenge] or [Proof] with a field of the wrong width throws out of the constructor
+         * kotlinx-serialization calls, and is dropped here like any other garbage. So is a [Proof]
+         * from a peer that predates [Proof.proverNonce].
          * Use [isAdmitFrame] to tell the two `null`s apart when that matters.
          */
         public fun decode(bytes: ByteArray): TapAdmitMessage? {

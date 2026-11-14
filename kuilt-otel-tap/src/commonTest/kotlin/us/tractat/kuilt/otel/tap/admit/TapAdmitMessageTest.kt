@@ -21,7 +21,10 @@ class TapAdmitMessageTest {
 
     @Test
     fun proofAndRejectRoundTrip() {
-        val proof = TapAdmitMessage.Proof(tag = ByteString(ByteArray(32) { 7 }))
+        val proof = TapAdmitMessage.Proof(
+            proverNonce = ByteString(ByteArray(NONCE_BYTES) { 3 }),
+            tag = ByteString(ByteArray(TapAdmitMessage.Proof.TAG_BYTES) { 7 }),
+        )
         assertEquals(proof, TapAdmitMessage.decode(TapAdmitMessage.encode(proof)))
         val reject = TapAdmitMessage.Reject("expired")
         assertEquals(reject, TapAdmitMessage.decode(TapAdmitMessage.encode(reject)))
