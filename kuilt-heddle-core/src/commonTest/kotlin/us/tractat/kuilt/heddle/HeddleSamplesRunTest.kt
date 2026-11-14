@@ -49,6 +49,9 @@ class HeddleSamplesRunTest {
     fun groupPathRoundTripHolds() = sampleGroupPathRoundTrip()
 
     @Test
+    fun consumerProblemsHold() = sampleConsumerProblems()
+
+    @Test
     fun localLeaseHolds() = sampleLocalLease()
 
     @Test

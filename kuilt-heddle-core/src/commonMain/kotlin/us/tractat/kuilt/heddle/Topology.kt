@@ -170,7 +170,10 @@ public data class TopologyProblem(
         require(names.size == path.size + 1) { "names holds the root's plus one per index: $names for $path" }
     }
 
-    /** The kinds of problem a topology can have. */
+    /**
+     * The kinds of problem a topology can have: the kinds [Topology.from] finds, and [CONSUMER] for
+     * the app's own.
+     */
     public enum class Kind {
         /** A name is the empty string. */
         EMPTY_NAME,
@@ -183,6 +186,15 @@ public data class TopologyProblem(
 
         /** A weight is not a positive whole number or ratio, such as `"3"` or `"3/2"`. */
         INVALID_WEIGHT,
+
+        /**
+         * A problem the app found in its own settings for a node, kept in the same file as the
+         * tree, so that one list holds everything wrong with the file. Heddle never reports this
+         * kind: the app builds the problem with the node's [TopologyProblem.path] and puts it in the list itself.
+         *
+         * @sample us.tractat.kuilt.heddle.sampleConsumerProblems
+         */
+        CONSUMER,
     }
 
     /** One line: the address, the kind and the detail. */

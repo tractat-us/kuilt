@@ -1611,6 +1611,7 @@ final class us.tractat.kuilt.heddle/TopologyProblem { // us.tractat.kuilt.heddle
     final fun toString(): kotlin/String // us.tractat.kuilt.heddle/TopologyProblem.toString|toString(){}[0]
 
     final enum class Kind : kotlin/Enum<us.tractat.kuilt.heddle/TopologyProblem.Kind> { // us.tractat.kuilt.heddle/TopologyProblem.Kind|null[0]
+        enum entry CONSUMER // us.tractat.kuilt.heddle/TopologyProblem.Kind.CONSUMER|null[0]
         enum entry DUPLICATE_NAME // us.tractat.kuilt.heddle/TopologyProblem.Kind.DUPLICATE_NAME|null[0]
         enum entry EMPTY_GROUP // us.tractat.kuilt.heddle/TopologyProblem.Kind.EMPTY_GROUP|null[0]
         enum entry EMPTY_NAME // us.tractat.kuilt.heddle/TopologyProblem.Kind.EMPTY_NAME|null[0]

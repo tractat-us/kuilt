@@ -1,5 +1,9 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
 
@@ -182,4 +186,88 @@ internal fun sampleGroupPathRoundTrip() {
     check(pool.findGroupId(GroupPath.Declared(listOf("tenants", "y"))) == null)
     check(pool.findGroupId(GroupPath.RuntimeChild(listOf("tenants", "x"), "y")) == null)
     check(pool.findPath(GroupId("elsewhere/tenants")) == null)
+}
+
+// ── A consumer's own settings in the same file ──────────────────────────────────────────────────
+
+/** The consumer's file: heddle's fields, plus its own `rules` on every node. */
+@Serializable
+internal data class PoolFile(val root: String, val children: List<PoolNode>)
+
+/** A node of the consumer's file: heddle's shape, plus the consumer's own `rules`. */
+@Serializable
+internal sealed interface PoolNode {
+    val name: String
+    val weight: String
+    val rules: List<String>
+}
+
+@Serializable
+@SerialName("group")
+internal data class PoolGroup(
+    override val name: String,
+    override val weight: String = "1",
+    val children: List<PoolNode> = emptyList(),
+    val runtimeChildren: String? = null,
+    override val rules: List<String> = emptyList(),
+) : PoolNode
+
+@Serializable
+@SerialName("lane")
+internal data class PoolLane(
+    override val name: String,
+    override val weight: String = "1",
+    override val rules: List<String> = emptyList(),
+) : PoolNode
+
+/**
+ * A file that carries the consumer's own settings beside the tree: decode it once, strictly, into
+ * the consumer's own type, build the [TopologyDocument] from it, and report the consumer's
+ * problems in the same list as heddle's, under [TopologyProblem.Kind.CONSUMER].
+ */
+@Suppress("unused")
+internal fun sampleConsumerProblems() {
+    val text = """
+        {"root": "pool", "children": [
+          {"type": "group", "name": "acme", "weight": "3", "children": [
+            {"type": "lane", "name": "batch", "rules": ["nightly"]},
+            {"type": "lane", "name": "batch", "rules": ["hourly"]}
+          ]}
+        ]}
+    """
+    // One decode, under a default `Json`: a key neither heddle nor the app knows is an error.
+    val file = Json.decodeFromString<PoolFile>(text)
+
+    fun PoolNode.document(): TopologyDocument.Node = when (this) {
+        is PoolGroup -> TopologyDocument.Group(name, weight, children.map { it.document() }, runtimeChildren)
+        is PoolLane -> TopologyDocument.Lane(name, weight)
+    }
+    val document = TopologyDocument(file.root, file.children.map { it.document() })
+
+    // The app's own check, addressed the same way: child indices from the root, in written order.
+    fun MutableList<TopologyProblem>.checkRules(nodes: List<PoolNode>, path: List<Int>, names: List<String>) {
+        nodes.forEachIndexed { index, node ->
+            node.rules.filter { it !in listOf("nightly", "weekly") }.forEach { rule ->
+                add(TopologyProblem(path + index, names + node.name, TopologyProblem.Kind.CONSUMER, "no rule is called \"$rule\""))
+            }
+            if (node is PoolGroup) checkRules(node.children, path + index, names + node.name)
+        }
+    }
+    val ours = buildList { checkRules(file.children, emptyList(), listOf(file.root)) }
+    val heddles = (Topology.from(document) as? TopologyParse.Invalid)?.problems.orEmpty()
+    val problems = heddles + ours
+    // One list, one addressing: the second `batch` is both a duplicate and has an unknown rule.
+    check(problems.map { it.path to it.kind } == listOf(listOf(0, 1) to TopologyProblem.Kind.DUPLICATE_NAME, listOf(0, 1) to TopologyProblem.Kind.CONSUMER))
+
+    // Why one strict decode and not two lenient ones: to decode the same file into heddle's type,
+    // the app's `rules` key must be ignored, and so is a misspelt `weigth`, which then reads as "1".
+    val typo = """{"root": "pool", "children": [{"type": "lane", "name": "batch", "weigth": "3"}]}"""
+    check(Json { ignoreUnknownKeys = true }.decodeFromString<TopologyDocument>(typo).children.single().weight == "1")
+    val refused = try {
+        Json.decodeFromString<PoolFile>(typo)
+        null
+    } catch (e: SerializationException) {
+        e
+    }
+    check(refused != null)
 }
