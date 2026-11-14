@@ -130,6 +130,29 @@ class DDSketchAddBucketsTest {
         )
     }
 
+    /**
+     * Counts that each fit but fold onto one cell past [Long.MAX_VALUE] are refused, not wrapped
+     * (#3354). Before the fix the zero fold wrapped negative and the zeros were silently dropped,
+     * and the top-bucket fold wrapped negative and failed as a non-positive increment.
+     */
+    @Test
+    fun countsThatFoldPastLongMaxValueAreRefusedNotWrapped() {
+        val empty = DDSketch.empty()
+        val top = empty.adding(r1, DDSketch.DEFAULT_MAX_INDEXED_VALUE).positiveBuckets.keys.single()
+        val bottom = empty.adding(r1, DDSketch.DEFAULT_MIN_INDEXED_VALUE).positiveBuckets.keys.single()
+        val max = Long.MAX_VALUE
+        val zerosFit = empty.piece(empty.addBuckets(r1, mapOf(bottom - 1 to max - 1L), emptyMap(), 1L).delta)
+        val topFits = empty.piece(empty.addBuckets(r1, mapOf(top to max - 1L, top + 1 to 1L), emptyMap(), 0L).delta)
+        assertAll(
+            { assertEquals(max, zerosFit.zeroCount, "the control: one short of the fold fits") },
+            { assertEquals(mapOf(top to max), topFits.positiveBuckets, "the control: one short of the fold fits") },
+            { assertEquals(1L, topFits.overflowCount) },
+            { assertFailsWith<ArithmeticException> { empty.addBuckets(r1, mapOf(bottom - 1 to max), emptyMap(), 1L) } },
+            { assertFailsWith<ArithmeticException> { empty.addBuckets(r1, mapOf(top to max, top + 1 to 1L), emptyMap(), 0L) } },
+            { assertFailsWith<ArithmeticException> { empty.addBuckets(r1, mapOf(top + 1 to max, top + 2 to 1L), emptyMap(), 0L) } },
+        )
+    }
+
     @Test
     fun negativeCountsAreRejected() {
         val empty = DDSketch.empty()
