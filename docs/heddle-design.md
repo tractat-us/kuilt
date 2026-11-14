@@ -744,8 +744,14 @@ capped (#3353). A `floor` written by an earlier build is still read, through the
 
 ```text
 gross(e) = P(e) + (baseIssued(e) − folded(e)) · G     (no gauge ⇒ baseIssued(e) · G)
-v_raw(e) = (gross(e) − returned(e) · G) / (G · w(e))
+raw(e)   = gross(e) − returned(e) · G − ⌊O(parent) · w(e) · G⌋
+v_raw(e) = raw(e) / (G · w(e))
 ```
+
+`O(parent)` is the parent's **origin**, one replicated max-register per parent in
+whole units of virtual time (#3353). Every child of the parent reads its position
+less the origin on its own grid, so raising the origin moves every child down
+together. It is zero until a rebase raises it (below).
 
 Which is design §7.1's `b(e) + committedService(e) / w(e)` with `b` supplied by the
 gauge — and with the **base** issuance as the fold axis, deliberately not the effective
@@ -765,21 +771,23 @@ edges nothing is divided: a weighted mean stays an unreduced sum of positions
 over a sum of weights, and two edges compare by integer cross-multiplication in
 128 bits. Only the two joins of §7.2 round, and both round up.
 
-**A position has a ceiling, and at the ceiling it saturates (#3313).** The
-ceiling is `(Long.MAX_VALUE − 2⁴⁸) / w.denominator` ticks. Dividing by the
-denominator keeps a position's virtual time, `p · w.den / (G · w.num)`, in `Long`,
-for the public reads and a stored wake offset. The `2⁴⁸` is room for one
-largest-reservation deadline `p + q · G`. A position that would pass the ceiling
-is held there where it is narrowed to the `Long` a pick orders: the gauge read and
-a wake clamp saturate. A seat and a checkpoint do not. The gauge stores its
-position wide, exactly and uncapped, and only a read narrows it (#3353): a cap on
-an absolute position in storage would turn into credit once a per-parent origin
-passed it. In a `LocalHeddle` ledger the stored ticks are not yet absolute. A
-rebase there raises the fold (below), so the next checkpoint reads through it and
-stores a lower position, until slice 7 of #3353 moves that rebase onto origins.
-Saturating is a pure function of the view, and it commutes with the
-gauge's componentwise `max`, so replicas still agree. What a saturated position
-loses is exactness, so the rule splits by call:
+**A position a pick orders has a ceiling, and at the ceiling it saturates
+(#3313).** The ceiling is `(Long.MAX_VALUE − 2⁴⁸) / w.denominator` ticks.
+Dividing by the denominator keeps a position's virtual time,
+`p · w.den / (G · w.num)`, in `Long`, for the public reads. The `2⁴⁸` is room for
+one largest-reservation deadline `p + q · G`.
+
+**Everything up to the effective position is wide, and only the effective
+position is narrowed (#3353).** The gauge stores its position absolute, wide,
+exact and uncapped. The raw position, the front, a wake clamp `front − raw`, the
+stored clamp and the effective position, raw plus clamp, are all computed in 128
+bits. The origin's share `⌊O · w · G⌋` can reach about 2¹³⁰ at budget-legal
+extreme weights, so it is a checked wide `mulDiv` that throws rather than wraps.
+Only the effective position is narrowed to the `Long` a pick orders, and that is
+where it saturates. Nothing absolute is ever capped: a cap on an absolute value
+turns into credit once the origin passes it. Saturating is a pure function of
+the view, so replicas still agree. What a saturated position loses is
+exactness, so the rule splits by call:
 
 - A call that **chooses** refuses. A pick at a parent with a child at its
   ceiling, or one whose own delegation would take a child there, returns
@@ -787,13 +795,11 @@ loses is exactness, so the rule splits by call:
   changes nothing.
 - A call that **charges** lands. `admit` and `complete` keep the books exact,
   and the position stays at the ceiling.
-- **No credit leaks through.** A front over a saturated child reads the ceiling.
-  A stored position at or past the ceiling reads the ceiling whatever the fold
-  says: a seat taken from a front at its ceiling stores the ceiling, which may
-  stand for more. A wake clamp to a
-  front past the waker's ceiling stores the ceiling itself. So a seat or clamp
-  taken against an understated front lands at the penalty end, and nothing kept
-  can outlast the saturated child as credit (§10.5).
+- **No credit leaks through.** Nothing is narrowed before the effective
+  position, so no front, seat or clamp is taken against an understated value. A
+  seat is stored at the exact front, past the ceiling if that is where it is. A
+  clamp carries a waker the whole way up to the front, however far behind it
+  idled. The pick over either refuses (§10.5).
 
 Left alone, a busy parent does reach it. Gross positions grow with lifetime
 service under the parent, about `2⁵⁷` units at the largest reservation and a
@@ -803,7 +809,41 @@ it sits out. The pick reads the **effective** position, raw plus offset. Seven
 lanes at the largest reservation, each waiting half the time, saturate a weight-60
 lane's offset at pick 1,189, while its gross position is at 1.4% of the ceiling.
 
-**So `LocalHeddle` rebases a parent long before then (#3329).** Once any child's
+**So both engines rebase a parent long before then.** `HeddleNode` raises the
+parent's origin (#3353). `LocalHeddle`, for now, raises its children's folds
+(#3329), and its rebase moves onto origins in slice 7 of #3353.
+
+**`HeddleNode` raises the origin.** After a pick has a grant, and after the seat
+and wake step, `schedule` checks whether any child's effective position has
+passed `R = ceiling / 16`. If one has, it raises the parent's origin by `Δ`, in
+the same patch as the grant:
+
+- `Δ` is a whole multiple of the least common multiple of `d / gcd(d, 16n)` over
+  the children this peer sees, for each child's weight `n / d`. Then
+  `Δ · w · G` is whole ticks on every one of their grids, and each child comes
+  down by exactly that.
+- `Δ` is the largest such multiple at or below the smallest effective virtual
+  time among the seated children this peer sees demanding, so none of them goes
+  below zero.
+- It rewrites no gauge and no wake clamp. Every child reads `Δ · w · G` lower, so
+  every front comes down `Δ`, every `⌈V · w · G⌉` by exactly `Δ · w · G`, and
+  every clamp `front − raw` is unchanged. The pick is checked unchanged on the
+  raised state before the raise is kept.
+- An idle child goes below zero, as far as it has to. Its next wake clamp, taken
+  wide, carries it back to the front, so it keeps none of that as credit (the
+  review's F1 case).
+
+**The two hazards of a replicated rebase are closed.** A seat is written absolute,
+`⌊O · w · G⌋ + ⌈V · w · G⌉` for the origin `O` and front `V` the seating peer
+read, so two peers that seat one newborn against different origins write the
+same position, give or take a tick, and the join's `max` adds no `Δ` to it. And
+nothing raises a fold, so a concurrent checkpoint has no raised fold to pair
+with. Two peers that raise the origin at once keep the higher; a child the winning
+peer had not seen keeps a residue below one tick, on the penalty side. Neither
+the Quilter frames nor the control log carry a version: a 0.7.4 peer and a 0.7.5
+peer must not share a cluster.
+
+**`LocalHeddle` raises the folds.** Once any child's
 gross or effective position passes `R = ceiling / 16`, every active child comes
 down by one virtual time `Δ`, an idle one only as far as `−R`:
 
@@ -870,13 +910,12 @@ all of them:
   workload that charges what it reserves never reaches it. The fix rides #3192's
   format 2.
 
-The rebase is `LocalHeddle`'s alone. Under replication, a peer that has not yet
-seen a rebase would seat a newborn at the old front, and a concurrent
-checkpoint's position would pair with the raised fold. The replicated `HeddleNode`
-stops granting at a saturated parent, and its `schedule` answers
-`ScheduleOutcome.PositionCeiling(parent)`. A call that granted before meeting the
-ceiling answers `Delegated`, and the next call answers the ceiling. Its rebase is
-tracked by #3353. `apply` keeps the weight products in range the same way: an
+A fold rebase is `LocalHeddle`'s alone: under replication a peer that has not
+seen it would seat a newborn at the old front, and a concurrent checkpoint's
+position would pair with the raised fold. Where `HeddleNode` still meets the
+ceiling, its `schedule` answers `ScheduleOutcome.PositionCeiling(parent)`. A call
+that granted before meeting the ceiling answers `Delegated`, and the next call
+answers the ceiling. `apply` keeps the weight products in range the same way: an
 activation whose weights would put its parent's `L`, `S`, `G · S` or `S · d` out
 of `Long` is refused with a `StepRefusal`. Where a topology act enters a
 replicated ledger the same rule is checked. The control log refuses a `Prepare`
@@ -1312,9 +1351,10 @@ Carried over from the source intact; each is a named property test (§13).
    the joiners is demanding (§7.2) — never with lifetime credit. The
    seat is published on the edge's `Gauge`, not frozen into the record, and is
    the front rounded **up** to the edge's own grid, under one tick (§7.2). It is
-   stored exactly and uncapped (#3353). Only the front it is taken from is still
-   narrowed, so a seat taken from a front at its ceiling lands at the ceiling
-   (§7.1).
+   written absolute, the origin the seating peer saw added back on the edge's
+   grid, so it means the same under any later origin, and it is stored exactly and
+   uncapped. The front it is taken from is wide too, so no seat is taken against
+   an understated front (#3353, §7.1).
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
    clamps forward.
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
@@ -1325,18 +1365,21 @@ Carried over from the source intact; each is a named property test (§13).
    measured in simulation against the configured caps. Discretization is the
    quantum plus the position grid: step 3 admits an edge up to one tick past
    `V`, and a seat or wake clamp lands under one tick above it, each `1/16` of a
-   unit of the edge's own service (§7.1). Below the position ceiling, that is:
-   at it, a seat or clamp lands at the ceiling and every pick there refuses.
+   unit of the edge's own service (§7.1). A parent's origin adds under one tick
+   more, on the penalty side, for a child whose grid it is off: one the rebasing
+   peer had not seen. A rebase changes no pick (§7.1), so it adds nothing else.
+   At the position ceiling every pick there refuses.
 10. **Closure dominance.** A replica that observed CLOSING never again
     delegates across that generation, regardless of merge order.
 11. **Conflicts surface.** Integrity violations converge to the same explicit
     report everywhere and quarantine their lineage; nothing is resolved by
     timestamp.
 12. **Overflow rejection.** Arithmetic that would exceed `Long` fails
-    deterministically, never wraps. The one exception is a position narrowed for
-    a pick, which saturates at its ceiling; a pick that would order it refuses
-    with a typed outcome instead (§7.1). A gauge stores its position in 128 bits,
-    exactly and uncapped (#3353).
+   deterministically, never wraps. The one exception is the effective position
+    narrowed for a pick, which saturates at its ceiling; a pick that would order it
+    refuses with a typed outcome instead (§7.1). Everything before it is 128-bit:
+    a gauge's stored position, a parent's origin, the raw position, the front and
+    a wake clamp, and arithmetic that would leave 128 bits throws (#3353).
 13. **Consensus only at the embroidery.** Mint, overlapping reshape, and
     fencing use `:kuilt-raft`; nothing else coordinates, at any frequency.
 
