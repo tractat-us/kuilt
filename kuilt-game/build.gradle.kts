@@ -33,6 +33,8 @@ kotlin {
             implementation(project(":kuilt-raft-test"))
             implementation(project(":kuilt-test"))
             implementation(project(":kuilt-gossip-test"))
+            // Fake device keys for the rooms these tests build: no WebCrypto wait on wasmJs.
+            implementation(project(":kuilt-identity-test"))
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmTest.dependencies {

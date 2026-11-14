@@ -8,6 +8,9 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-session"))
+            // `fakeRoomPair` seeds each side's roster with a fake device key, so a pair never waits on
+            // WebCrypto on wasmJs.
+            implementation(project(":kuilt-identity-test"))
             implementation(libs.kotlinx.coroutines.core)
             // FakeRoomFactory's process-wide room counter — a fake that handed two rooms one id
             // would reproduce #1594 inside the double used to test around it.
