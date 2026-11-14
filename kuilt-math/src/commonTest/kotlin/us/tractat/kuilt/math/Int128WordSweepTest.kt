@@ -3,8 +3,8 @@ package us.tractat.kuilt.math
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * Every `Int128` built from two corner words, through the operations that take an `Int128` as
@@ -62,6 +62,7 @@ class Int128WordSweepTest {
         }
         val arms = "fits=$fits refused=$refused refusedOnlyByRounding=$refusedOnlyByRounding rounded=$rounded " +
             "landedOnLongMin=$landedOnLongMin landedOnLongMax=$landedOnLongMax minValueDividend=$minValueDividend"
+        println("arms reached: $arms") // in the results XML, so a run shows what it covered
         assertAll(
             { assertTrue(fits > 0, arms) },
             { assertTrue(refused > 0, arms) },
@@ -93,6 +94,7 @@ class Int128WordSweepTest {
             if (x == Int128.MIN_VALUE && actual != 0L) minValueDividendNonZero++
         }
         val arms = "zero=$zero positive=$positive negative=$negative minValueDividendNonZero=$minValueDividendNonZero"
+        println("arms reached: $arms") // in the results XML, so a run shows what it covered
         assertAll(
             { assertTrue(zero > 0, arms) },
             { assertTrue(positive > 0, arms) },
@@ -105,33 +107,37 @@ class Int128WordSweepTest {
     fun plusAndMinusMatchTheOracleAndThrowExactlyWhenTheyLeave() {
         val arms = IntArray(6) // plus: fits, above, below; minus: fits, above, below
         for ((x, bx) in values) for ((y, by) in values) {
-            sweepArm(bx + by, arms, 0, "$x + $y") { x + y }
-            sweepArm(bx - by, arms, 3, "$x - $y") { x - y }
+            sweepArm(bx + by, arms, 0, { "$x + $y" }) { x + y }
+            sweepArm(bx - by, arms, 3, { "$x - $y" }) { x - y }
         }
         val counts = "plus fits=${arms[0]} above=${arms[1]} below=${arms[2]}; " +
             "minus fits=${arms[3]} above=${arms[4]} below=${arms[5]}"
+        println("arms reached: $counts") // in the results XML, so a run shows what it covered
         assertAll(
             { assertTrue(arms.all { it > 0 }, counts) },
             { assertEquals(2 * values.size * values.size, arms.sum(), counts) },
         )
     }
 
-    /** [actual] equals [exact], or throws exactly when [exact] leaves 128 bits; counts the arm at [base]. */
-    private fun sweepArm(exact: Big, arms: IntArray, base: Int, what: String, actual: () -> Int128) {
-        when {
-            exact > max -> {
-                arms[base + 1]++
-                assertFailsWith<ArithmeticException>("$what = $exact leaves 128 bits") { actual() }
-            }
-            exact < min -> {
-                arms[base + 2]++
-                assertFailsWith<ArithmeticException>("$what = $exact leaves 128 bits") { actual() }
-            }
-            else -> {
-                arms[base]++
-                assertEquals(exact, Big.of(actual()), what)
-            }
+    /**
+     * [actual] equals [exact], or throws [ArithmeticException] exactly when [exact] leaves 128 bits;
+     * counts the arm at [base]. The message is built only on a failure: printing two `Int128`s for
+     * each of the ~200,000 pairs would cost more than the sweep.
+     */
+    private fun sweepArm(exact: Big, arms: IntArray, base: Int, what: () -> String, actual: () -> Int128) {
+        val arm = when {
+            exact > max -> 1
+            exact < min -> 2
+            else -> 0
         }
+        arms[base + arm]++
+        val result = try {
+            actual()
+        } catch (_: ArithmeticException) {
+            null
+        }
+        val agrees = if (arm == 0) result != null && Big.of(result) == exact else result == null
+        if (!agrees) fail("${what()} = $exact: expected ${if (arm == 0) "that value" else "a throw"}, got $result")
     }
 
     private companion object {
