@@ -30,6 +30,17 @@ public final class us/tractat/kuilt/heddle/AcquireOutcome$NothingEligible : us/t
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/heddle/AcquireOutcome$PositionCeiling : us/tractat/kuilt/heddle/AcquireOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/AcquireOutcome$PositionCeiling;
+	public static synthetic fun copy-9eHOidQ$default (Lus/tractat/kuilt/heddle/AcquireOutcome$PositionCeiling;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/AcquireOutcome$PositionCeiling;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getParent-urUY4Jo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/heddle/AcquireOutcome$SupplyExhausted : us/tractat/kuilt/heddle/AcquireOutcome {
 	public static final field INSTANCE Lus/tractat/kuilt/heddle/AcquireOutcome$SupplyExhausted;
 	public fun equals (Ljava/lang/Object;)Z
@@ -490,6 +501,17 @@ public final class us/tractat/kuilt/heddle/LeaseOutcome$PathDraining : us/tracta
 	public static synthetic fun copy-dq4I9ps$default (Lus/tractat/kuilt/heddle/LeaseOutcome$PathDraining;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LeaseOutcome$PathDraining;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LeaseOutcome$PositionCeiling : us/tractat/kuilt/heddle/LeaseOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/LeaseOutcome$PositionCeiling;
+	public static synthetic fun copy-9eHOidQ$default (Lus/tractat/kuilt/heddle/LeaseOutcome$PositionCeiling;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LeaseOutcome$PositionCeiling;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getParent-urUY4Jo ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -1624,6 +1646,7 @@ public final class us/tractat/kuilt/heddle/WaitExplanation$Kind : java/lang/Enum
 	public static final field NOT_ELIGIBLE Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
 	public static final field NOT_WAITING Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
 	public static final field NO_LIVE_LINEAGE Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public static final field POSITION_CEILING Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
 	public static final field SUPPLY_EXHAUSTED Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
 	public static final field WOULD_BE_PICKED_NEXT Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
@@ -1655,6 +1678,18 @@ public final class us/tractat/kuilt/heddle/WaitExplanation$NotWaiting : us/tract
 	public static final field INSTANCE Lus/tractat/kuilt/heddle/WaitExplanation$NotWaiting;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/WaitExplanation$PositionCeiling : us/tractat/kuilt/heddle/WaitExplanation {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/WaitExplanation$PositionCeiling;
+	public static synthetic fun copy-9eHOidQ$default (Lus/tractat/kuilt/heddle/WaitExplanation$PositionCeiling;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/WaitExplanation$PositionCeiling;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
+	public final fun getParent-urUY4Jo ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

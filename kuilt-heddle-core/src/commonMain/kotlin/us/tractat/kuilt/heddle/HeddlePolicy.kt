@@ -1,6 +1,9 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.math.Rounding
+import us.tractat.kuilt.math.plusOrNull
+import us.tractat.kuilt.math.timesOrNull
 
 /**
  * One immediate child, as the policy sees it: the immutable attachment metadata
@@ -133,10 +136,19 @@ public object HeddlePolicy {
      * @param localHoldings service this peer may itself delegate right now; caps the quantum.
      * @throws IllegalStateException if step 3's eligible set is empty — a policy bug, not an
      *   input the caller can provoke (issue #1737).
+     * @throws ArithmeticException if any of [edges] holds a position at its ceiling, which no longer
+     *   orders exactly (#3313): [LocalHeddle] answers that with [AcquireOutcome.PositionCeiling], and
+     *   [FairShareAllocator.schedule] stops granting at the parent. Also, as before, if a deadline
+     *   `p + q · G` leaves `Long`, which a quantum above [LocalHeddle.MAX_RESERVATION] can reach.
      */
     public fun pick(edges: List<PolicyEdge>, config: PolicyConfig, localHoldings: Long): Grant? {
         require(localHoldings >= 0L) { "localHoldings must be non-negative, was $localHoldings" }
         if (localHoldings == 0L) return null
+        // Every child, not only the candidates: a saturated sibling moves the mean the others are
+        // judged against, so the whole parent stops ordering, not just that child.
+        edges.firstOrNull { isAtCeiling(it) }?.let {
+            throw PositionCeilingException("${it.record.id.value} is at its position ceiling")
+        }
 
         // 1. Candidates with their trimmed quantum.
         val candidates = edges.mapNotNull { edge ->
@@ -199,11 +211,25 @@ public object HeddlePolicy {
 
     /** [virtualService] as a position: whole ticks of the edge's own service. */
     internal fun rawTicks(edge: PolicyEdge): Long =
-        checkedSub(edge.gauge.grossTicksAt(edge.baseIssued, edge.record.weight), ticksOf(edge.summary.returned))
+        netTicks(edge.gauge.grossTicksAt(edge.baseIssued, edge.record.weight), edge.summary.returned, edge.record.weight)
 
-    /** The position a pick reads: [rawTicks] plus the scheduler-local wake clamp, both in ticks. */
-    internal fun effectiveTicks(edge: PolicyEdge): Long =
-        checkedAdd(rawTicks(edge), ticksAt(edge.virtualOffset, edge.record.weight))
+    /**
+     * The position a pick reads: [rawTicks] plus the scheduler-local wake clamp, both in ticks, held
+     * at the edge's [positionCeiling].
+     */
+    internal fun effectiveTicks(edge: PolicyEdge): Long {
+        val weight = edge.record.weight
+        return saturated(Int128.of(rawTicks(edge)) + ticksAt(edge.virtualOffset, weight), weight)
+    }
+
+    /**
+     * Whether a pick over [edge] would have to order a position at its ceiling: its effective
+     * position is there, or its wake clamp is, which a smaller raw position could otherwise hide.
+     */
+    internal fun isAtCeiling(edge: PolicyEdge): Boolean {
+        val weight = edge.record.weight
+        return atCeiling(effectiveTicks(edge), weight) || atCeiling(ticksAt(edge.virtualOffset, weight), weight)
+    }
 
     /**
      * Is [edge] **currently competing** — does its child want more service than it already
@@ -285,9 +311,12 @@ public object HeddlePolicy {
             val top = considered.maxWith { a, b ->
                 compareVirtual(effectiveTicks(a), a.record.weight, effectiveTicks(b), b.record.weight)
             }
-            return VirtualTime.of(effectiveTicks(top), top.record.weight)
+            // Any saturated child, not only the top: one that reads below the top may truly be above it.
+            return VirtualTime.of(effectiveTicks(top), top.record.weight).atCeilingIf(considered.any { isAtCeiling(it) })
         }
-        return meanOf(demanding)
+        // A saturated input understates the mean, and a joiner seated or clamped against it would
+        // keep that as credit once the input left: the front reads the ceiling instead (#3313).
+        return meanOf(demanding).atCeilingIf(demanding.any { isAtCeiling(it) })
     }
 
     /**
@@ -309,9 +338,22 @@ public object HeddlePolicy {
         // The front rounds up and the waker's own position down, so an off-grid caller's offset
         // can only overshoot the front, never land short of it (§10.5).
         ticksToVirtual(
-            wakeOffsetTicks(ticksAt(front, weight), ticksAt(vRaw, weight, Rounding.FLOOR), sleeperCredit),
+            clampTicks(ticksAt(front, weight), ticksAt(vRaw, weight, Rounding.FLOOR), sleeperCredit, weight),
             weight,
         )
+
+    /**
+     * The offset a waker stores: [wakeOffsetTicks], or exactly the waker's [positionCeiling] when the
+     * front on its grid is there. A front at the ceiling may stand for a later one, and an offset short
+     * of it would read as an exact position below the ceiling, so the clamp saturates whole: the
+     * waker's effective position then reads the ceiling, and a pick over it refuses (#3313).
+     */
+    internal fun clampTicks(frontTicks: Long, rawTicks: Long, sleeperCredit: Long, weight: Weight): Long =
+        if (atCeiling(frontTicks, weight)) {
+            positionCeiling(weight)
+        } else {
+            minOf(wakeOffsetTicks(frontTicks, rawTicks, sleeperCredit), positionCeiling(weight))
+        }
 
     /**
      * [wakeOffset] in ticks: how far a waker at [rawTicks] moves up to reach [frontTicks], less

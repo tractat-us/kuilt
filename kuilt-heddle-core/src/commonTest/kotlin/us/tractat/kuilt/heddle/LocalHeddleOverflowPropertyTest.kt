@@ -51,7 +51,11 @@ class LocalHeddleOverflowPropertyTest {
      * #3231's trigger, which is magnitude rather than compounding: fractional weights `3/7 : 2/5`,
      * every lease at [LocalHeddle.MAX_RESERVATION] and charged in full, with both lanes always
      * waiting. Before the fix the pick threw at cycle 4,995, about `2⁵⁶` units of service under the
-     * parent, and every later acquire there threw too. Twice that many cycles run here.
+     * parent, and every later acquire there threw too.
+     *
+     * Now the run passes that cycle and goes on to a's **position ceiling**, a little past cycle
+     * 9,000 at these weights, where the acquire is refused with a typed outcome instead of throwing
+     * (#3313's slice 4). Raising that ceiling is #3329's rebase, which this arm does not assume.
      */
     @Test
     fun fractionalWeightsPickPastTheOldServiceCeiling() {
@@ -63,20 +67,27 @@ class LocalHeddleOverflowPropertyTest {
             .apply { reconcileCapacity(1L) }
         val lanes = listOf(topology.groupId("a"), topology.groupId("b"))
         val picked = IntArray(lanes.size)
-        repeat(CEILING_CYCLES) { cycle ->
+        var refusal: AcquireOutcome? = null
+        for (cycle in 0 until CEILING_CYCLES) {
             val outcome = try {
                 engine.acquire(lanes.toSet(), lanes.toSet(), startedAt = cycle.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
             } catch (e: ArithmeticException) {
                 throw AssertionError("cycle ${cycle + 1} threw $e", e)
             }
+            if (outcome is AcquireOutcome.PositionCeiling) {
+                refusal = outcome
+                break
+            }
             check(outcome is AcquireOutcome.Acquired) { "cycle ${cycle + 1}: expected a lease, got $outcome" }
             picked[lanes.indexOf(outcome.lease.leaf)]++
             engine.complete(outcome.lease.id, actualCost = LocalHeddle.MAX_RESERVATION)
         }
+        val picks = picked.sum()
         assertAll(
-            { assertEquals(CEILING_CYCLES, picked.sum(), "every cycle made one pick") },
+            { assertTrue(picks > OLD_SERVICE_CEILING, "the run passed the old ceiling at cycle $OLD_SERVICE_CEILING: $picks picks") },
+            { assertTrue(refusal == null || refusal == AcquireOutcome.PositionCeiling(topology.groupId()), "a refusal names the parent: $refusal") },
             // 3/7 : 2/5 is 15 : 14.
-            { assertTrue(picked.all { it > CEILING_CYCLES / 3 }, "both lanes are served near 15 : 14: ${picked.toList()}") },
+            { assertTrue(picked.all { it > picks / 3 }, "both lanes are served near 15 : 14: ${picked.toList()}") },
             { assertEquals(emptyList<String>(), offGrid(engine.snapshot())) },
         )
     }
@@ -278,6 +289,9 @@ class LocalHeddleOverflowPropertyTest {
         const val PICKS = 100_000
         const val SAMPLE_EVERY = 100
         const val CEILING_CYCLES = 10_000
+
+        /** The cycle #3231's run threw at before the grid. */
+        const val OLD_SERVICE_CEILING = 4_995
         const val CHURN_SEATS = 5_000
         const val CHURN_WIDTH = 4
         const val WEDGED_PICKS = 20_000

@@ -285,12 +285,13 @@ another scheduler already started, and `previewPicks` answers "who goes next" wi
 anything. `startedAt` is stored on the lease and never read by a pick. A pick only goes down a
 subtree it can finish in, so a group whose only leaf sits behind a closing edge never takes a slot
 from a sibling that can run. A refusal is a typed outcome (`NothingEligible`, `SupplyExhausted`,
-`NoLiveLineage`, `PathDraining`, `Unknown`, `Stale`), never an exception: an `extend` on a lease
-whose path a reload is closing is `PathDraining`, and its `complete` still settles. A bad argument
-throws `IllegalArgumentException`, such as a reservation above `LocalHeddle.MAX_RESERVATION`
-(2^44 cost units). `ArithmeticException` is reachable too: each child's progress is a `Long`
-count of sixteenths of a unit, so the service under one parent has a ceiling, scaled for a newcomer
-by its weight against its siblings'. Past it, every `acquire` there throws. `IllegalStateException` is left only for a conflicted ledger, such as two live edges into
+`NoLiveLineage`, `PositionCeiling`, `PathDraining`, `Unknown`, `Stale`), never an exception: an
+`extend` on a lease whose path a reload is closing is `PathDraining`, and its `complete` still
+settles. A bad argument throws `IllegalArgumentException`, such as a reservation above
+`LocalHeddle.MAX_RESERVATION` (2^44 cost units). Each child's progress is a `Long` count of
+sixteenths of a unit, so the service under one parent has a ceiling, scaled for a newcomer by its
+weight against its siblings'. At it, `acquire` and `extend` there return `PositionCeiling(parent)`
+and change nothing, while `admit` and `complete` still charge. `IllegalStateException` is left only for a conflicted ledger, such as two live edges into
 one group, a split record or a cycle, which the public surface cannot reach today. The
 engine reads no clock and no random source, and it is not thread-safe: call every method under your
 scheduling lock, `snapshot()` included, and hand status and persistence readers the immutable value

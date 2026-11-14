@@ -332,14 +332,14 @@ class GaugeTest {
      * `33 / (16 · 3037000507)`. The floor was written off the grid — only an older peer or a
      * hand-built gauge can do that — and the read rounds it once, in the direction §10.5 allows.
      *
-     * What still throws is a **position** past `Long`: an issuance whose ticks do not fit. That is
-     * a deterministic refusal every replica makes alike (§10.12), never a wrap.
+     * A **position** past its ceiling, an issuance whose ticks do not fit, reads as the ceiling: a
+     * deterministic value every replica reads alike, never a wrap and no longer a throw (#3313).
      *
      * Reached through the [EntitlementLedger] read rather than bare arithmetic, so the guarantee is
      * pinned where consumers actually stand.
      */
     @Test
-    fun anOffGridFloorIsReadUpToTheGridAndOnlyAPositionPastLongThrows() {
+    fun anOffGridFloorIsReadUpToTheGridAndAPositionPastLongReadsAsTheCeiling() {
         val offGrid = ledgerWith(
             weight = Weight.of(3_037_000_507L, 1L),
             issued = 1L,
@@ -352,12 +352,25 @@ class GaugeTest {
         )
         assertAll(
             { assertEquals(Rational.of(33L, 16L * 3_037_000_507L), offGrid.grossVirtualService(EDGE)) },
+            // Held at the ceiling rather than thrown or wrapped (#3313): the read never fails, and a
+            // pick that would order it refuses instead.
             {
-                assertFailsWith<ArithmeticException>("must throw, never wrap (§10.12)") {
-                    pastLong.grossVirtualService(EDGE)
-                }
+                assertEquals(ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE), pastLong.grossVirtualService(EDGE))
             },
         )
+    }
+
+    /**
+     * A floor at the ceiling stays at the ceiling whatever the fold says (review of #3352). It was
+     * saturated when it was written and may stand for more, so a fold above the issuance this view
+     * holds, another peer's issuance not yet seen here, must not bring it back below the ceiling
+     * as if it were exact: a pick would then order it.
+     */
+    @Test
+    fun aFloorAtTheCeilingReadsTheCeilingWhateverTheFold() {
+        val atCeiling = ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE)
+        val ledger = ledgerWith(weight = Weight.ONE, issued = 5L, gauge = Gauge(atCeiling, folded = 10L))
+        assertEquals(atCeiling, ledger.grossVirtualService(EDGE))
     }
 
     /** `Σ w·ev / Σ w` — the front, as [HeddlePolicy] computes it, for the chaining measurement. */

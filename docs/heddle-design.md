@@ -694,6 +694,35 @@ edges nothing is divided: a weighted mean stays an unreduced sum of positions
 over a sum of weights, and two edges compare by integer cross-multiplication in
 128 bits. Only the two joins of §7.2 round, and both round up.
 
+**A position has a ceiling, and at the ceiling it saturates (#3313).** The
+ceiling is `(Long.MAX_VALUE − 2⁴⁸) / w.denominator` ticks. Dividing by the
+denominator keeps a floor's wire form, `p · w.den / (G · w.num)`, in `Long`. The
+`2⁴⁸` is room for one largest-reservation deadline `p + q · G`. A position
+that would pass the ceiling is held there: the gauge read, a seat, a checkpoint
+and a wake clamp all saturate. Saturating is a pure function of the view, and it
+commutes with the gauge's componentwise `max`, so replicas still agree. What a
+saturated position loses is exactness, so the rule splits by call:
+
+- A call that **chooses** refuses. A pick at a parent with a child at its
+  ceiling, or one whose own delegation would take a child there, returns
+  `PositionCeiling(parent)` from `LocalHeddle.acquire` and `extend`. The call
+  changes nothing.
+- A call that **charges** lands. `admit` and `complete` keep the books exact,
+  and the position stays at the ceiling.
+- **No credit leaks through.** A front over a saturated child reads the ceiling.
+  A floor at the ceiling stays there whatever the fold says. A wake clamp to a
+  front past the waker's ceiling stores the ceiling itself. So a seat or clamp
+  taken against an understated front lands at the penalty end, and nothing kept
+  can outlast the saturated child as credit (§10.5).
+
+The binding sum is lifetime service under one parent, about `2⁵⁷` units at the
+largest reservation and a weight of `3/7`, so a busy parent does reach it.
+Until positions can be brought back down (#3329 for `LocalHeddle`), a parent at
+its ceiling refuses picks for good. The replicated `HeddleNode` stops granting at
+that parent; its rebase and refusal surface are tracked by #3353. `apply` keeps the weight products in range
+the same way: an activation whose weights would put its parent's `L`, `S`,
+`G · S` or `S · d` out of `Long` is refused with a `StepRefusal`.
+
 Why a grid at all, against the exact `Rational` this section used to prescribe:
 a joiner stored the front, a weighted mean whose denominator carries `Σw` of the
 set it was taken over, and the next front averaged that value in again. Every
@@ -747,7 +776,7 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   writing exact fronts into floors, so the denominators in its own state keep
   growing toward the overflow this change fixes. A new peer that merges those
   floors reads them on its grid, reducing each fraction before it multiplies, so
-  it throws only where the position itself would leave `Long`.
+  it saturates only where the position itself passes its ceiling (§7.1).
 - **No unlimited idle credit:** when a child goes from not-demanding to
   demanding, a local wake offset clamps it forward:
 
@@ -1074,7 +1103,8 @@ Carried over from the source intact; each is a named property test (§13).
    parent's current virtual time — the front over its *demanding* children,
    not over all its active ones (§7.2) — never with lifetime credit. The
    seat is published on the edge's `Gauge`, not frozen into the record, and is
-   the front rounded **up** to the edge's own grid, under one tick (§7.2).
+   the front rounded **up** to the edge's own grid, under one tick (§7.2), below
+   the position ceiling; at it, the seat lands at the ceiling (§7.1).
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
    clamps forward.
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
@@ -1085,14 +1115,17 @@ Carried over from the source intact; each is a named property test (§13).
    measured in simulation against the configured caps. Discretization is the
    quantum plus the position grid: step 3 admits an edge up to one tick past
    `V`, and a seat or wake clamp lands under one tick above it, each `1/16` of a
-   unit of the edge's own service (§7.1).
+   unit of the edge's own service (§7.1). Below the position ceiling, that is:
+   at it, a seat or clamp lands at the ceiling and every pick there refuses.
 10. **Closure dominance.** A replica that observed CLOSING never again
     delegates across that generation, regardless of merge order.
 11. **Conflicts surface.** Integrity violations converge to the same explicit
     report everywhere and quarantine their lineage; nothing is resolved by
     timestamp.
 12. **Overflow rejection.** Arithmetic that would exceed `Long` fails
-    deterministically, never wraps.
+    deterministically, never wraps. The one exception is a position, which
+    saturates at its ceiling; a pick that would order it refuses with a typed
+    outcome instead (§7.1).
 13. **Consensus only at the embroidery.** Mint, overlapping reshape, and
     fencing use `:kuilt-raft`; nothing else coordinates, at any frequency.
 

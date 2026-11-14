@@ -235,6 +235,7 @@ class LocalHeddleFairnessTest {
                         AcquireOutcome.NothingEligible -> run.nothingEligible++
                         AcquireOutcome.SupplyExhausted -> fail("the harness funded step $step, yet the engine reported exhaustion")
                         is AcquireOutcome.NoLiveLineage -> fail("descent failed at ${out.at.value} on step $step")
+                        is AcquireOutcome.PositionCeiling -> fail("no position nears its ceiling here, step $step")
                     }
                     // A wake is an edge the allocator last observed idle and has now observed waiting.
                     val observed = before.allocatorMemory.demandingObserved

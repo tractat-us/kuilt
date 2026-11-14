@@ -410,8 +410,8 @@ public class EntitlementLedger private constructor(
      * `reconcileStranded` patch touches no term of this read, so it cannot matter whether it lands
      * before or after the edge is seated.
      *
-     * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12 — a
-     *   deterministic throw, never a silent wrap; see [CheckedMath]).
+     * A position past the edge's ceiling reads as the ceiling rather than throwing (#3313); a pick
+     * that would order it refuses instead (see [AcquireOutcome.PositionCeiling]).
      */
     public fun grossVirtualService(id: AttachmentId): Rational? =
         recordOf(id)?.let { grossVirtualService(id, it.weight) }
@@ -419,14 +419,14 @@ public class EntitlementLedger private constructor(
     /**
      * [id]'s virtual service net of returns — `grossVirtualService − returned / w` (design §7.1's
      * `b + committedService / weight`, with the gauge supplying `b` and the fold). `null` if [id]
-     * is unknown or divergent.
+     * is unknown or divergent. At the ceiling it reads the ceiling, as a pick does ([netTicks]).
      *
-     * @throws ArithmeticException if the exact arithmetic would exceed `Long`.
+     * @throws ArithmeticException if the returns, in ticks, leave `Long`.
      */
     public fun virtualService(id: AttachmentId): Rational? {
         val w = recordOf(id)?.weight ?: return null
         val gross = gauges[id].grossTicksAt(counterValue(issued, id), w)
-        return ticksToVirtual(checkedSub(gross, ticksOf(counterValue(returned, id))), w)
+        return ticksToVirtual(netTicks(gross, counterValue(returned, id), w), w)
     }
 
     /** [grossVirtualService] once the edge's single weight is in hand. */
@@ -1510,7 +1510,9 @@ public class EntitlementLedger private constructor(
      * The floor written is `max(front, baseIssued / w)`, and the fold is this peer's **own
      * observed** base issuance. Both halves matter:
      *  - the `max` means a bump can never seat an edge *behind* what its own observed service
-     *    already implies, so this write has no lifetime-credit direction (§10.5);
+     *    already implies, so this write has no lifetime-credit direction (§10.5). The one
+     *    exception is a seat past the edge's position ceiling, written at the ceiling; an edge
+     *    there refuses every pick that would order it, so the clamp is never spent (#3313);
      *  - folding the observed issuance is what makes a *stale* bump self-limiting. A peer that has
      *    seen none of this edge's service writes `(itsFront, 0)`, and the componentwise join then
      *    pairs that floor with a better-informed fold and deflates it. A restarted peer's
@@ -1531,14 +1533,24 @@ public class EntitlementLedger private constructor(
      * `⌈V · w · G⌉` a scheduler reads off its front ([VirtualTime.ticksFor]). The floor written is
      * `max(ticks, baseIssued · G)` ticks, stored as the virtual time it stands for, so it is on the
      * grid and every later read of it is exact. Rounding the front up to [ticks] is the only
-     * rounding a seat does (design §7.2).
+     * rounding a seat does (design §7.2). A seat above the edge's [positionCeiling] is written at
+     * the ceiling: a seat is part of a charge that may not be refused (#3313).
      */
     internal fun seatAt(edge: AttachmentId, ticks: Long): Patch<EntitlementLedger>? {
         val w = recordOf(edge)?.weight ?: return null
         if (edge in gauges) return null
         val observed = counterValue(issued, edge)
-        val floor = ticksToVirtual(maxOf(ticks, ticksOf(observed)), w)
+        val floor = ticksToVirtual(minOf(maxOf(ticks, saturatedTicksOf(observed, w)), positionCeiling(w)), w)
         return Patch(of(gauges = mapOf(edge to Gauge(floor, observed))))
+    }
+
+    /**
+     * Whether [edge]'s gross position is at its [positionCeiling], where it may stand for a larger
+     * one ([grossTicksAt]). `false` for an edge this ledger does not know.
+     */
+    internal fun isAtPositionCeiling(edge: AttachmentId): Boolean {
+        val w = recordOf(edge)?.weight ?: return false
+        return atCeiling(gauges[edge].grossTicksAt(counterValue(issued, edge), w), w)
     }
 
     /**

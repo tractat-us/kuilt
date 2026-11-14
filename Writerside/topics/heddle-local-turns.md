@@ -186,9 +186,10 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
   reservation at the leaf instead of returning it up the path.
 - **A lifetime ceiling.** Each child's progress is a `Long` count of
   sixteenths of a unit, and it grows with all the service its fork has handed
-  down, scaled by its weight against its siblings'. Past the ceiling, every
-  `acquire` at that fork throws `ArithmeticException`. Pick a coarse unit:
-  minutes or seconds, not nanoseconds.
+  down, scaled by its weight against its siblings'. At the ceiling, `acquire`
+  and `extend` at that fork return `PositionCeiling` and change nothing, while
+  `admit` and `complete` still charge. Pick a coarse unit: minutes or seconds,
+  not nanoseconds.
 
 **Sizing estimates.** The estimate and straddle effects both vanish for a lease
 that settles at its estimate, a `cancel` aside. So aim `defaultReservation` at a
@@ -274,15 +275,16 @@ one reads the engine's maps. The `LocalHeddleState` it returns is immutable, so
 hand that to a status page or another thread instead of the engine.
 
 **Outcomes, not exceptions.** Nothing suspends and nothing times out. The usual
-"no" is a typed answer that changes nothing: `SupplyExhausted`, `NothingEligible`
-or `NoLiveLineage` from `acquire`, and `Unknown`, `Stale`, `PathDraining` or
-`SupplyExhausted` from a lease call. `complete` and `admit` are never refused.
-Each call is all or nothing, with one exception: a refused `acquire` still
-updates the engine's memory of who was waiting.
+"no" is a typed answer that changes nothing: `SupplyExhausted`, `NothingEligible`,
+`NoLiveLineage` or `PositionCeiling` from `acquire`, and `Unknown`, `Stale`,
+`PathDraining`, `SupplyExhausted` or `PositionCeiling` from a lease call.
+`complete` and `admit` are never refused. Each call is all or nothing, with one
+exception: an `acquire` refused as `NoLiveLineage` still updates the engine's
+memory of who was waiting, because its pick saw them.
 
 **Exceptions mean a mistake.** An argument out of range throws
 `IllegalArgumentException`. Arithmetic past `Long` throws `ArithmeticException`
-rather than wrapping, as at the ceiling above. `IllegalStateException` means the
+rather than wrapping, except at the ceiling above. `IllegalStateException` means the
 engine found a state its own rules rule out: a bug in it, or a damaged ledger it
 did not write.
 

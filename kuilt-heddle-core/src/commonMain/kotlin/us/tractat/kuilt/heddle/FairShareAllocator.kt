@@ -96,6 +96,15 @@ public class FairShareAllocator(
             demandingObserved = demandingObserved.entries.sortedBy { it.key }.associate { it.key to it.value },
         )
 
+    /**
+     * An allocator that remembers exactly what this one does, and that later calls on either leave
+     * the other alone: [memory] without the sort, for a caller that copies on every call.
+     */
+    internal fun fork(): FairShareAllocator = FairShareAllocator(self, policy).also {
+        it.wakeOffsets.putAll(wakeOffsets)
+        it.demandingObserved.putAll(demandingObserved)
+    }
+
     /** The demanding state [edge] was last observed in, or `null` when it has never been observed. */
     internal fun lastObservedDemanding(edge: AttachmentId): Boolean? = demandingObserved[edge]
 
@@ -117,7 +126,8 @@ public class FairShareAllocator(
      * @param demand the current appetite of one child edge, [Demand.NONE] for an edge that wants
      *   nothing. Asked once per active child each time the policy input is built, so it should
      *   answer from live state rather than a copy taken before the call.
-     * @return the count of grants applied this call.
+     * @return the count of grants applied this call. It stops early, with nothing written for the
+     *   pick it stops at, when a child of [parent] reaches its position ceiling (#3313).
      */
     public fun schedule(
         parent: GroupId,
@@ -132,8 +142,14 @@ public class FairShareAllocator(
             // delegable ⇒ mutateOrSkip writes nothing and answers false (#2090). Peeking on
             // `ledger.current` first would run the policy twice per grant, the peek deciding
             // against a state an inbound write may already have moved past.
-            val applied = ledger.mutateOrSkip { s ->
-                pickOne(s, parent, earmarked, demand)?.let { grant -> s.delegate(self, grant.attachment, grant.amount) }
+            val applied = try {
+                ledger.mutateOrSkip { s ->
+                    pickOne(s, parent, earmarked, demand)?.let { grant -> s.delegate(self, grant.attachment, grant.amount) }
+                }
+            } catch (_: PositionCeilingException) {
+                // The pick would have to order a position at its ceiling (#3313): grant nothing more
+                // here. The throw left the transform before it returned a patch, so nothing was written.
+                false
             }
             if (!applied) break
             grants++
@@ -167,6 +183,9 @@ public class FairShareAllocator(
      *   cannot take this grant. A child [eligible] wants should also be one [waiting] wants.
      * @return the seated ledger and the grant, or `null` when no child can be granted anything:
      *   none is eligible, none is seated, or [parent] holds nothing.
+     * @throws ArithmeticException when a child of [parent] holds a position at its ceiling, as
+     *   [HeddlePolicy.pick] does (#3313). The wake memory has moved by then; a caller that must
+     *   change nothing on a refusal keeps a copy, as [LocalHeddle] does.
      */
     public fun pickChild(
         parent: GroupId,
@@ -420,16 +439,19 @@ public class FairShareAllocator(
         for (edge in edges) {
             if (edge.record.id !in wakers) continue
             val weight = edge.record.weight
-            val computed = HeddlePolicy.wakeOffsetTicks(
+            val computed = HeddlePolicy.clampTicks(
                 frontTicks = front.ticksFor(weight),
                 rawTicks = HeddlePolicy.rawTicks(edge),
                 sleeperCredit = policy.sleeperCredit,
+                weight = weight,
             )
             // Join, never replace: the front is not monotone across wake cycles (#1714). Both
             // sides are on the waker's grid, and the result is stored on it, so a stored offset
             // never carries a front's denominator into the next one (#3313).
             val carried = ticksAt(wakeOffsets[edge.record.id] ?: Rational.ZERO, weight)
-            wakeOffsets[edge.record.id] = ticksToVirtual(maxOf(carried, computed), weight)
+            // Held at the ceiling, like any position, so it stays representable; a pick over a clamp
+            // there refuses ([HeddlePolicy.isAtCeiling]).
+            wakeOffsets[edge.record.id] = ticksToVirtual(minOf(maxOf(carried, computed), positionCeiling(weight)), weight)
         }
     }
 
