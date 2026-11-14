@@ -32,9 +32,9 @@ public interface OtlpEdge {
      * The bridge subtracts this set from its local CRDT snapshot to compute the
      * delta: only spans absent from the digest are sent over the wire.
      *
-     * Throws on connectivity failure; [WarpOtlpBridge] wraps the call with
-     * [runCatchingCancellable] and reports the exception, tagged [OtlpSignal.SPANS], in a
-     * [DrainResult.Partial] or [DrainResult.Failure].
+     * Throws on connectivity failure; [WarpOtlpBridge] reports the exception, tagged
+     * [OtlpSignal.SPANS], in a [DrainResult.Partial] or [DrainResult.Failure]. A
+     * `CancellationException` this edge mints from its own `withTimeout` is reported the same way.
      */
     public suspend fun digest(): SpanDigest
 
@@ -55,9 +55,9 @@ public interface OtlpEdge {
      *
      * [spans] is non-empty when called by the bridge (an empty delta is never sent).
      *
-     * Throws on send failure; [WarpOtlpBridge] wraps the call with
-     * [runCatchingCancellable] and reports the exception, tagged [OtlpSignal.SPANS], in a
-     * [DrainResult.Partial] or [DrainResult.Failure].
+     * Throws on send failure; [WarpOtlpBridge] reports the exception, tagged
+     * [OtlpSignal.SPANS], in a [DrainResult.Partial] or [DrainResult.Failure]. A
+     * `CancellationException` this edge mints from its own `withTimeout` is reported the same way.
      */
     public suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink> = emptyList())
 
