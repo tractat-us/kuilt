@@ -150,6 +150,10 @@ public class WarpMetricExporter(
      * The OTLP exponential-histogram scale every histogram series here is kept at — the scale
      * [histogramPrototype]'s accuracy aligns with, [DEFAULT_OTLP_HISTOGRAM_SCALE] by default.
      *
+     * Every series holds exactly [histogramPrototype]'s configuration, so this one number describes
+     * them all: a new series starts from the prototype, [mergeHistogram] refuses a sketch of any
+     * other configuration, and [recover] drops a persisted series of another configuration.
+     *
      * A [MetricUpdate.AddExponentialHistogram] must arrive at this scale or a finer one: a coarser
      * bucket cannot be split without breaking the sketch's accuracy, so [record] refuses it. A
      * producer that controls its bucketing, such as an OpenTelemetry SDK's exponential-histogram
@@ -327,8 +331,28 @@ public class WarpMetricExporter(
             logger.warn(cause) { "otel.metrics.histograms: corrupt store entry, starting fresh" }
             return
         }
-        lock.withLock { recovered.forEach { (k, v) -> histograms[k] = v } }
+        // A series written under another configuration — the prototype changed across a restart —
+        // cannot be kept: its bucket indices mean other values, so an AddExponentialHistogram mapped
+        // at histogramScale would land at the wrong values, and a peer's merge would refuse it.
+        val (kept, foreign) = recovered.entries.partition { (_, sketch) -> sketch.hasPrototypeConfiguration() }
+        if (foreign.isNotEmpty()) {
+            logger.warn {
+                "otel.metrics.histograms: dropping ${foreign.size} recovered series written under another " +
+                    "configuration than histogramPrototype (${foreign.first().value.configuration()} vs " +
+                    "${histogramPrototype.configuration()}); the next histogram write removes them from the store"
+            }
+        }
+        lock.withLock { kept.forEach { (k, v) -> histograms[k] = v } }
     }
+
+    /** Whether this sketch can live in [histograms]: [histogramPrototype]'s exact configuration. */
+    private fun DDSketch.hasPrototypeConfiguration(): Boolean =
+        relativeAccuracy == histogramPrototype.relativeAccuracy &&
+            minIndexedValue == histogramPrototype.minIndexedValue &&
+            maxIndexedValue == histogramPrototype.maxIndexedValue
+
+    private fun DDSketch.configuration(): String =
+        "(α=$relativeAccuracy, range=[$minIndexedValue, $maxIndexedValue])"
 
     private suspend fun recoverSumsDouble() {
         val bytes = runCatchingCancellable { store.read(SUM_DOUBLE_STORE_KEY) }.getOrElse { cause ->
@@ -545,9 +569,16 @@ public class WarpMetricExporter(
             is MetricUpdate.AddCardinality,
             is MetricUpdate.RecordHistogram,
             -> Unit
-            is MetricUpdate.AddExponentialHistogram -> require(update.scale >= histogramScale) {
-                "AddExponentialHistogram for ${update.key.name} is at scale ${update.scale}, coarser than this " +
-                    "exporter's histogramScale $histogramScale; its buckets cannot be split without losing accuracy"
+            is MetricUpdate.AddExponentialHistogram -> {
+                require(update.scale >= histogramScale) {
+                    "AddExponentialHistogram for ${update.key.name} is at scale ${update.scale}, coarser than this " +
+                        "exporter's histogramScale $histogramScale; its buckets cannot be split without losing accuracy"
+                }
+                // Checked at construction too, but the lists are the caller's: one mutated since would
+                // otherwise make DDSketch.addBuckets throw after earlier updates were applied.
+                require(update.positiveCounts.all { it >= 0L } && update.negativeCounts.all { it >= 0L }) {
+                    "AddExponentialHistogram for ${update.key.name} holds a negative count"
+                }
             }
         }
     }
@@ -816,14 +847,18 @@ public class WarpMetricExporter(
      * Idempotent and lossless: the merged sketch equals the sketch of the combined
      * measurement stream. Returns [MetricExportResult.Success] after the durable write.
      *
-     * @throws IllegalArgumentException if [remote]'s relative accuracy is not
-     *   OTLP-aligned (see [alphaForOtlpScale]), or if [key] already holds a sketch
-     *   with a different configuration (DDSketch configs must match exactly to merge).
+     * @throws IllegalArgumentException if [remote]'s configuration — relative accuracy,
+     *   `minIndexedValue` and `maxIndexedValue` — is not exactly [histogramPrototype]'s. Every
+     *   series here holds that configuration, which is what lets [histogramScale] describe them
+     *   all; a fresh key does not take a foreign one either.
      */
     public suspend fun mergeHistogram(key: MetricKey, remote: DDSketch): MetricExportResult {
         // Validation stays outside the mutex: it throws by contract, and a throwing caller has no
         // business holding the durable-write section.
-        otlpScaleFor(remote.relativeAccuracy) // reject non-OTLP-aligned sketches up front
+        require(remote.hasPrototypeConfiguration()) {
+            "mergeHistogram for ${key.name}: remote sketch ${remote.configuration()} does not match " +
+                "histogramPrototype ${histogramPrototype.configuration()}"
+        }
         return writeMutex.withLock {
             val encoded = lock.withLock {
                 val current = histograms[key]

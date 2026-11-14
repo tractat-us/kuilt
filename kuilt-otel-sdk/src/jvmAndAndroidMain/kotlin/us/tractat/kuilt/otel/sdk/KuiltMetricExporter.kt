@@ -4,7 +4,6 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import io.opentelemetry.api.common.Attributes
 import io.opentelemetry.sdk.common.CompletableResultCode
 import io.opentelemetry.sdk.metrics.Aggregation
-import io.opentelemetry.sdk.metrics.Base2ExponentialHistogramOptions
 import io.opentelemetry.sdk.metrics.InstrumentType
 import io.opentelemetry.sdk.metrics.data.AggregationTemporality
 import io.opentelemetry.sdk.metrics.data.DoublePointData
@@ -111,14 +110,18 @@ public class KuiltMetricExporter @JvmOverloads constructor(
     public val maxBuckets: Int = DEFAULT_MAX_BUCKETS,
 ) : MetricExporter {
 
-    /** Built eagerly, so a [maxBuckets] the SDK refuses fails here rather than at the first instrument. */
+    /**
+     * Built eagerly, so a [maxBuckets] the SDK refuses fails here rather than at the first instrument.
+     *
+     * The `(maxBuckets, maxScale)` overload is deprecated in favour of `Base2ExponentialHistogramOptions`,
+     * but that class first shipped in OpenTelemetry SDK 1.60.0. The SDK is `compileOnly` here, so the
+     * app's own version is the one on the classpath, and on 1.59 or older the options class would
+     * throw `NoClassDefFoundError` from this constructor — taking counters and gauges down with the
+     * histograms. The deprecated overload exists on every version this bridge supports.
+     */
+    @Suppress("DEPRECATION")
     private val histogramAggregation: Aggregation =
-        Aggregation.base2ExponentialBucketHistogram(
-            Base2ExponentialHistogramOptions.builder()
-                .setMaxBuckets(maxBuckets)
-                .setMaxScale(exporter.histogramScale)
-                .build(),
-        )
+        Aggregation.base2ExponentialBucketHistogram(maxBuckets, exporter.histogramScale)
 
     private class Batch(val metrics: Collection<MetricData>, val code: CompletableResultCode)
 
