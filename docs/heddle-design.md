@@ -1215,6 +1215,77 @@ and never decides whether the caller runs anything.
 - Where `AT_CEILING` sits relative to the arm the overflow fix adds to
   `WaitExplanation`. Tracked by #3313.
 
+### 11.3 Previewing the next picks
+
+An admin's screen wants to show who goes next: of the twelve jobs waiting, which
+three run when the next three slots free up. The engine answers without moving
+anything, by playing the picks forward on a throwaway copy of itself. Two things
+limit that answer today. The caller must fix each pick's reservation up front,
+though in practice it depends on which leaf wins, since each leaf's next job has
+its own estimate. And it needs a live engine, so a reader holding only a saved
+snapshot has to restore a whole engine to ask. This section records the fix for
+both.
+
+#### As built: one reservation per pick, on a live engine
+
+`LocalHeddle.previewPicks(waiting: Map<GroupId, Int>, eligible, reservations:
+List<Long>)` takes each leaf's queue as a count, and pick `i` reserves
+`reservations[i]`. It runs real `acquire`s on a scratch engine that carries a
+copy of the wake memory, so it changes nothing, and it stops at the first call
+that would not acquire. `explain` and `entitlement` read the live engine too. To
+ask without moving the real engine's wake memory, a caller holding a snapshot
+restores a throwaway engine from it, under `epoch + 1`, on every decision.
+
+#### The design: the real sequence, on a snapshot
+
+Decided in #3321, and not yet built.
+
+**Preview with each leaf's own head.** `previewPicks(queues: Map<GroupId,
+List<Long>>, eligible, reservation = defaultReservation)`. Each leaf's queue
+lists its jobs' reservations, head first.
+
+- Each pick does what a real caller does: `acquire` with `reservation`, then, when
+  the winner's head is larger, `extend` the lease by `head − reservation`. Then it
+  pops the head.
+- `extend` makes no pick, so the order is the slot-length order that #3200 made
+  the contract, and this ships without settling #3200. The head sets only what
+  the lease holds, `max(reservation, head)`. A head below the reservation would
+  need the lease to shrink, which is #3200's question.
+- The list stops at the first refusal, including the position-ceiling refusal
+  the overflow fix adds (#3313).
+- The property to pin: the preview equals the leaves the real loop picks on the
+  same state.
+- The count-based `previewPicks` stays.
+
+**A view of a snapshot.** `snapshot.view(policy): LocalHeddleView` carries
+`previewPicks`, `explain` and `entitlement`, and the engine's own methods
+delegate to it, so the two cannot disagree.
+
+- The policy is a required parameter, because a snapshot does not keep one.
+- The view is built from the value `persist()` returns, `LocalHeddleSnapshot`.
+  `snapshot()`'s `LocalHeddleState` will not do: it lacks the reconciled capacity
+  and the topology last applied, and a pick reads both.
+
+**It waits on** the overflow fix's slices that make each call atomic and add the
+position-ceiling refusal (#3313).
+
+#### Settled — don't reopen
+
+- Settling per-leaf request length first: the preview models the real
+  acquire-then-extend sequence, which changes no order (#3321).
+- `previewPicks(queues: Map<GroupId, List<Long?>>, …)`, with `null` for an
+  unknown length, as #3229 planned: superseded by the `List<Long>` form. Once
+  type arguments are erased the two have the same JVM signature, so only one can
+  exist (#3321).
+- A snapshot view that takes no policy: the snapshot does not keep one (#3321).
+- A view over `LocalHeddleState`: it lacks the capacity and the last applied
+  topology (#3321).
+
+#### Open
+
+- A head below the lease's reservation, which would need the lease to shrink.
+  Tracked by #3200.
+
 ---
 
 ## 12. What was dropped from the source, and what is genuinely new
