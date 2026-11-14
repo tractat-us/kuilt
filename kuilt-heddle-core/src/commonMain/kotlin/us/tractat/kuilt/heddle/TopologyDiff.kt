@@ -184,7 +184,7 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
  * - into a declared child, other than the edge it adopts;
  * - into a declared child this topology no longer has, since a removal leaves a prepared edge
  *   alone ([planRemoval]);
- * - into an attached child still attached under its template, other than the edge it adopts. Only
+ * - into a child still attached under its group's template, other than the edge it adopts. Only
  *   when there is one: otherwise this prepared edge may be what says the child is attached, and
  *   forgetting it would detach the child.
  *
@@ -332,7 +332,7 @@ private fun MutableList<Planned>.planRemoval(edges: List<OwnedEdge>, abandonPrep
 }
 
 /**
- * Whether an attached child is attached: it has an active edge, or a prepared one — an attach or a
+ * Whether a child of a group with a template is attached: it has an active edge, or a prepared one — an attach or a
  * reweight waiting for its predecessor to drain. A detach closes both, so a detached child has
  * neither, and a diff does not bring it back.
  */
@@ -416,7 +416,7 @@ private fun List<OwnedEdge>.adoptable(want: WantedChild): OwnedEdge? =
 // ── the desired tree ────────────────────────────────────────────────────────────────────────────
 
 /**
- * A child the diff wants, with its parent and weight: a declared node, or an attached child still
+ * A child the diff wants, with its parent and weight: a declared node, or a child still
  * attached under a group with a template. [group] is set for a [Topology.Group].
  */
 private class WantedChild(val child: GroupId, val parent: GroupId, val weight: Weight, val group: Boolean)

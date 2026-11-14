@@ -7,7 +7,7 @@ package us.tractat.kuilt.heddle
  * Being a leaf is not enough, and the ledger alone cannot say more. A group whose children are all
  * inactive reads as a leaf ([EntitlementLedger.isLeaf]) whether it is a declared lane or a group
  * that simply has nothing attached right now, such as a group with a template before
- * the first one arrives. Only the [Topology] tells the two apart, so the engine keeps one.
+ * its first child is attached. Only the [Topology] tells the two apart, so the engine keeps one.
  *
  * A group is **leasable** when it is a leaf and this declares it. That one predicate is what
  * [LocalHeddle.acquire] ends a descent at, what lifts a waiting or eligible name into demand, and
@@ -40,7 +40,7 @@ internal sealed interface Leasable {
         /** The ceiling of each declared group and lane that has one. */
         private val ceilings = HashMap<GroupId, Long>()
 
-        /** The ceiling each attached child of a group with a template takes, by that group, where its template sets one. */
+        /** The ceiling each attached child takes from its group's template, by that group, where the template sets one. */
         private val templateCeilings = HashMap<GroupId, Long>()
 
         init {
