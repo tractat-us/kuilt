@@ -217,23 +217,6 @@ public class HeddleNode internal constructor(
     private val selfPeer = PeerId(self.value)
     private val scopeRef = scope
 
-    init {
-        // Demand board: single-collect our channel, fold each frame into the local TTL tracker.
-        scope.launch {
-            demandSeam.incoming.collect { swatch ->
-                val update = runCatchingCancellable {
-                    Cbor.decodeFromByteArray(demandSerializer, swatch.toByteArray())
-                }.getOrNull() ?: return@collect
-                lock.withLock { demandTracker.received(update) }
-            }
-        }
-        // Liveness: single-collect the liveness channel; fan out to per-peer detectors.
-        scope.launch { livenessSeam.incoming.collect { rawLiveness.emit(it) } }
-        scope.launch {
-            peersFlow.collect { peers -> reconcileDetectors(peers) }
-        }
-    }
-
     // ─────────────────────────────────────────────────────────────────────────────
     // Topology — the strict-drain lifecycle transitions, applied through the Quilter so
     // they replicate. Each returns whether it took effect (false = the ledger refused;
@@ -780,5 +763,24 @@ public class HeddleNode internal constructor(
 
         /** NamedMux channel carrying liveness heartbeats (design §8.1). */
         internal const val LIVENESS_CHANNEL: String = "heddle.liveness"
+    }
+
+    // Last in the class body, so every field the collectors read is filled before any of them
+    // runs (#2482).
+    init {
+        // Demand board: single-collect our channel, fold each frame into the local TTL tracker.
+        scope.launch {
+            demandSeam.incoming.collect { swatch ->
+                val update = runCatchingCancellable {
+                    Cbor.decodeFromByteArray(demandSerializer, swatch.toByteArray())
+                }.getOrNull() ?: return@collect
+                lock.withLock { demandTracker.received(update) }
+            }
+        }
+        // Liveness: single-collect the liveness channel; fan out to per-peer detectors.
+        scope.launch { livenessSeam.incoming.collect { rawLiveness.emit(it) } }
+        scope.launch {
+            peersFlow.collect { peers -> reconcileDetectors(peers) }
+        }
     }
 }
