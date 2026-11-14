@@ -245,13 +245,18 @@ class LocalHeddlePositionCeilingTest {
         saturated.pushTowardCeiling(a, below = 0L)
 
         // One unit is 16 ticks: 17 under, an acquire of 1 lands one tick under, and an extend crosses.
+        // b waits beside a, never eligible, at its origin: it holds the rebase's shift at zero
+        // (#3329), the one way a running engine still reaches the ceiling, so a is not brought down.
+        // One pick with both waiting seats b near its origin first.
         val crossing = engine()
+        val seating = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a, b), setOf(a), startedAt = 0L)).lease
+        crossing.complete(seating.id, actualCost = 1L)
         crossing.pushTowardCeiling(a, below = 17L)
         val before = crossing.snapshot()
-        val withoutExtend = crossing.previewPicks(mapOf(a to listOf(1L)), setOf(a), reservation = 1L)
-        val withExtend = crossing.previewPicks(mapOf(a to listOf(2L)), setOf(a), reservation = 1L)
+        val withoutExtend = crossing.previewPicks(mapOf(a to listOf(1L), b to listOf(1L)), setOf(a), reservation = 1L)
+        val withExtend = crossing.previewPicks(mapOf(a to listOf(2L), b to listOf(1L)), setOf(a), reservation = 1L)
         val unchanged = crossing.snapshot() == before
-        val lease = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a), setOf(a), startedAt = 0L, reservation = 1L)).lease
+        val lease = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a, b), setOf(a), startedAt = 0L, reservation = 1L)).lease
         assertAll(
             { assertEquals(listOf(b), unsaturated, "the control: b is picked when a is not saturated") },
             { assertEquals(emptyList(), saturated.previewPicks(queues, setOf(b), reservation = 1L)) },
