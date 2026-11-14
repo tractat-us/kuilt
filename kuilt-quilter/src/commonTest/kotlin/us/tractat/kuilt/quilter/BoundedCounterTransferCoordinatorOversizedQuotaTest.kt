@@ -1,10 +1,17 @@
 /**
  * [BoundedCounterTransferCoordinator] beside a peer whose quota is past [Long.MAX_VALUE] (#3343).
  *
- * [BoundedCounter.quota] throws for that peer, and the coordinator reads quotas inside its pumps: the
- * quota observer, the incoming-request collector, the borrow it launches, and the equalizer. A throw
- * there killed the pump for good, and on Kotlin/Native an uncaught coroutine exception aborts the
- * process (#1788). These tests hold a peer at 2⁶³ and check every one of those paths still works.
+ * [BoundedCounter.quota] throws for that peer, and the coordinator reads quotas in four places: the
+ * quota observer, the incoming-request collector, the borrow it launches, and the equalizer. These
+ * tests hold a peer at 2⁶³ and check each place still does its job.
+ *
+ * What can red here is the *work* each place does, not whether its pump is alive. The observer and
+ * the collector run under `pumpIn` with [us.tractat.kuilt.core.PumpVerdict.CONTINUE], so no throw on
+ * an item ends them, and the equalizer catches each tick. A throw at the collector still loses that
+ * request, which `qA > 0` / `qB > 0` see; a throw in the borrow, a bare `scope.launch`, ends that
+ * borrow, which they see too; a throw in the equalizer loses the tick, which its own test sees. A
+ * throw in C's observer on the 2⁶³ state is **not pinned**: it costs a WARN line and no behaviour,
+ * since a quota that large never needs to borrow. Saturating that read buys log hygiene only.
  */
 @file:OptIn(
     kotlinx.serialization.ExperimentalSerializationApi::class,
@@ -86,9 +93,13 @@ class BoundedCounterTransferCoordinatorOversizedQuotaTest {
 
     /**
      * A and B each spend their last unit, so both borrow, and the only peer with anything to give is
-     * C, at 2⁶³. Each borrow ranks C, C's collector answers both requests, and C's own quota observer
-     * runs on every state it sees. Then C spends down to 0 and must borrow back, which only its
-     * observer can start, so C's observer has to have survived the 2⁶³ state.
+     * C, at 2⁶³. Each borrow ranks C and C's collector answers both requests: `qA > 0` and `qB > 0`
+     * red when either the borrow's ranking or the collector's surplus read throws.
+     *
+     * The rest are smoke checks that cannot red on a saturation throw. The pumps run under
+     * `CONTINUE`, so they are active whatever their items threw. C borrowing back after it spends
+     * down happens on a state whose quota fits, so it holds even if C's observer threw on every
+     * earlier 2⁶³ state.
      */
     @Test
     fun everyPumpSurvivesAPeerHoldingPastLongMaxValue() = runTest(UnconfinedTestDispatcher()) {
@@ -129,18 +140,18 @@ class BoundedCounterTransferCoordinatorOversizedQuotaTest {
             { assertTrue(qB > 0L, "B's borrow ranked C and C's collector answered it; B holds $qB") },
             {
                 val all = listOf(wiredA, wiredB, wiredC).flatMap { it.coordinator.backgroundJobsForTest }
-                assertTrue(all.all { it.isActive }, "every coordinator pump is still running: $all")
+                assertTrue(all.all { it.isActive }, "smoke check: every coordinator pump is still running: $all")
             },
         )
 
-        // C gives away everything it still holds, so its observer has to borrow some back.
+        // Smoke check: C gives away everything it still holds, so its observer borrows some back.
         val qC = borrowed.quota(c)
         wiredC.quilter.apply(checkNotNull(borrowed.trySpend(c, qC)))
         testScheduler.advanceUntilIdle()
         val after = wiredC.quilter.state.value.quota(c)
         assertAll(
             { assertTrue(qC > 0L, "the rig: C still had quota to spend down; it held $qC") },
-            { assertTrue(after > 0L, "C's observer borrowed back after C spent down; C holds $after") },
+            { assertTrue(after > 0L, "smoke check: C's observer borrowed back after C spent down; C holds $after") },
         )
     }
 
@@ -195,7 +206,7 @@ class BoundedCounterTransferCoordinatorOversizedQuotaTest {
                 { assertEquals(Long.MAX_VALUE - qA - qB, state.quota(c) - 1L, "C's quota fits again, and is the rest") },
                 {
                     val jobs = wiredC.coordinator.backgroundJobsForTest
-                    assertTrue(jobs.all { it.isActive }, "every pump of C's coordinator is still running: $jobs")
+                    assertTrue(jobs.all { it.isActive }, "smoke check: every pump of C's coordinator is still running: $jobs")
                 },
             )
         }

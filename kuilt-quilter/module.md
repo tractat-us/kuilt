@@ -1,8 +1,7 @@
 # Module kuilt-quilter
 
 Live CRDT replication over a `Seam`. Depends on `:kuilt-core` (transport contract)
-and `:kuilt-crdt` (value types), and on `:kuilt-math` for the transfer coordinator's checked arithmetic;
-`:kuilt-crdt` itself has no transport dependency.
+and `:kuilt-crdt` (value types); `:kuilt-crdt` itself has no transport dependency.
 
 ## Core types
 

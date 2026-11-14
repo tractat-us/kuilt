@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PumpFailure
 import us.tractat.kuilt.core.PumpVerdict
 import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.core.Seam
@@ -21,7 +22,6 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.BoundedCounter
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.math.minusOrNull
 import kotlin.math.min
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -36,9 +36,10 @@ private const val BORROW_FAN_OUT = 2
  *
  * @param lowWaterThreshold when [BoundedCounter.quota] for the local replica drops to or below
  *   this value, a [BoundedCounterCoordMessage.TransferRequest] is sent to the top surplus peer(s).
- * @param requestedAmount how many quota units to request in each [BoundedCounterCoordMessage.TransferRequest].
- * @param surplusFloor the minimum quota a donor will retain after a transfer.
- *   A donor with `quota(self) <= surplusFloor` will not donate.
+ * @param requestedAmount how many quota units to request in each [BoundedCounterCoordMessage.TransferRequest];
+ *   at least 1, the least that request accepts.
+ * @param surplusFloor the minimum quota a donor will retain after a transfer; at least 0, since no
+ *   quota is below 0. A donor with `quota(self) <= surplusFloor` will not donate.
  * @param maxRetries how many times to retry a [BoundedCounterCoordMessage.TransferRequest] before
  *   giving up and degrading to "deny locally". Each retry doubles the backoff interval.
  * @param initialRetryDelay delay before the first retry.
@@ -49,7 +50,15 @@ public data class BoundedCounterTransferConfig(
     val surplusFloor: Long = 0L,
     val maxRetries: Int = 3,
     val initialRetryDelay: Duration = 2.seconds,
-)
+) {
+    init {
+        // Refused here rather than where the borrow builds its request: that runs in a bare
+        // `scope.launch`, where the request's own refusal would escape the coroutine and, on
+        // Kotlin/Native, abort the process (#1788).
+        require(requestedAmount >= 1L) { "requestedAmount must be at least 1, was $requestedAmount" }
+        require(surplusFloor >= 0L) { "surplusFloor must be at least 0, was $surplusFloor" }
+    }
+}
 
 /**
  * Coordinator that automatically rebalances [BoundedCounter] quota across peers over a [Seam].
@@ -176,9 +185,9 @@ public class BoundedCounterTransferCoordinator(
             },
             name = "bounded-counter-quota[${self.value}]",
         ) { bc ->
-            val quota = bc.quotaAtMost(self)
+            val low = !bc.quotaExceeds(self, config.lowWaterThreshold)
             val shouldLaunch = lock.withLock {
-                if (quota <= config.lowWaterThreshold && !requestInFlight) {
+                if (low && !requestInFlight) {
                     requestInFlight = true
                     true
                 } else {
@@ -226,7 +235,7 @@ public class BoundedCounterTransferCoordinator(
                     .onFailure { /* send failed — retry or degrade on next iteration */ }
             }
             // check if quota improved (a donor may have responded already)
-            if (state.value.quotaAtMost(self) > config.lowWaterThreshold) return
+            if (state.value.quotaExceeds(self, config.lowWaterThreshold)) return
             if (attempt < config.maxRetries - 1) {
                 delay(delay)
                 delay = delay * 2
@@ -241,14 +250,11 @@ public class BoundedCounterTransferCoordinator(
      *
      * Computed locally from the current [BoundedCounter] state — no network round-trip needed.
      * Filtering to the [reachable] set makes this partition-safe.
-     *
-     * Ranks by quota rather than by `quota - surplusFloor`: the order and the cut are the same, and
-     * nothing is subtracted, so a saturated quota cannot wrap against a negative floor.
      */
     private fun topSurplusPeers(bc: BoundedCounter, reachable: Set<PeerId>): List<PeerId> =
         reachable
+            .filter { peer -> bc.quotaExceeds(ReplicaId(peer.value), config.surplusFloor) }
             .map { peer -> peer to bc.quotaAtMost(ReplicaId(peer.value)) }
-            .filter { (_, quota) -> quota > config.surplusFloor }
             .sortedByDescending { (_, quota) -> quota }
             .take(BORROW_FAN_OUT)
             .map { (peer, _) -> peer }
@@ -258,14 +264,23 @@ public class BoundedCounterTransferCoordinator(
             scope = scope,
             onFailure = { phase, failure ->
                 // An item failure can come from the consumer's own applyTransfer, so the trace stays.
-                logger.warn(failure) { "BoundedCounter transfer-request collector for $self failed ($phase)" }
+                when (phase) {
+                    PumpFailure.ITEM ->
+                        logger.warn(failure) { "BoundedCounter transfer-request collector for $self failed" }
+                    PumpFailure.UPSTREAM ->
+                        logger.warn(failure) { "BoundedCounter coordinator for $self stopped serving transfer requests" }
+                }
                 PumpVerdict.CONTINUE
             },
             name = "bounded-counter-requests[${self.value}]",
         ) { swatch -> swatch.sender?.let { dispatch(it, swatch) } }
 
     private fun dispatch(sender: PeerId, swatch: Swatch) {
-        val msg = runCatchingCancellable { swatch.decode(Cbor, serializer) }.getOrNull() ?: return
+        // A frame that does not decode, including a request for fewer than one unit, which
+        // TransferRequest refuses as it is read, is a peer's mistake rather than ours: no trace.
+        val msg = runCatchingCancellable { swatch.decode(Cbor, serializer) }
+            .onFailure { logger.debug { "dropping undecodable coordinator frame from $sender: $it" } }
+            .getOrNull() ?: return
         when (msg) {
             is BoundedCounterCoordMessage.TransferRequest -> onTransferRequest(msg, sender)
         }
@@ -277,11 +292,10 @@ public class BoundedCounterTransferCoordinator(
     ) {
         if (msg.requester == self) return // safety: ignore requests from self
         val bc = state.value
-        val quota = bc.quotaAtMost(self)
-        if (quota <= config.surplusFloor) return
-        // Above the floor, the difference can pass Long.MAX_VALUE only by being large; [transfer]
-        // re-checks the grant against the exact quota either way.
-        val surplus = quota.minusOrNull(config.surplusFloor) ?: Long.MAX_VALUE
+        if (!bc.quotaExceeds(self, config.surplusFloor)) return
+        // Both operands are at least 0, so this cannot wrap; a saturated quota understates the
+        // surplus, and [transfer] re-checks the grant against the exact quota either way.
+        val surplus = bc.quotaAtMost(self) - config.surplusFloor
         val grant = min(surplus, msg.amount)
         val patch = bc.transfer(from = self, to = msg.requester, amount = grant) ?: return
         applyTransfer(patch)
@@ -376,11 +390,22 @@ public class BoundedCounterTransferCoordinator(
      * throws there, and every read in this class runs inside a pump or a launched borrow, where a
      * throw ended it for good — and on Kotlin/Native aborted the process (#1788).
      *
-     * Reading high is safe at every use: each is a threshold comparison, a ranking, or the cap on a
-     * grant that [BoundedCounter.transfer] re-checks against the exact quota. A quota is never below
-     * 0, so `null` from [BoundedCounter.quotaOrNull] always means too large, never too small.
+     * Reading low is safe at every use: each is a ranking, a difference against the fair share
+     * (which then understates an excess, so it drains over several ticks), or the cap on a grant
+     * that [BoundedCounter.transfer] re-checks against the exact quota. A threshold comparison is
+     * not among them: at a threshold of exactly [Long.MAX_VALUE] a saturated read sits *at* the
+     * threshold rather than above it, so every comparison goes through [quotaExceeds] instead.
+     * A quota is never below 0, so `null` from [BoundedCounter.quotaOrNull] always means too large,
+     * never too small.
      */
     private fun BoundedCounter.quotaAtMost(replica: ReplicaId): Long = quotaOrNull(replica) ?: Long.MAX_VALUE
+
+    /**
+     * Whether [replica]'s quota is above [threshold], exactly: a quota too large for a `Long` is above
+     * every `Long`, [Long.MAX_VALUE] included.
+     */
+    private fun BoundedCounter.quotaExceeds(replica: ReplicaId, threshold: Long): Boolean =
+        quotaOrNull(replica)?.let { it > threshold } ?: true
 
     private fun encode(msg: BoundedCounterCoordMessage): ByteArray =
         Cbor.encodeToByteArray(serializer, msg)
