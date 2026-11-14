@@ -1,0 +1,88 @@
+package us.tractat.kuilt.heddle
+
+import us.tractat.kuilt.test.assertAll
+import kotlin.random.Random
+import kotlin.test.Test
+import kotlin.test.assertEquals
+
+/**
+ * A pick never throws at any reachable state, however the waiting set moves between picks.
+ *
+ * Each step draws a fresh waiting set — a random, non-empty subset of the lanes — acquires one
+ * lease, and completes it at a random cost. A changing waiting set is what makes children wake,
+ * and each wake clamps a child to a front that is a weighted mean over a *different* set than the
+ * last one. Before the fix each such mean multiplied the denominators of the stored wake offsets,
+ * so a pick overflowed `Long` within tens of steps; a constant waiting set never wakes anyone and
+ * cannot reach the defect, so it is not an arm here.
+ *
+ * Two arms, because the two paths read the policy differently: the **order** path offers every
+ * waiting lane as eligible, so the pick's eligibility filter and deadline order run over the whole
+ * set; the **start** path offers one lane, as a caller does when the work has already been placed,
+ * so the pick has one candidate while the wake step still sees every waiter.
+ *
+ * The weights are mixed on purpose: whole numbers far apart (60 against 1), and fractions whose
+ * denominators are coprime with each other (3/7, 2/5, 5/3), since a weight's denominator is what
+ * a fractional sum carries into the mean.
+ *
+ * The generator walks only [List]s it built itself, in declaration order, so the same seed takes
+ * the same trajectory on every target.
+ */
+class LocalHeddleOverflowPropertyTest {
+
+    @Test
+    fun theOrderPathNeverOverflowsAsTheWaitingSetChanges() = assertNeverOverflows(seed = 7L, startPath = false)
+
+    @Test
+    fun theStartPathNeverOverflowsAsTheWaitingSetChanges() = assertNeverOverflows(seed = 11L, startPath = true)
+
+    private fun assertNeverOverflows(seed: Long, startPath: Boolean) {
+        val topology = draft("fs") {
+            LANES.forEach { (name, weight) -> lane(name, weight) }
+            group("nested", Weight.of(2)) {
+                NESTED.forEach { (name, weight) -> lane(name, weight) }
+            }
+        }
+        val engine = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+            .apply { reconcileCapacity(1L) }
+        val leaves = LANES.map { topology.groupId(it.first) } + NESTED.map { topology.groupId("nested", it.first) }
+        val random = Random(seed)
+
+        var picks = 0
+        repeat(PICKS) { step ->
+            val size = 1 + random.nextInt(leaves.size)
+            val waiting = leaves.shuffled(random).take(size)
+            val eligible = if (startPath) listOf(waiting[random.nextInt(waiting.size)]) else waiting
+            val outcome = try {
+                engine.acquire(waiting.toSet(), eligible.toSet(), startedAt = step.toLong(), reservation = 1L)
+            } catch (e: ArithmeticException) {
+                throw AssertionError("seed $seed, start path $startPath: pick ${step + 1} threw $e", e)
+            }
+            check(outcome is AcquireOutcome.Acquired) { "seed $seed, pick ${step + 1}: expected a lease, got $outcome" }
+            engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST))
+            picks++
+        }
+        assertAll(
+            { assertEquals(PICKS, picks, "every step made one pick") },
+            { assertEquals(0, engine.snapshot().leases.size, "every lease was completed") },
+        )
+    }
+
+    private companion object {
+        const val PICKS = 100_000
+        const val MAX_COST = 3_600
+
+        val LANES = listOf(
+            "a" to Weight.of(60),
+            "b" to Weight.of(30),
+            "c" to Weight.of(10),
+            "d" to Weight.of(1),
+            "e" to Weight.of(3, 7),
+            "f" to Weight.of(2, 5),
+        )
+        val NESTED = listOf(
+            "x" to Weight.of(5, 3),
+            "y" to Weight.ONE,
+            "z" to Weight.of(4),
+        )
+    }
+}
