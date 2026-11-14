@@ -4,6 +4,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * A pick never throws at any reachable state, however the waiting set moves between picks.
@@ -48,6 +49,7 @@ class LocalHeddleOverflowPropertyTest {
         val random = Random(seed)
 
         var picks = 0
+        var samplesPastLong = 0
         repeat(PICKS) { step ->
             val size = 1 + random.nextInt(leaves.size)
             val waiting = leaves.shuffled(random).take(size)
@@ -60,15 +62,28 @@ class LocalHeddleOverflowPropertyTest {
             check(outcome is AcquireOutcome.Acquired) { "seed $seed, pick ${step + 1}: expected a lease, got $outcome" }
             engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST))
             picks++
+            if (step % SAMPLE_EVERY == 0 && engine.snapshot().allocatorMemory.wakeOffsets.values.any(::isRounded)) {
+                samplesPastLong++
+            }
         }
         assertAll(
             { assertEquals(PICKS, picks, "every step made one pick") },
             { assertEquals(0, engine.snapshot().leases.size, "every lease was completed") },
+            // The rig: a wake offset whose exact value had no Long form, so it was narrowed. Without
+            // one the run never reached the state that overflowed, and its green would prove nothing.
+            { assertTrue(samplesPastLong > 0, "no sampled step held a narrowed wake offset") },
         )
+    }
+
+    /** A wake offset [ExactTime.toRational] rounded: on a power-of-two grid finer than `2⁻³¹`. */
+    private fun isRounded(offset: Rational): Boolean {
+        val d = offset.denominator
+        return d > (1L shl 31) && d and (d - 1) == 0L
     }
 
     private companion object {
         const val PICKS = 100_000
+        const val SAMPLE_EVERY = 100
         const val MAX_COST = 3_600
 
         val LANES = listOf(
