@@ -55,9 +55,9 @@ public data class BoundMetrics(
          *
          * @throws ArithmeticException when the demanding children's weight sum, or one demanding
          * child's reduced share of it, does not fit in a `Long`. Either needs the weights' common
-         * denominator `L` or their numerator sum `S` over it to pass `Long`. Through `LocalHeddle`,
-         * #3352's apply-time weight budget will refuse (#3352, open) such weight sets; `BoundMetrics`
-         * is still reachable with them through a replicated ledger (`HeddleNode`).
+         * denominator `L` or their numerator sum `S` over it to pass `Long`. `LocalHeddle`'s
+         * apply-time weight budget refuses such weight sets; `BoundMetrics` is still reachable with
+         * them through a replicated ledger (`HeddleNode`).
          */
         public fun at(
             ledger: EntitlementLedger,
