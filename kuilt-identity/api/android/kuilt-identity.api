@@ -19,6 +19,10 @@ public final class us/tractat/kuilt/identity/AdmissionProof$Companion {
 	public final fun sign-mz3NijM (Lus/tractat/kuilt/identity/DeviceKey;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
+public final class us/tractat/kuilt/identity/AndroidKeystoreDeviceKeyStoreKt {
+	public static final fun platform (Lus/tractat/kuilt/identity/DeviceKeyStore$Companion;Ljava/lang/String;Landroid/content/Context;)Lus/tractat/kuilt/identity/DeviceKeyStore;
+}
+
 public final class us/tractat/kuilt/identity/Challenge {
 	public static final field Companion Lus/tractat/kuilt/identity/Challenge$Companion;
 	public static final field NONCE_SIZE I

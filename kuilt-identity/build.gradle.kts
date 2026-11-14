@@ -87,7 +87,15 @@ kotlin {
             // FileDeviceKeyStore's one warning: a key it could not read back, replaced.
             implementation(libs.kotlin.logging)
         }
-        androidMain.dependencies { implementation(libs.cryptography.provider.jdk) }
+        androidMain.dependencies {
+            implementation(libs.cryptography.provider.jdk)
+            // The Keystore signs in DER; DeviceKey.sign returns raw r ‖ s. The library's DER codec
+            // reads the ECDSA-Sig-Value (derSignatureToRaw), so the conversion is encoding work only.
+            implementation(libs.cryptography.serialization.asn1)
+            implementation(libs.cryptography.serialization.asn1.modules)
+            // AndroidKeystoreDeviceKeyStore's one warning: a Keystore key it could not use, replaced.
+            implementation(libs.kotlin.logging)
+        }
         appleMain.dependencies {
             implementation(libs.cryptography.provider.cryptokit)
             // The Apple stores' one warning: a stored key they could not read back, replaced.
@@ -102,6 +110,15 @@ kotlin {
             implementation(project(":kuilt-conformance"))
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.serialization.cbor)
+        }
+        androidUnitTest.dependencies {
+            // AndroidKeystoreDeviceKeyStore's tests build a real KeyGenParameterSpec and throw a real
+            // KeyPermanentlyInvalidatedException; android.jar's stubs throw "Stub!" for both.
+            implementation(libs.robolectric)
+            // Compile scope: kotlin-logging needs an SLF4J backend on the Android unit-test variant, as in
+            // :kuilt-session, and AndroidKeystoreDeviceKeyStoreTest reads the replacement warning off a
+            // Logback ListAppender, as FileDeviceKeyStoreTest does.
+            implementation(libs.logback)
         }
         jvmTest.dependencies {
             // Compile scope: FileDeviceKeyStoreTest reads the replacement warning off a Logback
