@@ -1305,29 +1305,24 @@ and never decides whether the caller runs anything.
 An admin's screen wants to show who goes next: of the twelve jobs waiting, which
 three run when the next three slots free up. The engine answers without moving
 anything, by playing the picks forward on a throwaway copy of itself. Two things
-limit that answer today. The caller must fix each pick's reservation up front,
+limited that answer. The caller had to fix each pick's reservation up front,
 though in practice it depends on which leaf wins, since each leaf's next job has
-its own estimate. And it needs a live engine, so a reader holding only a saved
-snapshot has to restore a whole engine to ask. This section records the fix for
-both.
+its own estimate. That one is fixed: each leaf can now bring its own queue. And
+it needs a live engine, so a reader holding only a saved snapshot has to restore
+a whole engine to ask. This section records the fix for both.
 
-#### As built: one reservation per pick, on a live engine
+#### As built: each leaf's own head, on a live engine
 
 `LocalHeddle.previewPicks(waiting: Map<GroupId, Int>, eligible, reservations:
 List<Long>)` takes each leaf's queue as a count, and pick `i` reserves
 `reservations[i]`. It runs real `acquire`s on a scratch engine that carries a
 copy of the wake memory, so it changes nothing, and it stops at the first call
-that would not acquire. `explain` and `entitlement` read the live engine too. To
-ask without moving the real engine's wake memory, a caller holding a snapshot
-restores a throwaway engine from it, under `epoch + 1`, on every decision.
-
-#### The design: the real sequence, on a snapshot
-
-Decided in #3321, and not yet built.
+that would not acquire.
 
 **Preview with each leaf's own head.** `previewPicks(queues: Map<GroupId,
-List<Long>>, eligible, reservation = defaultReservation)`. Each leaf's queue
-lists its jobs' reservations, head first.
+List<Long>>, eligible, reservation = defaultReservation)`, built in #3321. Each
+leaf's queue lists its jobs' reservations, head first, and it runs on the same
+scratch engine.
 
 - Each pick does what a real caller does: `acquire` with `reservation`, then, when
   the winner's head is larger, `extend` the lease by `head − reservation`. Then it
@@ -1338,10 +1333,23 @@ lists its jobs' reservations, head first.
   head below the reservation would need the lease to shrink, which is #3200's
   question.
 - The list stops at the first refusal, including the position-ceiling refusal
-  the overflow fix adds (#3313).
-- The property to pin: the preview equals the leaves the real loop picks on the
-  same state.
+  the overflow fix adds (#3313). When the `acquire` lands and its `extend` is
+  refused, that pick is left out: the caller's lease would hold less than its
+  job needs.
+- Every queued reservation, not only the heads a pick reaches, is checked
+  against `1..MAX_RESERVATION` before anything runs.
+- Pinned: across random histories, mixed weights, with and without a reconciled
+  capacity, the preview equals the leaves the real loop picks on the same state,
+  and changes nothing.
 - The count-based `previewPicks` stays.
+
+`explain` and `entitlement` read the live engine too. To ask without moving the
+real engine's wake memory, a caller holding a snapshot restores a throwaway
+engine from it, under `epoch + 1`, on every decision.
+
+#### The design: the same answers, on a snapshot
+
+Decided in #3321, and not yet built.
 
 **A view of a snapshot.** `snapshot.view(policy): LocalHeddleView` carries
 `previewPicks`, `explain` and `entitlement`, and the engine's own methods
@@ -1352,8 +1360,8 @@ delegate to it, so the two cannot disagree.
   `snapshot()`'s `LocalHeddleState` will not do: it lacks the reconciled capacity
   and the topology last applied, and a pick reads both.
 
-**It waits on** the overflow fix's slices that make each call atomic and add the
-position-ceiling refusal (#3313).
+The overflow fix's slices it waited on, which make each call atomic and add the
+position-ceiling refusal, landed in #3352.
 
 #### Settled — don't reopen
 

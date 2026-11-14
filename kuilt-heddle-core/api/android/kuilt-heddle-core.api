@@ -785,7 +785,9 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun getEpoch ()J
 	public final fun getRoot-urUY4Jo ()Ljava/lang/String;
 	public final fun persist ()Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;
+	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;J)Ljava/util/List;
 	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;Ljava/util/List;)Ljava/util/List;
+	public static synthetic fun previewPicks$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/util/Map;Ljava/util/Set;JILjava/lang/Object;)Ljava/util/List;
 	public final fun reconcileCapacity (J)V
 	public final fun reconcileLeases (Ljava/util/Set;J)Lus/tractat/kuilt/heddle/LeaseReconciliation;
 	public final fun snapshot ()Lus/tractat/kuilt/heddle/LocalHeddleState;

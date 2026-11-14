@@ -282,7 +282,9 @@ cut off, so when it can be reached again it starts level with its siblings. A ne
 with its siblings too, rather than owed their whole history. `extend` reserves
 more for a lease that runs long, `cancel` charges nothing, `admit(leaf, startedAt)` charges work
 another scheduler already started, and `previewPicks` answers "who goes next" without changing
-anything. `startedAt` is stored on the lease and never read by a pick. A pick only goes down a
+anything. Give it each leaf's queue of job estimates, head first, and each pick does what your loop
+would: `acquire` at the slot's reservation, then `extend` to the winner's head when that is larger.
+`startedAt` is stored on the lease and never read by a pick. A pick only goes down a
 subtree it can finish in, so a group whose only leaf sits behind a closing edge never takes a slot
 from a sibling that can run. A refusal is a typed outcome (`NothingEligible`, `SupplyExhausted`,
 `NoLiveLineage`, `PositionCeiling`, `PathDraining`, `Unknown`, `Stale`), never an exception: an
