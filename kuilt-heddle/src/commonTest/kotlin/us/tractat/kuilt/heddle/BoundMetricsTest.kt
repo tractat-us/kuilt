@@ -20,6 +20,9 @@ import kotlin.test.assertEquals
  * where `share × T` itself leaves `Long`. Those two rows pin the overflow that was left. Both totals
  * are reachable: the pick's own ceiling (`committed / weight` in the gauge `delegate` writes) holds
  * at each of them, which the rig proves by delegating that service.
+ *
+ * Two rows carry a weight near `Long.MAX_VALUE`, where forming the share itself used to throw (#3347).
+ * Their expected values come from `fractions` too.
  */
 class BoundMetricsTest {
 
@@ -51,6 +54,28 @@ class BoundMetricsTest {
     @Test
     fun threeToOneAtTwoToThe62() {
         assertEquals(1L shl 60, deviation(Weight.of(3L), Weight.ONE, 1L shl 62))
+    }
+
+    /**
+     * A weight near `Long.MAX_VALUE` (#3347). The share `w₁ / W` is `(2⁶³−3)/2 ÷ (2⁶³−1)/2`, whose
+     * straight-across product `(2⁶³−3) · 2` leaves `Long` although the share itself,
+     * `(2⁶³−3)/(2⁶³−1)`, fits; `Rational.div` threw there on the first call, at any total.
+     */
+    @Test
+    fun aWeightNearLongMaxAgainstOneAtTwoToThe62() {
+        val heavy = Weight.of(Long.MAX_VALUE - 2L, 2L)
+        assertEquals(2_305_843_009_213_693_951L, deviation(heavy, Weight.ONE, committed1 = 1L shl 61, committed2 = 1L shl 61))
+    }
+
+    /** The same share with three children, so the heavy child's quotient is not the only one formed. */
+    @Test
+    fun threeChildrenWithOneWeightNearLongMax() {
+        val children = listOf(
+            Child(Weight.of(Long.MAX_VALUE - 4L, 2L), 1L shl 60),
+            Child(Weight.ONE, 1L shl 61),
+            Child(Weight.ONE, 0L),
+        )
+        assertEquals(2_305_843_009_213_693_952L, observedDeviationOf(children))
     }
 
     /** On the weight ratio exactly, at the largest total two children can hold, the deviation is zero. */
