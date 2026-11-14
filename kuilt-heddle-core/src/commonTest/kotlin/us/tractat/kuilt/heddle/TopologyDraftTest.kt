@@ -60,6 +60,21 @@ class TopologyDraftTest {
         assertEquals(handBuilt, drafted)
     }
 
+    /** A ceiling read from config passes straight through: `null` sets none, on every node alike. */
+    @Test
+    fun aNullCeilingIsNone() {
+        val none: Long? = null
+        val drafted = draft("root") {
+            group("acme", maxConcurrent = none) { lane("batch", maxConcurrent = none) }
+            group("tenants") { runtimeChildren(maxConcurrent = none) }
+        }
+        val plain = draft("root") {
+            group("acme") { lane("batch") }
+            group("tenants") { runtimeChildren() }
+        }
+        assertEquals(plain, drafted)
+    }
+
     @Test
     fun runtimeChildrenMarkTheGroupTheyAreDeclaredIn() {
         val drafted = draft("pool") {

@@ -25,7 +25,7 @@ public annotation class TopologyDraftDsl
  * ```
  *
  * A `maxConcurrent` beside a group, a lane or a runtime marker is its ceiling, the most leases open
- * beneath it at once ([Topology.Node.maxConcurrent]); leave it out for none.
+ * beneath it at once ([Topology.Node.maxConcurrent]); leave it out, or pass `null`, for none.
  *
  * The draft is only a way to write the tree down. The value it returns is built through the
  * [Topology] constructor, so it is checked by the same walk as [Topology.from], and a mistake
@@ -59,6 +59,8 @@ public sealed class TopologyDraft {
 
     // A ceiling is a second overload rather than a defaulted parameter: this class is sealed, not
     // final, so `@IntroducedAt` cannot restore the old signature, and the old one stays by hand.
+    // The ceiling is a required `Long?`, as on [Group.runtimeChildren], so a value read from config
+    // passes straight through, `null` for none, and a call without it still picks the first overload.
 
     /** Declares a group named [name] with [weight] among its siblings, whose children [block] declares. */
     public fun group(name: String, weight: Weight = Weight.ONE, block: Group.() -> Unit) {
@@ -67,9 +69,9 @@ public sealed class TopologyDraft {
 
     /**
      * Declares a group as the overload without a ceiling does, with at most [maxConcurrent] leases
-     * open beneath it at once, counted across all its children; `0` pauses it.
+     * open beneath it at once, counted across all its children; `0` pauses it, and `null` sets no ceiling.
      */
-    public fun group(name: String, weight: Weight = Weight.ONE, maxConcurrent: Long, block: Group.() -> Unit) {
+    public fun group(name: String, weight: Weight = Weight.ONE, maxConcurrent: Long?, block: Group.() -> Unit) {
         addGroup(name, weight, maxConcurrent, block)
     }
 
@@ -78,8 +80,11 @@ public sealed class TopologyDraft {
         children += Topology.Lane(name, weight)
     }
 
-    /** Declares a lane as the overload without a ceiling does, with at most [maxConcurrent] leases open on it at once; `0` pauses it. */
-    public fun lane(name: String, weight: Weight = Weight.ONE, maxConcurrent: Long) {
+    /**
+     * Declares a lane as the overload without a ceiling does, with at most [maxConcurrent] leases
+     * open on it at once; `0` pauses it, and `null` sets no ceiling.
+     */
+    public fun lane(name: String, weight: Weight = Weight.ONE, maxConcurrent: Long?) {
         children += Topology.Lane(name, weight, maxConcurrent)
     }
 
