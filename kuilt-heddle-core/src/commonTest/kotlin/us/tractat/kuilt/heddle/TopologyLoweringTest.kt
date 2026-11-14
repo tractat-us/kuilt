@@ -24,7 +24,7 @@ class TopologyLoweringTest {
 
     /**
      * Names that a naive join would fold together: a slash inside a name against two levels, a
-     * pre-escaped slash, the id grammar's own punctuation, the runtime marker, a lone surrogate
+     * pre-escaped slash, the id grammar's own punctuation, the template, a lone surrogate
      * against the `?` a JVM encoder substitutes for it, and a runtime `x` beside a declared `x` and
      * a declared `!x`.
      */
@@ -160,7 +160,7 @@ class TopologyLoweringTest {
                 GroupPath.Attached(listOf("nope"), "x"),
             ).map { path -> { assertNull(awkward.findGroupId(path), "findGroupId($path)") } }.toTypedArray(),
             // Ids this topology has no group for: another root, a group it does not declare, a
-            // runtime child of an unmarked group, and text in no topology's grammar.
+            // attached child of an unmarked group, and text in no topology's grammar.
             *listOf(
                 "other", "other/a", "root/nope", "root/a/nope", "root/a/!x", "root/!x", "root/g/!x/y", "root/g/x/!y",
                 "", "/", "root/", "root//x", "root/a%2fb", "root/%41", "root/g/!", "root/a/b@1:1#0",

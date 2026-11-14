@@ -6,13 +6,13 @@ package us.tractat.kuilt.heddle
 //
 //   root                    "root"
 //   declared child          "<parent>/<escaped name>"
-//   runtime child           "<parent>/!<escaped name>"
+//   attached child           "<parent>/!<escaped name>"
 //
 // and an edge's id is "<child>@<numerator>:<denominator>#<generation>".
 //
 // Escaping keeps only `[A-Za-z0-9._~-]` and writes every other byte of the name as `%XX`, so `/`,
 // `!`, `@`, `:`, `#` and `%` never appear inside a segment. That is what makes the encoding
-// injective: a name containing `/` cannot pass for two levels, and a runtime child cannot pass for
+// injective: a name containing `/` cannot pass for two levels, and an attached child cannot pass for
 // a declared one, because a declared segment never begins with `!`.
 //
 // The bytes are UTF-8, encoded here rather than by the platform. `String.encodeToByteArray` turns
@@ -41,9 +41,9 @@ public fun Topology.groupId(vararg path: String): GroupId {
 
 /**
  * Where a group sits in a [Topology], read from [root][Topology.root] down: a child the config
- * declares, or a child the consumer created at runtime beneath a marked group.
+ * declares, or a child the consumer created at runtime beneath a group with a template.
  *
- * The two arms are what keep a runtime child apart from a declared sibling of the same name:
+ * The two arms are what keep an attached child apart from a declared sibling of the same name:
  * `Attached(listOf("tenants"), "x")` and `Declared(listOf("tenants", "x"))` are different paths,
  * and [Topology.findGroupId] gives them different ids.
  *
@@ -55,7 +55,7 @@ public fun Topology.groupId(vararg path: String): GroupId {
 public sealed interface GroupPath {
 
     /**
-     * The names from just below the root down to the group, ending with the runtime child's own
+     * The names from just below the root down to the group, ending with the attached child's own
      * name if this is an [Attached]. `[]` is the root.
      */
     public val names: List<String>
@@ -72,15 +72,15 @@ public sealed interface GroupPath {
     }
 
     /**
-     * A runtime child [name] of the declared group at [group], which is never the root: the root
-     * carries no runtime marker.
+     * An attached child [name] of the declared group at [group], which is never the root: the root
+     * carries no template.
      *
      * @throws IllegalArgumentException if [group] is empty, or any name is empty.
      */
     public data class Attached(public val group: List<String>, public val name: String) : GroupPath {
         init {
-            require(group.isNotEmpty()) { "a runtime child's group is below the root" }
-            require(group.none { it.isEmpty() } && name.isNotEmpty()) { "a runtime child's path has no empty name: $group, $name" }
+            require(group.isNotEmpty()) { "an attached child's group is below the root" }
+            require(group.none { it.isEmpty() } && name.isNotEmpty()) { "an attached child's path has no empty name: $group, $name" }
         }
 
         override val names: List<String> get() = group + name
@@ -90,7 +90,7 @@ public sealed interface GroupPath {
 /**
  * The ledger id of the group at [path], or `null` when this topology has no such group: a
  * [GroupPath.Declared] it does not declare, or a [GroupPath.Attached] whose group is not marked
- * for runtime children. Never throws.
+ * for attached children. Never throws.
  *
  * Gives the same id as [groupId] and [attachedChildId] wherever they do not throw, and is the exact
  * inverse of [findPath].
@@ -116,16 +116,16 @@ public fun Topology.findPath(group: GroupId): GroupPath? {
     val parsed = pathOf(group) ?: return null
     val below = parsed.names.drop(1)
     // `pathOf` puts a runtime segment only at depth two or deeper, so `below` holds its group.
-    val path = if (parsed.runtime) GroupPath.Attached(below.dropLast(1), below.last()) else GroupPath.Declared(below)
+    val path = if (parsed.attached) GroupPath.Attached(below.dropLast(1), below.last()) else GroupPath.Declared(below)
     // Rebuilding the id checks the root, and that the path is declared or marked here.
     return path.takeIf { findGroupId(it) == group }
 }
 
 /**
- * The ledger id of the runtime child [name] of the group at [group], read from
+ * The ledger id of the attached child [name] of the group at [group], read from
  * [root][Topology.root] down.
  *
- * [name] is opaque: any non-empty string, chosen by the consumer. A runtime child lives in its own
+ * [name] is opaque: any non-empty string, chosen by the consumer. An attached child lives in its own
  * namespace, so one named like a declared sibling still gets a different id.
  *
  * @throws IllegalArgumentException if [group] does not name a group marked with
@@ -133,21 +133,21 @@ public fun Topology.findPath(group: GroupId): GroupPath? {
  */
 public fun Topology.attachedChildId(group: List<String>, name: String): GroupId = attachedChild(group, name).id
 
-/** A runtime child's [id], its [parent] group's id, and the [marker] that group carries. */
-internal class AttachedChild(val id: GroupId, val parent: GroupId, val marker: Topology.ChildTemplate)
+/** An attached child's [id], its [parent] group's id, and the [marker] that group carries. */
+internal class AttachedChild(val id: GroupId, val parent: GroupId, val template: Topology.ChildTemplate)
 
 /**
- * The runtime child [name] of the group at [group], checked once: [group] names a marked declared
+ * The attached child [name] of the group at [group], checked once: [group] names a marked declared
  * group and [name] is non-empty.
  *
  * @throws IllegalArgumentException otherwise, as [Topology.attachedChildId] documents.
  */
 internal fun Topology.attachedChild(group: List<String>, name: String): AttachedChild {
-    require(name.isNotEmpty()) { "a runtime child needs a name" }
-    // The root carries no runtime marker, so the path must name a declared group beneath it.
-    val marker = requireNotNull(templateAt(group).takeIf { group.isNotEmpty() }) { "$group is not a group marked for runtime children" }
+    require(name.isNotEmpty()) { "an attached child needs a name" }
+    // The root carries no template, so the path must name a declared group beneath it.
+    val template = requireNotNull(templateAt(group).takeIf { group.isNotEmpty() }) { "$group is not a group with a template" }
     val parent = idOf(group)
-    return AttachedChild(GroupId(attachedChildPath(parent, name)), GroupId(parent), marker)
+    return AttachedChild(GroupId(attachedChildPath(parent, name)), GroupId(parent), template)
 }
 
 /**
@@ -187,7 +187,7 @@ private fun Topology.idOf(path: List<String>): String =
  * rest. Lowering is deterministic: the same tree and generation give the same list on every
  * target.
  *
- * Runtime children are not lowered; the consumer creates them while running.
+ * Attached children are not lowered; the consumer creates them while running.
  *
  * @param generation a counter, `>= 0`, that tells this lowering's edges from an earlier one's.
  * @throws IllegalArgumentException if [generation] is negative.
@@ -208,29 +208,29 @@ public fun Topology.lower(generation: Long = 0L): List<AttachmentRecord> {
 
 /**
  * A group id read back into names: [names] runs from the root down, and [runtime] says the last
- * name is a runtime child's. The inverse of [Topology.groupId] and [Topology.attachedChildId], so a
+ * name is an attached child's. The inverse of [Topology.groupId] and [Topology.attachedChildId], so a
  * status page can name a group the current topology no longer declares.
  */
-internal data class ParsedPath(val names: List<String>, val runtime: Boolean)
+internal data class ParsedPath(val names: List<String>, val attached: Boolean)
 
 /**
  * The names [group] encodes, or `null` when it is not exactly what [Topology.groupId] or
  * [Topology.attachedChildId] would print. Every name is non-empty, and only the last segment may be
- * a runtime child's, and only at depth two or deeper: the root carries no runtime marker, so
+ * an attached child's, and only at depth two or deeper: the root carries no template, so
  * `root/!x` has no topology that prints it.
  */
 internal fun pathOf(group: GroupId): ParsedPath? {
     val segments = group.value.split('/')
-    var runtime = false
+    var attached = false
     val names = segments.mapIndexed { index, segment ->
         val marked = segment.startsWith(ATTACHED_MARKER)
         if (marked && (index < 2 || index != segments.lastIndex)) return null
-        runtime = marked
+        attached = marked
         val name = unescapeSegment(if (marked) segment.substring(1) else segment) ?: return null
         if (name.isEmpty()) return null
         name
     }
-    return ParsedPath(names, runtime)
+    return ParsedPath(names, attached)
 }
 
 /** The id of the edge into [child] at [weight] and [generation]. */
@@ -323,7 +323,7 @@ internal data class GenerationTop(val generation: Long, val edges: Int) {
 }
 
 /**
- * The runtime-children marker of the declared group at [path], read from the root down, or `null`
+ * The template of the declared group at [path], read from the root down, or `null`
  * when [path] names no declared group or the group is not marked. Never throws, so the diff can ask
  * about a group the topology no longer declares.
  */

@@ -43,7 +43,7 @@ The rest of the surface, by what you would ask it:
   fair share as an exact `Rational`. A reader holding only a stored snapshot
   asks the same three of `LocalHeddleSnapshot.view(policy)` (from `persist()`), with no engine.
 - **No more than N of these at once.** A `maxConcurrent` on a group, a lane or a
-  runtime marker is a ceiling: the most leases open beneath it at once, `0` to
+  template is a ceiling: the most leases open beneath it at once, `0` to
   pause it. A pick skips a leaf beneath a node at its ceiling for a sibling,
   `explain` tells that leaf `WaitExplanation.AtCeiling(group, limit)`, and
   `entitlement` owes it nothing until a lease beneath the node closes. Work

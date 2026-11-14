@@ -111,16 +111,16 @@ and what a preview would show.
 
 Children the app creates while running go under a group marked `template`. On an engine,
 `LocalHeddle.attach(group, name, generation)` and `detach(group, name)`
-attach and detach one child, at the marker's weight, under a name of any spelling that never
+attach and detach one child, at the template's weight, under a name of any spelling that never
 collides with a declared child; a detach drains like a removal. `Topology.attach` and
-`detach` list the same steps without applying them. A reload that keeps the marker
-keeps the child and its history; one that drops the marker closes it. A detach's own swap forgets
+`detach` list the same steps without applying them. A reload that keeps the template
+keeps the child and its history; one that drops the template closes it. A detach's own swap forgets
 the child's retired edge once its books close, so detach a child whenever it goes idle.
-A runtime child is always a leaf: it cannot be marked in turn, so a tree you discover while running
-is one level deep under its marked group. For two levels, such as a repository and then its
+An attached child is always a leaf: it cannot be marked in turn, so a tree you discover while running
+is one level deep under its group. For two levels, such as a repository and then its
 authors, declare each repository as a group marked `template`, and `LocalHeddle.apply` a
-new topology as each repository appears; its authors are then runtime children. Letting a runtime
-child have runtime children is tracked by #3314.
+new topology as each repository appears; its authors are then attached children. Letting a runtime
+child have attached children is tracked by #3314.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleAttachedChildren -->
 ```kotlin
@@ -131,7 +131,7 @@ child have runtime children is tracked by #3314.
     check(attach.map { it::class } == listOf(TopologyStep.Prepare::class, TopologyStep.Activate::class))
     check((attach.first() as TopologyStep.Prepare).record.weight == Weight.of(2))
     apply(attach)
-    // Asking again is harmless, and a reload that keeps the marker keeps the child.
+    // Asking again is harmless, and a reload that keeps the template keeps the child.
     check(pool.attach(listOf("tenants"), "x", ledger, generation = 0).isEmpty())
     check(Topology.diff(pool, ledger, generation = 0).isEmpty())
 ```
@@ -140,12 +140,12 @@ To turn your own config paths into ledger ids and back, without keeping a name m
 track heddle's escaping, use `Topology.findGroupId(GroupPath)` and `Topology.findPath(GroupId)`.
 Neither throws, and they are exact inverses: each returns `null` for anything this topology has no
 group for, including an id a reload has since removed. A `GroupPath` is `Declared(names)` or
-`AttachedChild(group, name)`, so a runtime child stays apart from a declared sibling of the same
+`AttachedChild(group, name)`, so an attached child stays apart from a declared sibling of the same
 name, and its `names` read either arm back from just below the root.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleGroupPathRoundTrip -->
 ```kotlin
-    // A declared lane and a runtime child share the name `x`, and their paths stay apart.
+    // A declared lane and an attached child share the name `x`, and their paths stay apart.
     val lane = GroupPath.Declared(listOf("tenants", "x"))
     val tenant = GroupPath.Attached(group = listOf("tenants"), name = "x")
     val laneId = checkNotNull(pool.findGroupId(lane))
@@ -153,7 +153,7 @@ name, and its `names` read either arm back from just below the root.
     check(laneId == pool.groupId("tenants", "x") && tenantId == pool.attachedChildId(listOf("tenants"), "x"))
     check(laneId != tenantId)
 
-    // Back from an id: the arm says whether the last name is a runtime child's.
+    // Back from an id: the arm says whether the last name is an attached child's.
     check(pool.findPath(laneId) == lane && pool.findPath(tenantId) == tenant)
     check(pool.findPath(tenantId)?.names == listOf("tenants", "x"))
 ```
@@ -317,8 +317,8 @@ themselves past it. Every mint in an epoch rewrites one record, so the ledger ne
 service.
 
 Start an engine with `LocalHeddle.fromTopology(topology, policy, epoch)`. A lease only ever ends at
-a lane, or at a runtime child of a marked group: a group that happens to have nothing attached,
-such as a marked group before its first runtime child, is never leased, and `admit` and `explain`
+a lane, or at an attached child of a group with a template: a group that happens to have nothing attached,
+such as a group with a template before its first attached child, is never leased, and `admit` and `explain`
 treat it as `NoLiveLineage`.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalLease -->
@@ -368,7 +368,7 @@ fraction, over the same competing set: work no pick can reach is owed nothing an
 ```
 
 To run no more than N of one part of the tree at once, however idle the rest is, do not count leases
-in your own loop beside the engine: set `maxConcurrent` on that group, lane or runtime marker (`0`
+in your own loop beside the engine: set `maxConcurrent` on that group, lane or template (`0`
 pauses it). A pick skips every leaf beneath a node whose open leases have reached it, draining ones
 included, so the slot goes to a sibling, and the capped node counts as idle at its parent: it banks
 no credit and wakes clamped. `explain` tells such a leaf `AtCeiling(group, limit)`, naming the

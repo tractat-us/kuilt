@@ -13,11 +13,11 @@ import kotlin.test.assertTrue
 /**
  * [Topology.findGroupId] and [Topology.findPath] are exact inverses, over seeded random trees whose
  * names are built from the awkward pieces [TopologyLoweringTest.flatteningIsInjectiveOverAwkwardNames]
- * pins: a slash, a pre-escaped slash, the runtime marker, the id grammar's punctuation, a non-ASCII
+ * pins: a slash, a pre-escaped slash, the template, the id grammar's punctuation, a non-ASCII
  * letter, both lone surrogates and an emoji. Joining one or two pieces makes names that a naive
  * encoding would fold together, such as `a/b` beside a group `a` holding `b`.
  *
- * Each tree is checked against every path it has a group for, runtime children included, under
+ * Each tree is checked against every path it has a group for, attached children included, under
  * names drawn from the same pieces so that they collide with declared siblings; and against paths
  * and ids it has no group for, taken from a second tree with the same root and from edits of real
  * ids. For every path `p` and id `i` tried:
@@ -103,7 +103,7 @@ class TopologyGroupPathPropertyTest {
             // Floors set below the counts measured on every target, so a drifting generator reds.
             { assertTrue(tally.declared >= 1_500, "declared ${tally.declared}") },
             { assertTrue(tally.runtime >= 250, "runtime ${tally.runtime}") },
-            { assertTrue(tally.collisions >= 120, "runtime children named like a declared sibling ${tally.collisions}") },
+            { assertTrue(tally.collisions >= 120, "attached children named like a declared sibling ${tally.collisions}") },
             { assertTrue(tally.unresolvedPaths >= 1_500, "unresolved paths ${tally.unresolvedPaths}") },
             { assertTrue(tally.unresolvedIds >= 10_000, "unresolved ids ${tally.unresolvedIds}") },
         )
@@ -156,7 +156,7 @@ class TopologyGroupPathPropertyTest {
         }
 
     /**
-     * Two runtime children under each marked group of [t]: one named like a declared child of that
+     * Two attached children under each group with a template of [t]: one named like a declared child of that
      * group when it has one, and one drawn from the pieces.
      */
     private fun runtimePaths(t: Topology, r: Random): List<Pair<List<String>, String>> =
@@ -174,7 +174,7 @@ class TopologyGroupPathPropertyTest {
             (if (group.template != null) listOf(path to group) else emptyList()) + markedGroups(group.children, path)
         }
 
-    /** Ids one edit away from [id]: a segment dropped or added, the runtime marker moved, a byte changed. */
+    /** Ids one edit away from [id]: a segment dropped or added, the template moved, a byte changed. */
     private fun edits(id: GroupId, r: Random): List<GroupId> {
         val segments = id.value.split('/')
         val last = segments.last()

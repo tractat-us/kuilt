@@ -88,10 +88,10 @@ class LocalHeddleOverflowPropertyTest {
     }
 
     /**
-     * The seat, the second way in, which needs no wake at all: a runtime child attaches and is seated
+     * The seat, the second way in, which needs no wake at all: an attached child attaches and is seated
      * at its parent's front, the same weighted mean, written into its gauge floor in the ledger. While
      * its siblings are waiting each seat carried their `Σ w` into the floor's denominator, so churning
-     * runtime children — attach one, detach the oldest — under a waiting set of *every attached
+     * attached children — attach one, detach the oldest — under a waiting set of *every attached
      * child* overflowed after 19–39 seats, and the floor survived a persist and restore with it.
      *
      * Every attached child always waits, so nothing ever idles and wakes: the wake path is not what

@@ -38,7 +38,7 @@ class TopologyDraftTest {
         assertEquals(handBuilt, drafted)
     }
 
-    /** A ceiling written beside a group, a lane or a runtime marker lands on that node, and nowhere else. */
+    /** A ceiling written beside a group, a lane or a template lands on that node, and nowhere else. */
     @Test
     fun aDraftedCeilingLandsOnItsNode() {
         val drafted = draft("root") {

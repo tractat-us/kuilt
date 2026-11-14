@@ -276,7 +276,7 @@ class EntitlementLedgerForgetTest {
     private val names = listOf("t0", "t1", "t2", "t3")
     private val policy = LocalPolicy(defaultReservation = 2L)
 
-    /** What the test knows of one engine: which runtime children it attached, in attach order. */
+    /** What the test knows of one engine: which attached children it attached, in attach order. */
     private class History(val h: LocalHeddle, val attached: MutableList<Pair<List<String>, String>> = ArrayList())
 
     private fun leasable(history: History): Set<GroupId> =
@@ -320,7 +320,7 @@ class EntitlementLedgerForgetTest {
      * group's holdings for every replica, `leafSpentTotal`, `mintedTotal`, the generation floor,
      * `hasChildEdges`, every other edge's summary and lifecycle, and a clean `validate()`. Then an
      * engine restored from the forgotten ledger runs in lockstep with one restored from the whole
-     * ledger: the same calls give the same outcomes, holdings and totals, and a runtime child
+     * ledger: the same calls give the same outcomes, holdings and totals, and an attached child
      * attached again gets an edge above every generation either ever held.
      *
      * The draws walk sorted lists, so the trajectory is the same on every target (#2592).

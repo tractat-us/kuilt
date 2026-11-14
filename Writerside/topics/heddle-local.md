@@ -253,7 +253,7 @@ agents. When the deploy finishes, deploys compete again, starting level like a
 team that went quiet, not owed the turns they sat out.
 
 A ceiling of `0` pauses a lane. On a group it counts every build beneath it, and
-on runtime children it caps each child on its own. When several are full on the
+on attached children it caps each child on its own. When several are full on the
 way down, `explain` names the one nearest the top. A ceiling never stops or
 refuses a build that is already running.
 
@@ -348,7 +348,7 @@ check(heddle.detach(listOf("forks"), "ana").refusals.isEmpty())
 
 A group is named by its path from the top, here `listOf("forks")`, and the
 child by its own name. `attachedChildId` turns the pair into the id you lease
-with. Every child of `forks` gets the weight its marker gives, 1 by default.
+with. Every child of `forks` gets the weight its template gives, 1 by default.
 
 **Taking something out waits for its builds.** A fork you detach, or a lane a
 reload leaves out, closes at once: nothing new is leased there, and `acquire`
@@ -479,7 +479,7 @@ finish, and the removal completes, exactly as it would have before.
   just as the old engine would have held it.
 - **The agent count** last given to `reconcileCapacity`.
 - **The tree last passed to `apply`**, or the one the engine started from.
-  Runtime children are in the books, so they come back too.
+  Attached children are in the books, so they come back too.
 - **The epoch** of the engine that took it.
 
 Not kept: the `LocalPolicy`, which `restore` takes afresh, and the counter that

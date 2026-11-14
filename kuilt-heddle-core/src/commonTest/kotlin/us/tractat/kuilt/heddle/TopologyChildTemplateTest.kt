@@ -21,7 +21,7 @@ class TopologyChildTemplateTest {
     private val tenants = listOf("tenants")
     private val tenantsId = GroupId("root/tenants")
 
-    /** A declared lane `x` inside a group whose runtime children weigh [marker]. */
+    /** A declared lane `x` inside a group whose attached children weigh [marker]. */
     private fun pool(marker: Long? = 2, tenantsWeight: Long = 1, acmeWeight: Long = 3) = Topology(
         "root",
         listOf(
@@ -44,7 +44,7 @@ class TopologyChildTemplateTest {
         return applied.ledger
     }
 
-    /** [ledger] with the runtime child [name] attached under `tenants`. */
+    /** [ledger] with the attached child [name] attached under `tenants`. */
     private fun attached(ledger: EntitlementLedger, name: String, t: Topology = pool(), generation: Long = 0): EntitlementLedger =
         applyClean(t.attach(tenants, name, ledger, generation), ledger)
 
@@ -79,7 +79,7 @@ class TopologyChildTemplateTest {
 
     @Test
     fun runtimeNamespaceCannotCollide() {
-        // Runtime children named exactly like the declared lane `x`, and like the escaped `!x`.
+        // Attached children named exactly like the declared lane `x`, and like the escaped `!x`.
         var ledger = bootFrom(pool())
         val x = pool().attach(tenants, "x", ledger, generation = 0)
         ledger = applyClean(x, ledger)
@@ -229,7 +229,7 @@ class TopologyChildTemplateTest {
             { assertEquals(Lifecycle.PREPARED, half.lifecycle(p), "the rig left the replacement prepared") },
             { assertEquals(Lifecycle.ACTIVE, half.lifecycle(a), "beside the active edge") },
             { assertEquals(listOf(Close(p, runtime("x")), Close(a, runtime("x")), Retire(a, runtime("x")), Retire(p, runtime("x"))), detach) },
-            { assertEquals(detach, removal, "a marker going away takes the same steps") },
+            { assertEquals(detach, removal, "a template going away takes the same steps") },
             *(1..2).map { cut ->
                 { assertEquals(listOf(LedgerConflict.DualActiveInbound(runtime("x"))), dualLive(applyClean(detach.take(cut), half)), "cut $cut") }
             }.toTypedArray(),
@@ -311,7 +311,7 @@ class TopologyChildTemplateTest {
         val ledger = attached(attached(bootFrom(pool()), "c-7f3a"), "x")
         val steps = Topology.diff(pool(marker = null), ledger, generation = 0)
         val after = applyClean(steps, ledger)
-        // The whole group gone takes its runtime children with it, below the group's own retire.
+        // The whole group gone takes its attached children with it, below the group's own retire.
         val gone = Topology("root", listOf(Group("acme", Weight.of(3), listOf(Lane("batch")))))
         val removal = Topology.diff(gone, ledger, generation = 0)
         assertAll(
@@ -327,7 +327,7 @@ class TopologyChildTemplateTest {
                 )
             },
             { assertEquals(emptyList(), after.validate()) },
-            // The marker coming back does not bring them back: a detached child stays detached.
+            // The template coming back does not bring them back: a detached child stays detached.
             { assertEquals(emptyList(), Topology.diff(pool(), after, generation = 0)) },
             {
                 assertEquals(
@@ -364,7 +364,7 @@ class TopologyChildTemplateTest {
             { assertEquals(listOf(e("root/tenants/!x@3:1#2")), after.liveInto(runtime("x"))) },
             { assertEquals(listOf(runtime("x")), mid.refused) },
             { assertEquals(listOf(e("root/tenants/!x@3:1#2")), finished.liveInto(runtime("x"))) },
-            // Once the marker weighs 3, a fresh attach uses it too.
+            // Once the template weighs 3, a fresh attach uses it too.
             { assertEquals(Weight.of(3), (pool(marker = 3).attach(tenants, "y", after, 0).first() as Prepare).record.weight) },
             { assertEquals(emptyList(), finished.validate()) },
         )
@@ -372,7 +372,7 @@ class TopologyChildTemplateTest {
 
     @Test
     fun attachReadsTheFloorTheLedgerCarries() {
-        // One runtime child at generation 7 over a tree at 0: the next attach is at 8, read from the
+        // One attached child at generation 7 over a tree at 0: the next attach is at 8, read from the
         // ledger's index rather than from a pass over every edge.
         val ledger = attached(bootFrom(pool()), "x", generation = 7)
         val steps = pool().attach(tenants, "y", ledger, generation = 0)

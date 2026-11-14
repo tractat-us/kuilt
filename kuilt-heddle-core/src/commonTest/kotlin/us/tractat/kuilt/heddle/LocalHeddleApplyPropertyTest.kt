@@ -25,7 +25,7 @@ import kotlin.test.fail
  * again converges on booting it from scratch.
  *
  * Trees are depth up to 3 with up to 3 children per group, names from a short list with escaped and
- * colliding ones, weights 1 to 4, half the groups marked for runtime children. Every draw is from a
+ * colliding ones, weights 1 to 4, half the groups given a template. Every draw is from a
  * `List` this file built. Each property counts the shapes it is meant to reach and asserts the
  * counts, so a generator that drifted to trivial histories reds rather than passing.
  */
@@ -59,7 +59,7 @@ class LocalHeddleApplyPropertyTest {
             // Floors sit below the counts measured on every target (202, 43, 36, 16, 139, 26).
             { assertTrue(tally.moved >= 140, "leases moved by a reweight ${tally.moved}") },
             { assertTrue(tally.drained >= 30, "removals that drained ${tally.drained}") },
-            { assertTrue(tally.runtimeMoved >= 20, "runtime-child leases moved ${tally.runtimeMoved}") },
+            { assertTrue(tally.runtimeMoved >= 20, "attached-child leases moved ${tally.runtimeMoved}") },
             { assertTrue(tally.reconcilesThatMoved >= 10, "reconciles that moved spend ${tally.reconcilesThatMoved}") },
             { assertTrue(tally.replacements >= 100, "replacements the liveness oracle checked ${tally.replacements}") },
             { assertTrue(tally.undeclaredLeaf >= 15, "leaves explained NoLiveLineage only for being undeclared ${tally.undeclaredLeaf}") },
@@ -101,7 +101,7 @@ class LocalHeddleApplyPropertyTest {
             { assertTrue(tally.removalWon >= 12, "reweights that waited on a removal below ${tally.removalWon}") },
             { assertTrue(tally.readdMidDrain >= 20, "children put back while still draining ${tally.readdMidDrain}") },
             { assertTrue(tally.formerLaneMoved >= 1, "leases at a former lane moved by a reweight ${tally.formerLaneMoved}") },
-            { assertTrue(tally.runtimeMoved >= 60, "runtime-child leases moved ${tally.runtimeMoved}") },
+            { assertTrue(tally.runtimeMoved >= 60, "attached-child leases moved ${tally.runtimeMoved}") },
             { assertTrue(tally.reconcilesThatMoved >= 100, "reconciles that moved spend ${tally.reconcilesThatMoved}") },
             { assertTrue(tally.replacements >= 400, "replacements the liveness oracle checked ${tally.replacements}") },
             { assertTrue(tally.undeclaredLeaf >= 40, "leaves explained NoLiveLineage only for being undeclared ${tally.undeclaredLeaf}") },
@@ -111,17 +111,17 @@ class LocalHeddleApplyPropertyTest {
 
     // ── one engine's history ────────────────────────────────────────────────────────────────────
 
-    /** An engine and what the test knows about it: its topology and the runtime children attached. */
+    /** An engine and what the test knows about it: its topology and the attached children attached. */
     private inner class Run(val h: LocalHeddle, var topology: Topology, val tally: Tally) {
         val attached = ArrayList<Pair<List<String>, String>>()
         private var step = 0L
 
-        /** Every group a lease may end at, by the test's own reading of the topology: lanes and attached runtime children. */
+        /** Every group a lease may end at, by the test's own reading of the topology: lanes and attached children. */
         fun declared(): List<GroupId> =
             lanePaths(topology.children, emptyList()).map { topology.groupId(*it.toTypedArray()) } +
                 attached.map { (g, n) -> topology.attachedChildId(g, n) }
 
-        /** Every group of the tree, declared or not, and every runtime child attached: what `explain` is asked about. */
+        /** Every group of the tree, declared or not, and every attached child attached: what `explain` is asked about. */
         fun everyGroup(): List<GroupId> =
             (nodePaths(topology.children, emptyList()).map { topology.groupId(*it.toTypedArray()) } + declared()).distinct().sorted()
 
@@ -169,7 +169,7 @@ class LocalHeddleApplyPropertyTest {
         /** Open up to [n] leases at random declared leaves, one acquire each. */
         fun openLeases(r: Random, n: Int) = repeat(n) {
             val runtime = attached.map { (g, name) -> topology.attachedChildId(g, name) }
-            // Half the leases go to a runtime child when one is attached, so its re-homes are reached.
+            // Half the leases go to an attached child when one is attached, so its re-homes are reached.
             val leaves = if (runtime.isNotEmpty() && r.nextBoolean()) runtime else declared()
             // A tree of marked groups with nothing attached yet declares no leaf at all.
             if (leaves.isEmpty()) return@repeat
@@ -342,7 +342,7 @@ class LocalHeddleApplyPropertyTest {
         val weight = Weight.of(1L + r.nextInt(4))
         return if (depth < 3 && r.nextInt(3) == 0) {
             // A quarter of the groups are marked and declare nothing: a leaf the ledger cannot tell
-            // from a lane until a runtime child attaches, which is what the leasable predicate decides.
+            // from a lane until an attached child attaches, which is what the leasable predicate decides.
             if (r.nextInt(4) == 0) return Group(name, weight, emptyList(), template = ChildTemplate(Weight.of(1L + r.nextInt(3))))
             Group(name, weight, randomChildren(r, depth + 1), template = if (r.nextBoolean()) ChildTemplate(Weight.of(1L + r.nextInt(3))) else null)
         } else {
@@ -363,7 +363,7 @@ class LocalHeddleApplyPropertyTest {
         val node = nodeAt(t.children, path)
         return when (r.nextInt(8)) {
             0, 1, 2 -> t.update(path) { it.withWeight(Weight.of(it.weight.numerator % 4 + 1)) }
-            // A marked group may lose its last declared child; any other group keeps one.
+            // A group with a template may lose its last declared child; any other group keeps one.
             3 -> if (siblingsOf(t, path).size > 1 || (path.size > 1 && templateAt(t, path.dropLast(1)) != null)) t.update(path) { null } else t
             4 -> {
                 val parent = if (node is Group) path else path.dropLast(1)

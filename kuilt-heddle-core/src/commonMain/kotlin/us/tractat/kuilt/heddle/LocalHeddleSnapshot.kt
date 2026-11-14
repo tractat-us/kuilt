@@ -40,7 +40,7 @@ import kotlinx.serialization.encoding.encodeCollection
  *   its first operation, exactly as the one it replaces did. Calling
  *   [LocalHeddle.reconcileCapacity] again after a restore is harmless.
  * - **The topology last applied, [lastApplied].** Only the topology tells a lane from a group that
- *   has nothing attached right now, such as one marked for runtime children before the first
+ *   has nothing attached right now, such as one with a template before the first
  *   arrives: both read as leaves in the ledger. A restored engine leases exactly what the persisted
  *   one did, and [LocalHeddle.attach] and a later [LocalHeddle.apply] diff against it.
  *   It is the topology of the last [LocalHeddle.apply], even one with refusals: applying it again

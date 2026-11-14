@@ -236,7 +236,7 @@ public sealed interface LeaseOutcome {
  *
  * Start one with [fromTopology], and change the tree while it runs with [apply]: a reload is one
  * unit, a reweight moves the leases open under it onto the new edge, and a removal drains (see
- * [apply]). Runtime children come and go with [attach] and [detach].
+ * [apply]). Attached children come and go with [attach] and [detach].
  *
  * ## How a pick works
  *
@@ -265,10 +265,10 @@ public sealed interface LeaseOutcome {
  * ## What a lease ends at
  *
  * A lease ends only at a **leasable** group: a leaf (no ACTIVE child edge) that the topology
- * declares a lane, or a runtime child of a group it marks for them. Being a leaf is not enough. A
+ * declares a lane, or an attached child of a group it marks for them. Being a leaf is not enough. A
  * group whose children are all inactive reads as a leaf in the ledger, and only the topology can
- * tell a lane from a group that has nothing attached right now, such as a marked group before its
- * first runtime child arrives. That group is never leased, and work named at it is never wanted.
+ * tell a lane from a group that has nothing attached right now, such as a group with a template before its
+ * first attached child arrives. That group is never leased, and work named at it is never wanted.
  * The pick's terminal, the lift of [acquire]'s two sets into demand, [admit], [explain] and
  * [entitlement] read this one predicate, so none of them can accept a group the others refuse.
  *
@@ -965,25 +965,25 @@ public class LocalHeddle private constructor(
     }
 
     /**
-     * Attach the runtime child [name] to the group at [group], read from the root down, at the
+     * Attach the attached child [name] to the group at [group], read from the root down, at the
      * weight the topology's marker on that group gives ([Topology.attach]). Applied as
      * one unit, like [apply]. Attaching a child that is already attached does nothing; attaching one
      * whose detach is still draining gives it a new edge and moves its draining leases onto it.
      *
      * @throws IllegalArgumentException if [group] does not name a group the topology marks for
-     *   runtime children, [name] is empty, or [generation] is negative.
+     *   attached children, [name] is empty, or [generation] is negative.
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun attach(group: List<String>, name: String, generation: Long): ApplyResult =
         atomically { run(topology().attach(group, name, ledger, generation)) }
 
     /**
-     * Detach the runtime child [name] from the group at [group] ([Topology.detach]):
+     * Detach the attached child [name] from the group at [group] ([Topology.detach]):
      * closed at once, and retired once its open leases complete, until when it is
      * [StepRefusal.Draining].
      *
      * @throws IllegalArgumentException if [group] does not name a group the topology marks for
-     *   runtime children, or [name] is empty.
+     *   attached children, or [name] is empty.
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun detach(group: List<String>, name: String): ApplyResult =
@@ -1380,7 +1380,7 @@ public class LocalHeddle private constructor(
 
     /**
      * Whether a lease may end at [group]: the **one leasable predicate**. It is a leaf, it is not
-     * the root, and the topology declares it a lane or a runtime child of a marked group
+     * the root, and the topology declares it a lane or an attached child of a group with a template
      * ([leasable]). The descent stops only here, and every name a pick or an admission accepts is
      * tested by it, through [reachable]. A [LocalHeddleView] reads the same top-level predicate.
      */

@@ -641,7 +641,7 @@ each `apply`, `attach` and `detach`. That swap forgets:
   v0.7.4 snapshot compacts in its first swap;
 - every PREPARED edge the topology in force does not want: a diff of that
   topology would leave it prepared and name it in no step. It moves the floor and
-  gives its parent a row, nothing else. A runtime child's prepared edge is kept
+  gives its parent a row, nothing else. An attached child's prepared edge is kept
   unless the child has another edge the diff adopts, since a prepared edge may be
   what says the child is attached.
 
@@ -686,8 +686,8 @@ of adopting the old one.
   Only a child that is gone for good compacts reliably.
 - **A group whose children were forgotten is never forgotten itself.** Its row
   in the fold keeps it counting as having child edges, and leaves go first. A
-  runtime child is always a leaf, so this bites a declared group removed after
-  its runtime children came and went.
+  attached child is always a leaf, so this bites a declared group removed after
+  its attached children came and went.
 
 ## 6. Demand is an `EphemeralMap`, and that is not an accident
 
@@ -1349,20 +1349,20 @@ Children the consumer creates while running hang under a group marked with
 `template`, in their own id namespace (`pool/tenants/!c-7f3a`), so a runtime
 name never collides with a declared one. `Topology.attach(group, name,
 ledger, generation)` and `detach(group, name, ledger)` list the steps for
-one child, at the marker's weight, numbered by the same generation floor as the diff.
-Which runtime children exist is the ledger's to say, and the diff owns them as it owns
-declared edges: under a marker the new tree keeps, an attached child is kept, history
-and all; a new marker weight regenerates it on a new edge; and when the marker goes, or
+one child, at the template's weight, numbered by the same generation floor as the diff.
+Which attached children exist is the ledger's to say, and the diff owns them as it owns
+declared edges: under a template the new tree keeps, an attached child is kept, history
+and all; a new template weight regenerates it on a new edge; and when the template goes, or
 its group does, the child is closed. Each detach retires the child's edge, and the
-engine forgets it in the same swap once its books close (§5.5), so a runtime child
+engine forgets it in the same swap once its books close (§5.5), so an attached child
 can be detached whenever it goes idle.
 
-A runtime child is a leaf, one level below its marked group: it cannot carry a marker
+An attached child is a leaf, one level below its group: it cannot carry a template
 itself, so nothing discovered while running has children of its own. §1's "any depth"
 is met today by declared groups, which nest freely and reshape on a reload, and not
 yet by runtime ones. A tree found at runtime two levels deep (say, a repository and
-then its authors) has to declare each repository as a marked group and reload as
-each one appears. Letting a runtime child have runtime children is tracked by #3314.
+then its authors) has to declare each repository as a group with a template and reload as
+each one appears. Letting an attached child have attached children is tracked by #3314.
 
 ### 11.2 A ceiling: "run no more than N of these"
 
@@ -1478,7 +1478,7 @@ and never decides whether the caller runs anything.
 #### Open
 
 - A document's `runtimeChildrenMaxConcurrent` on a group that does not mark
-  runtime children is dropped without a word. Reporting it needs a second new
+  attached children is dropped without a word. Reporting it needs a second new
   `TopologyProblem.Kind`, and this section allows only one. Tracked by #3368.
 
 ### 11.3 Previewing the next picks

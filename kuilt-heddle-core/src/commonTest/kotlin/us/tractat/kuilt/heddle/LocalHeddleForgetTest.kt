@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 
 /**
  * [LocalHeddle] forgets a retired edge in the swap that retires it (#3192, design §5.5), so an
- * engine whose runtime children come and go stays the same size however long it runs.
+ * engine whose attached children come and go stays the same size however long it runs.
  */
 class LocalHeddleForgetTest {
 
@@ -54,7 +54,7 @@ class LocalHeddleForgetTest {
         )
     }
 
-    /** The tree [oracle] reloads between: the marker's weight and `steady`'s, each 1 or 2. */
+    /** The tree [oracle] reloads between: the template's weight and `steady`'s, each 1 or 2. */
     private fun reloaded(marker: Long, steady: Long): Topology = Topology(
         "root",
         listOf(
@@ -208,7 +208,7 @@ class LocalHeddleForgetTest {
         )
     }
 
-    /** Put a prepared edge into the runtime child [name] at [weight] and [generation], as a snapshot could carry one. */
+    /** Put a prepared edge into the attached child [name] at [weight] and [generation], as a snapshot could carry one. */
     private fun LocalHeddle.prepareRuntime(name: String, weight: Long, generation: Long): AttachmentId {
         val child = tree.attachedChildId(tenants, name)
         val record = AttachmentRecord(attachmentIdOf(child, Weight.of(weight), generation), tree.groupId("tenants"), child, Weight.of(weight))
@@ -217,10 +217,10 @@ class LocalHeddleForgetTest {
     }
 
     /**
-     * A runtime child's prepared edge is the record that the child is attached, so a swap keeps one
-     * that says so: `u`'s, at the marker's weight, which a reload adopts, and `w`'s, at a weight the
+     * An attached child's prepared edge is the record that the child is attached, so a swap keeps one
+     * that says so: `u`'s, at the template's weight, which a reload adopts, and `w`'s, at a weight the
      * marker no longer gives, which is still the only edge `w` has. The reload then activates `u`'s,
-     * gives `w` an edge at the marker's weight, and only then forgets `w`'s old one, which nothing
+     * gives `w` an edge at the template's weight, and only then forgets `w`'s old one, which nothing
      * needs any more.
      */
     @Test
@@ -240,7 +240,7 @@ class LocalHeddleForgetTest {
             { assertEquals(u, after.lineageOf(tree.attachedChildId(tenants, "u"))?.last(), "u is attached on the edge it had") },
             {
                 val lineage = after.lineageOf(wChild).orEmpty()
-                assertTrue(lineage.isNotEmpty() && after.record(lineage.last())?.weight == Weight.ONE, "w is attached at the marker's weight: $lineage")
+                assertTrue(lineage.isNotEmpty() && after.record(lineage.last())?.weight == Weight.ONE, "w is attached at the template's weight: $lineage")
             },
             { assertNull(after.lifecycle(w), "and w's old prepared edge is forgotten") },
         )
@@ -248,7 +248,7 @@ class LocalHeddleForgetTest {
 
     /**
      * A reload forgets what the topology it installs does not want, not what the one it replaces
-     * did not: `u`, attached by a prepared edge at weight 1, is moved to a marker of weight 2, and
+     * did not: `u`, attached by a prepared edge at weight 1, is moved to a template of weight 2, and
      * the weight-1 edge, which the old marker would have adopted, goes in the reload's own swap.
      */
     @Test

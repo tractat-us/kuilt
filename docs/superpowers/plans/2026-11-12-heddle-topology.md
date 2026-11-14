@@ -13,7 +13,7 @@
 ## Rulings
 
 1. `diff` lives in `:kuilt-heddle-core`. The generation counter is supplied by the caller and floored by the ledger. No id carries a timestamp (#1713).
-2. Runtime-child names are opaque. No kuilt code, test or doc names a consumer. There is no script front end and no format library: `Topology` is `@Serializable` and the consumer brings its own format.
+2. Attached-child names are opaque. No kuilt code, test or doc names a consumer. There is no script front end and no format library: `Topology` is `@Serializable` and the consumer brings its own format.
 3. **The front door is the single-writer `LocalHeddle` in core.** `heddleGoverned` remains a documented later option, not a task. `heddleStatic` is not used, because it pulls `:kuilt-core`, quilter, liveness and coroutines.
 4. **D2:** `diff` is re-entrant. **D3:** a change of root throws.
 5. **D3m (confirmed): `Topology` carries no mint plan, and supply is not part of the admin's view.** The engine tops up supply inside `acquire`/`extend` against a watermark. Total capacity sizes that watermark.
@@ -70,8 +70,8 @@ These override the task sections below where they differ.
    - **P persists the allocator memory and versions the snapshot.** `LocalHeddleSnapshot` gains `allocatorMemory` and `formatVersion: Int`. `LocalHeddle.decode(bytes, format): RestoreResult` returns `Restored`, `UnsupportedVersion(found, supported)` or `Corrupt(reason)`. The policy is that each release reads the previous format, with a golden snapshot from the previous format checked in. New tests: `restoreReplaysIdenticallyWithAWaker` (`restore(persist())` plus the same acquires gives identical leases) and `previousFormatRestores`. §7.2's "never persisted" is about replication; a single writer persists its own memory.
    - **E adds `entitlement(leaf, waiting, totalSlots): Rational`**: the leaf's GPS share among the same competing set as `front()`, times capacity. A hold reason then agrees with the pick, and it feeds #3184.
    - **L3's `apply` takes the topology, not steps: `apply(new: Topology, generation: Long)`.** It diffs internally under the one lock (Amendment 6). **The atomic unit is the whole apply, on a working ledger swapped in once.** A per-child unit cannot work: when `acme` and `acme/batch` are both reweighted, a lease under `batch` crosses both edges. `preview` (S2) stays a pure diff. L3 also checks `holdings` on the applied ledger against a decoded copy, so the carried index is pinned under real Retire → Reconcile sequences. L3 decides whether `fromTopology` boots through `diff` against an empty ledger. If it does, `lower` stays a read-only view and is never a second, unfloored way to boot.
-   - **Task 5 has one generation-floor rule and caches it.** `diff`'s private `prepareGeneration` (with its adopted-PREPARED carve-out) and `effectiveGeneration` become one function. The engine caches the floor, or L0's `EdgeIndex` folds in a max generation. Each attach must not re-parse every edge (55k at Task C's scale). Task 5 also adds the lowering test's awkward-name set to the diff property generator: escaped segments, an escaped root, and `a`/`a1` siblings for the child-versus-edge tie-break. It also carries a runtime child through a reload with traffic.
-   - **Ledger growth** from runtime-child churn and abandoned PREPARED edges is #3192 (needs-design). Until that is settled, the docs advise keeping runtime children attached.
+   - **Task 5 has one generation-floor rule and caches it.** `diff`'s private `prepareGeneration` (with its adopted-PREPARED carve-out) and `effectiveGeneration` become one function. The engine caches the floor, or L0's `EdgeIndex` folds in a max generation. Each attach must not re-parse every edge (55k at Task C's scale). Task 5 also adds the lowering test's awkward-name set to the diff property generator: escaped segments, an escaped root, and `a`/`a1` siblings for the child-versus-edge tie-break. It also carries an attached child through a reload with traffic.
+   - **Ledger growth** from attached-child churn and abandoned PREPARED edges is #3192 (needs-design). Until that is settled, the docs advise keeping attached children attached.
    - **Release.** Maven Central carries `kuilt-heddle-core` only once L1 and P have landed, and the version number is @keddie's call. Until then, `docs/usage.md` documents publishing to Maven Local without an Android SDK: `:kuilt-crdt` and `:kuilt-heddle-core`'s `publishJvmPublicationToMavenLocal` and `publishKotlinMultiplatformPublicationToMavenLocal`.
 8. **A lease carries its start time, as data** (@keddie, 2026-11-12, from a consumer question about settling orphans after a restart). These override the task sections below where they differ.
    - **The no-clock rule is clarified, not relaxed.** Heddle never *reads* a clock. A time the caller passes in is data, like a cost. It is stored, compared and subtracted, never sampled. Replay stays deterministic, and no id carries a timestamp (#1713).
@@ -98,7 +98,7 @@ These override the task sections below where they differ.
    - **Mint ids carry the epoch** — *corrected by Amendment 10:* one record per epoch, `"local#<epoch>"`, carrying the epoch's cumulative total read off the working ledger. This replaces Task L1's `"local#<k>"`.
    - **`snapshot()` is taken under the caller's lock; the value it returns is read without it.** D6 and P's `persist()` mean that the *value* is lock-free, not the call.
    - **No earmark in L1.** Each level of an operation hands down exactly what it receives, and a pick is capped at the reservation, so a former lane's open reservation is never handed to its new child (`aLaneThatGainsAChildKeepsItsOpenReservation`). L3's re-home moves units without that cap, so L3 Step 1 adds `rehomeKeepsAFormerLanesOpenReservationsEarmarked`.
-   - **Only a declared Lane or an attached runtime child is leasable. That is L3's rule, because only the `Topology` can tell a Lane from a Group whose children are all inactive.** L3 adds one predicate, `isLeaf` and (Lane or attached runtime child), and uses it for both `acquire`'s terminal and `admit`, never for one alone. L3 Step 1 adds `admitRefusesAGroupThatIsNotALaneOrRuntimeChild` and `acquireNeverEndsAtAGroupThatIsNotALaneOrRuntimeChild`.
+   - **Only a declared Lane or an attached child is leasable. That is L3's rule, because only the `Topology` can tell a Lane from a Group whose children are all inactive.** L3 adds one predicate, `isLeaf` and (Lane or attached child), and uses it for both `acquire`'s terminal and `admit`, never for one alone. L3 Step 1 adds `admitRefusesAGroupThatIsNotALaneOrRuntimeChild` and `acquireNeverEndsAtAGroupThatIsNotALaneOrRuntimeChild`.
    - **L3's re-home includes leases at runtime leaves under a reweighted parent.** The re-attach-mid-drain sequence `[Prepare, Retire, Activate]` matches the replacement detector, so L3 handles it on purpose and tests it.
    - **Deferred to #3199: one `piece` per operation, and the cut in `pickChild`'s scan of active children** (Amendment 3, bullets 5 and 6). Each L1 operation is all-or-nothing through one swap, but it pieces once per mutator. Batching needs an internal ledger mutator. That is a change inside `EntitlementLedger`, with no change to ledger semantics or the public API, and it is all Amendment 3's "not a ledger change" means. #3199 lands before P, or records a decision not to. Scale is recorded, not asserted: the served and unserved rows are reported from the same run.
    - **Retracted:** an earlier follow-up proposed deleting the private `childEdges` and `EdgeIndex.children` as dead. They are not dead: `childEdges` backs `hasChildEdges`, which `Topology.diff` calls (`TopologyDiff.kt` lines 263 and 391), and `buildIndex`/`carryIndex` maintain `EdgeIndex.children` for it. Answering `hasChildEdges` some other way would be a design change, not a deletion.
@@ -124,10 +124,10 @@ These override the task sections below where they differ.
    - **Release (@keddie, 2026-11-13):** `v0.7.4` is cut once this plan's work through P has landed, coordinated with the identity track so that main is non-breaking at the tag.
 
 11. **What L3 settled, and the shapes P and #3238 bring** (from #3249's spec review, #3247 and #3248, 2026-11-13). These override the task sections and Amendments 6, 9 and 10 where they differ.
-   - **One leasable predicate.** A group is leasable when it `isLeaf` and the last applied `Topology` declares it: a Lane, or a runtime child of a marked group, attached through an ACTIVE lineage. A group that is not leasable answers `NoLiveLineage(at)`. No `Kind` arm is added.
+   - **One leasable predicate.** A group is leasable when it `isLeaf` and the last applied `Topology` declares it: a Lane, or an attached child of a group with a template, attached through an ACTIVE lineage. A group that is not leasable answers `NoLiveLineage(at)`. No `Kind` arm is added.
    - **Boot is an `apply`.** `fromTopology` applies onto an empty ledger at generation 0, and `fresh` is removed. `attach` and `detach` are the engine entry points for Task 5's lists. The engine needs its last applied topology, so P's `lastApplied` is a **non-null** `Topology`. Only the internal, test-only `over` builds an engine without one.
    - **One swap, with refusals per child (the leave-out model).** A child that is left out drops all of its steps and blocks its ancestors' retires. A draining removal keeps its steps up to the retire that was refused. `TopologyStep`'s KDoc says so.
-   - **A replacement is a child whose list both retires one edge and activates another**: a reweight, a new weight on a runtime marker, or a re-add mid-drain, whether declared or runtime. Its open leases move, draining ones included. Amendment 6's rule narrows to "only a new edge for the same `GroupId` re-homes". A reparent or a rename changes the `GroupId`, so it never re-homes (R12). *Confirmed by @keddie, 2026-11-13.*
+   - **A replacement is a child whose list both retires one edge and activates another**: a reweight, a new weight on a template, or a re-add mid-drain, whether declared or runtime. Its open leases move, draining ones included. Amendment 6's rule narrows to "only a new edge for the same `GroupId` re-homes". A reparent or a rename changes the `GroupId`, so it never re-homes (R12). *Confirmed by @keddie, 2026-11-13.*
    - **R1 as built.** Release up the old path, run the steps in order, re-delegate down the new lineage seat-first, check every path against its lineage, then swap. Step 4's "re-delegate before the retire" cannot be written; "before the reconcile" and "keep the old path" stand in for it. `releaseIdleBelow` is removed.
    - **The removal wins.** Under a reweighted group, a removed child with open leases is Draining, and so is the reweight. D7 narrows to "an orphan holds only the changes it lies under, until `reconcileLeases` settles it". Review Focus 2 still holds for siblings and unrelated children. *Confirmed by @keddie, 2026-11-13.*
    - A replacement the ledger refuses after the engine has released all of its units is `Refused`, never `Draining`.
@@ -181,7 +181,7 @@ These override the task sections below where they differ.
 2. **One slow group in a save that also changes others.** A user expects the other children to apply. Pinned by `oneDrainingChildDoesNotBlockAnother` (Task L3) and `unrelatedGroupInTheSameSaveApplies` (Task 4).
 3. **Restart or reset with leases in flight.** A user expects a lease to be either still valid or rejected by name, and never to charge the wrong group. Pinned by `staleLeaseAfterResetIsNamed` and `restoreKeepsLeases` (Task P).
 4. **A routine reload or drain.** A user expects the status to stay healthy, so that fail-open does not fire. Pinned by `drainingIsInformationalNotDegraded` (Task S1).
-5. **Names that collide once flattened,** including a runtime child named like a declared one, and a child literally named `#3`. A user expects distinct ids and an unambiguous problem path. Pinned by `flatteningIsInjectiveOverAwkwardNames` (Task 2), `runtimeNamespaceCannotCollide` (Task 5), and `emptyNameProblemDoesNotCollideWithHashNames` (Task 1).
+5. **Names that collide once flattened,** including an attached child named like a declared one, and a child literally named `#3`. A user expects distinct ids and an unambiguous problem path. Pinned by `flatteningIsInjectiveOverAwkwardNames` (Task 2), `runtimeNamespaceCannotCollide` (Task 5), and `emptyNameProblemDoesNotCollideWithHashNames` (Task 1).
 
 ---
 
@@ -195,7 +195,7 @@ These override the task sections below where they differ.
 @Serializable public data class TopologyDocument(public val root: String, public val children: List<Node>) {
     @Serializable public sealed interface Node { public val name: String; public val weight: String }
     @Serializable @SerialName("group") public data class Group(override val name: String, override val weight: String = "1",
-        public val children: List<Node> = emptyList(), public val template: String? = null) : Node   // marker weight text
+        public val children: List<Node> = emptyList(), public val template: String? = null) : Node   // template weight text
     @Serializable @SerialName("lane") public data class Lane(override val name: String, override val weight: String = "1") : Node
 }
 /** The checked value: constructible only valid. */
@@ -253,7 +253,7 @@ public object TopologyWeightSerializer : KSerializer<Weight>   // a STRING: "3" 
 - `public fun Topology.lower(generation: Long = 0L): List<AttachmentRecord>`, sorted by id.
 - Internal:
   - `escapeSegment`: every UTF-8 byte outside `[A-Za-z0-9._~-]` becomes `%XX`.
-  - A declared child is `"<parent>/<escaped>"`. **A runtime child is `"<parent>/!<escaped>"`.** `!` never survives escaping, so the two namespaces cannot collide.
+  - A declared child is `"<parent>/<escaped>"`. **An attached child is `"<parent>/!<escaped>"`.** `!` never survives escaping, so the two namespaces cannot collide.
   - `attachmentIdOf(child, weight, generation)` = `"${child.value}@${n}:${d}#$generation"`.
   - `generationOf(id): Long?` parses only the whole grammar.
   - `pathOf(group: GroupId): ParsedPath?` = (raw names, `runtime: Boolean`). It is the inverse of the encoding, which lets status name a group the topology no longer declares.
@@ -263,7 +263,7 @@ public object TopologyWeightSerializer : KSerializer<Weight>   // a STRING: "3" 
 
 - [ ] **Step 1: Write the failing tests.**
   - `lowerIsSortedAndGolden`: the §11.1 tree at generation 0 gives exactly `["root/acme/batch@1:1#0", "root/acme/interactive@3:1#0", "root/acme@3:1#0", "root/hobby/default@1:1#0", "root/hobby@1:1#0"]`.
-  - `flatteningIsInjectiveOverAwkwardNames`: `"a/b"`, `"a%2Fb"`, `"a"`, `"é"`, `"x@1:1#0"`, `"!x"`, a nested `a → b`, and runtime child `"x"` beside declared `"x"`. Every id is distinct.
+  - `flatteningIsInjectiveOverAwkwardNames`: `"a/b"`, `"a%2Fb"`, `"a"`, `"é"`, `"x@1:1#0"`, `"!x"`, a nested `a → b`, and attached child `"x"` beside declared `"x"`. Every id is distinct.
   - `pathOfInvertsGroupId`, over the same names.
   - `generationOfParsesOnlyTheGrammar`.
   - `floorSeesRetiredEdges`.
@@ -358,11 +358,11 @@ internal fun EntitlementLedger.reconcileLocally(child: GroupId): Relocation   //
 
 ---
 
-### Task 5: Runtime children [after Task 4]
+### Task 5: Attached children [after Task 4]
 
-`Topology.attach(group, name, ledger, generation)` returns `[Prepare, Activate]`, `[Activate]` or `[]` at the marker's weight. `detach(group, name, ledger)` returns `[Close, Retire]`, `[Retire]` or `[]`. Both live in the `!` namespace (Task 2), so **a name never collides with a declared child, and nothing on the build path throws for it**. They throw only when the group is unmarked or the name is empty.
+`Topology.attach(group, name, ledger, generation)` returns `[Prepare, Activate]`, `[Activate]` or `[]` at the template's weight. `detach(group, name, ledger)` returns `[Close, Retire]`, `[Retire]` or `[]`. Both live in the `!` namespace (Task 2), so **a name never collides with a declared child, and nothing on the build path throws for it**. They throw only when the group is unmarked or the name is empty.
 
-In `diff`, owned runtime children under a group that is still marked are desired at `new`'s marker weight. A changed weight regenerates them, and a removed marker closes them.
+In `diff`, owned attached children under a group that is still marked are desired at `new`'s template weight. A changed weight regenerates them, and a removed marker closes them.
 
 Tests:
 - `attachIsIdempotent`.
@@ -374,7 +374,7 @@ Tests:
 - `diffRegeneratesRuntimeChildrenWhenTheMarkerWeightChanges`.
 - Extend the generator.
 
-Same verification and docs rules. Commit "heddle-core: runtime children in their own namespace (#3173)". After merge, tick #3173's "Done when" boxes.
+Same verification and docs rules. Commit "heddle-core: attached children in their own namespace (#3173)". After merge, tick #3173's "Done when" boxes.
 
 ---
 

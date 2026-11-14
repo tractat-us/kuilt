@@ -115,7 +115,7 @@ class LocalHeddleCeilingTest {
         )
     }
 
-    /** On a runtime marker the ceiling caps each child on its own, not all of them together. */
+    /** On a template the ceiling caps each child on its own, not all of them together. */
     @Test
     fun aRuntimeMarkerCapsEachChildOnItsOwn() {
         val t = Topology("root", listOf(Group("tenants", Weight.ONE, emptyList(), ChildTemplate(Weight.ONE, maxConcurrent = 1L))))

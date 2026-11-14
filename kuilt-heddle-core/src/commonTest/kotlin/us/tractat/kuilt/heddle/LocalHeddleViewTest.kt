@@ -16,7 +16,7 @@ class LocalHeddleViewTest {
 
     /**
      * `root → {acme (3/2), solo, pool, tenants}`. `acme` holds a group `batch → {x, y (2)}` and a
-     * lane `interactive`; `pool` and `tenants` are marked for runtime children, and only `tenants`
+     * lane `interactive`; `pool` and `tenants` are given a template, and only `tenants`
      * ever gets one, so `pool` stays a leaf the topology does not declare: a name that only the
      * topology the view keeps can turn away.
      */
@@ -197,7 +197,7 @@ class LocalHeddleViewTest {
     }
 
     /**
-     * `pool` is a leaf the topology marks for runtime children and declares no lane: a view turns
+     * `pool` is a leaf the topology marks for attached children and declares no lane: a view turns
      * it away as the engine does, because it leases by the topology the snapshot kept. The rig: the
      * ledger alone reads `pool` as a leaf with a live lineage.
      */

@@ -328,7 +328,7 @@ class LocalHeddlePersistenceTest {
 
     /**
      * The topology comes back with the engine, so the restored one leases exactly what the persisted
-     * one did. The draft marks `pool` for runtime children and attaches none, so `pool` reads as a
+     * one did. The draft marks `pool` for attached children and attaches none, so `pool` reads as a
      * leaf in the ledger and only the topology says it is not leasable. An engine that leased every
      * leaf after a restore would admit work there. The lane is the control: it is still leasable, so
      * the refusal is about `pool`, not a restored engine that leases nothing.
@@ -353,7 +353,7 @@ class LocalHeddlePersistenceTest {
                 assertEquals(
                     listOf<Any>(AcquireOutcome.NoLiveLineage(pool), AcquireOutcome.NoLiveLineage(pool)),
                     listOf(before, restored.admit(pool, startedAt = 1L)),
-                    "a marked group with nothing attached is refused before the restore and after it",
+                    "a group with a template with nothing attached is refused before the restore and after it",
                 )
             },
             { assertIs<AcquireOutcome.Acquired>(restored.admit(draft.groupId("lane"), startedAt = 2L), "the control: the lane still leases") },
@@ -487,8 +487,8 @@ class LocalHeddlePersistenceTest {
 
     /**
      * The tree the rich scenario runs: `acme` (a nested group at a fractional weight, holding a group
-     * and a lane), `tenants` (marked for runtime children), and, while [withSpare], a lane `spare`.
-     * While [capped], `acme`, `interactive` and the runtime marker each carry a ceiling.
+     * and a lane), `tenants` (given a template), and, while [withSpare], a lane `spare`.
+     * While [capped], `acme`, `interactive` and the template each carry a ceiling.
      */
     private fun richTree(acmeWeight: Weight, withSpare: Boolean, capped: Boolean = false): Topology = Topology(
         "root",
@@ -560,7 +560,7 @@ class LocalHeddlePersistenceTest {
     private val departed = richBefore.attachedChildId(listOf("tenants"), "t2")
 
     /**
-     * The rich scenario, then a second runtime child `t2` attached under `tenants`, leased, settled
+     * The rich scenario, then a second attached child `t2` attached under `tenants`, leased, settled
      * and detached, so its edge retires with its books closed, then a reload that changes only
      * ceilings ([richCapped]), which moves no edge. With [forgets], the detach's own swap forgets
      * that edge, and prunes it from the allocator's memory. What format 2 adds over format 1: the
@@ -609,7 +609,7 @@ class LocalHeddlePersistenceTest {
             { assertEquals(GOLDEN_FORMAT_2_RICH, text, "format 2 changed; the rich encoding is now:\n$text\n") },
             { assertEquals(setOf(0L, 1L), golden().leases.map { it.id.epoch }.toSet(), "the rig: open leases from two epochs") },
             { assertTrue(golden().ledger.let { l -> l.allEdges().any { l.lifecycle(it) == Lifecycle.CLOSING } }, "the rig: an edge is draining") },
-            { assertTrue(golden().leases.any { it.leaf == tenant }, "the rig: a lease at a runtime child") },
+            { assertTrue(golden().leases.any { it.leaf == tenant }, "the rig: a lease at an attached child") },
             { assertEquals(richCapped, golden().lastApplied, "the rig: the topology last applied is the reload's, with its ceilings") },
             { assertTrue(golden().ledger.hasForgotten() && edge !in golden().ledger.allEdges(), "the rig: t2's edge is forgotten") },
             { assertTrue("\"forgotten\":" in GOLDEN_FORMAT_2_RICH, "the rig: the fold is in the bytes") },
@@ -627,10 +627,10 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
-     * Format 2's rich golden carries a ceiling on a group, a lane and a runtime marker, and an engine
+     * Format 2's rich golden carries a ceiling on a group, a lane and a template, and an engine
      * restored from it enforces each one, told apart by the ceiling `explain` names (#3324). The
      * golden has two leases open beneath `acme` (ceiling 3), one of them at `interactive` (ceiling
-     * 2), and one at the runtime child `t1` (ceiling 2 each).
+     * 2), and one at the attached child `t1` (ceiling 2 each).
      */
     @Test
     fun formatTwosGoldenCarriesACeiling() {
@@ -667,7 +667,7 @@ class LocalHeddlePersistenceTest {
             { assertIs<AcquireOutcome.Acquired>(underAcme) },
             { assertEquals(WaitExplanation.AtCeiling(richBefore.groupId("acme"), 3L), acmeWhy, "the group's ceiling") },
             { assertIs<AcquireOutcome.Acquired>(tenant) },
-            { assertEquals(WaitExplanation.AtCeiling(t1, 2L), tenantWhy, "the runtime marker's ceiling, on t1 alone") },
+            { assertEquals(WaitExplanation.AtCeiling(t1, 2L), tenantWhy, "the template's ceiling, on t1 alone") },
         )
     }
 
@@ -896,7 +896,7 @@ class LocalHeddlePersistenceTest {
      * A persist and restore at a random point of a random sequence is invisible: from then on every
      * outcome and the books after every step match an engine that never persisted. The sequence
      * mixes lease operations with reloads, a reweight (which moves open leases), a removal (which
-     * drains), a new weight on a runtime marker, and attaching and detaching runtime children, so a
+     * drains), a new weight on a template, and attaching and detaching attached children, so a
      * restore lands mid-drain and after a reload as well as on a quiet tree. Leases are addressed by
      * their place in the open list, which is id order in both: the restored engine's own ids come
      * after every restored one, as later sequence numbers do in the reference.
@@ -996,7 +996,7 @@ class LocalHeddlePersistenceTest {
             { assertTrue(drains > 0, "the rig: some reload left an edge draining, $drains") },
             { assertTrue(midDrain > 0, "the rig: some restore landed mid-drain, $midDrain") },
             { assertTrue(afterAReload > 0, "the rig: some restore came after a reload, $afterAReload") },
-            { assertTrue(withARuntimeLease > 0, "the rig: some restore carried a lease at a runtime child, $withARuntimeLease") },
+            { assertTrue(withARuntimeLease > 0, "the rig: some restore carried a lease at an attached child, $withARuntimeLease") },
         )
     }
 

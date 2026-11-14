@@ -17,7 +17,7 @@ package us.tractat.kuilt.heddle
  *
  *  - **Apply the whole list as one unit**, on a working ledger swapped in once, and serve nothing
  *    from a state part-way through it. A prefix is a state to recover from, never one to schedule
- *    against: when a runtime child is detached, or its marker goes, while it still has a prepared
+ *    against: when an attached child is detached, or its template goes, while it still has a prepared
  *    edge, that edge is closed before it is retired, and every prefix between the two holds two
  *    live inbound edges into the child — a [LedgerConflict.DualActiveInbound] that quarantines it.
  *    A refused child does not break the unit: it is left out as above, and the rest of the list
@@ -85,12 +85,12 @@ public sealed interface TopologyStep {
  * closing by an earlier reload is still retired by this one, and a diff after a restart needs
  * nothing but the ledger.
  *
- * **Runtime children** ([Topology.attach]) are owned the same way, and which of them
+ * **Attached children** ([Topology.attach]) are owned the same way, and which of them
  * exist is the ledger's to say, not [new]'s. Under a group [new] still marks, an attached child —
- * one with an active edge, or a prepared one waiting for a drain — keeps its edge at the marker's
- * weight, so a reload that leaves the marker alone leaves the child alone, history and all, and a
- * new marker weight gives it a new edge. Under a group that lost its marker, or is gone, every
- * runtime child is closed and retired, prepared edges included, so it does not come back if the
+ * one with an active edge, or a prepared one waiting for a drain — keeps its edge at the template's
+ * weight, so a reload that leaves the template alone leaves the child alone, history and all, and a
+ * new template weight gives it a new edge. Under a group that lost its template, or is gone, every
+ * attached child is closed and retired, prepared edges included, so it does not come back if the
  * marker does.
  *
  * **Re-entrant.** The result is a function of [ledger], [new] and [generation] alone. Apply any
@@ -108,8 +108,8 @@ public sealed interface TopologyStep {
  * with it every group below, until the retire lands. If its weight comes back, it is adopted, unless
  * the ledger has forgotten it: [LocalHeddle] forgets such an edge in the swap that lands a list
  * ([unwantedPrepared]), and a new edge is prepared instead. A
- * runtime child nothing wants is the exception, as above: its prepared edge is closed, ahead of its
- * live edge, and retired, so the child cannot come back with the marker. Between that close and
+ * attached child nothing wants is the exception, as above: its prepared edge is closed, ahead of its
+ * live edge, and retired, so the child cannot come back with the template. Between that close and
  * that retire the child has two live inbound edges, which is why the list is applied as one unit
  * (see [TopologyStep]).
  *
@@ -122,7 +122,7 @@ public sealed interface TopologyStep {
  * the activations of replacement edges from the top down, and last the [TopologyStep.Reconcile]s
  * of internal groups whose old edges carried work. Within a phase, steps sort by depth, then child
  * id, then edge id, except that a child's steps that cannot be refused come first: the close and
- * retire of a runtime child's abandoned prepared edge, and a retire with nothing outstanding. A
+ * retire of an attached child's abandoned prepared edge, and a retire with nothing outstanding. A
  * replacement edge activates only after its predecessor retires, so a child never has two inbound
  * edges carrying work.
  *
@@ -153,10 +153,10 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
 
     val edgesByChild = ledger.ownedEdges(new.root).groupBy { it.record.child }
     val wants = new.declaredChildren().associateBy { it.child } + edgesByChild.mapNotNull { (child, edges) ->
-        val path = pathOf(child)?.takeIf { it.runtime } ?: return@mapNotNull null
-        val marker = new.templateAt(path.names.drop(1).dropLast(1)) ?: return@mapNotNull null
+        val path = pathOf(child)?.takeIf { it.attached } ?: return@mapNotNull null
+        val template = new.templateAt(path.names.drop(1).dropLast(1)) ?: return@mapNotNull null
         if (!edges.attached()) return@mapNotNull null
-        child to WantedChild(child, parentOf(child), marker.weight, group = false)
+        child to WantedChild(child, parentOf(child), template.weight, group = false)
     }
     val children = (wants.keys + edgesByChild.keys).distinct().sorted()
     val adoptedByChild = wants.values.mapNotNull { want -> edgesByChild[want.child].orEmpty().adoptable(want)?.let { want.child to it } }.toMap()
@@ -168,7 +168,7 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
         val edges = edgesByChild[child].orEmpty()
         val want = wants[child]
         if (want == null) {
-            planned.planRemoval(edges, abandonPrepared = pathOf(child)?.runtime == true)
+            planned.planRemoval(edges, abandonPrepared = pathOf(child)?.attached == true)
         } else {
             planned.planWanted(want, edges, adoptedByChild[child], ledger) { prepareGeneration }
         }
@@ -184,11 +184,11 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
  * - into a declared child, other than the edge it adopts;
  * - into a declared child this topology no longer has, since a removal leaves a prepared edge
  *   alone ([planRemoval]);
- * - into a runtime child still attached under its marker, other than the edge it adopts. Only
+ * - into an attached child still attached under its template, other than the edge it adopts. Only
  *   when there is one: otherwise this prepared edge may be what says the child is attached, and
  *   forgetting it would detach the child.
  *
- * A runtime child whose marker is gone is never in it, since the diff closes and retires its
+ * An attached child whose marker is gone is never in it, since the diff closes and retires its
  * prepared edges. Forgetting one of these changes this diff not at all, but a later one: a diff
  * that wants the edge back, at the same weight, prepares a new edge above the generation floor
  * where it would have adopted the old one. Reads [candidates]' children's own edges from the
@@ -203,19 +203,19 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
         val edges = ledger.ownedEdgesInto(child, root)
         val path = pathOf(child)
         val want = declared[child] ?: run {
-            if (path?.runtime != true) return@filter true
+            if (path?.attached != true) return@filter true
             // No attached() check: the candidate is itself a PREPARED edge in [edges].
-            val marker = templateAt(path.names.drop(1).dropLast(1)) ?: return@filter false
-            WantedChild(child, parentOf(child), marker.weight, group = false)
+            val template = templateAt(path.names.drop(1).dropLast(1)) ?: return@filter false
+            WantedChild(child, parentOf(child), template.weight, group = false)
         }
         val adopted = edges.adoptable(want)
-        if (path?.runtime == true && adopted == null) return@filter false
+        if (path?.attached == true && adopted == null) return@filter false
         adopted?.id != id
     }
 }
 
 /**
- * The steps that attach the runtime child [name] to the group at [group], read from
+ * The steps that attach the attached child [name] to the group at [group], read from
  * [root][Topology.root] down, at the weight this topology's marker on that group gives: `[Prepare,
  * Activate]` for a new child, `[Activate]` when only the prepare landed, and `[]` when it is
  * already attached. [name] is opaque and lives in its own namespace, so it never collides with a
@@ -225,7 +225,7 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
  * and the same contracts on [TopologyStep] apply. Two more shapes follow from them. A child detached
  * but still draining is re-attached on a new edge that waits for the old one to retire: `[Prepare,
  * Retire, Activate]`, and the prepared edge alone records that the child is wanted until the
- * activate lands. A child whose edge is at an older marker weight is moved to the current one:
+ * activate lands. A child whose edge is at an older template weight is moved to the current one:
  * `[Prepare, Close, Retire, Activate]`.
  *
  * The edge is numbered as [Topology.Companion.diff] numbers its edges: at [generation], raised past
@@ -241,17 +241,17 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
  */
 public fun Topology.attach(group: List<String>, name: String, ledger: EntitlementLedger, generation: Long): List<TopologyStep> {
     require(generation >= 0L) { "a generation is >= 0, was $generation" }
-    val runtime = attachedChild(group, name)
+    val attached = attachedChild(group, name)
     requireSameRoot(ledger)
-    val want = WantedChild(runtime.id, runtime.parent, runtime.marker.weight, group = false)
-    val edges = ledger.ownedEdgesInto(runtime.id, root)
+    val want = WantedChild(attached.id, attached.parent, attached.template.weight, group = false)
+    val edges = ledger.ownedEdgesInto(attached.id, root)
     val planned = ArrayList<Planned>()
     planned.planWanted(want, edges, edges.adoptable(want), ledger) { effectiveGeneration(generation, ledger) }
     return planned.sortedWith(STEP_ORDER).map { it.step }
 }
 
 /**
- * The steps that detach the runtime child [name] from the group at [group]: `[Close, Retire]` for
+ * The steps that detach the attached child [name] from the group at [group]: `[Close, Retire]` for
  * an attached child, `[Retire]` when it is already closing, and `[]` when there is nothing left to
  * do. A retire is refused while the child's work is outstanding; detach again, or diff, once it has
  * drained.
@@ -312,7 +312,7 @@ private fun MutableList<Planned>.planWanted(
 
 /**
  * Close and retire every live edge of a child nothing wants. With [abandonPrepared] — a runtime
- * child — its prepared edges are closed and retired too, since for a runtime child a prepared edge
+ * child — its prepared edges are closed and retired too, since for an attached child a prepared edge
  * is the record that it is wanted.
  */
 private fun MutableList<Planned>.planRemoval(edges: List<OwnedEdge>, abandonPrepared: Boolean) {
@@ -332,7 +332,7 @@ private fun MutableList<Planned>.planRemoval(edges: List<OwnedEdge>, abandonPrep
 }
 
 /**
- * Whether a runtime child is attached: it has an active edge, or a prepared one — an attach or a
+ * Whether an attached child is attached: it has an active edge, or a prepared one — an attach or a
  * reweight waiting for its predecessor to drain. A detach closes both, so a detached child has
  * neither, and a diff does not bring it back.
  */
@@ -416,13 +416,13 @@ private fun List<OwnedEdge>.adoptable(want: WantedChild): OwnedEdge? =
 // ── the desired tree ────────────────────────────────────────────────────────────────────────────
 
 /**
- * A child the diff wants, with its parent and weight: a declared node, or a runtime child still
- * attached under a marked group. [group] is set for a [Topology.Group].
+ * A child the diff wants, with its parent and weight: a declared node, or an attached child still
+ * attached under a group with a template. [group] is set for a [Topology.Group].
  */
 private class WantedChild(val child: GroupId, val parent: GroupId, val weight: Weight, val group: Boolean)
 
 /**
- * D3 for one runtime child, as [Topology.Companion.diff] checks it: the ledger is not minted at
+ * D3 for one attached child, as [Topology.Companion.diff] checks it: the ledger is not minted at
  * another root, and if it holds any edge in the topology grammar, some edge hangs off this root.
  * Read from the mints and the index, not from every edge. The mint check is linear in the mint
  * records, which grow with service until L2 sizes the mint chunk.
@@ -456,7 +456,7 @@ private enum class Phase { PREPARE, FRESH_ACTIVATE, CLOSE, RETIRE, REPLACEMENT_A
 
 /**
  * A step and where it sorts. [first] puts it ahead of the same child's other steps in its phase: a
- * close or retire of a prepared edge a runtime child is abandoning, and a retire that cannot be
+ * close or retire of a prepared edge an attached child is abandoning, and a retire that cannot be
  * refused because nothing is outstanding on it. Neither changes as a prefix of the list applies,
  * so re-entrance holds.
  */
@@ -488,7 +488,7 @@ private fun MutableList<Planned>.retireIfLive(edge: OwnedEdge) {
 /**
  * Phase first; retires bottom-up and everything else top-down; then child id, then [Planned.first],
  * then edge id. A declared child has at most one close and one retire, so [Planned.first] orders
- * only a runtime child's abandoned prepared edge against its live one.
+ * only an attached child's abandoned prepared edge against its live one.
  */
 private val STEP_ORDER: Comparator<Planned> =
     compareBy<Planned> { it.phase }

@@ -12,8 +12,8 @@ import kotlin.test.assertTrue
 
 /**
  * One leasable predicate (#3173, plan Task L3, Amendment 9): a lease ends only at a leaf that the
- * topology declares a lane or a runtime child of a marked group. The ledger alone reads two other
- * groups here as leaves, and neither may be leased: `pool`, marked for runtime children with none
+ * topology declares a lane or an attached child of a group with a template. The ledger alone reads two other
+ * groups here as leaves, and neither may be leased: `pool`, given a template with none
  * attached, and `acme`, whose one declared lane's edge has closed.
  */
 class LocalHeddleLeasableTest {
@@ -55,11 +55,11 @@ class LocalHeddleLeasableTest {
         val runtime = h.admit(c, startedAt = 0L)
         assertAll(
             { assertTrue(before.isLeaf(pool) && before.isLeaf(acme), "the rig: the ledger reads both groups as leaves") },
-            { assertEquals(AcquireOutcome.NoLiveLineage(pool), refusedPool, "a marked group with nothing attached") },
+            { assertEquals(AcquireOutcome.NoLiveLineage(pool), refusedPool, "a group with a template with nothing attached") },
             { assertEquals(AcquireOutcome.NoLiveLineage(acme), refusedAcme, "a group whose declared lane closed") },
             { assertSame(before, unchanged, "neither refusal changed the ledger") },
             { assertEquals(s, (lane as? AcquireOutcome.Acquired)?.lease?.leaf, "a declared lane: $lane") },
-            { assertEquals(c, (runtime as? AcquireOutcome.Acquired)?.lease?.leaf, "an attached runtime child: $runtime") },
+            { assertEquals(c, (runtime as? AcquireOutcome.Acquired)?.lease?.leaf, "an attached child: $runtime") },
         )
     }
 

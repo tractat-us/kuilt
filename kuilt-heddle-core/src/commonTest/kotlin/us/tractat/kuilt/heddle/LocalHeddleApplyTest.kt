@@ -357,7 +357,7 @@ class LocalHeddleApplyTest {
     }
 
     /**
-     * A runtime child detached while a lease is open drains, and attaching it again lists
+     * An attached child detached while a lease is open drains, and attaching it again lists
      * `[Prepare, Retire, Activate]`: a new edge for the same group, which the re-home detector
      * reads as a replacement. The draining lease moves onto the new edge, and the child is attached
      * at once rather than when the drain ends.
