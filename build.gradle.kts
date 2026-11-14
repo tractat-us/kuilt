@@ -8485,7 +8485,6 @@ val forbidBareLaunchIn by tasks.registering {
         "kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/TieredSeam.kt" to 4,
         "kuilt-core/src/commonMain/kotlin/us/tractat/kuilt/core/composite/CompositeSeam.kt" to 1,
         "kuilt-deal/src/commonMain/kotlin/us/tractat/kuilt/deal/DealSession.kt" to 1,
-        "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/BoundedCounterTransferCoordinator.kt" to 2,
         "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/FugueGcCoordinator.kt" to 1,
         "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/MovableTreeGcCoordinator.kt" to 1,
         "kuilt-quilter/src/commonMain/kotlin/us/tractat/kuilt/quilter/Quilter.kt" to 2,

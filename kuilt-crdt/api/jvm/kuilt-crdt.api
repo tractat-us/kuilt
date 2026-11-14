@@ -51,12 +51,14 @@ public final class us/tractat/kuilt/crdt/BoundedCounter : us/tractat/kuilt/crdt/
 	public fun causalDots ()Ljava/util/Set;
 	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun fairShareOrNull (I)Ljava/lang/Long;
 	public final fun getTotalBudget ()J
 	public final fun getTotalSpent ()J
 	public fun hashCode ()I
 	public fun piece (Lus/tractat/kuilt/crdt/BoundedCounter;)Lus/tractat/kuilt/crdt/BoundedCounter;
 	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
 	public final fun quota-81S8jZI (Ljava/lang/String;)J
+	public final fun quotaOrNull-81S8jZI (Ljava/lang/String;)Ljava/lang/Long;
 	public fun toString ()Ljava/lang/String;
 	public final fun transfer-cDklQT4 (Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
 	public final fun trySpend-nudtHMw (Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;

@@ -215,6 +215,40 @@ class BoundedCounterTest {
         )
     }
 
+    /** [BoundedCounter.quotaOrNull] answers what [BoundedCounter.quota] answers, and `null` where it throws. */
+    @Test
+    fun quotaOrNullIsNullExactlyWhereQuotaThrows() {
+        val c = ReplicaId("C")
+        val bc = receivedPastLongMax(c)
+        val gaveOneBack = apply(bc, assertNotNull(bc.transfer(c, a, 1L)))
+        assertAll(
+            { assertEquals(0L, bc.quotaOrNull(a)) },
+            { assertNull(bc.quotaOrNull(c), "C holds 2^63") },
+            { assertEquals(Long.MAX_VALUE, gaveOneBack.quotaOrNull(c), "one less than 2^63 fits") },
+            { assertEquals(gaveOneBack.quota(c), gaveOneBack.quotaOrNull(c)) },
+        )
+    }
+
+    /**
+     * The fair share divides the bound, every seed, exactly: answered when the bound and the remaining
+     * budget are both past [Long.MAX_VALUE], `null` only when the share itself is.
+     */
+    @Test
+    fun fairShareOrNullDividesTheWholeBoundExactly() {
+        val c = ReplicaId("C")
+        val received = receivedPastLongMax(c)
+        val spent = apply(received, assertNotNull(received.trySpend(c, 3L)))
+        val twoFull = BoundedCounter.init(mapOf(a to Long.MAX_VALUE, b to Long.MAX_VALUE))
+        assertAll(
+            { assertFailsWith<ArithmeticException>("the rig: the remaining budget is 2^63") { received.totalBudget } },
+            { assertEquals(3_074_457_345_618_258_602L, received.fairShareOrNull(3), "floor(2^63 / 3)") },
+            { assertEquals(3_074_457_345_618_258_602L, spent.fairShareOrNull(3), "spending leaves the bound alone") },
+            { assertEquals(Long.MAX_VALUE, twoFull.fairShareOrNull(2), "a bound of 2·MAX over two") },
+            { assertNull(twoFull.fairShareOrNull(1), "2·MAX for one party does not fit") },
+            { assertFailsWith<IllegalArgumentException> { twoFull.fairShareOrNull(0) } },
+        )
+    }
+
     /**
      * C, holding one past [Long.MAX_VALUE], gives it all away to D and E. Its transfers out add up
      * past [Long.MAX_VALUE] too, and its quota is exactly 0 again.

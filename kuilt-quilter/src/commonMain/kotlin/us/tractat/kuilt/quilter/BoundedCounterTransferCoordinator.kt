@@ -9,20 +9,19 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.PumpVerdict
 import us.tractat.kuilt.core.ScopedCloseable
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.pumpIn
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.BoundedCounter
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
-import us.tractat.kuilt.math.Int128
-import us.tractat.kuilt.math.Rounding
+import us.tractat.kuilt.math.minusOrNull
 import kotlin.math.min
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -169,8 +168,15 @@ public class BoundedCounterTransferCoordinator(
 
     private fun observeQuota(): Job {
         var requestInFlight = false
-        return state.onEach { bc ->
-            val quota = bc.quota(self)
+        return state.pumpIn(
+            scope = scope,
+            onFailure = { phase, failure ->
+                logger.warn(failure) { "BoundedCounter quota observer for $self failed ($phase)" }
+                PumpVerdict.CONTINUE
+            },
+            name = "bounded-counter-quota[${self.value}]",
+        ) { bc ->
+            val quota = bc.quotaAtMost(self)
             val shouldLaunch = lock.withLock {
                 if (quota <= config.lowWaterThreshold && !requestInFlight) {
                     requestInFlight = true
@@ -201,7 +207,7 @@ public class BoundedCounterTransferCoordinator(
                     }
                 }
             }
-        }.launchIn(scope)
+        }
     }
 
     private suspend fun sendRequestWithRetries() {
@@ -220,7 +226,7 @@ public class BoundedCounterTransferCoordinator(
                     .onFailure { /* send failed — retry or degrade on next iteration */ }
             }
             // check if quota improved (a donor may have responded already)
-            if (state.value.quota(self) > config.lowWaterThreshold) return
+            if (state.value.quotaAtMost(self) > config.lowWaterThreshold) return
             if (attempt < config.maxRetries - 1) {
                 delay(delay)
                 delay = delay * 2
@@ -235,19 +241,28 @@ public class BoundedCounterTransferCoordinator(
      *
      * Computed locally from the current [BoundedCounter] state — no network round-trip needed.
      * Filtering to the [reachable] set makes this partition-safe.
+     *
+     * Ranks by quota rather than by `quota - surplusFloor`: the order and the cut are the same, and
+     * nothing is subtracted, so a saturated quota cannot wrap against a negative floor.
      */
     private fun topSurplusPeers(bc: BoundedCounter, reachable: Set<PeerId>): List<PeerId> =
         reachable
-            .map { peer -> peer to (bc.quota(ReplicaId(peer.value)) - config.surplusFloor) }
-            .filter { (_, surplus) -> surplus > 0L }
-            .sortedByDescending { (_, surplus) -> surplus }
+            .map { peer -> peer to bc.quotaAtMost(ReplicaId(peer.value)) }
+            .filter { (_, quota) -> quota > config.surplusFloor }
+            .sortedByDescending { (_, quota) -> quota }
             .take(BORROW_FAN_OUT)
             .map { (peer, _) -> peer }
 
     private fun observeIncoming(): Job =
-        coordSeam.incoming
-            .onEach { swatch -> swatch.sender?.let { dispatch(it, swatch) } }
-            .launchIn(scope)
+        coordSeam.incoming.pumpIn(
+            scope = scope,
+            onFailure = { phase, failure ->
+                // An item failure can come from the consumer's own applyTransfer, so the trace stays.
+                logger.warn(failure) { "BoundedCounter transfer-request collector for $self failed ($phase)" }
+                PumpVerdict.CONTINUE
+            },
+            name = "bounded-counter-requests[${self.value}]",
+        ) { swatch -> swatch.sender?.let { dispatch(it, swatch) } }
 
     private fun dispatch(sender: PeerId, swatch: Swatch) {
         val msg = runCatchingCancellable { swatch.decode(Cbor, serializer) }.getOrNull() ?: return
@@ -262,8 +277,11 @@ public class BoundedCounterTransferCoordinator(
     ) {
         if (msg.requester == self) return // safety: ignore requests from self
         val bc = state.value
-        val surplus = bc.quota(self) - config.surplusFloor
-        if (surplus <= 0L) return
+        val quota = bc.quotaAtMost(self)
+        if (quota <= config.surplusFloor) return
+        // Above the floor, the difference can pass Long.MAX_VALUE only by being large; [transfer]
+        // re-checks the grant against the exact quota either way.
+        val surplus = quota.minusOrNull(config.surplusFloor) ?: Long.MAX_VALUE
         val grant = min(surplus, msg.amount)
         val patch = bc.transfer(from = self, to = msg.requester, amount = grant) ?: return
         applyTransfer(patch)
@@ -288,14 +306,15 @@ public class BoundedCounterTransferCoordinator(
                 delay(cfg.cadence)
                 // A failure in one tick must not kill the periodic loop; runCatchingCancellable
                 // still rethrows CancellationException so the loop cancels cleanly on close().
-                // Rebalance retries next tick. A failure that persists — a budget too large to read
-                // in a `Long` throws on every tick (#3343) — is reported once at WARN, then at DEBUG
-                // until a tick succeeds again, so it is visible without a line per tick.
+                // Rebalance retries next tick. A failure that persists — a fair share too large to
+                // read in a `Long` throws on every tick (#3343) — is reported once at WARN, with its
+                // trace since it can come from the consumer's own applyTransfer, then at DEBUG until a
+                // tick succeeds again, so it is visible without a line per tick.
                 runCatchingCancellable { equalizeTick(cfg) }
                     .onSuccess { failing = false }
                     .onFailure { failure ->
-                        val line = { "BoundedCounter equalizer tick for $self failed; retrying next tick: $failure" }
-                        if (failing) logger.debug(line) else logger.warn(line)
+                        val line = "BoundedCounter equalizer tick for $self failed; retrying next tick"
+                        if (failing) logger.debug { "$line: $failure" } else logger.warn(failure) { line }
                         failing = true
                     }
             }
@@ -307,14 +326,15 @@ public class BoundedCounterTransferCoordinator(
         if (reachablePeers.isEmpty()) return
 
         val liveN = reachablePeers.size + 1 // peers + self
-        // The bound, remaining budget plus spent, is the initial total, formed exactly: each half
-        // can fit in a Long while their sum does not (#3343). Two non-negative Longs over at least
-        // two peers always give a fair share that fits.
-        val bound = Int128.of(bc.totalBudget) + bc.totalSpent
-        val fairShare = bound.divideOrNull(liveN.toLong(), Rounding.FLOOR)
-            ?: throw ArithmeticException("BoundedCounter fair share $bound / $liveN does not fit in a Long")
+        // The bound, remaining budget plus spent, is formed exactly inside BoundedCounter: it, and
+        // the remaining budget alone, can be past Long.MAX_VALUE while the share fits (#3343). Only a
+        // share that does not fit throws, and that is logged by the loop.
+        val fairShare = bc.fairShareOrNull(liveN)
+            ?: throw ArithmeticException("BoundedCounter fair share over $liveN replicas does not fit in a Long")
 
-        val myQuota = bc.quota(self)
+        // Both quotas and the share are at least 0, so neither difference can wrap. A saturated
+        // quota understates the excess, so an oversized holder drains over several ticks.
+        val myQuota = bc.quotaAtMost(self)
         val excess = myQuota - fairShare
         if (excess <= cfg.minImbalanceThreshold) return
 
@@ -322,7 +342,7 @@ public class BoundedCounterTransferCoordinator(
         // one. Randomised target selection (rather than always the single global minimum)
         // stops many over-share peers from thundering onto the same recipient in one round.
         val recipient = powerOfTwoLowest(bc, reachablePeers, cfg) ?: return
-        val recipientDeficit = fairShare - bc.quota(ReplicaId(recipient.value))
+        val recipientDeficit = fairShare - bc.quotaAtMost(ReplicaId(recipient.value))
         if (recipientDeficit <= 0L) return // chosen peer isn't below its share — skip this round
 
         // Cap the transfer so neither side crosses the fair share: a single step can't push
@@ -349,7 +369,18 @@ public class BoundedCounterTransferCoordinator(
         reachable
             .shuffled(cfg.random)
             .take(2)
-            .minByOrNull { peer -> bc.quota(ReplicaId(peer.value)) }
+            .minByOrNull { peer -> bc.quotaAtMost(ReplicaId(peer.value)) }
+
+    /**
+     * [replica]'s quota, read as [Long.MAX_VALUE] when it is larger (#3343). [BoundedCounter.quota]
+     * throws there, and every read in this class runs inside a pump or a launched borrow, where a
+     * throw ended it for good — and on Kotlin/Native aborted the process (#1788).
+     *
+     * Reading high is safe at every use: each is a threshold comparison, a ranking, or the cap on a
+     * grant that [BoundedCounter.transfer] re-checks against the exact quota. A quota is never below
+     * 0, so `null` from [BoundedCounter.quotaOrNull] always means too large, never too small.
+     */
+    private fun BoundedCounter.quotaAtMost(replica: ReplicaId): Long = quotaOrNull(replica) ?: Long.MAX_VALUE
 
     private fun encode(msg: BoundedCounterCoordMessage): ByteArray =
         Cbor.encodeToByteArray(serializer, msg)

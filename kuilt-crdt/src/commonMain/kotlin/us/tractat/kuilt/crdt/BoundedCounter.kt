@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.Rounding
 
 /**
  * A **bounded / escrow counter**: a shared budget pre-divided into per-replica
@@ -79,6 +80,31 @@ public class BoundedCounter private constructor(
         val exact = exactQuota(replica)
         return exact.toLongOrNull()
             ?: throw ArithmeticException("BoundedCounter quota for $replica, $exact, does not fit in a Long")
+    }
+
+    /**
+     * [quota], or `null` when it does not fit in a `Long`.
+     *
+     * For a caller that has to carry on whatever one replica holds, such as a coordinator ranking
+     * peers inside a long-lived pump: a quota past [Long.MAX_VALUE] is a `null` to handle there,
+     * not an exception that ends the pump. [trySpend] and [transfer] keep every replica's quota at
+     * or above 0, so a `null` means more than [Long.MAX_VALUE].
+     */
+    public fun quotaOrNull(replica: ReplicaId): Long? = exactQuota(replica).toLongOrNull()
+
+    /**
+     * The bound, [totalBudget] plus [totalSpent], split evenly over [parties] and rounded down; or
+     * `null` when that share does not fit in a `Long`.
+     *
+     * The bound is everything [init] seeded, and no transfer or spend changes it. It is formed
+     * exactly, so the share is answered even when the bound, or [totalBudget] alone, is past
+     * [Long.MAX_VALUE], as it is whenever one replica's quota is.
+     *
+     * @throws IllegalArgumentException if [parties] is not positive.
+     */
+    public fun fairShareOrNull(parties: Int): Long? {
+        require(parties >= 1) { "BoundedCounter fair share needs at least one party, was $parties" }
+        return initial.exactValue.divideOrNull(parties.toLong(), Rounding.FLOOR)
     }
 
     /** [quota], exactly: a handful of `Long` slots cannot leave 128 bits. */

@@ -11,7 +11,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":kuilt-core"))
             api(project(":kuilt-crdt"))
-            // The equalizer forms a BoundedCounter fair share exactly (#3343). Not `api`: no
+            // The transfer coordinator checks a donor's surplus for overflow (#3343). Not `api`: no
             // `:kuilt-math` type is on this module's public surface.
             implementation(project(":kuilt-math"))
             implementation(libs.kotlinx.atomicfu)

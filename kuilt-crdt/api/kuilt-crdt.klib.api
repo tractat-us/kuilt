@@ -1177,9 +1177,11 @@ final class us.tractat.kuilt.crdt/BoundedCounter : us.tractat.kuilt.crdt/Quilted
         final fun <get-totalSpent>(): kotlin/Long // us.tractat.kuilt.crdt/BoundedCounter.totalSpent.<get-totalSpent>|<get-totalSpent>(){}[0]
 
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.crdt/BoundedCounter.equals|equals(kotlin.Any?){}[0]
+    final fun fairShareOrNull(kotlin/Int): kotlin/Long? // us.tractat.kuilt.crdt/BoundedCounter.fairShareOrNull|fairShareOrNull(kotlin.Int){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.crdt/BoundedCounter.hashCode|hashCode(){}[0]
     final fun piece(us.tractat.kuilt.crdt/BoundedCounter): us.tractat.kuilt.crdt/BoundedCounter // us.tractat.kuilt.crdt/BoundedCounter.piece|piece(us.tractat.kuilt.crdt.BoundedCounter){}[0]
     final fun quota(us.tractat.kuilt.crdt/ReplicaId): kotlin/Long // us.tractat.kuilt.crdt/BoundedCounter.quota|quota(us.tractat.kuilt.crdt.ReplicaId){}[0]
+    final fun quotaOrNull(us.tractat.kuilt.crdt/ReplicaId): kotlin/Long? // us.tractat.kuilt.crdt/BoundedCounter.quotaOrNull|quotaOrNull(us.tractat.kuilt.crdt.ReplicaId){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.crdt/BoundedCounter.toString|toString(){}[0]
     final fun transfer(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.crdt/ReplicaId, kotlin/Long): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/BoundedCounter>? // us.tractat.kuilt.crdt/BoundedCounter.transfer|transfer(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
     final fun trySpend(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long = ...): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/BoundedCounter>? // us.tractat.kuilt.crdt/BoundedCounter.trySpend|trySpend(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
