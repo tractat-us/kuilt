@@ -178,7 +178,10 @@ whole ledger inherits the three merge laws for free.
   They carry no stability promise and may change in any release.
 
 Arithmetic that would exceed `Long` throws rather than wrapping: a fair-share
-tally that silently overflowed would be worse than one that stopped.
+tally that silently overflowed would be worse than one that stopped. The one
+exception is a child's position, which is held at a ceiling instead. A pick that
+would have to order a position there is refused with a typed `PositionCeiling`
+outcome, and a charge still lands.
 
 ## Deciding who runs next
 
