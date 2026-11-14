@@ -13,8 +13,9 @@ import us.tractat.kuilt.heddle.LocalHeddle.Companion.MAX_RESERVATION
  * returns answers exactly as that engine did when it took it.
  *
  * A view is a value. It reads the snapshot's books, wake memory, capacity and last applied topology,
- * and each question plays its picks forward on a throwaway engine built from them, so asking twice
- * gives the same answer twice. It needs the policy too, which a snapshot does not keep: pass the one
+ * with a count of the leases open beneath each node that has a ceiling
+ * ([Topology.Node.maxConcurrent]). Each question plays its picks forward on a throwaway engine built
+ * from them, so asking twice gives the same answer twice. It needs the policy too, which a snapshot does not keep: pass the one
  * the engine ran with.
  *
  * A view from a snapshot shares nothing with any engine, and each question only reads it, so any
