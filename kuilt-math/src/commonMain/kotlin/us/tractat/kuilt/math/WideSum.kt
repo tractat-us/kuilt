@@ -45,6 +45,10 @@ public class WideSum {
         val lo = low + vLow
         val carry = if (unsignedLess(lo, low)) 1L else 0L
         val hi = high + vHigh + carry
+        // As in Int128.plus: overflow iff both operands share a sign the result does not.
+        if ((high xor hi) and (vHigh xor hi) < 0L) {
+            throw ArithmeticException("Int128 overflow: $this + ${Int128.fromTwosComplement(vHigh, vLow)}")
+        }
         high = hi
         low = lo
     }
@@ -53,6 +57,10 @@ public class WideSum {
         val lo = low - vLow
         val borrow = if (unsignedLess(low, vLow)) 1L else 0L
         val hi = high - vHigh - borrow
+        // As in Int128.minus: overflow iff the operands differ in sign and the result left this one's.
+        if ((high xor vHigh) and (high xor hi) < 0L) {
+            throw ArithmeticException("Int128 overflow: $this - ${Int128.fromTwosComplement(vHigh, vLow)}")
+        }
         high = hi
         low = lo
     }
