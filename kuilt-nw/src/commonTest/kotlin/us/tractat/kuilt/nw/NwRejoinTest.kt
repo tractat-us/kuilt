@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.nw
 
@@ -20,7 +20,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -112,7 +112,7 @@ class NwRejoinTest {
                 NwLoom(FakeNwApi(radio, "host", "host"), SERVICE_TYPE, random = Random(0)),
                 backgroundScope,
                 clock,
-                InMemoryDeviceKeyStore(),
+                fakeKeyStore(0),
                 heartbeat,
             )
             val joinerFactory =
@@ -120,7 +120,7 @@ class NwRejoinTest {
                     NwLoom(joinerApi, SERVICE_TYPE, random = Random(1)),
                     backgroundScope,
                     clock,
-                    InMemoryDeviceKeyStore(),
+                    fakeKeyStore(1),
                     heartbeat,
                 )
             val (host, joiner) = coroutineScope {

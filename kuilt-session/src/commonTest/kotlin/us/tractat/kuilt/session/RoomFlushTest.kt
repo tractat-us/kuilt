@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -18,7 +18,7 @@ import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -315,12 +315,12 @@ class RoomFlushTest {
         val hostEnd = HoldableConnection(hostConnection)
         val (hostLoom, joinerLoom) = identifiedLoomPair(hostEnd to HoldableConnection(joinerConnection))
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val host = SeamRoomFactory(hostLoom, backgroundScope, clock, InMemoryDeviceKeyStore(), relayHeartbeat).host(Pattern("table"))
+        val host = SeamRoomFactory(hostLoom, backgroundScope, clock, fakeKeyStore(0), relayHeartbeat).host(Pattern("table"))
         val joiner = SeamRoomFactory(
             joinerLoom,
             backgroundScope,
             clock,
-            InMemoryDeviceKeyStore(),
+            fakeKeyStore(1),
             relayHeartbeat,
         ).join(InMemoryTag("table"))
         host.roster.first { it.size == 1 }

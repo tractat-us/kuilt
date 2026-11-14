@@ -1,6 +1,7 @@
 package us.tractat.kuilt.session
 
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.DidKey
 import kotlin.time.Instant
 
 /**
@@ -14,10 +15,18 @@ import kotlin.time.Instant
  * host's *verified* identity for the connection (when the fabric authenticates it —
  * see [PrincipalAttested]). It is `null` for unauthenticated connections and on the
  * joiner side (a joiner does not verify the host).
+ *
+ * [key] is the member's device key: one per device, from its
+ * [DeviceKeyStore][us.tractat.kuilt.identity.DeviceKeyStore], the same across every room and peer
+ * id that device ever has, so an app can recognise a device again by it. On the host it is the key
+ * the member named in its `Hello`; on a joiner it is the key the host's `Welcome` carried. **In this
+ * protocol version every key is a claim**: nothing yet checks that a member holds the private half
+ * of the key it names, so do not treat it as proof of who sent a frame.
  */
 public data class Member(
     val id: PeerId,
     val identity: MemberIdentity,
+    val key: DidKey,
     val liveness: Liveness,
     val principal: Principal? = null,
 )

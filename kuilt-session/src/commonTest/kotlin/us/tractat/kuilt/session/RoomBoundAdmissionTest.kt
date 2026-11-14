@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineScope
@@ -7,7 +9,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.test.assertAll
@@ -27,8 +29,12 @@ import kotlin.test.assertTrue
  * separately by `MultiRoomIsolationTest` over `InMemoryRoomFabric` — not duplicated here.)
  */
 class RoomBoundAdmissionTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
+
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
-        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = InMemoryDeviceKeyStore())
+        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = fakeKeyStore(nextDevice++))
 
     /**
      * Match → admitted. A joiner whose target room equals the host's [Pattern.roomKey]
@@ -73,14 +79,9 @@ class RoomBoundAdmissionTest {
             val joinerSeam = loom.join(InMemoryTag("Bob", roomKey = "room-B"))
             joinerSeam.broadcast(
                 AdmitMessage.encode(
-                    AdmitMessage.Hello(
-                        displayName = "Bob",
-                        sessionId = "session-bob",
-                        targetRoom = "room-B",
-                        // Declare the current version so this Hello clears the protocol gate, which
-                        // runs first (#1994): the subject here is the room gate, not versioning.
-                        protocolVersion = ProtocolVersion.CURRENT,
-                    ),
+                    // A complete current Hello, so it clears the protocol gate and the v3 key check,
+                    // which run first (#1994, #3210): the subject here is the room gate.
+                    currentHello(displayName = "Bob", sessionId = "session-bob", targetRoom = "room-B"),
                 ),
             )
 

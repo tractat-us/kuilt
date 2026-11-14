@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session.partition
 
@@ -14,7 +14,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.Liveness
@@ -356,7 +356,7 @@ private suspend fun TestScope.blipHarness(
         loom = base,
         scope = backgroundScope,
         clock = clock,
-        deviceKeyStore = InMemoryDeviceKeyStore(),
+        deviceKeyStore = fakeKeyStore(0),
         heartbeatConfig = config,
     )
     val hostRoom = factory.adopt(hostLink, SessionRole.Host, memberName = "Host")

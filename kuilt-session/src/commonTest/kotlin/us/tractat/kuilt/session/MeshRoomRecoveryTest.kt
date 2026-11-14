@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -11,7 +11,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.DefaultJoinerReconnectController
 import us.tractat.kuilt.test.FaultySeam
@@ -74,7 +74,7 @@ class MeshRoomRecoveryTest {
     private suspend fun kotlinx.coroutines.test.TestScope.mesh(): Mesh {
         val loom = InMemoryLoom()
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), config)
+        val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), config)
 
         val host = factory.host(Pattern("Host"))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
@@ -275,7 +275,7 @@ class MeshRoomRecoveryTest {
                 loom,
                 backgroundScope,
                 clock,
-                InMemoryDeviceKeyStore(),
+                fakeKeyStore(1),
                 longDetectorWindow,
                 reconnectControllerFactory = controllerFactory,
             )

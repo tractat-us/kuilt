@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineScope
@@ -8,7 +10,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.FakeLoom
 import us.tractat.kuilt.test.FakeSeam
@@ -42,8 +44,12 @@ import kotlin.time.Instant
  * monotonic counter load-bearing rather than incidental.
  */
 class RoomIdentityTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
+
     private fun factory(loom: Loom, scope: CoroutineScope) =
-        SeamRoomFactory(loom, scope, clock = { FROZEN }, deviceKeyStore = InMemoryDeviceKeyStore())
+        SeamRoomFactory(loom, scope, clock = { FROZEN }, deviceKeyStore = fakeKeyStore(nextDevice++))
 
     // ── The bug: one device, two rooms, one id ────────────────────────────────
 
@@ -184,7 +190,7 @@ class RoomIdentityTest {
     fun `rooms minted at different instants carry different timestamps`() =
         runTest {
             var now = FROZEN
-            val f = SeamRoomFactory(FakeLoom(), backgroundScope, clock = { now }, deviceKeyStore = InMemoryDeviceKeyStore())
+            val f = SeamRoomFactory(FakeLoom(), backgroundScope, clock = { now }, deviceKeyStore = fakeKeyStore(nextDevice++))
 
             val first = assertNotNull(f.host(Pattern(DEVICE)).roomId.value).value
             now = FROZEN + 5.seconds

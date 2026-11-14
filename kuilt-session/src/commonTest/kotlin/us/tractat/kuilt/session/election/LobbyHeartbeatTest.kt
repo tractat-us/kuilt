@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session.election
 
@@ -14,7 +14,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.test.FakeSeam
@@ -37,13 +37,17 @@ import kotlin.time.Instant
  * waiting in `awaitRoom` was torn as unreachable about 6 s later.
  */
 class LobbyHeartbeatTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
+
     private val ping = HeartbeatPartitionDetector.PING_PREFIX.encodeToByteArray()
 
     private fun TestScope.lobbyOver(seam: Seam): SeamElectionLobby {
         val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
         return SeamElectionLobby(
             seam = seam,
-            factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock = clock, deviceKeyStore = InMemoryDeviceKeyStore()),
+            factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock = clock, deviceKeyStore = fakeKeyStore(nextDevice++)),
             scope = backgroundScope,
             clock = clock,
             roomKey = null,

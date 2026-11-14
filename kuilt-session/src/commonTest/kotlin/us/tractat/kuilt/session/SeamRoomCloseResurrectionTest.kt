@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalCoroutinesApi::class)
+@file:OptIn(ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -18,7 +18,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
@@ -49,18 +49,11 @@ class SeamRoomCloseResurrectionTest {
 
     private val hostId = PeerId("host")
 
-    private fun helloFrame(joiner: PeerId): Swatch =
+    private suspend fun helloFrame(joiner: PeerId): Swatch =
         Swatch(
-            payload = AdmitMessage.encode(
-                AdmitMessage.Hello(
-                    displayName = joiner.value,
-                    sessionId = joiner.value,
-                    targetRoom = null,
-                    // Declare the current version so these Hellos clear the protocol gate (#1994);
-                    // the subject here is the post-close admit race, not versioning.
-                    protocolVersion = ProtocolVersion.CURRENT,
-                ),
-            ),
+            // A complete current Hello, so it clears the protocol gate and the v3 key check
+            // (#1994, #3210); the subject here is the post-close admit race, not versioning.
+            payload = AdmitMessage.encode(currentHello(displayName = joiner.value, sessionId = joiner.value)),
             sender = joiner,
         )
 
@@ -87,7 +80,7 @@ class SeamRoomCloseResurrectionTest {
                     memberName = "host",
                     scope = backgroundScope,
                     clock = { Instant.fromEpochMilliseconds(0L) },
-                    deviceKeyStore = InMemoryDeviceKeyStore(),
+                    device = RoomDevice.of(fakeKeyStore(0)),
                     heartbeatConfig = HeartbeatConfig(),
                 )
             room.start()

@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.nw
 
@@ -10,7 +10,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -87,10 +87,10 @@ class NwMeshRoomPartitionTest {
                     random = Random(i.toLong()),
                 )
 
-            val hostFactory = SeamRoomFactory(nwLoom(0), backgroundScope, clock, InMemoryDeviceKeyStore(), heartbeat)
+            val hostFactory = SeamRoomFactory(nwLoom(0), backgroundScope, clock, fakeKeyStore(0), heartbeat)
             val droppedLoom = nwLoom(1)
-            val droppedFactory = SeamRoomFactory(droppedLoom, backgroundScope, clock, InMemoryDeviceKeyStore(), heartbeat)
-            val bystanderFactory = SeamRoomFactory(nwLoom(2), backgroundScope, clock, InMemoryDeviceKeyStore(), heartbeat)
+            val droppedFactory = SeamRoomFactory(droppedLoom, backgroundScope, clock, fakeKeyStore(1), heartbeat)
+            val bystanderFactory = SeamRoomFactory(nwLoom(2), backgroundScope, clock, fakeKeyStore(2), heartbeat)
 
             // Weave concurrently — host()/join() each block until their first peer connects, so a
             // sequential setup would deadlock (peer 0 has no one to connect to yet). Mirrors

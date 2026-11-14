@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import java.util.concurrent.Executors
@@ -16,7 +18,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
@@ -73,18 +75,14 @@ class AdmissionRosterConcurrencyTest {
                     memberName = "host",
                     scope = scope,
                     clock = { Instant.fromEpochMilliseconds(0) },
-                    deviceKeyStore = InMemoryDeviceKeyStore(),
+                    device = RoomDevice.of(fakeKeyStore(0)),
                     heartbeatConfig = HeartbeatConfig(),
                 )
                 val events = scope.launch(start = CoroutineStart.UNDISPATCHED) {
                     room.events.collect { if (it is MembershipEvent.Left) departures.send(Unit) }
                 }
                 val hello = Swatch(
-                    AdmitMessage.encode(AdmitMessage.Hello(
-                        displayName = "peer",
-                        sessionId = "peer",
-                        protocolVersion = ProtocolVersion.CURRENT,
-                    )), sender = peer,
+                    AdmitMessage.encode(currentHello(displayName = "peer", sessionId = "peer")), sender = peer,
                 )
                 val goodbye = Swatch(AdmitMessage.encode(AdmitMessage.Goodbye), sender = peer)
                 var rosterDisagreements = 0

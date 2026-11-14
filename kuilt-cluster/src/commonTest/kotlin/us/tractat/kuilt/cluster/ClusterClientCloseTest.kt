@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.cluster
 
@@ -28,7 +28,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.InMemoryRaftStorage
 import us.tractat.kuilt.raft.NodeId
@@ -445,7 +445,7 @@ class ClusterClientCloseTest {
     private suspend fun TestScope.rig(): Rig {
         val inMemory = InMemoryLoom()
         val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val server = SeamRoomFactory(inMemory, backgroundScope, clock, InMemoryDeviceKeyStore()).host(Pattern(SERVER))
+        val server = SeamRoomFactory(inMemory, backgroundScope, clock, fakeKeyStore(0)).host(Pattern(SERVER))
         return Rig(DialRecordingLoom(inMemory), server, backgroundScope, clock)
     }
 
@@ -494,7 +494,7 @@ class ClusterClientCloseTest {
             clientNodeId = CLIENT,
             clusterConfig = CLUSTER_CONFIG,
             raftConfig = RaftConfig(random = Random(0)),
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            deviceKeyStore = fakeKeyStore(1),
             clock = clock,
         )
     }

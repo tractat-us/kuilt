@@ -286,6 +286,7 @@ class StarRelayTest {
                     assignedPeerId = star.joinerAId.value,
                     displayName = "attacker",
                     sessionId = star.joinerAId.value,
+                    key = TEST_KEY_B,
                 ),
             )
             star.joinerA.sendRelay(RelayDest.One(star.joinerBId), forgedWelcome)
@@ -909,6 +910,7 @@ class StarRelayTest {
                     assignedPeerId = star.joinerAId.value,
                     displayName = "attacker",
                     sessionId = star.joinerAId.value,
+                    key = TEST_KEY_B,
                 ),
             )
 

@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -12,7 +12,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
@@ -41,6 +41,9 @@ import kotlin.time.Instant
  * so these tests hang and hit the tight `runTest` wall-clock timeout / `UncompletedCoroutinesError`.
  */
 class RoomResumeTimeoutTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
 
     private val config = HeartbeatConfig(
         interval = 100.milliseconds,
@@ -116,7 +119,7 @@ class RoomResumeTimeoutTest {
         return Triple(joinerRoom, token, joinerSeam)
     }
 
-    private fun TestScope.makeSeamRoom(
+    private suspend fun TestScope.makeSeamRoom(
         seam: Seam,
         role: SessionRole,
         displayName: String,
@@ -129,7 +132,7 @@ class RoomResumeTimeoutTest {
             memberName = displayName,
             scope = backgroundScope,
             clock = clock,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            device = RoomDevice.of(fakeKeyStore(nextDevice++)),
             heartbeatConfig = config,
             roomId = roomId,
         ).also { it.start() }

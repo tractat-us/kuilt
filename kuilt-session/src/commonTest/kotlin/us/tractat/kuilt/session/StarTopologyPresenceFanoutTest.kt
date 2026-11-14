@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -19,7 +19,7 @@ import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.partition.JoinerReconnectController
@@ -203,7 +203,7 @@ class StarTopologyPresenceFanoutTest {
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val loom = InMemoryLoom()
             val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-            val factory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), hostConfig)
+            val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0), hostConfig)
 
             val hostRoom = factory.host(Pattern("Host"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
@@ -544,11 +544,11 @@ class StarTopologyPresenceFanoutTest {
             loom,
             backgroundScope,
             clock,
-            InMemoryDeviceKeyStore(),
+            fakeKeyStore(1),
             hostConfig,
             reconnectControllerFactory = hostReconnectController?.let { build -> { _, _, _ -> build() } },
         )
-        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), joinerConfig)
+        val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(2), joinerConfig)
 
         val hostRoom = hostFactory.host(Pattern("Host"))
         val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)

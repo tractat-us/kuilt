@@ -1,7 +1,11 @@
 package us.tractat.kuilt.session.admit
 
+import us.tractat.kuilt.session.GOLDEN_V2_HELLO_HEX
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
@@ -58,6 +62,49 @@ class HelloVersionWireCompatTest {
 
         val decoded = AdmitMessage.decode(encoded) as AdmitMessage.Hello
         assertEquals(ProtocolVersion.CURRENT, decoded.protocolVersion)
+    }
+
+    /**
+     * `AdmitMessage.encode(Hello("Ada", "s-1", targetRoom = "room-7", protocolVersion = 2))` — the wire
+     * a v2 joiner sends, captured from the encoder **before** v3 added the device key and the joiner
+     * nonce (#3210).
+     */
+    private val goldenV2Hello = GOLDEN_V2_HELLO_HEX
+
+    /**
+     * The capture receipt for [goldenV2Hello]: a Hello with no key and no nonce still encodes to the
+     * v2 bytes, so a v3 build that omitted them would put nothing new on the wire.
+     */
+    @Test
+    fun `a keyless v2 hello still encodes to the v2 bytes`() {
+        assertEquals(
+            goldenV2Hello,
+            AdmitMessage.encode(
+                AdmitMessage.Hello(displayName = "Ada", sessionId = "s-1", targetRoom = "room-7", protocolVersion = 2),
+            ).toHex(),
+        )
+    }
+
+    /**
+     * The hazard v3 must not walk into (#3210): a v2 Hello carries no key and no joiner nonce, and it
+     * must still **decode**, with both `null`. If either field were required on the wire, the CBOR
+     * decode would fail, [AdmitMessage.decode] would turn that into `null`, the host would drop the
+     * frame without a word, and the version gate — which needs a decoded Hello to read the version
+     * from — would never fire. The v2 joiner would wait out its admit deadline instead of being told
+     * [RejectCode.ProtocolMismatch].
+     */
+    @Test
+    fun `a v2 hello decodes with no key and no nonce so the version gate can refuse it`() {
+        val decoded = AdmitMessage.decode(goldenV2Hello.hexToBytes())
+
+        assertNotNull(decoded, "a v2 hello must decode, or the version gate never sees it")
+        val hello = decoded as AdmitMessage.Hello
+        assertAll(
+            { assertEquals(2, hello.protocolVersion) },
+            { assertNull(hello.key, "a v2 hello names no key") },
+            { assertNull(hello.joinerNonce, "a v2 hello carries no nonce") },
+            { assertFalse(ProtocolVersion.isSupported(hello.protocolVersion), "and the gate refuses v2") },
+        )
     }
 
     private fun ByteArray.toHex(): String = joinToString("") { b -> (b.toInt() and 0xFF).toString(16).padStart(2, '0') }

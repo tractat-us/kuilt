@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session.test
 
 import kotlinx.coroutines.CoroutineDispatcher
@@ -16,6 +18,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.session.FailureReason
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
@@ -972,13 +975,23 @@ class FakeRoomTest {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
+    /**
+     * A member with a fixed key: [FakeRoom] never reads keys, and a fixed one keeps two `member(alice)`
+     * calls equal, as the roster tests that add the same member twice expect.
+     */
     private fun member(
         id: PeerId,
         liveness: Liveness = Liveness.Connected,
     ) = Member(
         id = id,
         identity = MemberIdentity(displayName = id.value, sessionId = id.value),
+        key = fakeDidKey(MEMBER_DEVICE),
         liveness = liveness,
     )
+
+    private companion object {
+        /** The one fake device every [member] is keyed as. */
+        const val MEMBER_DEVICE = 0
+    }
 }
 
