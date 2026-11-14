@@ -488,7 +488,9 @@ from one primitive — *close, drain, retire, re-generate*:
   its next round (§7.2). No ancestor above the parent needs to know. Creating a
   child mints nothing.
 - **Close** an edge: CLOSING → let reservations finish, entitlement return →
-  `outstanding == 0` → RETIRED. History stays queryable forever.
+  `outstanding == 0` → RETIRED. History stays queryable forever, edge by edge
+  on a replicated ledger. A single-process engine will instead fold a finished
+  leaf's edge into a per-parent total (§5.5).
 - **Reparent** `C` from `A` to `B`: prepare `B→C`, close-drain-retire `A→C`,
   then activate `B→C` neutrally at `B`'s current virtual time. Old history
   stays under `A`; `C` starts prospectively neutral under `B`.
@@ -615,7 +617,7 @@ when its user goes idle.
 - **Forgetting between peers.** A replicated ledger would need causal stability
   per edge plus a tombstone, and a stored aggregate risks the drift that rejected
   candidate B ([`heddle-ledger-design.md`](heddle-ledger-design.md), *How this
-  was chosen*). Raised in #3192.
+  was chosen*). Tracked by #3332.
 - **The coupling to the position ceiling.** If #3329 settles on generation
   turnover, every turnover retires a parent's children, and this forgetting
   becomes its prerequisite. Tracked by #3329.
@@ -1003,7 +1005,12 @@ Carried over from the source intact; each is a named property test (§13).
    balances exactly.
 2. **Monotonicity.** Every replicated component only grows; merge is a join;
    the lattice laws hold (`piece` idempotent, commutative, associative).
-   `outstanding` may fall but is always derived, never stored.
+   `outstanding` may fall but is always derived, never stored. **Scope: every
+   ledger peers exchange.** A single-writer engine's forgetting of retired edges
+   (§5.5) removes slots and is not a join. It is confined, like invariant 4's
+   exception, to a ledger no other writer touches: `forget` is internal to
+   `:kuilt-heddle-core`, `piece` refuses a delta that carries a non-empty
+   `forgotten`, and `:kuilt-heddle` requires it to be empty.
 3. **Per-edge safety.** `0 ≤ spent(e) + returned(e) ≤ issued(e)`.
 4. **Path-relative accounting.** A completion charges every edge of the path
    captured at reservation; history never moves to a newer generation —
@@ -1102,7 +1109,9 @@ one child, at the marker's weight, numbered by the same generation floor as the 
 Which runtime children exist is the ledger's to say, and the diff owns them as it owns
 declared edges: under a marker the new tree keeps, an attached child is kept, history
 and all; a new marker weight regenerates it on a new edge; and when the marker goes, or
-its group does, the child is closed. Each detach leaves a retired edge behind for good.
+its group does, the child is closed. Each detach leaves a retired edge behind, and for
+now it stays for good: until the forgetting in §5.5 is built, keep a runtime child
+attached rather than detaching it when it goes idle.
 
 A runtime child is a leaf, one level below its marked group: it cannot carry a marker
 itself, so nothing discovered while running has children of its own. §1's "any depth"
