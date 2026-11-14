@@ -86,6 +86,108 @@ class GaugeTest {
         }
     }
 
+    /**
+     * The returns marker joins by `max` like the other two components (#3360), so the register is
+     * still a product of total orders: idempotent, commutative, associative, and no component
+     * falls under the join.
+     */
+    @Test
+    fun theReturnsMarkerJoinsByMaxLikeTheOtherComponents() {
+        val rnd = Random(0x3360)
+        fun gauge() = Gauge(Rational.of(rnd.nextLong(-500L, 500L), rnd.nextLong(1L, 9L)), rnd.nextLong(0L, 500L), rnd.nextLong(0L, 500L))
+        repeat(500) {
+            val a = gauge()
+            val b = gauge()
+            val c = gauge()
+            val merged = a.join(b)
+            assertAll(
+                { assertEquals(a, a.join(a), "idempotent") },
+                { assertEquals(merged, b.join(a), "commutative") },
+                { assertEquals(merged.join(c), a.join(b.join(c)), "associative") },
+                { assertEquals(maxOf(a.returnsFolded, b.returnsFolded), merged.returnsFolded, "the marker is the max: $a ⊔ $b = $merged") },
+                { assertEquals(Gauge(merged.floor, merged.folded), Gauge(a.floor, a.folded).join(Gauge(b.floor, b.folded)), "the other two join as before") },
+            )
+        }
+    }
+
+    /**
+     * A raw read subtracts only the returns the marker has not folded (#3360). A fold of `k` returns
+     * raises the fold and the marker by `k`: gross comes down by `k / w` and the raw read does not
+     * move, through [EntitlementLedger.virtualService] and [HeddlePolicy.virtualService] alike.
+     */
+    @Test
+    fun aFoldLowersGrossAndLeavesTheRawReadWhereItWas() {
+        val w = Weight.of(3L, 7L)
+        // A floor on the 3/7 grid: 7 · 3/7 · 16 = 48 ticks, so every read below is exact.
+        val unfolded = Gauge(Rational.of(7L), 5L)
+        val folded = Gauge(Rational.of(7L), 5L + 4L, returnsFolded = 4L)
+        val before = ledgerWith(weight = w, issued = 20L, returned = 4L, gauge = unfolded)
+        val after = ledgerWith(weight = w, issued = 20L, returned = 4L, gauge = folded)
+        fun policyRead(ledger: EntitlementLedger) = HeddlePolicy.virtualService(
+            PolicyEdge(checkNotNull(ledger.record(EDGE)), checkNotNull(ledger.edge(EDGE)), Demand.NONE, ledger.gauge(EDGE), ledger.baseIssuance(EDGE)),
+        )
+        assertAll(
+            // 7 + (20 − 5) · 7/3 = 42; less 4 · 7/3 returned = 98/3.
+            { assertEquals(Rational.of(42L), before.grossVirtualService(EDGE)) },
+            { assertEquals(Rational.of(98L, 3L), before.virtualService(EDGE)) },
+            { assertEquals(Rational.of(98L, 3L), after.grossVirtualService(EDGE), "gross is net of the folded returns") },
+            { assertEquals(before.virtualService(EDGE), after.virtualService(EDGE), "the ledger's raw read does not move") },
+            { assertEquals(policyRead(before), policyRead(after), "nor does the policy's") },
+            { assertEquals(after.virtualService(EDGE), policyRead(after), "and the two reads agree") },
+        )
+    }
+
+    /**
+     * A checkpoint `delegate` writes over a folded gauge carries the marker in its own patch, not
+     * only once the join brings it back (#3360): a patch that dropped it would read, on its own,
+     * as if every folded return were still to subtract. Either way the read after it is the read
+     * before it plus the delegation.
+     */
+    @Test
+    fun aDelegateCheckpointOverAFoldedGaugeCarriesTheMarkerAndReadsTheSame() {
+        val w = Weight.of(3L, 7L)
+        val folded = Gauge(Rational.of(7L), 9L, returnsFolded = 4L)
+        val before = ledgerWith(weight = w, issued = 20L, returned = 4L, gauge = folded).piece(holdingsAtParent(100L))
+        val patch = checkNotNull(before.delegate(REPLICA, EDGE, 3L)) { "the delegation lands" }
+        val after = before.piece(patch.delta)
+        assertAll(
+            { assertEquals(4L, patch.delta.gauge(EDGE)?.returnsFolded, "the checkpoint carries the marker itself") },
+            { assertEquals(4L, after.gauge(EDGE)?.returnsFolded) },
+            { assertEquals(checkNotNull(before.virtualService(EDGE)) + Rational.of(7L), after.virtualService(EDGE), "three units at 3/7 is 7") },
+            { assertEquals(after.virtualService(EDGE), ledgerWith(weight = w, issued = 23L, returned = 4L, gauge = checkNotNull(patch.delta.gauge(EDGE))).virtualService(EDGE), "the checkpoint alone reads the same") },
+        )
+    }
+
+    /**
+     * Only `LocalHeddle` writes the marker (#3360). Every ledger mutator a replicated peer drives,
+     * the seat, a delegation, a release and the drain witness a retire carries, leaves it at zero
+     * while returns pile up, so a replicated ledger never holds one (#3353).
+     */
+    @Test
+    fun noLedgerMutatorWritesTheReturnsMarker() {
+        var ledger = ledgerWith(weight = Weight.ONE).piece(holdingsAtParent(100L))
+        ledger = ledger.piece(checkNotNull(ledger.seat(EDGE, Rational.ZERO)).delta)
+        val patches = ArrayList<EntitlementLedger>()
+        repeat(5) {
+            val delegated = checkNotNull(ledger.delegate(REPLICA, EDGE, 10L)).delta
+            ledger = ledger.piece(delegated)
+            val released = checkNotNull(ledger.release(REPLICA, EDGE, 7L)).delta
+            ledger = ledger.piece(released)
+            patches += delegated
+            patches += released
+        }
+        ledger = ledger.piece(checkNotNull(ledger.close(EDGE)).delta)
+        ledger = ledger.piece(checkNotNull(ledger.release(REPLICA, EDGE, checkNotNull(ledger.edge(EDGE)).outstanding)).delta)
+        val retired = checkNotNull(ledger.retire(EDGE)).delta
+        patches += retired
+        ledger = ledger.piece(retired)
+        assertAll(
+            { assertTrue((ledger.edge(EDGE)?.returned ?: 0L) > 0L, "the rig: returns piled up") },
+            { assertEquals(0L, ledger.gauge(EDGE)?.returnsFolded, "the ledger holds no marker") },
+            { assertTrue(patches.all { (it.gauge(EDGE)?.returnsFolded ?: 0L) == 0L }, "no patch carried one") },
+        )
+    }
+
     // ── the wire form: the #1647 read-path guard, on both components ─────────────────────
 
     /**
@@ -149,6 +251,28 @@ class GaugeTest {
         assertFailsWith<Exception>("a zero denominator must not decode") {
             Json.decodeFromString<Gauge>("""{"floor":{"numerator":70,"denominator":0},"folded":20}""")
         }
+    }
+
+    /**
+     * The marker is one optional field (#3360): a gauge that has folded no returns encodes exactly
+     * as it did before the marker existed, and bytes written before it decode with a zero. A negative
+     * marker would subtract returns that were never made, so it does not decode.
+     */
+    @Test
+    fun anUnfoldedGaugeEncodesAsBeforeAndANegativeMarkerCannotArrive() {
+        val plain = Gauge(Rational.of(35L), 20L)
+        val marked = Gauge(Rational.of(35L), 24L, returnsFolded = 4L)
+        val before = """{"floor":{"numerator":35,"denominator":1},"folded":20}"""
+        assertAll(
+            { assertEquals(before, Json.encodeToString(plain), "no marker, no field") },
+            { assertEquals(plain, Json.decodeFromString<Gauge>(before), "bytes from before the marker read as zero") },
+            { assertEquals(marked, Json.decodeFromString<Gauge>(Json.encodeToString(marked)), "a marker round-trips") },
+            {
+                assertFailsWith<IllegalArgumentException>("a negative marker must not decode") {
+                    Json.decodeFromString<Gauge>("""{"floor":{"numerator":35,"denominator":1},"folded":20,"returnsFolded":-1}""")
+                }
+            },
+        )
     }
 
     /** Round-tripping a well-formed gauge is the identity — the guard costs nothing legitimate. */
@@ -400,6 +524,12 @@ class GaugeTest {
         issuedRelocIn = counter(issuedRelocIn),
         gauges = gauge?.let { mapOf(EDGE to it) } ?: emptyMap(),
     )
+
+    /** Holdings at [PARENT] for [REPLICA], as a root mint: what a delegation down [EDGE] draws on. */
+    private fun holdingsAtParent(amount: Long): EntitlementLedger =
+        EntitlementLedger.ZERO.mint(MintId("gauge#0"), PARENT, REPLICA, amount).delta.piece(
+            EntitlementLedger.of(lifecycle = mapOf(EDGE to Lifecycle.ACTIVE)),
+        )
 
     private fun counter(value: Long): Map<AttachmentId, GCounter> =
         if (value == 0L) emptyMap() else mapOf(EDGE to GCounter.of(REPLICA to value))

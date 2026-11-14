@@ -142,6 +142,29 @@ class HeddleFenceTest {
         )
     }
 
+    /**
+     * A replicated run writes returns, here the drain a `Reconcile` writes onto the dead edge, and
+     * never a returns marker (#3360). Folding a return is `LocalHeddle`'s alone; the replicated
+     * form is #3353's, and until it lands every gauge a node holds reads its returns unfolded.
+     */
+    @Test
+    fun aReplicatedRunWithReturnsNeverWritesAReturnsMarker() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+        val f = fixture("fence-no-marker")
+        f.mintAndDelegateDownE1()
+        val reservation = assertIs<ReserveOutcome.Reserved>(f.node.reserve(g, 3L)).id
+        f.node.complete(reservation, 1L)
+        f.racedRetireAndReparent()
+        assertIs<ControlOutcome.Applied>(f.plane.submit(ControlCommand.Quiesce(e1)))
+        runCurrent()
+        assertIs<ControlOutcome.Applied>(f.plane.submit(ControlCommand.Reconcile(g)))
+        val ledger = f.node.ledger.value
+        assertAll(
+            { assertTrue((ledger.edge(e1)?.returned ?: 0L) > 0L, "the rig: the reconcile drained e1 by returns") },
+            { assertNotNull(ledger.gauge(e1), "the rig: e1 carries a gauge") },
+            { assertFalse(ledger.hasFoldedReturns(), "no gauge holds a marker: ${listOf(e1, e3).associateWith { ledger.gauge(it) }}") },
+        )
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // FINDING 2 on the adversarial PoC's own topology: a MULTI-HOP captured path
     // `[e1, e2]` where only the first hop is quiesced. The re-home rewrites that hop and

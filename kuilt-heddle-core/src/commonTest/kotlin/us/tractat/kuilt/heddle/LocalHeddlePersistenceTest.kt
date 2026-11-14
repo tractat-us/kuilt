@@ -742,6 +742,54 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
+     * The rich snapshot v0.7.4 wrote carries returns no gauge has folded: its cancel handed a lease
+     * back up `acme` and `batch` before the marker existed (#3360). The first return across them
+     * after a restore folds the whole backlog, and reads exactly as an engine that never folds:
+     * gross comes down, and nothing a pick reads moves.
+     */
+    @Test
+    fun theFirstReturnAfterRestoringV074sRichSnapshotFoldsItsBacklog() {
+        val shipped = decoded(GOLDEN_FORMAT_1_RICH)
+        val engine = LocalHeddle.restore(shipped, richPolicy, epoch = shipped.epoch + 1)
+        val twin = LocalHeddle.restore(shipped, richPolicy, epoch = shipped.epoch + 1).also { it.foldReturnsForTest = false }
+        val lease = shipped.leases.single { it.leaf == richBefore.groupId("acme", "batch", "y") }
+        val path = checkNotNull(engine.capturedPath(lease.id))
+        val ledger = shipped.ledger
+        val backlog = path.filter { (ledger.edge(it)?.returned ?: 0L) > 0L }
+        check(engine.complete(lease.id, 1L) is LeaseOutcome.Done)
+        check(twin.complete(lease.id, 1L) is LeaseOutcome.Done)
+        val after = engine.snapshot().ledger
+        val unfolded = twin.snapshot().ledger
+        assertAll(
+            { assertEquals(2L, lease.reserved, "the rig: the completion hands one unit back") },
+            { assertTrue(backlog.isNotEmpty(), "the rig: the shipped bytes carry returns on the lease's path") },
+            { assertTrue(backlog.all { ledger.gauge(it)?.returnsFolded == 0L }, "the rig: none of them folded") },
+            { assertTrue(GOLDEN_FORMAT_1_RICH.indexOf("returnsFolded") < 0, "the rig: v0.7.4 wrote no marker") },
+            *path.map { edge -> { assertEquals(after.edge(edge)?.returned, after.gauge(edge)?.returnsFolded, "${edge.value} folded every return") } }.toTypedArray(),
+            { assertEquals(unfolded.allEdges().associateWith { unfolded.virtualService(it) }, after.allEdges().associateWith { after.virtualService(it) }, "every edge reads as the engine that never folds") },
+            *backlog.map { edge ->
+                {
+                    val folded = checkNotNull(after.grossVirtualService(edge))
+                    val kept = checkNotNull(unfolded.grossVirtualService(edge))
+                    assertTrue(folded < kept, "${edge.value}'s gross came down: $folded against $kept")
+                }
+            }.toTypedArray(),
+        )
+    }
+
+    /** Format 1 predates the returns marker (#3360), so a format-1 snapshot that carries one is corrupt. */
+    @Test
+    fun aFormatOneSnapshotCannotCarryAReturnsMarker() {
+        val text = encode(richScenario().first.persist()).replaceFirst("[2,", "[1,")
+        val out = LocalHeddle.decode(text, Json)
+        assertAll(
+            { assertTrue(text.startsWith("[1,") && "\"returnsFolded\":" in text, "the rig: format 1 with a marker") },
+            { assertTrue("\"forgotten\":" !in text, "the rig: and with no fold of forgotten edges") },
+            { assertTrue(out is RestoreResult.Corrupt && "format 1 predates" in out.reason, "expected Corrupt naming format 1, got $out") },
+        )
+    }
+
+    /**
      * This release writes format 2 and reads formats 1 and 2 (#3192). Format 3 is a later
      * release's, refused by name with nothing past the version read.
      */
