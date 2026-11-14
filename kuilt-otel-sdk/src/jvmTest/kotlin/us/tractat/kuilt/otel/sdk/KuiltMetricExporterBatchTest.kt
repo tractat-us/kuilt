@@ -21,6 +21,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricExportResult
+import us.tractat.kuilt.otel.MetricHistogramOverflowException
 import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.MetricSumOverflowException
 import us.tractat.kuilt.otel.MetricUpdate
@@ -255,6 +256,7 @@ class KuiltMetricExporterBatchTest {
         val latency = MetricKey("latency", MetricKind.EXPONENTIAL_HISTOGRAM)
         val scale = exp.histogramScale
         val seeded = exp.record(listOf(histogramUpdate(latency, scale, offset = 10, count = Long.MAX_VALUE - 1L)))
+        val rigRefuses = exp.record(listOf(histogramUpdate(latency, scale, offset = 10, count = 3L)))
         val export = listOf(
             metric("requests", MetricDataType.LONG_SUM, deltaCounter(listOf(longPoint(4L, "/b")))),
             metric("latency", MetricDataType.EXPONENTIAL_HISTOGRAM, deltaHistogram(scale, offset = 10, count = 3L)),
@@ -269,6 +271,10 @@ class KuiltMetricExporterBatchTest {
         val recovered = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
         assertAll(
             { assertEquals(MetricExportResult.Success, seeded, "the rig: the slot was seeded") },
+            {
+                val refusal = assertIs<MetricExportResult.Failure>(rigRefuses, "the rig: the series really is saturated")
+                assertEquals(latency, assertIs<MetricHistogramOverflowException>(refusal.cause).key)
+            },
             {
                 assertEquals(
                     Long.MAX_VALUE - 1L,

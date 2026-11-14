@@ -52,7 +52,10 @@ class WarpMetricExporterHistogramOverflowTest {
         val writesAfter = store.writesByKey()
         val control = exporter.record(fitsAlone)
         assertAll(
-            { assertIs<ArithmeticException>(assertIs<MetricExportResult.Failure>(result).cause) },
+            {
+                val cause = assertIs<MetricHistogramOverflowException>(assertIs<MetricExportResult.Failure>(result).cause)
+                assertEquals(latency, cause.key, "the refusal names the series")
+            },
             { assertEquals(memoryBefore, memoryAfter, "nothing applied in memory") },
             { assertEquals(writesBefore, writesAfter, "nothing written") },
             { assertEquals(MetricExportResult.Success, control, "the control: the rest of the batch fits") },

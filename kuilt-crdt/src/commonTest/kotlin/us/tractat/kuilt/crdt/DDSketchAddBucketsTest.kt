@@ -7,6 +7,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -150,6 +152,34 @@ class DDSketchAddBucketsTest {
             { assertFailsWith<ArithmeticException> { empty.addBuckets(r1, mapOf(bottom - 1 to max), emptyMap(), 1L) } },
             { assertFailsWith<ArithmeticException> { empty.addBuckets(r1, mapOf(top to max, top + 1 to 1L), emptyMap(), 0L) } },
             { assertFailsWith<ArithmeticException> { empty.addBuckets(r1, mapOf(top + 1 to max, top + 2 to 1L), emptyMap(), 0L) } },
+            { assertNull(empty.addBucketsOrNull(r1, mapOf(bottom - 1 to max), emptyMap(), 1L)) },
+            { assertNull(empty.addBucketsOrNull(r1, mapOf(top to max, top + 1 to 1L), emptyMap(), 0L)) },
+            { assertNull(empty.addBucketsOrNull(r1, mapOf(top + 1 to max, top + 2 to 1L), emptyMap(), 0L)) },
+        )
+    }
+
+    /**
+     * [DDSketch.addBucketsOrNull] answers `null` where [DDSketch.addBuckets] throws because a slot
+     * would pass [Long.MAX_VALUE], and the same patch where it does not.
+     */
+    @Test
+    fun addBucketsOrNullAnswersNullForASlotThatWouldPassLongMaxValue() {
+        val empty = DDSketch.empty()
+        val index = empty.adding(r1, 10.0).positiveBuckets.keys.single()
+        val full = empty.piece(empty.addBuckets(r1, mapOf(index to Long.MAX_VALUE - 1L), emptyMap(), Long.MAX_VALUE).delta)
+        assertAll(
+            { assertEquals(Long.MAX_VALUE, full.zeroCount, "the rig: the zero slot is full") },
+            { assertNull(full.addBucketsOrNull(r1, mapOf(index to 2L), emptyMap(), 0L), "the bucket slot") },
+            { assertNull(full.addBucketsOrNull(r1, emptyMap(), emptyMap(), 1L), "the zero slot") },
+            { assertFailsWith<ArithmeticException> { full.addBuckets(r1, mapOf(index to 2L), emptyMap(), 0L) } },
+            {
+                assertEquals(
+                    full.addBuckets(r1, mapOf(index to 1L), emptyMap(), 0L),
+                    full.addBucketsOrNull(r1, mapOf(index to 1L), emptyMap(), 0L),
+                    "the control: one more fits, and both give the same patch",
+                )
+            },
+            { assertNotNull(full.addBucketsOrNull(ReplicaId("r2"), mapOf(index to 2L), emptyMap(), 1L), "another replica's slots are its own") },
         )
     }
 
