@@ -105,8 +105,8 @@ and nothing else does:
   `ControlConflict.WeightBudget`. Every peer decides it from the same log, so every peer refuses.
   `heddleStatic` checks the same weights in its starting tree and in `prepare` and `activate`,
   which answer `false`. But a static peer checks only what it can see itself, so two peers
-  activating siblings at once can still add up past the limit together. Catching that when a pick
-  reads the tree is still to come (#3353).
+  activating siblings at once can still add up past the limit together. `schedule` catches that
+  when it reads the tree: it answers `WeightBudget` for the parent and hands nothing out there.
 - **The everyday path is untouched.** Handing out and charging for work — `schedule`, `reserve`,
   `complete` — never goes through the agreement step, at any rate. That is the whole point:
   agreement appears only at the two rare moments that need it.
