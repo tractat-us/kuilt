@@ -39,7 +39,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * and silently corrupt causality. Always [recover] from a [DurableStore] at startup,
  * and [persist] after the spans of a batch are durably exported. [tick] itself stays
  * pure (non-suspending) so the lock stays tight; persistence is the caller's
- * explicit step.
+ * explicit step. A refused read during [recover], including a store-minted cancellation,
+ * leaves the clock fresh like a missing entry and is reported only by an ERROR log line
+ * on the public overload; the next [persist] then overwrites the durable high-water mark
+ * and dots can be re-minted (#3390).
  *
  * ## Thread-safety
  *
@@ -106,7 +109,11 @@ public class WarpCausalClock(private val replica: ReplicaId) {
 
     /**
      * Reload `(seq, frontier)` from [store]. Call once at startup before any [tick];
-     * a missing or corrupt entry leaves the clock fresh (seq 0, empty frontier).
+     * a missing or corrupt entry leaves the clock fresh (seq 0, empty frontier). So does any
+     * refused read, including a cancellation the store minted: it is treated like a missing
+     * entry, and on this public overload it is reported only by an ERROR log line. The next
+     * [persist] then overwrites the durable high-water mark, so dots can be re-minted, which
+     * breaks uniqueness (#3390).
      */
     public suspend fun recover(store: DurableStore): Unit = recover(store) {}
 
