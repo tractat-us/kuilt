@@ -613,6 +613,28 @@ class LocalHeddlePersistenceTest {
         )
     }
 
+    /** An honest fold is never negative, so a snapshot whose fold is, in either of its two maps, is corrupt. */
+    @Test
+    fun aNegativeFoldIsCorrupt() {
+        val outflow = "\"outflow\":{\"root/tenants\":{\"local\":3}}"
+        val leafSpend = "\"leafSpend\":{\"local\":3}"
+        val tampered = listOf(
+            "outflow" to GOLDEN_FORMAT_2_RICH.replace(outflow, outflow.replace(":3", ":-3")),
+            "leaf spend" to GOLDEN_FORMAT_2_RICH.replace(leafSpend, leafSpend.replace(":3", ":-3")),
+        )
+        assertAll(
+            { assertIs<RestoreResult.Restored>(LocalHeddle.decode(GOLDEN_FORMAT_2_RICH, Json), "the control: the untampered fold restores") },
+            *tampered.map { (name, text) ->
+                val check: () -> Unit = {
+                    assertTrue(text != GOLDEN_FORMAT_2_RICH && ":-3" in text, "the rig: $name tampered")
+                    val out = LocalHeddle.decode(text, Json)
+                    assertTrue(out is RestoreResult.Corrupt && "never negative" in out.reason, "$name: expected Corrupt naming the negative fold, got $out")
+                }
+                check
+            }.toTypedArray(),
+        )
+    }
+
     /**
      * The rich scenario as format 1, on the 1/16-unit grid (#3313): never written by a release, but
      * the same snapshot the current format writes, and an engine restored from it carries on exactly

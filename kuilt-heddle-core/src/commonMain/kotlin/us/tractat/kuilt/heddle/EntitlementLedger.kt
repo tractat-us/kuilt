@@ -2013,12 +2013,8 @@ public class EntitlementLedger private constructor(
         // partially-delivered topology a topology-keyed predicate would report.
         val roots = mintedRoots()
         if (roots.size > 1) conflicts += LedgerConflict.MultipleRoots(roots)
-        // What a forgotten edge left behind is never negative: [forget] folds only an edge whose
-        // books closed. Its other checks ran at forget time, since nothing is left to check after.
-        for ((parent, row) in forgotten.outflow) {
-            for ((r, v) in row) if (v < 0L) conflicts += LedgerConflict.NegativeForgottenFold(parent, r)
-        }
-        for ((r, v) in forgotten.leafSpend) if (v < 0L) conflicts += LedgerConflict.NegativeForgottenFold(null, r)
+        // Nothing here reads `forgotten`: a forgotten edge's checks ran when it was forgotten, since
+        // nothing is left to check after, and a negative fold cannot be built ([ForgottenEdges]).
         // The global backstop, last: totals read straight off the components, so it survives a
         // regression in the per-lineage derivation the checks above all depend on.
         val spentTotal = leafSpentTotal()
@@ -2267,7 +2263,7 @@ public class EntitlementLedger private constructor(
      * - its child has no child edges in any lifecycle, forgotten ones included, so leaves go first;
      * - no transfer row, base or relocation, sits at its path;
      * - for a RETIRED edge, its books closed: charged plus returned within issued, no negative
-     *   effective spend, nothing outstanding, nothing stranded on it for any replica (what
+     *   effective spend in total or in any replica's fold, nothing outstanding, nothing stranded on it for any replica (what
      *   [relocationPatch] would move), and its child holding nothing for any replica.
      *
      * Whether an open lease's path crosses the edge is the engine's question, not the ledger's; with
@@ -2291,8 +2287,9 @@ public class EntitlementLedger private constructor(
             return ForgetRefusal.PER_EDGE_SAFETY
         }
         if (effLeaf < 0L || effRollup < 0L) return ForgetRefusal.NEGATIVE_EFFECTIVE_SPEND
-        if (edge(edge)?.outstanding != 0L) return ForgetRefusal.OUTSTANDING
         val replicas = replicasOnEdge(edge)
+        if (replicas.any { netInflow(edge, it) < 0L || effLeafSpentSlot(edge, it) < 0L }) return ForgetRefusal.NEGATIVE_FOLD
+        if (edge(edge)?.outstanding != 0L) return ForgetRefusal.OUTSTANDING
         if (replicas.any { strandedOn(edge, it) != 0L }) return ForgetRefusal.STRANDED
         if (allReplicas().any { holdings(record.child, it) != 0L }) return ForgetRefusal.CHILD_HOLDS
         return null

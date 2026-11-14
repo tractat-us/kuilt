@@ -52,16 +52,6 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
                 donor.compareTo(other.donor).let { if (it != 0) return it }
                 carried.compareTo(other.carried)
             }
-            is NegativeForgottenFold -> {
-                other as NegativeForgottenFold
-                // The folded leaf spend (no group) sorts ahead of every parent's outflow.
-                when {
-                    group == other.group -> replica.compareTo(other.replica)
-                    group == null -> -1
-                    other.group == null -> 1
-                    else -> group.compareTo(other.group).let { if (it != 0) it else replica.compareTo(other.replica) }
-                }
-            }
             is MultipleRoots -> {
                 other as MultipleRoots
                 // Lexicographic over two already-sorted lists: `List` is not `Comparable`, and a
@@ -482,23 +472,5 @@ public sealed interface LedgerConflict : Comparable<LedgerConflict> {
         public val carried: Long,
     ) : LedgerConflict {
         override val order: Int get() = 10
-    }
-
-    /**
-     * A fold of forgotten edges that has gone negative (#3192, design §5.5): what a ledger keeps of
-     * the edges it forgot, once their slots are gone, holds a negative amount for [replica].
-     *
-     * Only a retired leaf edge whose books closed is ever forgotten, and such an edge's
-     * `effIssued − returned` and effective leaf spend are both non-negative, so an honest fold never
-     * goes below zero. Seeing this means the fold was written some other way: a hand-built or
-     * corrupted snapshot. Like every report here it is a diagnostic, not a safety gate. A ledger that
-     * has forgotten nothing never reports it.
-     *
-     * @property group the parent whose folded outflow is negative, or `null` for the folded leaf
-     *   spend, which is kept per replica and not per parent.
-     * @property replica the replica whose fold is negative.
-     */
-    public data class NegativeForgottenFold(public val group: GroupId?, public val replica: ReplicaId) : LedgerConflict {
-        override val order: Int get() = 11
     }
 }

@@ -37,6 +37,7 @@ class EntitlementLedgerForgetTest {
     private fun closed(
         records: Map<AttachmentId, Set<AttachmentRecord>> = mapOf(e to setOf(AttachmentRecord(e, root, c, Weight.ONE))),
         issued: Map<AttachmentId, GCounter> = mapOf(e to counter(r1 to 5L)),
+        returned: Map<AttachmentId, GCounter> = emptyMap(),
         leafSpent: Map<AttachmentId, GCounter> = mapOf(e to counter(r1 to 5L)),
         lifecycle: Map<AttachmentId, Lifecycle> = mapOf(e to Lifecycle.RETIRED),
         leafRelocOut: Map<AttachmentId, GCounter> = emptyMap(),
@@ -46,6 +47,7 @@ class EntitlementLedgerForgetTest {
         records = records,
         minted = mapOf(MintId("m") to MintRecord(root, r1, 10L)),
         issued = issued,
+        returned = returned,
         leafSpent = leafSpent,
         lifecycle = lifecycle,
         leafRelocOut = leafRelocOut,
@@ -114,6 +116,7 @@ class EntitlementLedgerForgetTest {
             Triple("more charged than issued", closed(leafSpent = mapOf(e to counter(r1 to 6L))), e) to ForgetRefusal.PER_EDGE_SAFETY,
             Triple("a negative effective spend", closed(issued = emptyMap(), leafSpent = emptyMap(), leafRelocOut = mapOf(e to counter(r1 to 1L))), e) to
                 ForgetRefusal.NEGATIVE_EFFECTIVE_SPEND,
+            Triple("a fold negative for one replica", oneReplicaNegative(), e) to ForgetRefusal.NEGATIVE_FOLD,
             Triple("units outstanding", closed(leafSpent = mapOf(e to counter(r1 to 3L))), e) to ForgetRefusal.OUTSTANDING,
             Triple("a strand that nets to zero", closed(leafSpent = mapOf(e to counter(r2 to 5L))), e) to ForgetRefusal.STRANDED,
             Triple(
@@ -151,30 +154,49 @@ class EntitlementLedgerForgetTest {
     }
 
     /**
-     * An honest fold is never negative, so a negative one is reported, one conflict per replica and
-     * fold, the folded leaf spend (no group) first. Hand-built: no forget writes one.
+     * Two replicas whose totals close but whose own books do not: [r1] returned 1 it was never
+     * issued and moved 1 of leaf spend it never spent away, while [r2] was issued 1 and spent it.
+     * Per edge, issued 1 = returned 1 + spent 0, nothing is outstanding and no total is negative.
+     * Per replica, [r1]'s net inflow and effective leaf spend are both `-1`, which is what its fold
+     * would hold.
+     */
+    private fun oneReplicaNegative(): EntitlementLedger = closed(
+        issued = mapOf(e to counter(r2 to 1L)),
+        returned = mapOf(e to counter(r1 to 1L)),
+        leafSpent = mapOf(e to counter(r2 to 1L)),
+        leafRelocOut = mapOf(e to counter(r1 to 1L)),
+    )
+
+    /**
+     * The fold is kept per replica, so an edge whose totals pass every check but one of whose
+     * replicas would fold a negative amount is refused, not folded into a `-1` for that replica.
      */
     @Test
-    fun aNegativeFoldIsReported() {
-        val ledger = EntitlementLedger.of(
-            minted = mapOf(MintId("m") to MintRecord(root, r1, 10L)),
-            forgottenOutflow = mapOf(root to mapOf(r1 to -1L, r2 to 0L)),
-            forgottenLeafSpend = mapOf(r2 to -2L, r1 to 4L),
-            forgottenGenerationFloor = 3L,
-        )
-        val honest = EntitlementLedger.of(
-            minted = mapOf(MintId("m") to MintRecord(root, r1, 10L)),
-            forgottenOutflow = mapOf(root to mapOf(r1 to 1L)),
-            forgottenLeafSpend = mapOf(r1 to 1L),
-        )
+    fun anEdgeThatWouldFoldNegativeForOneReplicaIsRefused() {
+        val ledger = oneReplicaNegative()
+        val summary = checkNotNull(ledger.edge(e))
         assertAll(
+            { assertEquals(listOf(1L, 1L, 0L, 0L), listOf(summary.issued, summary.returned, summary.spent, summary.outstanding), "the rig: the totals close") },
             {
-                assertEquals(
-                    listOf(LedgerConflict.NegativeForgottenFold(null, r2), LedgerConflict.NegativeForgottenFold(root, r1)),
-                    ledger.validate().filterIsInstance<LedgerConflict.NegativeForgottenFold>(),
-                )
+                val netInflow = ledger.effectiveIssued(e, r1) - ledger.storedSlot(CounterFamily.RETURNED, e, r1)
+                assertEquals(-1L, netInflow, "the rig: r1's own net inflow is negative")
             },
-            { assertEquals(emptyList(), honest.validate(), "the control: a fold of the same shape that is not negative") },
+            { assertEquals(ForgetRefusal.NEGATIVE_FOLD, ledger.forgetRefusal(e)) },
+            { assertNull(ledger.forget(listOf(e))) },
+        )
+    }
+
+    /** A negative fold cannot be held at all, so no ledger, built by hand or decoded, carries one. */
+    @Test
+    fun aNegativeFoldCannotBeBuilt() {
+        assertAll(
+            { assertFailsWith<IllegalArgumentException>("outflow") { EntitlementLedger.of(forgottenOutflow = mapOf(root to mapOf(r1 to -1L))) } },
+            { assertFailsWith<IllegalArgumentException>("leaf spend") { EntitlementLedger.of(forgottenLeafSpend = mapOf(r1 to -1L)) } },
+            { assertFailsWith<IllegalArgumentException>("floor") { EntitlementLedger.of(forgottenGenerationFloor = -2L) } },
+            {
+                val honest = EntitlementLedger.of(forgottenOutflow = mapOf(root to mapOf(r1 to 0L)), forgottenLeafSpend = mapOf(r1 to 0L), forgottenGenerationFloor = 3L)
+                assertTrue(honest.hasForgotten(), "the control: a fold at zero, of the same shape, is held")
+            },
         )
     }
 

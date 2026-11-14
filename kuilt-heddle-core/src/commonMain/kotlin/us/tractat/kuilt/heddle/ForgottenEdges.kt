@@ -36,6 +36,13 @@ internal data class ForgottenEdges(
 ) {
     init {
         require(generationFloor >= -1L) { "a forgotten generation floor is -1 or a generation, was $generationFloor" }
+        // An honest fold is never negative: [EntitlementLedger.forget] folds only an edge on which
+        // every replica's net inflow and effective leaf spend are non-negative. Here, so a fold that
+        // went negative some other way, a hand-built or corrupt snapshot, cannot be held at all.
+        for ((parent, row) in outflow) {
+            for ((r, v) in row) require(v >= 0L) { "a forgotten outflow is never negative, was $v at ${parent.value} for ${r.value}" }
+        }
+        for ((r, v) in leafSpend) require(v >= 0L) { "a forgotten leaf spend is never negative, was $v for ${r.value}" }
     }
 
     /** Whether nothing has been forgotten. */
@@ -88,6 +95,12 @@ internal enum class ForgetRefusal {
 
     /** A negative effective spend: [LedgerConflict.NegativeEffectiveSpend]. */
     NEGATIVE_EFFECTIVE_SPEND,
+
+    /**
+     * A replica's net inflow or effective leaf spend on the edge is negative, though the totals are
+     * not: the fold is kept per replica, so it would go negative, which [ForgottenEdges] refuses.
+     */
+    NEGATIVE_FOLD,
 
     /** Retired with units still outstanding: [LedgerConflict.ClosureViolation]. */
     OUTSTANDING,
