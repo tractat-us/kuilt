@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.quilter
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
@@ -20,9 +21,13 @@ import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.BoundedCounter
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.Rounding
 import kotlin.math.min
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.quilter.BoundedCounterTransferCoordinator")
 
 /** Number of surplus peers to contact in parallel on a single low-quota event. */
 private const val BORROW_FAN_OUT = 2
@@ -277,13 +282,22 @@ public class BoundedCounterTransferCoordinator(
      */
     private fun startEqualizer(cfg: BoundedCounterEqualizerConfig): Job =
         scope.launch {
+            // Read and written only by this one coroutine, one tick at a time.
+            var failing = false
             while (true) {
                 delay(cfg.cadence)
-                // A transient transfer/broadcast failure in one tick must not kill the
-                // periodic loop; runCatchingCancellable still rethrows CancellationException
-                // so the loop cancels cleanly on close(). Rebalance retries next tick.
+                // A failure in one tick must not kill the periodic loop; runCatchingCancellable
+                // still rethrows CancellationException so the loop cancels cleanly on close().
+                // Rebalance retries next tick. A failure that persists — a budget too large to read
+                // in a `Long` throws on every tick (#3343) — is reported once at WARN, then at DEBUG
+                // until a tick succeeds again, so it is visible without a line per tick.
                 runCatchingCancellable { equalizeTick(cfg) }
-                    .onFailure { /* transient rebalance failure — retry next tick */ }
+                    .onSuccess { failing = false }
+                    .onFailure { failure ->
+                        val line = { "BoundedCounter equalizer tick for $self failed; retrying next tick: $failure" }
+                        if (failing) logger.debug(line) else logger.warn(line)
+                        failing = true
+                    }
             }
         }
 
@@ -293,8 +307,12 @@ public class BoundedCounterTransferCoordinator(
         if (reachablePeers.isEmpty()) return
 
         val liveN = reachablePeers.size + 1 // peers + self
-        val bound = bc.totalBudget + bc.totalSpent
-        val fairShare = bound / liveN
+        // The bound, remaining budget plus spent, is the initial total, formed exactly: each half
+        // can fit in a Long while their sum does not (#3343). Two non-negative Longs over at least
+        // two peers always give a fair share that fits.
+        val bound = Int128.of(bc.totalBudget) + bc.totalSpent
+        val fairShare = bound.divideOrNull(liveN.toLong(), Rounding.FLOOR)
+            ?: throw ArithmeticException("BoundedCounter fair share $bound / $liveN does not fit in a Long")
 
         val myQuota = bc.quota(self)
         val excess = myQuota - fairShare
