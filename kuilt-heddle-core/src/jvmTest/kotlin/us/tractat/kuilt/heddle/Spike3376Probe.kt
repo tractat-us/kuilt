@@ -137,6 +137,8 @@ class Spike3376Probe {
             Triple("UNIFIED+noShift(control)", true, 3),
             Triple("UNIFIED+keepK-settled", true, 4),
         )
+        val savedUnified = spikeUnified
+        val savedRule = spikeLagRule
         try {
             for ((name, unified, rule) in variants) {
                 spikeUnified = unified
@@ -171,8 +173,8 @@ class Spike3376Probe {
                 }
             }
         } finally {
-            spikeUnified = false
-            spikeLagRule = 0
+            spikeUnified = savedUnified
+            spikeLagRule = savedRule
             spikeLagCap = null
             spikeCapCountsOutstanding = false
         }
