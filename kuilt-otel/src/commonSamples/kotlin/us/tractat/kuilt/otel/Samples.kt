@@ -209,6 +209,33 @@ internal suspend fun sampleWarpMetricExporter() {
 }
 
 /**
+ * Add one interval of an already-bucketed histogram — what an OpenTelemetry SDK exports under delta
+ * temporality — as a [MetricUpdate.AddExponentialHistogram], instead of unrolling it into one
+ * [WarpMetricExporter.recordHistogram] per value or joining it in with `mergeHistogram`.
+ */
+internal suspend fun sampleAddExponentialHistogram() {
+    val exporter = WarpMetricExporter(
+        replica = us.tractat.kuilt.crdt.ReplicaId("server-1"),
+        store = InMemoryDurableStore(),
+    )
+    val latency = MetricKey("request.latency.ms", MetricKind.EXPONENTIAL_HISTOGRAM)
+
+    // OTLP buckets 160..162 at the exporter's own scale: 3 + 0 + 5 values, plus 2 zeros.
+    val interval = MetricUpdate.AddExponentialHistogram(
+        latency,
+        scale = exporter.histogramScale,
+        zeroCount = 2L,
+        positiveOffset = 160,
+        positiveCounts = listOf(3L, 0L, 5L),
+        negativeOffset = 0,
+        negativeCounts = emptyList(),
+    )
+    exporter.record(listOf(interval))
+    exporter.record(listOf(interval)) // a delta: the next interval adds, it does not replace
+    check(exporter.histogramSnapshot(latency).count == 20L)
+}
+
+/**
  * Hand a [WarpMetricExporter] many updates at once: [WarpMetricExporter.record] applies them in order
  * and writes each metric kind once, instead of once per update.
  */

@@ -88,6 +88,7 @@ public sealed interface MetricUpdate {
      *
      * @throws IllegalArgumentException if [zeroCount] or any bucket count is negative, or [scale]
      *   is outside the OTLP data model's `[-10, 20]`.
+     * @sample us.tractat.kuilt.otel.sampleAddExponentialHistogram
      */
     public data class AddExponentialHistogram(
         override val key: MetricKey,

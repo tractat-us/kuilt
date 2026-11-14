@@ -56,6 +56,9 @@ class OtelSamplesRunTest {
     fun warpMetricExporterBatchHolds(): TestResult = runTest { sampleWarpMetricExporterBatch() }
 
     @Test
+    fun addExponentialHistogramHolds(): TestResult = runTest { sampleAddExponentialHistogram() }
+
+    @Test
     fun warpSpanExporterHolds(): TestResult = runTest { sampleWarpSpanExporter() }
 
     @Test
