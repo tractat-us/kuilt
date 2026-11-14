@@ -186,25 +186,21 @@ class EntitlementLedgerForgetTest {
             { assertNotEquals(forgotE, forgotOther, "the rig: two different folds") },
             { assertFailsWith<IllegalArgumentException> { forgotE.piece(forgotOther) } },
             {
-                // An edge outside the topology grammar has no generation, so no floor can name it:
-                // only the fold comparison itself tells these two apart.
-                val x = AttachmentId("x")
-                val withX = closed(
-                    records = mapOf(e to setOf(AttachmentRecord(e, root, c, Weight.ONE)), x to setOf(AttachmentRecord(x, root, GroupId("root/x"), Weight.ONE))),
-                    issued = mapOf(e to counter(r1 to 5L), x to counter(r1 to 2L)),
-                    leafSpent = mapOf(e to counter(r1 to 5L), x to counter(r1 to 2L)),
-                    lifecycle = mapOf(e to Lifecycle.RETIRED, x to Lifecycle.RETIRED),
-                )
-                val one = checkNotNull(withX.forget(listOf(e)))
-                val both = checkNotNull(withX.forget(listOf(e, x)))
-                assertNotEquals(one, both, "the rig: two different folds")
-                assertFailsWith<IllegalArgumentException>("two folds, and no edge resurrected") { one.piece(both) }
+                // Two folds and not one edge between them, so no floor can be crossed: only the fold
+                // comparison itself tells these two apart.
+                val one = EntitlementLedger.of(forgottenLeafSpend = mapOf(r1 to 1L))
+                val another = EntitlementLedger.of(forgottenLeafSpend = mapOf(r1 to 2L))
+                assertFailsWith<IllegalArgumentException>("two folds, and no edge resurrected") { one.piece(another) }
             },
             { assertFailsWith<IllegalArgumentException>("the edge it forgot, back from a ledger that kept it") { forgotE.piece(two) } },
-            { assertFailsWith<IllegalArgumentException>("and the other way round") { two.piece(forgotE) } },
+            { assertFailsWith<IllegalArgumentException>("a ledger that never forgot takes no fold") { two.piece(forgotE) } },
             { assertEquals(forgotE, forgotE.piece(forgotE), "the same fold joins to itself") },
-            { assertEquals(forgotE, EntitlementLedger.ZERO.piece(forgotE)) },
-            { assertEquals(forgotE, forgotE.piece(EntitlementLedger.ZERO)) },
+            {
+                // Nothing on the left to resurrect, so only the fold check refuses this (§5.5: `piece`
+                // refuses a delta that carries a non-empty `forgotten`).
+                assertFailsWith<IllegalArgumentException>("an empty ledger adopts no fold") { EntitlementLedger.ZERO.piece(forgotE) }
+            },
+            { assertEquals(forgotE, forgotE.piece(EntitlementLedger.ZERO), "the forgetting ledger keeps its own fold") },
             { assertEquals(setOf(other, later), forgotE.piece(fresh).allEdges(), "an edge above the floor is accepted") },
             { assertTrue(forgotE.piece(fresh).hasForgotten(), "and the fold is kept") },
         )

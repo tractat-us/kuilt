@@ -20,7 +20,7 @@ import us.tractat.kuilt.crdt.ReplicaId
  * nets to zero, because "this group has child edges" is part of what the child's edge meant.
  *
  * It is the ledger's seventeenth component, and the only one that is not a join: forgetting removes
- * slots, so [EntitlementLedger.piece] refuses to merge two different folds. It is scoped to a single
+ * slots, so [EntitlementLedger.piece] refuses any fold that is not the receiver's own. It is scoped to a single
  * writer, the way §10 invariant 4's quiesced edge is. Every map goes through
  * [CanonicalMapSerializer], so equal folds encode to equal bytes. A ledger with nothing forgotten
  * holds [NONE], which a default `Json` or `Cbor` does not encode, so its bytes are what they were

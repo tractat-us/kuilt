@@ -192,9 +192,10 @@ import kotlinx.serialization.Transient
  *
  * Forgetting removes slots, so it is not a join, and it breaks §10 invariant 2 (monotonicity). It is
  * scoped to a single writer, as invariant 4's quiesced edge is: `LocalHeddle` is its only caller,
- * and [piece] throws rather than merge two different folds, or accept from a ledger that never
- * forgot an edge numbered at or below the floor of the one that did. A replicated ledger never
- * holds a fold. Forgetting between peers is open (#3332).
+ * and [piece] throws rather than take a fold that is not the receiver's own, or accept from a
+ * ledger that never forgot an edge numbered at or below the floor of the one that did. A replicated
+ * ledger never holds a fold, and `:kuilt-heddle` refuses one at decode. Forgetting between peers is
+ * open (#3332).
  *
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerMerge
  * @sample us.tractat.kuilt.heddle.sampleEntitlementLedgerLifecycle
@@ -312,23 +313,25 @@ public class EntitlementLedger private constructor(
         )
 
     /**
-     * The fold the join of `this` and [other] carries: whichever side forgot, since forgetting is
-     * one writer's act and a fold is not a lattice.
+     * The fold the join of `this` and [other] carries: this ledger's own, since forgetting is one
+     * writer's act and a fold is not a lattice.
      *
      * Throws [IllegalArgumentException], and so makes [piece] partial, in the two states a single
-     * writer never produces (design §5.5):
-     * - both sides carry a fold, and the folds differ: two writers forgot;
+     * writer never produces (design §5.5, §10 invariant 2):
+     * - [other] carries a fold that is not this ledger's own. A delta never carries one, so it is a
+     *   second writer's, or a forgetting ledger's being adopted by one that never forgot. The one
+     *   fold accepted is the receiver's own, so `a.piece(a)` is still `a`;
      * - one side carries a fold and the other names an edge it does not, at or below its
      *   generation floor: an edge the forgetting side may have forgotten, coming back.
      */
     private fun joinForgotten(other: EntitlementLedger): ForgottenEdges {
         if (forgotten.isEmpty() && other.forgotten.isEmpty()) return ForgottenEdges.NONE
-        require(forgotten.isEmpty() || other.forgotten.isEmpty() || forgotten == other.forgotten) {
-            "two different records of forgotten edges cannot be merged: forgetting is one writer's act"
+        require(other.forgotten.isEmpty() || other.forgotten == forgotten) {
+            "a ledger cannot take a record of forgotten edges that is not its own: forgetting is one writer's act"
         }
         requireNothingResurrected(other)
         other.requireNothingResurrected(this)
-        return if (forgotten.isEmpty()) other.forgotten else forgotten
+        return forgotten
     }
 
     /** Throws unless every edge [other] names that this ledger does not is above this ledger's forgotten floor. */
