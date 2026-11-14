@@ -93,13 +93,14 @@ public class DDSketch private constructor(
     /**
      * Total number of recorded values (bucketed + zeros).
      *
-     * @throws ArithmeticException if one bucket's count, summed across replicas, does not fit in
-     *   a `Long` (#3318). The sum across buckets is not yet checked, tracked by #3343.
+     * Summed exactly across every bucket and replica, so it is answered whenever the total fits in
+     * a `Long`, and refused when it does not.
+     *
+     * @throws ArithmeticException if the total does not fit in a `Long` (#3343).
      */
     public val count: Long
-        get() = positive.values.sumOf { it.value } +
-            negative.values.sumOf { it.value } +
-            zeros.value
+        get() = exactCount.toLongOrNull()
+            ?: throw ArithmeticException("DDSketch count $exactCount does not fit in a Long")
 
     /**
      * Number of recorded values whose magnitude was below [minIndexedValue] (including exact zeros).
@@ -246,14 +247,21 @@ public class DDSketch private constructor(
      * the exact quantile's magnitude lies within the indexable range.
      * `quantile(0.0)` is the minimum estimate, `quantile(1.0)` the maximum.
      *
+     * The walk sums bucket counts in a `Long`. It cannot wrap: every partial sum is at most [count],
+     * which has to fit for the walk to start.
+     *
      * @throws IllegalArgumentException if [q] is outside `[0, 1]` or the sketch is empty.
-     * @throws ArithmeticException if [count] throws, or a bucket's count does not fit in a `Long` (#3318).
+     * @throws ArithmeticException if [count] does not fit in a `Long` (#3343).
      */
     public fun quantile(q: Double): Double {
         require(q in 0.0..1.0) { "quantile must be in [0, 1], was $q" }
         val n = count
         require(n > 0L) { "quantile of an empty DDSketch" }
-        val rank = q * (n - 1)
+        // The rank as a whole number, `⌊q·(n−1)⌋`: a running count passes `q·(n−1)` exactly when it
+        // passes its floor. Compared as a Double, a count near 2⁶³ rounds to the rank it should pass
+        // and the walk ran out of buckets (#3343). `q·(n−1)` itself can round past `n−1` there, so
+        // it is clamped to the last value's rank.
+        val rank = minOf((q * (n - 1)).toLong(), n - 1)
         var cumulative = 0L
         for ((index, counter) in negative.entries.sortedByDescending { it.key }) {
             cumulative += counter.value
