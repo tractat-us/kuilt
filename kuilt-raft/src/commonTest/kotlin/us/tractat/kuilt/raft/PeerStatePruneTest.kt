@@ -18,8 +18,8 @@ import kotlin.test.assertNull
  *
  * [RaftState], [SnapshotSender] and [ReadIndexTracker] are actor-confined holders with no coroutines
  * of their own, so driving them directly is legitimate — the same justification as
- * `SnapshotSenderOffsetClampTest`. The engine wiring is pinned end to end by
- * `StaleMatchIndexReAddTest`.
+ * `SnapshotSenderOffsetClampTest`. That the engine calls them is pinned by
+ * [PeerStatePruneEngineTest]; the cross-term trajectories end to end by `StaleMatchIndexReAddTest`.
  */
 internal class PeerStatePruneTest {
 

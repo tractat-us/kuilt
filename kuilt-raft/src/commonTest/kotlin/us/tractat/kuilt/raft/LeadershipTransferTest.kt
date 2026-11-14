@@ -513,11 +513,12 @@ internal class LeadershipTransferTest {
      * gated on `_role is Leader && m.term == currentTerm` with the responder replying at its own
      * post-adoption term — so a value produced this term proves the target already reached it.
      *
-     * That is not an absolute guarantee, and this test does not claim one: `becomeLeader` resets
-     * `matchIndex` only for the **current configuration's** members, so a removed-then-re-admitted
-     * target can satisfy the predicate on a stale index and be sent a `TimeoutNow` at a term it never
-     * adopted. The guard is fail-safe-then-retry — the premature frame is dropped and the next
-     * heartbeat ACK re-fires it correctly. What must never happen is the case pinned here: an
+     * There used to be one hole in that: `becomeLeader` reset `matchIndex` only for the current
+     * configuration's members, so a removed-then-re-admitted target could satisfy the predicate on a
+     * stale index. #3124 closed it — `becomeLeader` now clears both index maps before initialising
+     * them, and `recomputeMembership` prunes a removed peer's entries. The guard does not lean on that
+     * and stays fail-safe-then-retry: a premature frame is dropped and the next heartbeat ACK re-fires
+     * it correctly. What must never happen is the case pinned here: an
      * *unauthenticated* higher-term frame moving the recipient's durable term and forcing an election.
      * A recipient that really is behind reaches the current term by the ordinary election-timeout path.
      *

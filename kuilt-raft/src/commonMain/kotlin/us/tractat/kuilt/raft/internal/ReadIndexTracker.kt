@@ -172,6 +172,9 @@ internal class ReadIndexTracker {
         lastAckRound.keys.retainAll(targets)
     }
 
+    /** Every peer this tracker holds ack evidence for. */
+    fun ackedPeers(): Set<NodeId> = lastAckRound.keys.toSet()
+
     /** Arm the §5.4.2 leader-completeness gate: reads must not resolve before commit reaches [index]. */
     fun onNoOpAppended(index: Long) {
         currentTermNoOpIndex = index

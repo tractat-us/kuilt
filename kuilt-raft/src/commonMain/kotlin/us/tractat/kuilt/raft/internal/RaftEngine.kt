@@ -1070,6 +1070,7 @@ internal class RaftEngine(
                         is EngineCommand.CancelTransfer   -> onCancelTransfer()
                         is EngineCommand.TransferTimeout  -> onTransferTimeout(c.epoch)
                         is EngineCommand.ReapCancelledForwards -> forwarder.reapCancelled()
+                        is EngineCommand.InspectPeerState -> c.response.complete(peerStateKeys())
                         is EngineCommand.Close            -> { cmd.close(); break }
                     }
                     if (!closing) flushWaitingForLeader()
@@ -1109,6 +1110,7 @@ internal class RaftEngine(
                         is EngineCommand.RequestReadIndex   -> buffered.deferred.completeExceptionally(closed)
                         is EngineCommand.CommitCut          -> buffered.response.completeExceptionally(closed)
                         is EngineCommand.TransferLeadership -> buffered.response.completeExceptionally(closed)
+                        is EngineCommand.InspectPeerState   -> buffered.response.completeExceptionally(closed)
                         // No caller deferred to fail — enumerated (no `else`) so a future deferred-carrying
                         // EngineCommand variant forces a compile error here rather than silently hanging its
                         // caller on close, exactly like the exhaustive actor-dispatch `when` above.
@@ -3822,6 +3824,27 @@ internal class RaftEngine(
         }
         return d.await()
     }
+
+    /**
+     * Which peers the leader-side per-peer state is keyed by, read on the actor (#3124). Lets an
+     * engine-level test pin that [prunePeerState] runs; nothing in production calls it.
+     */
+    internal suspend fun inspectPeerState(): PeerStateKeys {
+        val d = CompletableDeferred<PeerStateKeys>()
+        try {
+            cmd.send(EngineCommand.InspectPeerState(d))
+        } catch (_: ClosedSendChannelException) {
+            throw NotLeaderException("node is closed")
+        }
+        return d.await()
+    }
+
+    private fun peerStateKeys(): PeerStateKeys = PeerStateKeys(
+        nextIndex = state.nextIndex.keys.toSet(),
+        matchIndex = state.matchIndex.keys.toSet(),
+        snapshotPeers = snapshotSender.trackedPeers(),
+        readAckPeers = readIndexTracker.ackedPeers(),
+    )
 
     // ── Membership ────────────────────────────────────────────────────────────
 

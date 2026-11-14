@@ -223,6 +223,9 @@ internal class SnapshotSender(
         lastStampedRound.keys.retainAll(targets)
     }
 
+    /** Every peer this sender holds an entry for: an in-flight transfer or a last stamped round. */
+    fun trackedPeers(): Set<NodeId> = snapshotXfer.keys + lastStampedRound.keys
+
     /** Abandon every in-flight transfer — call on leadership relinquish (leader-only state). */
     fun abandonAll() {
         snapshotXfer.clear()

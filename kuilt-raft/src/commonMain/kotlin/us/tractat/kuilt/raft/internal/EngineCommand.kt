@@ -90,7 +90,27 @@ internal sealed interface EngineCommand {
      * the actor sees the registration first and the cancelled deferred when it sweeps.
      */
     data object ReapCancelledForwards : EngineCommand
+
+    /**
+     * Read which peers the leader-side per-peer state is keyed by (#3124). Answered on the actor, so
+     * the read is consistent with one point in the dispatch loop rather than racing it. Test-only in
+     * practice; it changes nothing.
+     */
+    data class InspectPeerState(val response: CompletableDeferred<PeerStateKeys>) : EngineCommand
 }
+
+/**
+ * Which peers each piece of leader-side per-peer state holds an entry for: [nextIndex] and
+ * [matchIndex] from [RaftState], [snapshotPeers] from [SnapshotSender] (in-flight transfers and
+ * last-stamped rounds), [readAckPeers] from [ReadIndexTracker]. Pruned to the replication targets on
+ * every membership change (#3124).
+ */
+internal data class PeerStateKeys(
+    val nextIndex: Set<NodeId>,
+    val matchIndex: Set<NodeId>,
+    val snapshotPeers: Set<NodeId>,
+    val readAckPeers: Set<NodeId>,
+)
 
 /** The result of an [EngineCommand.CommitCut]: the committed instruction prefix plus the cut index. */
 internal class CommitCutResult(
