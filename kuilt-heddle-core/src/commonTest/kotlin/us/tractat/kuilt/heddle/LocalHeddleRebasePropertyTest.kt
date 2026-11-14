@@ -1,6 +1,8 @@
 package us.tractat.kuilt.heddle
 
 import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.timesWide
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -187,6 +189,38 @@ class LocalHeddleRebasePropertyTest {
     }
 
     /**
+     * #3360's lane: a lease that reserves [LocalHeddle.MAX_RESERVATION] and charges 1 unit returns
+     * almost all of it, at weight `3/7`. Returned service used to grow the gross position, which
+     * nothing brought down, so this lane met [AcquireOutcome.PositionCeiling] after 4,681 picks
+     * (measured on the slice 2–4 base, JVM). The ceiling is now measured on the raw position,
+     * net of returns and relative to the parent's origin, and the gross is stored wide (#3353), so
+     * the lane makes [RETURNED_LANE_PICKS] picks with no refusal.
+     */
+    @Test
+    fun aLaneThatReturnsAlmostAllOfEachReservationNeverReachesTheCeiling() {
+        val topology = draft("returns") {
+            lane("a", Weight.of(3L, 7L))
+            lane("b", Weight.ONE)
+        }
+        val engine = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+            .apply { reconcileCapacity(1L) }
+        val a = topology.groupId("a")
+        var picks = 0
+        repeat(RETURNED_LANE_PICKS) { step ->
+            val outcome = engine.acquire(setOf(a), setOf(a), startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
+            check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
+            engine.complete(outcome.lease.id, actualCost = 1L)
+            picks++
+        }
+        val returned = checkNotNull(engine.snapshot().ledger.let { it.edge(checkNotNull(it.lineageOf(a)).last()) }).returned
+        assertAll(
+            { assertEquals(RETURNED_LANE_PICKS, picks, "the run made its own picks") },
+            // The bound the old read met: returned · G at the ceiling of weight 3/7.
+            { assertTrue(returned.timesWide(TICKS_PER_UNIT) > Int128.of(positionCeiling(Weight.of(3L, 7L))), "the rig: the lane returned past the old bound ($returned units)") },
+        )
+    }
+
+    /**
      * The largest share of its own ceiling any edge's position reads at in [engine]: its gross
      * position, or its effective one, the raw position plus the wake offset a pick reads.
      */
@@ -229,6 +263,9 @@ class LocalHeddleRebasePropertyTest {
         )
 
         const val RETURN_PICKS = 30_000
+
+        /** Over twenty times the 4,681 picks #3360's lane made before it refused. */
+        const val RETURNED_LANE_PICKS = 100_000
         const val RETURN_RESERVATION = 1L shl 42
         val RETURN_LANES = listOf(
             "p" to Weight.ONE,
