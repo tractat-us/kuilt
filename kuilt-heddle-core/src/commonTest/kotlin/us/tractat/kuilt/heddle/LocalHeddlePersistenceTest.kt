@@ -546,14 +546,44 @@ class LocalHeddlePersistenceTest {
         return outcomes
     }
 
+    private val departed = richBefore.runtimeChildId(listOf("tenants"), "t2")
+
     /**
-     * The rich scenario's encoding is pinned, and it restores: an engine started from it carries on
-     * exactly as the engine that wrote it would have, through a drain finishing and a reload.
+     * The rich scenario, then a second runtime child `t2` attached under `tenants`, leased, settled
+     * and detached, so its edge retires with its books closed. Returns that engine, its open leases,
+     * and its snapshot with `t2`'s edge forgotten: what format 2 adds over format 1 (#3192).
+     */
+    private fun richFoldedScenario(): Triple<LocalHeddle, List<Lease>, LocalHeddleSnapshot> {
+        val (h, open) = richScenario()
+        check(h.attachRuntimeChild(listOf("tenants"), "t2", generation = 4L).refusals.isEmpty())
+        val edge = checkNotNull(h.snapshot().ledger.lineageOf(departed)).last()
+        val lease = h.lease(setOf(departed), reservation = 2L, startedAt = 30L)
+        check(h.complete(lease.id, 3L) is LeaseOutcome.Done)
+        check(h.detachRuntimeChild(listOf("tenants"), "t2").refusals.isEmpty())
+        val whole = h.persist()
+        val folded = checkNotNull(whole.ledger.forget(listOf(edge))) { "t2's edge is forgettable: ${whole.ledger.forgetRefusal(edge)}" }
+        return Triple(h, open, LocalHeddleSnapshot(whole.epoch, folded, whole.allocatorMemory, whole.totalSlots, whole.open, whole.lastApplied))
+    }
+
+    /** [continuation] with the books' rows for [departed] and its edge left out, the only rows a fold removes. */
+    private fun List<Any>.withoutDeparted(edge: AttachmentId): List<Any> {
+        val books = last() as List<*>
+        val edges = (books[0] as List<*>).filterNot { (it as EdgeSummary?)?.attachment == edge }
+        val holdings = (books[1] as List<*>).filterNot { (it as Pair<*, *>).first == departed }
+        return dropLast(1) + listOf(listOf(edges, holdings) + books.drop(2))
+    }
+
+    /**
+     * The rich scenario's encoding is pinned, with a fold in it, and it restores: an engine started
+     * from it carries on exactly as the engine that wrote it, which never forgot, would have, through
+     * a drain finishing and a reload. The books agree on every row but the forgotten edge's and its
+     * child's, which the fold no longer holds.
      */
     @Test
     fun richCurrentFormatEncodesToItsGoldenAndRestores() {
-        val (reference, open) = richScenario()
-        val text = encode(reference.persist())
+        val (reference, open, snapshot) = richFoldedScenario()
+        val edge = checkNotNull(reference.snapshot().ledger.inboundEdges(departed).singleOrNull())
+        val text = encode(snapshot)
         // Decoded inside each arm, so a golden that no longer decodes still prints the new encoding.
         val golden = { decoded(GOLDEN_FORMAT_2_RICH) }
         assertAll(
@@ -562,11 +592,24 @@ class LocalHeddlePersistenceTest {
             { assertTrue(golden().ledger.let { l -> l.allEdges().any { l.lifecycle(it) == Lifecycle.CLOSING } }, "the rig: an edge is draining") },
             { assertTrue(golden().leases.any { it.leaf == tenant }, "the rig: a lease at a runtime child") },
             { assertEquals(richAfter, golden().lastApplied, "the rig: the topology last applied is the reload's") },
+            { assertTrue(golden().ledger.hasForgotten() && edge !in golden().ledger.allEdges(), "the rig: t2's edge is forgotten") },
+            { assertTrue("\"forgotten\":" in GOLDEN_FORMAT_2_RICH, "the rig: the fold is in the bytes") },
+            { assertTrue((reference.snapshot().ledger.edge(edge)?.spent ?: 0L) > 0L, "the rig: the forgotten edge had spent something") },
             {
-                val snapshot = golden()
-                val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
-                assertEquals(richContinuation(reference, open), richContinuation(restored, open))
+                val restored = LocalHeddle.restore(golden(), richPolicy, epoch = snapshot.epoch + 1)
+                assertEquals(richContinuation(reference, open).withoutDeparted(edge), richContinuation(restored, open))
             },
+        )
+    }
+
+    /** Format 1 predates the fold, so a format-1 snapshot that carries one is corrupt. */
+    @Test
+    fun aFormatOneSnapshotCannotCarryAFold() {
+        val text = GOLDEN_FORMAT_2_RICH.replaceFirst("[2,", "[1,")
+        val out = LocalHeddle.decode(text, Json)
+        assertAll(
+            { assertTrue(text.startsWith("[1,") && "\"forgotten\":" in text, "the rig: format 1 with a fold") },
+            { assertTrue(out is RestoreResult.Corrupt && "format 1 predates" in out.reason, "expected Corrupt naming format 1, got $out") },
         )
     }
 
