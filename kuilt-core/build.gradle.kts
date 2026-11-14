@@ -1,5 +1,7 @@
 plugins {
     id("kuilt.kmp-library")
+    // Generates `KuiltVersion.VERSION` into commonMain (#3323). Here alone: every module depends on this one.
+    id("kuilt.version-constant")
     alias(libs.plugins.kotlinSerialization)
 }
 
