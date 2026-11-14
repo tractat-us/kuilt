@@ -138,7 +138,7 @@ public object HeddlePolicy {
      *   input the caller can provoke (issue #1737).
      * @throws ArithmeticException if any of [edges] holds a position at its ceiling, which no longer
      *   orders exactly (#3313): [LocalHeddle] answers that with [AcquireOutcome.PositionCeiling], and
-     *   [FairShareAllocator.schedule] stops granting at the parent. Also, as before, if a deadline
+     *   [FairShareAllocator.schedule] answers [AllocationOutcome.PositionCeiling]. Also, as before, if a deadline
      *   `p + q · G` leaves `Long`, which a quantum above [LocalHeddle.MAX_RESERVATION] can reach.
      */
     public fun pick(edges: List<PolicyEdge>, config: PolicyConfig, localHoldings: Long): Grant? {

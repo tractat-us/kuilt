@@ -888,8 +888,11 @@ peers activating siblings at once can merge past the budget, and a governed
 peer's data plane can briefly hold an over-budget active set when gossip brings
 it a later `Activate` before an earlier `Close`. So `HeddleNode.schedule` checks
 the parent's active children again before it seats anyone, on every round, and
-answers `ScheduleOutcome.WeightBudget(parent)` with nothing written. The check
-is the whole parent's: it refuses even a pick whose own candidates would fit.
+answers `ScheduleOutcome.WeightBudget(parent)` with nothing written. As at the
+ceiling, a refusal met after grants answers `Delegated` and keeps the rounds
+already landed, and the next call answers the refusal. The check is the whole
+parent's: it refuses even a pick whose own candidates would fit. The node logs
+one warning, naming the active edges, each time a parent enters that state.
 
 Why a grid at all, against the exact `Rational` this section used to prescribe:
 a joiner stored the front, a weighted mean whose denominator carries `Σw` of the

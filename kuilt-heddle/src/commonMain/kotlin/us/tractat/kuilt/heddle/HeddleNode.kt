@@ -412,7 +412,9 @@ public class HeddleNode internal constructor(
     /**
      * [parent]'s **current virtual time** `V` on this peer (design §7.2; issue #1688) — a
      * **diagnostic** read of this view's front. `null` when [parent] has no active children in
-     * *this peer's view* and there is therefore no front to take.
+     * *this peer's view* and there is therefore no front to take, and `null` too when their
+     * weights put the front's sums out of `Long`, where [schedule] answers
+     * [ScheduleOutcome.WeightBudget].
      *
      * **Nothing has to be done with this value any more, and that is the point** (issue #1752).
      * It used to be the number a caller rounded into a newborn's record, which made a local
