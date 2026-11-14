@@ -5,6 +5,9 @@ import org.gradle.api.artifacts.result.ResolvedDependencyResult
 
 plugins {
     id("kuilt.kmp-library")
+    // Generates `us.tractat.kuilt.heddle.KuiltVersion` into commonMain (#3323). Its own copy, since
+    // this module may not depend on `:kuilt-core`, which carries the other one.
+    id("kuilt.version-constant")
     alias(libs.plugins.kotlinSerialization)
 }
 

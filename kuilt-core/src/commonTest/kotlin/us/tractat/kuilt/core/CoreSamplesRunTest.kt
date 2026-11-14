@@ -81,4 +81,7 @@ class CoreSamplesRunTest {
 
     @Test
     fun seamStateGateHolds(): TestResult = sampleSeamStateGate()
+
+    @Test
+    fun kuiltVersionHolds() = sampleKuiltVersion()
 }
