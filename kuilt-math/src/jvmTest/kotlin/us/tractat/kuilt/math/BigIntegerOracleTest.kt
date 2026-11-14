@@ -94,7 +94,39 @@ class BigIntegerOracleTest {
         assertTrue(refused > N / 100, "the refusal arm ran only $refused times")
     }
 
+    @Test
+    fun wideSumMatchesExactArithmeticOrThrows() {
+        val random = Random(5)
+        var threw = 0
+        var steps = 0
+        repeat(N / RUN) {
+            val sum = WideSum()
+            var exact = BigInteger.ZERO
+            repeat(RUN) {
+                val adding = random.nextBoolean()
+                val term = if (random.nextBoolean()) {
+                    random.nextCornerLong().timesWide(random.nextCornerLong())
+                } else {
+                    Int128.fromTwosComplement(random.nextLong(), random.nextLong())
+                }
+                val next = if (adding) exact.add(term.big()) else exact.subtract(term.big())
+                if (next < int128Min || next > int128Max) {
+                    threw++
+                    assertFailsWith<ArithmeticException>("$exact, $term") { if (adding) sum.add(term) else sum.sub(term) }
+                } else {
+                    if (adding) sum.add(term) else sum.sub(term)
+                    exact = next
+                }
+                assertEquals(exact, sum.toInt128().big(), "after $term")
+                steps++
+            }
+        }
+        assertEquals(N, steps)
+        assertTrue(threw > N / 20, "overflow arm ran $threw of $N times")
+    }
+
     private companion object {
         const val N = 200_000
+        const val RUN = 20
     }
 }
