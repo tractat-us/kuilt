@@ -30,15 +30,16 @@ class LocalHeddleCeilingTest {
     private val b = heavy(null).groupId("b")
     private val ab = setOf(a, b)
 
+    /**
+     * `a` alone waits for two picks, then `b` joins at the front beside it. Uncapped, the heavy lane's
+     * earlier deadline takes the third pick too; at a ceiling of two, it goes to `b`.
+     */
     @Test
     fun aThirdAcquireAtACeilingOfTwoPicksTheSibling() {
-        val capped = engine(heavy(cap = 2L))
-        val uncapped = engine(heavy(cap = null))
-        val cappedPicks = List(3) { capped.pick(ab) }
-        val uncappedPicks = List(3) { uncapped.pick(ab) }
+        fun picks(h: LocalHeddle) = List(2) { h.pick(setOf(a)) } + h.pick(ab)
         assertAll(
-            { assertEquals(listOf(a, a, a), uncappedPicks, "the control: uncapped, the heavy lane takes all three") },
-            { assertEquals(listOf(a, a, b), cappedPicks) },
+            { assertEquals(listOf(a, a, a), picks(engine(heavy(cap = null))), "the control: uncapped, the heavy lane takes all three") },
+            { assertEquals(listOf(a, a, b), picks(engine(heavy(cap = 2L)))) },
         )
     }
 
@@ -141,7 +142,7 @@ class LocalHeddleCeilingTest {
             { assertIs<AcquireOutcome.Acquired>(observing) },
             { assertEquals(LeaseOutcome.Done(0L, 0L), h.extend(lease.id, 1L)) },
             { assertEquals(LeaseOutcome.Done(3L, 1L), h.complete(lease.id, 3L)) },
-            { assertEquals(b, h.pick(ab), "while the paused lane's admitted work still counts") },
+            { assertEquals(AcquireOutcome.NothingEligible, h.acquire(ab, setOf(a), startedAt = 0L), "and the lane stays paused") },
         )
     }
 
@@ -164,7 +165,7 @@ class LocalHeddleCeilingTest {
         val admitted = admits.admit(lb, all, startedAt = 0L)
         val acquired = acquires.acquire(all, setOf(lb), startedAt = 0L)
         assertAll(
-            { assertEquals(acquired, admitted) },
+            { assertEquals<Any>(acquired, admitted) },
             { assertEquals(acquires.snapshot(), admits.snapshot(), "ledger, leases and wake memory alike") },
             { assertEquals(AcquireOutcome.NothingEligible, acquires.acquire(all, setOf(la), startedAt = 0L)) },
             { assertIs<AcquireOutcome.Acquired>(admits.admit(la, all, startedAt = 0L), "the capped leaf is still admitted") },
