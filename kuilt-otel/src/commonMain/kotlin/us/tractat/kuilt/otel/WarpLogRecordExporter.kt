@@ -1755,14 +1755,15 @@ public class WarpLogRecordExporter(
      */
     private suspend fun commit(actions: List<StoreAction>, logFailure: (Throwable) -> Unit): ExportResult {
         val swept = mutableListOf<Long>()
-        // A cancellation is rethrown by `runCatchingCancellable`, past the `fold` below, so
-        // without this the index would keep whatever `indexPersisted` the previous turn left —
-        // `true`, usually — although this turn's leading index write may have landed and the rest
-        // did not. The `finally` marks it dirty on that one path, so the next turn rewrites the
-        // index from the fields (#2186). It does no I/O, so cancellation has nothing to interrupt.
+        // This coroutine's own cancellation is rethrown by `attemptStoreTurn`, past the `fold`
+        // below, so without this the index would keep whatever `indexPersisted` the previous turn
+        // left — `true`, usually — although this turn's leading index write may have landed and the
+        // rest did not. The `finally` marks it dirty on that one path, so the next turn rewrites
+        // the index from the fields (#2186). It does no I/O, so cancellation has nothing to
+        // interrupt.
         var escaped = true
         val outcome = try {
-            runCatchingCancellable { storeTurn(actions, swept) }.also { escaped = false }
+            attemptStoreTurn(actions, swept).also { escaped = false }
         } finally {
             if (escaped) lock.withLock { ledgerSwept(swept, turnFailed = true) }
         }
@@ -1785,6 +1786,28 @@ public class WarpLogRecordExporter(
             },
         )
     }
+
+    /**
+     * [storeTurn], with every failure it throws returned as a value — **except this coroutine's
+     * own cancellation**, which propagates.
+     *
+     * **Whose cancellation is it?** A [DurableStore] may run its own `withTimeout`, and when that
+     * expires it throws a `CancellationException` at a caller whose job is alive.
+     * `runCatchingCancellable`, which this used until #3384, rethrew that one too: [export], which
+     * never throws, threw, or its caller completed as cancelled with no trace. Work follows this
+     * call — [commit]'s failure arm, which counts the refusal and marks the index dirty — so
+     * `ensureActive` decides. It throws only when this coroutine really is cancelled. A cancellation
+     * the store minted reads as a refused write, so a segment it interrupted stays unwritten
+     * ([activeSegmentUnwritten]) and the next turn writes it.
+     */
+    private suspend fun attemptStoreTurn(actions: List<StoreAction>, swept: MutableList<Long>): Result<Unit> =
+        try {
+            storeTurn(actions, swept)
+            Result.success(Unit)
+        } catch (cause: Throwable) {
+            currentCoroutineContext().ensureActive()
+            Result.failure(cause)
+        }
 
     /**
      * Apply one turn's [actions] to [store] in order, stopping at the first that throws; record
