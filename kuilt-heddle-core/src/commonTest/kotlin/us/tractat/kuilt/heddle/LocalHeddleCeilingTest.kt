@@ -190,7 +190,7 @@ class LocalHeddleCeilingTest {
         val (fresh, freshQueues, oneOpen, viewed) = previews(engine(heavy(cap = 2L)))
         val uncapped = previews(engine(heavy(cap = null)))
         assertAll(
-            { assertEquals(listOf(listOf(a, b, a, a), List(5) { listOf(a, b) }.flatten(), listOf(a, b, a), listOf(a, b, a)), uncapped, "the control") },
+            { assertEquals(listOf(listOf(a, b, a, a), listOf(a, b, a, a, a, a, b, b, b, b), listOf(a, b, a), listOf(a, b, a)), uncapped, "the control") },
             { assertEquals(listOf(a, b, a, b), fresh, "a's third pick would open a third lease") },
             { assertEquals(listOf(a, b, a, b, b, b, b), freshQueues, "a queue-form preview, once both of a's slots are taken") },
             { assertEquals(listOf(a, b), oneOpen, "the open lease leaves a one slot, and b's single job ends the list") },

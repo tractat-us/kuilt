@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalVersionOverloading::class)
+
 package us.tractat.kuilt.heddle
 
 /**
@@ -16,11 +18,14 @@ public annotation class TopologyDraftDsl
  * draft("pool") {
  *     group("acme", Weight.of(3)) {
  *         lane("interactive", Weight.of(3))
- *         lane("batch")
+ *         lane("batch", maxConcurrent = 2)
  *     }
  *     group("hobby") { lane("default") }
  * }
  * ```
+ *
+ * A `maxConcurrent` beside a group, a lane or a runtime marker is its ceiling, the most leases open
+ * beneath it at once ([Topology.Node.maxConcurrent]); leave it out for none.
  *
  * The draft is only a way to write the tree down. The value it returns is built through the
  * [Topology] constructor, so it is checked by the same walk as [Topology.from], and a mistake
@@ -52,15 +57,26 @@ public sealed class TopologyDraft {
 
     private val children = mutableListOf<Topology.Node>()
 
-    /** Declares a group named [name] with [weight] among its siblings, whose children [block] declares. */
-    public fun group(name: String, weight: Weight = Weight.ONE, block: Group.() -> Unit) {
+    /**
+     * Declares a group named [name] with [weight] among its siblings, whose children [block]
+     * declares, and at most [maxConcurrent] leases open beneath it at once (`null` for no ceiling).
+     */
+    public fun group(
+        name: String,
+        weight: Weight = Weight.ONE,
+        @IntroducedAt("0.7.5") maxConcurrent: Long? = null,
+        block: Group.() -> Unit,
+    ) {
         val group = Group(name).apply(block)
-        children += Topology.Group(name, weight, group.written(), group.runtime)
+        children += Topology.Group(name, weight, group.written(), group.runtime, maxConcurrent)
     }
 
-    /** Declares a lane named [name], where work is charged, with [weight] among its siblings. */
-    public fun lane(name: String, weight: Weight = Weight.ONE) {
-        children += Topology.Lane(name, weight)
+    /**
+     * Declares a lane named [name], where work is charged, with [weight] among its siblings and at
+     * most [maxConcurrent] leases open on it at once (`null` for no ceiling).
+     */
+    public fun lane(name: String, weight: Weight = Weight.ONE, @IntroducedAt("0.7.5") maxConcurrent: Long? = null) {
+        children += Topology.Lane(name, weight, maxConcurrent)
     }
 
     internal fun written(): List<Topology.Node> = children.toList()
@@ -75,8 +91,9 @@ public sealed class TopologyDraft {
 
         /**
          * Marks this group as one whose children the app creates while running, each with
-         * [weight]. A marked group may declare no children of its own. Call it at most once per
-         * group: a group has one runtime weight.
+         * [weight] and at most [maxConcurrent] leases open on it at once (`null` for no ceiling): the
+         * ceiling caps each child on its own, not all of them together. A marked group may declare
+         * no children of its own. Call it at most once per group: a group has one runtime weight.
          *
          * Each child the app creates here is a leaf, one level below this group: a runtime child
          * cannot be marked in turn, so it never has children of its own. Declared groups nest to
@@ -84,9 +101,9 @@ public sealed class TopologyDraft {
          *
          * @throws IllegalStateException when this group is already marked.
          */
-        public fun runtimeChildren(weight: Weight = Weight.ONE) {
+        public fun runtimeChildren(weight: Weight = Weight.ONE, @IntroducedAt("0.7.5") maxConcurrent: Long? = null) {
             check(runtime == null) { "group \"$name\" already marks runtime children with ${runtime?.weight}" }
-            runtime = Topology.RuntimeChildren(weight)
+            runtime = Topology.RuntimeChildren(weight, maxConcurrent)
         }
     }
 }
