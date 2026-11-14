@@ -293,7 +293,9 @@ public sealed interface LeaseOutcome {
  *
  * **The ordinary refusals keep one change, the allocator's wake memory.** An [acquire] refused with
  * [AcquireOutcome.NoLiveLineage] leaves the ledger as it was, but the pick it tried at the root
- * observed who was waiting, and forgetting that would treat the next observation as the first. A
+ * observed who was waiting, and forgetting that would treat the next observation as the first. So
+ * does the `NoLiveLineage` of the [admit] overload that takes a waiting set, which observes it at
+ * the root. A
  * ceiling refusal keeps nothing, because its pick could not order the children it observed.
  *
  * ## Supply
@@ -608,7 +610,9 @@ public class LocalHeddle private constructor(
      *
      * Returns [AcquireOutcome.NoLiveLineage] when [leaf] is not leasable or has no lineage of
      * active edges to the root, as [admit] does. The ledger is then unchanged, but the wake memory
-     * has observed [waiting] at the root, as the refused acquire's pick would have.
+     * has observed [waiting] at the root, as the refused acquire's pick would have when the engine can
+     * fund the reservation; where it cannot, that acquire returns [AcquireOutcome.SupplyExhausted]
+     * and observes nothing.
      *
      * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION], or
      *   [leaf] is not in [waiting].
@@ -636,8 +640,9 @@ public class LocalHeddle private constructor(
         for (edge in path) {
             val parent = checkNotNull(local.record(edge)) { "lineage edge ${edge.value} has no record" }.parent
             local = allocator.settle(parent, local, seen)
-            local = seatThenDelegate(local, listOf(edge), reservation, seen)
-                ?: return@atomically AcquireOutcome.NoLiveLineage(leaf)
+            local = checkNotNull(seatThenDelegate(local, listOf(edge), reservation, seen)) {
+                "the delegation of $reservation down ${edge.value}, admitted down a live lineage, was refused"
+            }
         }
         ledger = local
         forcedMints += minted
