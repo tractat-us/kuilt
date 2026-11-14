@@ -385,11 +385,11 @@ public class FairShareAllocator(
     }
 
     /**
-     * Seat every unseated active child of [parent] in [ledger], at the front of the seated ones as
-     * [demand] sees them, **without** observing anything: the wake memory is left exactly as it
-     * was. For a delegation that is not a pick, which must still never cross an unseated edge, and
-     * which has no fresh view of who is waiting to observe. Returns [ledger] itself when nothing
-     * under [parent] is unseated.
+     * Seat every unseated active child of [parent] in [ledger], at the joiners' front ([joinFront])
+     * with the unseated as the joiners, **without** observing anything: the wake memory is left
+     * exactly as it was. For a delegation that is not a pick, which must still never cross an
+     * unseated edge, and which has no fresh view of who is waiting to observe. Returns [ledger]
+     * itself when nothing under [parent] is unseated.
      */
     internal fun seatUnseated(
         parent: GroupId,
@@ -399,7 +399,7 @@ public class FairShareAllocator(
         val edges = policyEdges(ledger, parent, demand)
         val unseated = edges.filter { it.gauge == null }.mapTo(HashSet()) { it.record.id }
         if (unseated.isEmpty()) return ledger
-        val front = HeddlePolicy.frontTime(edges, excluding = unseated)
+        val front = joinFront(edges, joiners = unseated)
         val patch = seatPatch(ledger, unseated, front) ?: return ledger
         return ledger.piece(patch.delta)
     }
@@ -611,34 +611,30 @@ public class FairShareAllocator(
 
     /**
      * Seat the **newborns** and clamp the **wakers** under [parent] — the two kinds of joiner —
-     * against a single front taken over the set neither of them is in.
+     * against a single front, [joinFront].
      *
      * **One front, one exclusion set, and that is the whole point** (issue #1752). Both joiners are
      * measured against "where the competing set is right now", and each is, in its own way, reading
      * from further back than that: a newborn carries no [Gauge] and so reads from its own origin,
      * the furthest back anything can read, while a waker is still carrying the stale virtual service
-     * it slept on and this round's clamp has not been computed yet. Leave *either* in and it drags
-     * the front down to meet itself; leave both in and they average each other's staleness and both
-     * bank the difference. Seating them in two passes over two fronts is the same defect wearing a
-     * schedule: with a runner at `ev = 200` and a waker at `0`, a seat-then-clamp order seats a
-     * newborn at `100` and then clamps the waker to `mean(200, 100) = 150`, when both belong at
-     * `200`. The newborn's share of that is **permanent** — it is frozen into the [Gauge]'s
-     * position, which the join only ever ratchets up — which is exactly the §10.5 lifetime credit the seat exists to
-     * deny. [HeddlePolicy.front]'s KDoc states the rule; this is the one place that has to honour it.
+     * it slept on and this round's clamp has not been computed yet. Leave *either* in the mean and
+     * it drags the front down to meet itself; leave both in and they average each other's staleness
+     * and both bank the difference. Seating them in two passes over two fronts is the same defect
+     * wearing a schedule: with a runner at `ev = 200` and a waker at `0`, a seat-then-clamp order
+     * seats a newborn at `100` and then clamps the waker to `mean(200, 100) = 150`, when both belong
+     * at `200`. The newborn's share of that is **permanent** — it is frozen into the [Gauge]'s
+     * position, which the join only ever ratchets up — which is exactly the §10.5 lifetime credit
+     * the seat exists to deny.
      *
-     * **When every active child is a joiner and one of them is waking**, the front is the joiner
-     * furthest ahead ([joinersFront]): every waker is clamped to it and every newborn seated there
-     * (#3329 review). Otherwise a rebase that lifted idle children to `−R` would leave a newborn
-     * `R` ahead of them.
-     *
-     * **A `null` front means every active child is a newborn**, i.e. nobody is left to be level with,
-     * and the seat bump then writes [Rational.ZERO]. That is not a guess: [EntitlementLedger.seat]
-     * stores `max(front, baseIssued / w)`, so a zero front seats an edge exactly where it already
-     * reads, pinning it without moving it. Pinning is the point — it stops a sibling that happens to
-     * be served first from becoming the front the *others* are then seated behind, which is how a
-     * cohort of newborns would otherwise be split by nothing but pick order. And if this view is
-     * merely stale rather than genuinely empty, the componentwise join repairs it: a better-informed
-     * peer's higher position wins the `max`, so the low reading is absorbed rather than frozen.
+     * A cohort of newborns with nobody else at the parent is seated level, at the furthest-ahead
+     * origin among them, which for fresh edges is zero. That is not a guess:
+     * [EntitlementLedger.seat] stores `max(front, baseIssued / w)`, so a front at an edge's own
+     * origin seats it exactly where it already reads, pinning it without moving it. Pinning is the
+     * point — it stops a sibling that happens to be served first from becoming the front the
+     * *others* are then seated behind, which is how a cohort of newborns would otherwise be split by
+     * nothing but pick order. And if this view is merely stale rather than genuinely empty, the
+     * componentwise join repairs it: a better-informed peer's higher position wins the `max`, so the
+     * low reading is absorbed rather than frozen.
      *
      * Publishes at most one patch.
      */
@@ -653,62 +649,60 @@ public class FairShareAllocator(
             .filter { HeddlePolicy.isDemanding(it) && demandingObserved[it.record.id] == false }
             .mapTo(HashSet()) { it.record.id }
         val joiners = HashSet(unseated).apply { addAll(wakers) }
-        val taken = if (joiners.isEmpty()) null else HeddlePolicy.frontTime(edges, excluding = joiners) ?: joinersFront(edges, joiners, wakers)
-        val front = if (taken != null && wakers.isNotEmpty()) atLeastTheNewborns(taken, edges, unseated) else taken
-
-        if (unseated.isNotEmpty()) {
-            ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
+        if (joiners.isNotEmpty()) {
+            val front = joinFront(edges, joiners)
+            if (unseated.isNotEmpty()) {
+                ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
+            }
+            clampWakers(edges, wakers, front)
         }
-        if (front != null) clampWakers(edges, wakers, front)
         for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
     }
 
     /**
-     * The front when every active child is joining and at least one of them is waking: the joiner
-     * furthest ahead, a waker at its effective position or a newborn at its own origin (#3329
-     * review). Every waker is clamped to it and every newborn seated there, so the joiners start
-     * level: no waker keeps idle credit over another (§10.6), and none over a newborn.
+     * The front every one of [joiners] is seated at or clamped to (design §7.2, #3353).
      *
-     * The newborns count because a seat cannot go below the edge's own origin
-     * ([EntitlementLedger.seatAt]). Wakers a rebase lifted to `−R` sit below every newborn's
-     * origin, and a front taken over the wakers alone would seat the newborn `R` ahead of them.
+     * - **Some child that is not joining is demanding:** the weighted mean over those children
+     *   ([HeddlePolicy.frontTime] over the demanding non-joiners). The joiners come level with the
+     *   set they are about to compete in, and none of them is averaged into it.
+     * - **Otherwise**, the UNIFIED rule: the furthest-ahead child at the parent, counting idle
+     *   children, the joiners themselves, and each newborn at its own origin. There is no competing
+     *   set to come level with, so everyone joining starts level with whoever has had the most.
+     *   This can cost a joiner a turn; it can never give one.
      *
-     * `null` when nobody is waking: a cohort of newborns is then seated each at its own origin.
+     * It replaces three older rules: the maximum over the idle non-joiners alone, a `null` front
+     * when only joiners were left, and raising a front to the newborns' origins whenever newborns
+     * joined beside wakers. The first let a waker come back level with an idle bystander far behind
+     * its sibling: with `a` at 100 and `b` at 0 both waking beside `c` idle at 10, `b` was clamped
+     * to 10 and took 95 of the next 100.
+     *
+     * The third is gone from the competing case too, so that case did change. With a demanding
+     * runner below zero, the mean sits below a newborn's origin; the newborn is seated at its origin
+     * (a seat cannot go below it) and waits behind the runner, where the old raise clamped the
+     * wakers up to it instead. Nothing but `LocalHeddle`'s fold rebase puts a demanding child below
+     * zero, and per-parent origins replace that rebase in a later slice of #3353; until then
+     * `aNewbornBehindASubZeroRunnerWaitsUntilOrigins` pins the wait.
+     *
+     * Either way the front reads the ceiling when a child it was taken over is at its ceiling, so a
+     * joiner seated or clamped against it lands at the penalty end (#3313).
      */
-    private fun joinersFront(edges: List<PolicyEdge>, joiners: Set<AttachmentId>, wakers: Set<AttachmentId>): VirtualTime? {
-        if (wakers.isEmpty()) return null
-        val joining = edges.filter { it.record.id in joiners }
-        val top = joining.maxWith { a, b ->
+    private fun joinFront(edges: List<PolicyEdge>, joiners: Set<AttachmentId>): VirtualTime {
+        val competing = edges.filter { it.record.id !in joiners && HeddlePolicy.isDemanding(it) }
+        if (competing.isNotEmpty()) {
+            return checkNotNull(HeddlePolicy.frontTime(competing)) { "a non-empty demanding set has a front" }
+        }
+        val top = edges.maxWith { a, b ->
             compareVirtual(HeddlePolicy.effectiveTicks(a), a.record.weight, HeddlePolicy.effectiveTicks(b), b.record.weight)
         }
-        return VirtualTime.of(HeddlePolicy.effectiveTicks(top), top.record.weight).atCeilingIf(joining.any { HeddlePolicy.isAtCeiling(it) })
-    }
-
-    /**
-     * [front], or the origin of the newborn of [unseated] furthest ahead when that is later (#3329
-     * re-review). A newborn's seat cannot go below its own origin ([EntitlementLedger.seatAt]), so
-     * when newborns and wakers join together, a front below a newborn's origin would seat the
-     * newborn there and clamp the wakers lower, leaving them credit over it. The front an idle
-     * fallback reads can be that low: a rebase lifts an idle child only to `−R`. Raised to the
-     * origin, the wakers are clamped where the newborn is seated. Usually a no-op: a fresh edge's
-     * origin is zero, and a front is at or above zero.
-     */
-    private fun atLeastTheNewborns(front: VirtualTime, edges: List<PolicyEdge>, unseated: Set<AttachmentId>): VirtualTime {
-        val newborns = edges.filter { it.record.id in unseated }
-        if (newborns.isEmpty()) return front
-        val top = newborns.maxWith { a, b ->
-            compareVirtual(HeddlePolicy.effectiveTicks(a), a.record.weight, HeddlePolicy.effectiveTicks(b), b.record.weight)
-        }
-        val origin = HeddlePolicy.effectiveTicks(top)
-        return if (origin > front.ticksFor(top.record.weight)) VirtualTime.of(origin, top.record.weight) else front
+        // Any saturated child, not only the top: one that reads below the top may truly be above it.
+        return VirtualTime.of(HeddlePolicy.effectiveTicks(top), top.record.weight).atCeilingIf(edges.any { HeddlePolicy.isAtCeiling(it) })
     }
 
     /**
      * One patch seating each of [unseated] at [front], each on its own grid
-     * ([VirtualTime.ticksFor]), or at its own origin when [front] is `null`.
-     * [EntitlementLedger.seatAt] refuses an edge that already carries a gauge, so an id whose seat
-     * arrived between the front being read and this patch being built is simply skipped rather
-     * than re-seated.
+     * ([VirtualTime.ticksFor]). [EntitlementLedger.seatAt] refuses an edge that already carries a
+     * gauge, so an id whose seat arrived between the front being read and this patch being built is
+     * simply skipped rather than re-seated.
      *
      * The seats are gathered into one gauge map and assembled once. Joining them one at a time
      * copied the growing patch on every seat, which made a cohort of `n` newborns cost `n²` (5,000
@@ -717,12 +711,12 @@ public class FairShareAllocator(
     private fun seatPatch(
         s: EntitlementLedger,
         unseated: Set<AttachmentId>,
-        front: VirtualTime?,
+        front: VirtualTime,
     ): Patch<EntitlementLedger>? {
         val gauges = LinkedHashMap<AttachmentId, Gauge>()
         for (id in unseated.sorted()) {
             val weight = s.record(id)?.weight ?: continue
-            val seat = s.seatAt(id, front?.ticksFor(weight) ?: 0L) ?: continue
+            val seat = s.seatAt(id, front.ticksFor(weight)) ?: continue
             gauges[id] = checkNotNull(seat.delta.gauge(id)) { "a seat patch for ${id.value} carries no gauge" }
         }
         if (gauges.isEmpty()) return null
@@ -754,13 +748,10 @@ public class FairShareAllocator(
      *
      * All wakers are excluded from the front together, not just each from its own: two siblings
      * waking in the same round would otherwise average each other's stale virtual service into
-     * the front and both keep the credit. When nothing survives the exclusion, every **active**
-     * child under the parent is joining, and the front is the joiner furthest ahead
-     * ([joinersFront]), so the wakers are clamped level with each other and with any newborn
-     * (#3329 review). Surviving children that are merely *idle* do not empty the set:
-     * [HeddlePolicy.front] falls back to the maximum effective virtual service across them, the
-     * bound that can only ever give a turn up (§7.2). Either way, when newborns join beside the
-     * wakers, the front is raised to the newborns' origins ([atLeastTheNewborns]).
+     * the front and both keep the credit. When no child outside the joiners is demanding, the front
+     * is the furthest-ahead child at the parent, the joiners and the idle children included
+     * ([joinFront], §7.2), so the wakers are clamped level with each other, with any newborn, and
+     * with the child that has had the most: the bound that can only ever give a turn up.
      *
      * **The stored offset is joined with `max`, never replaced** (issue #1714). [HeddlePolicy.front]
      * is a weighted mean over whoever is competing *right now*, and that mean is not monotone

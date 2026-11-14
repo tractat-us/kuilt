@@ -272,7 +272,10 @@ public object HeddlePolicy {
      * When nothing in the surviving set is demanding, the fallback is the **maximum** effective
      * virtual service rather than the mean. §10.5 is one-directional — credit is forbidden, a
      * sliver of penalty is merely undesirable — so the conservative choice is the bound that can
-     * only ever give up.
+     * only ever give up. [FairShareAllocator] seats and clamps its joiners against a front of its
+     * own in that case, the furthest-ahead child counting the joiners too (design §7.2, #3353), so
+     * this fallback, over the survivors alone, is what this function reports and not what a joiner
+     * is given.
      *
      * **Not derivable from replicated state, by design — and no longer required to be.** Demand
      * ages out by *local* receive time and [PolicyEdge.virtualOffset] is deliberately not

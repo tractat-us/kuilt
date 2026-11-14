@@ -974,8 +974,8 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   denominator into the next one.
 
   Default `sleeperCredit = 0`. `parentVirtualTime` here is the front defined
-  just below, taken with the waker itself — and every sibling waking in the
-  same round — excluded. The clamp fires only on a transition this peer has
+  just below, with the waker itself — and every sibling waking in the same
+  round — excluded from its mean. The clamp fires only on a transition this peer has
   actually *observed*: an edge seen for the first time is recorded as it
   stands, never clamped on arrival, because a first sighting is not evidence
   that anyone slept. The offset is scheduler-local policy state — deliberately
@@ -1017,21 +1017,31 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   each other's staleness into the front and both keep it, so all of a round's
   wakers are excluded together, not each merely from its own.
 
-  **When nothing in the surviving set is demanding, the front is the
-  *maximum* effective virtual service in that set, not their mean.** There is
-  no competing set to come level with, so the fallback takes the bound that
-  can only ever give up: §10.5 is one-directional — credit is forbidden, a
-  sliver of penalty is merely undesirable — and the maximum is never below the
-  mean of the same set, so it can penalise a joiner but never credit one. The
+  **When no child outside the joiners is demanding, the mean has nothing to
+  average, and the front is a maximum instead.** The rule, ruled in #3353:
+
+  When no non-joiner is demanding, the front is the furthest-ahead child at the parent, counting idle children, the joiners themselves, and each newborn at its own origin. There is no competing set to come level with, so everyone joining starts level with whoever has had the most. This can cost a joiner a turn; it can never give one.
+
+  §10.5 is one-directional — credit is forbidden, a sliver of penalty is merely
+  undesirable — and the maximum is the bound that can only ever give up. The
   consequence is worth stating plainly rather than discovering: an idle child
   sitting *ahead* of everyone pins the front at its own position for every
-  newborn seated while nothing competes.
+  joiner while nothing else competes. A cohort of fresh newborns lands at zero,
+  the furthest-ahead origin among them.
 
-  **An empty surviving set has no front at all, and the front read reports that
-  as `null` rather than quietly as the origin.** Two different situations wear
-  that one face: the legitimate **first** generation under a parent, whose origin
-  seat is genuinely correct, and a peer whose view has simply not applied the
-  siblings yet, for which the origin seat is wrong.
+  It replaces three older rules. The maximum used to be taken over the idle
+  survivors alone, which let a waker come back level with an idle bystander far
+  behind its sibling: with `a` at 100 and `b` at 0 both waking beside `c` idle
+  at 10, `b` was clamped to 10 and took 95 of the next 100 grants, where this
+  rule splits them 50/50. With only joiners left there was no front at all, and
+  each newborn was seated at its own origin. And whenever newborns joined beside
+  wakers, the front was raised to the newborns' origins (#3329), a case this
+  rule now covers by counting them.
+
+  **The old rule's empty set had no front, and two situations wore that face**:
+  the legitimate **first** generation under a parent, whose origin seat is
+  genuinely correct, and a peer whose view has simply not applied the siblings
+  yet, for which the origin seat is wrong.
 
   While the seat was frozen into the committed record that ambiguity was
   load-bearing and unfixable from inside — one peer's guess became everyone's
@@ -1043,27 +1053,22 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
 
   **Publishing the seat dissolves the ambiguity rather than fencing it** (#1752).
   The seat bump writes `max(front, baseIssued / w)` into the edge's `Gauge`, so a
-  peer with no front seats at the origin — where the edge already reads, pinning
-  it without moving it — and any better-informed peer's higher position wins the
-  join's `max`. A low reading is absorbed instead of frozen, so the fence and both
-  of its residuals are gone, and a node with no control plane no longer needs to
-  tell the two situations apart.
+  peer that sees only the newborns seats them at the furthest-ahead origin, where
+  a fresh edge already reads, pinning it without moving it, and any
+  better-informed peer's higher position wins the join's `max`. A low reading is
+  absorbed instead of frozen, so the fence and both of its residuals are gone,
+  and a node with no control plane no longer needs to tell the two situations
+  apart.
 
-  **When every active child is joining and at least one is waking, the front is
-  the joiner furthest ahead** (#3329 review). A waker counts at its effective
-  position and a newborn at its own origin. Every waker is clamped there and
-  every newborn seated there, so the cohort starts level. No waker keeps idle
-  credit over another (§10.6), and none over a newborn. The newborns count
-  because a seat cannot go below the edge's own origin. The rule used to leave
-  the wakers unclamped and seat each newborn at its origin. A rebase can lift
-  idle children to `−R`, and that old rule then put a newborn about `R` ahead of
-  the wakers, which took every pick until they caught up. With nobody waking, a
-  cohort of newborns is still seated each at its own origin, as above.
-
-  The same seat floor reaches the ordinary fronts too. Whenever newborns join
-  beside wakers, the front is raised to the newborns' origins. The idle fallback
-  can sit below them, at a sibling a rebase lifted to `−R`, and a waker clamped
-  there would otherwise keep credit over a newborn seated at its origin.
+  **The newborns count because a seat cannot go below the edge's own origin.** A
+  rebase can lift idle children to `−R` (§7.1). A front taken without the
+  newborns could then sit below them, and a waker clamped there would keep
+  credit over a newborn seated at its origin, which took every pick until the
+  waker caught up (#3329 review). When some non-joiner *is* demanding, the front
+  is that set's mean and can still sit below a newborn's origin, at a runner a
+  `LocalHeddle` rebase brought below zero. The newborn then waits behind it. That
+  is a penalty, never credit, and it is the gap per-parent origins will close,
+  when slice 7 of #3353 moves `LocalHeddle` onto them.
 
 ### 7.3 Selection
 
@@ -1303,7 +1308,8 @@ Carried over from the source intact; each is a named property test (§13).
    reservation's captured path crosses an edge of the strand it re-homes.
 5. **Neutral attachment initialization.** A new generation starts at the
    parent's current virtual time — the front over its *demanding* children,
-   not over all its active ones (§7.2) — never with lifetime credit. The
+   not over all its active ones, or the furthest-ahead child when no child but
+   the joiners is demanding (§7.2) — never with lifetime credit. The
    seat is published on the edge's `Gauge`, not frozen into the record, and is
    the front rounded **up** to the edge's own grid, under one tick (§7.2). It is
    stored exactly and uncapped (#3353). Only the front it is taken from is still

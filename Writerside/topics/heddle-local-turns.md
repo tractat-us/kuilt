@@ -84,9 +84,11 @@ offset = max(0, front − ev − sleeperCredit / w)
 ```
 
 `front` is the weighted average `ev` of the siblings that kept competing, with
-every waker left out. If none of them is competing, the largest `ev` among them
-stands in. If every child is waking or new and at least one is waking, they all
-start level with the one furthest ahead. A child's offset never shrinks against its siblings', so a
+every waker left out. If none of them is competing, there is nobody to catch up
+with. Then the front is the team furthest ahead, counting the idle ones, the
+wakers, and each new team at zero. Everyone coming back starts level with
+whoever has had the most. That can cost a team a turn, but never give it an
+extra one. A child's offset never shrinks against its siblings', so a
 second wake cannot hand back credit the first one took. `sleeperCredit` is the
 idle credit a waker may keep, set on `LocalPolicy`, and it defaults to zero.
 
