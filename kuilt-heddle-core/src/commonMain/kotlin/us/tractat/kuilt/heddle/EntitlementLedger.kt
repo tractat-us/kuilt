@@ -394,7 +394,8 @@ public class EntitlementLedger private constructor(
 
     /**
      * [id]'s **gross** virtual service — `floor + (baseIssued − folded) / w`, or `baseIssued / w`
-     * when no [Gauge] is stored. `null` if [id] is unknown *or divergent* (no single record ⇒ no
+     * when no [Gauge] is stored, read on the edge's 1/16-unit grid: a floor written off it is
+     * rounded up once ([grossTicksAt], #3313). `null` if [id] is unknown *or divergent* (no single record ⇒ no
      * single weight to divide by).
      *
      * ## Base issuance, not effective (issue #1752, F2)

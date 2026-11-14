@@ -57,8 +57,9 @@ The winner's edge is handed `r`, which raises its `ev` by `r/w`, and the pick
 repeats one fork down. Every candidate shares the same `r`, so deadlines differ
 only by progress and weight. A heavier child moves less per build, so it wins
 more often. Progress is counted in sixteenths of a unit, as whole numbers, so
-there is no floating point. Only a newcomer's starting place is rounded, up by
-under one sixteenth, so it never starts ahead of the children already waiting.
+there is no floating point. Only a newcomer's starting place, or a waking
+child's, is rounded, up by under one sixteenth, so it never starts ahead of the
+children already waiting.
 
 The steps are `HeddlePolicy.pick`. `FairShareAllocator.pickChild` makes one such
 pick at one fork, and `LocalHeddle.acquire` walks them from the root to a lane.

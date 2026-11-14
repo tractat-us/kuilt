@@ -194,9 +194,10 @@ it is issued entitlement, not only when it spends); a child is *eligible* when i
 ahead of the weighted-mean of its siblings; among the eligible, the one whose next grant
 would finish soonest wins. A freshly created child starts level with its siblings — no
 credit for the parent's whole past — and an idle child that wakes is clamped forward to
-the current front, so neither can bank an unfair head start (design §7, §10.5–6). Every
-comparison is exact integer arithmetic on `Rational`, so the same inputs produce the
-same pick on JVM, Android, iOS, macOS, and wasmJs.
+the current front, so neither can bank an unfair head start (design §7, §10.5–6). Each
+child's progress is a whole number of sixteenths of a unit, and every comparison is integer
+cross-multiplication, so the same inputs produce the same pick on JVM, Android, iOS, macOS,
+and wasmJs.
 
 ## Scheduling without a network
 

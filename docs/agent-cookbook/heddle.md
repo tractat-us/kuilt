@@ -202,10 +202,9 @@ from a sibling that can run. A refusal is a typed outcome (`NothingEligible`, `S
 `NoLiveLineage`, `PathDraining`, `Unknown`, `Stale`), never an exception: an `extend` on a lease
 whose path a reload is closing is `PathDraining`, and its `complete` still settles. A bad argument
 throws `IllegalArgumentException`, such as a reservation above `LocalHeddle.MAX_RESERVATION`
-(2^44 cost units). `ArithmeticException` is reachable too: a pick compares exact fractions, so
-the total service under one parent has a ceiling. The ceiling depends on the children's weights:
-whole-number weights reach much further than fractional ones. Past it, every `acquire` there
-throws. `IllegalStateException` is left only for a conflicted ledger, such as two live edges into
+(2^44 cost units). `ArithmeticException` is reachable too: each child's progress is a `Long`
+count of sixteenths of a unit, so the service under one parent has a ceiling, scaled for a newcomer
+by its weight against its siblings'. Past it, every `acquire` there throws. `IllegalStateException` is left only for a conflicted ledger, such as two live edges into
 one group, a split record or a cycle, which the public surface cannot reach today. The
 engine reads no clock and no random source, and it is not thread-safe: call every method under your
 scheduling lock, `snapshot()` included, and hand status and persistence readers the immutable value
@@ -251,8 +250,8 @@ same test `acquire` applies), `SupplyExhausted`, `BehindAtLevel(parent, nextChil
 group where another child goes first, or `WouldBePickedNext`. It runs the real pick on a throwaway
 copy, wake memory included, so it agrees with the next `acquire` on the same arguments and changes
 nothing. `BehindAtLevel` carries the leaf side's virtual service beside two lines: `eligibleFront`,
-the line this pick drew over the children it could run (above it, the side was not a candidate;
-at or below, it lost on its deadline), and `front`, the share line over everyone waiting (above
+the line this pick drew over the children it could run (more than one sixteenth of a unit of the
+side's own service above it, the side was not a candidate; at or below, it lost on its deadline), and `front`, the share line over everyone waiting (above
 it, the side has had more than its share). Log `kind`, a stable ordered enum, and the group ids,
 not the rationals, which move every pick. `entitlement(leaf, waiting, totalSlots)` is the leaf's fair share of the slots, as an exact
 fraction, over the same competing set: work no pick can reach is owed nothing and takes nothing.

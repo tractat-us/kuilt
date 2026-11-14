@@ -79,14 +79,6 @@ public data class Gauge(
 }
 
 /**
- * [units] of service converted to virtual time at weight [w]: `units / w = units * den / num`.
- * The one place that division happens, so the gauge read and [HeddlePolicy.virtualService] cannot
- * drift in how they weight a quantity. Overflow-checked (§10.12).
- */
-internal fun perWeight(units: Long, w: Weight): Rational =
-    Rational.of(checkedMul(units, w.denominator), w.numerator)
-
-/**
  * The **gross** virtual service an edge of weight [weight] reads at base issuance [baseIssued] —
  * `floor + (baseIssued − folded) / weight`, or `baseIssued / weight` when the receiver is `null`
  * and the edge therefore reads from its own origin.

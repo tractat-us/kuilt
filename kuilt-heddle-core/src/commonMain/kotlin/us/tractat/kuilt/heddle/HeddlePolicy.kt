@@ -1,5 +1,7 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Rounding
+
 /**
  * One immediate child, as the policy sees it: the immutable attachment metadata
  * ([record] — parent, child and weight), the parent-facing accounting ([summary] —
@@ -304,7 +306,12 @@ public object HeddlePolicy {
      * @param sleeperCredit bounded credit the waker may keep (default `0`).
      */
     public fun wakeOffset(front: Rational, vRaw: Rational, weight: Weight, sleeperCredit: Long): Rational =
-        ticksToVirtual(wakeOffsetTicks(ticksAt(front, weight), ticksAt(vRaw, weight), sleeperCredit), weight)
+        // The front rounds up and the waker's own position down, so an off-grid caller's offset
+        // can only overshoot the front, never land short of it (§10.5).
+        ticksToVirtual(
+            wakeOffsetTicks(ticksAt(front, weight), ticksAt(vRaw, weight, Rounding.FLOOR), sleeperCredit),
+            weight,
+        )
 
     /**
      * [wakeOffset] in ticks: how far a waker at [rawTicks] moves up to reach [frontTicks], less

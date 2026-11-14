@@ -3,6 +3,7 @@ package us.tractat.kuilt.heddle
 import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.math.Rounding
 import us.tractat.kuilt.math.mulDiv
+import us.tractat.kuilt.math.timesOrNull
 import us.tractat.kuilt.math.timesWide
 
 /**
@@ -44,19 +45,40 @@ internal const val TICKS_PER_UNIT: Long = 16L
 internal fun ticksOf(units: Long): Long = checkedMul(units, TICKS_PER_UNIT)
 
 /**
- * The virtual time [v] read on the grid of an edge of weight [w]: `⌈v · w · G⌉` ticks.
+ * The virtual time [v] read on the grid of an edge of weight [w]: `⌈v · w · G⌉` ticks, or `⌊…⌋`
+ * when [rounding] says so.
  *
  * Exact for a value already on that grid — every value this module writes is — and the one
  * rounding left for any other: a floor or offset an older peer wrote as an arbitrary rational, or a
  * front handed to the public [EntitlementLedger.seat]. Rounding up is the same side the seat takes.
  *
+ * The fraction is reduced crosswise before anything multiplies, and when the two denominators'
+ * product still leaves `Long` the division is done in two ceiling steps instead
+ * (`⌈⌈x / a⌉ / b⌉ = ⌈x / (a · b)⌉` for positive `a` and `b`; the same holds for floors). So an
+ * older peer's fat denominator throws only when the **result** does not fit, never on the way to
+ * a small one.
+ *
  * @throws ArithmeticException if the result does not fit in a `Long`.
  */
-internal fun ticksAt(v: Rational, w: Weight): Long {
+internal fun ticksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILING): Long {
     val scale = checkedMul(w.numerator, TICKS_PER_UNIT)
-    val divisor = checkedMul(v.denominator, w.denominator)
-    return mulDiv(v.numerator, scale, divisor, Rounding.CEILING)
-        ?: throw ArithmeticException("Long overflow: ⌈$v · $w · $TICKS_PER_UNIT⌉")
+    val g1 = gcdOf(w.denominator, absRemainder(v.numerator, w.denominator))
+    val g2 = gcdOf(v.denominator, scale)
+    val numerator = v.numerator / g1
+    val weightDenominator = w.denominator / g1
+    val denominator = v.denominator / g2
+    val reducedScale = scale / g2
+    fun overflow(): Nothing = throw ArithmeticException("Long overflow: ⌈$v · $w · $TICKS_PER_UNIT⌉")
+    val divisor = denominator.timesOrNull(weightDenominator)
+    if (divisor != null) return mulDiv(numerator, reducedScale, divisor, rounding) ?: overflow()
+    val inner = mulDiv(numerator, reducedScale, denominator, rounding) ?: overflow()
+    return mulDiv(inner, 1L, weightDenominator, rounding) ?: overflow()
+}
+
+/** `|a mod b|` for a positive [b]: in `[0, b)`, and never a negation of `Long.MIN_VALUE`. */
+private fun absRemainder(a: Long, b: Long): Long {
+    val r = a % b
+    return if (r < 0L) -r else r
 }
 
 /**
@@ -97,7 +119,6 @@ internal class VirtualTime(
     private val weightDenominator: Long,
 ) {
     init {
-        require(ticks >= Int128.ZERO) { "a virtual time is never negative, was $ticks" }
         require(weightNumerator > 0L && weightDenominator > 0L) { "weight must be positive" }
     }
 
@@ -106,10 +127,12 @@ internal class VirtualTime(
      * is seated, where a waker is clamped to, and the highest position at which an edge of weight
      * [w] is still eligible (design §7.3 step 3, read at grid resolution).
      *
-     * `V · w · G = ticks · (wDen · w.num) / (wNum · w.den)`. The quotient `ticks / divisor` is
-     * split off first so no intermediate needs more than 128 bits: it fits in a `Long` because the
-     * divisor is at least the number of positions summed (each edge's integer weight is at least
-     * one) and no position exceeds a `Long`.
+     * `V · w · G = ticks · (wDen · w.num) / (wNum · w.den)`. The floor quotient `ticks / divisor`
+     * is split off first so no intermediate needs more than 128 bits: it fits in a `Long` because
+     * the divisor is at least the number of positions summed (each edge's integer weight is at
+     * least one) and every position is a `Long`. The remainder is taken against that floor
+     * quotient, so it is in `[0, divisor)` for a negative sum too: a position can be negative when
+     * an edge has returned more than its base issuance, relocation credit included.
      *
      * @throws ArithmeticException if the result, or a weight product, does not fit in a `Long`.
      */
@@ -118,7 +141,10 @@ internal class VirtualTime(
         val divisor = checkedMul(weightNumerator, w.denominator)
         val whole = ticks.divideOrNull(divisor, Rounding.FLOOR)
             ?: throw ArithmeticException("Long overflow: $ticks / $divisor")
-        val remainder = ticks % divisor // ticks ≥ 0, so this is the floor remainder, in [0, divisor)
+        // The floor remainder, in [0, divisor): `ticks % divisor` truncates, which differs for a negative sum.
+        val remainder = checkNotNull((ticks - whole.timesWide(divisor)).toLongOrNull()) {
+            "a floor remainder is below its divisor: $ticks − $whole · $divisor"
+        }
         val fraction = checkNotNull(mulDiv(remainder, multiplier, divisor, Rounding.CEILING)) {
             "remainder · m / d < m always fits: $remainder · $multiplier / $divisor"
         }
@@ -129,7 +155,7 @@ internal class VirtualTime(
     /** This time as an exact [Rational], for diagnostics. Throws when it does not fit one. */
     fun toRational(): Rational {
         val denominator = checkedMul(TICKS_PER_UNIT, weightNumerator)
-        val g = gcd(ticks % denominator, denominator)
+        val g = gcd(denominator, absRemainder128(ticks, denominator))
         val numerator = ticks.divideOrNull(g, Rounding.FLOOR) // exact: g divides ticks
             ?: throw ArithmeticException("Long overflow: $ticks / $g")
         return Rational.of(checkedMul(numerator, weightDenominator), denominator / g)
@@ -155,6 +181,11 @@ internal class VirtualTime(
         fun of(ticks: Long, w: Weight): VirtualTime = VirtualTime(Int128.of(ticks), w.numerator, w.denominator)
 
         private tailrec fun gcd(a: Long, b: Long): Long = if (b == 0L) a else gcd(b, a % b)
+
+        private fun absRemainder128(a: Int128, b: Long): Long {
+            val r = a % b
+            return if (r < 0L) -r else r
+        }
     }
 }
 

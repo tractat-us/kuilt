@@ -626,20 +626,22 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   This reverses #1752's 2026-07-30 ruling, which kept the floor an exact
   `Rational` and warned that a fixed-point floor would have to round **down**,
   because a `ceil` at every checkpoint would compound into real inflation. That
-  premise does not hold here, because checkpoints do not round. A checkpoint
-  writes the floor plus the issuance since the fold, which is whole units and so
-  whole ticks; reading an on-grid floor back is exact; and only the seat and the
-  wake clamp round, each once per join. A floor written off the grid, by a peer
-  older than #3313, is rounded up once, on read, and the next checkpoint writes it
-  back on the grid. Rounding up is monotone, so it commutes with the join's `max`
-  and peers that merge in any order still read the same position.
+  premise does not hold here, because a checkpoint adds whole ticks. It writes
+  the floor plus the issuance since the fold, which is whole units; reading an
+  on-grid floor back is exact; and only the seat and the wake clamp round, each
+  once per join. A floor written off the grid, by a peer older than #3313, is
+  rounded up once, by the first checkpoint that reads it, and every checkpoint
+  after that is exact. Peers that merge in any order still read the same
+  position, because the read is a function of the joined gauge and the join is
+  unchanged.
 
   Two consequences of mixed versions, accepted rather than fenced. An old and a
   new peer can read the same state up to one tick apart, because the new one rounds
   an off-grid floor up and the old one does not. And an un-upgraded peer keeps
   writing exact fronts into floors, so the denominators in its own state keep
-  growing toward the overflow this change fixes; a new peer that merges those
-  floors reads them on its grid and is unaffected.
+  growing toward the overflow this change fixes. A new peer that merges those
+  floors reads them on its grid, reducing each fraction before it multiplies, so
+  it throws only where the position itself would leave `Long`.
 - **No unlimited idle credit:** when a child goes from not-demanding to
   demanding, a local wake offset clamps it forward:
 
@@ -796,7 +798,9 @@ terms:
 
 At any parent `p`, the temporary fairness error is bounded by the entitlement
 that unreconciled peers can independently steer among `p`'s children, plus
-quantum discretization:
+discretization: the quantum, and the position grid's one tick (`1/16` of a
+unit) per edge, from step 3's grid-resolution eligibility and the up-rounded
+seat and wake clamp (§7.1–7.3):
 
 ```text
 error(p) ≤ Σ over unreconciled peers s of B(p, s) + discretization
@@ -967,7 +971,10 @@ Carried over from the source intact; each is a named property test (§13).
 8. **Projection homomorphism.**
    `project(merge(A,B), e) = merge(project(A,e), project(B,e))`.
 9. **Bounded fairness error.** `error(p) ≤ Σ B(p, s) + discretization`,
-   measured in simulation against the configured caps.
+   measured in simulation against the configured caps. Discretization is the
+   quantum plus the position grid: step 3 admits an edge up to one tick past
+   `V`, and a seat or wake clamp lands under one tick above it, each `1/16` of a
+   unit of the edge's own service (§7.1).
 10. **Closure dominance.** A replica that observed CLOSING never again
     delegates across that generation, regardless of merge order.
 11. **Conflicts surface.** Integrity violations converge to the same explicit
