@@ -487,11 +487,9 @@ class LocalHeddlePersistenceTest {
     /**
      * The tree the rich scenario runs: `acme` (a nested group at a fractional weight, holding a group
      * and a lane), `tenants` (marked for runtime children), and, while [withSpare], a lane `spare`.
-     * `acme` and `interactive` carry a ceiling, and so does the runtime marker, each high enough that
-     * no call of the scenario meets it, so format 2's encoding carries a ceiling on every kind of node
-     * that takes one and the scenario runs as it would without them.
+     * While [capped], `acme`, `interactive` and the runtime marker each carry a ceiling.
      */
-    private fun richTree(acmeWeight: Weight, withSpare: Boolean): Topology = Topology(
+    private fun richTree(acmeWeight: Weight, withSpare: Boolean, capped: Boolean = false): Topology = Topology(
         "root",
         listOfNotNull(
             Topology.Group(
@@ -499,17 +497,20 @@ class LocalHeddlePersistenceTest {
                 acmeWeight,
                 listOf(
                     Topology.Group("batch", Weight.ONE, listOf(Topology.Lane("x"), Topology.Lane("y", Weight.of(2)))),
-                    Topology.Lane("interactive", maxConcurrent = 2L),
+                    Topology.Lane("interactive", maxConcurrent = 2L.takeIf { capped }),
                 ),
-                maxConcurrent = 3L,
+                maxConcurrent = 3L.takeIf { capped },
             ),
-            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE, maxConcurrent = 2L)),
+            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE, maxConcurrent = 2L.takeIf { capped })),
             Topology.Lane("spare").takeIf { withSpare },
         ),
     )
 
     private val richBefore = richTree(Weight.of(3, 2), withSpare = true)
     private val richAfter = richTree(Weight.of(5, 2), withSpare = false)
+
+    /** [richAfter] with ceilings, high enough that no call of the scenarios meets them: what format 2's rich golden last applied. */
+    private val richCapped = richTree(Weight.of(5, 2), withSpare = false, capped = true)
     private val richPolicy = LocalPolicy(defaultReservation = 2L)
     private val tenant = richBefore.runtimeChildId(listOf("tenants"), "t1")
     private val richLeaves = setOf(richBefore.groupId("acme", "interactive"), richBefore.groupId("acme", "batch", "x"), richBefore.groupId("acme", "batch", "y"), tenant)
@@ -557,8 +558,10 @@ class LocalHeddlePersistenceTest {
 
     /**
      * The rich scenario, then a second runtime child `t2` attached under `tenants`, leased, settled
-     * and detached, so its edge retires with its books closed. Returns that engine, its open leases,
-     * and its snapshot with `t2`'s edge forgotten: what format 2 adds over format 1 (#3192).
+     * and detached, so its edge retires with its books closed, then a reload that changes only
+     * ceilings ([richCapped]), which moves no edge. Returns that engine, its open leases, and its
+     * snapshot with `t2`'s edge forgotten: what format 2 adds over format 1, the fold (#3192) and
+     * the ceilings (#3324).
      */
     private fun richFoldedScenario(): Triple<LocalHeddle, List<Lease>, LocalHeddleSnapshot> {
         val (h, open) = richScenario()
@@ -567,6 +570,8 @@ class LocalHeddlePersistenceTest {
         val lease = h.lease(setOf(departed), reservation = 2L, startedAt = 30L)
         check(h.complete(lease.id, 3L) is LeaseOutcome.Done)
         check(h.detachRuntimeChild(listOf("tenants"), "t2").refusals.isEmpty())
+        val ceilingsOnly = h.apply(richCapped, generation = 5L)
+        check(ceilingsOnly.applied.isEmpty() && ceilingsOnly.refusals.isEmpty()) { "a change of ceiling alone is no step: $ceilingsOnly" }
         val whole = h.persist()
         val folded = checkNotNull(whole.ledger.forget(listOf(edge))) { "t2's edge is forgettable: ${whole.ledger.forgetRefusal(edge)}" }
         return Triple(h, open, LocalHeddleSnapshot(whole.epoch, folded, whole.allocatorMemory, whole.totalSlots, whole.open, whole.lastApplied))
@@ -598,7 +603,7 @@ class LocalHeddlePersistenceTest {
             { assertEquals(setOf(0L, 1L), golden().leases.map { it.id.epoch }.toSet(), "the rig: open leases from two epochs") },
             { assertTrue(golden().ledger.let { l -> l.allEdges().any { l.lifecycle(it) == Lifecycle.CLOSING } }, "the rig: an edge is draining") },
             { assertTrue(golden().leases.any { it.leaf == tenant }, "the rig: a lease at a runtime child") },
-            { assertEquals(richAfter, golden().lastApplied, "the rig: the topology last applied is the reload's") },
+            { assertEquals(richCapped, golden().lastApplied, "the rig: the topology last applied is the reload's, with its ceilings") },
             { assertTrue(golden().ledger.hasForgotten() && edge !in golden().ledger.allEdges(), "the rig: t2's edge is forgotten") },
             { assertTrue("\"forgotten\":" in GOLDEN_FORMAT_2_RICH, "the rig: the fold is in the bytes") },
             { assertTrue((reference.snapshot().ledger.edge(edge)?.spent ?: 0L) > 0L, "the rig: the forgotten edge had spent something") },
