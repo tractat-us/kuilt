@@ -16,6 +16,9 @@ import us.tractat.kuilt.math.plusOrNull
  * Because merge is max, two replicas must never increment the *same* slot
  * concurrently — each replica owns its own [ReplicaId] slot.
  *
+ * Every slot is non-negative, and the type enforces it: [of] and the decoder both refuse a
+ * negative count, so every sum built on a counter can rely on it.
+ *
  * @sample us.tractat.kuilt.crdt.sampleGCounter
  * @sample us.tractat.kuilt.crdt.sampleGCounterPiece
  */
@@ -24,6 +27,14 @@ public class GCounter private constructor(
     @Serializable(with = CanonicalMapSerializer::class)
     private val counts: Map<ReplicaId, Long>,
 ) : Quilted<GCounter> {
+
+    // In `init`, not in `of`: the generated decoder runs it too, so a negative slot cannot arrive
+    // over the wire either (#3397).
+    init {
+        for ((replica, count) in counts) {
+            require(count >= 0L) { "GCounter slot $replica must not be negative, was $count" }
+        }
+    }
 
     /**
      * The counter's value: the sum of all per-replica counts.
@@ -96,7 +107,12 @@ public class GCounter private constructor(
         /** The zero counter. */
         public val ZERO: GCounter = GCounter(emptyMap())
 
-        /** A counter with the given per-replica counts (test/seed helper). */
+        /**
+         * A counter with the given per-replica counts (test/seed helper). A zero count is kept as
+         * a slot.
+         *
+         * @throws IllegalArgumentException if any count is negative.
+         */
         public fun of(vararg pairs: Pair<ReplicaId, Long>): GCounter = GCounter(pairs.toMap())
     }
 }
