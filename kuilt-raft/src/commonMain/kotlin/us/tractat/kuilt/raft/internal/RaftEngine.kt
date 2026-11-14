@@ -1630,7 +1630,8 @@ internal class RaftEngine(
                 if (entry.index <= state.currentCommitIndex) return false
             }
             // No committed configuration in the log: the snapshot's is committed by construction; failing
-            // that, the bootstrap.
+            // that, the bootstrap. A bootstrap that seats voters but not this node therefore never
+            // campaigns; whether `raftNode` should refuse that shape is tracked by #3406.
             return state.snapshotConfig?.namesVoter(self) ?: (self in bootstrapConfig.voters)
         }
 
@@ -4011,7 +4012,10 @@ internal class RaftEngine(
             debug { "reevaluateSelfRole: $current → $desired" }
             _role.value = desired
             if (desired is RaftRole.Learner) {
-                electionJob?.cancel()   // learners do not participate in elections
+                // Learners do not participate in elections. This fires on APPEND, before the demotion
+                // commits, so a leader demoted rather than dropped cannot unwedge §4.2.2's Figure 4.6 the
+                // way [promotable] lets a dropped one: tracked by #3405.
+                electionJob?.cancel()
                 electionJob = null
             } else {
                 // Promoted INTO a voting role (Learner → Follower). Arm the election timer now — a
