@@ -312,3 +312,8 @@ internal fun compareVirtualWide(a: Int128, wa: Weight, b: Int128, wb: Weight): I
     // ⌊a · ka / kb⌋ = b: equal exactly when nothing was left over, above `b` otherwise.
     return if (mulDiv(a, ka, kb, Rounding.CEILING) == floor) 0 else 1
 }
+
+/** This value as the nearest `Double`, for a diagnostic ratio: `high · 2⁶⁴ + unsigned(low)`. */
+internal fun Int128.toDouble(): Double = high.toDouble() * TWO_TO_THE_64 + low.toULong().toDouble()
+
+private const val TWO_TO_THE_64: Double = 18446744073709551616.0
