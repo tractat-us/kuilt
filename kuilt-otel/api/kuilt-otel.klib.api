@@ -91,6 +91,7 @@ abstract interface us.tractat.kuilt.otel/OtlpEdge { // us.tractat.kuilt.otel/Otl
     abstract suspend fun send(kotlin.collections/Set<us.tractat.kuilt.otel/SpanRecord>, kotlin.collections/List<us.tractat.kuilt.otel/SpanLink> = ...) // us.tractat.kuilt.otel/OtlpEdge.send|send(kotlin.collections.Set<us.tractat.kuilt.otel.SpanRecord>;kotlin.collections.List<us.tractat.kuilt.otel.SpanLink>){}[0]
     open suspend fun logDigest(): us.tractat.kuilt.otel/LogDigest // us.tractat.kuilt.otel/OtlpEdge.logDigest|logDigest(){}[0]
     open suspend fun metricDigest(): us.tractat.kuilt.otel/MetricDigest // us.tractat.kuilt.otel/OtlpEdge.metricDigest|metricDigest(){}[0]
+    open suspend fun retainMetrics(kotlin.collections/Set<us.tractat.kuilt.otel/MetricKey>) // us.tractat.kuilt.otel/OtlpEdge.retainMetrics|retainMetrics(kotlin.collections.Set<us.tractat.kuilt.otel.MetricKey>){}[0]
     open suspend fun sendLogs(kotlin.collections/Set<us.tractat.kuilt.otel/LogRecord>) // us.tractat.kuilt.otel/OtlpEdge.sendLogs|sendLogs(kotlin.collections.Set<us.tractat.kuilt.otel.LogRecord>){}[0]
     open suspend fun sendMetrics(kotlin.collections/Set<us.tractat.kuilt.otel/MetricPoint>) // us.tractat.kuilt.otel/OtlpEdge.sendMetrics|sendMetrics(kotlin.collections.Set<us.tractat.kuilt.otel.MetricPoint>){}[0]
 }

@@ -9,6 +9,8 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.io.bytestring.ByteString
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.SetSerializer
@@ -57,6 +59,11 @@ public enum class OtlpWireFormat {
  * idempotently by id. This sent-set does not repair distinct stamped span values
  * created by retrying an export after an indeterminate local write.
  *
+ * The metric map is read from [store] once per drain and decoded only when its bytes
+ * changed since this edge last saw them, so a drain whose series mostly stood still
+ * pays one read, one encode and one write of it, where it used to pay two reads and
+ * two decodes on top.
+ *
  * The id-set is capped at [maxSentIds] (drop-oldest) so a long-lived producer's
  * sent-set cannot grow without bound; choose a cap that exceeds the device's realistic
  * offline window.
@@ -72,8 +79,9 @@ public enum class OtlpWireFormat {
  *   length, and a URL carrying credentials never reaches a filename. Length is
  *   unconstrained here.
  * @param store durable persistence for the per-endpoint sent-set.
- * @param maxSentIds cap on the span/log sent-set size (drop-oldest). Metrics are
- *   naturally bounded by series count.
+ * @param maxSentIds cap on the span/log sent-set size (drop-oldest). The metric
+ *   sent-versions map takes no cap: every drain prunes it to the series the producer
+ *   still holds ([retainMetrics]), so it is bounded by the producer's `maxMetrics`.
  * @param wire OTLP wire encoding to emit. Defaults to [OtlpWireFormat.JSON].
  * @param resource this producer's resource attributes, sent as the `resource` of every
  *   request on both wires — `service.name` and whatever else tells one producer from
@@ -138,7 +146,8 @@ public class OtlpHttpEdge(
     override suspend fun logDigest(): LogDigest =
         LogDigest(readIdSet(logKey).mapTo(mutableSetOf()) { it.hexToByteString() })
 
-    override suspend fun metricDigest(): MetricDigest = MetricDigest(readVersions())
+    override suspend fun metricDigest(): MetricDigest =
+        MetricDigest(sentVersionsLock.withLock { refreshSentVersions() }.versions)
 
     // ── Sends (POST, then fold into the sent-set on success) ───────────────────
 
@@ -178,7 +187,16 @@ public class OtlpHttpEdge(
                     protobuf.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(points, envelope))
             },
         )
-        recordVersions(points.associate { it.key to it.valueHash() })
+        val updates = points.associate { it.key to it.valueHash() }
+        sentVersionsLock.withLock { commitSentVersions(currentSentVersions().versions + updates) }
+    }
+
+    override suspend fun retainMetrics(live: Set<MetricKey>) {
+        sentVersionsLock.withLock {
+            val current = currentSentVersions().versions
+            if (current.keys.all { it in live }) return
+            commitSentVersions(current.filterKeys { it in live })
+        }
     }
 
     // ── HTTP ───────────────────────────────────────────────────────────────────
@@ -219,16 +237,56 @@ public class OtlpHttpEdge(
         store.write(key, cbor.encodeToByteArray(idSetSerializer, capped))
     }
 
-    private suspend fun readVersions(): Map<MetricKey, Long> {
-        val bytes = store.read(metricKey) ?: return emptyMap()
+    // ── Metric sent-versions: one decoded copy, kept equal to disk (#3292) ─────
+    //
+    // At 10k series the map is about 900 KiB of CBOR, and a drain used to read and decode it twice
+    // (once for the digest, once more to fold the sent points in) and then encode it again. Now a
+    // drain reads it once, in `metricDigest`, and decodes only when the bytes differ from the ones
+    // the cached map came from; the send and the prune fold onto that cached map.
+    //
+    // Why compare the bytes rather than trust the cache outright: this instance is not the only
+    // writer of its key. Two edges on one store and one endpoint share one sent-set by design
+    // (#1053; a trailing slash is the same collector), so another instance's write can land between
+    // two of this one's drains. A cache trusted past that write is silent under-delivery for a gauge
+    // that returns to an earlier value: the cache says the old value was sent, the collector holds
+    // the newer one, and the drain sends nothing. The read is what notices; the comparison is what
+    // keeps it from costing a decode.
+    //
+    // The cache only ever holds what is on disk: it is replaced after the store's write returns, and
+    // `sendMetrics` reaches that write only after a 2xx. A failed POST or a refused write leaves it
+    // as it was. The lock makes each fold-and-write one step, so two concurrent sends on this edge
+    // cannot each fold onto the same base and lose the other's points.
+
+    /** The decoded sent-versions map, beside the exact bytes on disk it came from (null: no key). */
+    private class SentVersions(val bytes: ByteArray?, val versions: Map<MetricKey, Long>)
+
+    private val sentVersionsLock = Mutex()
+
+    // Guarded by sentVersionsLock.
+    private var sentVersions: SentVersions? = null
+
+    /** Reads the key once; decodes only when its bytes are not the ones the cache came from. */
+    private suspend fun refreshSentVersions(): SentVersions {
+        val bytes = store.read(metricKey)
+        val cached = sentVersions
+        if (cached != null && cached.bytes.contentEquals(bytes)) return cached
+        return SentVersions(bytes, decodeVersions(bytes)).also { sentVersions = it }
+    }
+
+    /** The cache when a digest has loaded it, so a send and a prune in the same drain do not re-read. */
+    private suspend fun currentSentVersions(): SentVersions = sentVersions ?: refreshSentVersions()
+
+    private suspend fun commitSentVersions(versions: Map<MetricKey, Long>) {
+        val bytes = cbor.encodeToByteArray(versionsSerializer, versions)
+        store.write(metricKey, bytes)
+        sentVersions = SentVersions(bytes, versions)
+    }
+
+    private fun decodeVersions(bytes: ByteArray?): Map<MetricKey, Long> {
+        if (bytes == null) return emptyMap()
         return runCatchingCancellable {
             cbor.decodeFromByteArray(versionsSerializer, bytes)
         }.getOrDefault(emptyMap())
-    }
-
-    private suspend fun recordVersions(updates: Map<MetricKey, Long>) {
-        val merged = readVersions() + updates
-        store.write(metricKey, cbor.encodeToByteArray(versionsSerializer, merged))
     }
 
     public companion object {

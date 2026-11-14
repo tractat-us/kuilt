@@ -17,6 +17,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpOtlpBridge"
  * 3. Computes the delta — records present locally but absent from the digest (for
  *    metrics: series whose value-hash advanced).
  * 4. Sends only the delta.
+ * 5. For metrics, tells the edge which series are still live ([OtlpEdge.retainMetrics]), so its
+ *    record of what it sent stays bounded by the series this producer holds.
  *
  * Spans additionally carry inferred causal [SpanLink]s (#846): the bridge runs
  * [inferCausalLinks] over the **full** span snapshot (so a predecessor already
@@ -96,6 +98,9 @@ public class WarpOtlpBridge(
             val digest = edge.metricDigest()
             val delta = points.filterTo(mutableSetOf()) { digest.versions[it.key] != it.valueHash() }
             if (delta.isNotEmpty()) edge.sendMetrics(delta)
+            // Every series the edge has a record of was rendered and sent at some point, so the
+            // rendered keys are the whole live set the edge needs to bound its record by (#3292).
+            edge.retainMetrics(points.mapTo(HashSet(points.size)) { it.key })
             delta.size
         }
 

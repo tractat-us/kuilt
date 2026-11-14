@@ -38,7 +38,7 @@ import kotlin.time.Clock
  *   edge's work.
  * - [edgeDigestNanosPerDrain] and [edgeSendNanosPerDrain] are the time spent inside the real edge's
  *   `metricDigest` and `sendMetrics`, read off a [TimingEdge] around it; [edgeOtherNanosPerDrain]
- *   is every other edge call. Of the edge's time, [edgeStoreNanosPerDrain] is in its store; the
+ *   is every other edge call, which with spans and logs idle is the `retainMetrics` prune. Of the edge's time, [edgeStoreNanosPerDrain] is in its store; the
  *   rest is its CBOR, the request encoding and the mock POST.
  */
 data class DrainRow(
@@ -96,6 +96,8 @@ class TimingEdge(private val delegate: OtlpEdge) : OtlpEdge {
         sendCalls.incrementAndGet()
         timed(sendNanos) { delegate.sendMetrics(points) }
     }
+
+    override suspend fun retainMetrics(live: Set<MetricKey>): Unit = timed(otherNanos) { delegate.retainMetrics(live) }
 }
 
 /**

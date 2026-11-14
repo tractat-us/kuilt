@@ -63,14 +63,15 @@ fun bridgeTable(rows: List<BridgeRow>) = report(
 fun drainTable(rows: List<DrainRow>) = report(
     "edge-drain",
     listOf(
-        "wire", "series", "changed", "ms/drain", "bridge ms", "edge digest ms", "edge send ms", "edge store ms",
-        "parts/whole", "edge reads/drain", "edge KiB read", "edge KiB written", "request KiB", "alloc MiB/drain",
+        "wire", "series", "changed", "ms/drain", "bridge ms", "edge digest ms", "edge send ms", "edge other ms",
+        "edge store ms", "parts/whole", "edge reads/drain", "edge KiB read", "edge KiB written", "request KiB", "alloc MiB/drain",
         "timed drains",
     ),
     rows.map { r ->
         listOf(
             r.wire.name.lowercase(), r.series.toString(), r.changed.toString(), millis(r.sample.nanosPerOp),
             millis(r.bridgeNanosPerDrain), millis(r.edgeDigestNanosPerDrain), millis(r.edgeSendNanosPerDrain),
+            millis(r.edgeOtherNanosPerDrain),
             millis(r.edgeStoreNanosPerDrain), ratio(r.partsOverWhole), ratio(r.edgeReadsPerDrain),
             kib(r.edgeBytesReadPerDrain.toDouble()), kib(r.edgeBytesWrittenPerDrain.toDouble()),
             kib(r.requestBytesPerDrain.toDouble()), kib(r.sample.allocatedBytesPerOp / 1024.0),
