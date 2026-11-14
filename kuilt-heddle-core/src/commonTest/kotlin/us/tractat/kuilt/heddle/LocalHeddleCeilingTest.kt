@@ -15,6 +15,7 @@ import kotlin.test.fail
  * A ceiling is enforced (#3324, design §11.2): a pick drops every leaf beneath a node whose open
  * leases have reached its `maxConcurrent` from both the waiting and the eligible set, so the node
  * counts as idle at its parent and wakes clamped. `admit`, `extend` and `complete` are never refused.
+ * And it is reported: `explain` names the ceiling a leaf waits on, and `entitlement` owes it nothing.
  */
 class LocalHeddleCeilingTest {
 
