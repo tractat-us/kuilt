@@ -5,6 +5,8 @@ package us.tractat.kuilt.otel
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
@@ -110,7 +112,12 @@ public class WarpCausalClock(private val replica: ReplicaId) {
 
     /** Lets the owning telemetry facade include clock recovery in span persistence health. */
     internal suspend fun recover(store: DurableStore, onFailure: (Throwable) -> Unit) {
-        val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
+        val bytes = try {
+            store.read(STORE_KEY)
+        } catch (cause: Throwable) {
+            // A cancellation the store minted is a refused read; only this coroutine's own
+            // cancellation propagates (#3388).
+            currentCoroutineContext().ensureActive()
             onFailure(cause)
             logger.error(cause) { "otel.causal.clock: store read failed, starting fresh" }
             return
