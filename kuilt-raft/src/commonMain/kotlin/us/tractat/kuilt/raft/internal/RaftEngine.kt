@@ -1998,11 +1998,12 @@ internal class RaftEngine(
         electionJob?.cancel()
         leaderAlive = true
         leaderLeaseJob?.cancel()
-        val nextIdx = state.lastLogIndex + 1L
-        otherMembers.forEach { p ->
-            state.nextIndex[p] = nextIdx
-            state.matchIndex[p] = 0L
-        }
+        // Clear, then initialise (#3124). This closes the cross-term hole by itself: a peer outside the
+        // config cannot carry a value from an earlier leadership of this node into this one. The prune in
+        // [recomputeMembership] also closes it, but only because this node's follower-side recompute saw
+        // the removal; this line does not depend on that. It is what makes every matchIndex a this-term
+        // value, which the onTimeoutNow guards below lean on. Keep both.
+        state.resetPeerIndices(otherMembers, firstIndex = state.lastLogIndex + 1L)
         emitTrace(RaftTraceEvent.BecomeLeader(nextClock(), transport.selfId, state.currentTerm))
         heartbeatJob = scope.launch {
             while (true) {
@@ -2569,6 +2570,7 @@ internal class RaftEngine(
     private suspend fun onInstallSnapshotResponse(from: NodeId, m: RaftMessage.InstallSnapshotResponse) {
         if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != state.currentTerm) return
+        if (!isReplicationTarget(from)) return
         recentVoterContacts += from                // reachability signal for CheckQuorum
         readIndexTracker.recordAck(from, m.echoedRound)   // credit ACK to the round it actually responded to (BLOCKER 1a)
         confirmFreshReads()                        // ReadIndex: snapshot ACKs count as freshness evidence
@@ -3284,10 +3286,28 @@ internal class RaftEngine(
         send(from, RaftMessage.AppendEntriesResponse(state.currentTerm, true, acceptedMatchIndex, echoedRound = m.round))
     }
 
+    /**
+     * Whether a same-term replication response from [from] still concerns this leader (#3124). A
+     * response from a peer outside the replication targets answers a request sent before the peer was
+     * removed. Acting on it would re-create the per-peer state [prunePeerState] dropped, and a rejection
+     * would even resume replication to a non-member. Nothing honest is lost by ignoring it: CheckQuorum
+     * and read freshness count only voters, and adopt-on-append puts a new peer among the targets before
+     * the first AppendEntries goes to it.
+     *
+     * Callers check it after their higher-term step-down, never before, so a removed peer's higher-term
+     * response still forces the §5.1 step-down.
+     */
+    private fun isReplicationTarget(from: NodeId): Boolean {
+        val target = from in otherMembers
+        if (!target) debug { "response from ${from.value}, which is not a replication target — ignored (#3124)" }
+        return target
+    }
+
     private suspend fun onAppendEntriesResponse(from: NodeId, m: RaftMessage.AppendEntriesResponse) {
         // stale-term peer response: step down and discard
         if (m.term > state.currentTerm) { stepDown(m.term, StepDownReason.HigherTermObserved); return }
         if (_role.value !is RaftRole.Leader || m.term != state.currentTerm) return
+        if (!isReplicationTarget(from)) return
         recentVoterContacts += from                 // reachability signal for CheckQuorum (success or failure)
         readIndexTracker.recordAck(from, m.echoedRound)   // credit ACK to the round it actually responded to (BLOCKER 1a)
         confirmFreshReads()                         // ReadIndex: check if any pending reads can now be confirmed
@@ -3839,6 +3859,7 @@ internal class RaftEngine(
         state.membershipState = newMembership
         reevaluateSelfRole()
         if (changed) {
+            prunePeerState()
             _membership.value = newMembership.effectiveConfig
             debug { "recomputeMembership: $prior → $newMembership (source=$branch)" }
             // `old` is the prior effective config — on the first ever change that is the
@@ -3850,6 +3871,25 @@ internal class RaftEngine(
                 ),
             )
         }
+    }
+
+    /**
+     * Forget the leader-side state of every peer outside the replication targets of the config just
+     * adopted (#3124): its indices, its in-flight snapshot transfer, its read-freshness evidence. A
+     * Joint's targets are both sides, so nobody still voting on either side loses anything.
+     *
+     * It runs on every change, committed or not, and in every role. Each value it drops is volatile
+     * leader state with a safe initial value, so a peer that comes back is rebuilt as if it were new.
+     * On a leader its own config entries never roll back (Leader Append-Only, §5.3). A rollback only
+     * happens on a follower, where these maps are dead state that [becomeLeader] rebuilds anyway.
+     * Pruning only once the entry commits would buy no safety, and would keep the leak open for the
+     * whole window.
+     */
+    private fun prunePeerState() {
+        val targets = otherMembers
+        state.retainPeerIndices(targets)
+        snapshotSender.retain(targets)
+        readIndexTracker.retain(targets)
     }
 
     /**
@@ -4191,15 +4231,15 @@ internal class RaftEngine(
         // already reached our term before the frame existed, and that causality survives arbitrary
         // reordering (the frame does not exist until the ACK lands).
         //
-        // The one hole in "produced this term": [becomeLeader] resets matchIndex to 0 only for
-        // `otherMembers` — the CURRENT configuration's members — and nothing ever clears the map, so a
-        // NodeId outside the config at election time keeps a stale value across the term change. A peer
-        // removed while its matchIndex was high, then re-admitted and made a transfer target, can satisfy
-        // `isTargetCaughtUp` on that stale index and be sent a TimeoutNow at a term it never adopted.
-        // This guard is therefore **fail-safe-then-retry**, not "cannot happen": the premature frame is
-        // dropped with no state touched, the in-flight transfer survives, and the next heartbeat ACK from
-        // the now-same-term target re-fires [sendTimeoutNow] correctly — well inside the transfer's
-        // one-election-timeout auto-abandon window, since heartbeatInterval << electionTimeout.
+        // "Produced this term" used to have one hole. [becomeLeader] reset matchIndex only for the
+        // current config's members and nothing cleared the map, so a peer removed while its matchIndex was
+        // high, then re-admitted and made a transfer target, could satisfy `isTargetCaughtUp` on a stale
+        // index. #3124 closed it: [becomeLeader] now clears both index maps before initialising them, and
+        // [recomputeMembership] prunes a removed peer's entry. The guard stays as **fail-safe-then-retry**
+        // all the same, because it holds without leaning on that. The premature frame is dropped with no
+        // state touched, the in-flight transfer survives, and the next heartbeat ACK from the
+        // now-same-term target re-fires [sendTimeoutNow] correctly. That lands well inside the
+        // transfer's one-election-timeout auto-abandon window, since heartbeatInterval << electionTimeout.
         //
         // Either way a node that genuinely IS behind must catch up through the ordinary election-timeout
         // path, whose pre-vote round checks its log — not through an immediate election that skips it.
@@ -4238,11 +4278,10 @@ internal class RaftEngine(
         // advances only on [onAppendEntriesResponse] / [onInstallSnapshotResponse] — both of which are
         // fed by a responder that ran [adoptLeaderForTerm] BEFORE replying. So a matchIndex value
         // produced this term proves the target pinned this leader for this term, and the pin now
-        // outlives the process. The one exception is the stale-matchIndex hole the higher-term guard
-        // above documents (a peer outside the config at election time keeps its old matchIndex), which
-        // is fail-safe-then-retry in exactly the same way: the frame is dropped with no state touched
-        // and the next heartbeat ACK re-fires [sendTimeoutNow], well inside the transfer's
-        // one-election-timeout auto-abandon window.
+        // outlives the process. The stale-matchIndex exception the higher-term guard above describes was
+        // closed by #3124. Were it ever to reopen, this guard fails safe and retries in the same way: the
+        // frame is dropped with no state touched, and the next heartbeat ACK re-fires [sendTimeoutNow]
+        // well inside the transfer's one-election-timeout auto-abandon window.
         val established = leaderForTerm
         if (from != established) {
             debug {

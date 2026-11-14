@@ -53,6 +53,16 @@ internal class SnapshotSender(
     private val lastStampedRound = mutableMapOf<NodeId, Long>()
 
     /**
+     * The highest [lastStampedRound] of any peer [retain] has dropped this leadership. A fresh
+     * transfer to any peer waits for a round above it as well as above the peer's own entry. That is
+     * what lets [retain] drop a removed peer's entry without re-opening #2843 if the peer is re-added:
+     * a late ack for its dropped transfer still echoes a round at or below this floor. One scalar
+     * keeps the guarantee and stays bounded on a long-lived leader whose peers come and go (#3124).
+     * It is conservative across peers and costs at most one heartbeat of delay.
+     */
+    private var prunedRoundFloor = 0L
+
+    /**
      * The next chunk for [peer]'s in-flight transfer, loading the stored snapshot fresh (from offset 0)
      * iff there is none in flight; otherwise it resumes from the peer's acked offset. A rewind of the
      * same snapshot is never initiated here — the follower drives that via its `ReAdvertise(0)` ack; the
@@ -115,7 +125,7 @@ internal class SnapshotSender(
             if (inFlight.meta.lastIncludedIndex >= storedIndex) return null
             snapshotXfer.remove(peer)
         }
-        if (lastStampedRound[peer]?.let { round <= it } == true) return null  // a late ack could not be told apart
+        if (round <= maxOf(lastStampedRound[peer] ?: 0L, prunedRoundFloor)) return null  // a late ack could not be told apart
         chunkBytes(peer, storedConfig) ?: return null            // refused before paying for the load
         val stored = storage.loadSnapshot() ?: return null       // nothing to send yet
         val fresh = SnapshotXfer(stored.meta, stored.state, 0L, startRound = round)
@@ -202,10 +212,22 @@ internal class SnapshotSender(
         }
     }
 
+    /**
+     * Forget every peer outside [targets]: drop its in-flight transfer, which releases this sender's
+     * private copy of the whole snapshot, and fold its last stamped round into [prunedRoundFloor].
+     * Call on every membership change (#3124).
+     */
+    fun retain(targets: Set<NodeId>) {
+        snapshotXfer.keys.retainAll(targets)
+        lastStampedRound.filterKeys { it !in targets }.values.maxOrNull()?.let { prunedRoundFloor = maxOf(prunedRoundFloor, it) }
+        lastStampedRound.keys.retainAll(targets)
+    }
+
     /** Abandon every in-flight transfer — call on leadership relinquish (leader-only state). */
     fun abandonAll() {
         snapshotXfer.clear()
         lastStampedRound.clear()   // the round counter restarts with the next leadership
+        prunedRoundFloor = 0L
     }
 
     /** A chunk ready to be framed into a `RaftMessage.InstallSnapshot` by the engine. */

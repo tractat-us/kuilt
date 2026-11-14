@@ -81,8 +81,42 @@ internal class RaftState(bootstrapConfig: ClusterConfig) {
     var membershipState: MembershipState = MembershipState.Simple(bootstrapConfig)
 
     // ── Leader-side replication indices ───────────────────────────────────────
+
+    /**
+     * Raft §5.3 `nextIndex` / `matchIndex`: volatile leader state, keyed only by the current
+     * replication targets (#3124). [resetPeerIndices] rebuilds both at election and
+     * [retainPeerIndices] prunes them on every membership change. A peer that is absent reads as
+     * `nextIndex = 1` and `matchIndex = 0`. Both are safe starting values: `matchIndex = 0` never
+     * over-credits a commit, and `nextIndex` converges by §5.3 backup or InstallSnapshot.
+     *
+     * Keeping no key past its peer's membership matters for more than memory. The log can shrink
+     * between two of this node's leaderships, so a value carried over from an earlier term can point
+     * past the leader's own log (a `nextIndex` with no `prevLogTerm` to send) or credit a peer with
+     * entries it never held (a `matchIndex` counted toward a joint quorum).
+     */
     val nextIndex: MutableMap<NodeId, Long> = mutableMapOf()
     val matchIndex: MutableMap<NodeId, Long> = mutableMapOf()
+
+    /**
+     * Start a leadership: forget every peer, then track [targets] from [firstIndex] with
+     * `matchIndex = 0` (Figure 2's "reinitialized after election"). Clearing first is what makes
+     * every `matchIndex` value one produced in this term. Overwriting only [targets] left a peer that
+     * was outside the config at election time holding a value from an earlier term (#3124).
+     */
+    fun resetPeerIndices(targets: Set<NodeId>, firstIndex: Long) {
+        nextIndex.clear()
+        matchIndex.clear()
+        targets.forEach { p ->
+            nextIndex[p] = firstIndex
+            matchIndex[p] = 0L
+        }
+    }
+
+    /** Drop every peer outside [targets]: the union of both sides during a Joint (#3124). */
+    fun retainPeerIndices(targets: Set<NodeId>) {
+        nextIndex.keys.retainAll(targets)
+        matchIndex.keys.retainAll(targets)
+    }
 
     // ── Derived log helpers (pure functions of the moved fields) ──────────────
 
