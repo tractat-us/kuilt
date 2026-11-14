@@ -685,7 +685,7 @@ of adopting the old one.
   usually holds something, and `CHILD_HOLDS` refuses the old edge while it does.
   Only a child that is gone for good compacts reliably.
 - **A group whose children were forgotten is never forgotten itself.** Its row
-  in the fold keeps it counting as having child edges, and leaves go first. A
+  in the fold keeps it counting as having child edges, and leaves go first. An
   attached child is always a leaf, so this bites a declared group removed after
   its attached children came and went.
 
@@ -1345,8 +1345,8 @@ parent's front. A rename or a move is a delete plus an add (§5.3). The steps ar
 applied by an interpreter that holds the ledger's only writer; the contracts it must
 keep are on `TopologyStep`.
 
-Children the consumer creates while running hang under a group marked with
-`template`, in their own id namespace (`pool/tenants/!c-7f3a`), so a runtime
+Children the consumer attaches while running hang under a group with a
+`template`, in their own id namespace (`pool/tenants/!c-7f3a`), so an attached
 name never collides with a declared one. `Topology.attach(group, name,
 ledger, generation)` and `detach(group, name, ledger)` list the steps for
 one child, at the template's weight, numbered by the same generation floor as the diff.
@@ -1360,7 +1360,7 @@ can be detached whenever it goes idle.
 An attached child is a leaf, one level below its group: it cannot carry a template
 itself, so nothing discovered while running has children of its own. §1's "any depth"
 is met today by declared groups, which nest freely and reshape on a reload, and not
-yet by runtime ones. A tree found at runtime two levels deep (say, a repository and
+yet by attached ones. A tree found while running two levels deep (say, a repository and
 then its authors) has to declare each repository as a group with a template and reload as
 each one appears. Letting an attached child have attached children is tracked by #3314.
 
@@ -1392,9 +1392,21 @@ Decided in #3324, and built in three parts: declaring it (#3358), enforcing it
 `Topology.Lane` and `Topology.ChildTemplate`, mirrored in `TopologyDocument`.
 `null` means no ceiling, and nothing changes.
 
-- On `ChildTemplate` it caps **each** attached child, not all of them together.
+- On a group's `template` (`ChildTemplate`) it caps **each** attached child, not
+  all of them together; the group's own `maxConcurrent` caps them all together.
+  A document writes the per-child ceiling inside the template, so it cannot be
+  written on a group that has none (#3368):
+
+  ```yaml
+  - type: group
+    name: repos
+    maxConcurrent: 8                # all repos together
+    template: { maxConcurrent: 2 }  # each attached repo
+  ```
+
 - **0 means pause:** picks stop under that node. It is not a problem.
-- A negative value is the one new `TopologyProblem.Kind`.
+- A negative value is the one new `TopologyProblem.Kind`. A negative
+  `template.maxConcurrent` is reported at the group's address.
 - In a `draft`, `group`, `lane` and `template` each take it as
   `maxConcurrent: Long?`, so a value read from config passes straight through.
 - The ceiling lives in the engine, read from the topology last applied
@@ -1474,12 +1486,11 @@ and never decides whether the caller runs anything.
 - Treating a ceiling of 0 as a problem: it means pause (#3324).
 - `AT_CEILING` before `SUPPLY_EXHAUSTED`, and `POSITION_CEILING` after it
   (#3324, #3313).
-
-#### Open
-
-- A document's `runtimeChildrenMaxConcurrent` on a group that does not mark
-  attached children is dropped without a word. Reporting it needs a second new
-  `TopologyProblem.Kind`, and this section allows only one. Tracked by #3368.
+- A per-child ceiling written beside the template rather than inside it: a
+  document once had both a marker and a separate ceiling field, and dropped the
+  ceiling without a word when the marker was missing. Nesting it in `template`
+  makes that document impossible to write, so no second problem kind is needed
+  (#3368).
 
 ### 11.3 Previewing the next picks
 

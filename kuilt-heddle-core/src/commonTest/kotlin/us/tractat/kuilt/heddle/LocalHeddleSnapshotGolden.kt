@@ -12,7 +12,7 @@ internal const val GOLDEN_FORMAT_1: String = """[1,{"epoch":0,"totalSlots":2,"le
 
 /**
  * Format 1 of a [LocalHeddleSnapshot] that carries the envelope's own shapes, and the topology's:
- * the rich scenario of `LocalHeddlePersistenceTest` (a nested group at a fractional weight, a
+ * the rich scenario of `LocalHeddlePersistenceTest` (a nested group at a fractional weight, an
  * attached child, a lease a reweight moved, a removal draining with its lease open, a cancel, and
  * open leases from two epochs). Not every ledger map: `leafSpent`, `rollupSpent` and `transfers`
  * are empty here and the relocation maps are absent. Their encodings are pinned in `:kuilt-heddle`'s

@@ -107,7 +107,7 @@ public sealed interface TopologyStep {
  * closing it would make it a second live edge into its child — which quarantines the child, and
  * with it every group below, until the retire lands. If its weight comes back, it is adopted, unless
  * the ledger has forgotten it: [LocalHeddle] forgets such an edge in the swap that lands a list
- * ([unwantedPrepared]), and a new edge is prepared instead. A
+ * ([unwantedPrepared]), and a new edge is prepared instead. An
  * attached child nothing wants is the exception, as above: its prepared edge is closed, ahead of its
  * live edge, and retired, so the child cannot come back with the template. Between that close and
  * that retire the child has two live inbound edges, which is why the list is applied as one unit

@@ -1,37 +1,52 @@
-base='kuilt-heddle-core/src/commonMain/kotlin/us/tractat/kuilt/heddle/'
-def edit(name, pairs):
-    p=base+name
+def edit(p, pairs):
     s=open(p).read()
     for a,b in pairs:
-        assert s.count(a)>=1, (name,a)
+        assert s.count(a)==1, (p,a)
         s=s.replace(a,b)
     open(p,'w').write(s)
 
-edit('TopologyLowering.kt',[
-("//   attached child           \"<parent>/!<escaped name>\"", "//   attached child          \"<parent>/!<escaped name>\""),
-(""" * declares, or a child the consumer created at runtime beneath a group with a template.""",
- """ * declares, or a child the consumer attached while running beneath a group with a template."""),
-(""" * [GroupPath.Declared] it does not declare, or a [GroupPath.Attached] whose group is not marked
- * for attached children. Never throws.""",""" * [GroupPath.Declared] it does not declare, or a [GroupPath.Attached] whose group has no
- * template. Never throws."""),
-("""    // `pathOf` puts a runtime segment only at depth two or deeper, so `below` holds its group.""",
- """    // `pathOf` puts an attached segment only at depth two or deeper, so `below` holds its group."""),
-("""    // Rebuilding the id checks the root, and that the path is declared or marked here.""",
- """    // Rebuilding the id checks the root, and that the path is declared, or under a template, here."""),
-(""" * @throws IllegalArgumentException if [group] does not name a group marked with
- *   [template][Topology.Group.template], or [name] is empty.""",""" * @throws IllegalArgumentException if [group] does not name a group with a
- *   [template][Topology.Group.template], or [name] is empty."""),
-("""/** An attached child's [id], its [parent] group's id, and the [marker] that group carries. */""",
- """/** An attached child's [id], its [parent] group's id, and the [template] that group carries. */"""),
-(""" * The attached child [name] of the group at [group], checked once: [group] names a marked declared
- * group and [name] is non-empty.""",""" * The attached child [name] of the group at [group], checked once: [group] names a declared group
- * with a template and [name] is non-empty."""),
-(""" * Attached children are not lowered; the consumer creates them while running.""",
- """ * Attached children are not lowered; the consumer attaches them while running."""),
-(""" * A group id read back into names: [names] runs from the root down, and [runtime] says the last""",
- """ * A group id read back into names: [names] runs from the root down, and [attached] says the last"""),
-(""" * The template of the declared group at [path], read from the root down, or `null`
- * when [path] names no declared group or the group is not marked. Never throws, so the diff can ask""",
- """ * The template of the declared group at [path], read from the root down, or `null`
- * when [path] names no declared group or the group has none. Never throws, so the diff can ask"""),
+edit('docs/heddle-design.md',[
+("""Children the consumer creates while running hang under a group marked with
+`template`, in their own id namespace (`pool/tenants/!c-7f3a`), so a runtime
+name never collides with a declared one.""","""Children the consumer attaches while running hang under a group with a
+`template`, in their own id namespace (`pool/tenants/!c-7f3a`), so an attached
+name never collides with a declared one."""),
+("""is met today by declared groups, which nest freely and reshape on a reload, and not
+yet by runtime ones. A tree found at runtime two levels deep (say, a repository and""",
+"""is met today by declared groups, which nest freely and reshape on a reload, and not
+yet by attached ones. A tree found while running two levels deep (say, a repository and"""),
+("""- On `ChildTemplate` it caps **each** attached child, not all of them together.
+- **0 means pause:** picks stop under that node. It is not a problem.
+- A negative value is the one new `TopologyProblem.Kind`.""",
+"""- On a group's `template` (`ChildTemplate`) it caps **each** attached child, not
+  all of them together; the group's own `maxConcurrent` caps them all together.
+  A document writes the per-child ceiling inside the template, so it cannot be
+  written on a group that has none (#3368):
+
+  ```yaml
+  - type: group
+    name: repos
+    maxConcurrent: 8                # all repos together
+    template: { maxConcurrent: 2 }  # each attached repo
+  ```
+
+- **0 means pause:** picks stop under that node. It is not a problem.
+- A negative value is the one new `TopologyProblem.Kind`. A negative
+  `template.maxConcurrent` is reported at the group's address."""),
+("""- `AT_CEILING` before `SUPPLY_EXHAUSTED`, and `POSITION_CEILING` after it
+  (#3324, #3313).
+
+#### Open
+
+- A document's `runtimeChildrenMaxConcurrent` on a group that does not mark
+  attached children is dropped without a word. Reporting it needs a second new
+  `TopologyProblem.Kind`, and this section allows only one. Tracked by #3368.
+""","""- `AT_CEILING` before `SUPPLY_EXHAUSTED`, and `POSITION_CEILING` after it
+  (#3324, #3313).
+- A per-child ceiling written beside the template rather than inside it: a
+  document once had both a marker and a separate ceiling field, and dropped the
+  ceiling without a word when the marker was missing. Nesting it in `template`
+  makes that document impossible to write, so no second problem kind is needed
+  (#3368).
+"""),
 ])

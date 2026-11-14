@@ -159,7 +159,7 @@ class TopologyLoweringTest {
                 GroupPath.Attached(listOf("g", "x"), "y"),
                 GroupPath.Attached(listOf("nope"), "x"),
             ).map { path -> { assertNull(awkward.findGroupId(path), "findGroupId($path)") } }.toTypedArray(),
-            // Ids this topology has no group for: another root, a group it does not declare, a
+            // Ids this topology has no group for: another root, a group it does not declare, an
             // attached child of an unmarked group, and text in no topology's grammar.
             *listOf(
                 "other", "other/a", "root/nope", "root/a/nope", "root/a/!x", "root/!x", "root/g/!x/y", "root/g/x/!y",
