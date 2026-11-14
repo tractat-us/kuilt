@@ -20,13 +20,15 @@ import kotlin.test.assertTrue
  * Each tree is checked against every path it has a group for, runtime children included, under
  * names drawn from the same pieces so that they collide with declared siblings; and against paths
  * and ids it has no group for, taken from a second tree with the same root and from edits of real
- * ids. The two laws, for every path `p` and id `i` tried:
+ * ids. For every path `p` and id `i` tried:
  *
  * - `findGroupId(p)` is `null` or an id `i` with `findPath(i) == p`;
- * - `findPath(i)` is `null` or a path `p` with `findGroupId(p) == i`.
+ * - `findPath(i)` is `null` or a path `p` with `findGroupId(p) == i`;
+ * - either is non-null exactly when the tree has that group, judged by this file's own walk;
  *
  * and every path the tree declares or can attach resolves, to the id [Topology.groupId] or
- * [Topology.runtimeChildId] gives it.
+ * [Topology.runtimeChildId] gives it. The third law is not implied by the first two: a pair that
+ * resolved every path in the id grammar, this tree's or not, would satisfy both.
  *
  * Every draw is from a `List` this file built, so a seed walks the same trajectory on every target,
  * and the cases each law is meant to exercise are counted and floored, so a generator that drifted
@@ -61,17 +63,37 @@ class TopologyGroupPathPropertyTest {
                 path is GroupPath.RuntimeChild && GroupPath.Declared(path.names) in resolvable.map { it.first }
             }
 
+            // Which paths this tree has a group for, read off the tree by this file's own walk: the
+            // laws alone hold for a pair that resolves every path in the grammar, here or not.
+            val declaredHere = declaredPaths(t.children, emptyList())
+            val markedHere = markedGroups(t.children, emptyList()).map { it.first }
+            fun here(path: GroupPath): Boolean = when (path) {
+                is GroupPath.Declared -> path.names in declaredHere
+                is GroupPath.RuntimeChild -> path.group in markedHere
+            }
+
             // Paths and ids from a sibling tree, and edits of real ids: most are not this tree's.
             val foreignPaths = declaredPaths(other.children, emptyList()).map { GroupPath.Declared(it) } +
                 runtimePaths(other, r).map { GroupPath.RuntimeChild(it.first, it.second) }
             for (path in foreignPaths) {
                 val id = t.findGroupId(path)
+                if ((id != null) != here(path)) failures += "seed $seed: findGroupId($path) = $id, but the tree ${if (here(path)) "has" else "has no"} such group"
                 if (id == null) tally.unresolvedPaths++ else if (t.findPath(id) != path) failures += "seed $seed: findPath(findGroupId($path)) = ${t.findPath(id)}"
+            }
+            // Same root, so a sibling's id is this tree's exactly when its path is.
+            for (path in foreignPaths) {
+                val id = checkNotNull(other.findGroupId(path)) { "seed $seed: the sibling resolves its own $path" }
+                val expected = path.takeIf { here(it) }
+                if (t.findPath(id) != expected) failures += "seed $seed: findPath(${id.value}) = ${t.findPath(id)}, expected $expected"
             }
             val foreignIds = foreignPaths.mapNotNull { other.findGroupId(it) } + ids.flatMap { edits(it, r) }
             for (id in foreignIds) {
                 val path = t.findPath(id)
-                if (path == null) tally.unresolvedIds++ else if (t.findGroupId(path) != id) failures += "seed $seed: findGroupId(findPath(${id.value})) = ${t.findGroupId(path)}"
+                when {
+                    path == null -> tally.unresolvedIds++
+                    !here(path) -> failures += "seed $seed: findPath(${id.value}) = $path, which the tree has no group for"
+                    t.findGroupId(path) != id -> failures += "seed $seed: findGroupId(findPath(${id.value})) = ${t.findGroupId(path)}"
+                }
             }
             loops++
         }
