@@ -942,6 +942,7 @@ final class us.tractat.kuilt.heddle/EntitlementLedger : us.tractat.kuilt.crdt/Qu
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/EntitlementLedger.equals|equals(kotlin.Any?){}[0]
     final fun gauge(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/Gauge? // us.tractat.kuilt.heddle/EntitlementLedger.gauge|gauge(us.tractat.kuilt.heddle.AttachmentId){}[0]
     final fun grossVirtualService(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/EntitlementLedger.grossVirtualService|grossVirtualService(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun hasFoldedReturns(): kotlin/Boolean // us.tractat.kuilt.heddle/EntitlementLedger.hasFoldedReturns|hasFoldedReturns(){}[0]
     final fun hasForgotten(): kotlin/Boolean // us.tractat.kuilt.heddle/EntitlementLedger.hasForgotten|hasForgotten(){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/EntitlementLedger.hashCode|hashCode(){}[0]
     final fun holdings(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.crdt/ReplicaId): kotlin/Long // us.tractat.kuilt.heddle/EntitlementLedger.holdings|holdings(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.crdt.ReplicaId){}[0]
@@ -1007,16 +1008,19 @@ final class us.tractat.kuilt.heddle/FairShareAllocator { // us.tractat.kuilt.hed
 }
 
 final class us.tractat.kuilt.heddle/Gauge { // us.tractat.kuilt.heddle/Gauge|null[0]
-    constructor <init>(us.tractat.kuilt.heddle/Rational, kotlin/Long) // us.tractat.kuilt.heddle/Gauge.<init>|<init>(us.tractat.kuilt.heddle.Rational;kotlin.Long){}[0]
+    constructor <init>(us.tractat.kuilt.heddle/Rational, kotlin/Long, kotlin/Long = ...) // us.tractat.kuilt.heddle/Gauge.<init>|<init>(us.tractat.kuilt.heddle.Rational;kotlin.Long;kotlin.Long){}[0]
 
     final val floor // us.tractat.kuilt.heddle/Gauge.floor|{}floor[0]
         final fun <get-floor>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Gauge.floor.<get-floor>|<get-floor>(){}[0]
     final val folded // us.tractat.kuilt.heddle/Gauge.folded|{}folded[0]
         final fun <get-folded>(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.folded.<get-folded>|<get-folded>(){}[0]
+    final val returnsFolded // us.tractat.kuilt.heddle/Gauge.returnsFolded|{}returnsFolded[0]
+        final fun <get-returnsFolded>(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.returnsFolded.<get-returnsFolded>|<get-returnsFolded>(){}[0]
 
     final fun component1(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Gauge.component1|component1(){}[0]
     final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.component2|component2(){}[0]
-    final fun copy(us.tractat.kuilt.heddle/Rational = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/Gauge // us.tractat.kuilt.heddle/Gauge.copy|copy(us.tractat.kuilt.heddle.Rational;kotlin.Long){}[0]
+    final fun component3(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.component3|component3(){}[0]
+    final fun copy(us.tractat.kuilt.heddle/Rational = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/Gauge // us.tractat.kuilt.heddle/Gauge.copy|copy(us.tractat.kuilt.heddle.Rational;kotlin.Long;kotlin.Long){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Gauge.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Gauge.hashCode|hashCode(){}[0]
     final fun join(us.tractat.kuilt.heddle/Gauge): us.tractat.kuilt.heddle/Gauge // us.tractat.kuilt.heddle/Gauge.join|join(us.tractat.kuilt.heddle.Gauge){}[0]
