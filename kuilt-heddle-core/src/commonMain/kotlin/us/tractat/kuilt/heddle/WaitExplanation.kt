@@ -44,8 +44,8 @@ public sealed interface WaitExplanation {
     }
 
     /**
-     * [group], on the leaf's path, has [limit] leases open beneath it already, its concurrency
-     * ceiling ([Topology.Node.maxConcurrent]), so no pick goes to the leaf until one of them closes.
+     * [group], on the leaf's path, has at least [limit] leases open beneath it, its concurrency
+     * ceiling ([Topology.Node.maxConcurrent]), so no pick goes to the leaf until enough of them close.
      * A [limit] of `0` is a pause. When several groups on the path are at their ceilings, [group] is
      * the one nearest the root: the whole subtree waits on it.
      *
