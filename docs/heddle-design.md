@@ -1371,7 +1371,7 @@ it at `Long.MAX_VALUE`.
 
 #### The design: filter the candidates
 
-Decided in #3324, and not yet built.
+Decided in #3324. Declaring it (#3358) and enforcing it (#3364) are built; reporting it is not yet.
 
 **Declaring it.** `maxConcurrent: Long? = null` on `Topology.Group`,
 `Topology.Lane` and `Topology.RuntimeChildren`, mirrored in `TopologyDocument`.
@@ -1387,8 +1387,10 @@ Decided in #3324, and not yet built.
 
 **Counting.** In leases: the open leases whose captured path passes through the
 node, draining ones included. That is derived from the engine's open leases, so
-nothing new is persisted. The scratch engine `explain` and `previewPicks` run on
-must carry the open leases too; today it starts with none.
+nothing new is persisted. The throwaway engine `explain` and `previewPicks` run on
+starts from the count of the leases open when it was built and adds each lease it
+opens, so a preview counts its own picks. A view of a snapshot counts the
+snapshot's leases: it carries the count, never the leases.
 
 **Enforcement.** Before a pick builds its demand views, every leaf under a node
 at its ceiling is dropped from `waiting` and from `eligible`.
@@ -1503,7 +1505,8 @@ it, a reader holding a snapshot restored a throwaway engine from it, under
   `snapshot()`'s `LocalHeddleState` will not do: it lacks the reconciled capacity
   and the topology last applied, and a pick reads both.
 - It reads the root, the ledger, the wake memory, the capacity and the topology
-  last applied. It does not read the open leases: no pick or explanation does.
+  last applied, and of the open leases only how many lie beneath each node with a
+  ceiling (§11.2): no pick or explanation reads a lease's id, time or reservation.
 - Each question plays forward on a throwaway engine with its own fork of the wake
   memory, so a view is a value: asking twice gives the same answer twice, and
   readers may share one. It is additive ABI, with no format change.

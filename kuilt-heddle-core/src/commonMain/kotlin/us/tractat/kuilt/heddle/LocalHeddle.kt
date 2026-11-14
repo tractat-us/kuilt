@@ -267,6 +267,19 @@ public sealed interface LeaseOutcome {
  * The pick's terminal, the lift of [acquire]'s two sets into demand, [admit], [explain] and
  * [entitlement] read this one predicate, so none of them can accept a group the others refuse.
  *
+ * ## Ceilings
+ *
+ * A node of the topology may carry a ceiling, [Topology.Node.maxConcurrent]: the most leases open
+ * beneath it at once. A lease counts at every group its path passes through, a draining one
+ * included. Before a pick builds its demand views, every leaf beneath a group at its ceiling is
+ * dropped from both sets, so the pick goes to a sibling, and the capped group counts as idle at its
+ * parent: it banks no credit while it waits, and wakes clamped once a lease beneath it closes. A
+ * ceiling of `0` pauses everything beneath it. [previewPicks] and [explain] filter the same way,
+ * counting the leases already open and the ones a preview opens. The count is derived from the open
+ * leases on every call, so a ceiling persists nothing and a reload that changes only ceilings
+ * changes no edge. [admit], [extend], [complete] and [apply] charge work that is already running,
+ * so no ceiling refuses them, and lowering one preempts nothing.
+ *
  * ## Asking why
  *
  * [explain] says why a leaf is not what the next [acquire] picks, or that it is, by running that
@@ -414,6 +427,12 @@ public class LocalHeddle private constructor(
     ledger: EntitlementLedger,
     allocator: FairShareAllocator,
     leasable: Leasable,
+    /**
+     * Leases open beneath each capped group that this engine does not hold: the real engine's, when
+     * this is the throwaway engine a [LocalHeddleView] plays its questions forward on. Empty for
+     * every real engine. Never changes, so it lives outside [Core].
+     */
+    private val openElsewhere: Map<GroupId, Int> = emptyMap(),
 ) {
     init {
         require(epoch >= 0L) { "epoch must be non-negative, was $epoch" }
@@ -503,8 +522,8 @@ public class LocalHeddle private constructor(
      *
      * A pick never reads [startedAt]; it is stored on the lease for the caller's own reconciling.
      *
-     * Returns [AcquireOutcome.NothingEligible] when [eligible] is empty,
-     * [AcquireOutcome.SupplyExhausted] when the root holds less than [reservation] and no capacity
+     * Returns [AcquireOutcome.NothingEligible] when [eligible] is empty, or every leaf in it is
+     * beneath a group at its ceiling (see "Ceilings"), [AcquireOutcome.SupplyExhausted] when the root holds less than [reservation] and no capacity
      * is reconciled, and [AcquireOutcome.NoLiveLineage] when no eligible leaf can be reached. In
      * each of those cases the ledger is unchanged, with no top-up either; only the allocator's wake
      * memory may have moved (see the class KDoc). [AcquireOutcome.PositionCeiling] when a pick on
@@ -524,9 +543,11 @@ public class LocalHeddle private constructor(
         requireReservation("reservation", reservation)
         require(waiting.containsAll(eligible)) { "eligible must be a subset of waiting" }
         if (eligible.isEmpty()) return@atomically AcquireOutcome.NothingEligible
+        val (waitingNow, eligibleNow) = belowCeilings(waiting, eligible)
+        if (eligibleNow.isEmpty()) return@atomically AcquireOutcome.NothingEligible
         // Topped up on the working value only: a descent that then fails discards the mint with it.
         val base = fundedBase(reservation) ?: return@atomically AcquireOutcome.SupplyExhausted
-        when (val descent = descend(base, demands(base, waiting, eligible, reservation), eligible, reservation)) {
+        when (val descent = descend(base, demands(base, waitingNow, eligibleNow, reservation), eligibleNow, reservation)) {
             is Descent.Refused -> AcquireOutcome.NoLiveLineage(descent.at)
             is Descent.Ceiling -> AcquireOutcome.PositionCeiling(descent.at)
             is Descent.Reached -> {
@@ -595,12 +616,33 @@ public class LocalHeddle private constructor(
     internal fun fundedBase(reservation: Long): EntitlementLedger? = supplied(ledger, reservation)
 
     /**
+     * How many leases are open beneath each capped group: this engine's own, by the child of every
+     * edge on their paths, draining ones included, plus [openElsewhere]. Derived on each call, so a
+     * ceiling keeps nothing of its own. Empty when the topology sets no ceiling.
+     */
+    internal fun openBeneath(): Map<GroupId, Int> =
+        openElsewhere.plusCounts(ledger.openBeneath(open.values.asSequence().map { it.path }, leasable))
+
+    /**
+     * [waiting] and [eligible] without every leaf beneath a group at its ceiling: what a pick
+     * builds its demand views over, so a capped group is wanted by nobody and counts as idle at its
+     * parent. The sets themselves when the topology sets no ceiling. The one filter [acquire], the
+     * observing [admit] and a [LocalHeddleView]'s questions share.
+     */
+    internal fun belowCeilings(waiting: Set<GroupId>, eligible: Set<GroupId>): Pair<Set<GroupId>, Set<GroupId>> {
+        if (!leasable.hasCeilings) return waiting to eligible
+        val counts = openBeneath()
+        val waitingNow = ledger.belowCeilings(waiting, counts, leasable)
+        return waitingNow to eligible.filterTo(HashSet()) { it in waitingNow }
+    }
+
+    /**
      * This engine's state as a [LocalHeddleView], for the length of one call: the read-only
      * questions are answered there, so the engine and a view of its snapshot cannot disagree. It
      * hands over the live allocator, which the view only ever forks.
      */
     private fun view(): LocalHeddleView =
-        LocalHeddleView(root, policy, epoch, ledger, allocator, capacity, leasable, rebase = rebaseForTest)
+        LocalHeddleView(root, policy, epoch, ledger, allocator, capacity, leasable, rebase = rebaseForTest, openBeneath = openBeneath())
 
     /**
      * Charge work another scheduler already started at [leaf]: open a lease for it with no pick,
@@ -640,6 +682,13 @@ public class LocalHeddle private constructor(
      * ceiling saturates there, and the charge lands as the plain [admit]'s does. The equivalence
      * holds wherever that acquire would lease; where it would be refused, this still charges.
      *
+     * Nor is it refused at a concurrency ceiling (see "Ceilings"), so with ceilings set the
+     * equivalence covers only a [leaf] with no group at its ceiling on its lineage. It observes
+     * [waiting] as that acquire does, every leaf beneath a group at its ceiling counted idle, so
+     * beside a capped sibling the two still agree. For a capped [leaf] they part: the acquire picks
+     * nothing and returns [AcquireOutcome.NothingEligible], while this charges the work and observes
+     * [leaf] as waiting, since it is running.
+     *
      * Returns [AcquireOutcome.NoLiveLineage] when [leaf] is not leasable or has no lineage of
      * active edges to the root, as [admit] does. The ledger is then unchanged, but the wake memory
      * has observed [waiting] at the root, as the refused acquire's pick would have when the engine can
@@ -659,7 +708,10 @@ public class LocalHeddle private constructor(
         requireReservation("reservation", reservation)
         require(leaf in waiting) { "leaf must be in waiting" }
         val base = ledger
-        val seen = demands(base, waiting, setOf(leaf), reservation).waiting
+        // Observed as the acquire's pick observes it, a capped leaf idle; the admitted leaf is
+        // running work whatever its ceiling, so it is kept.
+        val observed = belowCeilings(waiting, emptySet()).first + leaf
+        val seen = demands(base, observed, setOf(leaf), reservation).waiting
         if (!base.canEndAt(leaf)) {
             // The refused acquire's pick observes at the root before it finds nothing to pick.
             allocator.settle(root, base, seen)
@@ -1411,7 +1463,8 @@ public class LocalHeddle private constructor(
 
         /**
          * A throwaway engine over [ledger] that picks, and tops up, as one with [allocator]'s wake
-         * memory and [capacity] would next. [allocator] becomes its own, so pass a fork. What a
+         * memory and [capacity] would next, with [openElsewhere] counted against every ceiling
+         * beside the leases it opens itself. [allocator] becomes its own, so pass a fork. What a
          * [LocalHeddleView] plays its questions forward on.
          */
         internal fun scratch(
@@ -1422,7 +1475,8 @@ public class LocalHeddle private constructor(
             allocator: FairShareAllocator,
             leasable: Leasable,
             capacity: Capacity,
-        ): LocalHeddle = LocalHeddle(root, policy, epoch, ledger, allocator, leasable).also { it.capacity = capacity }
+            openElsewhere: Map<GroupId, Int>,
+        ): LocalHeddle = LocalHeddle(root, policy, epoch, ledger, allocator, leasable, openElsewhere).also { it.capacity = capacity }
 
         /**
          * An engine over [ledger] as it stands, with a fresh allocator, leasing what [leasable]

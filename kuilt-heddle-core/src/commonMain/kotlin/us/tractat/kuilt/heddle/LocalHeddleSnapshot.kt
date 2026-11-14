@@ -117,16 +117,21 @@ public class LocalHeddleSnapshot internal constructor(
      *   [LocalHeddle.reconcileCapacity]).
      * @sample us.tractat.kuilt.heddle.sampleSnapshotView
      */
-    public fun view(policy: LocalPolicy): LocalHeddleView = LocalHeddleView(
-        root = root,
-        policy = policy,
-        epoch = epoch,
-        ledger = ledger,
-        allocator = FairShareAllocator(LocalHeddle.SELF, LocalHeddle.policyConfig(policy), allocatorMemory),
-        capacity = Capacity.sized(totalSlots, policy),
-        leasable = Leasable.ByTopology(lastApplied),
-        rebase = true,
-    )
+    public fun view(policy: LocalPolicy): LocalHeddleView {
+        val leasable = Leasable.ByTopology(lastApplied)
+        return LocalHeddleView(
+            root = root,
+            policy = policy,
+            epoch = epoch,
+            ledger = ledger,
+            allocator = FairShareAllocator(LocalHeddle.SELF, LocalHeddle.policyConfig(policy), allocatorMemory),
+            capacity = Capacity.sized(totalSlots, policy),
+            leasable = leasable,
+            rebase = true,
+            // The view keeps no leases, only how many are open beneath each capped group.
+            openBeneath = ledger.openBeneath(open.asSequence().map { it.path }, leasable),
+        )
+    }
 
     override fun equals(other: Any?): Boolean =
         other is LocalHeddleSnapshot &&

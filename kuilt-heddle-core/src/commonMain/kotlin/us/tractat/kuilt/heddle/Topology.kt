@@ -66,8 +66,10 @@ public data class Topology(public val root: String, public val children: List<No
 
         /**
          * The most leases that may be open beneath this child at once, or `null` for no ceiling.
-         * `0` pauses it: nothing beneath it is picked. Never negative. `LocalHeddle` does not read it
-         * yet. Enforcement is tracked by #3324.
+         * `0` pauses it: nothing beneath it is picked. Never negative. A [LocalHeddle] running this
+         * topology picks nothing beneath a child whose open leases have reached it, and counts the
+         * child idle at its parent until they drop below; it refuses no charge for work already
+         * running there.
          */
         public val maxConcurrent: Long?
     }
@@ -82,8 +84,7 @@ public data class Topology(public val root: String, public val children: List<No
      *   it never has children of its own. Declared groups nest to any depth; runtime ones do not
      *   yet, and letting them is tracked by #3314.
      * @property maxConcurrent the most leases open beneath this group at once, counted across all
-     *   its children; `null` for no ceiling, `0` to pause it. `LocalHeddle` does not read it yet.
-     *   Enforcement is tracked by #3324.
+     *   its children; `null` for no ceiling, `0` to pause it.
      */
     @Serializable
     @SerialName("group")
@@ -99,7 +100,7 @@ public data class Topology(public val root: String, public val children: List<No
      * A leaf of the tree: work is charged here.
      *
      * @property maxConcurrent the most leases open on this lane at once; `null` for no ceiling,
-     *   `0` to pause it. `LocalHeddle` does not read it yet. Enforcement is tracked by #3324.
+     *   `0` to pause it.
      */
     @Serializable
     @SerialName("lane")
@@ -114,8 +115,7 @@ public data class Topology(public val root: String, public val children: List<No
      * name is an opaque string the consumer chooses: heddle attaches no meaning to it.
      *
      * @property maxConcurrent the most leases open on **each** runtime child at once, not on all of
-     *   them together; `null` for no ceiling, `0` to pause every one. Never negative. `LocalHeddle`
-     *   does not read it yet. Enforcement is tracked by #3324.
+     *   them together; `null` for no ceiling, `0` to pause every one. Never negative.
      */
     @Serializable
     public data class RuntimeChildren(

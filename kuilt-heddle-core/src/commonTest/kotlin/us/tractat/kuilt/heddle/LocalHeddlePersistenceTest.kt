@@ -487,22 +487,30 @@ class LocalHeddlePersistenceTest {
     /**
      * The tree the rich scenario runs: `acme` (a nested group at a fractional weight, holding a group
      * and a lane), `tenants` (marked for runtime children), and, while [withSpare], a lane `spare`.
+     * While [capped], `acme`, `interactive` and the runtime marker each carry a ceiling.
      */
-    private fun richTree(acmeWeight: Weight, withSpare: Boolean): Topology = Topology(
+    private fun richTree(acmeWeight: Weight, withSpare: Boolean, capped: Boolean = false): Topology = Topology(
         "root",
         listOfNotNull(
             Topology.Group(
                 "acme",
                 acmeWeight,
-                listOf(Topology.Group("batch", Weight.ONE, listOf(Topology.Lane("x"), Topology.Lane("y", Weight.of(2)))), Topology.Lane("interactive")),
+                listOf(
+                    Topology.Group("batch", Weight.ONE, listOf(Topology.Lane("x"), Topology.Lane("y", Weight.of(2)))),
+                    Topology.Lane("interactive", maxConcurrent = 2L.takeIf { capped }),
+                ),
+                maxConcurrent = 3L.takeIf { capped },
             ),
-            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
+            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE, maxConcurrent = 2L.takeIf { capped })),
             Topology.Lane("spare").takeIf { withSpare },
         ),
     )
 
     private val richBefore = richTree(Weight.of(3, 2), withSpare = true)
     private val richAfter = richTree(Weight.of(5, 2), withSpare = false)
+
+    /** [richAfter] with ceilings, high enough that no call of the scenarios meets them: what format 2's rich golden last applied. */
+    private val richCapped = richTree(Weight.of(5, 2), withSpare = false, capped = true)
     private val richPolicy = LocalPolicy(defaultReservation = 2L)
     private val tenant = richBefore.runtimeChildId(listOf("tenants"), "t1")
     private val richLeaves = setOf(richBefore.groupId("acme", "interactive"), richBefore.groupId("acme", "batch", "x"), richBefore.groupId("acme", "batch", "y"), tenant)
@@ -550,8 +558,10 @@ class LocalHeddlePersistenceTest {
 
     /**
      * The rich scenario, then a second runtime child `t2` attached under `tenants`, leased, settled
-     * and detached, so its edge retires with its books closed. Returns that engine, its open leases,
-     * and its snapshot with `t2`'s edge forgotten: what format 2 adds over format 1 (#3192).
+     * and detached, so its edge retires with its books closed, then a reload that changes only
+     * ceilings ([richCapped]), which moves no edge. Returns that engine, its open leases, and its
+     * snapshot with `t2`'s edge forgotten: what format 2 adds over format 1, the fold (#3192) and
+     * the ceilings (#3324).
      */
     private fun richFoldedScenario(): Triple<LocalHeddle, List<Lease>, LocalHeddleSnapshot> {
         val (h, open) = richScenario()
@@ -560,6 +570,8 @@ class LocalHeddlePersistenceTest {
         val lease = h.lease(setOf(departed), reservation = 2L, startedAt = 30L)
         check(h.complete(lease.id, 3L) is LeaseOutcome.Done)
         check(h.detachRuntimeChild(listOf("tenants"), "t2").refusals.isEmpty())
+        val ceilingsOnly = h.apply(richCapped, generation = 5L)
+        check(ceilingsOnly.applied.isEmpty() && ceilingsOnly.refusals.all { it is StepRefusal.Draining }) { "a change of ceiling alone is no step: $ceilingsOnly" }
         val whole = h.persist()
         val folded = checkNotNull(whole.ledger.forget(listOf(edge))) { "t2's edge is forgettable: ${whole.ledger.forgetRefusal(edge)}" }
         return Triple(h, open, LocalHeddleSnapshot(whole.epoch, folded, whole.allocatorMemory, whole.totalSlots, whole.open, whole.lastApplied))
@@ -591,7 +603,7 @@ class LocalHeddlePersistenceTest {
             { assertEquals(setOf(0L, 1L), golden().leases.map { it.id.epoch }.toSet(), "the rig: open leases from two epochs") },
             { assertTrue(golden().ledger.let { l -> l.allEdges().any { l.lifecycle(it) == Lifecycle.CLOSING } }, "the rig: an edge is draining") },
             { assertTrue(golden().leases.any { it.leaf == tenant }, "the rig: a lease at a runtime child") },
-            { assertEquals(richAfter, golden().lastApplied, "the rig: the topology last applied is the reload's") },
+            { assertEquals(richCapped, golden().lastApplied, "the rig: the topology last applied is the reload's, with its ceilings") },
             { assertTrue(golden().ledger.hasForgotten() && edge !in golden().ledger.allEdges(), "the rig: t2's edge is forgotten") },
             { assertTrue("\"forgotten\":" in GOLDEN_FORMAT_2_RICH, "the rig: the fold is in the bytes") },
             { assertTrue((reference.snapshot().ledger.edge(edge)?.spent ?: 0L) > 0L, "the rig: the forgotten edge had spent something") },
@@ -599,6 +611,29 @@ class LocalHeddlePersistenceTest {
                 val restored = LocalHeddle.restore(golden(), richPolicy, epoch = snapshot.epoch + 1)
                 assertEquals(richContinuation(reference, open).withoutDeparted(edge), richContinuation(restored, open))
             },
+        )
+    }
+
+    /**
+     * Format 2's rich golden carries a ceiling on a group, a lane and a runtime marker, and an engine
+     * restored from it enforces them: `interactive` (ceiling 2) has one lease open in the golden,
+     * so it takes one more and then nothing (#3324).
+     */
+    @Test
+    fun formatTwosGoldenCarriesACeiling() {
+        val snapshot = decoded(GOLDEN_FORMAT_2_RICH)
+        val acme = assertIs<Topology.Group>(snapshot.lastApplied.children.first { it.name == "acme" })
+        val tenants = assertIs<Topology.Group>(snapshot.lastApplied.children.first { it.name == "tenants" })
+        val interactive = richBefore.groupId("acme", "interactive")
+        val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
+        val second = restored.acquire(setOf(interactive), setOf(interactive), startedAt = 0L)
+        val third = restored.acquire(setOf(interactive), setOf(interactive), startedAt = 0L)
+        assertAll(
+            { assertTrue("\"maxConcurrent\":3" in GOLDEN_FORMAT_2_RICH, "the ceiling is in the bytes") },
+            { assertEquals(listOf(3L, 2L, 2L), listOf(acme.maxConcurrent, acme.children.first { it.name == "interactive" }.maxConcurrent, tenants.runtimeChildren?.maxConcurrent)) },
+            { assertEquals(1, snapshot.leases.count { it.leaf == interactive }, "the rig: one lease open at interactive") },
+            { assertIs<AcquireOutcome.Acquired>(second) },
+            { assertEquals(AcquireOutcome.NothingEligible, third, "interactive is at its ceiling") },
         )
     }
 
