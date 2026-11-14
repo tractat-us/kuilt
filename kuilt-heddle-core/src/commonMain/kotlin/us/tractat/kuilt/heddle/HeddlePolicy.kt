@@ -2,14 +2,14 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.math.Rounding
-import us.tractat.kuilt.math.plusOrNull
-import us.tractat.kuilt.math.timesOrNull
+import us.tractat.kuilt.math.timesWide
 
 /**
  * One immediate child, as the policy sees it: the immutable attachment metadata
  * ([record] — parent, child and weight), the parent-facing accounting ([summary] —
  * issued/returned/spent), the child's advertised [demand], the replicated virtual-time seat
- * ([gauge] paired with [baseIssued]), and the scheduler-local wake clamp ([virtualOffset]).
+ * ([gauge] paired with [baseIssued]), its parent's replicated [origin], and the scheduler-local
+ * wake clamp ([offsetTicks]).
  *
  * The record and summary must describe the **same** edge; [HeddlePolicy] rejects a
  * mismatch rather than schedule against inconsistent inputs.
@@ -26,13 +26,16 @@ import us.tractat.kuilt.math.timesOrNull
  *   the effective value here would make a relocation-receiving edge appear to have consumed its
  *   whole re-homed strand the instant it arrived (issue #1752, F2); it is also what makes the seat
  *   arrival-order independent. Necessarily `0 ≤ baseIssued ≤ summary.issued`.
- * @property virtualOffset scheduler-local forward clamp applied on wake so an idle
- *   child cannot bank a backlog of virtual time (design §7.2). `ZERO` for a child
- *   that never slept; computed by [HeddlePolicy.wakeOffset] on an idle→demand edge —
+ * @property offsetTicks scheduler-local forward clamp applied on wake so an idle child cannot
+ *   bank a backlog of virtual time (design §7.2), in ticks of the edge's own service and wide
+ *   (#3353). Zero for a child that never slept; computed on an idle→demand edge —
  *   [FairShareAllocator] detects that edge and carries the offset here (issue #1695), joining
  *   each new value with the one already stored so a re-wake into a lower front can never
  *   refund an earlier clamp (issue #1714). Deliberately *not* replicated — divergent
- *   offsets reorder locally but never touch conservation.
+ *   offsets reorder locally but never touch conservation. Non-negative.
+ * @property origin the parent's origin in whole virtual-time units ([EntitlementLedger.origin]):
+ *   every child of the parent reads its position less `⌊origin · w · G⌋` (#3353). Zero for a parent
+ *   no rebase has moved. Non-negative.
  */
 public data class PolicyEdge(
     public val record: AttachmentRecord,
@@ -40,13 +43,16 @@ public data class PolicyEdge(
     public val demand: Demand,
     public val gauge: Gauge?,
     public val baseIssued: Long,
-    public val virtualOffset: Rational = Rational.ZERO,
+    public val offsetTicks: Int128 = Int128.ZERO,
+    public val origin: Int128 = Int128.ZERO,
 ) {
     init {
         require(record.id == summary.attachment) {
             "PolicyEdge record ${record.id} and summary ${summary.attachment} describe different edges"
         }
         require(baseIssued >= 0L) { "PolicyEdge baseIssued must be non-negative, was $baseIssued" }
+        require(offsetTicks >= Int128.ZERO) { "PolicyEdge offsetTicks must be non-negative, was $offsetTicks" }
+        require(origin >= Int128.ZERO) { "PolicyEdge origin must be non-negative, was $origin" }
         require(baseIssued <= summary.issued) {
             "PolicyEdge baseIssued $baseIssued exceeds effective issued ${summary.issued} on ${record.id} — " +
                 "the effective value is the base plus non-negative relocation credit, so this pair cannot " +
@@ -207,29 +213,40 @@ public object HeddlePolicy {
      *
      * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12).
      */
-    public fun virtualService(edge: PolicyEdge): Rational = ticksToVirtual(rawTicks(edge), edge.record.weight)
-
-    /** [virtualService] as a position: whole ticks of the edge's own service. */
-    internal fun rawTicks(edge: PolicyEdge): Long =
-        netTicks(edge.gauge.grossTicksAt(edge.baseIssued, edge.record.weight), edge.summary.returned, edge.record.weight)
+    public fun virtualService(edge: PolicyEdge): Rational =
+        ticksToVirtual(saturated(rawTicks(edge), edge.record.weight), edge.record.weight)
 
     /**
-     * The position a pick reads: [rawTicks] plus the scheduler-local wake clamp, both in ticks, held
-     * at the edge's [positionCeiling].
+     * [virtualService] as a position: whole ticks of the edge's own service, relative to the
+     * parent's origin, wide and never narrowed ([rawTicksAt], #3353).
+     */
+    internal fun rawTicks(edge: PolicyEdge): Int128 =
+        edge.gauge.rawTicksAt(edge.baseIssued, edge.summary.returned, edge.record.weight, edge.origin)
+
+    /** The effective position, wide: [rawTicks] plus the scheduler-local wake clamp, in ticks. */
+    internal fun effectiveTicksWide(edge: PolicyEdge): Int128 = rawTicks(edge) + edge.offsetTicks
+
+    /**
+     * The position a pick orders: [effectiveTicksWide] narrowed to a `Long` and held at the edge's
+     * [positionCeiling]. The one narrowing on the way from a gauge to a pick (#3353).
+     *
+     * @throws PositionCeilingException if the position is below `Long`, which only a demanding child
+     *   no rebase may push below zero could reach, and none can.
      */
     internal fun effectiveTicks(edge: PolicyEdge): Long {
+        val wide = effectiveTicksWide(edge)
         val weight = edge.record.weight
-        return saturated(Int128.of(rawTicks(edge)) + ticksAt(edge.virtualOffset, weight), weight)
+        if (wide >= Int128.of(positionCeiling(weight))) return positionCeiling(weight)
+        return wide.toLongOrNull() ?: throw PositionCeilingException("${edge.record.id.value} reads $wide ticks, below Long")
     }
 
     /**
      * Whether a pick over [edge] would have to order a position at its ceiling: its effective
-     * position is there, or its wake clamp is, which a smaller raw position could otherwise hide.
+     * position, raw plus clamp and narrowed once, is there (#3313). A wake clamp is a difference,
+     * not a position, so it has no ceiling of its own (#3353).
      */
-    internal fun isAtCeiling(edge: PolicyEdge): Boolean {
-        val weight = edge.record.weight
-        return atCeiling(effectiveTicks(edge), weight) || atCeiling(ticksAt(edge.virtualOffset, weight), weight)
-    }
+    internal fun isAtCeiling(edge: PolicyEdge): Boolean =
+        effectiveTicksWide(edge) >= Int128.of(positionCeiling(edge.record.weight))
 
     /**
      * Is [edge] **currently competing** — does its child want more service than it already
@@ -278,7 +295,7 @@ public object HeddlePolicy {
      * is given.
      *
      * **Not derivable from replicated state, by design — and no longer required to be.** Demand
-     * ages out by *local* receive time and [PolicyEdge.virtualOffset] is deliberately not
+     * ages out by *local* receive time and [PolicyEdge.offsetTicks] is deliberately not
      * replicated, so two peers can and do compute different fronts. That used to be safe only by
      * **carriage**: the finished record travelled in the log entry, one proposer's reading became
      * everyone's permanent fact, and a proposer reading a partial view froze a wrong one for good
@@ -312,14 +329,13 @@ public object HeddlePolicy {
         // Nothing competing ⇒ no mean to take; fall back to the max, which can only give up.
         if (demanding.isEmpty()) {
             val top = considered.maxWith { a, b ->
-                compareVirtual(effectiveTicks(a), a.record.weight, effectiveTicks(b), b.record.weight)
+                compareVirtualWide(effectiveTicksWide(a), a.record.weight, effectiveTicksWide(b), b.record.weight)
             }
-            // Any saturated child, not only the top: one that reads below the top may truly be above it.
-            return VirtualTime.of(effectiveTicks(top), top.record.weight).atCeilingIf(considered.any { isAtCeiling(it) })
+            return VirtualTime.of(effectiveTicksWide(top), top.record.weight)
         }
-        // A saturated input understates the mean, and a joiner seated or clamped against it would
-        // keep that as credit once the input left: the front reads the ceiling instead (#3313).
-        return meanOf(demanding).atCeilingIf(demanding.any { isAtCeiling(it) })
+        // Wide, so a front over a position past the ceiling is still the exact front (#3353): a
+        // joiner seated or clamped against it lands where it belongs, and the pick refuses.
+        return meanOf(demanding)
     }
 
     /**
@@ -328,7 +344,7 @@ public object HeddlePolicy {
      * `max(0, ⌈front · w · G⌉ − p − sleeperCredit · G)` ticks. Adding this offset to
      * [virtualService] clamps the waker up to the current front (with default
      * `sleeperCredit = 0`, to the front rounded up to its grid), so it cannot claim a backlog of
-     * idle virtual time. The result is the [PolicyEdge.virtualOffset] the caller stores, on the
+     * idle virtual time. The result is the clamp a caller stores ([PolicyEdge.offsetTicks]), on the
      * grid, so reading it back is exact.
      *
      * @param front the parent's virtual time at the moment of waking — [front], with the waker
@@ -341,30 +357,24 @@ public object HeddlePolicy {
         // The front rounds up and the waker's own position down, so an off-grid caller's offset
         // can only overshoot the front, never land short of it (§10.5).
         ticksToVirtual(
-            clampTicks(ticksAt(front, weight), ticksAt(vRaw, weight, Rounding.FLOOR), sleeperCredit, weight),
+            saturated(
+                clampTicks(wideTicksAt(front, weight), wideTicksAt(vRaw, weight, Rounding.FLOOR), sleeperCredit),
+                weight,
+            ),
             weight,
         )
 
     /**
-     * The offset a waker stores: [wakeOffsetTicks], or exactly the waker's [positionCeiling] when the
-     * front on its grid is there. A front at the ceiling may stand for a later one, and an offset short
-     * of it would read as an exact position below the ceiling, so the clamp saturates whole: the
-     * waker's effective position then reads the ceiling, and a pick over it refuses (#3313).
+     * [wakeOffset] in ticks, wide: how far a waker at [rawTicks] moves up to reach [frontTicks], less
+     * [sleeperCredit] whole units it may keep, and never below zero. Sleeper credit is in service
+     * units, not virtual time, so it scales onto the grid by `G` like any other service.
+     *
+     * Nothing here is narrowed (#3353): a waker idle since long before the parent's origin was
+     * raised sits far below its siblings, and the clamp has to carry it the whole way up, or it
+     * would keep the difference as credit.
      */
-    internal fun clampTicks(frontTicks: Long, rawTicks: Long, sleeperCredit: Long, weight: Weight): Long =
-        if (atCeiling(frontTicks, weight)) {
-            positionCeiling(weight)
-        } else {
-            minOf(wakeOffsetTicks(frontTicks, rawTicks, sleeperCredit), positionCeiling(weight))
-        }
-
-    /**
-     * [wakeOffset] in ticks: how far a waker at [rawTicks] moves up to reach [frontTicks], less
-     * [sleeperCredit] whole units it may keep. Sleeper credit is in service units, not virtual
-     * time, so it scales onto the grid by `G` like any other service.
-     */
-    internal fun wakeOffsetTicks(frontTicks: Long, rawTicks: Long, sleeperCredit: Long): Long =
-        maxOf(0L, checkedSub(checkedSub(frontTicks, rawTicks), ticksOf(sleeperCredit)))
+    internal fun clampTicks(frontTicks: Int128, rawTicks: Int128, sleeperCredit: Long): Int128 =
+        maxOf(Int128.ZERO, frontTicks - rawTicks - sleeperCredit.timesWide(TICKS_PER_UNIT))
 
     /**
      * The trimmed quantum for [edge] this round: the smallest of the configured quantum,
@@ -399,7 +409,7 @@ public object HeddlePolicy {
      * non-empty.
      */
     private fun meanOf(edges: List<PolicyEdge>): VirtualTime =
-        VirtualTime.mean(edges.map { effectiveTicks(it) }, edges.map { it.record.weight })
+        VirtualTime.mean(edges.map { effectiveTicksWide(it) }, edges.map { it.record.weight })
 
     /**
      * Order candidates by virtual deadline `ev + q/w`, then by attachment id. On the grid the
