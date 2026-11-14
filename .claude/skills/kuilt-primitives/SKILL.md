@@ -19,8 +19,8 @@ Rows pair `;`-separated groups in order.
 |a heartbeat, an idle reaper, "is this peer alive"; reaping an unjoined room; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
 |a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|
 |`room.incoming.filter { it.sender == peer }`, a member's first frame lost before subscribing|`Room.incomingFrom` (`FramesLost`)|`session.md#per-member-frames`|
-|a `delay` between a last send and `leave`/`close`|`Room`/`Seam.flush` → `FlushOutcome` (often `Unsupported`)|`session.md#a-last-frame-before-leaving`|
-|a `host == selfId` check, re-electing a host that left mid-lobby|`SeamRoomFactory.electLobby` → `awaitRoom` → `BecameHost` → `start()`|`session.md#host-election--the-lobby`|
+|a `delay` between a last send and `leave`/`close`|`Room`/`Seam.flush` → `FlushOutcome`|`session.md#a-last-frame-before-leaving`|
+|a `host == selfId` check, re-electing a host that left mid-lobby|`SeamRoomFactory.electLobby` → `awaitRoom` → `ElectionOutcome.BecameHost` → `start()`|`session.md#host-election--the-lobby`|
 |a propose→commit turn/session facade, host election with a term|`GameSession` + `TurnSequencer`|`consensus.md#consensus--turns`|
 |a server holding the log clients propose into, a client outliving its server|`ClusterClient` (`clusterClient`/`clusterClientWithNode`) + `ServerCluster` (`serverCluster`)|`consensus.md#when-one-of-the-peers-is-a-server`|
 |a Raft term/vote/log surviving a restart, an `expect`/`actual` `RaftStorage`|`DurableStoreRaftStorage.open(store)` + `RaftStorageConformanceSuite`|`consensus.md#durable-consensus-state`|
