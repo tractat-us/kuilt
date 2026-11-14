@@ -1100,6 +1100,16 @@ public class LocalHeddle private constructor(
      */
     internal var afterPickForTest: (GroupId) -> Unit = {}
 
+    /**
+     * Whether this engine rebases a busy parent before its positions reach their ceiling (#3329).
+     * Off only in a test's twin, to show a run reaches the ceiling without it and picks the same
+     * until then. Not engine state: a [restore] starts with it on.
+     */
+    internal var rebaseForTest: Boolean = true
+
+    /** How many rebases moved this engine's positions, counting only calls it kept: the witness a test reads. */
+    internal val rebasesForTest: Int get() = 0
+
     /** The path [lease] charges, for tests: what it was opened on, or what a reweight moved it onto. */
     internal fun capturedPath(lease: LeaseId): List<AttachmentId>? = open[lease]?.path
 
