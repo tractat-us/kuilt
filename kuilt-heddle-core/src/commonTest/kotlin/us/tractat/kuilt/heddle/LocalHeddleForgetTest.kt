@@ -195,4 +195,61 @@ class LocalHeddleForgetTest {
             { assertTrue(reload.refusals.isEmpty(), "and lands: $reload") },
         )
     }
+
+    /** Put a prepared edge into the runtime child [name] at [weight] and [generation], as a snapshot could carry one. */
+    private fun LocalHeddle.prepareRuntime(name: String, weight: Long, generation: Long): AttachmentId {
+        val child = tree.runtimeChildId(tenants, name)
+        val record = AttachmentRecord(attachmentIdOf(child, Weight.of(weight), generation), tree.groupId("tenants"), child, Weight.of(weight))
+        reshapeForTest { l -> l.piece(checkNotNull(l.prepare(record)).delta) }
+        return record.id
+    }
+
+    /**
+     * A runtime child's prepared edge is the record that the child is attached, so a swap keeps one
+     * that says so: `u`'s, at the marker's weight, which a reload adopts, and `w`'s, at a weight the
+     * marker no longer gives, which is still the only edge `w` has. The reload then activates `u`'s,
+     * gives `w` an edge at the marker's weight, and only then forgets `w`'s old one, which nothing
+     * needs any more.
+     */
+    @Test
+    fun aPreparedEdgeThatStillSaysARuntimeChildIsAttachedIsKept() {
+        val h = engine()
+        val u = h.prepareRuntime("u", weight = 1L, generation = 5L)
+        val w = h.prepareRuntime("w", weight = 2L, generation = 6L)
+        check(h.attachRuntimeChild(tenants, "v", generation = 0L).refusals.isEmpty())
+        val kept = h.snapshot().ledger
+        val reload = h.apply(tree, generation = 0L)
+        val after = h.snapshot().ledger
+        val wChild = tree.runtimeChildId(tenants, "w")
+        assertAll(
+            { assertEquals(Lifecycle.PREPARED, kept.lifecycle(u), "the attach of v kept u's adoptable edge") },
+            { assertEquals(Lifecycle.PREPARED, kept.lifecycle(w), "and w's, its only one") },
+            { assertTrue(reload.refusals.isEmpty(), "the reload lands: $reload") },
+            { assertEquals(u, after.lineageOf(tree.runtimeChildId(tenants, "u"))?.last(), "u is attached on the edge it had") },
+            {
+                val lineage = after.lineageOf(wChild).orEmpty()
+                assertTrue(lineage.isNotEmpty() && after.record(lineage.last())?.weight == Weight.ONE, "w is attached at the marker's weight: $lineage")
+            },
+            { assertNull(after.lifecycle(w), "and w's old prepared edge is forgotten") },
+        )
+    }
+
+    /**
+     * A reload forgets what the topology it installs does not want, not what the one it replaces
+     * did not: `u`, attached by a prepared edge at weight 1, is moved to a marker of weight 2, and
+     * the weight-1 edge, which the old marker would have adopted, goes in the reload's own swap.
+     */
+    @Test
+    fun aReloadForgetsWhatTheTopologyItInstallsDoesNotWant() {
+        val h = engine()
+        val old = h.prepareRuntime("u", weight = 1L, generation = 5L)
+        val reload = h.apply(reloaded(marker = 2L, steady = 1L), generation = 0L)
+        val after = h.snapshot().ledger
+        val lineage = after.lineageOf(tree.runtimeChildId(tenants, "u")).orEmpty()
+        assertAll(
+            { assertTrue(reload.refusals.isEmpty(), "the reload lands: $reload") },
+            { assertTrue(lineage.isNotEmpty() && after.record(lineage.last())?.weight == Weight.of(2), "the rig: u is attached at weight 2: $lineage") },
+            { assertNull(after.lifecycle(old), "and its weight-1 edge is forgotten") },
+        )
+    }
 }
