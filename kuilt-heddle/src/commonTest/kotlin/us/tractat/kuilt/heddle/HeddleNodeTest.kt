@@ -1221,6 +1221,8 @@ class HeddleNodeTest {
             }
         }
         val origin = peer.node.ledger.value.origin(root)
+        // In the results XML, so a run shows what it reached.
+        println("long run: calls=${run.calls} grants=${run.grants} rebases=${peer.node.rebasesForTest} peak=$peak origin=$origin")
         assertAll(
             { assertTrue(run.grants >= target, "the run made its own ${run.grants} grants") },
             { assertTrue(peer.node.rebasesForTest > 0, "the rig: the parent rebased (${peer.node.rebasesForTest} times)") },
@@ -1254,6 +1256,7 @@ class HeddleNodeTest {
             if (refusedAt < 0) assertEquals(b.issuedByLane(), a.issuedByLane(), "call ${a.calls}: the two made different picks")
         }
         val beyond = a.grants
+        println("twin: refused at call $refusedAt after ${b.grants} grants; the rebasing node rebased ${rebasing.peers[0].node.rebasesForTest} times")
         repeat(64) { assertTrue(a.step() !is ScheduleOutcome.PositionCeiling, "the rebasing node refused after the twin did") }
         assertAll(
             { assertTrue(refusedAt > 0, "the rig: the twin reached its ceiling, at call $refusedAt") },
