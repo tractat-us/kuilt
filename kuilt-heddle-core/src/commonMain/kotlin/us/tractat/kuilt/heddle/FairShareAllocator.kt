@@ -149,9 +149,15 @@ public class FairShareAllocator(
      * @param demand the current appetite of one child edge, [Demand.NONE] for an edge that wants
      *   nothing. Asked once per active child each time the policy input is built, so it should
      *   answer from live state rather than a copy taken before the call.
-     * @return [AllocationOutcome.Delegated] with the count of grants applied this call, or
-     *   [AllocationOutcome.NothingToDelegate] when none was. It stops early, with nothing written
-     *   for the pick it stops at, when a child of [parent] reaches its position ceiling (#3313).
+     * Two states stop it, and neither throws. A child of [parent] at its position ceiling (#3313)
+     * stops it at the pick that would have to order it. Active children whose weights put a pick's
+     * products out of `Long` ([weightsFitTheBudget]) stop it before the seat step, writing nothing:
+     * the replicated ledger can merge such a set from writes that each fit (#3353).
+     *
+     * @return [AllocationOutcome.Delegated] with the count of grants applied this call, even when a
+     *   refusal stopped it after them; otherwise [AllocationOutcome.PositionCeiling] or
+     *   [AllocationOutcome.WeightBudget] when [parent] cannot be ordered, and
+     *   [AllocationOutcome.NothingToDelegate] when it simply had nothing to grant.
      */
     public fun schedule(
         parent: GroupId,
