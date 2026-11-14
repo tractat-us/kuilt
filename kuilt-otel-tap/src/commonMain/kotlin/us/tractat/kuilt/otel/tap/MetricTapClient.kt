@@ -36,7 +36,7 @@ public data class MetricSnapshot(
     public val doubleSums: Map<MetricKey, Double>,
     public val gauges: Map<MetricKey, Double>,
     public val cardinalities: Map<MetricKey, Long>,
-    @IntroducedAt("0.8")
+    @IntroducedAt("0.7.4")
     public val histograms: Map<MetricKey, DDSketch> = emptyMap(),
 )
 
