@@ -239,7 +239,8 @@ val cancelled = heddle.acquire(both, both, startedAt = 98L)
 check(cancelled is AcquireOutcome.Acquired)
 check(heddle.cancel(cancelled.lease.id) == LeaseOutcome.Done(charged = 0L, overrun = 0L))
 // Someone started a mobile build by hand. Admit it: no pick, but it is charged like any other.
-val byHand = heddle.admit(mobile, startedAt = 99L)
+// Naming who else is waiting keeps the scheduler's view of the queue as a pick would leave it.
+val byHand = heddle.admit(mobile, waiting = both, startedAt = 99L)
 check(byHand is AcquireOutcome.Acquired)
 check(heddle.complete(byHand.lease.id, actualCost = 4L) == LeaseOutcome.Done(charged = 4L, overrun = 1L))
 ```
@@ -254,7 +255,8 @@ check(heddle.complete(byHand.lease.id, actualCost = 4L) == LeaseOutcome.Done(cha
 - **`cancel`** closes a lease and charges nothing.
 - **`admit`** charges work that started without a pick, such as a build someone
   ran by hand. It is never refused for lack of supply, because the work is already
-  running.
+  running. Pass `waiting` too, and the scheduler sees the queue as a pick would
+  have, so a lane that sat idle and comes back starts level with the others.
 
 ## Change the tree while builds run
 

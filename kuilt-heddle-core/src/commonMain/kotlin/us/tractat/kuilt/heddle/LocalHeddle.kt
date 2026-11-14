@@ -226,7 +226,8 @@ public sealed interface LeaseOutcome {
  * the tree and reserves an estimated cost for it. When the work finishes, [complete] charges what
  * it really cost and hands back what it did not use. Cost is time, by convention, in whatever unit
  * the caller counts in. A lease that runs long is [extend]ed, or charged its overrun at the end;
- * a charge is never refused. Work another scheduler already started is [admit]ted, with no pick.
+ * a charge is never refused. Work another scheduler already started is [admit]ted, with no pick;
+ * pass the waiting set to [admit] and the wake memory observes it as the pick would have.
  *
  * Start one with [fromTopology], and change the tree while it runs with [apply]: a reload is one
  * unit, a reweight moves the leases open under it onto the new edge, and a removal drains (see
