@@ -252,4 +252,57 @@ class LocalHeddleForgetTest {
             { assertNull(after.lifecycle(old), "and its weight-1 edge is forgotten") },
         )
     }
+
+    /**
+     * Forgetting composes with a rebase (#3329). Three users are served, `u0` is pushed past the
+     * rebase threshold, and a pick rebases `tenants`, moving every child's position, `u2`'s
+     * included. Then `u2` leaves: its swap forgets its edge and what the allocator held for it,
+     * rebase and all. From there an engine that forgets picks exactly as one that keeps
+     * everything.
+     */
+    @Test
+    fun forgettingComposesWithARebase() {
+        val users = listOf("u0", "u1", "u2")
+        val ids = users.map { tree.runtimeChildId(tenants, it) }
+        fun twin(forgets: Boolean) = engine().also { h ->
+            h.forgetsForTest = forgets
+            users.forEach { check(h.attachRuntimeChild(tenants, it, generation = 0L).refusals.isEmpty()) }
+            ids.forEach { check(h.complete(h.lease(setOf(it), reservation = 1L).id, 1L) is LeaseOutcome.Done) }
+            val edge = checkNotNull(h.snapshot().ledger.lineageOf(ids[0])).last()
+            val target = 2 * (positionCeiling(Weight.ONE) / 16)
+            h.reshapeForTest { l ->
+                val gauge = checkNotNull(l.gauge(edge))
+                val floorTicks = target - (l.baseIssuance(edge) - gauge.folded) * TICKS_PER_UNIT
+                l.piece(EntitlementLedger.of(gauges = mapOf(edge to Gauge(ticksToVirtual(floorTicks, Weight.ONE), gauge.folded))))
+            }
+            val rebasesBefore = h.rebasesForTest
+            check(h.complete(h.lease(setOf(ids[1]), reservation = 1L).id, 1L) is LeaseOutcome.Done)
+            check(h.acquire(ids.toSet(), setOf(ids[1]), startedAt = 1L).let { it is AcquireOutcome.Acquired && h.complete(it.lease.id, 1L) is LeaseOutcome.Done })
+            check(h.rebasesForTest > rebasesBefore) { "the rig: the pick rebased" }
+        }
+        val subject = twin(forgets = true)
+        val reference = twin(forgets = false)
+        val departed = checkNotNull(subject.snapshot().ledger.lineageOf(ids[2])).last()
+        val rememberedBefore = departed in subject.snapshot().allocatorMemory.demandingObserved
+        check(subject.detachRuntimeChild(tenants, "u2").refusals.isEmpty())
+        check(reference.detachRuntimeChild(tenants, "u2").refusals.isEmpty())
+        val after = subject.snapshot()
+        val picks = (0 until 40).map { i ->
+            listOf(subject, reference).map { h ->
+                val out = h.acquire(ids.take(2).toSet(), ids.take(2).toSet(), startedAt = 10L + i)
+                check(out is AcquireOutcome.Acquired) { "acquire $i: $out" }
+                check(h.complete(out.lease.id, 1L + i % 2) is LeaseOutcome.Done)
+                out.lease.leaf
+            }
+        }
+        assertAll(
+            { assertTrue(rememberedBefore, "the rig: the allocator remembered u2's edge") },
+            { assertNull(after.ledger.lifecycle(departed), "u2's edge is forgotten") },
+            { assertTrue(departed !in after.allocatorMemory.wakeOffsets && departed !in after.allocatorMemory.demandingObserved, "and so is its memory") },
+            { assertEquals(Lifecycle.RETIRED, reference.snapshot().ledger.lifecycle(departed), "the rig: the reference kept it") },
+            { assertEquals(picks.map { it[1] }, picks.map { it[0] }, "the same picks") },
+            { assertEquals(reference.snapshot().ledger.holdings(tree.groupId("tenants"), LOCAL), subject.snapshot().ledger.holdings(tree.groupId("tenants"), LOCAL)) },
+            { assertEquals(emptyList(), subject.snapshot().ledger.validate()) },
+        )
+    }
 }
