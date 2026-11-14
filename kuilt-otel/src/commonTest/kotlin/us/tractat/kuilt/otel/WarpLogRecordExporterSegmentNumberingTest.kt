@@ -178,9 +178,9 @@ class WarpLogRecordExporterSegmentNumberingTest {
         assertAll(
             // The control: a well-formed index constructs, so the refusals are not a constructor
             // that refuses everything.
-            { LogSegmentIndex(listOf(1L), active = 2L, next = 3L, retired = listOf(0L)) },
+            { LogSegmentIndex(listOf(1L), active = 2L, next = 3L, retired = listOf(0L)); Unit },
             *refusals.map { (shape, build) ->
-                { assertFailsWith<IllegalArgumentException>("the index accepted $shape") { build() } }
+                { assertFailsWith<IllegalArgumentException>("the index accepted $shape") { build() }; Unit }
             }.toTypedArray(),
         )
     }
@@ -236,8 +236,8 @@ class WarpLogRecordExporterSegmentNumberingTest {
                 ),
             ),
         )
-        store.putRaw(StoreKey(segmentKeyForTest(below)), segmentOf((0 until 4).map { record(it) }))
-        store.putRaw(StoreKey(segmentKeyForTest(wrapped)), segmentOf((4 until 6).map { record(it) }))
+        store.putRaw(StoreKey(segmentKeyForTest(below)), segmentOf(ReplicaId("X"), (0 until 4).map { record(it) }))
+        store.putRaw(StoreKey(segmentKeyForTest(wrapped)), segmentOf(ReplicaId("Y"), (4 until 6).map { record(it) }))
 
         val read = indexOf(store)
         val exporter = exporterFor(store).also { it.recover() }
@@ -254,11 +254,11 @@ class WarpLogRecordExporterSegmentNumberingTest {
         )
     }
 
-    private fun segmentOf(records: List<LogRecord>): ByteArray {
+    private fun segmentOf(author: ReplicaId, records: List<LogRecord>): ByteArray {
         var rga = Rga.empty<LogRecord>()
         var tail = RgaId.HEAD
         records.forEach { r ->
-            val (next, op) = rga.insertAfter(replica = replicaA, after = tail, value = r)
+            val (next, op) = rga.insertAfter(replica = author, after = tail, value = r)
             rga = next
             tail = op.id
         }
