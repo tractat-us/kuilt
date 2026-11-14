@@ -54,8 +54,8 @@ public data class BoundMetrics(
          * identically on every peer that has merged the same state.
          *
          * @throws ArithmeticException when the demanding children's weight sum, or one demanding
-         * child's reduced share of it, does not fit in a `Long`. That needs extreme weights;
-         * scheduling itself is unaffected.
+         * child's reduced share of it, does not fit in a `Long`. Either needs weights whose
+         * numerators, over their common denominator, sum past `Long`.
          */
         public fun at(
             ledger: EntitlementLedger,
@@ -94,9 +94,12 @@ public data class BoundMetrics(
          * same value from the same state.
          *
          * @throws ArithmeticException when the demanding weight sum `W`, or a demanding child's
-         * reduced share `w_i/W`, does not fit in a `Long`. That needs extreme weights (two children
-         * of `(2⁶²+1)/4` and `1/12` give a share of `(3·2⁶²+3)/(3·2⁶²+4)` while `W` fits); a quotient
-         * whose reduced form fits never throws. Scheduling is unaffected.
+         * reduced share `w_i/W`, does not fit in a `Long`. Both need the weights, brought to their
+         * common denominator `L`, to have a numerator sum `S` past `Long`: `W` reduced is `S/L`, and a
+         * share reduced is at most `S` over at most `S`. That is the same sum the scheduler forms for
+         * a front over these children, which throws there too. `W` can still fit: `2⁵⁷/3` and `1/192`
+         * sum to `S = 2⁶³+1` over `L = 192`, `W` reduces to `((2⁶³+1)/3)/64`, and the first share is
+         * `2⁶³/(2⁶³+1)`. A quotient whose reduced form fits never throws.
          */
         private fun observedDeviation(
             ledger: EntitlementLedger,
@@ -131,8 +134,9 @@ public data class BoundMetrics(
          * `⌈|share · total − committed|⌉`, for a reduced `share = p/q`: the numerator
          * `|p·total − committed·q|` is formed in 128 bits and divided by `q` rounding up, so no
          * intermediate decides whether it fits — only the answer does (#3319). Multiplying the
-         * share by a lifetime total as a `Long` rational threw once `p · total` passed `2⁶³`, which
-         * for a two-child split near `3 : 1` is a total of `2⁶²`, and on every call after that.
+         * share by a lifetime total as a `Long` rational threw once `p · total / gcd(total, q)` passed
+         * `2⁶³`, and on every call after that: a `31 : 1` split did at a total of `2⁵⁹ − 1`, which two
+         * edges can carry.
          *
          * The answer always fits when `0 ≤ committed ≤ total` and `0 ≤ share ≤ 1`, which holds for
          * every demanding child of a ledger whose committed service is non-negative: the gap is then
