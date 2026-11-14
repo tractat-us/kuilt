@@ -9,9 +9,16 @@ import kotlin.test.assertEquals
  * [BoundMetrics.observedDeviation] at lifetime totals large enough that the old arithmetic
  * (`share × totalCommitted` as a `Long` rational) overflowed and threw on every later call (#3319).
  *
- * Each row is #3319's measured first-throw total, split exactly 50/50 between two demanding children
- * of `root`, so the deviation is `|share₁ − ½| · T` rounded up. The expected values were computed
- * outside Kotlin with exact rationals (Python's `fractions.Fraction`), not by the formula under test.
+ * The first four rows are #3319's measured first-throw totals, split exactly 50/50 between two
+ * demanding children of `root`, so the deviation is `|share₁ − ½| · T` rounded up. The expected values
+ * were computed outside Kotlin with exact rationals (Python's `fractions.Fraction`), not by the
+ * formula under test.
+ *
+ * The 128-bit order and gcd-first sum of #3313 already moved two of those thresholds: an exact
+ * 50/50 split no longer throws at `2⁵¹` or `2⁵⁶`, but the same weights still threw at `2⁵⁴` and `2⁵⁷`,
+ * where `share × T` itself leaves `Long`. Those two rows pin the overflow that was left. Both totals
+ * are reachable: the pick's own ceiling (`committed / weight` in the gauge `delegate` writes) holds
+ * at each of them, which the rig proves by delegating that service.
  */
 class BoundMetricsTest {
 
@@ -27,8 +34,18 @@ class BoundMetricsTest {
     }
 
     @Test
+    fun thousandthAgainstTheRestAtTwoToThe54() {
+        assertEquals(8_989_184_856_231_511L, deviation(Weight.of(1L, 1000L), Weight.of(999L, 1000L), 1L shl 54))
+    }
+
+    @Test
     fun coprimeDenominatorsAtTwoToThe56() {
         assertEquals(1_549_625_678_235_010L, deviation(Weight.of(1L, 97L), Weight.of(1L, 89L), 1L shl 56))
+    }
+
+    @Test
+    fun coprimeDenominatorsAtTwoToThe57() {
+        assertEquals(3_099_251_356_470_019L, deviation(Weight.of(1L, 97L), Weight.of(1L, 89L), 1L shl 57))
     }
 
     @Test
