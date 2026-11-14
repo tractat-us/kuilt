@@ -2199,8 +2199,9 @@ public class EntitlementLedger private constructor(
      * A RETIRED edge folds its `effIssued − returned` per replica into its parent's outflow, which
      * [holdings] subtracts, its effective leaf spend per replica into the folded leaf spend, which
      * [leafSpentTotal] counts, and its generation into the forgotten floor, which the generation
-     * floor reads. Its parent then counts as having child edges ([hasChildEdges]) for good. A PREPARED
-     * edge never carried anything, so it moves the floor alone.
+     * floor reads. A PREPARED edge never carried anything, so it folds nothing but its generation.
+     * Either way its parent keeps counting as having child edges ([hasChildEdges]), as it did while
+     * the edge was held, so no reader of that question sees the forget either.
      *
      * **Not a join.** Every other mutator only adds to the lattice; this removes slots, so the result
      * is not above `this`, and it breaks §10 invariant 2. It is one writer's act: `LocalHeddle` is its
@@ -2221,9 +2222,9 @@ public class EntitlementLedger private constructor(
         var floor = forgotten.generationFloor
         for (e in doomed) {
             floor = maxOf(floor, generationOf(e) ?: -1L)
-            if (lifecycleOf(e) != Lifecycle.RETIRED) continue
             val record = checkNotNull(recordOf(e)) { "a forgettable edge has one record" }
             val row = outflow.getOrPut(record.parent) { HashMap() }
+            if (lifecycleOf(e) != Lifecycle.RETIRED) continue
             for (r in replicasOnEdge(e)) {
                 val net = netInflow(e, r)
                 if (net != 0L) row[r] = checkedAdd(row[r] ?: 0L, net)

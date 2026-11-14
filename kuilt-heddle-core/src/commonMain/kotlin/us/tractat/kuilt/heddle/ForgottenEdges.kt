@@ -17,7 +17,7 @@ import us.tractat.kuilt.crdt.ReplicaId
  *   so a new edge is never numbered at or below one the ledger once held.
  *
  * A parent appears in [outflow] once any of its children is forgotten, even when what it folded
- * nets to zero, because "this group has child edges" is part of what a retired child meant.
+ * nets to zero, because "this group has child edges" is part of what the child's edge meant.
  *
  * It is the ledger's seventeenth component, and the only one that is not a join: forgetting removes
  * slots, so [EntitlementLedger.piece] refuses to merge two different folds. It is scoped to a single
