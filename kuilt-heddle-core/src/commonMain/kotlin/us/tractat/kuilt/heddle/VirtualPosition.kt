@@ -86,12 +86,17 @@ internal fun saturatedTicksOf(units: Long, w: Weight): Long = saturated(units.ti
 internal class PositionCeilingException(message: String) : ArithmeticException(message)
 
 /**
- * Whether one parent's children, of [weights], keep every product a pick forms in `Long`: the
- * least common multiple `L` of the denominators, the sum `S = Σ n · L/d`, and `L · n`, `S · d`,
- * `G · S` and every `d_a · n_b` ([VirtualTime.mean], [VirtualTime.ticksFor], [compareVirtual]).
- * A subset's `L` and `S` are at most the whole set's, so a set that passes keeps every front a pick
- * takes over part of it in range too. A reload that would break it is refused at
- * [LocalHeddle.apply] (#3313).
+ * Whether one parent's children, of [weights], keep every product a pick forms in `Long`
+ * ([VirtualTime.mean], [VirtualTime.ticksFor], [compareVirtual]). Four checks cover them all:
+ * - `L`, the least common multiple of the denominators;
+ * - `S = Σ n · L/d`, the weights' sum over `L`;
+ * - `G · S`, the front's denominator in ticks;
+ * - `S · d` for every weight, the divisor [VirtualTime.ticksFor] forms.
+ *
+ * The other products follow. `L · n = (n · L/d) · d ≤ S · d`, since `n · L/d` is one term of `S`.
+ * And `d_a · n_b ≤ L · n_b ≤ S · d_b`, since `d_a` divides `L`. A subset's `L` divides the whole
+ * set's, so its `S` is no larger, and every front a pick takes over part of the set stays in range
+ * too. A reload that would break it is refused at [LocalHeddle.apply] (#3313).
  */
 internal fun weightsFitTheBudget(weights: List<Weight>): Boolean {
     if (weights.isEmpty()) return true
@@ -100,8 +105,7 @@ internal fun weightsFitTheBudget(weights: List<Weight>): Boolean {
     var sum = 0L
     for (w in weights) sum = sum.plusOrNull(w.numerator.timesOrNull(l / w.denominator) ?: return false) ?: return false
     if (sum.timesOrNull(TICKS_PER_UNIT) == null) return false
-    if (weights.any { l.timesOrNull(it.numerator) == null || sum.timesOrNull(it.denominator) == null }) return false
-    return weights.maxOf { it.denominator }.timesOrNull(weights.maxOf { it.numerator }) != null
+    return weights.all { sum.timesOrNull(it.denominator) != null }
 }
 
 /**
@@ -193,6 +197,12 @@ internal class VirtualTime(
     private val ticks: Int128,
     private val weightNumerator: Long,
     private val weightDenominator: Long,
+    /**
+     * Whether a position this time was taken over is at its ceiling, so the time may stand for a
+     * later one. Then every [ticksFor] reads the ceiling: a seat or clamp taken against it lands at
+     * the penalty end, never below a front it cannot see (§10.5, #3313).
+     */
+    private val atCeiling: Boolean = false,
 ) {
     init {
         require(weightNumerator > 0L && weightDenominator > 0L) { "weight must be positive" }
@@ -218,6 +228,7 @@ internal class VirtualTime(
      *   [weightsFitTheBudget] rules out for a topology [LocalHeddle.apply] accepted.
      */
     fun ticksFor(w: Weight): Long {
+        if (atCeiling) return positionCeiling(w)
         val multiplier = checkedMul(weightDenominator, w.numerator)
         val divisor = checkedMul(weightNumerator, w.denominator)
         val whole = ticks.divideOrNull(divisor, Rounding.FLOOR)
@@ -231,6 +242,10 @@ internal class VirtualTime(
         }
         return saturated(whole.timesWide(multiplier) + fraction, w)
     }
+
+    /** This time, marked as taken over a position at its ceiling when [saturated] says so. */
+    fun atCeilingIf(saturated: Boolean): VirtualTime =
+        if (saturated && !atCeiling) VirtualTime(ticks, weightNumerator, weightDenominator, atCeiling = true) else this
 
     /** This time as an exact [Rational], for diagnostics. Throws when it does not fit one. */
     fun toRational(): Rational {

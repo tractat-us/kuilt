@@ -439,17 +439,18 @@ public class FairShareAllocator(
         for (edge in edges) {
             if (edge.record.id !in wakers) continue
             val weight = edge.record.weight
-            val computed = HeddlePolicy.wakeOffsetTicks(
+            val computed = HeddlePolicy.clampTicks(
                 frontTicks = front.ticksFor(weight),
                 rawTicks = HeddlePolicy.rawTicks(edge),
                 sleeperCredit = policy.sleeperCredit,
+                weight = weight,
             )
             // Join, never replace: the front is not monotone across wake cycles (#1714). Both
             // sides are on the waker's grid, and the result is stored on it, so a stored offset
             // never carries a front's denominator into the next one (#3313).
             val carried = ticksAt(wakeOffsets[edge.record.id] ?: Rational.ZERO, weight)
-            // Held at the ceiling, like any position: a clamp is part of a charge that may not be
-            // refused, and a pick over a clamp there refuses instead ([HeddlePolicy.isAtCeiling]).
+            // Held at the ceiling, like any position, so it stays representable; a pick over a clamp
+            // there refuses ([HeddlePolicy.isAtCeiling]).
             wakeOffsets[edge.record.id] = ticksToVirtual(minOf(maxOf(carried, computed), positionCeiling(weight)), weight)
         }
     }

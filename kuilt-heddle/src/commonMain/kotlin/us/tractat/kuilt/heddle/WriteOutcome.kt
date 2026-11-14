@@ -40,7 +40,11 @@ public sealed interface ScheduleOutcome {
         }
     }
 
-    /** The scheduler ran and found no holdings to move toward any advertised demand. */
+    /**
+     * The scheduler ran and delegated nothing: it found no holdings to move toward any advertised
+     * demand, or the parent has a child at its position ceiling, where picks are refused
+     * ([HeddleNode.schedule]; telling the two apart is tracked by #3353).
+     */
     public data object NothingToDelegate : ScheduleOutcome
 }
 

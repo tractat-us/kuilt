@@ -288,6 +288,8 @@ public sealed interface LeaseOutcome {
  * reads, and its [persist]ed snapshot encodes, exactly as before, and the next call starts clean. A
  * whole reload is one operation, however many children it changes.
  *
+ * The copy costs one copy of the open leases and of the wake memory per call.
+ *
  * **The ordinary refusals keep one change, the allocator's wake memory.** An [acquire] refused with
  * [AcquireOutcome.NoLiveLineage] leaves the ledger as it was, but the pick it tried at the root
  * observed who was waiting, and forgetting that would treat the next observation as the first. A
@@ -350,8 +352,8 @@ public sealed interface LeaseOutcome {
  * Nothing suspends and nothing times out. An argument out of range throws
  * [IllegalArgumentException], a reservation or extension above [MAX_RESERVATION] included.
  *
- * Arithmetic that would leave `Long` throws [ArithmeticException] rather than wrapping. The one
- * place a running engine could reach it is now a typed refusal instead: an edge's **position**, its
+ * Arithmetic that would leave `Long` throws [ArithmeticException] rather than wrapping. The place
+ * a running engine reached it first is now a typed refusal instead: an edge's **position**, its
  * service in ticks of 1/16 of a unit, has a ceiling, `Long.MAX_VALUE` less room for one
  * [MAX_RESERVATION] deadline, divided by its weight's denominator. A joiner inherits its position
  * from the front it is seated at, scaled by its weight against its siblings', so the service one
@@ -364,7 +366,14 @@ public sealed interface LeaseOutcome {
  * - a call that **charges**, [admit] or [complete], lands as usual. The books stay exact; only the
  *   position is held at the ceiling.
  *
- * A parent at its ceiling refuses picks until its positions come back down (#3329).
+ * A parent at its ceiling refuses picks until its positions come back down (#3329). A seat or a
+ * wake clamp taken against a front that includes a position at its ceiling lands at the joiner's
+ * own ceiling, the penalty end, so nothing an understated front would have handed out is kept as
+ * credit once the saturated child leaves.
+ *
+ * The diagnostics still answer in exact [Rational]s, and those can throw [ArithmeticException]
+ * before the ceiling: [explain]'s [WaitExplanation.BehindAtLevel] fronts, whose numerator carries
+ * the least common multiple of the sibling weights' denominators, and [entitlement].
  *
  * [apply] keeps the weight arithmetic in range the same way: a reload whose weights would put one
  * parent's products of numerators and denominators out of `Long` refuses that child with a
@@ -710,6 +719,8 @@ public class LocalHeddle private constructor(
      *
      * @throws IllegalArgumentException as [acquire] does: [reservation] out of range, or [eligible]
      *   not a subset of [waiting].
+     * @throws ArithmeticException when a [WaitExplanation.BehindAtLevel] front does not fit an exact
+     *   [Rational], which can happen well below the position ceiling (see "Failure surface").
      * @sample us.tractat.kuilt.heddle.sampleExplainWait
      */
     public fun explain(

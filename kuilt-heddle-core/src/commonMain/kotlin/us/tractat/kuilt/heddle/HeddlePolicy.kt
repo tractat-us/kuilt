@@ -137,8 +137,9 @@ public object HeddlePolicy {
      * @throws IllegalStateException if step 3's eligible set is empty — a policy bug, not an
      *   input the caller can provoke (issue #1737).
      * @throws ArithmeticException if any of [edges] holds a position at its ceiling, which no longer
-     *   orders exactly, or a deadline leaves `Long` (#3313). [LocalHeddle] answers it with
-     *   [AcquireOutcome.PositionCeiling]; [FairShareAllocator.schedule] stops granting at the parent.
+     *   orders exactly (#3313): [LocalHeddle] answers that with [AcquireOutcome.PositionCeiling], and
+     *   [FairShareAllocator.schedule] stops granting at the parent. Also, as before, if a deadline
+     *   `p + q · G` leaves `Long`, which a quantum above [LocalHeddle.MAX_RESERVATION] can reach.
      */
     public fun pick(edges: List<PolicyEdge>, config: PolicyConfig, localHoldings: Long): Grant? {
         require(localHoldings >= 0L) { "localHoldings must be non-negative, was $localHoldings" }
@@ -209,13 +210,8 @@ public object HeddlePolicy {
     public fun virtualService(edge: PolicyEdge): Rational = ticksToVirtual(rawTicks(edge), edge.record.weight)
 
     /** [virtualService] as a position: whole ticks of the edge's own service. */
-    internal fun rawTicks(edge: PolicyEdge): Long {
-        val weight = edge.record.weight
-        val gross = edge.gauge.grossTicksAt(edge.baseIssued, weight)
-        // A gross held at the ceiling may stand for more than it says, so what is left after the
-        // returns is not known either: it stays at the ceiling rather than reading exact.
-        return if (atCeiling(gross, weight)) gross else checkedSub(gross, ticksOf(edge.summary.returned))
-    }
+    internal fun rawTicks(edge: PolicyEdge): Long =
+        netTicks(edge.gauge.grossTicksAt(edge.baseIssued, edge.record.weight), edge.summary.returned, edge.record.weight)
 
     /**
      * The position a pick reads: [rawTicks] plus the scheduler-local wake clamp, both in ticks, held
@@ -315,9 +311,11 @@ public object HeddlePolicy {
             val top = considered.maxWith { a, b ->
                 compareVirtual(effectiveTicks(a), a.record.weight, effectiveTicks(b), b.record.weight)
             }
-            return VirtualTime.of(effectiveTicks(top), top.record.weight)
+            return VirtualTime.of(effectiveTicks(top), top.record.weight).atCeilingIf(isAtCeiling(top))
         }
-        return meanOf(demanding)
+        // A saturated input understates the mean, and a joiner seated or clamped against it would
+        // keep that as credit once the input left: the front reads the ceiling instead (#3313).
+        return meanOf(demanding).atCeilingIf(demanding.any { isAtCeiling(it) })
     }
 
     /**
@@ -339,12 +337,22 @@ public object HeddlePolicy {
         // The front rounds up and the waker's own position down, so an off-grid caller's offset
         // can only overshoot the front, never land short of it (§10.5).
         ticksToVirtual(
-            minOf(
-                wakeOffsetTicks(ticksAt(front, weight), ticksAt(vRaw, weight, Rounding.FLOOR), sleeperCredit),
-                positionCeiling(weight),
-            ),
+            clampTicks(ticksAt(front, weight), ticksAt(vRaw, weight, Rounding.FLOOR), sleeperCredit, weight),
             weight,
         )
+
+    /**
+     * The offset a waker stores: [wakeOffsetTicks], or exactly the waker's [positionCeiling] when the
+     * front on its grid is there. A front at the ceiling may stand for a later one, and an offset short
+     * of it would read as an exact position below the ceiling, so the clamp saturates whole: the
+     * waker's effective position then reads the ceiling, and a pick over it refuses (#3313).
+     */
+    internal fun clampTicks(frontTicks: Long, rawTicks: Long, sleeperCredit: Long, weight: Weight): Long =
+        if (atCeiling(frontTicks, weight)) {
+            positionCeiling(weight)
+        } else {
+            minOf(wakeOffsetTicks(frontTicks, rawTicks, sleeperCredit), positionCeiling(weight))
+        }
 
     /**
      * [wakeOffset] in ticks: how far a waker at [rawTicks] moves up to reach [frontTicks], less
@@ -407,7 +415,6 @@ public object HeddlePolicy {
         val ticks: Long,
     ) {
         /** The deadline as a position on this edge's grid: `p + q · G`. */
-        fun deadline(): Long = ticks.plusOrNull(quantum.timesOrNull(TICKS_PER_UNIT) ?: Long.MAX_VALUE)
-            ?: throw PositionCeilingException("${edge.record.id.value}'s deadline $ticks + $quantum units leaves Long")
+        fun deadline(): Long = checkedAdd(ticks, ticksOf(quantum))
     }
 }

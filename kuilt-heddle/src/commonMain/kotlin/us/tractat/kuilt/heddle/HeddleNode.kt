@@ -341,6 +341,15 @@ public class HeddleNode internal constructor(
      * read once, under [lock], which [reserve] and [complete] also hold, so it cannot move during
      * the rounds.
      *
+     * **A busy parent reaches the position ceiling, and then this grants nothing there.** Each
+     * child's virtual position is a `Long` of 1/16-unit ticks, and it grows with the service handed
+     * down under the parent over its lifetime, so it is bounded. Past the bound it saturates instead
+     * of throwing (#3313). A pick that would have to order a saturated position is refused, and
+     * the rounds stop at that parent, so [schedule] returns what it granted before, `0` from then
+     * on. This node has no rebase to bring the positions back down, and it does not yet say why it
+     * stopped; both are tracked by #3353. At [LocalHeddle.MAX_RESERVATION]-size grants and a weight
+     * of `3/7`, the bound is about 9,000 grants, some 2⁵⁷ units of service.
+     *
      * @return the count of grants applied this call.
      */
     public fun schedule(parent: GroupId): Int = lock.withLock {
