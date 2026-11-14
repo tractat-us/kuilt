@@ -8,6 +8,7 @@ import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.math.WideSum
+import us.tractat.kuilt.math.timesWide
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 
@@ -486,17 +487,7 @@ public class EntitlementLedger private constructor(
 
     /** [grossVirtualService] once the edge's single weight is in hand. */
     private fun grossVirtualService(id: AttachmentId, w: Weight): Rational =
-        grossVirtualServiceAt(id, w, counterValue(issued, id))
-
-    /**
-     * The gross virtual service [id] would read at base issuance [issuance] — the same arithmetic
-     * as [grossVirtualService], evaluated at a *hypothetical* issuance rather than the stored one.
-     * This is what a checkpoint's floor is: the value the writer asserts *after* its own grant
-     * lands. Sharing the arithmetic is deliberate — a checkpoint computed by a second copy of this
-     * expression could drift from the read that has to agree with it.
-     */
-    private fun grossVirtualServiceAt(id: AttachmentId, w: Weight, issuance: Long): Rational =
-        gauges[id].grossVirtualServiceAt(issuance, w)
+        gauges[id].grossVirtualServiceAt(counterValue(issued, id), w)
 
     /**
      * The [Lifecycle] of [id], or `null` if [id] is entirely unknown to this ledger.
@@ -1554,7 +1545,7 @@ public class EntitlementLedger private constructor(
         val issuedAfter = checkedAdd(counterValue(issued, edge), amount)
         val bump = of(
             issued = mapOf(edge to bumpedSlot(issued, edge, r, amount)),
-            gauges = mapOf(edge to Gauge(grossVirtualServiceAt(edge, rec.weight, issuedAfter), issuedAfter)),
+            gauges = mapOf(edge to checkpoint(edge, rec.weight, issuedAfter)),
         )
         return Patch(bump.piece(witness(r, lineage)))
     }
@@ -1589,7 +1580,7 @@ public class EntitlementLedger private constructor(
      */
     public fun seat(edge: AttachmentId, front: Rational): Patch<EntitlementLedger>? {
         val w = recordOf(edge)?.weight ?: return null
-        return seatAt(edge, ticksAt(front, w))
+        return seatAtWide(edge, wideTicksAt(front, w))
     }
 
     /**
@@ -1600,13 +1591,27 @@ public class EntitlementLedger private constructor(
      * rounding a seat does (design §7.2). A seat above the edge's [positionCeiling] is written at
      * the ceiling: a seat is part of a charge that may not be refused (#3313).
      */
-    internal fun seatAt(edge: AttachmentId, ticks: Long): Patch<EntitlementLedger>? {
-        val w = recordOf(edge)?.weight ?: return null
+    internal fun seatAt(edge: AttachmentId, ticks: Long): Patch<EntitlementLedger>? = seatAtWide(edge, Int128.of(ticks))
+
+    /** [seatAt] at a position that may be past `Long`, as the public [seat]'s front can be. */
+    private fun seatAtWide(edge: AttachmentId, ticks: Int128): Patch<EntitlementLedger>? {
+        if (recordOf(edge) == null) return null
         if (edge in gauges) return null
         val observed = counterValue(issued, edge)
-        val floor = ticksToVirtual(minOf(maxOf(ticks, saturatedTicksOf(observed, w)), positionCeiling(w)), w)
-        return Patch(of(gauges = mapOf(edge to Gauge(floor, observed))))
+        return Patch(of(gauges = mapOf(edge to gaugeAt(maxOf(ticks, observed.timesWide(TICKS_PER_UNIT)), observed))))
     }
+
+    /**
+     * The gauge [delegate] writes for [edge] at base issuance [issuedAfter]: the exact gross
+     * position there, uncapped, at that fold ([exactGrossTicksAt]).
+     *
+     * Held at zero from below. A position can read below zero only where a `LocalHeddle` rebase has
+     * raised the fold above the issuance (#3329), and there the checkpoint is a lower position at
+     * a lower fold than the gauge it joins, which the join absorbs either way: the stored position
+     * is never negative, so zero is no higher than it.
+     */
+    private fun checkpoint(edge: AttachmentId, w: Weight, issuedAfter: Long): Gauge =
+        gaugeAt(maxOf(gauges[edge].exactGrossTicksAt(issuedAfter, w), Int128.ZERO), issuedAfter)
 
     /**
      * Whether [edge]'s gross position is at its [positionCeiling], where it may stand for a larger
