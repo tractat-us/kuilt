@@ -1510,6 +1510,7 @@ public final class us/tractat/kuilt/heddle/TopologyProblem {
 }
 
 public final class us/tractat/kuilt/heddle/TopologyProblem$Kind : java/lang/Enum {
+	public static final field CONSUMER Lus/tractat/kuilt/heddle/TopologyProblem$Kind;
 	public static final field DUPLICATE_NAME Lus/tractat/kuilt/heddle/TopologyProblem$Kind;
 	public static final field EMPTY_GROUP Lus/tractat/kuilt/heddle/TopologyProblem$Kind;
 	public static final field EMPTY_NAME Lus/tractat/kuilt/heddle/TopologyProblem$Kind;
