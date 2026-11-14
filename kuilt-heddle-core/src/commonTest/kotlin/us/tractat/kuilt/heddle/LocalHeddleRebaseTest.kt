@@ -193,10 +193,10 @@ class LocalHeddleRebaseTest {
     fun aNewbornAmongWakersMeetsTheWakerFurthestAhead() = assertNewbornJoinsLevel(waking = setOf(b, c))
 
     /**
-     * The same, with `c` left idle: a non-joiner survives, so the front is the idle fallback, `c` at
-     * `−R` in the rebasing engine. The waker `b` is clamped there, and the newborn must be seated
-     * level with it, not at its own origin `R` above (#3329 re-review): the front is raised to the
-     * newborns' origins whenever newborns and wakers join together.
+     * The same, with `c` left idle at `−R` in the rebasing engine. No child outside the joiners is
+     * demanding, so the front is the furthest-ahead child at the parent, the newborn counted at its
+     * own origin (§7.2, #3353): the waker `b` is clamped level with the newborn, not left at `−R`
+     * beside the idle `c`, `R` behind it (#3329 re-review).
      */
     @Test
     fun aNewbornBesideAWakerAndAnIdleSiblingStartsLevel() = assertNewbornJoinsLevel(waking = setOf(b))
