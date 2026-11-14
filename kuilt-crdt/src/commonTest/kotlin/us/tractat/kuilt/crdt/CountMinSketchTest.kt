@@ -185,6 +185,62 @@ class CountMinSketchTest {
         }
     }
 
+    // ── Cell overflow (#3397) ─────────────────────────────────────────────────
+
+    /**
+     * A one-cell sketch whose cell holds [count]. Every item hashes to that cell, so it stands for
+     * a sketch that has seen [count] occurrences without making the test add them. The decode
+     * goes through the type's own serializer, the way a full state arrives over anti-entropy.
+     */
+    private fun oneCellAt(count: Long): CountMinSketch =
+        Json.decodeFromString(CountMinSketch.serializer(), """{"width":1,"depth":1,"cells":[[$count]]}""")
+
+    /**
+     * An add that would carry a cell past [Long.MAX_VALUE] is refused. Before the fix the delta
+     * carried a wrapped, negative cell, and [CountMinSketch.piece], a max, discarded it: the
+     * occurrence was lost on every replica with nothing to say so. The first assertion is the rig:
+     * the cell really is full before the add.
+     */
+    @Test
+    fun addRefusesAnOccurrenceThatWouldOverflowItsCell() {
+        val full = oneCellAt(Long.MAX_VALUE)
+        assertAll(
+            { assertEquals(Long.MAX_VALUE, full.estimate("x"), "the rig's cell is at Long.MAX_VALUE") },
+            { assertFailsWith<ArithmeticException> { full.add("x") } },
+        )
+    }
+
+    /**
+     * One full row is enough to refuse the add, even when the estimate reads from a row with room:
+     * a delta that raised the other rows and dropped the full one would leave the rows disagreeing
+     * about what was counted.
+     */
+    @Test
+    fun addRefusesWhenAnyRowsCellIsFull() {
+        val oneRowFull = Json.decodeFromString(
+            CountMinSketch.serializer(),
+            """{"width":1,"depth":2,"cells":[[${Long.MAX_VALUE}],[3]]}""",
+        )
+        assertAll(
+            { assertEquals(3L, oneRowFull.estimate("x"), "the rig's estimate comes from the row with room") },
+            { assertFailsWith<ArithmeticException> { oneRowFull.add("x") } },
+        )
+    }
+
+    /**
+     * The boundary on the other side: an add landing exactly on [Long.MAX_VALUE] is kept, and the
+     * estimate answers it. Before the fix `estimate` read [Long.MAX_VALUE] as "no row seen" and
+     * answered `0` for a full cell.
+     */
+    @Test
+    fun addReachesExactlyLongMaxValue() {
+        val nearlyFull = oneCellAt(Long.MAX_VALUE - 1L)
+        assertAll(
+            { assertEquals(Long.MAX_VALUE - 1L, nearlyFull.estimate("x"), "the rig's cell is one below the ceiling") },
+            { assertEquals(Long.MAX_VALUE, nearlyFull.piece(nearlyFull.add("x")).estimate("x")) },
+        )
+    }
+
     // ── ByteArray overloads (#727) ────────────────────────────────────────────
 
     @Test
