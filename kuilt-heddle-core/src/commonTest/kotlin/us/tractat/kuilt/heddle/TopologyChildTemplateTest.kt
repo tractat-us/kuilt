@@ -115,7 +115,7 @@ class TopologyChildTemplateTest {
         assertAll(
             { assertEquals(names.size, children.toSet().size, "runtime ids collide: ${children.map { it.value }}") },
             *names.zip(children).map { (name, child) ->
-                { assertEquals(ParsedPath(listOf("root", "tenants", name), runtime = true), pathOf(child), name) }
+                { assertEquals(ParsedPath(listOf("root", "tenants", name), attached = true), pathOf(child), name) }
             }.toTypedArray(),
             { assertEquals(emptyList(), Topology.diff(pool(), ledger, generation = 0)) },
             { assertEquals(emptyList(), ledger.validate()) },
@@ -276,7 +276,7 @@ class TopologyChildTemplateTest {
         assertAll(
             { assertEquals(2, runtimeEdges.size, "the rig attached both") },
             { assertTrue(steps.isNotEmpty(), "the reload changes something") },
-            { assertEquals(emptyList(), steps.filter { pathOf(it.child)?.runtime == true }) },
+            { assertEquals(emptyList(), steps.filter { pathOf(it.child)?.attached == true }) },
             { assertEquals(runtimeEdges, listOf(runtime("c-7f3a"), runtime("x")).flatMap { after.liveInto(it) }) },
             { assertEquals(emptyList(), after.validate()) },
         )
@@ -295,7 +295,7 @@ class TopologyChildTemplateTest {
         // And afterwards it is served through the group's new edge.
         val served = charged(finished, runtime("c-7f3a"), amount = 5, spent = 5)
         assertAll(
-            { assertEquals(emptyList(), steps.filter { pathOf(it.child)?.runtime == true }) },
+            { assertEquals(emptyList(), steps.filter { pathOf(it.child)?.attached == true }) },
             { assertEquals(listOf(tenantsId), mid.refused, "the group's retire waits for the child's open units") },
             { assertEquals(Lifecycle.ACTIVE, mid.ledger.lifecycle(edge)) },
             { assertEquals(9L, served.edge(edge)?.spent) },

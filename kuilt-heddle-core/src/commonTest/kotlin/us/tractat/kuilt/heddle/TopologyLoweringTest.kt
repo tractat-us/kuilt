@@ -115,12 +115,12 @@ class TopologyLoweringTest {
         val declared = declaredNames.map { listOf(it) } + listOf(listOf("a", "b"), listOf("g", "x"), listOf("g", "!x"))
         val runtimeNames = listOf("x", "a/b", "!x", "é", "\uD800", "x@1:1#0", "%21x")
         assertAll(
-            { assertEquals(ParsedPath(listOf("root"), runtime = false), pathOf(awkward.groupId())) },
+            { assertEquals(ParsedPath(listOf("root"), attached = false), pathOf(awkward.groupId())) },
             *declared.map { path ->
-                { assertEquals(ParsedPath(listOf("root") + path, runtime = false), pathOf(awkward.groupId(*path.toTypedArray()))) }
+                { assertEquals(ParsedPath(listOf("root") + path, attached = false), pathOf(awkward.groupId(*path.toTypedArray()))) }
             }.toTypedArray(),
             *runtimeNames.map { name ->
-                { assertEquals(ParsedPath(listOf("root", "g", name), runtime = true), pathOf(awkward.attachedChildId(listOf("g"), name))) }
+                { assertEquals(ParsedPath(listOf("root", "g", name), attached = true), pathOf(awkward.attachedChildId(listOf("g"), name))) }
             }.toTypedArray(),
             // Not the encoding of anything: each must be refused rather than read some other way.
             *listOf(

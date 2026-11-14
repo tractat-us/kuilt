@@ -153,7 +153,7 @@ independently consumable. Both modules are published and constrained by
 
 **The logical scheduling tree** is data, not schema — groups created, closed,
 and reparented at runtime, any depth, no fixed level names (today a child the app
-creates while running is always a leaf; §11.1 says where that stands):
+attaches while running is always a leaf; §11.1 says where that stands):
 
 ```text
 root
