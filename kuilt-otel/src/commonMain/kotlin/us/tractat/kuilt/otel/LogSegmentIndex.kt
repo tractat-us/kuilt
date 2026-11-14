@@ -79,7 +79,7 @@ internal data class LogSegmentIndex(
 }
 
 /**
- * The index as stored. Its field names and order are the stored shape, so they must not change.
+ * The index as stored. CBOR keys each field by its name, so the names must not change.
  *
  * Every build before #3317 wrote these fields as `Int`. CBOR stores an integer at whatever
  * width it needs, so those bytes decode into `Long` fields unchanged, and so do the segment
