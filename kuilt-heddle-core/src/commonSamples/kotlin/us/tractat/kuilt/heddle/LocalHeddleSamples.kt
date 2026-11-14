@@ -338,5 +338,33 @@ internal fun samplePreviewQueues() {
     check(picked == preview)
 }
 
+/**
+ * An admin screen holding only the last stored snapshot asks who goes next, why a lane waits, and
+ * what it is owed, with no engine to start. The view answers as the engine that took the snapshot.
+ */
+@Suppress("unused")
+internal fun sampleSnapshotView() {
+    val tree = twoLanes()
+    val heavy = tree.groupId("heavy")
+    val light = tree.groupId("light")
+    val policy = LocalPolicy(defaultReservation = 3L)
+    val heddle = LocalHeddle.fromTopology(tree, policy, epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 2L)
+    val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
+
+    // On the admin screen: decode the stored snapshot and view it with the engine's policy.
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored)
+    val view = decoded.snapshot.view(policy)
+
+    val queued = setOf(heavy, light)
+    check(view.previewPicks(mapOf(heavy to 2, light to 1), eligible = queued, reservations = List(3) { 3L }) == listOf(heavy, light, heavy))
+    check(view.explain(heavy, waiting = queued, eligible = queued) == WaitExplanation.WouldBePickedNext)
+    check(view.entitlement(light, waiting = queued, totalSlots = 3L) == Rational.ONE)
+    // The engine gives the same answers, and asking either moved nothing.
+    check(heddle.previewPicks(mapOf(heavy to 2, light to 1), queued, List(3) { 3L }) == listOf(heavy, light, heavy))
+    check((heddle.acquire(queued, queued, startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf == heavy)
+}
+
 /** Two lanes under `pool`, `heavy` at weight 2 beside `light`. */
 private fun twoLanes(): Topology = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light")))

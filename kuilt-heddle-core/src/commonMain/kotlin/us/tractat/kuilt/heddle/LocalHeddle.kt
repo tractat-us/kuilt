@@ -453,7 +453,7 @@ public class LocalHeddle private constructor(
         set(value) {
             core.ledger = value
         }
-    private val allocator: FairShareAllocator get() = core.allocator
+    internal val allocator: FairShareAllocator get() = core.allocator
     private var leasable: Leasable
         get() = core.leasable
         set(value) {
@@ -525,10 +525,10 @@ public class LocalHeddle private constructor(
      * The pick [acquire] makes, on [base] and this engine's allocator: from [root], one
      * [FairShareAllocator.pickChild] per level and a delegation of [reservation] down the edge it
      * picked, until it reaches an eligible leaf. Every step lands on a local value; [base] is not
-     * changed. Only the allocator's wake memory moves, which is why [explain] and [previewPicks] run
-     * it on a [scratch] engine.
+     * changed. Only the allocator's wake memory moves, which is why a [LocalHeddleView] runs it on a
+     * throwaway engine.
      */
-    private fun descend(base: EntitlementLedger, demands: Demands, eligible: Set<GroupId>, reservation: Long): Descent {
+    internal fun descend(base: EntitlementLedger, demands: Demands, eligible: Set<GroupId>, reservation: Long): Descent {
         var local = base
         val levels = ArrayList<Level>()
         var group = root
@@ -560,15 +560,14 @@ public class LocalHeddle private constructor(
      * engine and writes nothing: whatever it returns is only committed by the caller. It is topped
      * up below the low watermark ([supplied]), so an [explain] sees the supply the [acquire] would.
      */
-    private fun fundedBase(reservation: Long): EntitlementLedger? = supplied(ledger, reservation)
+    internal fun fundedBase(reservation: Long): EntitlementLedger? = supplied(ledger, reservation)
 
     /**
-     * An engine over [over] with a copy of this one's wake memory and its capacity: it picks, and
-     * tops up, as this one would next, and moving it moves nothing here.
+     * This engine's state as a [LocalHeddleView], for the length of one call: the read-only
+     * questions are answered there, so the engine and a view of its snapshot cannot disagree. It
+     * hands over the live allocator, which the view only ever forks.
      */
-    private fun scratch(over: EntitlementLedger): LocalHeddle =
-        LocalHeddle(root, policy, epoch, over, FairShareAllocator(SELF, policyConfig(policy), allocator.memory), leasable)
-            .also { it.capacity = capacity }
+    private fun view(): LocalHeddleView = LocalHeddleView(root, policy, epoch, ledger, allocator, capacity, leasable)
 
     /**
      * Charge work another scheduler already started at [leaf]: open a lease for it with no pick,
@@ -731,49 +730,20 @@ public class LocalHeddle private constructor(
 
     /**
      * Who would go next: the leaves `reservations.size` calls to [acquire] would pick, in order,
-     * if nothing else happened in between. Changes nothing, not even the wake memory.
-     *
-     * [waiting] gives each leaf's queued work as a count. A leaf counts as waiting while its count
-     * is above zero, and each pick takes one from the leaf it picked. Pick `i` reserves
-     * `reservations[i]`, and its eligible set is [eligible] among the leaves still waiting. The list
-     * ends early at the first call that would not acquire.
+     * if nothing else happened in between. Changes nothing, not even the wake memory. Answered by a
+     * view of this engine's state: see [LocalHeddleView.previewPicks].
      *
      * @throws IllegalArgumentException when a count is negative or a reservation is not in `1..`[MAX_RESERVATION].
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
-    public fun previewPicks(waiting: Map<GroupId, Int>, eligible: Set<GroupId>, reservations: List<Long>): List<GroupId> {
-        require(waiting.values.all { it >= 0 }) { "a queued count must be non-negative" }
-        val scratch = scratch(ledger)
-        val remaining = HashMap(waiting)
-        val picks = ArrayList<GroupId>(reservations.size)
-        for (reservation in reservations) {
-            val waitingNow = remaining.filterValues { it > 0 }.keys
-            val eligibleNow = eligible.filterTo(HashSet()) { it in waitingNow }
-            val out = scratch.acquire(waitingNow, eligibleNow, startedAt = 0L, reservation = reservation)
-            if (out !is AcquireOutcome.Acquired) break
-            val leaf = out.lease.leaf
-            picks += leaf
-            remaining[leaf] = remaining.getValue(leaf) - 1
-        }
-        return picks
-    }
+    public fun previewPicks(waiting: Map<GroupId, Int>, eligible: Set<GroupId>, reservations: List<Long>): List<GroupId> =
+        view().previewPicks(waiting, eligible, reservations)
 
     /**
      * Who would go next, with each leaf's own next job: the leaves a caller's loop over [queues]
-     * would pick, in order, if nothing else happened in between. Changes nothing, not even the wake
-     * memory.
-     *
-     * [queues] lists each leaf's queued jobs by their reservations, head first. A leaf counts as
-     * waiting while its list is not empty. Each pick does what that caller does: [acquire] with
-     * [reservation] among the waiting leaves in [eligible], then, when the winner's head is larger
-     * than [reservation], [extend] the lease by the difference, then pop the head. [extend] makes
-     * no pick, so the order is the one the slot's own reservation decides, and the head sets only
-     * what the lease holds: `max(reservation, head)`. A head below [reservation] holds
-     * [reservation], since a lease cannot shrink.
-     *
-     * The list ends when no waiting leaf is eligible, or at the first call that is refused, a
-     * `PositionCeiling` refusal included. When the acquire lands and its extend is the call
-     * refused, that pick is left out: the caller's lease would hold less than its job needs.
+     * would pick, in order, acquiring at [reservation] and extending to the winner's head, if
+     * nothing else happened in between. Changes nothing, not even the wake memory. Answered by a
+     * view of this engine's state: see [LocalHeddleView.previewPicks].
      *
      * @throws IllegalArgumentException when [reservation] or any queued reservation, not only a
      *   head, is not in `1..`[MAX_RESERVATION].
@@ -783,38 +753,12 @@ public class LocalHeddle private constructor(
         queues: Map<GroupId, List<Long>>,
         eligible: Set<GroupId>,
         reservation: Long = policy.defaultReservation,
-    ): List<GroupId> {
-        requireReservation("reservation", reservation)
-        for ((leaf, queue) in queues) queue.forEach { requireReservation("a queued reservation of ${leaf.value}", it) }
-        val scratch = scratch(ledger)
-        val remaining = queues.mapValuesTo(HashMap()) { (_, queue) -> ArrayDeque(queue) }
-        val picks = ArrayList<GroupId>()
-        while (true) {
-            val waitingNow = remaining.filterValues { it.isNotEmpty() }.keys
-            val eligibleNow = eligible.filterTo(HashSet()) { it in waitingNow }
-            val out = scratch.acquire(waitingNow, eligibleNow, startedAt = 0L, reservation = reservation)
-            if (out !is AcquireOutcome.Acquired) break
-            val head = remaining.getValue(out.lease.leaf).removeFirst()
-            if (head > reservation && scratch.extend(out.lease.id, head - reservation) !is LeaseOutcome.Done) break
-            picks += out.lease.leaf
-        }
-        return picks
-    }
+    ): List<GroupId> = view().previewPicks(queues, eligible, reservation)
 
     /**
      * Why [leaf] is not, or is, what the next [acquire] on these same arguments picks. Changes
-     * nothing, not even the wake memory.
-     *
-     * The reasons are checked in [WaitExplanation.Kind] order, and the first that holds is the
-     * answer: [leaf] is not in [waiting], not in [eligible], cannot be reached (the same test the
-     * pick applies, so a leaf behind a closing edge, a group with an active child, and a group that
-     * is not leasable are each [WaitExplanation.NoLiveLineage]), or the root cannot fund
-     * [reservation]. Past those, the
-     * answer is the pick itself, run on a [scratch] copy of the engine with the allocator's wake
-     * memory, so a group waking from idle is clamped here exactly as the acquire would clamp it:
-     * [WaitExplanation.WouldBePickedNext] when the pick ends at [leaf],
-     * [WaitExplanation.PositionCeiling] when it is refused at a position ceiling on the way, and
-     * otherwise [WaitExplanation.BehindAtLevel] at the first group where it goes another way.
+     * nothing, not even the wake memory. Answered by a view of this engine's state: see
+     * [LocalHeddleView.explain].
      *
      * @throws IllegalArgumentException as [acquire] does: [reservation] out of range, or [eligible]
      *   not a subset of [waiting].
@@ -827,85 +771,18 @@ public class LocalHeddle private constructor(
         waiting: Set<GroupId>,
         eligible: Set<GroupId>,
         reservation: Long = policy.defaultReservation,
-    ): WaitExplanation {
-        requireReservation("reservation", reservation)
-        require(waiting.containsAll(eligible)) { "eligible must be a subset of waiting" }
-        if (leaf !in waiting) return WaitExplanation.NotWaiting
-        if (leaf !in eligible) return WaitExplanation.NotEligible
-        if (!ledger.canEndAt(leaf)) return WaitExplanation.NoLiveLineage(leaf)
-        val base = fundedBase(reservation) ?: return WaitExplanation.SupplyExhausted
-
-        val trial = scratch(base)
-        val demands = demands(base, waiting, eligible, reservation)
-        val descent = trial.descend(base, demands, eligible, reservation)
-        if (descent is Descent.Ceiling) return WaitExplanation.PositionCeiling(descent.at)
-        // An eligible leaf the pick can end at, with the root funded: the root's pick has a candidate
-        // in the leaf's own top edge, and every pick below goes toward an eligible leaf.
-        check(descent is Descent.Reached) { "no pick reached any leaf, though ${leaf.value} is eligible and reachable" }
-        if (descent.leaf == leaf) return WaitExplanation.WouldBePickedNext
-        val lineage = checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }
-        // Every group above the leaf on its lineage has an active child, so the pick cannot have
-        // stopped there: it left the lineage at some level.
-        val level = checkNotNull(lineage.indices.firstOrNull { it >= descent.levels.size || descent.levels[it].edge != lineage[it] }) {
-            "the pick went past ${leaf.value}, an eligible leaf on its own path"
-        }
-        check(level < descent.levels.size) { "the pick stopped above ${leaf.value}, at a group with an active child" }
-        val at = descent.levels[level]
-        // The trial's wake memory has moved on below this level, but each level writes only its own
-        // children's entries, so what it holds for this level's children is what this level read.
-        return WaitExplanation.BehindAtLevel(
-            parent = at.parent,
-            nextChild = checkNotNull(base.record(at.edge)) { "picked edge ${at.edge.value} has no record" }.child,
-            leafSideVirtualService = checkNotNull(trial.allocator.effectiveVirtualService(at.seated, at.parent, lineage[level])) {
-                "${lineage[level].value} is not an active child of ${at.parent.value}"
-            },
-            front = checkNotNull(trial.allocator.virtualTime(at.seated, at.parent, demands.waiting)) {
-                "${at.parent.value} has no active children, though a pick was made there"
-            },
-            // Over the children the pick saw as candidates: every one is seated by now, and each is
-            // granted the whole reservation, so the set the pick averaged is exactly the set
-            // `eligible` wants.
-            eligibleFront = checkNotNull(trial.allocator.virtualTime(at.seated, at.parent, demands.eligible)) {
-                "${at.parent.value} has no active children, though a pick was made there"
-            },
-        )
-    }
+    ): WaitExplanation = view().explain(leaf, waiting, eligible, reservation)
 
     /**
-     * [leaf]'s fair share of [totalSlots] slots right now, as an exact rational: its weight's share
-     * among the siblings competing beside it, times its parent's share among the siblings beside
-     * that, up to the root, times [totalSlots]. This is the share an idealised fair scheduler
-     * (generalised processor sharing) would give it while [waiting] stays as it is.
-     *
-     * "Competing" is the set a pick takes its front over: an ACTIVE child counts when a leaf of
-     * [waiting] that a pick could end at lies under it. So work no descent can reach, behind a
-     * closing edge, at a group with an active child or at one that is not leasable, competes for
-     * nothing and is owed nothing,
-     * and it takes nothing from its siblings' shares. `0` when [leaf] is not in [waiting], or is not
-     * a leaf a pick could end at.
-     *
-     * A share, not a promise: the slots a leaf gets over a run track it only while the waiting set
-     * holds still, and a leaf that is waiting but rarely eligible gets less.
+     * [leaf]'s fair share of [totalSlots] slots right now, as an exact rational, while [waiting]
+     * stays as it is. Answered by a view of this engine's state: see [LocalHeddleView.entitlement].
      *
      * @throws IllegalArgumentException when [totalSlots] is negative.
      * @throws ArithmeticException when the exact share does not fit in `Long` numerators.
      * @sample us.tractat.kuilt.heddle.sampleExplainWait
      */
-    public fun entitlement(leaf: GroupId, waiting: Set<GroupId>, totalSlots: Long): Rational {
-        require(totalSlots >= 0L) { "totalSlots must be non-negative, was $totalSlots" }
-        val base = ledger
-        if (leaf !in waiting || !base.canEndAt(leaf)) return Rational.ZERO
-        val competing = base.reachable(waiting)
-        var share = Rational.of(totalSlots)
-        for (edge in checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }) {
-            val record = checkNotNull(base.record(edge)) { "lineage edge ${edge.value} has no record" }
-            val competingWeight = base.activeChildren(record.parent)
-                .mapNotNull { base.record(it.attachment)?.takeIf { sibling -> sibling.child in competing } }
-                .fold(Rational.ZERO) { sum, sibling -> sum + sibling.weight.asRational() }
-            share = share * record.weight.asRational() / competingWeight
-        }
-        return share
-    }
+    public fun entitlement(leaf: GroupId, waiting: Set<GroupId>, totalSlots: Long): Rational =
+        view().entitlement(leaf, waiting, totalSlots)
 
     /**
      * Tell the engine how many slots the caller runs at once, [totalSlots]. It sizes the supply
@@ -918,21 +795,7 @@ public class LocalHeddle private constructor(
      * @sample us.tractat.kuilt.heddle.sampleLocalLease
      */
     public fun reconcileCapacity(totalSlots: Long): Unit = atomically {
-        require(totalSlots >= 0L) { "totalSlots must be non-negative, was $totalSlots" }
-        val rounds = policy.supply
-        val perRound = policy.defaultReservation
-        // n × r × t ≤ limit, by floor division so the check itself cannot overflow.
-        require(rounds.targetSlots == 0L || totalSlots <= SUPPLY_TARGET_LIMIT / perRound / rounds.targetSlots) {
-            "totalSlots $totalSlots × defaultReservation $perRound × targetSlots ${rounds.targetSlots} is above $SUPPLY_TARGET_LIMIT"
-        }
-        // A zero target makes both levels zero (low ≤ target) for any count, so nothing is multiplied.
-        // Otherwise the check above bounds every product, and the checked multiplies restate it.
-        capacity = if (rounds.targetSlots == 0L) {
-            Capacity(totalSlots, low = 0L, target = 0L)
-        } else {
-            val round = checkedMul(totalSlots, perRound)
-            Capacity(totalSlots, low = checkedMul(round, rounds.lowWatermarkSlots), target = checkedMul(round, rounds.targetSlots))
-        }
+        capacity = Capacity.sized(totalSlots, policy)
     }
 
     /**
@@ -1350,14 +1213,14 @@ public class LocalHeddle private constructor(
     private data class OpenLease(val lease: Lease, val path: List<AttachmentId>)
 
     /** The two demand views one pick reads, [waiting] and [eligible]. */
-    private class Demands(val waiting: (AttachmentId) -> Demand, val eligible: (AttachmentId) -> Demand)
+    internal class Demands(val waiting: (AttachmentId) -> Demand, val eligible: (AttachmentId) -> Demand)
 
     /**
      * The demand views a pick of [reservation] reads on [base], each lifted by the very predicate
      * the descent stops on ([reachable]). A subtree with no leasable leaf reached through ACTIVE
      * edges is never wanted, so no pick can lead into it.
      */
-    private fun demands(base: EntitlementLedger, waiting: Set<GroupId>, eligible: Set<GroupId>, reservation: Long): Demands {
+    internal fun demands(base: EntitlementLedger, waiting: Set<GroupId>, eligible: Set<GroupId>, reservation: Long): Demands {
         val wants = Demand(targetOutstanding = UNBOUNDED_TARGET, maximumUsefulGrant = reservation)
         val waitingGroups = base.reachable(waiting)
         // eligible ⊆ waiting, so equal sizes mean equal sets, and the lift is shared.
@@ -1369,20 +1232,19 @@ public class LocalHeddle private constructor(
      * Whether a lease may end at [group]: the **one leasable predicate**. It is a leaf, it is not
      * the root, and the topology declares it a lane or a runtime child of a marked group
      * ([leasable]). The descent stops only here, and every name a pick or an admission accepts is
-     * tested by it, through [reachable].
+     * tested by it, through [reachable]. A [LocalHeddleView] reads the same top-level predicate.
      */
-    private fun EntitlementLedger.isLeasable(group: GroupId): Boolean = group != root && isLeaf(group) && leasable.declares(group)
+    private fun EntitlementLedger.isLeasable(group: GroupId): Boolean = isLeasable(group, root, leasable)
 
     /**
      * Every group of [groups] a lease can end at and a delegation from the root can reach — leasable,
      * with every edge of its lineage ACTIVE — together with every group on those lineages: the lift
      * a demand view, an admission and an explanation all read.
      */
-    private fun EntitlementLedger.reachable(groups: Collection<GroupId>): Set<GroupId> =
-        withDelegableLineages(groups.filter { isLeasable(it) })
+    private fun EntitlementLedger.reachable(groups: Collection<GroupId>): Set<GroupId> = reachable(groups, root, leasable)
 
     /** Whether a lease can end at [group] and a delegation reach it: [isLeasable], through ACTIVE edges only. */
-    private fun EntitlementLedger.canEndAt(group: GroupId): Boolean = group in reachable(listOf(group))
+    private fun EntitlementLedger.canEndAt(group: GroupId): Boolean = canEndAt(group, root, leasable)
 
     /** What one [attempt] at a reload came to. */
     private sealed interface Trial {
@@ -1399,7 +1261,7 @@ public class LocalHeddle private constructor(
     }
 
     /** What [descend] did. */
-    private sealed interface Descent {
+    internal sealed interface Descent {
         /** It ended at [leaf], with [ledger] the delegated result and [levels] each pick on the way. */
         class Reached(val ledger: EntitlementLedger, val leaf: GroupId, val levels: List<Level>) : Descent
 
@@ -1411,14 +1273,7 @@ public class LocalHeddle private constructor(
     }
 
     /** One level of a [Descent]: the pick at [parent] chose [edge], on [seated], the ledger with [parent]'s children seated. */
-    private class Level(val parent: GroupId, val seated: EntitlementLedger, val edge: AttachmentId)
-
-    /** [slots] as last reconciled, and the root holdings it sizes: the [low] watermark and the [target] a top-up leaves. */
-    private data class Capacity(val slots: Long, val low: Long, val target: Long) {
-        companion object {
-            val NONE = Capacity(slots = 0L, low = 0L, target = 0L)
-        }
-    }
+    internal class Level(val parent: GroupId, val seated: EntitlementLedger, val edge: AttachmentId)
 
     public companion object {
         /** The one writer. Internal: a consumer never needs to name it. */
@@ -1445,21 +1300,12 @@ public class LocalHeddle private constructor(
          */
         private const val UNBOUNDED_TARGET: Long = Long.MAX_VALUE / 4
 
-        /**
-         * The largest supply target [reconcileCapacity] sizes, `Long.MAX_VALUE / 4`: room above it
-         * for the operation a top-up funds, at most [MAX_RESERVATION], and for the epoch's running
-         * mint total, which carries every unit ever charged.
-         */
-        private const val SUPPLY_TARGET_LIMIT: Long = Long.MAX_VALUE / 4
-
-        private fun requireReservation(name: String, amount: Long) =
+        internal fun requireReservation(name: String, amount: Long) =
             require(amount in 1L..MAX_RESERVATION) { "$name must be in 1..$MAX_RESERVATION, was $amount" }
 
         /** The index of the first edge of [path] that is not ACTIVE, or `null` when every edge is. */
         private fun EntitlementLedger.firstNotActiveIndex(path: List<AttachmentId>): Int? =
             path.indexOfFirst { lifecycle(it) != Lifecycle.ACTIVE }.takeIf { it >= 0 }
-
-        private fun Weight.asRational(): Rational = Rational.of(numerator, denominator)
 
         /** Whether the active children beside [edge], itself included, fit [weightsFitTheBudget]. */
         private fun EntitlementLedger.siblingWeightsFit(edge: AttachmentId): Boolean {
@@ -1515,6 +1361,21 @@ public class LocalHeddle private constructor(
             check(booted.refusals.isEmpty()) { "booting from an empty ledger refused ${booted.refusals}" }
             return engine
         }
+
+        /**
+         * A throwaway engine over [ledger] that picks, and tops up, as one with [allocator]'s wake
+         * memory and [capacity] would next. [allocator] becomes its own, so pass a fork. What a
+         * [LocalHeddleView] plays its questions forward on.
+         */
+        internal fun scratch(
+            root: GroupId,
+            policy: LocalPolicy,
+            epoch: Long,
+            ledger: EntitlementLedger,
+            allocator: FairShareAllocator,
+            leasable: Leasable,
+            capacity: Capacity,
+        ): LocalHeddle = LocalHeddle(root, policy, epoch, ledger, allocator, leasable).also { it.capacity = capacity }
 
         /**
          * An engine over [ledger] as it stands, with a fresh allocator, leasing what [leasable]
@@ -1590,7 +1451,7 @@ public class LocalHeddle private constructor(
          * The allocator's policy: an unbounded quantum, because each pick's reservation rides in its
          * demand's `maximumUsefulGrant`, and no outstanding cap, because the caller owns concurrency.
          */
-        private fun policyConfig(policy: LocalPolicy): PolicyConfig =
+        internal fun policyConfig(policy: LocalPolicy): PolicyConfig =
             PolicyConfig(quantum = Long.MAX_VALUE, perChildOutstandingCap = Long.MAX_VALUE, sleeperCredit = policy.sleeperCredit)
 
         /** [wants] for an edge whose child is in [groups], [Demand.NONE] for every other. */

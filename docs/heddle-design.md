@@ -1358,19 +1358,19 @@ and never decides whether the caller runs anything.
 An admin's screen wants to show who goes next: of the twelve jobs waiting, which
 three run when the next three slots free up. The engine answers without moving
 anything, by playing the picks forward on a throwaway copy of itself. Two things
-limited that answer. The caller had to fix each pick's reservation up front,
-though in practice it depends on which leaf wins, since each leaf's next job has
-its own estimate. That one is fixed: each leaf can now bring its own queue. And
-it needs a live engine, so a reader holding only a saved snapshot has to restore
-a whole engine to ask. This section records the fix for both.
+limited that answer, and both are now fixed. The caller had to fix each pick's
+reservation up front, though in practice it depends on which leaf wins, since
+each leaf's next job has its own estimate: each leaf now brings its own queue.
+And the answer needed a live engine, so a reader holding only a saved snapshot
+had to restore a whole engine to ask: that reader now asks a view of the
+snapshot.
 
-#### As built: each leaf's own head, on a live engine
+#### As built: each leaf's own head
 
-`LocalHeddle.previewPicks(waiting: Map<GroupId, Int>, eligible, reservations:
-List<Long>)` takes each leaf's queue as a count, and pick `i` reserves
-`reservations[i]`. It runs real `acquire`s on a scratch engine that carries a
-copy of the wake memory, so it changes nothing, and it stops at the first call
-that would not acquire.
+`previewPicks(waiting: Map<GroupId, Int>, eligible, reservations: List<Long>)`
+takes each leaf's queue as a count, and pick `i` reserves `reservations[i]`. It
+runs real `acquire`s on a scratch engine that carries a copy of the wake memory,
+so it changes nothing, and it stops at the first call that would not acquire.
 
 **Preview with each leaf's own head.** `previewPicks(queues: Map<GroupId,
 List<Long>>, eligible, reservation = defaultReservation)`, built in #3321. Each
@@ -1387,8 +1387,9 @@ scratch engine.
   question.
 - The list stops at the first refusal, including the position-ceiling refusal
   the overflow fix adds (#3313). When the `acquire` lands and its `extend` is
-  refused, that pick is left out: the caller's lease would hold less than its
-  job needs.
+  refused, that pick is left out and the list ends there, even when the root
+  could still fund the next leaf: the caller's lease would hold less than its job
+  needs, and its loop stops at that lease.
 - Every queued reservation, not only the heads a pick reaches, is checked
   against `1..MAX_RESERVATION` before anything runs.
 - Pinned: across random histories, mixed weights, with and without a reconciled
@@ -1396,22 +1397,29 @@ scratch engine.
   and changes nothing.
 - The count-based `previewPicks` stays.
 
-`explain` and `entitlement` read the live engine too. To ask without moving the
-real engine's wake memory, a caller holding a snapshot restores a throwaway
-engine from it, under `epoch + 1`, on every decision.
+#### As built: the same answers, on a snapshot
 
-#### The design: the same answers, on a snapshot
+**A view of a snapshot.** `snapshot.view(policy): LocalHeddleView`, built in
+#3321, carries `previewPicks` in both forms, `explain` and `entitlement`. The engine's own
+methods are that view over its live state, so the two cannot disagree. Before
+it, a reader holding a snapshot restored a throwaway engine from it, under
+`epoch + 1`, on every question.
 
-Decided in #3321, and not yet built.
-
-**A view of a snapshot.** `snapshot.view(policy): LocalHeddleView` carries
-`previewPicks`, `explain` and `entitlement`, and the engine's own methods
-delegate to it, so the two cannot disagree.
-
-- The policy is a required parameter, because a snapshot does not keep one.
+- The policy is a required parameter, because a snapshot does not keep one. A
+  policy that cannot size the snapshot's `totalSlots` throws, as `restore` does.
 - The view is built from the value `persist()` returns, `LocalHeddleSnapshot`.
   `snapshot()`'s `LocalHeddleState` will not do: it lacks the reconciled capacity
   and the topology last applied, and a pick reads both.
+- It reads the root, the ledger, the wake memory, the capacity and the topology
+  last applied. It does not read the open leases: no pick or explanation does.
+- Each question plays forward on a throwaway engine with its own fork of the wake
+  memory, so a view is a value: asking twice gives the same answer twice, and
+  readers may share one. It is additive ABI, with no format change.
+- Pinned: across random histories, with and without a reconciled capacity and a
+  reload, a view answers as the engine and as an `epoch + 1` restore, and moves
+  neither the engine nor the snapshot. Two control arms, one forgetting the wake
+  memory and one the capacity, each answer differently, so the match rests on
+  the view reading both.
 
 The overflow fix's slices it waited on, which make each call atomic and add the
 position-ceiling refusal, landed in #3352.
