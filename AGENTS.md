@@ -72,6 +72,7 @@ and `docs/usage.md` for how to consume it.
 | `:kuilt-test` | all | Shared test utilities/fakes built on `:kuilt-core`. |
 | `:kuilt-session-test` | all | Session test support (`FakeRoomFactory`, …). |
 | `:kuilt-raft-test` | all | Raft test harness (`FakeRaftNode`, …). |
+| `:kuilt-identity-test` | all | Identity test support: `FakeKeyScheme` and `fakeKeyStore(index)`, a synchronous `KeyScheme` whose signatures anyone can compute, so a room test on wasmJs never waits on a WebCrypto promise and stays on virtual time. Still refuses a wrong key, a wrong message and a tampered signature. Behind the `@TestOnlyKeyScheme` opt-in (level `ERROR`); a room selects it only by being built on a fake store. |
 | `:kuilt-deal-test` | all | Commutative-scheme TCK — `CommutativeSchemeConformanceSuite` verifies any `CommutativeScheme` impl (round-trip recovery, commutativity, strip-order independence, key distinctness). Shipped in `commonMain` for subclassing. |
 | `:kuilt-gossip-test` | all | Gossip test support — `inMemoryStarOf(n)` returns a `Star`: a started in-memory star of `GossipSeam`s (a hub plus n clients) with an accept handle (`Star.source`) for admitting a fresh client mid-test. |
 | `:kuilt-warp-test` | all | Warp's published test infrastructure: the sandboxed-WASM conformance TCK plus `MultiNodeWarpSim` / `warpSimTest` — the deterministic virtual-time multi-node harness (warp's analogue of `:kuilt-raft-test`'s `MultiNodeRaftSim`; use it, don't hand-roll one). |

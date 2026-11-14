@@ -60,6 +60,9 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
+            // `fakeKeyStore(n)`: rooms in tests sign and check with a scheme that never waits on
+            // WebCrypto, so wasmJs room tests stay on virtual time (#3280).
+            implementation(project(":kuilt-identity-test"))
             implementation(project(":kuilt-crdt"))
             implementation(project(":kuilt-quilter"))
             implementation(libs.kotlinx.coroutines.test)

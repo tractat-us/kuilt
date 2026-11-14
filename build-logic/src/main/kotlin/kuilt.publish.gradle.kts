@@ -219,6 +219,7 @@ fun moduleDescription(module: String): String = when (module) {
     "kuilt-test" -> "Shared test utilities and fakes for kuilt, built on kuilt-core."
     "kuilt-session-test" -> "Session test support (FakeRoomFactory, …) for kuilt."
     "kuilt-raft-test" -> "Raft test harness (FakeRaftNode, …) for kuilt."
+    "kuilt-identity-test" -> "Test support for kuilt-identity: a fake key scheme that never waits on WebCrypto, for room tests on virtual time."
     "kuilt-deal-test" -> "Conformance TCK for kuilt CommutativeScheme implementations."
     "kuilt-gossip-test" ->
         "Gossip test support for kuilt: a started in-memory star of GossipSeams, with a handle " +

@@ -94,7 +94,15 @@ public class Grant private constructor(
      * Never throws on a bad grant. It throws [IllegalStateException] only when this platform's
      * cryptographic provider cannot run at all.
      */
-    public suspend fun isSignedByIssuer(): Boolean = StatementCodec.isSignedBy(wireBytes, issuer)
+    @OptIn(IdentityInternalApi::class)
+    public suspend fun isSignedByIssuer(): Boolean = isSignedByIssuer(KeyScheme.P256)
+
+    /**
+     * [isSignedByIssuer], checked in [scheme] rather than always in [KeyScheme.P256]. A room's
+     * [GrantTrust] passes the room's own [DeviceKeyStore.keyScheme].
+     */
+    @IdentityInternalApi
+    public suspend fun isSignedByIssuer(scheme: KeyScheme): Boolean = StatementCodec.isSignedBy(wireBytes, issuer, scheme)
 
     override fun equals(other: Any?): Boolean = other is Grant && wireBytes.contentEquals(other.wireBytes)
 

@@ -1,0 +1,70 @@
+// Klib ABI Dump
+// Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <us.tractat.kuilt:kuilt-identity-test>
+open annotation class us.tractat.kuilt.identity.test/TestOnlyKeyScheme : kotlin/Annotation { // us.tractat.kuilt.identity.test/TestOnlyKeyScheme|null[0]
+    constructor <init>() // us.tractat.kuilt.identity.test/TestOnlyKeyScheme.<init>|<init>(){}[0]
+}
+
+sealed interface us.tractat.kuilt.identity.test/FakeKeyOperation { // us.tractat.kuilt.identity.test/FakeKeyOperation|null[0]
+    final class Parse : us.tractat.kuilt.identity.test/FakeKeyOperation { // us.tractat.kuilt.identity.test/FakeKeyOperation.Parse|null[0]
+        constructor <init>(kotlin/String) // us.tractat.kuilt.identity.test/FakeKeyOperation.Parse.<init>|<init>(kotlin.String){}[0]
+
+        final val value // us.tractat.kuilt.identity.test/FakeKeyOperation.Parse.value|{}value[0]
+            final fun <get-value>(): kotlin/String // us.tractat.kuilt.identity.test/FakeKeyOperation.Parse.value.<get-value>|<get-value>(){}[0]
+
+        final fun component1(): kotlin/String // us.tractat.kuilt.identity.test/FakeKeyOperation.Parse.component1|component1(){}[0]
+        final fun copy(kotlin/String = ...): us.tractat.kuilt.identity.test/FakeKeyOperation.Parse // us.tractat.kuilt.identity.test/FakeKeyOperation.Parse.copy|copy(kotlin.String){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity.test/FakeKeyOperation.Parse.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity.test/FakeKeyOperation.Parse.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity.test/FakeKeyOperation.Parse.toString|toString(){}[0]
+    }
+
+    final class Sign : us.tractat.kuilt.identity.test/FakeKeyOperation { // us.tractat.kuilt.identity.test/FakeKeyOperation.Sign|null[0]
+        constructor <init>(us.tractat.kuilt.identity/DidKey, kotlin/ByteArray) // us.tractat.kuilt.identity.test/FakeKeyOperation.Sign.<init>|<init>(us.tractat.kuilt.identity.DidKey;kotlin.ByteArray){}[0]
+
+        final val key // us.tractat.kuilt.identity.test/FakeKeyOperation.Sign.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity.test/FakeKeyOperation.Sign.key.<get-key>|<get-key>(){}[0]
+        final val message // us.tractat.kuilt.identity.test/FakeKeyOperation.Sign.message|{}message[0]
+            final fun <get-message>(): kotlin/ByteArray // us.tractat.kuilt.identity.test/FakeKeyOperation.Sign.message.<get-message>|<get-message>(){}[0]
+
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity.test/FakeKeyOperation.Sign.toString|toString(){}[0]
+    }
+
+    final class Verify : us.tractat.kuilt.identity.test/FakeKeyOperation { // us.tractat.kuilt.identity.test/FakeKeyOperation.Verify|null[0]
+        constructor <init>(us.tractat.kuilt.identity/DidKey, kotlin/ByteArray, kotlin/ByteArray) // us.tractat.kuilt.identity.test/FakeKeyOperation.Verify.<init>|<init>(us.tractat.kuilt.identity.DidKey;kotlin.ByteArray;kotlin.ByteArray){}[0]
+
+        final val key // us.tractat.kuilt.identity.test/FakeKeyOperation.Verify.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity.test/FakeKeyOperation.Verify.key.<get-key>|<get-key>(){}[0]
+        final val message // us.tractat.kuilt.identity.test/FakeKeyOperation.Verify.message|{}message[0]
+            final fun <get-message>(): kotlin/ByteArray // us.tractat.kuilt.identity.test/FakeKeyOperation.Verify.message.<get-message>|<get-message>(){}[0]
+        final val signature // us.tractat.kuilt.identity.test/FakeKeyOperation.Verify.signature|{}signature[0]
+            final fun <get-signature>(): kotlin/ByteArray // us.tractat.kuilt.identity.test/FakeKeyOperation.Verify.signature.<get-signature>|<get-signature>(){}[0]
+
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity.test/FakeKeyOperation.Verify.toString|toString(){}[0]
+    }
+
+    final object Generate : us.tractat.kuilt.identity.test/FakeKeyOperation { // us.tractat.kuilt.identity.test/FakeKeyOperation.Generate|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.identity.test/FakeKeyOperation.Generate.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.identity.test/FakeKeyOperation.Generate.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.identity.test/FakeKeyOperation.Generate.toString|toString(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.identity.test/FakeKeyScheme : us.tractat.kuilt.identity/KeyScheme { // us.tractat.kuilt.identity.test/FakeKeyScheme|null[0]
+    constructor <init>(kotlin.random/Random, kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.identity.test/FakeKeyOperation, kotlin/Unit> = ...) // us.tractat.kuilt.identity.test/FakeKeyScheme.<init>|<init>(kotlin.random.Random;kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.identity.test.FakeKeyOperation,kotlin.Unit>){}[0]
+
+    final fun key(kotlin/Int): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity.test/FakeKeyScheme.key|key(kotlin.Int){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.identity.test/FakeKeyScheme.toString|toString(){}[0]
+    final suspend fun generate(): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity.test/FakeKeyScheme.generate|generate(){}[0]
+    final suspend fun parse(kotlin/String): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity.test/FakeKeyScheme.parse|parse(kotlin.String){}[0]
+    final suspend fun verify(us.tractat.kuilt.identity/DidKey, kotlin/ByteArray, kotlin/ByteArray): kotlin/Boolean // us.tractat.kuilt.identity.test/FakeKeyScheme.verify|verify(us.tractat.kuilt.identity.DidKey;kotlin.ByteArray;kotlin.ByteArray){}[0]
+}
+
+final fun us.tractat.kuilt.identity.test/fakeDeviceKey(kotlin/Int): us.tractat.kuilt.identity/DeviceKey // us.tractat.kuilt.identity.test/fakeDeviceKey|fakeDeviceKey(kotlin.Int){}[0]
+final fun us.tractat.kuilt.identity.test/fakeDidKey(kotlin/Int): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity.test/fakeDidKey|fakeDidKey(kotlin.Int){}[0]
+final fun us.tractat.kuilt.identity.test/fakeKeyStore(kotlin/Int, us.tractat.kuilt.identity.test/FakeKeyScheme = ...): us.tractat.kuilt.identity/DeviceKeyStore // us.tractat.kuilt.identity.test/fakeKeyStore|fakeKeyStore(kotlin.Int;us.tractat.kuilt.identity.test.FakeKeyScheme){}[0]
