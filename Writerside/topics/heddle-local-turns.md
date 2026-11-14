@@ -181,12 +181,11 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
   [#3238](https://github.com/tractat-us/kuilt/issues/3238). The networked
   `HeddleNode` does not take this path: its `complete` keeps an unused
   reservation at the leaf instead of returning it up the path.
-- **A lifetime ceiling.** Virtual service is an exact fraction over `Long`, and
-  its numerators grow with all the service a fork has handed down, scaled by its
-  children's weights. In one measurement, weights 3 : 1 ran past 2^60 units, and
-  weights 3/7 : 2/5 threw near 2^56. Past the ceiling, every `acquire` at that
-  fork throws `ArithmeticException`. Pick a coarse unit: minutes or seconds, not
-  nanoseconds.
+- **Rounding past `Long`.** A pick compares virtual service exactly, at any
+  size. A value it keeps is stored exactly when a `Long` fraction can hold it,
+  and is otherwise rounded up by a sliver, which can only give a turn away. So
+  neither the total service a fork hands down nor a waiting set that changes
+  between picks makes `acquire` throw.
 
 **Sizing estimates.** The estimate and straddle effects both vanish for a lease
 that settles at its estimate, a `cancel` aside. So aim `defaultReservation` at a

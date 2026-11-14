@@ -577,9 +577,14 @@ advancing its virtual clock.
 Because the numerator is *committed* service, a grant advances the child's
 virtual position the moment it is issued — hoarding is charged (the
 over-allocation loop the source warns about is closed), and `release` walks
-the child back and restores eligibility. Comparisons are exact: integer
-cross-multiplication with overflow checks. Never per-child independent
-rounding.
+the child back and restores eligibility. Comparisons are exact: the policy
+computes in integers of unbounded size (`ExactTime`), so a comparison never
+overflows. Never per-child independent rounding. A virtual time the scheduler
+*stores* — a wake offset, a seat, a gauge checkpoint — is a `Long` rational,
+and is narrowed to one exactly when it fits; only a value with no `Long` form
+is rounded, **up**, onto the finest power-of-two grid that holds it. Without
+that cut, each wake clamp's mean multiplied the stored denominators by another
+`Σ w` and a pick overflowed within tens of picks of a changing waiting set.
 
 ### 7.2 Neutral creation and no idle credit
 
@@ -706,8 +711,8 @@ Per allocation round at one parent, on one peer:
    empty, and that is a **theorem, not an expectation** (#1737): `V` is the
    weighted mean of the *same* candidate set over strictly positive weights,
    so it is never below that set's minimum — and no rounding can eat the
-   margin, because the comparison is exact integer cross-multiplication that
-   *throws* on overflow rather than returning a wrong order (§7.1). An empty
+   margin, because the comparison is exact integer arithmetic of unbounded
+   size, which neither rounds nor overflows (§7.1). An empty
    set could therefore only mean step 2's mean was taken over a different set
    than this filter, or a non-positive weight was admitted; either leaves the
    round's whole ordering untrustworthy, so the implementation **asserts and
