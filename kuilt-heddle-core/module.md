@@ -163,6 +163,8 @@ whole ledger inherits the three merge laws for free.
   names a peer as the *cause* rather than as a party to the fault).
 - `Gauge` — an edge's replicated virtual-time seat: where a new child starts competing, written by
   the scheduler and merged by taking the larger reading, so no single peer's guess is frozen in.
+  The position is kept in 128 bits (`ticksHigh`, `ticksLow`), exactly and never capped, so a
+  long-lived busy parent cannot fill it.
 - `EdgeSummary` — the parent-facing projection of one edge (`issued`/`returned`/
   `spent` and the derived `outstanding`).
 - `EntitlementLedger` — the replicated `Quilted` state itself.
@@ -187,9 +189,10 @@ whole ledger inherits the three merge laws for free.
 
 Arithmetic that would exceed `Long` throws rather than wrapping: a fair-share
 tally that silently overflowed would be worse than one that stopped. The one
-exception is a child's position, which is held at a ceiling instead. A pick that
-would have to order a position there is refused with a typed `PositionCeiling`
-outcome, and a charge still lands.
+exception is a child's position as a pick reads it, which is held at a ceiling
+instead. A pick that would have to order a position there is refused with a typed
+`PositionCeiling` outcome, and a charge still lands. The gauge itself stores the
+position exactly, past the ceiling if it gets there; only the read is held.
 
 ## Deciding who runs next
 

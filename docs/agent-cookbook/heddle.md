@@ -299,8 +299,8 @@ from a sibling that can run. A refusal is a typed outcome (`NothingEligible`, `S
 `NoLiveLineage`, `PositionCeiling`, `PathDraining`, `Unknown`, `Stale`), never an exception: an
 `extend` on a lease whose path a reload is closing is `PathDraining`, and its `complete` still
 settles. A bad argument throws `IllegalArgumentException`, such as a reservation above
-`LocalHeddle.MAX_RESERVATION` (2^44 cost units). Each child's progress is a `Long` count of
-sixteenths of a unit, with a ceiling. A pick rebases a busy parent's children long before it, all
+`LocalHeddle.MAX_RESERVATION` (2^44 cost units). Each child's progress is a count of
+sixteenths of a unit, stored exactly in 128 bits and read for a pick as a `Long` with a ceiling. A pick rebases a busy parent's children long before it, all
 by the same virtual time, so no pick changes. A parent still reaches the ceiling while a demanding
 child sits at zero and is never served, when it is only ever charged through `admit`, `extend` or
 an overrun and never picked at, or once an edge's lifetime returned service (reserved but not
