@@ -124,14 +124,16 @@ class LocalHeddleFairnessTest {
             {
                 assertEquals(
                     // Re-pinned for the 2⁻⁴ position grid (#3313): 4 picks moved from b to a. Exact
-                    // rationals read a=6731 b=2899 and an overall error of 0.016677.
-                    "a=6735 b=2895 c=3172 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
+                    // rationals read a=6731 b=2899 and an overall error of 0.016677. Re-pinned again
+                    // for the UNIFIED joiner front (§7.2, #3353): 16 picks moved off a, 4 to b and
+                    // 12 to c, and the overall error fell from 0.016990 to 0.015740.
+                    "a=6719 b=2899 c=3184 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
                         "exhaustedAcquires=0 exhaustedExtends=0 inlineOverruns=878 filtered=1489 seesExtended=1994 wakes=1030 " +
                         "mints=322 forcedMints=0 minUnspent=33",
                     run.fingerprint(),
                 )
             },
-            { assertEquals(0.016990, overall, PIN_TOLERANCE, "pinned overall error") },
+            { assertEquals(0.015740, overall, PIN_TOLERANCE, "pinned overall error") },
             { assertEquals(0.089246, window, PIN_TOLERANCE, "pinned window error") },
         )
     }
@@ -149,8 +151,9 @@ class LocalHeddleFairnessTest {
             { assertTrue(run.acquires > 0 && run.completes > 0, "work still flowed: ${run.acquires} / ${run.completes}") },
             {
                 assertEquals(
-                    // Re-pinned for the 2⁻⁴ position grid (#3313): 5 picks moved from b to a.
-                    "a=4034 b=1832 c=1874 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
+                    // Re-pinned for the 2⁻⁴ position grid (#3313): 5 picks moved from b to a. Re-pinned
+                    // again for the UNIFIED joiner front (§7.2, #3353): 3 picks moved from a to b.
+                    "a=4031 b=1835 c=1874 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
                         "exhaustedAcquires=2403 exhaustedExtends=40 inlineOverruns=737 filtered=914 seesExtended=1325 wakes=857 " +
                         "mints=3316 forcedMints=460 minUnspent=0",
                     run.fingerprint(),
