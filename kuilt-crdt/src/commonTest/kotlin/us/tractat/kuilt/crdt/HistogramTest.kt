@@ -1,5 +1,8 @@
 package us.tractat.kuilt.crdt
 
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
@@ -189,6 +192,44 @@ class HistogramTest {
         )
     }
 
+    // ── Counts past Long.MAX_VALUE (#3343) ────────────────────────────────────
+
+    /**
+     * Two buckets whose counts each fit and add up to one past [Long.MAX_VALUE]: the count is
+     * refused rather than wrapped. Before the fix it read [Long.MIN_VALUE].
+     */
+    @Test
+    fun aCountPastLongMaxValueAcrossBucketsIsRefusedNotWrapped() {
+        val histogram = twoBuckets(Long.MAX_VALUE, 1L)
+        assertAll(
+            { assertEquals(listOf(Long.MAX_VALUE, 1L, 0L, 0L), histogram.bucketCounts, "the rig: each bucket fits") },
+            { assertFailsWith<ArithmeticException> { histogram.count } },
+            { assertTrue("counts=[9223372036854775807, 1, 0, 0]" in histogram.toString(), histogram.toString()) },
+        )
+    }
+
+    /** The boundary on the other side: buckets adding up to exactly [Long.MAX_VALUE] are answered. */
+    @Test
+    fun aCountOfExactlyLongMaxValueAcrossBucketsIsAnswered() {
+        assertEquals(Long.MAX_VALUE, twoBuckets(Long.MAX_VALUE - 1L, 1L).count)
+    }
+
+    /**
+     * A histogram over [boundaries] whose first two buckets hold [first] and [second], both in r1's
+     * slot. A replica reaches a count near [Long.MAX_VALUE] only one `record` at a time, so it is
+     * built through the histogram's wire form instead, field for field.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    private fun twoBuckets(first: Long, second: Long): Histogram {
+        val wire = HistogramWire(
+            boundaries = boundaries,
+            buckets = mapOf(0 to GCounter.of(r1 to first), 1 to GCounter.of(r1 to second)),
+            positiveSum = GCounterDouble.ZERO,
+            negativeSum = GCounterDouble.ZERO,
+        )
+        return Cbor.decodeFromByteArray(Histogram.serializer(), Cbor.encodeToByteArray(HistogramWire.serializer(), wire))
+    }
+
     // ── Serialization ─────────────────────────────────────────────────────────
 
     @Test
@@ -216,3 +257,12 @@ class HistogramTest {
         return Histogram.empty(boundaries).recording(replica, List(n) { rng.nextDouble(-20.0, 220.0) })
     }
 }
+
+/** [Histogram]'s serialized fields, without its constructor's checks, to build a state no replica could record. */
+@Serializable
+private class HistogramWire(
+    val boundaries: List<Double>,
+    val buckets: Map<Int, GCounter>,
+    val positiveSum: GCounterDouble,
+    val negativeSum: GCounterDouble,
+)

@@ -354,6 +354,43 @@ class DDSketchTest {
         )
     }
 
+    // ── Counts past Long.MAX_VALUE (#3343) ───────────────────────────────────
+
+    /**
+     * Two buckets whose counts each fit, one in each sign's store, that add up to one past
+     * [Long.MAX_VALUE]: the count is refused rather than wrapped, and so is a quantile, which ranks
+     * against it. Before the fix [DDSketch.count] read [Long.MIN_VALUE] and the quantile reported
+     * an empty sketch.
+     */
+    @Test
+    fun aCountPastLongMaxValueAcrossBucketsIsRefusedNotWrapped() {
+        val empty = DDSketch.empty()
+        val index = empty.adding(r1, 10.0).positiveBuckets.keys.single()
+        val sketch = empty.piece(empty.addBuckets(r1, mapOf(index to Long.MAX_VALUE), mapOf(index to 1L), 0L).delta)
+        assertAll(
+            { assertEquals(mapOf(index to Long.MAX_VALUE), sketch.positiveBuckets, "the rig: each bucket fits") },
+            { assertEquals(mapOf(index to 1L), sketch.negativeBuckets, "the rig: each bucket fits") },
+            { assertFailsWith<ArithmeticException> { sketch.count } },
+            { assertFailsWith<ArithmeticException> { sketch.quantile(0.5) } },
+            { assertTrue("count=9223372036854775808" in sketch.toString(), sketch.toString()) },
+        )
+    }
+
+    /** The boundary on the other side: buckets and zeros adding up to exactly [Long.MAX_VALUE] are answered. */
+    @Test
+    fun aCountOfExactlyLongMaxValueAcrossBucketsIsAnswered() {
+        val empty = DDSketch.empty()
+        val ten = empty.adding(r1, 10.0)
+        val index = ten.positiveBuckets.keys.single()
+        val sketch = empty.piece(
+            empty.addBuckets(r1, mapOf(index to Long.MAX_VALUE - 2L), mapOf(index to 1L), zeroCount = 1L).delta,
+        )
+        assertAll(
+            { assertEquals(Long.MAX_VALUE, sketch.count) },
+            { assertEquals(ten.quantile(1.0), sketch.quantile(1.0), "the top value is 10's bucket") },
+        )
+    }
+
     // ── Serialization ─────────────────────────────────────────────────────────
 
     @Test

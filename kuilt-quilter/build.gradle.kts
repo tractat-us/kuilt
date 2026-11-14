@@ -24,7 +24,8 @@ kotlin {
             implementation(libs.kotlinx.serialization.json)
         }
         jvmTest.dependencies {
-            runtimeOnly(libs.logback)
+            // Compile scope: a jvmTest asserts the coordinator's log lines through a Logback ListAppender.
+            implementation(libs.logback)
         }
         androidUnitTest.dependencies {
             runtimeOnly(libs.logback)

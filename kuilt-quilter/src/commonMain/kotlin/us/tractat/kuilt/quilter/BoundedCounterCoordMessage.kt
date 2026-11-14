@@ -21,12 +21,18 @@ public sealed class BoundedCounterCoordMessage {
      * [us.tractat.kuilt.crdt.BoundedCounter.transfer] if it has surplus.
      *
      * @param requester the [ReplicaId] asking for quota.
-     * @param amount how many units the requester would like.
+     * @param amount how many units the requester would like; at least 1. The decoder runs this
+     *   check too, so a frame from a peer asking for fewer is refused while it is read, before any
+     *   donor acts on it.
      */
     @Serializable
     @SerialName("transferRequest")
     public class TransferRequest(
         public val requester: ReplicaId,
         public val amount: Long,
-    ) : BoundedCounterCoordMessage()
+    ) : BoundedCounterCoordMessage() {
+        init {
+            require(amount >= 1L) { "BoundedCounter transfer request amount must be at least 1, was $amount" }
+        }
+    }
 }

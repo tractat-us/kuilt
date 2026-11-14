@@ -983,6 +983,8 @@ public class WarpMetricExporter(
     /**
      * Estimate the [q]-quantile (`q` in `[0, 1]`) of all values recorded for [key],
      * within the sketch's relative accuracy — or `null` if the series holds no values.
+     *
+     * @throws ArithmeticException if the series' total count does not fit in a `Long` (#3343).
      */
     public fun histogramQuantile(key: MetricKey, q: Double): Double? = lock.withLock {
         histograms[key]?.takeIf { it.count > 0L }?.quantile(q)

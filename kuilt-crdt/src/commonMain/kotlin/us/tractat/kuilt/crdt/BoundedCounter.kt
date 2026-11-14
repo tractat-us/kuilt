@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.Rounding
 
 /**
  * A **bounded / escrow counter**: a shared budget pre-divided into per-replica
@@ -68,13 +69,53 @@ public class BoundedCounter private constructor(
     /**
      * [replica]'s remaining quota — what it may still spend locally.
      *
-     * @throws ArithmeticException if [replica]'s transfers out add up past [Long.MAX_VALUE] (#3318).
+     * Formed exactly from its seed, what it received, what it gave and what it spent, so it is
+     * answered whenever the remainder fits in a `Long`, even when what it received or gave does not.
+     * [trySpend] and [transfer] compare against the exact quota, so a quota too large to read here
+     * still spends.
+     *
+     * @throws ArithmeticException if the quota does not fit in a `Long` (#3343).
      */
     public fun quota(replica: ReplicaId): Long {
-        val received = transfers.values.sumOf { it.count(replica) }
-        val given = transfers[replica]?.value ?: 0L
-        return initial.count(replica) + received - given - spent.count(replica)
+        val exact = exactQuota(replica)
+        return exact.toLongOrNull()
+            ?: throw ArithmeticException("BoundedCounter quota for $replica, $exact, does not fit in a Long")
     }
+
+    /**
+     * [quota], or `null` when it does not fit in a `Long`.
+     *
+     * For a caller that has to carry on whatever one replica holds, such as a coordinator ranking
+     * peers inside a long-lived pump: a quota past [Long.MAX_VALUE] is a `null` to handle there,
+     * not an exception that ends the pump. [trySpend] and [transfer] keep every replica's quota at
+     * or above 0, so a `null` means more than [Long.MAX_VALUE].
+     */
+    public fun quotaOrNull(replica: ReplicaId): Long? = exactQuota(replica).toLongOrNull()
+
+    /**
+     * The bound, [totalBudget] plus [totalSpent], split evenly over [parties] and rounded down; or
+     * `null` when that share does not fit in a `Long`.
+     *
+     * The bound is everything [init] seeded, and no transfer or spend changes it. It is formed
+     * exactly, so the share is answered even when the bound, or [totalBudget] alone, is past
+     * [Long.MAX_VALUE], as it is whenever one replica's quota is.
+     *
+     * @throws IllegalArgumentException if [parties] is not positive.
+     */
+    public fun fairShareOrNull(parties: Int): Long? {
+        require(parties >= 1) { "BoundedCounter fair share needs at least one party, was $parties" }
+        return initial.exactValue.divideOrNull(parties.toLong(), Rounding.FLOOR)
+    }
+
+    /** [quota], exactly: a handful of `Long` slots cannot leave 128 bits. */
+    private fun exactQuota(replica: ReplicaId): Int128 {
+        val received = transfers.values.fold(Int128.ZERO) { sum, row -> sum + row.count(replica) }
+        val given = transfers[replica]?.exactValue ?: Int128.ZERO
+        return received + initial.count(replica) - given - spent.count(replica)
+    }
+
+    /** Whether [amount] is more than [replica] holds, judged on the exact quota. */
+    private fun exceedsQuota(replica: ReplicaId, amount: Long): Boolean = Int128.of(amount) > exactQuota(replica)
 
     /**
      * Try to spend [amount] on behalf of [replica]. Returns a [Patch] when the
@@ -83,12 +124,11 @@ public class BoundedCounter private constructor(
      * commit. [amount] must be positive.
      *
      * @throws IllegalArgumentException if [amount] is not positive.
-     * @throws ArithmeticException if [quota] throws, or if [replica]'s spent slot would pass
-     *   [Long.MAX_VALUE] (#3318).
+     * @throws ArithmeticException if [replica]'s spent slot would pass [Long.MAX_VALUE] (#3318).
      */
     public fun trySpend(replica: ReplicaId, amount: Long = 1L): Patch<BoundedCounter>? {
         require(amount >= 1L) { "BoundedCounter spend must be positive, was $amount" }
-        if (amount > quota(replica)) return null
+        if (exceedsQuota(replica, amount)) return null
         val spentDelta = spent.inc(replica, amount).delta
         return Patch(BoundedCounter(initial = GCounter.ZERO, transfers = emptyMap(), spent = spentDelta))
     }
@@ -107,13 +147,12 @@ public class BoundedCounter private constructor(
      * gracefully to "deny when low".
      *
      * @throws IllegalArgumentException if [amount] is not positive or [from] equals [to].
-     * @throws ArithmeticException if [quota] throws for [from], or if [from]'s transfer slot for
-     *   [to] would pass [Long.MAX_VALUE] (#3318).
+     * @throws ArithmeticException if [from]'s transfer slot for [to] would pass [Long.MAX_VALUE] (#3318).
      */
     public fun transfer(from: ReplicaId, to: ReplicaId, amount: Long): Patch<BoundedCounter>? {
         require(amount >= 1L) { "BoundedCounter transfer must be positive, was $amount" }
         require(from != to) { "BoundedCounter transfer requires from != to" }
-        if (amount > quota(from)) return null
+        if (exceedsQuota(from, amount)) return null
         val fromRow = transfers[from] ?: GCounter.ZERO
         val rowDelta = fromRow.inc(to, amount).delta
         return Patch(
