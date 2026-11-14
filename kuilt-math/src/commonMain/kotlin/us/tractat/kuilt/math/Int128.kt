@@ -142,7 +142,7 @@ public class Int128 private constructor(
     }
 
     /** The absolute value as an unsigned 128-bit pair; correct for [MIN_VALUE] too (2¹²⁷). */
-    private fun magnitude(): Int128 {
+    internal fun magnitude(): Int128 {
         if (!isNegative) return this
         // Two's complement negation without the overflow check: 2¹²⁷ read as unsigned is right.
         val lo = low.inv() + 1L
@@ -212,7 +212,7 @@ internal fun unsignedLess(a: Long, b: Long): Boolean = (a xor Long.MIN_VALUE) < 
 
 private fun compareUnsigned(a: Long, b: Long): Int = (a xor Long.MIN_VALUE).compareTo(b xor Long.MIN_VALUE)
 
-private class UnsignedQuotient(val quotientHigh: ULong, val quotientLow: ULong, val remainder: ULong)
+internal class UnsignedQuotient(val quotientHigh: ULong, val quotientLow: ULong, val remainder: ULong)
 
 /**
  * The unsigned 128-bit `(high, low)` divided by [d]: quotient and remainder.
@@ -221,7 +221,7 @@ private class UnsignedQuotient(val quotientHigh: ULong, val quotientLow: ULong, 
  * is what lets the shift below drop the bit it shifts out: the remainder stays under `d ≤ 2⁶³`, so
  * doubling it and adding one stays under 2⁶⁴. A divisor above 2⁶³ would need that bit carried.
  */
-private fun divideUnsigned(high: ULong, low: ULong, d: ULong): UnsignedQuotient {
+internal fun divideUnsigned(high: ULong, low: ULong, d: ULong): UnsignedQuotient {
     if (high == 0UL) return UnsignedQuotient(0UL, low / d, low % d)
     val quotientHigh = high / d
     var r = high % d // < d, so the low word's quotient fits in 64 bits.
