@@ -340,9 +340,19 @@ public class HeddleNode internal constructor(
     // ─────────────────────────────────────────────────────────────────────────────
     // Scheduling — one or more EEVDF allocation rounds at [parent], delegating this
     // peer's holdings down toward demanding children. Pure and bounded: each grant
-    // reduces this peer's holdings at [parent], so the loop terminates. Returns the
-    // number of quanta delegated.
+    // reduces this peer's holdings at [parent], so the loop terminates. Answers a
+    // ScheduleOutcome: what was delegated, or why nothing could be.
     // ─────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The parents whose last [schedule] answered [ScheduleOutcome.WeightBudget], so the warning
+     * fires once per transition into that state rather than on every call. Under [lock].
+     */
+    private val overBudgetParents = HashSet<GroupId>()
+
+    /** How many times [schedule] has warned of a parent entering the weight-budget state: a test's witness. */
+    internal var weightBudgetWarningsForTest: Int = 0
+        private set
 
     /**
      * Run allocation rounds at [parent] until nothing more can be delegated: build the

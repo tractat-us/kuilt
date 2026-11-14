@@ -1137,13 +1137,17 @@ class HeddleNodeTest {
         for (edge in listOf(e1, e2, heavy.id, light.id)) a.advertise(edge, hungry)
         val before = a.ledger.value
         val outcome = a.schedule(root)
+        val again = a.schedule(root)
         h.pump()
         assertAll(
             { assertTrue(aAdded && bAdded, "the rig: each peer's own view accepted its child") },
             { assertEquals(3, aAloneSees, "the rig: A did not see B's child before the heal") },
             { assertEquals(4, before.activeChildren(root).size, "the rig: after the heal A sees all four") },
             { assertEquals(ScheduleOutcome.WeightBudget(root), outcome, "the node says why it stopped") },
+            { assertEquals(ScheduleOutcome.WeightBudget(root), again, "and says it again on the next call") },
             { assertEquals(before, a.ledger.value, "and wrote nothing: no seat, no grant") },
+            { assertEquals(1, a.weightBudgetWarningsForTest, "one warning for the transition, not one per call") },
+            { assertNull(a.parentVirtualTime(root), "the diagnostic front has nothing it can compute, and does not throw") },
         )
     }
 
