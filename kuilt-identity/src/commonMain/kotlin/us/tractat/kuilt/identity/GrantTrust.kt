@@ -52,7 +52,7 @@ public sealed interface GrantVerdict {
  *
  * The only trusted issuer is the host's own key. So losing that key is the safe direction: every
  * grant the host ever issued becomes [GrantVerdict.UntrustedIssuer], and those devices are vetted
- * again. Losing the revocations is the dangerous one, since revoked devices come back.
+ * again. Losing the revocations is the dangerous one, since revoked devices come back on their old passes.
  *
  * [verify] reads no clock and keeps no state of its own: given the same grant, subject, room, time
  * and revocations it gives the same verdict. It reads [revocations] as they are at the call.

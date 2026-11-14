@@ -157,7 +157,7 @@ public class RevocationList private constructor(
             } else {
                 checkNotNull(RevocationListLayout.decode(bytes)) {
                     "the ${bytes.size} bytes under store key \"${key.name}\" are not a revocation list; " +
-                        "refusing to open it as empty, which would let every revoked device back in"
+                        "refusing to open it as empty, which would let every revoked device back in on its old pass"
                 }
             }
             return RevocationList(Keeping.InStore(store, key), cutoffs)

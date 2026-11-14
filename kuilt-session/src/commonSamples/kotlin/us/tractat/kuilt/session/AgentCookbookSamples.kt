@@ -357,9 +357,11 @@ public suspend fun flushThenLeaveSample(
  * Revoking and blocking are separate. Revoking a key voids the passes it already holds, so it has to
  * knock again as a newcomer; it is not a ban, and this policy lets a revoked friend straight back in
  * with a fresh pass. [blocked] is what keeps a device out: the app's own set, which it can undo, held
- * in a `StateFlow` because the policy may decide two joiners at once. To
- * shut a device out now, do both: blocking alone leaves a pass it holds working, and revoking alone
- * only sends it back to this policy.
+ * in a `StateFlow` because the app changes the set while hosting, so the read must be live. Keep the
+ * set across restarts as you keep the revocations: a forgotten block lets a revoked device back in as
+ * a newcomer. To keep a device out from its next return, block it and revoke it: blocking alone
+ * leaves a held seat or a pass it holds working, and revoking alone only sends it back to this
+ * policy. Neither removes a device that is in the room now.
  */
 public suspend fun hostAdmissionSample(
     friends: Set<DidKey>,
