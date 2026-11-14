@@ -76,7 +76,7 @@ public final class us/tractat/kuilt/session/test/FakeRoom$FakeChannelSeam : us/t
 public final class us/tractat/kuilt/session/test/FakeRoomFactory : us/tractat/kuilt/session/RoomFactory {
 	public fun <init> ()V
 	public fun host-_oCq2W8 (Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun join (Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class us/tractat/kuilt/session/test/FakeRoomFactoryKt {

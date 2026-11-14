@@ -98,7 +98,8 @@ members appear in the `roster` or deliver frames to `incoming`.
 or mDNS fabrics in production:
 
 ```kotlin
-val factory: RoomFactory = SeamRoomFactory(loom, scope) // loom = any Loom; scope owns the room's coroutines
+// loom = any Loom; scope owns the room's coroutines; the store holds this device's key.
+val factory: RoomFactory = SeamRoomFactory.systemClock(loom, scope, deviceKeyStore)
 
 // Host a room (this peer becomes the Host) or join one (becomes a Joiner).
 val room: Room = factory.host(Pattern(sessionName = "alice", maxPeers = 4))
@@ -118,6 +119,13 @@ room.sendTo(somePeerId, "just for you".encodeToByteArray())
 
 room.leave()  // idempotent
 ```
+
+**The factory needs a key store.** `deviceKeyStore` holds this device's key,
+and every room the factory makes shares it, because they are all one device.
+`InMemoryDeviceKeyStore()` forgets the key when the process ends, so the app is
+a new device every run. That suits tests, and apps that choose not to be
+remembered. `join` also takes an optional `deviceId`, which the host records as
+the member's `MemberIdentity.deviceId`.
 
 **Host loss is terminal — there is no auto-election.** When a joiner's link to
 the host drops permanently, the room emits `MembershipEvent.HostLost` and
@@ -508,6 +516,7 @@ val host = KtorRoomHost(
     path = "/ws/cluster",
     serverPeerId = PeerId("server-1"),
     pattern = Pattern("cluster-room"),
+    deviceKeyStore = serverKeyStore,          // this server's key; each server has its own
 )
 
 val serverScope = CoroutineScope(coroutineContext + Job())
@@ -577,6 +586,7 @@ val client: ClusterClient = clientScope.clusterClient(
         learners = setOf(clientNodeId),
     ),
     raftConfig = RaftConfig(/* … */),
+    deviceKeyStore = clientKeyStore,          // this client's key, shared by every room it rejoins
     clock = { Clock.System.now() },
 )
 

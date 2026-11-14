@@ -16,6 +16,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.test.FakeSeam
@@ -46,7 +47,12 @@ class LobbyPromotionTest {
     private fun lobby(seam: Seam, loom: InMemoryLoom, scope: kotlinx.coroutines.CoroutineScope) =
         SeamElectionLobby(
             seam = seam,
-            factory = SeamRoomFactory(loom, scope, clock = { Instant.fromEpochMilliseconds(0L) }),
+            factory = SeamRoomFactory(
+                loom,
+                scope,
+                clock = { Instant.fromEpochMilliseconds(0L) },
+                deviceKeyStore = InMemoryDeviceKeyStore(),
+            ),
             scope = scope,
             clock = { Instant.fromEpochMilliseconds(0L) },
             roomKey = null,

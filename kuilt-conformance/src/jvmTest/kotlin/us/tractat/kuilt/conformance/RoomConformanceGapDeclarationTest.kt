@@ -3,6 +3,7 @@ package us.tractat.kuilt.conformance
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.TestScope
 import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.SeamRoomFactory
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
@@ -64,6 +65,7 @@ class RoomConformanceGapDeclarationTest {
                     loom = InMemoryLoom(),
                     scope = scope,
                     clock = clock,
+                    deviceKeyStore = InMemoryDeviceKeyStore(),
                     heartbeatConfig = fastHeartbeatConfig,
                 )
                 return RoomHarness(

@@ -15,6 +15,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import kotlin.test.Test
@@ -29,7 +30,7 @@ class LoomRoomHostTest {
     @Test
     fun `drives the admit handshake over an in-memory loom under virtual time`() = runTest {
         val loom = InMemoryLoom()
-        val host = LoomRoomHost(loom, Pattern("server"), clock = zeroClock)
+        val host = LoomRoomHost(loom, Pattern("server"), InMemoryDeviceKeyStore(), clock = zeroClock)
         val hostRoomReady = CompletableDeferred<Room>()
 
         val hostJob = backgroundScope.launch {
@@ -39,7 +40,12 @@ class LoomRoomHostTest {
 
         // A joiner connects over the same in-memory mesh — no socket bound — and
         // completes Hello → Welcome → onPeer purely under runTest virtual time.
-        val joinerFactory = SeamRoomFactory(loom = loom, scope = backgroundScope, clock = zeroClock)
+        val joinerFactory = SeamRoomFactory(
+            loom = loom,
+            scope = backgroundScope,
+            clock = zeroClock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
+        )
         val joinerRoom = joinerFactory.join(InMemoryTag("server"))
 
         hostRoom.roster.first { it.size == 1 }
@@ -54,7 +60,7 @@ class LoomRoomHostTest {
 
     @Test
     fun `start a second time on the same host throws`() = runTest {
-        val host = LoomRoomHost(InMemoryLoom(), Pattern("dup"), clock = zeroClock)
+        val host = LoomRoomHost(InMemoryLoom(), Pattern("dup"), InMemoryDeviceKeyStore(), clock = zeroClock)
 
         val firstStarted = CompletableDeferred<Unit>()
         val job = backgroundScope.launch {
@@ -90,7 +96,7 @@ class LoomRoomHostTest {
     fun `leaves the room on the way out even though the teardown is a cancellation`() =
         runTest(timeout = TEST_WEDGE_BACKSTOP) {
             val seam = SuspendingCloseSeam(FakeSeam(selfId = PeerId("host")))
-            val host = LoomRoomHost(SoleSeamLoom(seam), Pattern("shielded"), clock = zeroClock)
+            val host = LoomRoomHost(SoleSeamLoom(seam), Pattern("shielded"), InMemoryDeviceKeyStore(), clock = zeroClock)
             val hosting = CompletableDeferred<Unit>()
 
             val hostJob = backgroundScope.launch { host.start { hosting.complete(Unit) } }

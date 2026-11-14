@@ -112,8 +112,8 @@ public final class us/tractat/kuilt/session/Liveness$Partitioned : us/tractat/ku
 }
 
 public final class us/tractat/kuilt/session/LoomRoomHost : us/tractat/kuilt/session/RoomHost {
-	public fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;)V
-	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/identity/DeviceKeyStore;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lus/tractat/kuilt/core/Pattern;Lus/tractat/kuilt/identity/DeviceKeyStore;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun close ()V
 	public fun start (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -369,13 +369,13 @@ public final class us/tractat/kuilt/session/RoomChannel {
 public abstract interface class us/tractat/kuilt/session/RoomFactory {
 	public abstract fun host-_oCq2W8 (Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun host-_oCq2W8$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public abstract fun join (Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun join$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun join (Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun join$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class us/tractat/kuilt/session/RoomFactory$DefaultImpls {
 	public static synthetic fun host-_oCq2W8$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public static synthetic fun join$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun join$default (Lus/tractat/kuilt/session/RoomFactory;Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class us/tractat/kuilt/session/RoomFrame {
@@ -416,18 +416,18 @@ public final class us/tractat/kuilt/session/RoomReplicatorKt {
 
 public final class us/tractat/kuilt/session/SeamRoomFactory : us/tractat/kuilt/session/RoomFactory {
 	public static final field Companion Lus/tractat/kuilt/session/SeamRoomFactory$Companion;
-	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun adopt-gmi5Iy8 (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/session/SessionRole;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun adopt-gmi5Iy8$default (Lus/tractat/kuilt/session/SeamRoomFactory;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/session/SessionRole;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun adopt-V4P9x5Q (Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/session/SessionRole;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun adopt-V4P9x5Q$default (Lus/tractat/kuilt/session/SeamRoomFactory;Lus/tractat/kuilt/core/Seam;Lus/tractat/kuilt/session/SessionRole;Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun electLobby (Lus/tractat/kuilt/core/Pattern;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun host-_oCq2W8 (Lus/tractat/kuilt/core/Pattern;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun join (Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun join (Lus/tractat/kuilt/core/Tag;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class us/tractat/kuilt/session/SeamRoomFactory$Companion {
-	public final fun systemClock-gwCluXo (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;)Lus/tractat/kuilt/session/SeamRoomFactory;
-	public static synthetic fun systemClock-gwCluXo$default (Lus/tractat/kuilt/session/SeamRoomFactory$Companion;Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;ILjava/lang/Object;)Lus/tractat/kuilt/session/SeamRoomFactory;
+	public final fun systemClock-TUY-ock (Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;)Lus/tractat/kuilt/session/SeamRoomFactory;
+	public static synthetic fun systemClock-TUY-ock$default (Lus/tractat/kuilt/session/SeamRoomFactory$Companion;Lus/tractat/kuilt/core/Loom;Lkotlinx/coroutines/CoroutineScope;Lus/tractat/kuilt/identity/DeviceKeyStore;Lus/tractat/kuilt/liveness/HeartbeatConfig;JILkotlin/jvm/functions/Function3;ILjava/lang/Object;)Lus/tractat/kuilt/session/SeamRoomFactory;
 }
 
 public abstract interface annotation class us/tractat/kuilt/session/SessionInternalApi : java/lang/annotation/Annotation {

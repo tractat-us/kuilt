@@ -18,6 +18,7 @@ import us.tractat.kuilt.core.FlushOutcome
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -314,8 +315,14 @@ class RoomFlushTest {
         val hostEnd = HoldableConnection(hostConnection)
         val (hostLoom, joinerLoom) = identifiedLoomPair(hostEnd to HoldableConnection(joinerConnection))
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val host = SeamRoomFactory(hostLoom, backgroundScope, clock, relayHeartbeat).host(Pattern("table"))
-        val joiner = SeamRoomFactory(joinerLoom, backgroundScope, clock, relayHeartbeat).join(InMemoryTag("table"))
+        val host = SeamRoomFactory(hostLoom, backgroundScope, clock, InMemoryDeviceKeyStore(), relayHeartbeat).host(Pattern("table"))
+        val joiner = SeamRoomFactory(
+            joinerLoom,
+            backgroundScope,
+            clock,
+            InMemoryDeviceKeyStore(),
+            relayHeartbeat,
+        ).join(InMemoryTag("table"))
         host.roster.first { it.size == 1 }
         joiner.roster.first { it.size == 1 }
         return LinkedRooms(host, joiner, hostEnd)

@@ -92,7 +92,7 @@ clients attached to the edge, proposals forwarded to whichever server is current
 `ServerCluster` on the server side (JVM/Android). Don't hand-roll the forwarding hop, the
 endpoint rotation, or the "which server is the leader now" bookkeeping.
 
-Client side: `CoroutineScope.clusterClient(loom, clusterEndpoints, clientNodeId, clusterConfig, raftConfig, clock)`
+Client side: `CoroutineScope.clusterClient(loom, clusterEndpoints, clientNodeId, clusterConfig, raftConfig, deviceKeyStore, clock)`
 owns the whole connect → use → reconnect lifecycle, rotating through `ClusterEndpoints` on a tear and
 swapping the transport underneath one long-lived node rather than rebuilding it.
 `clusterClientWithNode(raftNode)` is the plainer entry point when you manage the transport yourself.

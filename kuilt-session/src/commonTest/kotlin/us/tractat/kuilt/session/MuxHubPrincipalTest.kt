@@ -9,6 +9,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
@@ -42,12 +43,17 @@ class MuxHubPrincipalTest {
             val principal = Principal("device-x")
 
             // Host one room over the mux-hub server loom.
-            val hostFactory = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock = zeroClock)
+            val hostFactory = SeamRoomFactory(
+                fabric.serverLoom,
+                backgroundScope,
+                clock = zeroClock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
+            )
             val hostRoom = hostFactory.host(Pattern("room"))
 
             // A joiner whose server-end connection is attested with a verified principal.
             val joinerLoom = fabric.clientLoom(PeerId("joiner"), Random(1L), principal = principal)
-            val joinerFactory = SeamRoomFactory(joinerLoom, backgroundScope, clock = zeroClock)
+            val joinerFactory = SeamRoomFactory(joinerLoom, backgroundScope, clock = zeroClock, deviceKeyStore = InMemoryDeviceKeyStore())
             joinerFactory.join(InMemoryTag("room"))
 
             // Await the admit handshake, then assert the verified principal rode onto the member.

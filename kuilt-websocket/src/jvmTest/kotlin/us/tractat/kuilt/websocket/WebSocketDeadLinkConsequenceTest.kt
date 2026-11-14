@@ -45,6 +45,7 @@ import us.tractat.kuilt.core.fabric.ConnectionSource
 import us.tractat.kuilt.core.fabric.Mesh
 import us.tractat.kuilt.core.fabric.hubMesh
 import us.tractat.kuilt.core.fabric.identified
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -183,7 +184,7 @@ class WebSocketDeadLinkConsequenceTest {
         val hubSeam = loom.host(Pattern(ROOM))
         // A slow pinger so a heartbeat cannot land in the window and do the eviction under test.
         val quietPinger = HeartbeatConfig(interval = 60.seconds, timeout = 1.seconds, reconnectWindow = 1.seconds)
-        val room = SeamRoomFactory.systemClock(loom, rigScope, heartbeatConfig = quietPinger).host(Pattern(ROOM))
+        val room = SeamRoomFactory.systemClock(loom, rigScope, InMemoryDeviceKeyStore(), heartbeatConfig = quietPinger).host(Pattern(ROOM))
 
         val memberScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val base = CapturingLoom(spokeLoom())
@@ -194,7 +195,7 @@ class WebSocketDeadLinkConsequenceTest {
             nameOf = { ROOM },
         )
         val member = memberScope.async {
-            SeamRoomFactory.systemClock(mux, memberScope).join(advertisement("member"))
+            SeamRoomFactory.systemClock(mux, memberScope, InMemoryDeviceKeyStore()).join(advertisement("member"))
         }.await()
         room.roster.first { roster -> roster.any { it.id == SPOKE } }
         member.roster.first { roster -> roster.any { it.id == HUB } }

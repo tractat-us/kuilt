@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Principal
 import us.tractat.kuilt.session.Room
@@ -36,28 +37,37 @@ private val log = KotlinLogging.logger("us.tractat.kuilt.websocket.KtorRoomHost"
  * dispatching each to `onRoom` in a child coroutine so concurrent connections
  * don't serialize.
  *
+ * **One device key for every room.** Every room this host accepts is hosted by the same server, so
+ * they all share the one [DeviceKeyStore] it is given. A process that runs several servers — a
+ * cluster test, say — gives each its own store, because each server is its own device.
  */
 public class KtorRoomHost internal constructor(
     private val path: String,
     private val pattern: Pattern,
     private val loom: Loom,
+    private val deviceKeyStore: DeviceKeyStore,
 ) : RoomHost {
     /**
      * Production constructor. Pre-constructs a [KtorServerLoom] synchronously
      * so the WebSocket route is mounted on [application] before any client
      * tries to connect. Deferring into [start]'s launched coroutine would
      * race-condition route registration against early connecting clients.
+     *
+     * [deviceKeyStore] holds this server's key. It is required: see
+     * [us.tractat.kuilt.session.SeamRoomFactory] for why, and what to pass.
      */
     public constructor(
         application: Application,
         path: String,
         serverPeerId: PeerId,
         pattern: Pattern,
+        deviceKeyStore: DeviceKeyStore,
         principalExtractor: (ApplicationCall) -> Principal? = { null },
     ) : this(
         path = path,
         pattern = pattern,
         loom = KtorServerLoom(application, path, serverPeerId, principalExtractor = principalExtractor),
+        deviceKeyStore = deviceKeyStore,
     )
 
     private val startMutex = Mutex()
@@ -88,7 +98,7 @@ public class KtorRoomHost internal constructor(
         }
         log.info { "ws.room.start path=$path sessionName=${pattern.sessionName}" }
         coroutineScope {
-            val factory = SeamRoomFactory.systemClock(loom = loom, scope = this)
+            val factory = SeamRoomFactory.systemClock(loom = loom, scope = this, deviceKeyStore = deviceKeyStore)
             while (true) {
                 val room: Room =
                     try {

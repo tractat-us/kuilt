@@ -22,6 +22,7 @@ import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.RoomAuthorizer
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.fabric.hubMesh
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.ResumeResult
 import us.tractat.kuilt.session.partition.RoomId
@@ -152,6 +153,7 @@ class ConcurrentResumeHangTest {
                 memberName = "table-7",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = RoomId("room-1"),
             ).also { it.start() }
@@ -179,6 +181,7 @@ class ConcurrentResumeHangTest {
                 memberName = "client",
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
                 roomId = null,
                 reweave = { muxClient.join(tag) },
@@ -244,6 +247,7 @@ class ConcurrentResumeHangTest {
             memberName = displayName,
             scope = backgroundScope,
             clock = clock,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             heartbeatConfig = fastConfig,
             roomId = roomId,
         ).also { it.start() }

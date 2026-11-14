@@ -12,6 +12,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.test.FaultySeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -117,7 +118,7 @@ class MembershipEventDropContractTest {
     private suspend fun TestScope.drop(config: HeartbeatConfig): Drop {
         val loom = InMemoryLoom()
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val factory = SeamRoomFactory(loom, backgroundScope, clock, config)
+        val factory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), config)
 
         val hostRoom = factory.host(Pattern("Table"))
         // Wrap the joiner's live seam so heartbeats can be dropped WITHOUT tearing it: state stays

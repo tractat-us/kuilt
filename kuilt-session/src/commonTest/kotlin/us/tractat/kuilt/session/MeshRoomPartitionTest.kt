@@ -12,6 +12,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.election.ElectionOutcome
 import us.tractat.kuilt.session.election.SeamElectionLobby
@@ -61,6 +62,7 @@ class MeshRoomPartitionTest {
                 loom = faulty,
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastHeartbeat,
             )
             fun lobby(seam: Seam) = SeamElectionLobby(

@@ -20,6 +20,7 @@ import us.tractat.kuilt.cluster.clusterClient
 import us.tractat.kuilt.cluster.serverCluster
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.Committed
 import us.tractat.kuilt.raft.NodeId
@@ -81,7 +82,7 @@ class ConcurrentAdmissionE2ETest {
             selfPeerId = PeerId(clientBetaId.value),
         )
 
-        val host = KtorRoomHost(application, path, serverPeerId, roomPattern)
+        val host = KtorRoomHost(application, path, serverPeerId, roomPattern, InMemoryDeviceKeyStore())
 
         coroutineScope {
             val serverScope = CoroutineScope(coroutineContext + Job())
@@ -106,6 +107,7 @@ class ConcurrentAdmissionE2ETest {
                 clientNodeId = clientAlphaId,
                 clusterConfig = ClusterConfig(voters = bothVoters, learners = setOf(clientAlphaId)),
                 raftConfig = raftCfg,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 clock = { Clock.System.now() },
             )
             val clientBeta = betaScope.clusterClient(
@@ -114,6 +116,7 @@ class ConcurrentAdmissionE2ETest {
                 clientNodeId = clientBetaId,
                 clusterConfig = ClusterConfig(voters = bothVoters, learners = setOf(clientBetaId)),
                 raftConfig = raftCfg,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 clock = { Clock.System.now() },
             )
 

@@ -94,7 +94,7 @@ final class us.tractat.kuilt.session.test/FakeRoomFactory : us.tractat.kuilt.ses
     constructor <init>() // us.tractat.kuilt.session.test/FakeRoomFactory.<init>|<init>(){}[0]
 
     final suspend fun host(us.tractat.kuilt.core/Pattern, kotlin/String?, us.tractat.kuilt.session.partition/RoomId?): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.test/FakeRoomFactory.host|host(us.tractat.kuilt.core.Pattern;kotlin.String?;us.tractat.kuilt.session.partition.RoomId?){}[0]
-    final suspend fun join(us.tractat.kuilt.core/Tag, kotlin/String?): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.test/FakeRoomFactory.join|join(us.tractat.kuilt.core.Tag;kotlin.String?){}[0]
+    final suspend fun join(us.tractat.kuilt.core/Tag, kotlin/String?, kotlin/String?): us.tractat.kuilt.session/Room // us.tractat.kuilt.session.test/FakeRoomFactory.join|join(us.tractat.kuilt.core.Tag;kotlin.String?;kotlin.String?){}[0]
 }
 
 final fun us.tractat.kuilt.session.test/admissionRequest(us.tractat.kuilt.identity/DidKey, kotlin/String = ..., kotlin/String? = ...): us.tractat.kuilt.session.admit/AdmissionRequest // us.tractat.kuilt.session.test/admissionRequest|admissionRequest(us.tractat.kuilt.identity.DidKey;kotlin.String;kotlin.String?){}[0]

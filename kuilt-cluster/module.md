@@ -125,7 +125,8 @@ either direction.
 val cluster = serverScope.serverCluster(
     host = KtorRoomHost(application, path = "/ws/cluster",
                         serverPeerId = PeerId("server-1"),
-                        pattern = Pattern("cluster-room")),
+                        pattern = Pattern("cluster-room"),
+                        deviceKeyStore = serverKeyStore),  // this server's key
     voterIds = listOf(NodeId("server-1")),
     raftConfig = RaftConfig(/* … */),
 )

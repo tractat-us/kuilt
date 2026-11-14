@@ -278,7 +278,7 @@ final class us.tractat.kuilt.nw/NwPathState { // us.tractat.kuilt.nw/NwPathState
 }
 
 final class us.tractat.kuilt.nw/NwRoomHost : us.tractat.kuilt.session/RoomHost { // us.tractat.kuilt.nw/NwRoomHost|null[0]
-    constructor <init>(us.tractat.kuilt.core/Loom, us.tractat.kuilt.core/Pattern) // us.tractat.kuilt.nw/NwRoomHost.<init>|<init>(us.tractat.kuilt.core.Loom;us.tractat.kuilt.core.Pattern){}[0]
+    constructor <init>(us.tractat.kuilt.core/Loom, us.tractat.kuilt.core/Pattern, us.tractat.kuilt.identity/DeviceKeyStore) // us.tractat.kuilt.nw/NwRoomHost.<init>|<init>(us.tractat.kuilt.core.Loom;us.tractat.kuilt.core.Pattern;us.tractat.kuilt.identity.DeviceKeyStore){}[0]
 
     final fun close() // us.tractat.kuilt.nw/NwRoomHost.close|close(){}[0]
     final suspend fun start(kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.session/Room, kotlin/Unit>) // us.tractat.kuilt.nw/NwRoomHost.start|start(kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.session.Room,kotlin.Unit>){}[0]

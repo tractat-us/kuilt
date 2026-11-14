@@ -13,6 +13,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.test.FlakyLifecycleLoom
 import kotlin.test.Test
@@ -106,6 +107,7 @@ class AdoptTearTerminalTest {
                 loom = loom,
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
             )
 
@@ -184,6 +186,7 @@ class AdoptTearTerminalTest {
                 loom = loom,
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
             )
 
@@ -252,6 +255,7 @@ class AdoptTearTerminalTest {
                 loom = loom,
                 scope = backgroundScope,
                 clock = clock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
                 heartbeatConfig = fastConfig,
             )
 

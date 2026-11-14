@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.MembershipEvent
 import us.tractat.kuilt.session.SeamRoomFactory
@@ -111,10 +112,17 @@ class NwRejoinTest {
                 NwLoom(FakeNwApi(radio, "host", "host"), SERVICE_TYPE, random = Random(0)),
                 backgroundScope,
                 clock,
+                InMemoryDeviceKeyStore(),
                 heartbeat,
             )
             val joinerFactory =
-                SeamRoomFactory(NwLoom(joinerApi, SERVICE_TYPE, random = Random(1)), backgroundScope, clock, heartbeat)
+                SeamRoomFactory(
+                    NwLoom(joinerApi, SERVICE_TYPE, random = Random(1)),
+                    backgroundScope,
+                    clock,
+                    InMemoryDeviceKeyStore(),
+                    heartbeat,
+                )
             val (host, joiner) = coroutineScope {
                 val h = async { hostFactory.host(Pattern("session")) }
                 val j = async { joinerFactory.join(tag) }

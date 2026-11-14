@@ -26,6 +26,7 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.RgaId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
@@ -457,7 +458,7 @@ internal fun sampleGameRooms() = runTest(StandardTestDispatcher(), timeout = TES
 internal fun sampleGameOverRoom() = runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
     val loom = InMemoryLoom()
     val clock = { Instant.fromEpochMilliseconds(0) }
-    fun factory() = SeamRoomFactory(loom, backgroundScope, clock)
+    fun factory() = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore())
 
     // Two peers form one room; the host hands its room to gameOverRoom.
     val hostRoom = factory().host(Pattern("my-game"))

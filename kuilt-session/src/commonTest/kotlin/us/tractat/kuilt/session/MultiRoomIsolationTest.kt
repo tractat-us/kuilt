@@ -9,6 +9,7 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
@@ -43,13 +44,18 @@ class MultiRoomIsolationTest {
             val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(42L))
 
             // Two rooms hosted over the SAME server loom.
-            val hostFactory = SeamRoomFactory(fabric.serverLoom, backgroundScope, clock = zeroClock)
+            val hostFactory = SeamRoomFactory(
+                fabric.serverLoom,
+                backgroundScope,
+                clock = zeroClock,
+                deviceKeyStore = InMemoryDeviceKeyStore(),
+            )
             val room1 = hostFactory.host(Pattern("room-1"))
             val room2 = hostFactory.host(Pattern("room-2"))
 
             // A joiner that targets ONLY room-1.
             val joinerLoom = fabric.clientLoom(PeerId("joiner"), Random(1L))
-            val joinerFactory = SeamRoomFactory(joinerLoom, backgroundScope, clock = zeroClock)
+            val joinerFactory = SeamRoomFactory(joinerLoom, backgroundScope, clock = zeroClock, deviceKeyStore = InMemoryDeviceKeyStore())
             val joinerRoom = joinerFactory.join(InMemoryTag("room-1"))
 
             // Await the admit handshake into room-1 on both ends, deterministically.

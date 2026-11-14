@@ -14,6 +14,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.JoinerReconnectController
 import us.tractat.kuilt.session.partition.JoinerReconnectEvent
@@ -161,10 +162,11 @@ class WindowEpisodeIdentityTest {
                 loom,
                 backgroundScope,
                 clock,
+                InMemoryDeviceKeyStore(),
                 fastConfig,
                 reconnectControllerFactory = { _, _, _ -> policy },
             )
-            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fastConfig)
+            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
 
             val host = hostFactory.host(Pattern("Host"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
@@ -316,10 +318,11 @@ class WindowEpisodeIdentityTest {
                 loom,
                 backgroundScope,
                 clock,
+                InMemoryDeviceKeyStore(),
                 fastConfig,
                 reconnectControllerFactory = { _, _, _ -> policy },
             )
-            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fastConfig)
+            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
 
             val host = hostFactory.host(Pattern("Host"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)
@@ -488,10 +491,11 @@ class WindowEpisodeIdentityTest {
                 loom,
                 backgroundScope,
                 clock,
+                InMemoryDeviceKeyStore(),
                 fastConfig,
                 reconnectControllerFactory = { _, _, _ -> policy },
             )
-            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fastConfig)
+            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), fastConfig)
 
             val host = hostFactory.host(Pattern("Host"))
             val droppedLink = FaultySeam(loom.join(InMemoryTag("Dropped")), backgroundScope)

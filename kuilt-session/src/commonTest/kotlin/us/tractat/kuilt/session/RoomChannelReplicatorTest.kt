@@ -21,6 +21,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
 import us.tractat.kuilt.quilter.QuilterConfig
@@ -98,8 +99,8 @@ class RoomChannelReplicatorTest {
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Alice"))
-            val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock).join(InMemoryTag("Bob"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).host(Pattern("Alice"))
+            val joinerRoom = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).join(InMemoryTag("Bob"))
 
             // Wait for admit handshake on both sides
             hostRoom.roster.first { it.size == 1 }
@@ -134,7 +135,7 @@ class RoomChannelReplicatorTest {
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Alice"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).host(Pattern("Alice"))
 
             // Connect a raw seam that never sends Hello (never admitted)
             val unadmitted = loom.join(InMemoryTag("Unadmitted"))
@@ -177,7 +178,7 @@ class RoomChannelReplicatorTest {
         runTest(UnconfinedTestDispatcher()) {
             val loom = InMemoryLoom()
             val testClock: () -> kotlin.time.Instant = { kotlin.time.Instant.fromEpochMilliseconds(0L) }
-            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock).host(Pattern("Alice"))
+            val hostRoom = SeamRoomFactory(loom, backgroundScope, testClock, InMemoryDeviceKeyStore()).host(Pattern("Alice"))
 
             // Connect a raw seam that never sends Hello (never admitted).
             val unadmitted = loom.join(InMemoryTag("Unadmitted"))
