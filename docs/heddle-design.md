@@ -918,7 +918,8 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
 
   The seat is **published, not carried** (issue #1752). It is not in the record;
   it is a `Gauge` in the replicated ledger, written by the scheduler's seat bump
-  on every peer that still sees the edge unseated, and the gauge's componentwise
+  on every peer that grants at the parent while it still sees the edge unseated
+  (a call with nothing to grant writes no seat, #3353), and the gauge's componentwise
   join resolves those readings by `max` on the position. That matters because `V` is
   a *local* reading — demand ages out by local receive time and wake clamps are not
   replicated — so a proposer that froze its own reading into the record made one
