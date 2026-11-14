@@ -247,8 +247,9 @@ public class DDSketch private constructor(
      * the exact quantile's magnitude lies within the indexable range.
      * `quantile(0.0)` is the minimum estimate, `quantile(1.0)` the maximum.
      *
-     * The walk sums bucket counts in a `Long`. It cannot wrap: every partial sum is at most [count],
-     * which has to fit for the walk to start.
+     * The walk sums bucket counts in a `Long`. It cannot wrap while every slot is non-negative, as
+     * every mutator keeps them: each partial sum is then at most [count], which has to fit for the
+     * walk to start.
      *
      * @throws IllegalArgumentException if [q] is outside `[0, 1]` or the sketch is empty.
      * @throws ArithmeticException if [count] does not fit in a `Long` (#3343).

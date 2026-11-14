@@ -63,10 +63,16 @@ public class Histogram private constructor(
     /**
      * Total number of recorded values. Always equals `bucketCounts.sum()`.
      *
-     * @throws ArithmeticException if one bucket's count, summed across replicas, does not fit in
-     *   a `Long` (#3318). The sum across buckets is not yet checked, tracked by #3343.
+     * Summed exactly across every bucket and replica, so it is answered whenever the total fits in
+     * a `Long`, and refused when it does not.
+     *
+     * @throws ArithmeticException if the total does not fit in a `Long` (#3343).
      */
-    public val count: Long get() = buckets.values.sumOf { it.value }
+    public val count: Long
+        get() {
+            val exact = buckets.values.fold(Int128.ZERO) { sum, bucket -> sum + bucket.exactValue }
+            return exact.toLongOrNull() ?: throw ArithmeticException("Histogram count $exact does not fit in a Long")
+        }
 
     /** The sum of all recorded values (for the mean), computed replica-order-deterministically. */
     public val sum: Double get() = positiveSum.value - negativeSum.value
