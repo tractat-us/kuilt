@@ -341,7 +341,8 @@ treat it as `NoLiveLineage`.
 
 To show someone why their work is waiting, `explain(leaf, waiting, eligible)` gives one
 `WaitExplanation`: `NotWaiting`, `NotEligible`, `NoLiveLineage(at)` (no pick can end there, the
-same test `acquire` applies), `SupplyExhausted`, `BehindAtLevel(parent, nextChild, …)` at the first
+same test `acquire` applies), `AtCeiling(group, limit)` (see the ceiling below), `SupplyExhausted`,
+`PositionCeiling(parent)`, `BehindAtLevel(parent, nextChild, …)` at the first
 group where another child goes first, or `WouldBePickedNext`. It runs the real pick on a throwaway
 copy, wake memory included, so it agrees with the next `acquire` on the same arguments and changes
 nothing. `BehindAtLevel` carries the leaf side's virtual service beside two lines: `eligibleFront`,
@@ -363,6 +364,34 @@ fraction, over the same competing set: work no pick can reach is owed nothing an
     // While both stay queued, heavy is owed 2 slots of every 3 and light 1.
     check(heddle.entitlement(heavy, waiting = queued, totalSlots = 3L) == Rational.of(2L))
     check(heddle.entitlement(light, waiting = queued, totalSlots = 3L) == Rational.ONE)
+```
+
+To run no more than N of one part of the tree at once, however idle the rest is, do not count leases
+in your own loop beside the engine: set `maxConcurrent` on that group, lane or runtime marker (`0`
+pauses it). A pick skips every leaf beneath a node whose open leases have reached it, draining ones
+included, so the slot goes to a sibling, and the capped node counts as idle at its parent: it banks
+no credit and wakes clamped. `explain` tells such a leaf `AtCeiling(group, limit)`, naming the
+capped node nearest the root, before any supply check; `entitlement` owes it nothing; `previewPicks`
+counts the leases it opens against the ceiling; and `acquire` returns `NothingEligible` when every
+eligible leaf is capped. `admit`, `extend` and `complete` are never refused, and lowering a ceiling
+preempts nothing. A gate in your loop could do none of the reporting.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleConcurrencyCeiling -->
+```kotlin
+    val tree = draft("pool") {
+        lane("deploys", Weight.of(3), maxConcurrent = 1)
+        lane("builds")
+    }
+```
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleConcurrencyCeiling -->
+```kotlin
+    val deploy = (heddle.acquire(queued, queued, startedAt = 0L) as AcquireOutcome.Acquired).lease
+    check(deploy.leaf == deploys)
+    // Deploys weigh three times as much, but one is already running, its ceiling.
+    check(heddle.explain(deploys, waiting = queued, eligible = queued) == WaitExplanation.AtCeiling(deploys, limit = 1L))
+    check(heddle.entitlement(builds, waiting = queued, totalSlots = 4L) == Rational.of(4L))
+    check((heddle.acquire(queued, queued, startedAt = 1L) as AcquireOutcome.Acquired).lease.leaf == builds)
 ```
 
 After a crash or a restart of your executors, `reconcileLeases(live, now)` compares the leases the
