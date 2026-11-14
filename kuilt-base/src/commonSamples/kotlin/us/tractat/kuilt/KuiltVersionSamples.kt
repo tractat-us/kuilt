@@ -1,4 +1,4 @@
-package us.tractat.kuilt.core
+package us.tractat.kuilt
 
 /**
  * Samples for [KuiltVersion], cited by this module's generated `KuiltVersion` KDoc and by the agent cookbook.
