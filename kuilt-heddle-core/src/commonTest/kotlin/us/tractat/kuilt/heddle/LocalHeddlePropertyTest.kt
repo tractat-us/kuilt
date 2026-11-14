@@ -247,6 +247,7 @@ class LocalHeddlePropertyTest {
                             }
                             AcquireOutcome.NothingEligible -> if (eligible.isNotEmpty()) fail("NothingEligible with $eligible at $at")
                             AcquireOutcome.SupplyExhausted -> fail("the supply is sized never to run out, at $at")
+                            is AcquireOutcome.PositionCeiling -> fail("no position nears its ceiling here, at $at")
                         }
                     }
                     open.isEmpty() -> reshape(h, rng, seen)

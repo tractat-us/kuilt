@@ -39,6 +39,27 @@ import us.tractat.kuilt.math.timesWide
 internal const val TICKS_PER_UNIT: Long = 16L
 
 /**
+ * The room left above a position at its ceiling for one deadline: the largest reservation,
+ * [LocalHeddle.MAX_RESERVATION], in ticks. A pick reads `p + q · G`, so with this much spare, a
+ * deadline over a position below the ceiling never leaves `Long`.
+ */
+internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS_PER_UNIT
+
+/**
+ * The highest position, in ticks, an edge of weight [w] can hold exactly: `(Long.MAX_VALUE −`
+ * [POSITION_HEADROOM]`) / w.denominator`.
+ *
+ * The bound has two jobs. Divided by the weight's denominator, it keeps the position's own virtual
+ * time representable: a floor on the wire is `ticks / (G · w)`, whose numerator is at most
+ * `ticks · w.denominator` ([ticksToVirtual]). Short of `Long.MAX_VALUE` by [POSITION_HEADROOM], it
+ * leaves a deadline room. A position that would pass it **saturates** here instead of throwing
+ * (#3313): it no longer orders exactly, so a pick that would have to order it is refused with
+ * [AcquireOutcome.PositionCeiling], while a charge, which may not be refused, lands with the
+ * position held at the ceiling.
+ */
+internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADROOM) / w.denominator
+
+/**
  * [units] of an edge's own service as ticks: `units · G`. Exact; throws on `Long` overflow
  * (design §10.12).
  */

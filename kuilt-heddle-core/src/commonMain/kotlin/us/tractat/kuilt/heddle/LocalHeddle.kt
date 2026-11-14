@@ -124,6 +124,17 @@ public sealed interface AcquireOutcome {
      * [LocalHeddle.admit], [at] is the leaf that was named.
      */
     public data class NoLiveLineage(public val at: GroupId) : AcquireOutcome, AdmitOutcome
+
+    /**
+     * The pick would have to order a position at its ceiling ([parent] has a child there), or its
+     * own delegation would take one there. Positions are kept in a `Long` of 1/16-unit ticks, and
+     * one at the ceiling no longer orders exactly, so the pick is refused rather than guessed.
+     * Nothing changed, the allocator's wake memory included.
+     *
+     * Only choosing is refused: [LocalHeddle.admit] and [LocalHeddle.complete] still charge a
+     * parent at its ceiling, and the position stays there (see "Failure surface" on [LocalHeddle]).
+     */
+    public data class PositionCeiling(public val parent: GroupId) : AcquireOutcome
 }
 
 /**
@@ -196,6 +207,14 @@ public sealed interface LeaseOutcome {
 
     /** No open lease has this id, and it is from another epoch than [currentEpoch]. Nothing changed. */
     public data class Stale(public val currentEpoch: Long) : LeaseOutcome
+
+    /**
+     * An extend whose delegation would take an edge of the lease's path to its position ceiling, or
+     * across a path already there; [parent] is the group above that edge. The lease and the engine
+     * are unchanged. The lease still settles: [LocalHeddle.complete] and [LocalHeddle.cancel] are
+     * never refused.
+     */
+    public data class PositionCeiling(public val parent: GroupId) : LeaseOutcome
 }
 
 /**
@@ -421,6 +440,7 @@ public class LocalHeddle private constructor(
         var group = root
         while (group !in eligible || !local.isLeasable(group)) {
             val pick = allocator.pickChild(group, local, demands.waiting, demands.eligible) ?: return Descent.Refused(group)
+            afterPickForTest(group)
             val edge = pick.grant.attachment
             check(pick.grant.amount == reservation) {
                 "picked ${edge.value} for ${pick.grant.amount}, not the reservation $reservation"
@@ -959,6 +979,12 @@ public class LocalHeddle private constructor(
      * as one with a step the ledger refuses outright.
      */
     internal fun applyStepsForTest(steps: List<TopologyStep>): ApplyResult = run(steps)
+
+    /**
+     * Called after each level's pick, once the wake memory has moved and before the delegation: the
+     * seam a test throws from to fail an [acquire] part-way. Not engine state.
+     */
+    internal var afterPickForTest: (GroupId) -> Unit = {}
 
     /** The path [lease] charges, for tests: what it was opened on, or what a reweight moved it onto. */
     internal fun capturedPath(lease: LeaseId): List<AttachmentId>? = open[lease]?.path
