@@ -104,7 +104,8 @@ import us.tractat.kuilt.math.timesWide
  * check below is the read-path guard for them — the generated deserializer calls this primary
  * constructor, so an off-wire value cannot bypass it (the same shape as [MintRecord]). Each tick
  * word is elided at zero, so a gauge with no ticks encodes byte for byte as one written before
- * #3353, and a position below `2⁶³` carries only [ticksLow]. [floor] carries its own guard
+ * #3353, and a position below `2⁶³` carries only [ticksLow]. [floor] is elided at zero too, so a
+ * gauge this build writes carries no floor at all. [floor] carries its own guard
  * separately, because [Rational] keeps its invariant in a factory that a generated deserializer
  * *would* bypass: see [RationalSerializer], which this property routes through explicitly.
  *
@@ -120,7 +121,7 @@ import us.tractat.kuilt.math.timesWide
 @Serializable
 public data class Gauge(
     @Serializable(with = RationalSerializer::class)
-    public val floor: Rational,
+    public val floor: Rational = Rational.ZERO,
     public val folded: Long,
     public val ticksHigh: Long = 0L,
     public val ticksLow: Long = 0L,
@@ -146,7 +147,7 @@ public data class Gauge(
 }
 
 /** A gauge asserting the position [ticks] at the fold [folded], with no legacy floor. */
-internal fun gaugeAt(ticks: Int128, folded: Long): Gauge = Gauge(Rational.ZERO, folded, ticks.high, ticks.low)
+internal fun gaugeAt(ticks: Int128, folded: Long): Gauge = Gauge(folded = folded, ticksHigh = ticks.high, ticksLow = ticks.low)
 
 /**
  * The **gross** virtual service an edge of weight [weight] reads at base issuance [baseIssued] —

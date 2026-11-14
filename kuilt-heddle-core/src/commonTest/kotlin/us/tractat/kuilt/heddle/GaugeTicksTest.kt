@@ -227,13 +227,14 @@ class GaugeTicksTest {
 
     // ── the wire ─────────────────────────────────────────────────────────────────────────
 
-    /** `ticks` is elided at zero, so a floor-only gauge encodes as it did before #3353. */
+    /** `ticks` is elided at zero, so a floor-only gauge encodes as it did before #3353; a zero floor is elided too. */
     @Test
     fun zeroTicksAreElidedAndTicksRoundTrip() {
         val legacy = Gauge(Rational.of(70L), 20L)
         val wide = Gauge(Rational.ZERO, 20L, ticksHigh = 3L, ticksLow = -2L)
         assertAll(
             { assertEquals("""{"floor":{"numerator":70,"denominator":1},"folded":20}""", Json.encodeToString(legacy)) },
+            { assertEquals("""{"folded":20,"ticksLow":16}""", Json.encodeToString(gaugeOfUnits(1L, 20L)), "a written gauge carries no floor") },
             { assertEquals(wide, Json.decodeFromString<Gauge>(Json.encodeToString(wide))) },
         )
     }
