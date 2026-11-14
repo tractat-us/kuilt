@@ -120,7 +120,19 @@ internal class FakeKeystore : KeystoreBackend {
  */
 internal object AospKeystore {
     /** `ResponseCode.SYSTEM_ERROR`: what a Keystore that is merely failing right now answers. */
-    val SYSTEM_ERROR: Int get() = constant("android.system.keystore2.ResponseCode", "SYSTEM_ERROR")
+    val SYSTEM_ERROR: Int get() = constant(RESPONSE_CODE, "SYSTEM_ERROR")
+
+    /** `ResponseCode.LOCKED`: the Keystore waits for the user. */
+    val LOCKED: Int get() = constant(RESPONSE_CODE, "LOCKED")
+
+    /** `ResponseCode.KEY_NOT_FOUND`: public code 6. */
+    val KEY_NOT_FOUND: Int get() = constant(RESPONSE_CODE, "KEY_NOT_FOUND")
+
+    /** `ResponseCode.KEY_PERMANENTLY_INVALIDATED`: public code 6. */
+    val KEY_PERMANENTLY_INVALIDATED: Int get() = constant(RESPONSE_CODE, "KEY_PERMANENTLY_INVALIDATED")
+
+    /** `ResponseCode.VALUE_CORRUPTED`: public code 7, the one that blames a corrupted key. */
+    val VALUE_CORRUPTED: Int get() = constant(RESPONSE_CODE, "VALUE_CORRUPTED")
 
     /** `KM_ERROR_INVALID_KEY_BLOB`: the key's stored blob cannot be used. */
     val INVALID_KEY_BLOB: Int get() = constant("android.security.keymaster.KeymasterDefs", "KM_ERROR_INVALID_KEY_BLOB")
@@ -143,6 +155,8 @@ internal object AospKeystore {
 
     /** What keystore2 throws from `initSign` for any code without a mapping of its own. */
     fun signFailure(code: Int): InvalidKeyException = InvalidKeyException("Keystore operation failed", keystoreException(code))
+
+    private const val RESPONSE_CODE = "android.system.keystore2.ResponseCode"
 
     private fun constant(className: String, field: String): Int = Class.forName(className).getField(field).getInt(null)
 }

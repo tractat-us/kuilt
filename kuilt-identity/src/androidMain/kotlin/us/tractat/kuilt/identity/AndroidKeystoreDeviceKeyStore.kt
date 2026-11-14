@@ -2,6 +2,7 @@ package us.tractat.kuilt.identity
 
 import android.content.Context
 import android.os.Build
+import androidx.annotation.RequiresApi
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -12,11 +13,12 @@ import us.tractat.kuilt.store.StoreKey
 import java.io.File
 import java.io.RandomAccessFile
 import java.math.BigInteger
+import java.nio.ByteBuffer
 import java.security.PublicKey
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECPoint
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.milliseconds
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AndroidKeystoreDeviceKeyStore")
 
@@ -47,24 +49,24 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AndroidKeys
  *
  * - **Replaced at once, with one warning:** a certificate whose public half is not P-256; a key whose
  *   signature does not verify under its certificate's name; a key the Keystore reports permanently
- *   invalidated; and, on Android 13 and later, a failure the Keystore's `KeyStoreException` attributes
- *   to the key (for example `INVALID_KEY_BLOB`), or an `UnrecoverableKeyException` with no Keystore cause.
- * - **Thrown, key kept, nothing counted:** on Android 13 and later, a failure the Keystore calls
- *   transient, a system error or a wait for the user. However long the Keystore stays down, it cannot
- *   cost the device its key.
- * - **Thrown and counted:** every failure nothing explains — any failure below Android 13, and on 13 and
- *   later one whose code names neither the key nor the Keystore. Each launch that fails to read the key
- *   throws and is counted beside the grants; the third consecutive one replaces the key, and a launch
- *   that reads it resets the count. A launch is a process: asking many times in one counts once.
- *
+ *   invalidated; and, on Android 13 and later, a failure whose `KeyStoreException` blames the key
+ *   (not found, permanently invalidated, corrupted) or an `UnrecoverableKeyException` with no Keystore
+ *   cause.
+ * - **Thrown, key kept:** on Android 13 and later, a failure the Keystore calls transient, a system
+ *   error or a wait for the user, however long it lasts.
+ * - **Thrown, key kept for an hour:** a failure of unknown cause — every other failure, which below
+ *   Android 13 is all of them. The store keeps one timestamp beside the grants, the start of the current
+ *   run of failures; any successful read clears it. A failure of unknown cause once that run is an hour
+ *   old replaces the key. Which process failed, and how often, does not matter.
+
  * Unlike the desktop file store, a replaced key cannot be kept aside: the Keystore will not copy a key.
  *
  * ## A key that was made here
  *
  * On Android 11 and earlier `getKey` answers "no key" when the Keystore fails, the same answer as a
  * first launch. So once the store has made a key and read it back, it writes a small marker beside the
- * grants, and there a "no key" with the marker present is a failed launch to count, not a reason to make
- * a new key. On Android 12 and later "no key" means only that, and a key is made at once whatever the
+ * grants, and there a "no key" with the marker present is a failure of unknown cause, not a reason to
+ * make a new key. On Android 12 and later "no key" means only that, and a key is made at once whatever the
  * marker says. The marker lives where the grants do, so it is cleared with the app's data and never
  * restored to another phone, just as the key is not. It is written after the key, and a launch that reads
  * the key writes it if it is missing, so a crash between the two costs nothing.
@@ -78,10 +80,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AndroidKeys
  * afterwards is seen at the next launch.
  *
  * @param alias the Keystore alias the key is kept under.
- * @param directory where the grants, the failed-launch count and the lock file live.
+ * @param directory where the grants, the failing-since time, the marker and the lock file live.
  * @param backend the Keystore itself; a seam only so the store can be tested off a device.
  * @param sdkInt the Android version, which decides how much a Keystore failure can say ([judge]).
- * @param launch this launch's identity, so a launch's failures count once: one per process by default.
+ * @param now the time in epoch milliseconds, read when a failure of unknown cause starts or continues.
  * @param beforeKeyIsMade called each time this store is about to make a key, and at no other time:
  *   the conformance suite's gate.
  */
@@ -90,7 +92,7 @@ internal class AndroidKeystoreDeviceKeyStore(
     directory: File,
     private val backend: KeystoreBackend,
     private val sdkInt: Int,
-    private val launch: String = THIS_PROCESS,
+    private val now: () -> Long,
     private val beforeKeyIsMade: suspend () -> Unit,
 ) : DeviceKeyStore {
     private val directory: File = directory.absoluteFile
@@ -118,7 +120,6 @@ internal class AndroidKeystoreDeviceKeyStore(
         if (next !== current) store.write(GRANTS, StoredGrants.encode(next))
     }
 
-    // RandomAccessFile rather than java.nio.file: the store runs from API 24, and java.nio.file is 26.
     private suspend fun <T> exclusively(block: suspend () -> T): T = inProcess.withLock {
         RandomAccessFile(lockFile, "rw").use { file ->
             file.channel.lock().use { block() }
@@ -135,11 +136,11 @@ internal class AndroidKeystoreDeviceKeyStore(
         val publicKey = backend.getCertificatePublicKey(alias) ?: return afterFailure(KeystoreFailure.NoCertificate)
         return when (val read = readBack(publicKey, signer)) {
             is KeystoreRead.Usable -> {
-                forgetFailedLaunches()
+                forgetFailingSince()
                 markKeyMade() // Heals a launch that crashed between making the key and marking it.
                 read.key
             }
-            is KeystoreRead.Refused -> replace(read.reason)
+            is KeystoreRead.Refused -> replace(read.reason, cause = null)
             is KeystoreRead.Failed -> afterFailure(read.failure)
         }
     }
@@ -148,7 +149,7 @@ internal class AndroidKeystoreDeviceKeyStore(
      * `getKey` answered "no key". On Android 12 and later that is `KEY_NOT_FOUND` and nothing else, so it
      * is a first launch, or a key deleted by someone else: make one. On Android 11 and earlier it is also
      * how a Keystore that did not answer looks, so where this store has made a key before — its marker
-     * is beside the grants — it is a failed launch to count, not a first launch.
+     * is beside the grants — it is a failure of unknown cause, not a first launch.
      */
     private suspend fun noKey(): DeviceKey =
         if (sdkInt <= LAST_API_WHERE_GET_KEY_HIDES_FAILURE && store.read(KEY_MADE) != null) {
@@ -157,29 +158,28 @@ internal class AndroidKeystoreDeviceKeyStore(
             make()
         }
 
-    /** Decided 29: replace, keep, or count — see [judge]. Returns only by replacing; otherwise throws. */
+    /** Decided 29: replace, keep, or wait — see [judge]. Returns only by replacing; otherwise throws. */
     private suspend fun afterFailure(failure: KeystoreFailure): DeviceKey {
         when (val verdict = judge(failure, sdkInt)) {
-            is FailureVerdict.Replace -> return replace("${verdict.why} (${failure.description})")
+            is FailureVerdict.Replace -> return replace("${verdict.why} (${failure.description})", failure.cause)
             FailureVerdict.Keep -> Unit
-            FailureVerdict.Count -> {
-                val failed = countFailedLaunch()
-                if (failed >= FAILED_LAUNCHES_BEFORE_REPLACING) {
-                    return replace("$failed consecutive launches could not read it; the last: ${failure.description}")
+            FailureVerdict.Unknown -> {
+                val failingFor = (now() - failingSince()).milliseconds
+                if (failingFor >= UNKNOWN_CAUSE_PATIENCE) {
+                    return replace("the Keystore has failed for $failingFor with no good read; the last: ${failure.description}", failure.cause)
                 }
             }
         }
-        val cause = (failure as? KeystoreFailure.Thrown)?.error
-        // The cause rides on the warning, not the exception: its Keystore code is what a device check needs.
-        logger.warn(cause) {
+        logger.warn(failure.cause) {
             "kuilt-identity: the device key under Android Keystore alias \"$alias\" could not be read " +
                 "(${failure.description}); it is kept, and this call fails."
         }
         throw keystoreFailed(failure)
     }
 
-    private suspend fun replace(reason: String): DeviceKey {
-        logger.warn {
+    /** Replacing a key is the most destructive thing the store does, so its warning carries the [cause]. */
+    private suspend fun replace(reason: String, cause: Throwable?): DeviceKey {
+        logger.warn(cause) {
             "kuilt-identity: the device key under Android Keystore alias \"$alias\" cannot be used: $reason. " +
                 "It is deleted and replaced with a new key, so this device is a new device to every room it " +
                 "returns to."
@@ -188,7 +188,7 @@ internal class AndroidKeystoreDeviceKeyStore(
         // and re-marks, and a crash after it leaves no key and no marker, which is a first launch.
         store.delete(KEY_MADE)
         backend.delete(alias)
-        forgetFailedLaunches()
+        forgetFailingSince()
         return make()
     }
 
@@ -217,21 +217,24 @@ internal class AndroidKeystoreDeviceKeyStore(
         )
     }
 
-    /** This launch counted as failed, once: the count after it. */
-    private suspend fun countFailedLaunch(): Int {
-        val held = store.read(FAILED_LAUNCHES)?.let(FailedLaunches::decode)
-        if (held != null && held.lastLaunch == launch) return held.count
-        val count = (held?.count ?: 0) + 1
-        store.write(FAILED_LAUNCHES, FailedLaunches(count, launch).encode())
-        return count
+    /**
+     * When the current run of failures began, starting one now if none is running. A start in the future
+     * — the clock moved back — is read as now.
+     */
+    private suspend fun failingSince(): Long {
+        val at = now()
+        val held = store.read(FAILING_SINCE)?.takeIf { it.size == Long.SIZE_BYTES }?.let { ByteBuffer.wrap(it).long }
+        if (held != null && held <= at) return held
+        store.write(FAILING_SINCE, ByteBuffer.allocate(Long.SIZE_BYTES).putLong(at).array())
+        return at
     }
 
     private suspend fun markKeyMade() {
         if (store.read(KEY_MADE) == null) store.write(KEY_MADE, byteArrayOf(1))
     }
 
-    private suspend fun forgetFailedLaunches() {
-        if (store.read(FAILED_LAUNCHES) != null) store.delete(FAILED_LAUNCHES)
+    private suspend fun forgetFailingSince() {
+        if (store.read(FAILING_SINCE) != null) store.delete(FAILING_SINCE)
     }
 
     private suspend fun readGrants(): List<Grant> {
@@ -254,8 +257,8 @@ internal class AndroidKeystoreDeviceKeyStore(
         /** The [StoreKey] the grants record is kept under. */
         val GRANTS: StoreKey = StoreKey("grants")
 
-        /** The [StoreKey] the failed-launch count is kept under ([FailedLaunches]). */
-        val FAILED_LAUNCHES: StoreKey = StoreKey("keystore-failed-launches")
+        /** The [StoreKey] of the start of the current run of failures, 8 bytes of epoch milliseconds. */
+        val FAILING_SINCE: StoreKey = StoreKey("keystore-failing-since")
 
         /**
          * The [StoreKey] of the marker that says this store has made a key ([noKey]). Beside the grants in
@@ -269,9 +272,6 @@ internal class AndroidKeystoreDeviceKeyStore(
          * Android 12 (API 31), answers `null` only for `KEY_NOT_FOUND`.
          */
         const val LAST_API_WHERE_GET_KEY_HIDES_FAILURE: Int = 30
-
-        /** This process's launch: every store it opens counts a failure once between them. */
-        private val THIS_PROCESS: String = UUID.randomUUID().toString()
 
         /** One mutex per alias for the life of the process; a handful of entries. */
         private val ALIAS_MUTEXES = ConcurrentHashMap<String, Mutex>()
@@ -349,10 +349,8 @@ internal class KeystoreDeviceKey(override val id: DidKey, private val signer: Ke
             signer.signDer(message)
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
-            // The exception's class alone goes on what the caller sees; the cause, with its Keystore code,
-            // goes on the warning, where a device check reads it.
             logger.warn(e) { "kuilt-identity: the Android Keystore failed to sign with the device key ${id.value}" }
-            throw signingFailed(e::class.simpleName)
+            throw signingFailed(e)
         }
         return derSignatureToRaw(der) ?: throw notDer()
     }
@@ -373,8 +371,10 @@ internal class KeystoreDeviceKey(override val id: DidKey, private val signer: Ke
  *
  * A damaged key is replaced with a warning and the app carries on as a new device; a Keystore that
  * cannot answer right now makes [DeviceKeyStore.deviceKey] throw and keeps the key. Where the Keystore
- * does not say which a failure is — always below Android 13 — the third consecutive launch that fails
- * replaces the key.
+ * does not say whose failure it is — always below Android 13 — the key is kept until the Keystore has
+ * been failing for an hour with no good read in between, and then replaced.
+ *
+ * Requires Android 8.0 (API 26): the grants are kept through `java.nio.file`.
  *
  * No Keystore call is made until the first [DeviceKeyStore.deviceKey]; that call, and every grant
  * call, does disk and Keystore work on the caller's dispatcher.
@@ -383,16 +383,20 @@ internal class KeystoreDeviceKey(override val id: DidKey, private val signer: Ke
  * @param context any context of the app; only its no-backup directory is read.
  * @throws IllegalArgumentException when [appId] is not one such segment.
  */
+@RequiresApi(MIN_API)
 public fun DeviceKeyStore.Companion.platform(appId: String, context: Context): DeviceKeyStore =
-    platformStore(appId, context.noBackupFilesDir, AndroidKeystoreBackend, Build.VERSION.SDK_INT)
+    platformStore(appId, context.noBackupFilesDir, AndroidKeystoreBackend, Build.VERSION.SDK_INT, System::currentTimeMillis)
 
-/** [platform] over [noBackupDir], [backend] and [sdkInt]: the test's way in, with a fake Keystore. */
-internal fun platformStore(appId: String, noBackupDir: File, backend: KeystoreBackend, sdkInt: Int): DeviceKeyStore {
+/** The lowest Android version the store runs on: its grants store uses `java.nio.file`. */
+private const val MIN_API = 26
+
+/** [platform] over [noBackupDir], [backend], [sdkInt] and [now]: the test's way in, with a fake Keystore. */
+internal fun platformStore(appId: String, noBackupDir: File, backend: KeystoreBackend, sdkInt: Int, now: () -> Long): DeviceKeyStore {
     require(APP_ID.matches(appId) && appId != "." && appId != "..") {
         "appId must be one segment of letters, digits, '.', '_' and '-', and not '.' or '..': \"$appId\""
     }
     val name = "kuilt-identity-$appId"
-    return AndroidKeystoreDeviceKeyStore(name, File(noBackupDir, name), backend, sdkInt) {}
+    return AndroidKeystoreDeviceKeyStore(name, File(noBackupDir, name), backend, sdkInt, now) {}
 }
 
 private val APP_ID = Regex("[A-Za-z0-9._-]+")
@@ -404,11 +408,11 @@ private const val COORDINATE_BITS = 256
 private const val COORDINATE_BYTES = 32
 private val P256_ORDER = BigInteger(P256.N.toString(16), 16)
 
-private fun signingFailed(failureClass: String?) =
-    IllegalStateException("kuilt-identity: the Android Keystore failed to sign (${failureClass ?: "unknown"})")
+private fun signingFailed(cause: Exception) =
+    IllegalStateException("kuilt-identity: the Android Keystore failed to sign (${cause::class.simpleName})", cause)
 
 private fun keystoreFailed(failure: KeystoreFailure) =
-    IllegalStateException("kuilt-identity: the Android Keystore could not read the device key: ${failure.description}")
+    IllegalStateException("kuilt-identity: the Android Keystore could not read the device key: ${failure.description}", failure.cause)
 
 private fun notDer() =
     IllegalStateException("kuilt-identity: the Android Keystore returned a signature that is not a P-256 ECDSA-Sig-Value")

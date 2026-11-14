@@ -19,12 +19,12 @@ import java.util.UUID
  * a fresh temp directory per fixture. Every reopen is a new store over the same fake Keystore, alias and
  * directory, as a new launch.
  *
- * **Why only 33 and later.** That is where a Keystore failure says what kind it is, so the suite's two
+ * **Why only 33 and later.** That is where a Keystore failure says whose it is, so the suite's two
  * damage properties hold as written: damage is replaced at once, and a Keystore failing right now is
  * refused. Below 33 neither holds as the suite states it, by design or by platform:
- * - a failure there is counted, and replaces the key on the third consecutive failed launch (Decided 29),
- *   not the first, so `aCorruptKeyIsReplacedNotFatal` would red; `AndroidKeystoreDeviceKeyStoreTest`
- *   covers the count instead;
+ * - every failure there is of unknown cause and replaces the key only after an hour of failures
+ *   (Decided 29), not at once, so `aCorruptKeyIsReplacedNotFatal` would red;
+ *   `AndroidKeystoreDeviceKeyStoreTest` covers the hour instead;
  * - on Android 11 and earlier `getKey` answers "no key" when the Keystore fails, so there is no state a
  *   `makeKeyUnreadable` hook could rig that the store can see. That is a platform gap the store cannot
  *   close, and claiming either arm for it would be false.
@@ -38,8 +38,10 @@ import java.util.UUID
  * Each damage hook leaves the fake Keystore as that failure leaves the real one, per AOSP's source:
  *
  * - **corrupt key:** every signature fails with `InvalidKeyException("Keystore operation failed")`
- *   caused by a `KeyStoreException` carrying `KM_ERROR_INVALID_KEY_BLOB`, which is how keystore2 reports
- *   a key blob it cannot use: the key loads, and fails when it is asked to sign;
+ *   caused by a `KeyStoreException` carrying `VALUE_CORRUPTED` (public code 7), the one code the
+ *   Keystore uses to blame a corrupted key, so the store replaces it at once. Not `INVALID_KEY_BLOB`:
+ *   that lands in public code 10 beside passing TEE faults, so it is of unknown cause and waits an hour,
+ *   which this property, asking for an immediate replacement, cannot express;
  * - **mismatched key:** one key's certificate beside another key's private half, so the entry loads and
  *   fails only the self-test;
  * - **cleared key:** the alias deleted;
@@ -58,9 +60,9 @@ class AndroidKeystoreDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSu
         val directory = Files.createTempDirectory("kuilt-keystore-grants").toFile()
         return DeviceKeyStoreFixture.Durable(
             reopen = { beforeKeyIsMade ->
-                AndroidKeystoreDeviceKeyStore(alias, directory, keystore, SDK, UUID.randomUUID().toString(), beforeKeyIsMade)
+                AndroidKeystoreDeviceKeyStore(alias, directory, keystore, SDK, { NOW }, beforeKeyIsMade)
             },
-            corruptKey = { keystore.damage(alias) { AospKeystore.signFailure(AospKeystore.INVALID_KEY_BLOB) } },
+            corruptKey = { keystore.damage(alias) { AospKeystore.signFailure(AospKeystore.VALUE_CORRUPTED) } },
             plantMismatchedKey = {
                 val named = FakeKeystore.newPair()
                 val signer = FakeKeystore.newPair()
@@ -93,6 +95,9 @@ class AndroidKeystoreDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSu
 
     private companion object {
         const val SDK = 33
+
+        /** No property here waits on the clock: no rig's failure is of unknown cause. */
+        const val NOW = 1_700_000_000_000L
     }
 }
 

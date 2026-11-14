@@ -26,8 +26,10 @@ import java.security.spec.ECGenParameterSpec
  *   asks a yes/no "is it there?", which answers "no" on an error. No JCA call there tells an absent key
  *   from a Keystore that did not answer.
  * - [getCertificatePublicKey] is `KeyStore.getCertificate(alias)?.publicKey`, which returns `null` both
- *   when there is no certificate and when the Keystore fails: keystore2 catches every error and returns
- *   `null`. So a `null` here never proves the certificate is gone.
+ *   when there is no certificate and when the Keystore fails: keystore2 catches every
+ *   `android.security.KeyStoreException` and returns `null`. So a `null` here never proves the
+ *   certificate is gone. Anything else it throws — a runtime exception from a dead keystore2 binder —
+ *   escapes, which the store reads as a failure and so keeps the key.
  *
  * Deliberately without any member that returns a private key or its bytes: the store reaches the key
  * only as a [KeystoreSigner], so nothing it holds can export the key.

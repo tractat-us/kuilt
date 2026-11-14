@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory
 import us.tractat.kuilt.store.FileChannelDurableStore
 import us.tractat.kuilt.test.assertAll
 import java.io.File
+import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.security.ProviderException
 import java.security.Signature
@@ -119,153 +120,225 @@ class AndroidKeystoreDeviceKeyStoreTest {
         )
     }
 
-    // ── Decided 29: which failure replaces the key ───────────────────────────
+    // ── Decided 29: whose failure it is ──────────────────────────────────────
 
     /**
-     * On Android 13 and later, the failures that are the Keystore's own trouble keep the key — including
+     * On Android 13 and later, the failures the Keystore calls its own keep the key — including
      * `SYSTEM_ERROR`, which `isTransientFailure()` calls *not* transient, the reason that predicate alone
-     * is not the rule.
+     * is not the rule — and `LOCKED`, which waits for the user.
      */
     @Test
     fun onAndroid13WhatTheKeystoreCallsItsOwnTroubleKeepsTheKey() {
-        val systemError = AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR)
-        val busy = AospKeystore.signFailure(AospKeystore.SECURE_HW_BUSY)
+        val systemError = AospKeystore.keystoreException(AospKeystore.SYSTEM_ERROR)
+        val locked = AospKeystore.keystoreException(AospKeystore.LOCKED)
         assertAll(
-            { assertFalse(AospKeystore.keystoreException(AospKeystore.SYSTEM_ERROR).isTransientFailure, "precondition: AOSP calls SYSTEM_ERROR not transient") },
+            { assertFalse(systemError.isTransientFailure, "precondition: AOSP calls SYSTEM_ERROR not transient") },
             { assertTrue(AospKeystore.keystoreException(AospKeystore.SECURE_HW_BUSY).isTransientFailure, "precondition: and SECURE_HW_BUSY transient") },
-            { assertIs<FailureVerdict.Keep>(judge(thrown(systemError), 33), "SYSTEM_ERROR while loading") },
-            { assertIs<FailureVerdict.Keep>(judge(thrown(busy), 33), "SECURE_HW_BUSY while signing") },
+            { assertTrue(locked.requiresUserAuthentication() && !locked.isSystemError && !locked.isTransientFailure, "precondition: LOCKED only waits for the user") },
+            { assertIs<FailureVerdict.Keep>(judge(thrown(AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR)), 33), "SYSTEM_ERROR while loading") },
+            { assertIs<FailureVerdict.Keep>(judge(thrown(AospKeystore.signFailure(AospKeystore.SECURE_HW_BUSY)), 33), "SECURE_HW_BUSY while signing") },
+            { assertIs<FailureVerdict.Keep>(judge(thrown(AospKeystore.loadFailure(AospKeystore.LOCKED)), 33), "LOCKED while loading") },
             {
                 assertIs<FailureVerdict.Keep>(
                     judge(thrown(AospKeystore.signFailure(AospKeystore.UNKNOWN_ERROR)), 33),
-                    "KM_ERROR_UNKNOWN_ERROR: ERROR_KEYMINT_FAILURE like a bad blob, but flagged a system error",
+                    "KM_ERROR_UNKNOWN_ERROR: code 10, flagged a system error",
                 )
             },
         )
     }
 
-    /**
-     * On Android 13 and later, what names neither the key nor the Keystore counts a failed launch
-     * (Decided 29, amended): kept forever, a failure that never goes away would strand the device.
-     */
+    /** On Android 13 and later, what the Keystore blames on the key replaces it — each code read by name. */
     @Test
-    fun onAndroid13WhatNothingExplainsCounts() {
+    fun onAndroid13WhatTheKeystoreBlamesOnTheKeyReplacesIt() {
         assertAll(
+            { assertIs<FailureVerdict.Replace>(judge(thrown(AospKeystore.loadFailure(AospKeystore.KEY_NOT_FOUND)), 33), "KEY_NOT_FOUND (code 6)") },
             {
-                assertIs<FailureVerdict.Count>(
-                    judge(thrown(AospKeystore.loadFailure(UNMAPPED_CODE)), 33),
-                    "a code AOSP has no entry for: ERROR_KEYSTORE_FAILURE with no flags",
+                assertIs<FailureVerdict.Replace>(
+                    judge(thrown(AospKeystore.loadFailure(AospKeystore.KEY_PERMANENTLY_INVALIDATED)), 33),
+                    "KEY_PERMANENTLY_INVALIDATED (code 6)",
                 )
             },
-            { assertIs<FailureVerdict.Count>(judge(thrown(ProviderException("no cause")), 33), "a failure with no Keystore cause") },
-            { assertIs<FailureVerdict.Count>(judge(KeystoreFailure.NoCertificate, 33), "a certificate that did not come back") },
-        )
-    }
-
-    /** On Android 13 and later, what the Keystore attributes to the key replaces it. */
-    @Test
-    fun onAndroid13WhatTheKeystoreCallsTheKeysReplacesIt() {
-        val badBlob = AospKeystore.signFailure(AospKeystore.INVALID_KEY_BLOB)
-        assertAll(
-            { assertIs<FailureVerdict.Replace>(judge(thrown(badBlob), 33), "INVALID_KEY_BLOB while signing") },
+            { assertIs<FailureVerdict.Replace>(judge(thrown(AospKeystore.signFailure(AospKeystore.VALUE_CORRUPTED)), 33), "VALUE_CORRUPTED (code 7)") },
             { assertIs<FailureVerdict.Replace>(judge(thrown(UnrecoverableKeyException("no cause")), 33), "UnrecoverableKeyException, no Keystore cause") },
             { assertIs<FailureVerdict.Replace>(judge(thrown(KeyPermanentlyInvalidatedException()), 33), "permanently invalidated") },
         )
     }
 
-    /** Below Android 13 nothing says which kind a failure is, so all of them count — except permanent invalidation. */
+    /**
+     * On Android 13 and later, what names neither the key nor the Keystore is of unknown cause — code 10
+     * with no flag included: AOSP's KeyMint bucket holds `INVALID_KEY_BLOB` and passing TEE faults alike.
+     */
     @Test
-    fun belowAndroid13EveryFailureCountsButPermanentInvalidation() {
+    fun onAndroid13WhatNothingExplainsIsOfUnknownCause() {
+        val badBlob = AospKeystore.keystoreException(AospKeystore.INVALID_KEY_BLOB)
+        assertAll(
+            { assertEquals(10, badBlob.numericErrorCode, "precondition: INVALID_KEY_BLOB is public code 10") },
+            { assertFalse(badBlob.isSystemError || badBlob.isTransientFailure, "precondition: with no flag") },
+            { assertIs<FailureVerdict.Unknown>(judge(thrown(AospKeystore.signFailure(AospKeystore.INVALID_KEY_BLOB)), 33), "INVALID_KEY_BLOB") },
+            { assertIs<FailureVerdict.Unknown>(judge(thrown(AospKeystore.loadFailure(UNMAPPED_CODE)), 33), "a code AOSP has no entry for") },
+            { assertIs<FailureVerdict.Unknown>(judge(thrown(ProviderException("no cause")), 33), "a failure with no Keystore cause") },
+            { assertIs<FailureVerdict.Unknown>(judge(KeystoreFailure.NoCertificate, 33), "a certificate that did not come back") },
+        )
+    }
+
+    /** Below Android 13 nothing says whose failure it is: all are of unknown cause, but permanent invalidation. */
+    @Test
+    fun belowAndroid13EveryFailureIsOfUnknownCauseButPermanentInvalidation() {
         val failures = listOf(
             thrown(AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR)),
-            thrown(AospKeystore.signFailure(AospKeystore.INVALID_KEY_BLOB)),
+            thrown(AospKeystore.signFailure(AospKeystore.VALUE_CORRUPTED)),
             thrown(UnrecoverableKeyException("no cause")),
             thrown(ProviderException("no cause")),
             KeystoreFailure.NoCertificate,
             KeystoreFailure.NoKeyThoughOneWasMade,
         )
-        val verdicts = listOf(24, 30, 32).flatMap { sdk -> failures.map { judge(it, sdk) } }
+        val verdicts = listOf(26, 30, 32).flatMap { sdk -> failures.map { judge(it, sdk) } }
         assertAll(
-            { assertTrue(verdicts.all { it is FailureVerdict.Count }, "every failure counts below 33: $verdicts") },
-            { assertIs<FailureVerdict.Replace>(judge(thrown(KeyPermanentlyInvalidatedException()), 24), "permanent invalidation replaces at once") },
+            { assertTrue(verdicts.all { it is FailureVerdict.Unknown }, "every failure is of unknown cause below 33: $verdicts") },
+            { assertIs<FailureVerdict.Replace>(judge(thrown(KeyPermanentlyInvalidatedException()), 26), "permanent invalidation replaces at once") },
         )
     }
 
-    // ── The store, failure by failure ────────────────────────────────────────
+    // ── A failure of unknown cause: one hour ─────────────────────────────────
 
-    /**
-     * Below Android 13 a Keystore failure throws and keeps the key, counted once per launch however many
-     * times the launch asks; the third consecutive failed launch replaces it.
-     */
+    /** A run of failures of unknown cause shorter than an hour throws and keeps the key. */
     @Test
-    fun belowAndroid13TheThirdConsecutiveFailedLaunchReplacesTheKey() = runTest {
-        val rig = Rig(sdk = 32)
+    fun aRunUnderAnHourKeepsTheKey() = runTest {
+        val rig = Rig(sdk = 30)
         val held = rig.launch().deviceKey().id
         rig.keystore.loadFault = { AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR) }
-
-        val second = rig.launch()
-        val first = failureOf { second.deviceKey() }
-        val firstAgain = failureOf { second.deviceKey() } // the same launch asking again
-        val third = failureOf { rig.launch().deviceKey() }
-        val madeBefore = rig.keystore.generated
-        val countBefore = rig.failedLaunches()
-        // The fault still holds when the fourth launch reads, so its replacement is the count's doing; it
-        // is cleared only once the store has decided, so the new key can be read back.
-        val fourth = rig.launch(clearFaultAfterJudging = true).deviceKey().id
-        val countAfter = rig.failedLaunches()
-
+        val first = failureOf { rig.launch().deviceKey() }
+        val since = rig.failingSince()
+        rig.clock += MINUTE * 59
+        val later = failureOf { rig.launch().deviceKey() }
+        rig.keystore.loadFault = null
+        val after = rig.launch().deviceKey().id
         assertAll(
-            { assertTrue(first is IllegalStateException && firstAgain is IllegalStateException && third is IllegalStateException, "each failed launch throws: $first, $firstAgain, $third") },
-            { assertEquals(1, madeBefore, "and makes no key in two failed launches") },
-            { assertEquals(2, countBefore, "asking twice in one launch counts once: two launches, count 2") },
-            { assertNotEquals(held, fourth, "the third failed launch replaces the key") },
-            { assertEquals(2, rig.keystore.generated, "with one new key") },
-            { assertEquals(null, countAfter, "and the count is cleared") },
+            { assertTrue(first is IllegalStateException && later is IllegalStateException, "both throw: $first, $later") },
+            { assertEquals(T, since, "the first failure starts the run") },
+            { assertEquals(1, rig.keystore.generated, "no key is made in 59 minutes") },
+            { assertEquals(held, after, "and the key is the same key") },
         )
     }
 
-    /** A launch that reads the key resets the count, so failures must be consecutive to replace it. */
+    /** A failure of unknown cause once the run is an hour old replaces the key. */
     @Test
-    fun belowAndroid13ALaunchThatReadsTheKeyResetsTheCount() = runTest {
+    fun aRunAnHourOldReplacesTheKey() = runTest {
+        val rig = Rig(sdk = 30)
+        val held = rig.launch().deviceKey().id
+        rig.keystore.loadFault = { AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR) }
+        failureOf { rig.launch().deviceKey() }
+        rig.clock += HOUR
+        val replaced = rig.launch(clearFaultAfterJudging = true).deviceKey().id
+        val since = rig.failingSince()
+        assertAll(
+            { assertNotEquals(held, replaced, "an hour of failures replaces the key") },
+            { assertEquals(2, rig.keystore.generated, "with one new key") },
+            { assertNull(since, "and the run is cleared") },
+        )
+    }
+
+    /** A successful read clears the run, so the hour is counted from the first failure after it. */
+    @Test
+    fun aSuccessfulReadClearsTheRun() = runTest {
         val rig = Rig(sdk = 30)
         val held = rig.launch().deviceKey().id
         val fault = { AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR) }
         rig.keystore.loadFault = fault
         failureOf { rig.launch().deviceKey() }
-        failureOf { rig.launch().deviceKey() }
-        val countBeforeSuccess = rig.failedLaunches()
+        rig.clock += MINUTE * 30
         rig.keystore.loadFault = null
-        val readBetween = rig.launch().deviceKey().id
-        val countAfterSuccess = rig.failedLaunches()
+        rig.launch().deviceKey()
+        val clearedBySuccess = rig.failingSince()
+        rig.clock += MINUTE * 20
         rig.keystore.loadFault = fault
         failureOf { rig.launch().deviceKey() }
-        failureOf { rig.launch().deviceKey() }
+        val restarted = rig.failingSince()
+        rig.clock += MINUTE * 40 // 90 minutes since the first failure, 40 since the run restarted
+        val late = failureOf { rig.launch().deviceKey() }
         rig.keystore.loadFault = null
         val after = rig.launch().deviceKey().id
-
         assertAll(
-            { assertEquals(2, countBeforeSuccess, "precondition: two failed launches were counted") },
-            { assertEquals(held, readBetween, "a launch that reads the key gets it") },
-            { assertEquals(null, countAfterSuccess, "and clears the count") },
-            { assertEquals(held, after, "so two more failed launches, four in all, do not replace it") },
-            { assertEquals(1, rig.keystore.generated, "no key was made after the first") },
+            { assertNull(clearedBySuccess, "a successful read clears the run") },
+            { assertEquals(T + MINUTE * 50, restarted, "the next failure starts a new one") },
+            { assertTrue(late is IllegalStateException, "40 minutes into it, a failure throws: $late") },
+            { assertEquals(held, after, "and the key is kept") },
         )
     }
 
-    /** On Android 13 and later a failure the Keystore calls its own never replaces the key, however long it lasts. */
+    /** Failures from different processes — different store instances — are one run: the hour is the Keystore's, not a process's. */
+    @Test
+    fun failuresFromDifferentProcessesShareOneRun() = runTest {
+        val rig = Rig(sdk = 30)
+        val held = rig.launch().deviceKey().id
+        rig.keystore.loadFault = { AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR) }
+        val ui = rig.launch()
+        val sync = rig.launch()
+        failureOf { ui.deviceKey() }
+        rig.clock += MINUTE * 20
+        failureOf { sync.deviceKey() }
+        rig.clock += MINUTE * 20
+        failureOf { ui.deviceKey() }
+        val since = rig.failingSince()
+        rig.clock += MINUTE * 20
+        val replaced = rig.launch(clearFaultAfterJudging = true).deviceKey().id
+        assertAll(
+            { assertEquals(T, since, "three failures from two processes, one run, started by the first") },
+            { assertNotEquals(held, replaced, "and an hour after it began the key is replaced") },
+        )
+    }
+
+    /** A run that started in the future — the clock moved back — is read as starting now. */
+    @Test
+    fun aRunStartedInTheFutureIsReadAsNow() = runTest {
+        val rig = Rig(sdk = 30)
+        val held = rig.launch().deviceKey().id
+        rig.plantFailingSince(T + HOUR * 10)
+        rig.keystore.loadFault = { AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR) }
+        val first = failureOf { rig.launch().deviceKey() }
+        val since = rig.failingSince()
+        rig.clock += MINUTE * 59
+        val later = failureOf { rig.launch().deviceKey() }
+        rig.keystore.loadFault = null
+        val after = rig.launch().deviceKey().id
+        assertAll(
+            { assertTrue(first is IllegalStateException && later is IllegalStateException, "both throw: $first, $later") },
+            { assertEquals(T, since, "the future start is replaced by now") },
+            { assertEquals(held, after, "and the key is kept") },
+        )
+    }
+
+    /** On Android 13 and later a failure the Keystore calls its own never starts a run, however long it lasts. */
     @Test
     fun onAndroid13AKeystoreFailureNeverReplacesTheKey() = runTest {
         val rig = Rig(sdk = 33)
         val held = rig.launch().deviceKey().id
         rig.keystore.loadFault = { AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR) }
-        val failures = List(5) { failureOf { rig.launch().deviceKey() } }
-        val counted = rig.failedLaunches()
+        val failures = List(3) {
+            failureOf { rig.launch().deviceKey() }.also { rig.clock += HOUR }
+        }
+        val since = rig.failingSince()
         rig.keystore.loadFault = null
         val after = rig.launch().deviceKey().id
         assertAll(
-            { assertTrue(failures.all { it is IllegalStateException }, "five launches throw: $failures") },
-            { assertEquals(null, counted, "nothing is counted on 33 and later") },
+            { assertTrue(failures.all { it is IllegalStateException }, "three hours of failures throw: $failures") },
+            { assertNull(since, "and start no run") },
             { assertEquals(held, after, "and the key is the same key") },
+        )
+    }
+
+    /** On Android 13 and later code 10 with no flag — a bad blob or a passing TEE fault — waits the hour. */
+    @Test
+    fun onAndroid13AnUnflaggedKeyMintFailureWaitsTheHour() = runTest {
+        val rig = Rig(sdk = 33)
+        val held = rig.launch().deviceKey().id
+        rig.keystore.signFault = { AospKeystore.signFailure(AospKeystore.INVALID_KEY_BLOB) }
+        val early = failureOf { rig.launch().deviceKey() }
+        rig.clock += HOUR
+        val replaced = rig.launch(clearSignFaultAfterJudging = true).deviceKey().id
+        assertAll(
+            { assertTrue(early is IllegalStateException, "the first failure throws: $early") },
+            { assertNotEquals(held, replaced, "an hour later the key is replaced") },
         )
     }
 
@@ -287,22 +360,23 @@ class AndroidKeystoreDeviceKeyStoreTest {
 
     /**
      * Android 11 and earlier store a key and its certificate separately, so a crash between them leaves a
-     * key with no certificate under the alias. A failing certificate read looks the same, so it is
-     * counted like any failure: the third consecutive launch replaces it, and the replacement is kept.
+     * key with no certificate under the alias. A failing certificate read looks the same, so it waits the
+     * hour like any failure of unknown cause, and then is replaced.
      */
     @Test
-    fun belowAndroid12AHalfMadeKeyIsReplacedOnTheThirdLaunch() = runTest {
+    fun belowAndroid12AHalfMadeKeyIsReplacedAfterAnHour() = runTest {
         val rig = Rig(sdk = 30)
         rig.keystore.plant(rig.alias, null, FakeKeystore.newPair().private)
-        val early = List(2) { failureOf { rig.launch().deviceKey() } }
+        val early = failureOf { rig.launch().deviceKey() }
         val madeEarly = rig.keystore.generated
-        val third = rig.launch().deviceKey().id
-        val fourth = rig.launch().deviceKey().id
+        rig.clock += HOUR
+        val made = rig.launch().deviceKey().id
+        val again = rig.launch().deviceKey().id
         assertAll(
-            { assertTrue(early.all { it is IllegalStateException }, "the first two launches throw: $early") },
-            { assertEquals(0, madeEarly, "and make no key") },
-            { assertEquals(1, rig.keystore.generated, "the third makes one") },
-            { assertEquals(third, fourth, "which is kept") },
+            { assertTrue(early is IllegalStateException, "the first launch throws: $early") },
+            { assertEquals(0, madeEarly, "and makes no key") },
+            { assertEquals(1, rig.keystore.generated, "an hour later one is made") },
+            { assertEquals(made, again, "and kept") },
         )
     }
 
@@ -317,30 +391,14 @@ class AndroidKeystoreDeviceKeyStoreTest {
         val held = rig.launch().deviceKey().id
         rig.keystore.certificateLost = true
         val failure = failureOf { rig.launch().deviceKey() }
-        val counted = rig.failedLaunches()
+        val since = rig.failingSince()
         rig.keystore.certificateLost = false
         val after = rig.launch().deviceKey().id
         assertAll(
             { assertTrue(failure is IllegalStateException, "throws: $failure") },
             { assertEquals(1, rig.keystore.generated, "makes no key") },
-            { assertEquals(1, counted, "and counts a failed launch") },
+            { assertEquals(T, since, "and starts a run") },
             { assertEquals(held, after, "and the key is the same key") },
-        )
-    }
-
-    /** On Android 13 and later a code that names neither key nor Keystore replaces on the third failed launch. */
-    @Test
-    fun onAndroid13AnUnexplainedCodeReplacesOnTheThirdFailedLaunch() = runTest {
-        val rig = Rig(sdk = 33)
-        val held = rig.launch().deviceKey().id
-        rig.keystore.loadFault = { AospKeystore.loadFailure(UNMAPPED_CODE) }
-        val early = List(2) { failureOf { rig.launch().deviceKey() } }
-        val madeEarly = rig.keystore.generated
-        val third = rig.launch(clearFaultAfterJudging = true).deviceKey().id
-        assertAll(
-            { assertTrue(early.all { it is IllegalStateException }, "two failed launches throw: $early") },
-            { assertEquals(1, madeEarly, "and make no key") },
-            { assertNotEquals(held, third, "the third replaces it") },
         )
     }
 
@@ -348,53 +406,54 @@ class AndroidKeystoreDeviceKeyStoreTest {
 
     /**
      * On Android 11 and earlier `getKey` answers "no key" when the Keystore fails. Where this store has
-     * made a key, that counts a failed launch instead of making a new one; the outage ending brings the
+     * made a key, that is a failure of unknown cause, not a first launch; the outage ending brings the
      * same key back.
      */
     @Test
-    fun onAndroid11NoKeyWhereOneWasMadeCountsRatherThanMakingOne() = runTest {
+    fun onAndroid11NoKeyWhereOneWasMadeIsAFailureNotAFirstLaunch() = runTest {
         val rig = Rig(sdk = 30)
         val held = rig.launch().deviceKey().id
         val marked = rig.marked()
         rig.keystore.legacyOutage = true
-        val failures = List(2) { failureOf { rig.launch().deviceKey() } }
-        val counted = rig.failedLaunches()
+        val failure = failureOf { rig.launch().deviceKey() }
+        val since = rig.failingSince()
         rig.keystore.legacyOutage = false
         val after = rig.launch().deviceKey().id
         assertAll(
             { assertTrue(marked, "precondition: making the key marked it") },
-            { assertTrue(failures.all { it is IllegalStateException }, "two launches in the outage throw: $failures") },
-            { assertEquals(2, counted, "and are counted") },
+            { assertTrue(failure is IllegalStateException, "a launch in the outage throws: $failure") },
+            { assertEquals(T, since, "and starts a run") },
             { assertEquals(1, rig.keystore.generated, "no key is made") },
             { assertEquals(held, after, "and the key is the same key once the Keystore answers") },
         )
     }
 
-    /** The outage lasting three launches replaces the key, as any counted failure does. */
+    /** "No key" with the marker for an hour replaces the key, as any failure of unknown cause does. */
     @Test
-    fun onAndroid11NoKeyForThreeLaunchesReplacesIt() = runTest {
+    fun onAndroid11NoKeyForAnHourReplacesIt() = runTest {
         val rig = Rig(sdk = 30)
         val held = rig.launch().deviceKey().id
         rig.keystore.legacyOutage = true
-        repeat(2) { failureOf { rig.launch().deviceKey() } }
-        val third = rig.launch(clearOutageBeforeMaking = true).deviceKey().id
+        failureOf { rig.launch().deviceKey() }
+        rig.clock += HOUR
+        val replaced = rig.launch(clearOutageBeforeMaking = true).deviceKey().id
         val marked = rig.marked()
         assertAll(
-            { assertNotEquals(held, third, "the third failed launch makes a new key") },
-            { assertTrue(marked, "and marks it") },
+            { assertNotEquals(held, replaced, "an hour later a new key is made") },
+            { assertTrue(marked, "and marked") },
         )
     }
 
     /** No marker and no key is a first launch, on every version: the key is made at once. */
     @Test
     fun noKeyAndNoMarkerIsAFirstLaunch() = runTest {
-        val made = listOf(24, 30, 33).map { sdk ->
+        val made = listOf(26, 30, 33).map { sdk ->
             val rig = Rig(sdk)
             val before = rig.marked()
             rig.launch().deviceKey()
             !before && rig.keystore.generated == 1 && rig.marked()
         }
-        assertEquals(listOf(true, true, true), made, "made at once and marked, at API 24, 30 and 33")
+        assertEquals(listOf(true, true, true), made, "made at once and marked, at API 26, 30 and 33")
     }
 
     /**
@@ -408,17 +467,17 @@ class AndroidKeystoreDeviceKeyStoreTest {
         rig.keystore.delete(rig.alias)
         val marked = rig.marked()
         val again = rig.launch().deviceKey().id
-        val counted = rig.failedLaunches()
+        val since = rig.failingSince()
         assertAll(
             { assertTrue(marked, "precondition: the marker is there") },
             { assertNotEquals(held, again, "a new key is made at once") },
-            { assertEquals(null, counted, "and nothing is counted") },
+            { assertNull(since, "and no run is started") },
         )
     }
 
     /**
      * The marker is written after the key, never before: a key that fails to be made leaves no marker,
-     * so the next launch makes one at once rather than counting a "missing" key that never existed.
+     * so the next launch makes one at once rather than waiting out a "missing" key that never existed.
      */
     @Test
     fun aKeyThatFailedToBeMadeLeavesNoMarker() = runTest {
@@ -437,7 +496,7 @@ class AndroidKeystoreDeviceKeyStoreTest {
 
     /**
      * A key with no marker beside it — a crash between making it and marking it — is marked by the next
-     * launch that reads it, so a later outage counts rather than replaces it.
+     * launch that reads it, so a later outage is a failure rather than a first launch.
      */
     @Test
     fun aLaunchThatReadsAnUnmarkedKeyMarksIt() = runTest {
@@ -459,6 +518,8 @@ class AndroidKeystoreDeviceKeyStoreTest {
         )
     }
 
+    // ── Other entries ────────────────────────────────────────────────────────
+
     /** A certificate with no key is what `getKey` answers `null` for: no key, so one is made at once. */
     @Test
     fun aCertificateWithoutAKeyIsNoKey() = runTest {
@@ -475,14 +536,14 @@ class AndroidKeystoreDeviceKeyStoreTest {
     /** `KeyPermanentlyInvalidatedException` replaces the key at once, on every version. */
     @Test
     fun aPermanentlyInvalidatedKeyIsReplacedAtOnceOnEveryVersion() = runTest {
-        val replaced = listOf(24, 30, 33).map { sdk ->
+        val replaced = listOf(26, 30, 33).map { sdk ->
             val rig = Rig(sdk)
             val held = rig.launch().deviceKey().id
             rig.keystore.damage(rig.alias) { KeyPermanentlyInvalidatedException() }
             val replacement = rig.launch().deviceKey().id
             replacement != held && rig.keystore.generated == 2
         }
-        assertEquals(listOf(true, true, true), replaced, "replaced on the first launch after, at API 24, 30 and 33")
+        assertEquals(listOf(true, true, true), replaced, "replaced on the first launch after, at API 26, 30 and 33")
     }
 
     /** A certificate on another curve is not this device's key: it is replaced, with one warning naming the alias. */
@@ -506,11 +567,11 @@ class AndroidKeystoreDeviceKeyStoreTest {
     }
 
     /**
-     * A Keystore failure is logged with its cause, Keystore code and all, while the exception the caller
-     * sees carries only the class: the code is what a device check needs (review I1).
+     * Every Keystore failure is logged with its cause, Keystore code and all — a kept key's warning, a
+     * replaced key's, and a failed signature's — and the exception the caller sees carries it too.
      */
     @Test
-    fun aFailureIsLoggedWithItsCause() = runTest {
+    fun aFailureIsLoggedAndThrownWithItsCause() = runTest {
         val rig = Rig(sdk = 33)
         val key = rig.launch().deviceKey()
         rig.keystore.loadFault = { AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR) }
@@ -518,17 +579,25 @@ class AndroidKeystoreDeviceKeyStoreTest {
         rig.keystore.loadFault = null
         rig.keystore.signFault = { AospKeystore.signFailure(AospKeystore.SECURE_HW_BUSY) }
         val (signWarnings, signFailure) = capturing { failureOf { key.sign(MESSAGE) } }
+        rig.keystore.signFault = null
+        rig.keystore.damage(rig.alias) { AospKeystore.signFailure(AospKeystore.VALUE_CORRUPTED) }
+        val (replaceWarnings, _) = capturing { rig.launch().deviceKey() }
 
-        fun causes(event: ILoggingEvent): String =
-            generateSequence(event.throwableProxy) { it.cause }.joinToString(" <- ") { it.className }
+        fun logged(event: ILoggingEvent): String = generateSequence(event.throwableProxy) { it.cause }.joinToString(" <- ") { it.className }
+        fun thrown(failure: Throwable?): String = generateSequence(failure) { it.cause }.joinToString(" <- ") { it::class.java.name }
+        val keystoreCause = "android.security.KeyStoreException"
 
         assertAll(
             { assertTrue(loadFailure is IllegalStateException, "a failed load throws IllegalStateException: $loadFailure") },
+            { assertTrue(keystoreCause in thrown(loadFailure), "carrying the Keystore cause: ${thrown(loadFailure)}") },
             { assertTrue(signFailure is IllegalStateException, "a failed signature too: $signFailure") },
+            { assertTrue(keystoreCause in thrown(signFailure), "carrying the Keystore cause: ${thrown(signFailure)}") },
             { assertEquals(1, loadWarnings.size, "one warning for the failed load") },
-            { assertTrue("android.security.KeyStoreException" in causes(loadWarnings[0]), "carrying the Keystore cause: ${causes(loadWarnings[0])}") },
+            { assertTrue(keystoreCause in logged(loadWarnings[0]), "logged with its cause: ${logged(loadWarnings[0])}") },
             { assertEquals(1, signWarnings.size, "one warning for the failed signature") },
-            { assertTrue("android.security.KeyStoreException" in causes(signWarnings[0]), "carrying the Keystore cause: ${causes(signWarnings[0])}") },
+            { assertTrue(keystoreCause in logged(signWarnings[0]), "logged with its cause: ${logged(signWarnings[0])}") },
+            { assertEquals(1, replaceWarnings.size, "one warning for the replacement") },
+            { assertTrue(keystoreCause in logged(replaceWarnings[0]), "logged with its cause: ${logged(replaceWarnings[0])}") },
         )
     }
 
@@ -539,13 +608,13 @@ class AndroidKeystoreDeviceKeyStoreTest {
     fun platformKeepsGrantsUnderTheNoBackupDirectory() = runTest {
         val noBackup = tempDirectory()
         val keystore = FakeKeystore()
-        val store = platformStore("my-app", noBackup, keystore, 33)
+        val store = platformStore("my-app", noBackup, keystore, 33, ::fixedClock)
         val me = store.deviceKey().id
         store.keepGrant(Grant.issue(DeviceKey.generate(), me, GrantScope.AnyRoomOfIssuer, T, T + HOUR))
 
         val grantsDirectory = File(noBackup, "kuilt-identity-my-app")
-        val keptAfterReopen = platformStore("my-app", noBackup, keystore, 33).grants().size
-        val otherApp = platformStore("other-app", noBackup, keystore, 33).deviceKey().id
+        val keptAfterReopen = platformStore("my-app", noBackup, keystore, 33, ::fixedClock).grants().size
+        val otherApp = platformStore("other-app", noBackup, keystore, 33, ::fixedClock).deviceKey().id
         assertAll(
             { assertTrue(keystore.holds("kuilt-identity-my-app"), "the key is under alias kuilt-identity-my-app") },
             { assertTrue(grantsDirectory.isDirectory, "the grants directory is under the no-backup directory") },
@@ -559,7 +628,7 @@ class AndroidKeystoreDeviceKeyStoreTest {
         val noBackup = tempDirectory()
         val refused = listOf("", ".", "..", "a/b", "a b", "../x").filter { appId ->
             try {
-                platformStore(appId, noBackup, FakeKeystore(), 33)
+                platformStore(appId, noBackup, FakeKeystore(), 33, ::fixedClock)
                 false
             } catch (_: IllegalArgumentException) {
                 true
@@ -570,31 +639,45 @@ class AndroidKeystoreDeviceKeyStoreTest {
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    /** One fake Keystore, alias and directory at [sdk]; each [launch] is a new process opening the store. */
+    /**
+     * One fake Keystore, alias, directory and clock at [sdk]; each [launch] is a new store over them, as a
+     * new process would open. The clock starts at [T] and moves only when a test moves it.
+     */
     private class Rig(val sdk: Int) {
         val keystore = FakeKeystore()
         val alias = "kuilt-identity-test-${UUID.randomUUID()}"
         val directory: File = Files.createTempDirectory("kuilt-keystore-test").toFile()
+        var clock: Long = T
 
         /**
-         * A new launch's store. With [clearFaultAfterJudging], the load fault is cleared as soon as the
-         * store has made its decision to replace — before it makes the new key — so the replacement is
-         * not itself refused by the fault.
+         * A new store. Each `clear…` flag lifts that fault inside `beforeKeyIsMade` — once the store has
+         * decided to make a key, before it makes one — so a replacement is not itself refused by the fault.
          */
-        fun launch(clearFaultAfterJudging: Boolean = false, clearOutageBeforeMaking: Boolean = false): DeviceKeyStore =
-            AndroidKeystoreDeviceKeyStore(alias, directory, keystore, sdk, UUID.randomUUID().toString()) {
+        fun launch(
+            clearFaultAfterJudging: Boolean = false,
+            clearOutageBeforeMaking: Boolean = false,
+            clearSignFaultAfterJudging: Boolean = false,
+        ): DeviceKeyStore =
+            AndroidKeystoreDeviceKeyStore(alias, directory, keystore, sdk, { clock }) {
                 if (clearFaultAfterJudging) keystore.loadFault = null
                 if (clearOutageBeforeMaking) keystore.legacyOutage = false
+                if (clearSignFaultAfterJudging) keystore.signFault = null
             }
 
         /** Whether the made-here marker is beside the grants. */
         suspend fun marked(): Boolean =
             FileChannelDurableStore(directory).read(AndroidKeystoreDeviceKeyStore.KEY_MADE) != null
 
-        /** The failed-launch count on disk, or `null` when none is kept. */
-        suspend fun failedLaunches(): Int? =
-            FileChannelDurableStore(directory).read(AndroidKeystoreDeviceKeyStore.FAILED_LAUNCHES)
-                ?.let(FailedLaunches::decode)?.count
+        /** The start of the current run of failures on disk, or `null` when none is running. */
+        suspend fun failingSince(): Long? =
+            FileChannelDurableStore(directory).read(AndroidKeystoreDeviceKeyStore.FAILING_SINCE)?.let { ByteBuffer.wrap(it).long }
+
+        suspend fun plantFailingSince(at: Long) {
+            FileChannelDurableStore(directory).write(
+                AndroidKeystoreDeviceKeyStore.FAILING_SINCE,
+                ByteBuffer.allocate(Long.SIZE_BYTES).putLong(at).array(),
+            )
+        }
     }
 
     private fun thrown(error: Throwable) = KeystoreFailure.Thrown("testing", error)
@@ -628,6 +711,9 @@ class AndroidKeystoreDeviceKeyStoreTest {
         const val UNMAPPED_CODE = 9_999
         const val T = 1_700_000_000_000L
         const val HOUR = 3_600_000L
+        const val MINUTE = 60_000L
+
+        fun fixedClock(): Long = T
         val MESSAGE = "signed by the Keystore key".encodeToByteArray()
 
         /** A DER INTEGER with [content] as its contents octets, exactly as given. */

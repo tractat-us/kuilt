@@ -95,6 +95,8 @@ kotlin {
             implementation(libs.cryptography.serialization.asn1.modules)
             // AndroidKeystoreDeviceKeyStore's one warning: a Keystore key it could not use, replaced.
             implementation(libs.kotlin.logging)
+            // @RequiresApi(26) on DeviceKeyStore.platform(appId, context), which lint reads.
+            implementation(libs.androidx.annotation)
         }
         appleMain.dependencies {
             implementation(libs.cryptography.provider.cryptokit)
