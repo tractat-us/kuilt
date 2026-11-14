@@ -229,10 +229,12 @@ public class FileDeviceKeyStore internal constructor(
  *   every machine the user signs in to.
  * - **Linux:** under `$XDG_STATE_HOME` (by default `~/.local/state`), not `$XDG_CONFIG_HOME`, which
  *   people sync between machines.
- * - **macOS:** under `~/Library/Application Support/<app>`, excluded from Time Machine with
- *   `tmutil addexclusion` (the `com.apple.metadata:com_apple_backup_excludeItem` attribute). Migration
- *   Assistant copying one Mac straight to another still carries the directory across; the old Mac and
- *   the new one are then one device until one of them deletes its key file.
+ * - **macOS:** under `~/Library/Application Support/<app>`, the folder the native macOS store uses.
+ *   Time Machine backs it up and Migration Assistant copies it to a new Mac, which is then one device
+ *   with the old one until one of them deletes its key file. Excluding it from Time Machine
+ *   (`tmutil addexclusion`) stops a migration from that backup carrying the key, but also loses the
+ *   key when this same Mac is restored, and does not stop a direct Mac-to-Mac migration; which to
+ *   prefer is the app's call.
  *
  * Opening it again with the same [appId] and [directory] after a restart is the same device.
  *

@@ -61,7 +61,12 @@ aside, makes a new key and logs a warning: the app keeps working, as a new devic
 crashes over it. A file it cannot read at all is different: that throws, because becoming a new
 device over a passing fault would be worse. Give it a folder that stays on this computer, one that
 backups, migration and roaming profiles do not copy to another: a copied key makes two computers one
-device. The Apple, Android and browser stores follow, one at a time. Every store, including one you write
+device. On an iPhone or iPad, `DeviceKeyStore.platform("my-app")` keeps the key in the Keychain, set
+so it never leaves this device: iCloud Keychain does not sync it and a backup does not restore it to
+another phone. On a Mac the same call keeps the key in a file in the app's Application Support folder
+instead, which only this user can read. The trade is stated plainly: Time Machine and Migration
+Assistant copy that folder to the next Mac, and the two Macs are then one device until one of them
+deletes its key file. The Android and browser stores follow, one at a time. Every store, including one you write
 yourself, proves it keeps its promises by passing `DeviceKeyStoreConformanceSuite` from
 `:kuilt-conformance`.
 

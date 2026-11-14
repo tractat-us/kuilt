@@ -1,5 +1,6 @@
 // Klib ABI Dump
 // Targets: [iosArm64, iosSimulatorArm64, macosArm64, wasmJs]
+// Alias: apple => [iosArm64, iosSimulatorArm64, macosArm64]
 // Rendering settings:
 // - Signature version: 2
 // - Show manifest properties: true
@@ -255,3 +256,6 @@ final value class us.tractat.kuilt.identity/DidKey { // us.tractat.kuilt.identit
         final suspend fun parse(kotlin/String): us.tractat.kuilt.identity/DidKey // us.tractat.kuilt.identity/DidKey.Companion.parse|parse(kotlin.String){}[0]
     }
 }
+
+// Targets: [apple]
+final fun (us.tractat.kuilt.identity/DeviceKeyStore.Companion).us.tractat.kuilt.identity/platform(kotlin/String): us.tractat.kuilt.identity/DeviceKeyStore // us.tractat.kuilt.identity/platform|platform@us.tractat.kuilt.identity.DeviceKeyStore.Companion(kotlin.String){}[0]
