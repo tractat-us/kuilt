@@ -437,7 +437,7 @@ store.delete(key)
 check(store.read(key) == null)
 ```
 
-## Which kuilt wrote this
+### Which kuilt wrote what you saved
 
 **Intent:** record which kuilt release wrote something you keep, such as a snapshot, a saved ledger or a log header, so a later run can tell old data from new. Don't copy the version string into your own code: the copy goes stale on the next upgrade, and a snapshot build never matches it.
 **Primitive:** `KuiltVersion.VERSION` (`:kuilt-core`, so every module brings it) — a `const val` generated from the version the build publishes: `<line>.0-dev` locally, `<line>.0-dev.<run>` in a snapshot, the tag's `x.y.z` in a release.
