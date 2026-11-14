@@ -55,12 +55,13 @@ data class DrainRow(
     val edgeBytesReadPerDrain: Long,
     val edgeBytesWrittenPerDrain: Long,
     val requestBytesPerDrain: Long,
-) {
-    /** The bridge alone plus the time inside the edge, over the whole drain: near 1 when the rig is sound. */
-    val partsOverWhole: Double
-        get() = (bridgeNanosPerDrain + edgeDigestNanosPerDrain + edgeSendNanosPerDrain + edgeOtherNanosPerDrain) /
-            sample.nanosPerOp
-}
+    /**
+     * The bridge alone plus the time inside the edge, over the whole drain, as the median of each
+     * round's own ratio: near 1 when the rig is sound. Per round rather than a ratio of medians, so
+     * a contention spike in one round's whole drain moves one sample, not the quotient.
+     */
+    val partsOverWhole: Double,
+)
 
 /**
  * Times every call into [delegate], so an arm can tell the edge's share of a drain from the
@@ -222,8 +223,11 @@ suspend fun edgeDrainArm(series: Int, changed: Int, wire: OtlpWireFormat, rounds
         changed = changed,
         wire = wire,
         sample = Sample(
-            opsPerRound = 1, rounds = rounds,executed = executed,
-            nanosPerOp = whole.median(), allocatedBytesPerOp = wholeAlloc.median(),
+            opsPerRound = 1,
+            rounds = rounds,
+            executed = executed,
+            nanosPerOp = whole.median(),
+            allocatedBytesPerOp = wholeAlloc.median(),
         ),
         bridgeNanosPerDrain = bridgeAlone.median(),
         edgeDigestNanosPerDrain = inDigest.median(),
@@ -234,5 +238,8 @@ suspend fun edgeDrainArm(series: Int, changed: Int, wire: OtlpWireFormat, rounds
         edgeBytesReadPerDrain = edgeStore.bytesRead / executed,
         edgeBytesWrittenPerDrain = edgeStore.bytesWritten / executed,
         requestBytesPerDrain = requestBytes.get() / executed,
+        partsOverWhole = DoubleArray(rounds) {
+            (bridgeAlone[it] + inDigest[it] + inSend[it] + inOther[it]) / whole[it]
+        }.median(),
     )
 }
