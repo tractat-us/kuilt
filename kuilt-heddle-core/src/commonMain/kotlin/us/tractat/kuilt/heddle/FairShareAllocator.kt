@@ -783,7 +783,7 @@ public class FairShareAllocator(
         val competing = edges.filter { it.record.id !in joiners && HeddlePolicy.isDemanding(it) }
         val ws = competing.fold(Rational.ZERO) { acc, e -> acc + weightOf(e) }
         var fStar = f
-        if (spikeLagRule == 2 && ws > Rational.ZERO) {
+        if (spikeLagRule >= 2 && ws > Rational.ZERO) {
             var sum = Rational.ZERO
             for (e in edges) {
                 if (e.record.id !in wakers) continue
@@ -801,7 +801,8 @@ public class FairShareAllocator(
                 continue
             }
             val carried = ticksAt(wakeOffsets[edge.record.id] ?: Rational.ZERO, weight)
-            val shift = maxOf(0L, ticksAt(fStar - d.anchor, weight))
+            // Rule 3 is the positive control: a waker that keeps its raw position banks every idle stretch.
+            val shift = if (spikeLagRule == 3) 0L else maxOf(0L, ticksAt(fStar - d.anchor, weight))
             wakeOffsets[edge.record.id] = ticksToVirtual(minOf(carried + shift, positionCeiling(weight)), weight)
         }
     }

@@ -70,23 +70,24 @@ class Spike3376Probe {
     }
 
     /**
-     * §10.6: a and b equal, a 3-unit burst both want (b leaves owed), then b idles [idle] episodes
-     * while a takes 2 units alone in each, then a 10-unit burst both want. b's take of that last burst.
+     * §10.6: a and b equal; a burst of [first] units both want, then b idles [idle] episodes while a
+     * takes 2 units alone in each, then an 11-unit burst both want. b's take of that last burst.
+     * [first] = 3 leaves b owed half a unit (a won the tie); [first] = 2 leaves them level.
      */
-    private fun idleLength(idle: Int): Int {
+    private fun idleLength(idle: Int, first: Long): Int {
         val a = edgeOf(root, GroupId("p/a"))
         val b = edgeOf(root, GroupId("p/b"))
         val cell = Cell(ledger(listOf(a, b), emptyMap()), listOf(a, b))
         val al = alloc(emptyMap())
         al.schedule(root, cell, 0L) { Demand.NONE }
-        cell.mint("w", 3L)
+        cell.mint("w", first)
         al.schedule(root, cell, 0L) { wants }
         repeat(idle) { i ->
             cell.mint("i$i", 2L)
             al.schedule(root, cell, 0L) { id -> if (id == a.id) wants else Demand.NONE }
         }
         val before = cell.granted["p/b"] ?: 0
-        cell.mint("z", 10L)
+        cell.mint("z", 11L)
         al.schedule(root, cell, 0L) { wants }
         return (cell.granted["p/b"] ?: 0) - before
     }
@@ -100,7 +101,7 @@ class Spike3376Probe {
     }
 
     private fun slotRows(tag: String) {
-        for (think in listOf(7L, 4L)) {
+        for (think in listOf(7L, 4L, 12L)) {
             val runs = listOf(Arm.HONEST, Arm.OVER_LAST, Arm.CANCEL_LAST, Arm.UNDER_LAST).associateWith { arm ->
                 WakeCreditRig.run(WakeConfig("1L t$think $arm", WakeCreditRig.oneLevel(), listOf(LaneSpec(A, arm, think, 4, listOf(8L))), horizon = 4_000L))
             }
@@ -108,7 +109,8 @@ class Spike3376Probe {
             println("SPIKE $tag slot1L t$think honest=${fmt(h)} " + runs.filterKeys { it != Arm.HONEST }.entries.joinToString(" ") { (arm, r) -> "$arm=${fmt(r.share(A) - h)}" })
             val noise = listOf(listOf(4L, 4L, 4L, 20L), listOf(2L, 14L)).joinToString(" ") { costs ->
                 val r = WakeCreditRig.run(WakeConfig("n", WakeCreditRig.oneLevel(), listOf(LaneSpec(A, Arm.NOISE, think, 4, costs)), horizon = 4_000L))
-                "noise$costs=${fmt(r.share(A))}"
+                val h2 = WakeCreditRig.run(WakeConfig("h", WakeCreditRig.oneLevel(), listOf(LaneSpec(A, Arm.HONEST, think, 4, costs)), horizon = 4_000L))
+                "noise$costs=${fmt(r.share(A))}(honest ${fmt(h2.share(A))})"
             }
             println("SPIKE $tag slot1L t$think $noise")
             val two = listOf(Arm.HONEST, Arm.OVER_LAST, Arm.CANCEL_LAST).associateWith { arm ->
@@ -132,6 +134,7 @@ class Spike3376Probe {
         val variants = listOf(
             Triple("MAIN", false, 0), Triple("MAIN+keep", false, 1), Triple("MAIN+keepK", false, 2),
             Triple("UNIFIED", true, 0), Triple("UNIFIED+keep", true, 1), Triple("UNIFIED+keepK", true, 2),
+            Triple("UNIFIED+noShift(control)", true, 3),
         )
         try {
             for ((name, unified, rule) in variants) {
@@ -147,7 +150,8 @@ class Spike3376Probe {
                 println("SPIKE $name S7b staggered 2:1 light first: ${staggered(listOf(2, 1), 1, 1)}")
                 println("SPIKE $name S7c staggered 1:1 b0 first 1+2: ${staggered(listOf(1, 1), 0, 2)}")
                 println("SPIKE $name S7d staggered 1:1 b1 first 1+2: ${staggered(listOf(1, 1), 1, 2)}")
-                println("SPIKE $name IDLE b's take of 10 after idling N: " + listOf(1, 10, 100, 1000).joinToString { "N=$it:${idleLength(it)}" })
+                println("SPIKE $name IDLE b owed, take of 11 after idling N: " + listOf(1, 10, 100, 1000).joinToString { "N=$it:${idleLength(it, 3L)}" })
+                println("SPIKE $name IDLE b level, take of 11 after idling N: " + listOf(1, 10, 100, 1000).joinToString { "N=$it:${idleLength(it, 2L)}" })
                 println("SPIKE $name S2a: ${oneShot(mapOf(a to 16000L, b to 0L), emptyList(), mapOf(a to false, b to false), emptySet(), 100)}")
                 println("SPIKE $name S3: ${oneShot(mapOf(a to 1600L, b to 0L, cc to 160L), emptyList(), mapOf(a to false, b to false, cc to false), setOf(cc), 100)}")
                 println("SPIKE $name S4b: ${oneShot(mapOf(b to 0L, a to 0L), listOf(n), mapOf(b to true, a to false), emptySet(), 150)}")
@@ -156,7 +160,7 @@ class Spike3376Probe {
             }
             spikeUnified = true
             spikeLagRule = 2
-            for (cap in listOf(0L, 1L, 4L, 8L)) {
+            for (cap in listOf(0L, 1L, 8L)) {
                 spikeLagCap = cap
                 for (counts in listOf(false, true)) {
                     spikeCapCountsOutstanding = counts
