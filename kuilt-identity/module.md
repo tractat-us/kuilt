@@ -66,7 +66,12 @@ so it never leaves this device: iCloud Keychain does not sync it and a backup do
 another phone. On a Mac the same call keeps the key in a file in the app's Application Support folder
 instead, which only this user can read. The trade is stated plainly: Time Machine and Migration
 Assistant copy that folder to the next Mac, and the two Macs are then one device until one of them
-deletes its key file. The Android and browser stores follow, one at a time. Every store, including one you write
+deletes its key file. On Android 8.0 and later, `DeviceKeyStore.platform("my-app", context)` keeps the key in the Android
+Keystore, which signs with it and never hands it to the app, and the grants in the app's no-backup
+folder, so neither moves to another phone with a backup. A key that no longer signs for its name,
+or that the Keystore blames, is replaced with a warning. A Keystore that cannot answer right now
+throws and keeps the key. When nothing says whose failure it is, as on every phone older than
+Android 13, the key is kept until the Keystore has been failing for an hour, and then replaced. The browser store follows. Every store, including one you write
 yourself, proves it keeps its promises by passing `DeviceKeyStoreConformanceSuite` from
 `:kuilt-conformance`.
 
