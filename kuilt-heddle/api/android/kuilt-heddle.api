@@ -276,7 +276,7 @@ public final class us/tractat/kuilt/heddle/HeddleNode : us/tractat/kuilt/heddle/
 	public final fun prepare (Lus/tractat/kuilt/heddle/AttachmentRecord;)Z
 	public fun reserve-jc7CSWg (Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ReserveOutcome;
 	public final fun retire-dq4I9ps (Ljava/lang/String;)Z
-	public final fun schedule-9eHOidQ (Ljava/lang/String;)I
+	public final fun schedule-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/ScheduleOutcome;
 }
 
 public final class us/tractat/kuilt/heddle/HeddleNode$Companion {
@@ -347,6 +347,28 @@ public final class us/tractat/kuilt/heddle/ScheduleOutcome$Delegated : us/tracta
 public final class us/tractat/kuilt/heddle/ScheduleOutcome$NothingToDelegate : us/tractat/kuilt/heddle/ScheduleOutcome {
 	public static final field INSTANCE Lus/tractat/kuilt/heddle/ScheduleOutcome$NothingToDelegate;
 	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ScheduleOutcome$PositionCeiling : us/tractat/kuilt/heddle/ScheduleOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/ScheduleOutcome$PositionCeiling;
+	public static synthetic fun copy-9eHOidQ$default (Lus/tractat/kuilt/heddle/ScheduleOutcome$PositionCeiling;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ScheduleOutcome$PositionCeiling;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getParent-urUY4Jo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/ScheduleOutcome$WeightBudget : us/tractat/kuilt/heddle/ScheduleOutcome {
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun copy-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/ScheduleOutcome$WeightBudget;
+	public static synthetic fun copy-9eHOidQ$default (Lus/tractat/kuilt/heddle/ScheduleOutcome$WeightBudget;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ScheduleOutcome$WeightBudget;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getParent-urUY4Jo ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
