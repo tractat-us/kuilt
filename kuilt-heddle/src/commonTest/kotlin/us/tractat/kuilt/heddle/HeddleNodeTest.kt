@@ -1198,7 +1198,7 @@ class HeddleNodeTest {
      *
      * Before the origin rebase this exact run refused with [ScheduleOutcome.PositionCeiling] after
      * [GRANTS_BEFORE_THE_CEILING] grants (measured on the slice 2–4 base, JVM). The run below goes
-     * five times as far, counts its own grants and rebases, and checks that the peak effective
+     * ten times as far, counts its own grants and rebases, and checks that the peak effective
      * position [HeddleNode.boundMetrics] reports stays below the ceiling.
      */
     @Test
@@ -1210,7 +1210,7 @@ class HeddleNodeTest {
         h.pump()
         val peer = h.peers[0]
         val run = LongRun(peer, Random(3353))
-        val target = 5 * GRANTS_BEFORE_THE_CEILING
+        val target = 10 * GRANTS_BEFORE_THE_CEILING
         var peak = 0.0
         while (run.grants < target) {
             val outcome = run.step()
@@ -1592,8 +1592,12 @@ class HeddleNodeTest {
         /** Enough root supply for every long run here, and two peers' fit a `Long`: 2⁶¹, about 130,000 grants of [MAX_GRANT]. */
         const val LONG_RUN_MINT: Long = 1L shl 61
 
-        /** Grants the mixed-weight long run made before it refused at the ceiling, before the origin rebase (JVM). */
-        const val GRANTS_BEFORE_THE_CEILING: Int = 300
+        /**
+         * Grants the mixed-weight long run made before it refused at the ceiling, before the origin
+         * rebase: 145, at call 70, measured on the slice 2–4 base with #3386 merged, JVM. The twin's
+         * seed refused there at 131 grants, call 66, exactly where its no-rebase twin here does.
+         */
+        const val GRANTS_BEFORE_THE_CEILING: Int = 145
 
         /** The lagging-peer scenario's grant, and how many a call makes: 12 calls of 256 pass a weight-1 lane's threshold. */
         const val LAG_GRANT: Long = LocalHeddle.MAX_RESERVATION
