@@ -250,9 +250,12 @@ class LocalHeddleOverflowPropertyTest {
     }
 
     /**
-     * Every stored floor and wake offset in [ledger] and [memory] that is **not** on its edge's grid — whose
-     * `value · w · G` is not a whole number of ticks — named for the failure message. Empty is the
-     * fix: a compounding denominator would put a value off the grid before it overflowed anything.
+     * Every stored wake offset in [memory], and any legacy gauge floor in [ledger], that is **not** on its
+     * edge's grid — whose `value · w · G` is not a whole number of ticks — named for the failure message.
+     * Empty is the fix: a compounding denominator would put a value off the grid before it overflowed
+     * anything. Since #3353 a seat and a checkpoint store the position in the gauge's ticks, whole by
+     * construction, and leave the floor at zero, so the floor arm sees only a floor an older build wrote;
+     * the offsets are what this run can still put off the grid.
      */
     private fun offGrid(state: LocalHeddleState): List<String> = offGrid(state.ledger, state.allocatorMemory)
 

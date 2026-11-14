@@ -38,7 +38,7 @@ class GaugeTicksTest {
         val seat = assertNotNull(ledger.seatAt(EDGE, ceiling + 1_000L), "an unseated edge takes a seat")
         val stored = assertNotNull(seat.delta.gauge(EDGE), "the seat patch carries the gauge")
         assertAll(
-            { assertTrue(ceiling + 1_000L > ceiling, "the rig: the seat is past the ceiling") },
+            { assertTrue(stored.ticks > Int128.of(ceiling), "the rig: the stored seat is past the ceiling") },
             { assertEquals(Int128.of(ceiling + 1_000L), stored.ticks, "stored exactly, not at the ceiling") },
             { assertEquals(Rational.ZERO, stored.floor, "the legacy floor is left at zero") },
             { assertEquals(0L, stored.folded) },

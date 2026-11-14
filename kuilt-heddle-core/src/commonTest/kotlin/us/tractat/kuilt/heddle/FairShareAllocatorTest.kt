@@ -171,7 +171,7 @@ class FairShareAllocatorTest {
         assertAll(
             { assertEquals(100L, issued(onA, e1), "A sees e1's run") },
             { assertEquals(100L, issued(onA, e2), "and e2's") },
-            { assertEquals(Rational.ZERO, assertNotNull(onA.current.gauge(e3)).floor, "and e3 seated at the origin") },
+            { assertEquals(gaugeOfUnits(0L, 0L), onA.current.gauge(e3), "and e3 seated at the origin") },
         )
 
         FairShareAllocator(a, policy).schedule(root, onA, earmarked = 0L, demandOf(e1 to hungry, e3 to hungry))
