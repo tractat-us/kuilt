@@ -774,7 +774,10 @@ is held there where it is narrowed to the `Long` a pick orders: the gauge read a
 a wake clamp saturate. A seat and a checkpoint do not. The gauge stores its
 position wide, exactly and uncapped, and only a read narrows it (#3353): a cap on
 an absolute position in storage would turn into credit once a per-parent origin
-passed it. Saturating is a pure function of the view, and it commutes with the
+passed it. In a `LocalHeddle` ledger the stored ticks are not yet absolute. A
+rebase there raises the fold (below), so the next checkpoint reads through it and
+stores a lower position, until slice 7 of #3353 moves that rebase onto origins.
+Saturating is a pure function of the view, and it commutes with the
 gauge's componentwise `max`, so replicas still agree. What a saturated position
 loses is exactness, so the rule splits by call:
 
@@ -929,9 +932,10 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   growing toward the overflow this change fixes. A new peer that merges those
   floors reads them on its grid, reducing each fraction before it multiplies, so
   it saturates only where the position itself passes its ceiling (§7.1). Since
-  #3353 the question no longer arises: a peer from before `ticks` cannot decode
-  a gauge that carries them, so the two cannot share a cluster at all, and every
-  peer is upgraded together.
+  #3353 it is worse than a rounding difference. A peer from before `ticks`
+  cannot decode a frame whose gauge carries them, so it drops the frame. It
+  stays connected and silently stops converging, and nothing refuses it. So the
+  two must not share a cluster, and every peer is upgraded together.
 - **No unlimited idle credit:** when a child goes from not-demanding to
   demanding, a local wake offset clamps it forward:
 
