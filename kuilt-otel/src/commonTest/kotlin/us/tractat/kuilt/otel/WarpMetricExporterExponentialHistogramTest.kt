@@ -148,6 +148,54 @@ class WarpMetricExporterExponentialHistogramTest {
     }
 
     @Test
+    fun aRecoveredSeriesAtAnotherScaleIsDroppedSoBucketsLandAtTheExportersScale() = runTest {
+        // A deployment that moved its prototype from scale 4 to scale 5 across a restart.
+        val store = InMemoryDurableStore()
+        val before = WarpMetricExporter(
+            replica = replica,
+            store = store,
+            histogramPrototype = us.tractat.kuilt.crdt.DDSketch.empty(relativeAccuracy = alphaForOtlpScale(4)),
+        )
+        before.recordHistogram(key, 3.0)
+        val after = exporter(store).also { it.recover() }
+        val t = after.histogramScale
+        after.record(
+            listOf(
+                MetricUpdate.AddExponentialHistogram(
+                    key, scale = t, zeroCount = 0L,
+                    positiveOffset = 32, positiveCounts = listOf(1L),
+                    negativeOffset = 0, negativeCounts = emptyList(),
+                ),
+            ),
+        )
+        // Reference: the same value recorded at the exporter's own scale.
+        val reference = exporter().also { it.recordHistogram(key, midpointOf(32, t)) }
+
+        assertAll(
+            { assertEquals(4, otlpScaleFor(before.histogramSnapshot(key).relativeAccuracy), "precondition: written at scale 4") },
+            { assertEquals(5, t, "precondition: recovered by a scale-5 exporter") },
+            { assertEquals(reference.histogramSnapshot(key), after.histogramSnapshot(key), "OTLP 32 at scale 5 is ~2.0, not ~4.0") },
+        )
+    }
+
+    @Test
+    fun mergingASketchOfAnotherConfigurationIsRefused() = runTest {
+        val exp = exporter()
+        val scale4 = us.tractat.kuilt.crdt.DDSketch.empty(relativeAccuracy = alphaForOtlpScale(4))
+        val otherRange = us.tractat.kuilt.crdt.DDSketch.empty(
+            relativeAccuracy = alphaForOtlpScale(exp.histogramScale),
+            maxIndexedValue = 1e12,
+        )
+        assertFailsWith<IllegalArgumentException>("another scale") {
+            exp.mergeHistogram(key, scale4.piece(scale4.add(replica, 3.0).delta))
+        }
+        assertFailsWith<IllegalArgumentException>("another range") {
+            exp.mergeHistogram(key, otherRange.piece(otherRange.add(replica, 3.0).delta))
+        }
+        assertEquals(0, exp.metricCount(), "nothing installed")
+    }
+
+    @Test
     fun constructionRejectsWhatNoExporterCouldApply() {
         fun update(scale: Int = 5, zeroCount: Long = 0L, positive: List<Long> = emptyList(), negative: List<Long> = emptyList()) =
             MetricUpdate.AddExponentialHistogram(key, scale, zeroCount, 0, positive, 0, negative)
