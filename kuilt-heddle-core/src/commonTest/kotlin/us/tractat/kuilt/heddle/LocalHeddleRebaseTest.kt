@@ -3,6 +3,7 @@ package us.tractat.kuilt.heddle
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -29,15 +30,23 @@ class LocalHeddleRebaseTest {
     private val threshold = positionCeiling(Weight.ONE) / 16
 
     /** An engine in which every lane has been picked once, so every lane is seated and observed waiting. */
-    private fun engine(rebase: Boolean = true) = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
-        .apply {
-            rebaseForTest = rebase
-            reconcileCapacity(1L)
-            repeat(3) {
-                val lease = (acquire(setOf(a, b, c), setOf(a, b, c), startedAt = 0L) as AcquireOutcome.Acquired).lease
-                complete(lease.id, actualCost = 1L)
+    private fun engine(rebase: Boolean = true, over: Topology = topology) =
+        LocalHeddle.fromTopology(over, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+            .apply {
+                rebaseForTest = rebase
+                reconcileCapacity(1L)
+                repeat(3) {
+                    val lease = (acquire(setOf(a, b, c), setOf(a, b, c), startedAt = 0L) as AcquireOutcome.Acquired).lease
+                    complete(lease.id, actualCost = 1L)
+                }
             }
-        }
+
+    /** One acquire and its completion at cost 1 on each engine, returning the leaves they picked. */
+    private fun pickOnEach(engines: List<LocalHeddle>, waiting: Set<GroupId>, at: Long): List<GroupId> = engines.map { e ->
+        val lease = (e.acquire(waiting, waiting, startedAt = at) as AcquireOutcome.Acquired).lease
+        e.complete(lease.id, actualCost = 1L)
+        lease.leaf
+    }
 
     private fun LocalHeddle.edgeOf(lane: GroupId): AttachmentId =
         checkNotNull(snapshot().ledger.lineageOf(lane)?.last()) { "${lane.value} has no lineage" }
@@ -126,5 +135,104 @@ class LocalHeddleRebaseTest {
             { assertEquals(pickedAfterWake.map { it[1] }, pickedAfterWake.map { it[0] }, "once c wakes, every pick is the twin's") },
             { assertTrue(pickedAfterWake.any { it[0] == c }, "and c was picked, so the wake was reached") },
         )
+    }
+
+    /**
+     * An acquire refused with `NoLiveLineage` keeps what its pick observed and nothing else, even at
+     * a parent past the threshold whose waker carries an offset a rebase would absorb (#3329 review).
+     * The offset and the folds are one change: keeping the lowered offset while the refused call
+     * drops the raised folds would hand the waker its offset back as credit.
+     *
+     * `g` is a group with a child, so it is never leasable, and naming it as the only eligible group
+     * leaves the root's pick with no candidate.
+     */
+    @Test
+    fun aRefusedAcquireKeepsNoPartOfARebase() {
+        val withGroup = draft("rebase") {
+            lane("a", Weight.ONE)
+            lane("b", Weight.ONE)
+            lane("c", Weight.ONE)
+            group("g", Weight.ONE) { lane("x", Weight.ONE) }
+        }
+        val g = withGroup.groupId("g")
+        val engine = engine(over = withGroup)
+        val twin = engine(rebase = false, over = withGroup)
+        val both = listOf(engine, twin)
+        // c sits out six picks and then wakes, so it carries a wake offset.
+        repeat(6) { pickOnEach(both, setOf(a, b), at = 1L) }
+        pickOnEach(both, setOf(a, b, c), at = 2L)
+        for (e in both) {
+            e.pushTo(a, 3 * threshold)
+            e.pushTo(b, 2 * threshold)
+            e.pushTo(c, 2 * threshold)
+        }
+        val memoryBefore = engine.snapshot().allocatorMemory
+        val cOffset = memoryBefore.wakeOffsets[engine.edgeOf(c)]
+        check(cOffset != null && cOffset > Rational.ZERO) { "the rig: c carries a wake offset, not $cOffset" }
+
+        val refused = (0 until 3).map { engine.acquire(setOf(a, b, c, g), setOf(g), startedAt = 3L) }
+        repeat(3) { twin.acquire(setOf(a, b, c, g), setOf(g), startedAt = 3L) }
+        val memoryAfter = engine.snapshot().allocatorMemory
+        val picks = (0 until 30).map { i -> pickOnEach(both, setOf(a, b, c), at = 4L + i) }
+        assertAll(
+            { assertEquals(List(3) { AcquireOutcome.NoLiveLineage(engine.root) }, refused) },
+            { assertEquals(memoryBefore.wakeOffsets, memoryAfter.wakeOffsets, "no wake offset moved") },
+            { assertEquals(picks.map { it[1] }, picks.map { it[0] }, "and the picks after are the twin's") },
+            { assertTrue(engine.rebasesForTest >= 1, "the picks after did rebase: ${engine.rebasesForTest}") },
+        )
+    }
+
+    /**
+     * Every active child a joiner: the busy lane is reweighted, so its new edge is a newborn, while
+     * the two idle lanes wake far behind it, lifted to `−R` in the rebasing engine. With no one left
+     * to be level with, the wakers are clamped to the one furthest ahead and the newborn is seated
+     * there too (#3329 review): seating it at its own origin instead would leave it about `R` ahead
+     * of the lifted wakers, and they would take every pick until they caught up.
+     */
+    @Test
+    fun aNewbornAmongWakersMeetsTheWakerFurthestAhead() {
+        val engine = engine()
+        val twin = engine(rebase = false)
+        val both = listOf(engine, twin)
+        // b and c are seen idle, then a runs alone from far up, so the engine rebases past them.
+        pickOnEach(both, setOf(a), at = 1L)
+        for (e in both) e.pushTo(a, 3 * threshold)
+        pickOnEach(both, setOf(a), at = 2L)
+        val lifted = engine.ticks(b)
+        check(lifted >= -threshold && lifted < -threshold + TICKS_PER_UNIT) { "the rig: b was lifted to −R, not $lifted" }
+        check(twin.ticks(b) >= 0L) { "the twin's b is where it was" }
+
+        val oldEdge = engine.edgeOf(a)
+        val reweighted = draft("rebase") {
+            lane("a", Weight.of(2))
+            lane("b", Weight.ONE)
+            lane("c", Weight.ONE)
+        }
+        for (e in both) check(e.apply(reweighted, generation = 1L).refusals.isEmpty()) { "the reweight landed" }
+        check(engine.edgeOf(a) != oldEdge) { "the rig: a's edge is a newborn" }
+
+        val picks = (0 until 40).map { i -> pickOnEach(both, setOf(a, b, c), at = 3L + i) }
+        assertAll(
+            { assertEquals(picks.map { it[1] }, picks.map { it[0] }, "every pick is the twin's") },
+            { assertTrue(picks.any { it[0] == a }, "and the newborn is served") },
+        )
+    }
+
+    /**
+     * A parent with a child at its ceiling is not rebased: that position may stand for more, and its
+     * floor stays at the ceiling whatever the fold says. The engine's pick refuses before it would
+     * rebase, so this asks the rebase itself, with every other child far above zero, where a missing
+     * guard would move them.
+     */
+    @Test
+    fun aParentWithAChildAtItsCeilingIsNotRebased() {
+        val engine = engine()
+        engine.pushTo(a, positionCeiling(Weight.ONE))
+        engine.pushTo(b, 2 * threshold)
+        engine.pushTo(c, 2 * threshold)
+        val wants = Demand(targetOutstanding = Long.MAX_VALUE, maximumUsefulGrant = 1L)
+        val allocator = FairShareAllocator(LocalHeddle.SELF, PolicyConfig(quantum = 1L))
+        val rebase = allocator.rebased(engine.root, engine.snapshot().ledger) { wants }
+        assertNull(rebase, "no rebase at a parent with a child at its ceiling")
     }
 }
