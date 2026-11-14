@@ -57,26 +57,35 @@ public sealed class TopologyDraft {
 
     private val children = mutableListOf<Topology.Node>()
 
-    /**
-     * Declares a group named [name] with [weight] among its siblings, whose children [block]
-     * declares, and at most [maxConcurrent] leases open beneath it at once (`null` for no ceiling).
-     */
-    public fun group(
-        name: String,
-        weight: Weight = Weight.ONE,
-        @IntroducedAt("0.7.5") maxConcurrent: Long? = null,
-        block: Group.() -> Unit,
-    ) {
-        val group = Group(name).apply(block)
-        children += Topology.Group(name, weight, group.written(), group.runtime, maxConcurrent)
+    // A ceiling is a second overload rather than a defaulted parameter: this class is sealed, not
+    // final, so `@IntroducedAt` cannot restore the old signature, and the old one stays by hand.
+
+    /** Declares a group named [name] with [weight] among its siblings, whose children [block] declares. */
+    public fun group(name: String, weight: Weight = Weight.ONE, block: Group.() -> Unit) {
+        addGroup(name, weight, maxConcurrent = null, block)
     }
 
     /**
-     * Declares a lane named [name], where work is charged, with [weight] among its siblings and at
-     * most [maxConcurrent] leases open on it at once (`null` for no ceiling).
+     * Declares a group as the overload without a ceiling does, with at most [maxConcurrent] leases
+     * open beneath it at once, counted across all its children; `0` pauses it.
      */
-    public fun lane(name: String, weight: Weight = Weight.ONE, @IntroducedAt("0.7.5") maxConcurrent: Long? = null) {
+    public fun group(name: String, weight: Weight = Weight.ONE, maxConcurrent: Long, block: Group.() -> Unit) {
+        addGroup(name, weight, maxConcurrent, block)
+    }
+
+    /** Declares a lane named [name], where work is charged, with [weight] among its siblings. */
+    public fun lane(name: String, weight: Weight = Weight.ONE) {
+        children += Topology.Lane(name, weight)
+    }
+
+    /** Declares a lane as the overload without a ceiling does, with at most [maxConcurrent] leases open on it at once; `0` pauses it. */
+    public fun lane(name: String, weight: Weight = Weight.ONE, maxConcurrent: Long) {
         children += Topology.Lane(name, weight, maxConcurrent)
+    }
+
+    private fun addGroup(name: String, weight: Weight, maxConcurrent: Long?, block: Group.() -> Unit) {
+        val group = Group(name).apply(block)
+        children += Topology.Group(name, weight, group.written(), group.runtime, maxConcurrent)
     }
 
     internal fun written(): List<Topology.Node> = children.toList()
