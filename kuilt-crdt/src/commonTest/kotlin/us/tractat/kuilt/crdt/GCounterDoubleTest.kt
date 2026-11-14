@@ -1,8 +1,11 @@
 package us.tractat.kuilt.crdt
 
+import kotlinx.serialization.json.Json
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class GCounterDoubleTest {
@@ -65,5 +68,30 @@ class GCounterDoubleTest {
         val patch = GCounterDouble.of(a to 5.0).inc(a, 1.0)
         assertEquals(6.0, patch.delta.count(a))
         assertTrue(patch.delta.count(b) == 0.0)
+    }
+
+    /**
+     * A slot is non-negative, as on [GCounter]: [GCounterDouble.inc] only raises one. A negative
+     * or NaN slot handed to [GCounterDouble.of] is refused (#3397). NaN matters as much as a
+     * negative: `maxOf` with NaN is NaN, so one such slot would win every join of that replica.
+     */
+    @Test
+    fun ofRefusesANegativeOrNaNSlot() {
+        assertAll(
+            { assertFailsWith<IllegalArgumentException> { GCounterDouble.of(a to 1.0, b to -0.5) } },
+            { assertFailsWith<IllegalArgumentException> { GCounterDouble.of(a to Double.NaN) } },
+            { assertEquals(0.0, GCounterDouble.of(a to 0.0).count(a), "a zero slot is a legal seed") },
+        )
+    }
+
+    /** The decoder refuses one too, because the check lives in the type. The first assertion is the rig. */
+    @Test
+    fun decoderRefusesANegativeSlot() {
+        val valid = Json.encodeToString(GCounterDouble.serializer(), GCounterDouble.of(a to 7.5))
+        val negated = valid.replace(":7.5", ":-7.5")
+        assertAll(
+            { assertNotEquals(valid, negated, "the rig found the slot to negate in $valid") },
+            { assertFailsWith<IllegalArgumentException> { Json.decodeFromString(GCounterDouble.serializer(), negated) } },
+        )
     }
 }
