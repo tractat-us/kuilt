@@ -13,10 +13,10 @@ import kotlin.test.assertTrue
  * The reference is the POM the `kotlinMultiplatform` publication writes, handed over by the build
  * as `kuilt.publishedPom`, rather than `project.version` — so a build that ever sets the
  * publication's coordinates somewhere other than the project version reds here instead of
- * shipping a constant that names a different release. Run with `-Pversion=<anything>` and both
+ * shipping a value that names a different release. Run with `-Pversion=<anything>` and both
  * sides move together; a generator that ignored the override would red.
  *
- * JVM only: the constant is one generated `commonMain` file every target compiles, so there is no
+ * JVM only: the value is one generated `commonMain` file every target compiles, so there is no
  * per-target value to disagree, and the POM is a file only a JVM test can read.
  *
  * What CI proves: the PR build runs this only at the default `<line>.0-dev`. The publish jobs pass
@@ -26,7 +26,7 @@ import kotlin.test.assertTrue
 class KuiltVersionTest {
 
     @Test
-    fun `the constant is the version the published POM declares`() {
+    fun `the value is the version the published POM declares`() {
         val pomPath = assertNotNull(
             // ALLOW-selfSkipGate: the build's handover of the POM path; a missing one fails, never skips
             System.getProperty("kuilt.publishedPom"),
