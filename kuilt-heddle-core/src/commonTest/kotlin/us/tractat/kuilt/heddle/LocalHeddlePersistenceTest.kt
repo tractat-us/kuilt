@@ -487,6 +487,9 @@ class LocalHeddlePersistenceTest {
     /**
      * The tree the rich scenario runs: `acme` (a nested group at a fractional weight, holding a group
      * and a lane), `tenants` (marked for runtime children), and, while [withSpare], a lane `spare`.
+     * `acme` and `interactive` carry a ceiling, and so does the runtime marker, each high enough that
+     * no call of the scenario meets it, so format 2's encoding carries a ceiling on every kind of node
+     * that takes one and the scenario runs as it would without them.
      */
     private fun richTree(acmeWeight: Weight, withSpare: Boolean): Topology = Topology(
         "root",
@@ -494,9 +497,13 @@ class LocalHeddlePersistenceTest {
             Topology.Group(
                 "acme",
                 acmeWeight,
-                listOf(Topology.Group("batch", Weight.ONE, listOf(Topology.Lane("x"), Topology.Lane("y", Weight.of(2)))), Topology.Lane("interactive")),
+                listOf(
+                    Topology.Group("batch", Weight.ONE, listOf(Topology.Lane("x"), Topology.Lane("y", Weight.of(2)))),
+                    Topology.Lane("interactive", maxConcurrent = 2L),
+                ),
+                maxConcurrent = 3L,
             ),
-            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE)),
+            Topology.Group("tenants", Weight.ONE, emptyList(), runtimeChildren = Topology.RuntimeChildren(Weight.ONE, maxConcurrent = 2L)),
             Topology.Lane("spare").takeIf { withSpare },
         ),
     )
@@ -599,6 +606,29 @@ class LocalHeddlePersistenceTest {
                 val restored = LocalHeddle.restore(golden(), richPolicy, epoch = snapshot.epoch + 1)
                 assertEquals(richContinuation(reference, open).withoutDeparted(edge), richContinuation(restored, open))
             },
+        )
+    }
+
+    /**
+     * Format 2's rich golden carries a ceiling on a group, a lane and a runtime marker, and an engine
+     * restored from it enforces them: `interactive` (ceiling 2) has one lease open in the golden,
+     * so it takes one more and then nothing (#3324).
+     */
+    @Test
+    fun formatTwosGoldenCarriesACeiling() {
+        val snapshot = decoded(GOLDEN_FORMAT_2_RICH)
+        val acme = assertIs<Topology.Group>(snapshot.lastApplied.children.first { it.name == "acme" })
+        val tenants = assertIs<Topology.Group>(snapshot.lastApplied.children.first { it.name == "tenants" })
+        val interactive = richBefore.groupId("acme", "interactive")
+        val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
+        val second = restored.acquire(setOf(interactive), setOf(interactive), startedAt = 0L)
+        val third = restored.acquire(setOf(interactive), setOf(interactive), startedAt = 0L)
+        assertAll(
+            { assertTrue("\"maxConcurrent\":3" in GOLDEN_FORMAT_2_RICH, "the ceiling is in the bytes") },
+            { assertEquals(listOf(3L, 2L, 2L), listOf(acme.maxConcurrent, acme.children.first { it.name == "interactive" }.maxConcurrent, tenants.runtimeChildren?.maxConcurrent)) },
+            { assertEquals(1, snapshot.leases.count { it.leaf == interactive }, "the rig: one lease open at interactive") },
+            { assertIs<AcquireOutcome.Acquired>(second) },
+            { assertEquals(AcquireOutcome.NothingEligible, third, "interactive is at its ceiling") },
         )
     }
 

@@ -38,6 +38,28 @@ class TopologyDraftTest {
         assertEquals(handBuilt, drafted)
     }
 
+    /** A ceiling written beside a group, a lane or a runtime marker lands on that node, and nowhere else. */
+    @Test
+    fun aDraftedCeilingLandsOnItsNode() {
+        val drafted = draft("root") {
+            group("acme", maxConcurrent = 3L) {
+                lane("batch", maxConcurrent = 0L)
+                lane("interactive")
+            }
+            group("tenants") { runtimeChildren(Weight.of(2), maxConcurrent = 1L) }
+        }
+
+        val handBuilt = Topology(
+            "root",
+            listOf(
+                Topology.Group("acme", Weight.ONE, listOf(Topology.Lane("batch", maxConcurrent = 0L), Topology.Lane("interactive")), maxConcurrent = 3L),
+                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.of(2), maxConcurrent = 1L)),
+            ),
+        )
+
+        assertEquals(handBuilt, drafted)
+    }
+
     @Test
     fun runtimeChildrenMarkTheGroupTheyAreDeclaredIn() {
         val drafted = draft("pool") {
