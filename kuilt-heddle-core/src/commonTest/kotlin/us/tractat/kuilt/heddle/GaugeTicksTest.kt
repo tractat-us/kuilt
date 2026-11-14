@@ -35,7 +35,7 @@ class GaugeTicksTest {
     fun aSeatPastTheCeilingIsStoredExactly() {
         val ceiling = positionCeiling(SMALL_CEILING)
         val ledger = ledgerWith(SMALL_CEILING)
-        val seat = assertNotNull(ledger.seatAt(EDGE, ceiling + 1_000L), "an unseated edge takes a seat")
+        val seat = assertNotNull(ledger.seatAtWide(EDGE, Int128.of(ceiling + 1_000L)), "an unseated edge takes a seat")
         val stored = assertNotNull(seat.delta.gauge(EDGE), "the seat patch carries the gauge")
         assertAll(
             { assertTrue(stored.ticks > Int128.of(ceiling), "the rig: the stored seat is past the ceiling") },
@@ -53,7 +53,7 @@ class GaugeTicksTest {
     fun aSeatBehindItsObservedIssuanceStoresTheIssuanceExactlyPastLong() {
         val issued = Long.MAX_VALUE / 4L
         val ledger = ledgerWith(Weight.ONE, issued = issued)
-        val stored = assertNotNull(assertNotNull(ledger.seatAt(EDGE, 0L)).delta.gauge(EDGE))
+        val stored = assertNotNull(assertNotNull(ledger.seatAtWide(EDGE, Int128.of(0L))).delta.gauge(EDGE))
         val expected = issued.timesWide(TICKS_PER_UNIT)
         assertAll(
             { assertTrue(expected.toLongOrNull() == null, "the rig: the issuance in ticks is past Long") },
@@ -72,7 +72,7 @@ class GaugeTicksTest {
         val ceiling = positionCeiling(w)
         var ledger = fundedLedgerWith(w)
         val seatedAt = ceiling - TICKS_PER_UNIT
-        ledger = ledger.piece(assertNotNull(ledger.seatAt(EDGE, seatedAt)).delta)
+        ledger = ledger.piece(assertNotNull(ledger.seatAtWide(EDGE, Int128.of(seatedAt))).delta)
         val patch = assertNotNull(ledger.delegate(GRANTOR, EDGE, 5L), "the grantor holds enough")
         val checkpoint = assertNotNull(patch.delta.gauge(EDGE))
         val merged = assertNotNull(ledger.piece(patch.delta).gauge(EDGE))

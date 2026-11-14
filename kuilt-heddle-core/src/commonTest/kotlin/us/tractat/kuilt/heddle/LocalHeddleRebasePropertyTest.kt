@@ -195,8 +195,9 @@ class LocalHeddleRebasePropertyTest {
         val ledger = state.ledger
         return ledger.allEdges().maxOf { edge ->
             val weight = checkNotNull(ledger.record(edge)).weight
-            val gross = ledger.gauge(edge).grossTicksAt(ledger.baseIssuance(edge), weight)
-            val raw = netTicks(gross, ledger.edge(edge)?.returned ?: 0L, weight)
+            val wideGross = ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge), weight)
+            val gross = saturated(wideGross, weight)
+            val raw = saturated(wideGross - (ledger.edge(edge)?.returned ?: 0L) * TICKS_PER_UNIT, weight)
             val offset = state.allocatorMemory.wakeOffsets[edge]?.let { ticksAt(it, weight) } ?: 0L
             maxOf(gross, raw + offset).toDouble() / positionCeiling(weight).toDouble()
         }

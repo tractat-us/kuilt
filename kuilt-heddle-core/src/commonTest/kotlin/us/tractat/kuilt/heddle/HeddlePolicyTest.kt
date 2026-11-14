@@ -37,7 +37,7 @@ class HeddlePolicyTest {
     ) {
         val record get() = AttachmentRecord(AttachmentId(id), GroupId("root"), GroupId(id), weight)
         val summary get() = EdgeSummary(AttachmentId(id), issued, returned, spent)
-        fun edge() = PolicyEdge(record, summary, demand, seat?.let { Gauge(it, folded = 0L) }, issued, offset)
+        fun edge() = PolicyEdge(record, summary, demand, seat?.let { Gauge(it, folded = 0L) }, issued, wideTicksAt(offset, weight))
         fun virtualService() = HeddlePolicy.virtualService(edge())
 
         /** `ev` as the policy sees it — the raw virtual service plus the wake clamp. */

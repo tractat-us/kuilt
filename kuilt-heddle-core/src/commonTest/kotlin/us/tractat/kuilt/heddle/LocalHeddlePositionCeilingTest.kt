@@ -67,7 +67,7 @@ class LocalHeddlePositionCeilingTest {
         val ledger = snapshot().ledger
         val edge = edgeOf(lane)
         val weight = checkNotNull(ledger.record(edge)).weight
-        return ledger.gauge(edge).grossTicksAt(ledger.baseIssuance(edge), weight)
+        return saturated(ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge), weight), weight)
     }
 
     private fun LocalHeddle.ceilingOf(lane: GroupId): Long =
