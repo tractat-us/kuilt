@@ -176,7 +176,7 @@ class WarpLogRecordExporterConcurrencyTest {
     )
 
     /** Segment numbers resident in [store] that the on-disk index does not name at all. */
-    private suspend fun orphanedSegments(store: RecordingStore): Set<Int> {
+    private suspend fun orphanedSegments(store: RecordingStore): Set<Long> {
         // A missing index is a broken fixture, not a clean result. Every exporter here writes one
         // on its very first batch, so its absence means no batch ever landed — and returning
         // "no orphans" for that would green this assertion on precisely the store state it exists
@@ -187,7 +187,7 @@ class WarpLogRecordExporterConcurrencyTest {
         val named = index.sealedSegments.toSet() + index.active + index.retired
         return store.keys()
             .filter { it.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }
-            .map { it.substringAfterLast('.').toInt() }
+            .map { it.substringAfterLast('.').toLong() }
             .toSet() - named
     }
 
@@ -488,7 +488,7 @@ class WarpLogRecordExporterConcurrencyTest {
         private const val FOREIGN_ID_BASE = 1_000
 
         /** The segment number a fresh exporter opens on — the first key a merge-path pass rewrites. */
-        private const val ACTIVE_SEGMENT = 0
+        private const val ACTIVE_SEGMENT = 0L
 
         /** How long the parked-turn test lets a second export run before looking at the log. */
         private const val SETTLE_MILLIS = 500L

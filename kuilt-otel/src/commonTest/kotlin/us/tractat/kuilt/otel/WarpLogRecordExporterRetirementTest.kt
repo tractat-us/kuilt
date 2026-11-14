@@ -401,7 +401,7 @@ class WarpLogRecordExporterRetirementTest {
     }
 
     /** The store of a two-phase run, and the segment whose fate the run decides. */
-    private class RetirementRun(val store: RecordingStore, val atStake: Int)
+    private class RetirementRun(val store: RecordingStore, val atStake: Long)
 
     /**
      * Export, restart, export again — and report the segment at stake: the oldest one still
@@ -597,7 +597,7 @@ class WarpLogRecordExporterRetirementTest {
                     val swept = batch.withIndex().filter {
                         it.value.kind == StoreOpKind.DELETE && it.value.key.name.startsWith("otel.logs.seg.")
                     }
-                    val numbers = swept.map { it.value.key.name.substringAfterLast('.').toInt() }
+                    val numbers = swept.map { it.value.key.name.substringAfterLast('.').toLong() }
                     val commitAt = batch.indexOfFirst {
                         it.kind == StoreOpKind.WRITE && it.key == INDEX_KEY_FOR_TEST &&
                             decodeIndexForTest(requireNotNull(it.bytes)).retired.isNotEmpty()
@@ -706,7 +706,7 @@ class WarpLogRecordExporterRetirementTest {
             seen = ops.size
         }
 
-        val published = mutableSetOf<Int>()
+        val published = mutableSetOf<Long>()
         val offences = mutableListOf<String>()
         var commits = 0
         batches.forEach { batch ->
@@ -1003,7 +1003,7 @@ class WarpLogRecordExporterRetirementTest {
     }
 
     /** Numbers [store]'s current index names as sealed whose key is absent — read back as `Pinned`. */
-    private suspend fun phantomSegments(store: RecordingStore): List<Int> {
+    private suspend fun phantomSegments(store: RecordingStore): List<Long> {
         val index = decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)))
         return index.sealedSegments.filterNot { segmentKeyForTest(it) in segmentKeys(store) }
     }
@@ -1081,8 +1081,8 @@ class WarpLogRecordExporterRetirementTest {
         val indexes = store.operations()
             .filter { it.kind == StoreOpKind.WRITE && it.key == INDEX_KEY_FOR_TEST }
             .map { decodeIndexForTest(requireNotNull(it.bytes)) }
-        val retired = mutableSetOf<Int>()
-        val resurrected = mutableListOf<Int>()
+        val retired = mutableSetOf<Long>()
+        val resurrected = mutableListOf<Long>()
         indexes.forEach { index ->
             resurrected += index.sealedSegments.filter { it in retired }
             retired += index.retired

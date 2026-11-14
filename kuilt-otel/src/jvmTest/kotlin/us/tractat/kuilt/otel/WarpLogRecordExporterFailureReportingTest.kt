@@ -154,7 +154,7 @@ class WarpLogRecordExporterFailureReportingTest {
         val store = FailDeleteStore(backing)
         var duringFirstRun = 0
         var afterRestart = 0
-        var ledger = emptyList<Int>()
+        var ledger = emptyList<Long>()
 
         capturingLogsOf(EXPORTER_LOGGER) { captured ->
             val exporter = exporterFor(store)

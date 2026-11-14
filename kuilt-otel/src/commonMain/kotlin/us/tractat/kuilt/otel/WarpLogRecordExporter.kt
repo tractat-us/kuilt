@@ -516,6 +516,24 @@ public class WarpLogRecordExporter(
      */
     private var indexPersisted: Boolean = false
 
+    /**
+     * Whether [log] may hold a merged remote's ops that no segment on disk carries. Guarded by
+     * [lock]; read and written only inside [mergeTurn].
+     *
+     * A merge joins the remote into [log] before its adopted segment is written, so a merge whose
+     * turn then failed leaves those ops in memory alone. A retry of that same merge, the usual
+     * next step for gossip, changes nothing in memory, and without this it would be skipped as
+     * a no-op and return `Success` for ops no key holds (#3317). Nothing short of persisting that
+     * remote again carries them: an export writes only the active segment, and a later merge
+     * adopts only its own remote.
+     *
+     * So it is **sticky**. A merge turn sets it before it changes [log], and only a successful
+     * turn that found it clear clears it again. Once a merge has failed, every later merge adopts,
+     * no-op or not, as every merge did before #3317, until the next process start, whose [log] is
+     * by definition what the store holds.
+     */
+    private var logHoldsUncarriedMerge: Boolean = false
+
     private val healthState = MutableStateFlow(ExporterHealth())
 
     /**
@@ -1445,7 +1463,8 @@ public class WarpLogRecordExporter(
      * Merge an [Rga] received from another replica (via anti-entropy / gossip)
      * into this exporter's state, then flush the merged result to [store].
      *
-     * Idempotent: merging the same [Rga] twice produces the same result.
+     * Idempotent: merging the same [Rga] twice produces the same result. A merge that adds
+     * nothing to this exporter's log writes no segment and spends no segment number.
      *
      * **[remote]'s whole operation log is published to [AppliedOpSink]** — see that type, and
      * `publishApplied`'s call site below, for why the merge path publishes at all and why it
@@ -1459,9 +1478,14 @@ public class WarpLogRecordExporter(
 
     /** [merge]'s write turn: build the actions, then apply them. Must hold [writeMutex]. */
     private suspend fun mergeTurn(remote: Rga<LogRecord>): ExportResult {
+        var clearedBeforeTurn = false
         val actions = runCatchingCancellable {
             lock.withLock {
-                log = log.piece(remote)
+                val merged = log.piece(remote)
+                if (merged == log && !logHoldsUncarriedMerge) return@withLock noOpMergeWrites()
+                clearedBeforeTurn = !logHoldsUncarriedMerge
+                logHoldsUncarriedMerge = true
+                log = merged
                 // A remote insert can land anywhere, including after the local tail.
                 rebuildDerivedState()
                 val adopted = adoptRemoteSegment(remote)
@@ -1499,11 +1523,34 @@ public class WarpLogRecordExporter(
         // Duplicates are the consumer's to suppress. It is the side that knows what it has kept,
         // and this exporter deliberately does not track what any sink has seen.
         publishApplied(remote.operations().toList())
+        // A no-op merge over a clean store owes nothing, so it writes nothing and reports Success,
+        // as an all-dedup export turn does. Not through commit: that would mark the index current
+        // and close a durable-write outage on the strength of zero writes.
+        if (actions.isEmpty()) return ExportResult.Success
         val result = commit(actions) { cause ->
             logger.error(cause) { "WarpLogRecordExporter: durable write failed during merge" }
         }
+        if (result is ExportResult.Success && clearedBeforeTurn) lock.withLock { logHoldsUncarriedMerge = false }
         return if (result is ExportResult.Success) storeSucceeded() else result
     }
+
+    /**
+     * What a merge that changed nothing in [log] still owes. Must hold [lock].
+     *
+     * Not a segment: every op the remote carries is already in [log], and [logHoldsUncarriedMerge]
+     * being clear says every op [log] got from a merge is already on disk. So the merge spends no
+     * segment number (#3317). Before, it adopted the remote anyway, so a consumer merging a peer's
+     * unchanged log ten times a second spent a number ten times a second.
+     *
+     * What it can still owe is this exporter's **own** pending writes. An export whose write was
+     * refused leaves its ops in [activeSegment] and the index marked stale, and reporting
+     * `Success` here would claim the remote is durable when part of it may be those very ops,
+     * echoed back by a peer. So when the index is stale this writes what an export turn would.
+     * One gap is shared with [exportTurn]'s dedup path: a turn that failed before reaching the
+     * store leaves the index current, and then neither path rewrites the active segment.
+     */
+    private fun noOpMergeWrites(): List<StoreAction> =
+        if (indexPersisted) emptyList() else pendingWrites(retire = false)
 
     /**
      * Drop every record this exporter holds and delete the segments that held them —
