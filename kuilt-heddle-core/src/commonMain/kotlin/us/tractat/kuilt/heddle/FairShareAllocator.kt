@@ -159,27 +159,45 @@ public class FairShareAllocator(
         earmarked: Long,
         demand: (AttachmentId) -> Demand,
     ): AllocationOutcome {
+        // Before the seat step, which already multiplies by a weight: a replicated ledger can hold a
+        // set no single write would have admitted (#3353), and every pick over it would throw.
+        if (!childWeightsFit(ledger.current, parent)) return AllocationOutcome.WeightBudget(parent)
         settleJoiners(parent, ledger, demand)
         var grants = 0
+        var refusal: AllocationOutcome? = null
         while (grants < MAX_ROUNDS_PER_CALL) {
             // One pick, inside the cell's write step, on the state the grant lands on. Nothing
             // delegable ⇒ mutateOrSkip writes nothing and answers false (#2090). Peeking on
             // `ledger.current` first would run the policy twice per grant, the peek deciding
             // against a state an inbound write may already have moved past.
-            val applied = try {
-                ledger.mutateOrSkip { s ->
-                    pickOne(s, parent, earmarked, demand)?.let { grant -> s.delegate(self, grant.attachment, grant.amount) }
+            val applied = ledger.mutateOrSkip { s ->
+                // Again on each round's state: a merge between two rounds can bring the set over.
+                if (!childWeightsFit(s, parent)) {
+                    refusal = AllocationOutcome.WeightBudget(parent)
+                    return@mutateOrSkip null
                 }
-            } catch (_: PositionCeilingException) {
-                // The pick would have to order a position at its ceiling (#3313): grant nothing more
-                // here. The throw left the transform before it returned a patch, so nothing was written.
-                false
+                try {
+                    pickOne(s, parent, earmarked, demand)?.let { grant -> s.delegate(self, grant.attachment, grant.amount) }
+                } catch (_: PositionCeilingException) {
+                    // The pick would have to order a position at its ceiling (#3313): grant nothing
+                    // more here. No patch is returned, so nothing is written.
+                    refusal = AllocationOutcome.PositionCeiling(parent)
+                    null
+                }
             }
             if (!applied) break
             grants++
         }
-        return if (grants == 0) AllocationOutcome.NothingToDelegate else AllocationOutcome.Delegated(grants)
+        // Progress first: a refusal met after a grant is reported by the next call, which meets it at once.
+        return when {
+            grants > 0 -> AllocationOutcome.Delegated(grants)
+            else -> refusal ?: AllocationOutcome.NothingToDelegate
+        }
     }
+
+    /** Whether [parent]'s active children in [s] fit [weightsFitTheBudget], so a pick there can be computed. */
+    private fun childWeightsFit(s: EntitlementLedger, parent: GroupId): Boolean =
+        weightsFitTheBudget(s.activeChildren(parent).mapNotNull { s.record(it.attachment)?.weight })
 
     /**
      * Make **one** pick at [parent]: seat the newborns and clamp the wakers exactly as [schedule]
