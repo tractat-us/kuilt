@@ -52,6 +52,10 @@ public data class BoundMetrics(
          * bound must count), the set of [demanding] child edges (those advertising live
          * demand), and the [config] caps. Pure — a function of the arguments, computed
          * identically on every peer that has merged the same state.
+         *
+         * @throws ArithmeticException when the demanding children's weight sum, or one demanding
+         * child's reduced share of it, does not fit in a `Long`. That needs extreme weights;
+         * scheduling itself is unaffected.
          */
         public fun at(
             ledger: EntitlementLedger,
@@ -88,6 +92,11 @@ public data class BoundMetrics(
          * lag over the backlogged set, design §8.2), so it is excluded from both the total and
          * the max. Exact rational throughout — no floating point — so every peer computes the
          * same value from the same state.
+         *
+         * @throws ArithmeticException when the demanding weight sum `W`, or a demanding child's
+         * reduced share `w_i/W`, does not fit in a `Long`. That needs extreme weights (two children
+         * of `(2⁶²+1)/4` and `1/12` give a share of `(3·2⁶²+3)/(3·2⁶²+4)` while `W` fits); a quotient
+         * whose reduced form fits never throws. Scheduling is unaffected.
          */
         private fun observedDeviation(
             ledger: EntitlementLedger,

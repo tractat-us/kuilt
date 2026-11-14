@@ -5,6 +5,7 @@ import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.math.plusOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /**
  * [BoundMetrics.observedDeviation] at lifetime totals large enough that the old arithmetic
@@ -78,6 +79,23 @@ class BoundMetricsTest {
         assertEquals(2_305_843_009_213_693_952L, observedDeviationOf(children))
     }
 
+    /**
+     * The residual overflow, documented and pinned: the weight sum `W = (3·2⁶⁰+1)/3` fits a `Long`,
+     * but the share `(2⁶²+1)/4 ÷ W = (3·2⁶²+3)/(3·2⁶²+4)` is already reduced and both parts pass
+     * `Long.MAX_VALUE`, so the metric throws. Both weights are accepted by `prepare` and the rig
+     * builds, so the throw is the metric's and scheduling is unaffected.
+     */
+    @Test
+    fun aReducedShareThatDoesNotFitThrows() {
+        val children = listOf(
+            Child(Weight.of((1L shl 62) + 1L, 4L), 1L),
+            Child(Weight.of(1L, 12L), 1L),
+        )
+        // Returning at all means `prepare`, activate, seat and delegate accepted both weights, and the rig's own equality assert held.
+        val metric = metricsRigOf(children)
+        assertFailsWith<ArithmeticException> { metric() }
+    }
+
     /** On the weight ratio exactly, at the largest total two children can hold, the deviation is zero. */
     @Test
     fun onRatioAtTheLargestTotalIsZero() {
@@ -117,7 +135,10 @@ internal data class Child(val weight: Weight, val committed: Long, val demanding
  * public mutators: mint at the root, then prepare, activate, seat and delegate each edge. Shared with
  * the JVM oracle, so both check the same rig.
  */
-internal fun observedDeviationOf(children: List<Child>): Long {
+internal fun observedDeviationOf(children: List<Child>): Long = metricsRigOf(children)()
+
+/** Builds [observedDeviationOf]'s rig and asserts it, returning the metric call unrun so a test can tell setup from the call. */
+internal fun metricsRigOf(children: List<Child>): () -> Long {
     val root = GroupId("root")
     val alice = ReplicaId("alice")
     val edges = children.indices.map { AttachmentId("root->g$it") }
@@ -133,5 +154,5 @@ internal fun observedDeviationOf(children: List<Child>): Long {
     assertEquals(children.map { it.committed }, edges.map { ledger.edge(it)?.committedService })
     val demanding = edges.filterIndexed { i, _ -> children[i].demanding }.toSet()
     val config = HeddleConfig(policy = PolicyConfig(quantum = 1L), maxHoldingsPerPeer = Long.MAX_VALUE / 4)
-    return BoundMetrics.at(ledger, root, setOf(alice), demanding, config).observedDeviation
+    return { BoundMetrics.at(ledger, root, setOf(alice), demanding, config).observedDeviation }
 }

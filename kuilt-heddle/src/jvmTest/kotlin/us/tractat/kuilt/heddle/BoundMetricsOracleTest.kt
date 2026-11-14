@@ -34,8 +34,9 @@ class BoundMetricsOracleTest {
     /**
      * Weights near `Long.MAX_VALUE` (#3347): one child's weight is `a/b` with `a` past `MAX / b`, so
      * the straight-across `Rational.div` that forms its share overflowed. The rest are whole numbers
-     * small enough that the weight sum `(a + b·Σc)/b` still fits, which is the one overflow that
-     * remains a real one. The rig counts the draws where some demanding child's share overflowed
+     * small enough that the weight sum `(a + b·Σc)/b` still fits. Two overflows remain real ones and
+     * are documented on `observedDeviation`: the weight sum itself, and a reduced share `w_i/W`
+     * whose parts both pass `Long` (pinned in `BoundMetricsTest`). The rig counts the draws where some demanding child's share overflowed
      * the old quotient, so the arm cannot pass on draws that never formed one.
      */
     @Test
