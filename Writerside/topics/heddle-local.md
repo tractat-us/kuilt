@@ -351,9 +351,8 @@ child by its own name. `attachedChildId` turns the pair into the id you lease
 with. Every child of `forks` gets the weight its template gives, 1 by default.
 
 **Coming from v0.7.4.** Its "runtime children" are these attached children, and
-the group's marker is now its template. A config that wrote `runtimeChildren: "1"`
-writes `template: { weight: "1" }`, and one that capped each child with
-`runtimeChildrenMaxConcurrent` puts `maxConcurrent` inside the template. Decode
+the group's marker is now its template. A config that wrote `runtimeChildren: "1"` writes `template: { weight: "1" }`, and the
+template can now carry a `maxConcurrent` that caps each child. Decode
 configs strictly: a lenient decoder drops the old key without a word, and the
 group loses its template. Snapshots saved by v0.7.4 still restore.
 
