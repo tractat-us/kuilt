@@ -117,9 +117,7 @@ collides with a declared child; a detach drains like a removal. `Topology.attach
 `detach` list the same steps without applying them. A reload that keeps the template
 keeps the child and its history; one that drops the template closes it. A detach's own swap forgets
 the child's retired edge once its books close, so detach a child whenever it goes idle.
-**Migrating a v0.7.4 config:** `runtimeChildren: "1"` is now `template: { weight: "1" }`. A strict
-decode refuses the old key, but a lenient one (`ignoreUnknownKeys`) drops it silently, so decode
-strictly.
+**Coming from v0.7.4:** see [Migrating from runtimeChildren to template](#migrating-from-runtimechildren-to-template).
 
 An attached child is always a leaf: it carries no template of its own, so a tree you discover
 while running is one level deep under its group. For two levels, such as a repository and then its
@@ -669,3 +667,72 @@ reason. A lane is charged **per execution**, so a task two peers both run under 
     check(untagged.lane == Lane.ROOT)
     check(admission.admit(untagged) === AdmissionTicket.NOOP)
 ```
+
+## Migrating from runtimeChildren to template
+
+**Intent:** you wrote code or config against v0.7.4's "runtime children" and are moving to the
+current release. The idea is unchanged: a group whose children your app attaches while it runs.
+Only the names moved, and one old config key is dropped without a word if you decode leniently.
+**Primitive:** `Topology.Group.template` (a `Topology.ChildTemplate`), `LocalHeddle.attach` and
+`detach`.
+
+| In v0.7.4 | Now |
+|---|---|
+| config `runtimeChildren: "1"` | `template: { weight: "1" }` |
+| `TopologyDocument.Group.runtimeChildren: String?` | `template: TopologyDocument.ChildTemplate?` |
+| `TopologyDraft.Group.runtimeChildren(...)` | `template(weight, maxConcurrent)` |
+| `Topology.RuntimeChildren`, `Group.runtimeChildren` | `Topology.ChildTemplate`, `Group.template` |
+| `attachRuntimeChild` / `detachRuntimeChild`, on `LocalHeddle` and on `Topology` | `attach` / `detach` |
+| `Topology.runtimeChildId` | `Topology.attachedChildId` |
+
+If you built against a snapshot between v0.7.4 and this release, two more names moved: config
+`runtimeChildrenMaxConcurrent: 2` is now `template: { maxConcurrent: 2 }`, and
+`GroupPath.RuntimeChild` is now `GroupPath.Attached`.
+
+The config in the new shape, written once for a group that caps all its repos together and each
+attached repo on its own:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/TopologySamples.kt#sampleChildTemplateDocument -->
+```kotlin
+    val text = """
+        {"root": "pool", "children": [
+          {"type": "group", "name": "repos", "maxConcurrent": 8, "template": {"maxConcurrent": 2}}
+        ]}
+    """
+    val written = Json.decodeFromString<TopologyDocument>(text)
+    val repos = (Topology.from(written) as TopologyParse.Valid).topology.children.single() as Topology.Group
+    check(repos.maxConcurrent == 8L)
+    check(repos.template == Topology.ChildTemplate(Weight.ONE, maxConcurrent = 2L))
+```
+
+What behaves differently:
+
+- **An old config key is dropped, not refused, by a lenient decoder.** A strict decode throws on
+  `runtimeChildren`. A decoder built with `ignoreUnknownKeys = true` discards it, so the group
+  loads with no template. If it declares children, `Topology.from` reports no problem, and the first
+  `attach`, `detach` or `attachedChildId` under it throws `IllegalArgumentException` (`… is not a
+  group with a template`) at run time rather than at load. If it declares none, `from` reports
+  `EMPTY_GROUP`. Decode strictly. This test pins both outcomes; its `json` is the strict one:
+
+<!-- verbatim from kuilt-heddle-core/src/commonTest/kotlin/us/tractat/kuilt/heddle/TopologyTest.kt#aVersionSevenFourMarkerIsRefusedStrictlyAndDroppedLeniently -->
+```kotlin
+    val old = """{"root":"root","children":[{"type":"group","name":"tenants","children":[{"type":"lane","name":"x"}],"runtimeChildren":"1"}]}"""
+    val lenient = Json { ignoreUnknownKeys = true }
+    val dropped = Topology.from(lenient.decodeFromString(TopologyDocument.serializer(), old))
+    val tenants = assertIs<Topology.Group>(assertIs<TopologyParse.Valid>(dropped).topology.children.single())
+
+    assertAll(
+        { assertFailsWith<SerializationException> { json.decodeFromString(TopologyDocument.serializer(), old) } },
+        { assertNull(tenants.template) },
+        { assertEquals(listOf("x"), tenants.children.map { it.name }) },
+    )
+```
+
+- **A per-child ceiling is new, and lives inside the template.** v0.7.4 had none; `template: { maxConcurrent: 2 }` caps each attached child, and the group's own `maxConcurrent` caps them all together.
+- **`template: {}` is a template.** It attaches children at weight 1 with no ceiling.
+- **Saved snapshots are untouched.** The stored name is still `runtimeChildren`, so a snapshot
+  from v0.7.4 restores, and one this release writes reads back the same bytes. Only your config
+  text and your code change.
+
+The call-site change is a rename, so there is no "before" block to quote: the old names no longer
+compile. The working `attach` and `detach` are in `sampleAttachedChildren`, under [A fair-share tree in one process](#a-fair-share-tree-in-one-process).
