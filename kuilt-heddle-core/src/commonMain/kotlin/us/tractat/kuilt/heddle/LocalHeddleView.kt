@@ -41,11 +41,17 @@ public class LocalHeddleView internal constructor(
      * synthetic constructor in the JVM ABI.
      */
     private val rebase: Boolean,
+    /**
+     * How many leases were open beneath each capped group when the state was taken: counted, not
+     * carried, since a pick needs the count against each ceiling and never the leases themselves.
+     * Every throwaway engine counts it beside the leases it opens. Empty when no ceiling is set.
+     */
+    private val openBeneath: Map<GroupId, Int>,
 ) {
 
     /** An engine over this view's state, with its own copy of the wake memory: it picks and tops up as the engine would next. */
     private fun scratch(): LocalHeddle =
-        LocalHeddle.scratch(root, policy, epoch, ledger, allocator.fork(), leasable, capacity).also { it.rebaseForTest = rebase }
+        LocalHeddle.scratch(root, policy, epoch, ledger, allocator.fork(), leasable, capacity, openBeneath).also { it.rebaseForTest = rebase }
 
     /**
      * Who would go next: the leaves `reservations.size` calls to [LocalHeddle.acquire] would pick,
@@ -158,10 +164,15 @@ public class LocalHeddleView internal constructor(
         if (leaf !in eligible) return WaitExplanation.NotEligible
         if (!ledger.canEndAt(leaf, root, leasable)) return WaitExplanation.NoLiveLineage(leaf)
         val trial = scratch()
+        // The pick drops a leaf beneath a group at its ceiling from both sets, so for it the leaf is
+        // not eligible on this slot. Until the explanation can name the ceiling (#3324), that is the
+        // answer, and it agrees with the acquire, which never picks it.
+        val (waitingNow, eligibleNow) = trial.belowCeilings(waiting, eligible)
+        if (leaf !in eligibleNow) return WaitExplanation.NotEligible
         val base = trial.fundedBase(reservation) ?: return WaitExplanation.SupplyExhausted
 
-        val demands = trial.demands(base, waiting, eligible, reservation)
-        val descent = trial.descend(base, demands, eligible, reservation)
+        val demands = trial.demands(base, waitingNow, eligibleNow, reservation)
+        val descent = trial.descend(base, demands, eligibleNow, reservation)
         if (descent is LocalHeddle.Descent.Ceiling) return WaitExplanation.PositionCeiling(descent.at)
         // An eligible leaf the pick can end at, with the root funded: the root's pick has a candidate
         // in the leaf's own top edge, and every pick below goes toward an eligible leaf.
