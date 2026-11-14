@@ -31,9 +31,53 @@ class BoundMetricsOracleTest {
         assertTrue(overflowedBefore > N / 2, "only $overflowedBefore of $N draws overflowed the old product")
     }
 
+    /**
+     * Weights near `Long.MAX_VALUE` (#3347): one child's weight is `a/b` with `a` past `MAX / b`, so
+     * the straight-across `Rational.div` that forms its share overflowed. The rest are whole numbers
+     * small enough that the weight sum `(a + b·Σc)/b` still fits, which is the one overflow that
+     * remains a real one. The rig counts the draws where some demanding child's share overflowed
+     * the old quotient, so the arm cannot pass on draws that never formed one.
+     */
+    @Test
+    fun observedDeviationMatchesExactArithmeticAtWeightsNearLongMax() {
+        val random = Random(3347)
+        var oldQuotientThrew = 0
+        repeat(N) {
+            val children = randomChildrenWithAHeavyWeight(random)
+            if (oldQuotientOverflows(children)) oldQuotientThrew++
+            assertEquals(oracle(children), observedDeviationOf(children), "children $children")
+        }
+        // The rig: most draws form a share the old quotient threw on.
+        assertTrue(oldQuotientThrew > N / 2, "only $oldQuotientThrew of $N draws formed a share the old quotient threw on")
+    }
+
     private fun randomChildren(random: Random): List<Child> {
         val n = random.nextInt(2, 4)
         val weights = List(n) { Weight.of(random.nextLong(1L, 1_000L), random.nextLong(1L, 1_000L)) }
+        return withCommitted(random, weights)
+    }
+
+    /** One weight `a/b` with `a + b·Σc ≤ MAX`, so the sum fits, and `a > MAX / b`, so `a · b` does not. */
+    private fun randomChildrenWithAHeavyWeight(random: Random): List<Child> {
+        val n = random.nextInt(2, 4)
+        val light = List(n - 1) { random.nextLong(1L, 1_000L) }
+        val b = random.nextLong(2L, 1_000L)
+        val room = Long.MAX_VALUE - b * light.sum()
+        var a: Long
+        do a = random.nextLong(Long.MAX_VALUE / b + 1, room + 1) while (gcd(a, b) != 1L)
+        val heavyAt = random.nextInt(n)
+        val weights = List(n) { i ->
+            when {
+                i == heavyAt -> Weight.of(a, b)
+                i < heavyAt -> Weight.of(light[i])
+                else -> Weight.of(light[i - 1])
+            }
+        }
+        return withCommitted(random, weights)
+    }
+
+    private fun withCommitted(random: Random, weights: List<Weight>): List<Child> {
+        val n = weights.size
         // Each edge's gauge forms `committed · b`, and the root must fund the sum, so cap each child.
         val committed = weights.map { w ->
             val cap = Long.MAX_VALUE / n / w.denominator
@@ -58,6 +102,18 @@ class BoundMetricsOracleTest {
         val (_, scaled, sum, total) = scaledWeights(children)
         return scaled.any { w -> (w / w.gcd(sum)) * total > Long.MAX_VALUE.big() }
     }
+
+    /** Whether forming some demanding child's share `wᵢ / W` by multiplying straight across leaves `Long`. */
+    private fun oldQuotientOverflows(children: List<Child>): Boolean {
+        val live = children.filter { it.demanding }
+        val sum = live.fold(Rational.ZERO) { acc, c -> acc + Rational.of(c.weight.numerator, c.weight.denominator) }
+        val max = Long.MAX_VALUE.big()
+        return live.any { c ->
+            c.weight.numerator.big() * sum.denominator.big() > max || c.weight.denominator.big() * sum.numerator.big() > max
+        }
+    }
+
+    private tailrec fun gcd(x: Long, y: Long): Long = if (y == 0L) x else gcd(y, x % y)
 
     private data class Scaled(val live: List<Child>, val scaled: List<BigInteger>, val sum: BigInteger, val total: BigInteger)
 
