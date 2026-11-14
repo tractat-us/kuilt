@@ -315,7 +315,9 @@ public final class us/tractat/kuilt/heddle/EntitlementLedger$Companion {
 	public final fun bootstrap-lUmtw0Q (Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;)Lus/tractat/kuilt/heddle/EntitlementLedger;
 	public final fun getZERO ()Lus/tractat/kuilt/heddle/EntitlementLedger;
 	public final fun of (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;)Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public final fun of (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;J)Lus/tractat/kuilt/heddle/EntitlementLedger;
 	public static synthetic fun of$default (Lus/tractat/kuilt/heddle/EntitlementLedger$Companion;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public static synthetic fun of$default (Lus/tractat/kuilt/heddle/EntitlementLedger$Companion;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/EntitlementLedger;
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -689,6 +691,22 @@ public final class us/tractat/kuilt/heddle/LedgerConflict$NegativeEffectiveSpend
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
 	public fun getOrder ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/LedgerConflict$NegativeForgottenFold : us/tractat/kuilt/heddle/LedgerConflict {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
+	public final fun component1-8ilV7vI ()Ljava/lang/String;
+	public final fun component2-ffK6qZA ()Ljava/lang/String;
+	public final fun copy-8VToyDw (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/heddle/LedgerConflict$NegativeForgottenFold;
+	public static synthetic fun copy-8VToyDw$default (Lus/tractat/kuilt/heddle/LedgerConflict$NegativeForgottenFold;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$NegativeForgottenFold;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGroup-8ilV7vI ()Ljava/lang/String;
+	public fun getOrder ()I
+	public final fun getReplica-ffK6qZA ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

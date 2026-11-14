@@ -139,6 +139,34 @@ class EntitlementLedgerForgetTest {
         )
     }
 
+    /**
+     * An honest fold is never negative, so a negative one is reported, one conflict per replica and
+     * fold, the folded leaf spend (no group) first. Hand-built: no forget writes one.
+     */
+    @Test
+    fun aNegativeFoldIsReported() {
+        val ledger = EntitlementLedger.of(
+            minted = mapOf(MintId("m") to MintRecord(root, r1, 10L)),
+            forgottenOutflow = mapOf(root to mapOf(r1 to -1L, r2 to 0L)),
+            forgottenLeafSpend = mapOf(r2 to -2L, r1 to 4L),
+            forgottenGenerationFloor = 3L,
+        )
+        val honest = EntitlementLedger.of(
+            minted = mapOf(MintId("m") to MintRecord(root, r1, 10L)),
+            forgottenOutflow = mapOf(root to mapOf(r1 to 1L)),
+            forgottenLeafSpend = mapOf(r1 to 1L),
+        )
+        assertAll(
+            {
+                assertEquals(
+                    listOf(LedgerConflict.NegativeForgottenFold(null, r2), LedgerConflict.NegativeForgottenFold(root, r1)),
+                    ledger.validate().filterIsInstance<LedgerConflict.NegativeForgottenFold>(),
+                )
+            },
+            { assertEquals(emptyList(), honest.validate(), "the control: a fold of the same shape that is not negative") },
+        )
+    }
+
     // ── the join refuses what a second writer would produce ───────────────────────────────────
 
     @Test
