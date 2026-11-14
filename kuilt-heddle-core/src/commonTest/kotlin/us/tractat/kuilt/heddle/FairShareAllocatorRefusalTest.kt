@@ -203,16 +203,21 @@ class FairShareAllocatorRefusalTest {
         )
     }
 
-    /** The same parent with nothing at the root: an ordinary empty pick, which keeps what it seated and saw. */
+    /**
+     * The same parent with nothing at the root: an ordinary empty pick keeps what it observed, and
+     * writes nothing, as [LocalHeddle] does. The newborn's seat waits for the call that grants.
+     */
     @Test
-    fun anOrdinaryEmptyPickKeepsItsSeatsAndWakeMemory() {
+    fun anOrdinaryEmptyPickKeepsItsWakeMemoryAndWritesNothing() {
         val (cell, allocator) = joining(mint = 0L, e1Ticks = 1_600L)
+        val before = cell.current
         val outcome = allocator.schedule(root, cell, earmarked = 0L) { hungry }
         val memory = allocator.memory
         assertAll(
             { assertEquals(AllocationOutcome.NothingToDelegate, outcome, "the rig: nothing to grant") },
-            { assertEquals(Gauge(ticksToVirtual(1_600L, Weight.ONE), folded = 0L), cell.current.gauge(e3), "the newborn is seated at e1") },
-            { assertEquals(1, cell.writes, "in one patch") },
+            { assertEquals(null, before.gauge(e3), "the rig: e3 is unseated") },
+            { assertEquals(before, cell.current, "no seat landed for the newborn") },
+            { assertEquals(0, cell.writes, "not one patch") },
             { assertEquals(ticksToVirtual(1_600L, Weight.ONE), memory.wakeOffsets[e2], "the waker's clamp is kept") },
             { assertEquals(mapOf(e1 to true, e2 to true, e3 to true), memory.demandingObserved, "and so is what it saw") },
         )
