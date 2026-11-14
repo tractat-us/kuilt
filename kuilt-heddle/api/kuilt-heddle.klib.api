@@ -49,6 +49,22 @@ sealed interface us.tractat.kuilt.heddle/ControlConflict { // us.tractat.kuilt.h
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ControlConflict.Refused.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ControlConflict.Refused.toString|toString(){}[0]
     }
+
+    final class WeightBudget : us.tractat.kuilt.heddle/ControlConflict { // us.tractat.kuilt.heddle/ControlConflict.WeightBudget|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/AttachmentId) // us.tractat.kuilt.heddle/ControlConflict.WeightBudget.<init>|<init>(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.AttachmentId){}[0]
+
+        final val edge // us.tractat.kuilt.heddle/ControlConflict.WeightBudget.edge|{}edge[0]
+            final fun <get-edge>(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/ControlConflict.WeightBudget.edge.<get-edge>|<get-edge>(){}[0]
+        final val parent // us.tractat.kuilt.heddle/ControlConflict.WeightBudget.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/ControlConflict.WeightBudget.parent.<get-parent>|<get-parent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/ControlConflict.WeightBudget.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/AttachmentId // us.tractat.kuilt.heddle/ControlConflict.WeightBudget.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ..., us.tractat.kuilt.heddle/AttachmentId = ...): us.tractat.kuilt.heddle/ControlConflict.WeightBudget // us.tractat.kuilt.heddle/ControlConflict.WeightBudget.copy|copy(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.AttachmentId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ControlConflict.WeightBudget.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ControlConflict.WeightBudget.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ControlConflict.WeightBudget.toString|toString(){}[0]
+    }
 }
 
 sealed interface us.tractat.kuilt.heddle/ControlOutcome { // us.tractat.kuilt.heddle/ControlOutcome|null[0]

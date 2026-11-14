@@ -1817,6 +1817,11 @@ public final class us/tractat/kuilt/heddle/Weight$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class us/tractat/kuilt/heddle/WeightBudgetKt {
+	public static final fun activationFitsTheBudget-4WscdsM (Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/lang/String;)Z
+	public static final fun weightFitsTheBudget (Lus/tractat/kuilt/heddle/Weight;)Z
+}
+
 public final class us/tractat/kuilt/heddle/WeightSerializer : kotlinx/serialization/KSerializer {
 	public static final field INSTANCE Lus/tractat/kuilt/heddle/WeightSerializer;
 	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
