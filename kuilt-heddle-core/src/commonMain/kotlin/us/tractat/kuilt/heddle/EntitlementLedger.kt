@@ -115,9 +115,9 @@ import kotlinx.serialization.Transient
  *    `transferRelocIn`/`transferRelocOut`, described next.
  *  - `gauges` — the per-edge virtual-time seat register ([Gauge]), joined **componentwise**
  *    max. This is the only *multi-writer* per-edge component: unlike a counter slot, which
- *    exactly one replica writes, any peer may assert a floor for any edge. The pairing of each
- *    floor with the issuance its writer observed is what makes that safe under an order-free
- *    join — see [Gauge] and [grossVirtualService].
+ *    exactly one replica writes, any peer may assert a position for any edge. The pairing of
+ *    each position with the issuance its writer observed is what makes that safe under an
+ *    order-free join — see [Gauge] and [grossVirtualService].
  *
  * The `spent` split ([leafSpent] vs [rollupSpent]) is the load-bearing choice: a
  * completed charge on a leaf path charges the leaf's own final edge in `leafSpent`
@@ -300,8 +300,9 @@ public class EntitlementLedger private constructor(
             rollupRelocIn = rollupRelocIn.mergeEdgeCounters(other.rollupRelocIn),
             rollupRelocOut = rollupRelocOut.mergeEdgeCounters(other.rollupRelocOut),
             // The virtual-time gauge: a per-edge register joined COMPONENTWISE (max floor, max
-            // fold) — never lexicographically by floor, which would keep a stale writer's pair
-            // whole and reintroduce the double count (#1752, see [Gauge]).
+            // ticks as one 128-bit number, max fold) — never lexicographically by position, which
+            // would keep a stale writer's pair whole and reintroduce the double count (#1752, see
+            // [Gauge]).
             gauges = gauges.joinValues(other.gauges) { mine, theirs -> mine.join(theirs) },
             // The transfer relocation pair: the same per-donor-row matrix `transfers` is, joined by
             // the same rule, so the product-of-lattices argument covers them unchanged.
@@ -443,15 +444,16 @@ public class EntitlementLedger private constructor(
     /**
      * [id]'s **base** issuance — `Σ_r issued(id)[r]`, excluding relocation credit. This is the
      * [Gauge]'s fold axis, and it is published because a consumer holding a [gauge] cannot
-     * interpret the register without it: the read is `floor + (baseIssuance − folded) / w`, and
+     * interpret the register without it: the read advances the gauge's position by
+     * `(baseIssuance − folded)` units of the edge's own service, and
      * [edge]'s [EdgeSummary.issued] is the *effective* value, which deliberately is not this.
      */
     public fun baseIssuance(id: AttachmentId): Long = counterValue(issued, id)
 
     /**
-     * [id]'s **gross** virtual service — `floor + (baseIssued − folded) / w`, or `baseIssued / w`
-     * when no [Gauge] is stored, read on the edge's 1/16-unit grid: a floor written off it is
-     * rounded up once ([grossTicksAt], #3313). `null` if [id] is unknown *or divergent* (no single record ⇒ no
+     * [id]'s **gross** virtual service — the [Gauge]'s position advanced by `(baseIssued − folded)`
+     * units, over `G · w`, or `baseIssued / w` when no gauge is stored, read on the edge's
+     * 1/16-unit grid: a legacy floor written off it is rounded up once ([grossTicksAt], #3313). `null` if [id] is unknown *or divergent* (no single record ⇒ no
      * single weight to divide by).
      *
      * ## Base issuance, not effective (issue #1752, F2)
@@ -1510,8 +1512,9 @@ public class EntitlementLedger private constructor(
      *
      * ## The checkpoint is patch-atomic with the counter it folds, and that is load-bearing
      *
-     * The checkpoint asserts *"at base issuance `issuedAfter`, this edge's gross virtual service
-     * was `grossEv(issuedAfter)`"* — computed in this peer's own view, which is the only view it
+     * The checkpoint asserts *"at base issuance `issuedAfter`, this edge's gross position was
+     * `gross(issuedAfter)`"*, stored in the gauge's ticks exactly and uncapped (#3353) —
+     * computed in this peer's own view, which is the only view it
      * can honestly speak for. Riding the **same** [Patch] as the `issued` bump is what puts F1's
      * precondition outside the reachable sublattice: every reachable view is a join of published
      * patches, so no view can hold this edge's advanced counter while missing the checkpoint that
@@ -1526,9 +1529,9 @@ public class EntitlementLedger private constructor(
      * ## Seat before you delegate — this method will not do it for you
      *
      * Delegating down an edge that carries **no** gauge silently seats it at its own origin: the
-     * checkpoint written here is `grossEv(issuedAfter)`, which for an unseated edge is
-     * `issuedAfter / w`, and [seat] refuses forever afterwards because a gauge now exists. The join
-     * cannot repair it either — `max` on a floor that is already the minimum is a no-op. So a
+     * checkpoint written here is `gross(issuedAfter)`, which for an unseated edge is
+     * `issuedAfter · G`, and [seat] refuses forever afterwards because a gauge now exists. The join
+     * cannot repair it either — `max` on a position that is already the minimum is a no-op. So a
      * caller driving this must seat first; [FairShareAllocator.schedule] does, and it
      * additionally refuses a gauge-absent edge as a candidate so a mid-round `Activate` cannot slip
      * through the gap.
@@ -1562,15 +1565,13 @@ public class EntitlementLedger private constructor(
      * order). Gauge absence has neither defect: it is the exact question "has anybody seated this
      * edge yet", and the relocation counters are not a term of it.
      *
-     * The floor written is `max(front, baseIssued / w)`, and the fold is this peer's **own
-     * observed** base issuance. Both halves matter:
+     * The position written is `max(⌈front · w · G⌉, baseIssued · G)` ticks, exact and uncapped
+     * (#3353), and the fold is this peer's **own observed** base issuance. Both halves matter:
      *  - the `max` means a bump can never seat an edge *behind* what its own observed service
-     *    already implies, so this write has no lifetime-credit direction (§10.5). The one
-     *    exception is a seat past the edge's position ceiling, written at the ceiling; an edge
-     *    there refuses every pick that would order it, so the clamp is never spent (#3313);
+     *    already implies, so this write has no lifetime-credit direction (§10.5);
      *  - folding the observed issuance is what makes a *stale* bump self-limiting. A peer that has
      *    seen none of this edge's service writes `(itsFront, 0)`, and the componentwise join then
-     *    pairs that floor with a better-informed fold and deflates it. A restarted peer's
+     *    pairs that position with a better-informed fold and deflates it. A restarted peer's
      *    `(0, 0)` is absorbed with no effect at all.
      *
      * [front] is the parent's virtual time over the set [edge] is joining — see
@@ -1585,11 +1586,13 @@ public class EntitlementLedger private constructor(
 
     /**
      * [seat] at a position already on [edge]'s grid: [ticks] of its own service, the
-     * `⌈V · w · G⌉` a scheduler reads off its front ([VirtualTime.ticksFor]). The floor written is
-     * `max(ticks, baseIssued · G)` ticks, stored as the virtual time it stands for, so it is on the
-     * grid and every later read of it is exact. Rounding the front up to [ticks] is the only
-     * rounding a seat does (design §7.2). A seat above the edge's [positionCeiling] is written at
-     * the ceiling: a seat is part of a charge that may not be refused (#3313).
+     * `⌈V · w · G⌉` a scheduler reads off its front ([VirtualTime.ticksFor]). The position written
+     * is `max(ticks, baseIssued · G)`, taken on the absolute values in 128 bits and stored in the
+     * gauge's ticks exactly, with the floor left at zero. Rounding the front up to [ticks] is the
+     * only rounding a seat does (design §7.2). Nothing here caps it: a seat past the edge's
+     * [positionCeiling] is stored past it, and only a read narrows it (#3353). A front at its own
+     * ceiling arrives here as the ceiling, since [VirtualTime.ticksFor] still narrows it, and the
+     * read holds a stored position there whatever the fold says ([grossTicksAt]).
      */
     internal fun seatAt(edge: AttachmentId, ticks: Long): Patch<EntitlementLedger>? = seatAtWide(edge, Int128.of(ticks))
 
