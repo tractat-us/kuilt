@@ -443,18 +443,19 @@ public class EntitlementLedger private constructor(
 
     /**
      * [id]'s **base** issuance — `Σ_r issued(id)[r]`, excluding relocation credit. This is the
-     * [Gauge]'s fold axis, and it is published because a consumer holding a [gauge] cannot
-     * interpret the register without it: the read advances the gauge's position by
-     * `(baseIssuance − folded)` units of the edge's own service, and
-     * [edge]'s [EdgeSummary.issued] is the *effective* value, which deliberately is not this.
+     * [Gauge]'s fold axis: the read advances the gauge's position by `(baseIssuance − folded)`
+     * units of the edge's own service. It is published so a consumer can relate a [gauge]'s
+     * [Gauge.folded] to the issuance it has seen since, for diagnostics; [grossVirtualService] and
+     * [virtualService] are the reads that interpret the register. [edge]'s [EdgeSummary.issued] is
+     * the *effective* value, which deliberately is not this.
      */
     public fun baseIssuance(id: AttachmentId): Long = counterValue(issued, id)
 
     /**
      * [id]'s **gross** virtual service — the [Gauge]'s position advanced by `(baseIssued − folded)`
      * units, over `G · w`, or `baseIssued / w` when no gauge is stored, read on the edge's
-     * 1/16-unit grid: a legacy floor written off it is rounded up once ([grossTicksAt], #3313). `null` if [id] is unknown *or divergent* (no single record ⇒ no
-     * single weight to divide by).
+     * 1/16-unit grid: a legacy floor written off it is rounded up once ([grossTicksAt], #3313).
+     * `null` if [id] is unknown *or divergent* (no single record ⇒ no single weight to divide by).
      *
      * ## Base issuance, not effective (issue #1752, F2)
      *
