@@ -170,8 +170,8 @@ class WarpLogRecordExporterSegmentNumberingTest {
 
     @Test
     fun aDifferentMergeLandingInBetweenDoesNotExcuseTheRetry() = runTest {
-        // The second merge adopts only its own remote, so its success says nothing about the
-        // first one's ops, which are still in memory alone.
+        // The merge in between adopts the whole merged log, so it carries the first merge's
+        // stranded ops to disk and the retry has nothing left to persist.
         val backing = RecordingStore()
         val store = WriteRefusingStore(backing) { key -> key.name.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }
         val exporter = exporterFor(store)

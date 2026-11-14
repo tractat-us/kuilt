@@ -209,14 +209,16 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * in-memory bound is priced in.** A foreign author's dots are covered by an explicit
  * [RgaOp.Compact], nothing prunes one, and any segment carrying one is therefore pinned — where
  * pinned means retained **entire**: every [RgaOp.Insert] it holds, bodies included, for the life
- * of the store. Two shapes reach it:
+ * of the store. Three shapes reach it:
  *
  * - a sealed segment that happened to be active when a pass minted a `Compact` keeps its full
  *   [segmentOps] ops — ~123 KB at [DEFAULT_LOG_SEGMENT_OPS]; and
  * - a [merge] persists the remote op-log **verbatim** under a key of its own, so merging from a
  *   peer whose log carries a `Compact` — which any peer that has itself windowed a foreign
  *   author's dots does, i.e. any peer in a steady-state mesh — pins that peer's whole log. At
- *   [DEFAULT_MAX_LOG_RECORDS] that is megabytes per merge.
+ *   [DEFAULT_MAX_LOG_RECORDS] that is megabytes per merge; and
+ * - the first merge after a failed one persists this replica's **whole merged log**, not the
+ *   remote's, so the stranded ops reach disk; if that log carries a `Compact` it is pinned too.
  *
  * So the on-disk total settles for a replica fed by [export] and grows in **whole records** for
  * one fed by gossip — a coarser split than the in-memory bound's. Consolidation — rewriting a
@@ -696,7 +698,8 @@ public class WarpLogRecordExporter(
         ) : StoreAction
 
         /**
-         * The **commit point** of a merge's adopted segment: write [bytes] — the peer's whole log —
+         * The **commit point** of a merge's adopted segment: write [bytes] — the remote's op-log, or
+         * this replica's whole merged log on the first merge after a failed one —
          * under [number]'s key and, only once that write has *returned*, seal [number] into the
          * layout in memory with [content] ([applyAdopt]).
          *
