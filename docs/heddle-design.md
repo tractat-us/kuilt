@@ -525,9 +525,10 @@ arrives and detached when the user goes idle. Every departure leaves something
 behind. Detaching retires the child's edge, and a retired edge stays in the
 ledger for good, because the work done under it still counts in the books. So
 an engine that runs for months grows with every arrival and departure, in
-memory and on disk, without bound. This section records how a single-process
-engine forgets those edges while keeping the books exact, how much of that is
-built, and why peers cannot yet do the same.
+memory and on disk, without bound. This section records how a ledger forgets
+those edges while keeping the books exact, how much of that is built, and why
+peers cannot yet do the same. The ledger half is built; the engine half, which
+decides when to forget, is not built yet and is recorded as a design.
 
 #### Kept for good, summed once
 
@@ -547,11 +548,11 @@ Three other readers need a retired edge:
 - **`Topology.diff`'s `hasChildEdges` test.** It asks whether a group has any
   child edge in any lifecycle, to decide whether a reload needs a `Reconcile`.
 
-#### As built: fold, then forget
+#### As built: the ledger forgets
 
 Decided in #3192. The ledger half is built: a ledger can forget an edge, and a
 replicated ledger refuses one that has (#3357). The engine does not forget
-anything yet; see *When it happens*.
+anything yet; see *The design: the engine forgets*.
 
 **The seventeenth component, `forgotten`.** It is an internal `ForgottenEdges`,
 written through `CanonicalMapSerializer` at every level, with its own arm in
@@ -572,18 +573,20 @@ which a default `Json` or `Cbor` does not encode, so its bytes are what they
 were before the component existed.
 
 **When an edge may be forgotten.** When all of these hold. `forgetRefusal`
-names the first one an edge fails, as a `ForgetRefusal`:
+names the first one an edge fails, as a `ForgetRefusal`, checking in the order
+`ForgetRefusal` declares:
 
 - the ledger knows the edge, its id is in the topology grammar (the floor can
   only carry an id that has a generation), and one record names it;
-- it is RETIRED, or PREPARED with no counter and no gauge;
+- it is RETIRED, or PREPARED;
 - its child has no child edges in any lifecycle, forgotten ones included, so
   leaves go first;
 - no transfer row, base or relocation, sits at its path;
-- for a RETIRED edge, its books closed: charged plus returned within issued, no
-  negative effective spend in total or in any one replica's share, nothing
-  outstanding, nothing stranded on it for any replica, and its child holding
-  nothing.
+- a PREPARED edge has no counter and no gauge;
+- a RETIRED edge's books closed: charged plus returned within issued, no
+  negative effective spend in total, no negative net inflow or effective leaf
+  spend in any one replica's share, nothing outstanding, nothing stranded on it
+  for any replica, and its child holding nothing.
 
 Whether an open lease's captured path crosses the edge is the engine's
 question, not the ledger's. With nothing outstanding, no lease is charging it.
@@ -595,16 +598,6 @@ plus the parent's row. That a forgotten PREPARED edge will never activate is the
 caller's precondition. If it is activated anyway, `activate` finds no record and
 refuses, and a delta built elsewhere names an id at or below the floor, which
 `piece` refuses.
-
-**When it happens: not yet.** The engine is to forget automatically, in the
-same swap that retires an edge (`detachRuntimeChild`, `apply`), with no new
-API. That swap also sweeps every forgettable RETIRED edge no open lease
-crosses, so a restored v0.7.4 snapshot compacts too. It prunes the edge from the
-allocator's wake memory, `AllocatorMemory`, in the same swap, since
-`forgetDepartedChildren` finds an edge's parent through its record and could
-not once the record is gone. A PREPARED edge the topology no longer wants moves
-only the floor. Until that lands, nothing outside the tests calls `forget`, and
-an engine grows as it did before.
 
 **Forgetting is not a join.** Every other mutator only adds to the lattice; this
 one removes slots. So it is outside §10 invariant 2, scoped to a single writer,
@@ -635,6 +628,20 @@ carries one fails to decode.
 formats 1 and 2. v0.7.4 wrote format 1, and a format-1 snapshot that carries a
 fold is refused, since format 1 predates it. Every encoded change for the next
 release goes under that one bump.
+
+#### The design: the engine forgets
+
+None of this is built. The ledger half above is what exists.
+
+**When it happens.** The engine is to forget automatically, in the
+same swap that retires an edge (`detachRuntimeChild`, `apply`), with no new
+API. That swap also sweeps every forgettable RETIRED edge no open lease
+crosses, so a restored v0.7.4 snapshot compacts too. It prunes the edge from the
+allocator's wake memory, `AllocatorMemory`, in the same swap, since
+`forgetDepartedChildren` finds an edge's parent through its record and could
+not once the record is gone. A PREPARED edge the topology no longer wants moves
+the floor and gives its parent a row, nothing else. Until that lands, nothing
+outside the tests calls `forget`, and an engine grows as it did before.
 
 **Until the engine forgets,** keep a runtime child attached rather than
 detaching it when its user goes idle.
