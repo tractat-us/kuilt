@@ -24,9 +24,12 @@ import us.tractat.kuilt.math.timesWide
  * ```
  * P(e)       = max(⌈floor · w · G⌉, ticks)
  * gross(e)   = P(e) + (baseIssued(e) − folded) · G      (no gauge ⇒ baseIssued(e) · G)
- * grossEv(e) = gross(e) / (G · w)
- * ev(e)      = grossEv(e) − returned(e) / w
+ * raw(e)     = gross(e) − returned(e) · G − ⌊O · w · G⌋
+ * ev(e)      = raw(e) / (G · w)
  * ```
+ *
+ * `O` is the parent's origin ([EntitlementLedger.origin]), whole units of virtual time every child
+ * of the parent reads less of, on its own grid. The gauge itself holds no trace of it.
  *
  * ## Why the pair, and not just the position (issue #1752, F1)
  *
@@ -64,15 +67,17 @@ import us.tractat.kuilt.math.timesWide
  *
  * The ticks are never rewritten in place and never capped in storage. A seat and a checkpoint
  * store the exact value, past the position ceiling, and past `Long` if the edge's history goes
- * there. Saturation happens only where a position is narrowed to the `Long` a pick orders
- * ([grossTicksAt]). A cap in storage would turn into credit once a per-parent origin, the next
- * step of #3353, rose past it.
+ * there. Every read is wide up to the effective position a pick orders, and only that is narrowed
+ * ([rawTicksAt], [HeddlePolicy.effectiveTicks]). A cap in storage would turn into credit once the
+ * parent's origin rose past it. A seat is written absolute too: the origin the seating peer saw,
+ * added back on the edge's grid, so a seat means the same under any later origin.
  *
  * They are not yet absolute in a `LocalHeddle` ledger. A rebase there raises the fold (below), and
  * the next checkpoint after issuance passes the raised fold reads through it: ticks of `1000 · G`
  * at fold 1000, the fold raised to 1500, and a checkpoint at issuance 1600 stores `1100 · G`, not
  * `1600 · G`. That holds until `LocalHeddle` moves its rebase onto per-parent origins (#3353,
- * slice 7). The replicated `HeddleNode` raises no fold, so its ticks are absolute already.
+ * slice 7). The replicated `HeddleNode` raises its parents' origins instead and no fold, so its
+ * ticks are absolute already.
  *
  * ## The read is deliberately not monotone in the view
  *
@@ -81,14 +86,15 @@ import us.tractat.kuilt.math.timesWide
  * monotonicity of the read but a sandwich over every reachable view: no view can read an edge
  * behind the service that view itself contains (the §10.5 no-lifetime-credit direction), and no
  * view can inflate it beyond the largest stale write's excess. Do not "fix" the
- * non-monotonicity. The one place the lower half gives is the position ceiling (#3313): a position
- * past it reads as the ceiling, behind what it stands for, and every pick that would order it is
- * refused, so the shortfall is never spent.
+ * non-monotonicity. The one place the lower half gives is the position ceiling (#3313): an
+ * effective position past it is narrowed to the ceiling, behind what it stands for, and every pick
+ * that would order it is refused, so the shortfall is never spent.
  *
- * In a `LocalHeddle` ledger the sandwich is **relative**, not absolute: a rebase lowers every
- * child of a parent by one virtual time together, so a position reads its service less every
- * rebase taken since, and can read below zero, down to `−R` for an idle child (#3329). Read the
- * bounds against the siblings, not against the origin.
+ * Under a rebase the sandwich is **relative**, not absolute: a rebase lowers every child of a
+ * parent by one virtual time together, so a position reads its service less every rebase taken
+ * since. In a `HeddleNode` ledger that is the parent's origin, and an idle child can read as far
+ * below zero as the origin has risen; in a `LocalHeddle` ledger it is a raised fold, down to `−R`
+ * for an idle child (#3329). Read the bounds against the siblings, not against zero.
  *
  * ## A fold above issuance: `LocalHeddle`'s rebase
  *

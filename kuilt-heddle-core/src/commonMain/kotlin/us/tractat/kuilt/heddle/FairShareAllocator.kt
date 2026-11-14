@@ -204,6 +204,11 @@ public class FairShareAllocator(
      * - the first pick **granted**: the seats and the delegation land as one patch, and the fork is
      *   kept.
      *
+     * A first round that grants may also raise [parent]'s origin, in the same patch, once a child
+     * there has climbed past its [rebaseThreshold]: see [raiseOriginBeneath]. So may each later
+     * round, inside its own write. That rebase is what keeps a busy parent clear of the position
+     * ceiling, and it changes no pick (#3353).
+     *
      * The fork is adopted only once the write step has returned, so a cell that throws while writing
      * leaves this allocator as it was. Each later round is its own write, as before: a refusal there,
      * or a throw from the cell or the policy in round `k > 1`, keeps rounds `1..k−1`, which have
@@ -534,7 +539,8 @@ public class FairShareAllocator(
     /**
      * [ledger] with [parent]'s active children moved down by one common virtual time `Δ`, once one
      * of them has climbed past its [rebaseThreshold]; `null` when nothing moved (#3329). For a single
-     * writer only: [LocalHeddle] calls it, and the replicated [schedule] never does (#3353).
+     * writer only: [LocalHeddle] calls it. The replicated [schedule] raises the parent's origin
+     * instead ([raiseOriginBeneath], #3353), which rewrites no gauge.
      *
      * ## What moves: the effective position
      *

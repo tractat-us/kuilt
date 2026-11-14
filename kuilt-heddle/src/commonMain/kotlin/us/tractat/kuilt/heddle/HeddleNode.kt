@@ -358,16 +358,21 @@ public class HeddleNode internal constructor(
      * read once, under [lock], which [reserve] and [complete] also hold, so it cannot move during
      * the rounds.
      *
-     * **A busy parent reaches the position ceiling, and then this grants nothing there.** Each
-     * child's virtual position is a `Long` of 1/16-unit ticks, and it grows with the service handed
-     * down under the parent over its lifetime, so it is bounded. Past the bound it saturates instead
-     * of throwing (#3313). A pick that would have to order a saturated position is refused, and
-     * the rounds stop at that parent: a call that granted first answers [ScheduleOutcome.Delegated],
-     * and every call after it [ScheduleOutcome.PositionCeiling]. A refused call writes nothing and
-     * leaves the wake clamps as they were, and a call with nothing to grant writes nothing either
-     * ([FairShareAllocator.schedule]). This node has no rebase to bring the positions back down
-     * yet (#3353). At [LocalHeddle.MAX_RESERVATION]-size grants and a weight of
-     * `3/7`, the bound is about 9,000 grants, some 2⁵⁷ units of service.
+     * **A busy parent rebases by raising its origin, long before the position ceiling** (#3353).
+     * Each child's position is stored wide, and a pick orders it relative to the parent's origin,
+     * narrowed to a `Long` with a ceiling. Once any child's effective position passes a sixteenth
+     * of that ceiling, a round that grants also raises the origin, in the same patch as its grant,
+     * by the largest whole step no demanding child would fall below zero for. Every child reads the
+     * same virtual time lower, so no pick changes, and nothing else is rewritten: a peer that has
+     * not seen the raise still seats and checkpoints correctly, since both write absolute positions.
+     * [boundMetrics] reports the peak effective position as a fraction of its ceiling.
+     *
+     * The ceiling can still be met: a demanding child that is never served holds the step at zero.
+     * A pick that would have to order a position at its ceiling is refused, and the rounds stop at
+     * that parent: a call that granted first answers [ScheduleOutcome.Delegated], and every call
+     * after it [ScheduleOutcome.PositionCeiling]. A refused call writes nothing and leaves the wake
+     * clamps as they were, and a call with nothing to grant writes nothing either
+     * ([FairShareAllocator.schedule]).
      *
      * @return [ScheduleOutcome.Delegated] with the count of grants applied this call,
      *   [ScheduleOutcome.NothingToDelegate] when none was, or [ScheduleOutcome.PositionCeiling] or

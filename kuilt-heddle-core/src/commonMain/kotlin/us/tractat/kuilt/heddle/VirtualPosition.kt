@@ -51,20 +51,22 @@ internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS
  * [POSITION_HEADROOM]`) / w.denominator`.
  *
  * The bound has two jobs. Divided by the weight's denominator, it keeps the position's own virtual
- * time representable: a position read as a virtual time, by the public reads and in a stored wake
- * offset, is `ticks / (G · w)`, whose numerator is at most `ticks · w.denominator`
- * ([ticksToVirtual]). A gauge stores its position in 128-bit ticks and is not held here; only a
- * read of it is (#3353). Short of `Long.MAX_VALUE` by [POSITION_HEADROOM], it
- * leaves a deadline room. A position that would pass it **saturates** here instead of throwing
- * (#3313): it no longer orders exactly, so a pick that would have to order it is refused with
- * [AcquireOutcome.PositionCeiling], while a charge, which may not be refused, lands with the
- * position held at the ceiling.
+ * time representable: a position read as a virtual time by the public reads is `ticks / (G · w)`,
+ * whose numerator is at most `ticks · w.denominator` ([ticksToVirtual]). Short of `Long.MAX_VALUE`
+ * by [POSITION_HEADROOM], it leaves a deadline room.
+ *
+ * It bounds only the **effective** position a pick orders, relative to the parent's origin
+ * (#3353). A gauge's stored position, the origin, the raw position, the front and a wake clamp are
+ * all 128-bit and held nowhere. An effective position that would pass the ceiling **saturates**
+ * here instead of throwing (#3313): it no longer orders exactly, so a pick that would have to
+ * order it is refused with [AcquireOutcome.PositionCeiling], while a charge, which may not be
+ * refused, lands.
  */
 internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADROOM) / w.denominator
 
 /**
- * The position, in ticks, past which [LocalHeddle] rebases a parent: a sixteenth of [w]'s
- * [positionCeiling] (#3329). Far enough below the ceiling that the spread of a busy parent's
+ * The position, in ticks, past which a parent is rebased: a sixteenth of [w]'s [positionCeiling]
+ * ([LocalHeddle] by its folds, #3329; `HeddleNode` by its origin, #3353). Far enough below the ceiling that the spread of a busy parent's
  * children above the rebased one never reaches it, and far enough above zero that a rebase is rare.
  */
 internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16
