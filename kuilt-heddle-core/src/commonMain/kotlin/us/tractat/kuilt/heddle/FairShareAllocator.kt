@@ -741,7 +741,10 @@ public class FairShareAllocator(
         }
     }
 
-    private fun spikeEff(edge: PolicyEdge): Rational = ticksToVirtual(HeddlePolicy.effectiveTicks(edge), edge.record.weight)
+    private fun spikeEff(edge: PolicyEdge): Rational {
+        val eff = ticksToVirtual(HeddlePolicy.effectiveTicks(edge), edge.record.weight)
+        return if (spikeLagRule == 4) eff - Rational.of(edge.summary.outstanding) / weightOf(edge) else eff
+    }
 
     private fun weightOf(edge: PolicyEdge): Rational = Rational.of(edge.record.weight.numerator, edge.record.weight.denominator)
 
@@ -779,9 +782,13 @@ public class FairShareAllocator(
      * main.
      */
     private fun placeWakers(edges: List<PolicyEdge>, wakers: Set<AttachmentId>, joiners: Set<AttachmentId>, front: VirtualTime) {
-        val f = front.toRational()
         val competing = edges.filter { it.record.id !in joiners && HeddlePolicy.isDemanding(it) }
         val ws = competing.fold(Rational.ZERO) { acc, e -> acc + weightOf(e) }
+        val f = when {
+            spikeLagRule != 4 -> front.toRational()
+            competing.isNotEmpty() -> competing.fold(Rational.ZERO) { acc, e -> acc + weightOf(e) * spikeEff(e) } / ws
+            else -> edges.maxOf { spikeEff(it) }
+        }
         var fStar = f
         if (spikeLagRule >= 2 && ws > Rational.ZERO) {
             var sum = Rational.ZERO

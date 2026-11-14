@@ -135,6 +135,7 @@ class Spike3376Probe {
             Triple("MAIN", false, 0), Triple("MAIN+keep", false, 1), Triple("MAIN+keepK", false, 2),
             Triple("UNIFIED", true, 0), Triple("UNIFIED+keep", true, 1), Triple("UNIFIED+keepK", true, 2),
             Triple("UNIFIED+noShift(control)", true, 3),
+            Triple("UNIFIED+keepK-settled", true, 4),
         )
         try {
             for ((name, unified, rule) in variants) {
