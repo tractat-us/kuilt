@@ -35,9 +35,19 @@ kotlin {
         // set with id :kuilt-identity/appleMain". Creating it by hand disables the template, so
         // every Apple intermediate is wired here; jvm, android and wasmJs need none.
         val appleMain by creating { dependsOn(commonMain.get()) }
-        val iosArm64Main by getting { dependsOn(appleMain) }
-        val iosSimulatorArm64Main by getting { dependsOn(appleMain) }
-        val macosArm64Main by getting { dependsOn(appleMain) }
+        // iOS keeps the device key in the Keychain and macOS in a file (Decided 28), so each has its
+        // own intermediate for its `DeviceKeyStore.platform(appId)`; the store they share is appleMain's.
+        val iosMain by creating { dependsOn(appleMain) }
+        val macosMain by creating { dependsOn(appleMain) }
+        val iosArm64Main by getting { dependsOn(iosMain) }
+        val iosSimulatorArm64Main by getting { dependsOn(iosMain) }
+        val macosArm64Main by getting { dependsOn(macosMain) }
+        val appleTest by creating { dependsOn(commonTest.get()) }
+        val iosTest by creating { dependsOn(appleTest) }
+        val macosTest by creating { dependsOn(appleTest) }
+        val iosArm64Test by getting { dependsOn(iosTest) }
+        val iosSimulatorArm64Test by getting { dependsOn(iosTest) }
+        val macosArm64Test by getting { dependsOn(macosTest) }
 
         commonMain.dependencies {
             // `api`: `RevocationList.open` takes a `DurableStore` and a `StoreKey`, so a caller names
@@ -78,7 +88,11 @@ kotlin {
             implementation(libs.kotlin.logging)
         }
         androidMain.dependencies { implementation(libs.cryptography.provider.jdk) }
-        appleMain.dependencies { implementation(libs.cryptography.provider.cryptokit) }
+        appleMain.dependencies {
+            implementation(libs.cryptography.provider.cryptokit)
+            // The Apple stores' one warning: a stored key they could not read back, replaced.
+            implementation(libs.kotlin.logging)
+        }
         wasmJsMain.dependencies { implementation(libs.cryptography.provider.webcrypto) }
 
         commonTest.dependencies {

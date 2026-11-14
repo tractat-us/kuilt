@@ -82,12 +82,3 @@ class FileDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() {
         }
     }
 }
-
-/** [jwk] with its `d` replaced by the `d` in [of]: a pair whose halves belong to different keys. */
-internal fun withPrivatePart(jwk: String, of: String): String {
-    val d = Regex("\"d\"\\s*:\\s*\"([^\"]+)\"")
-    val signerD = checkNotNull(d.find(of)) { "no d in the signer's JWK" }.groupValues[1]
-    val namedD = checkNotNull(d.find(jwk)) { "no d in the named JWK" }.groupValues[1]
-    check(signerD != namedD) { "precondition: two different keys" }
-    return jwk.replace(namedD, signerD)
-}
