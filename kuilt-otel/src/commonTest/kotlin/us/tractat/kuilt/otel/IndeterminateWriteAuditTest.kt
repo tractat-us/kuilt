@@ -34,8 +34,8 @@ class IndeterminateWriteAuditTest {
             val store = CommitThenFailStore(StoreKey("otel.spans"), cancel)
             val clock = WarpCausalClock(replica)
             val exporter = WarpSpanExporter(replica, store, causalClock = clock)
-            if (cancel) assertFailsWith<CancellationException> { exporter.export(span) }
-            else assertIs<ExportResult.Failure>(exporter.export(span))
+            // A cancellation the store throws at a live caller is a refused write (#3388).
+            assertIs<ExportResult.Failure>(exporter.export(span))
             val live = exporter.snapshot().elements
             val recoveredClock = WarpCausalClock(replica).also { it.recover(store) }
             val recovered = WarpSpanExporter(replica, store, causalClock = recoveredClock).also { it.recover() }
@@ -221,8 +221,8 @@ class IndeterminateWriteAuditTest {
             )
             for (write in writes) {
                 store.armed = true
-                if (cancel) assertFailsWith<CancellationException> { write() }
-                else assertIs<MetricExportResult.Failure>(write())
+                // A cancellation the store throws at a live caller is a refused write (#3388).
+                assertIs<MetricExportResult.Failure>(write())
             }
             val recovered = WarpMetricExporter(replica, store).also { it.recover() }
             val durable = recovered.snapshotAll()
@@ -275,7 +275,12 @@ class IndeterminateWriteAuditTest {
         }
     }
 
-    /** A minted cancellation exercises propagation; real caller cancellation is covered by the log fixture. */
+    /**
+     * Commits, then throws. With [cancel] it throws a `CancellationException` at a caller whose job is
+     * alive: the exporters read that as a refused write (#3388), while [WarpCausalClock.persist],
+     * which has no guard, lets it through. The caller's own cancellation is pinned by the
+     * `StoreMintedCancellationTest` suites.
+     */
     private class CommitThenFailStore(private val target: StoreKey?, private val cancel: Boolean) : DurableStore {
         private val backing = InMemoryDurableStore()
         var armed = true
