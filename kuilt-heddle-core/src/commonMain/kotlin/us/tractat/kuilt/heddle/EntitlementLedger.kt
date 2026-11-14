@@ -916,8 +916,8 @@ public class EntitlementLedger private constructor(
      * weight or parent mints a *new* id, never re-preparing an old one. No entitlement
      * may cross a prepared edge until [activate].
      *
-     * Also `null` for an id in the topology grammar at or below the generation of every edge
-     * this ledger has forgotten (design §5.5): it may be one of them, and [piece] would throw on
+     * Also `null` for an id in the topology grammar at or below the highest generation this
+     * ledger has forgotten (design §5.5): it may be a forgotten one, and [piece] would throw on
      * the patch at its resurrection guard. The floor cannot tell a forgotten id from one this
      * ledger never held, so it refuses both, which costs nothing, since every id a diff or an
      * attach prepares is numbered above the floor.

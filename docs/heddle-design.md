@@ -648,12 +648,16 @@ each `apply`, `attachRuntimeChild` and `detachRuntimeChild`. That swap forgets:
 The same swap prunes each forgotten edge from the allocator's wake memory,
 `AllocatorMemory`, since `forgetDepartedChildren` finds an edge's parent through
 its record and could not once the record is gone. The sweep reads every edge's
-lifecycle once, and the counters once for all the candidates together.
+lifecycle once. It walks the counters for their replicas twice, once to choose
+the candidates and once to forget them, rather than once per candidate.
 
 Measured on the JVM: 2,000 users each attached, served once and detached leave
 the snapshot within 64 bytes of where it stood after the first 20. Before, each
-one added about 400 bytes. An engine that forgets and one that keeps everything
-give the same picks, holdings and conservation on the same calls.
+one added about 410 bytes. Where the edges forgotten are retired ones, an engine
+that forgets and one that keeps everything give the same picks, holdings and
+conservation on the same calls. A forgotten prepared edge does change a later
+diff: one that wants that edge back prepares a new edge above the floor instead
+of adopting the old one.
 
 #### Settled — don't reopen
 
@@ -1238,8 +1242,8 @@ Carried over from the source intact; each is a named property test (§13).
 2. **Monotonicity.** Every replicated component only grows; merge is a join;
    the lattice laws hold (`piece` idempotent, commutative, associative).
    `outstanding` may fall but is always derived, never stored. **Scope: every
-   ledger peers exchange.** A single-writer engine's forgetting of retired edges
-   (§5.5) removes slots and is not a join. It is confined, like invariant 4's
+   ledger peers exchange.** A single-writer engine's forgetting of retired edges,
+   and of prepared edges its topology does not want (§5.5), removes slots and is not a join. It is confined, like invariant 4's
    exception, to a ledger no other writer touches: `forget` is internal to
    `:kuilt-heddle-core`, `piece` refuses a fold that is not the receiver's own,
    and `:kuilt-heddle` refuses to decode a ledger that carries one.

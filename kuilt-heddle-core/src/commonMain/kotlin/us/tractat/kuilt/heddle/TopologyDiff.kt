@@ -189,8 +189,9 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
  *   forgetting it would detach the child.
  *
  * A runtime child whose marker is gone is never in it, since the diff closes and retires its
- * prepared edges. Forgetting one of these changes no later diff: nothing reads it but the
- * generation floor, which the fold keeps. Reads [candidates]' children's own edges from the
+ * prepared edges. Forgetting one of these changes this diff not at all, but a later one: a diff
+ * that wants the edge back, at the same weight, prepares a new edge above the generation floor
+ * where it would have adopted the old one. Reads [candidates]' children's own edges from the
  * index, not every edge.
  */
 internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, ledger: EntitlementLedger): List<AttachmentId> {
@@ -203,8 +204,8 @@ internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, led
         val path = pathOf(child)
         val want = declared[child] ?: run {
             if (path?.runtime != true) return@filter true
+            // No attached() check: the candidate is itself a PREPARED edge in [edges].
             val marker = markerAt(path.names.drop(1).dropLast(1)) ?: return@filter false
-            if (!edges.attached()) return@filter false
             WantedChild(child, parentOf(child), marker.weight, group = false)
         }
         val adopted = edges.adoptable(want)

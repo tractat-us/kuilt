@@ -191,8 +191,8 @@ A finite product of semilattices is a semilattice, so
 `GCounter` delta carries the resulting absolute slot value, so re-delivering any patch is
 absorbed idempotently by max — **duplicate-delivery idempotence comes from the lattice, not
 event ids.** No component decrements; `outstanding`/`holdings` are derived and may fall.
-The one planned exception is a single writer's forgetting of retired edges (see `holdings`
-below), which removes slots and is therefore not a join; `piece` refuses a delta that carries it.
+The one exception is a single writer's forgetting of retired edges, and of prepared edges
+its topology does not want (see `holdings` below), which removes slots and is therefore not a join; `piece` refuses a delta that carries it.
 
 ## `holdings(group, r)`
 

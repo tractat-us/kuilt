@@ -1018,19 +1018,21 @@ public class LocalHeddle private constructor(
      * - every PREPARED edge the topology in force does not want ([Topology.unwantedPrepared]),
      *   which carries nothing, so only the generation floor moves.
      *
-     * An edge on an open lease's path is never forgotten, though no lease's path holds either kind:
-     * [run] has just checked that every path is its leaf's live lineage. The allocator's memory of
-     * each forgotten edge goes in the same swap, since its own pruning needs the edge's record.
+     * No edge on an open lease's path is forgotten, and nothing here filters for it, because two
+     * guards already hold it: [attempt] has just checked that every open lease's path is its leaf's
+     * live lineage, which crosses no RETIRED or PREPARED edge, and the ledger refuses to forget an
+     * edge a lease still charges ([ForgetRefusal.OUTSTANDING]). The allocator's memory of each
+     * forgotten edge goes in the same swap, since its own pruning needs the edge's record.
      *
-     * Reads every edge's lifecycle once, and the counters once for all the candidates together.
+     * Reads every edge's lifecycle once, and makes two passes for the replicas the counters name,
+     * one to choose the candidates ([EntitlementLedger.forgettable]) and one to forget them.
      * What forgetting changes and what it does not is on [EntitlementLedger.forget].
      */
     private fun forgetQuiesced() {
         if (!forgetsForTest) return
         val quiesced = ledger.quiescedEdges()
         if (quiesced.isEmpty()) return
-        val crossed = open.values.flatMapTo(HashSet()) { it.path }
-        val (prepared, retired) = quiesced.filter { it !in crossed }.partition { ledger.lifecycle(it) == Lifecycle.PREPARED }
+        val (prepared, retired) = quiesced.partition { ledger.lifecycle(it) == Lifecycle.PREPARED }
         val unwanted = (leasable as? Leasable.ByTopology)?.topology?.unwantedPrepared(prepared, ledger).orEmpty()
         val doomed = ledger.forgettable(retired + unwanted)
         if (doomed.isEmpty()) return
