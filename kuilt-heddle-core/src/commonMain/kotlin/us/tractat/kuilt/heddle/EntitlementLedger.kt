@@ -7,6 +7,7 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.WideSum
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 

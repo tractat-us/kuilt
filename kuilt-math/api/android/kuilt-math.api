@@ -46,3 +46,13 @@ public final class us/tractat/kuilt/math/Rounding : java/lang/Enum {
 	public static fun values ()[Lus/tractat/kuilt/math/Rounding;
 }
 
+public final class us/tractat/kuilt/math/WideSum {
+	public fun <init> ()V
+	public final fun add (J)V
+	public final fun add (Lus/tractat/kuilt/math/Int128;)V
+	public final fun sub (J)V
+	public final fun sub (Lus/tractat/kuilt/math/Int128;)V
+	public final fun toInt128 ()Lus/tractat/kuilt/math/Int128;
+	public fun toString ()Ljava/lang/String;
+}
+

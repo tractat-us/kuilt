@@ -208,7 +208,7 @@ public fun compareProducts(a: Long, b: Long, c: Long, d: Long): Int = a.timesWid
 
 private const val LOW_32: Long = 0xFFFF_FFFFL
 
-private fun unsignedLess(a: Long, b: Long): Boolean = (a xor Long.MIN_VALUE) < (b xor Long.MIN_VALUE)
+internal fun unsignedLess(a: Long, b: Long): Boolean = (a xor Long.MIN_VALUE) < (b xor Long.MIN_VALUE)
 
 private fun compareUnsigned(a: Long, b: Long): Int = (a xor Long.MIN_VALUE).compareTo(b xor Long.MIN_VALUE)
 

@@ -174,8 +174,67 @@ class OracleTest {
         mulDiv(-x, 1L, -2L, Rounding.FLOOR), mulDiv(-x, 1L, -2L, Rounding.CEILING),
     )
 
+    /**
+     * A [WideSum] driven through random runs of `Long`, product and arbitrary 128-bit terms keeps
+     * the oracle's exact total after every step, and throws, leaving the total as it was, exactly
+     * when the oracle's next total leaves 128 bits. Half the runs open next to an edge of the range,
+     * so a single `Long` term can cross it and the `Long` arm's refusal is reached too.
+     */
+    @Test
+    fun wideSumKeepsTheOracleTotalAndRefusesExactlyWhereItLeavesTheRange() {
+        val random = Random(105)
+        val min = Big.of(Int128.MIN_VALUE)
+        val max = Big.of(Int128.MAX_VALUE)
+        val refused = IntArray(3)
+        var steps = 0
+        repeat(N / RUN) {
+            val sum = WideSum()
+            var exact = Big.ZERO
+            val opening = when (random.nextInt(4)) {
+                0 -> Int128.MAX_VALUE - random.nextLong(4)
+                1 -> Int128.MIN_VALUE + random.nextLong(4)
+                else -> Int128.ZERO
+            }
+            sum.add(opening)
+            exact += Big.of(opening)
+            repeat(RUN) {
+                val kind = random.nextInt(3)
+                val adding = random.nextBoolean()
+                val term = when (kind) {
+                    0 -> Int128.of(random.nextCornerLong())
+                    1 -> random.nextCornerLong().timesWide(random.nextCornerLong())
+                    else -> Int128.fromTwosComplement(random.nextLong(), random.nextLong())
+                }
+                val step: () -> Unit = when {
+                    // The Long overloads, not the Int128 ones, for a Long term.
+                    kind == 0 && adding -> { -> sum.add(term.low) }
+                    kind == 0 -> { -> sum.sub(term.low) }
+                    adding -> { -> sum.add(term) }
+                    else -> { -> sum.sub(term) }
+                }
+                val next = if (adding) exact + Big.of(term) else exact - Big.of(term)
+                if (next < min || next > max) {
+                    refused[kind]++
+                    assertFailsWith<ArithmeticException>("$exact ${if (adding) "+" else "-"} $term") { step() }
+                } else {
+                    step()
+                    exact = next
+                }
+                assertEquals(exact, Big.of(sum.toInt128()), "after $term")
+                steps++
+            }
+        }
+        assertAll(
+            { assertEquals(N, steps) },
+            { assertTrue(refused[0] > 0, "the Long arm refused ${refused[0]} times") },
+            { assertTrue(refused[1] > 0, "the product arm refused ${refused[1]} times") },
+            { assertTrue(refused[2] > N / 20, "the 128-bit arm refused ${refused[2]} times") },
+        )
+    }
+
     private companion object {
         const val N = 200_000
+        const val RUN = 20
         val CORNERS = listOf(
             Long.MIN_VALUE, Long.MIN_VALUE + 1L, -(1L shl 32), -2L, -1L, 0L, 1L, 2L,
             (1L shl 32) - 1L, 1L shl 32, Long.MAX_VALUE - 1L, Long.MAX_VALUE,

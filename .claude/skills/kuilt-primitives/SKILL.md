@@ -26,11 +26,11 @@ Rows pair `;`-separated groups in order.
 |a Raft term/vote/log surviving a restart, an `expect`/`actual` `RaftStorage`|`DurableStoreRaftStorage.open(store)` + `RaftStorageConformanceSuite`|`consensus.md#durable-consensus-state`|
 |a last-write-wins register, a grow-only or add/remove set, a shared JSON document; trimming a log that only grows; wanting the *edits* not the value|`LWWRegister`/`LWWMap`, `GSet`/`GCounter`/`PNCounter`, `ORSet`/`ORMap`, `BoundedCounter`, `Causal`, `CausalMap`, `EphemeralMap`, `JsonCrdt` (`Patch`); `Rga.dropWindow` + `VersionVector.contiguous`; `OpLogCrdt` (`operations`/`classify`/`dotOf`)|`replication.md#replicated-data`|
 |replicating a CRDT by hand; "claim it only if it's free"; a hop so two guests can see each other; averaging model updates privately; comparing two peers' state as one number; a write lost to close|`Quilter`; `Quilter.mutateOrSkip { … }`; `Room.channel(id)`; `FedAvg` + `TrainingUpdate`; `canonicalDigest`; `Quilter.drainAndClose`|`replication.md#replicated-data`|
-|a session too big for all-to-all — N² links|`GossipSeam` + `deltaTargets = { gossip.activePeers.value }` (`recommendedActiveViewSize`, `FullFanout`, `hostedOverlay`)|`replication.md#scaling-to-many-peers`|
+|a session too big for all-to-all|`GossipSeam` + `deltaTargets = { gossip.activePeers.value }` (`recommendedActiveViewSize`, `FullFanout`, `hostedOverlay`)|`replication.md#scaling-to-many-peers`|
 |dealing cards nobody can peek at|`DealSession` + `SraScheme()`|`replication.md#dealing-cards-nobody-can-peek-at`|
 |a shared random nobody could steer — a seed, a die roll|`FairRandom.roll()`|`replication.md#nobody-chose-that-number`|
 |a `seenIds` set|`GSet`/kuilt dedup|`replication.md#dedup`|
-|a `Long` total that must not wrap; cross-multiplied fractions, `a * b / c`|`plusOrNull`/`timesOrNull`; `compareProducts`, `mulDiv`|`replication.md#counting-past-what-a-long-holds`|
+|a `Long` total that must not wrap; cross-multiplied fractions, `a * b / c`|`plusOrNull`/`timesOrNull`; `compareProducts`, `mulDiv`, `WideSum`|`replication.md#counting-past-what-a-long-holds`|
 |a longer-lived copy of a replicated log; replaying it, a resume cursor|`BoltDecorator` + `AppliedOpSink` (`WarpLogRecordExporter(appliedOps = …)`); `Bolt.replay` + `ReplayScope` → `CleanTail`/`Truncated`; `Bolt.durability()`|`replication.md#archiving-what-the-live-replica-forgets`|
 |merging discovery feeds into one roster; a `try`/`catch` per browse feed|`discoveryRoster` (`onSourceFailure`)|`fabrics.md#discovery`|
 |a sweeper over a discovery list — departed peers on screen|`PeerDiscoverySource.departures()` + `DiscoverySourceConformanceSuite`|`fabrics.md#peers-pile-up-and-are-never-removed`|

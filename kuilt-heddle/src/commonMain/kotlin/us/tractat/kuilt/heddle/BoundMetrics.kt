@@ -2,6 +2,8 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.math.Rounding
+import us.tractat.kuilt.math.plusOrNull
+import us.tractat.kuilt.math.timesOrNull
 import us.tractat.kuilt.math.timesWide
 
 /**
@@ -69,14 +71,17 @@ public data class BoundMetrics(
             val discretization = config.policy.quantum
             val peerCount = maxOf(1, roster.size).toLong()
             val configuredWorstCase =
-                checkedAdd(checkedMul(peerCount, config.maxHoldingsPerPeer), discretization)
+                peerCount.timesOrNull(config.maxHoldingsPerPeer)?.plusOrNull(discretization)
+                    ?: throw ArithmeticException("Long overflow: $peerCount * ${config.maxHoldingsPerPeer} + $discretization")
 
             var steerable = 0L
             for (r in roster) {
                 val h = ledger.holdings(parent, r)
-                if (h > 0L) steerable = checkedAdd(steerable, h)
+                if (h > 0L) steerable = steerable.plusOrNull(h) ?: throw ArithmeticException("Long overflow: $steerable + $h")
             }
-            val currentBound = minOf(configuredWorstCase, checkedAdd(steerable, discretization))
+            val steerableBound = steerable.plusOrNull(discretization)
+                ?: throw ArithmeticException("Long overflow: $steerable + $discretization")
+            val currentBound = minOf(configuredWorstCase, steerableBound)
 
             return BoundMetrics(
                 parent = parent,
@@ -120,7 +125,8 @@ public data class BoundMetrics(
             for (c in children) {
                 val w = ledger.record(c.attachment)?.weight ?: continue
                 weights[c.attachment] = w
-                totalCommitted = checkedAdd(totalCommitted, c.committedService)
+                totalCommitted = totalCommitted.plusOrNull(c.committedService)
+                    ?: throw ArithmeticException("Long overflow: $totalCommitted + ${c.committedService}")
                 weightSum += Rational.of(w.numerator, w.denominator)
             }
             if (totalCommitted == 0L || weightSum == Rational.ZERO) return 0L
