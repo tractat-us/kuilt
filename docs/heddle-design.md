@@ -1247,8 +1247,9 @@ lists its jobs' reservations, head first.
 - Each pick does what a real caller does: `acquire` with `reservation`, then, when
   the winner's head is larger, `extend` the lease by `head − reservation`. Then it
   pops the head.
-- `extend` makes no pick, so the order is the slot-length order that #3200 made
-  the contract, and this ships without settling #3200. The head sets only what
+- `extend` makes no pick, so the order is the slot-length order, the contract
+  ruled in #3200 (plan Amendment 9), and this ships without settling the rest of
+  #3200. The head sets only what
   the lease holds, `max(reservation, head)`. A head below the reservation would
   need the lease to shrink, which is #3200's question.
 - The list stops at the first refusal, including the position-ceiling refusal
