@@ -6,16 +6,24 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.io.bytestring.ByteString
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
@@ -64,78 +72,125 @@ class TokenGatedSeamTest {
     }
 
     /**
-     * Replay/forgery defense: a proof bound to a *foreign* nonce (not the one the verifier
-     * issued) is rejected, even though it is a valid HMAC of the correct code. This is the
-     * property that stops a captured proof from being replayed against a fresh challenge —
-     * the verifier checks the tag against the nonce **it** sent, and each challenge is fresh.
+     * Replay/forgery defense: a proof over a *foreign* nonce (not the one the verifier issued) is
+     * rejected, even though everything else about it is right: the code, both ids, and the prover
+     * nonce the attacker sends alongside it. This is the property that stops a captured proof from
+     * being replayed against a fresh challenge — the verifier checks the tag against the nonce **it**
+     * sent, and each challenge is fresh. The control arm is the same forger using the nonce it was
+     * sent, which proves the only thing wrong with the first proof was the nonce.
      */
     @Test
     fun proofBoundToAForeignNonceIsRejected() = runTest(UnconfinedTestDispatcher()) {
+        val foreignNonce = ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES) { 0x5A }
+        val (hostGate, forgerId) = forgerAgainstAVerifier { foreignNonce }
+        assertFalse(forgerId in hostGate.peers.value, "a proof over a foreign nonce is refused")
+    }
+
+    /** The control for the test above: the same forged proof over the nonce it was actually sent. */
+    @Test
+    fun aProofOverTheIssuedNonceFromTheSameRigIsAdmitted() = runTest(UnconfinedTestDispatcher()) {
+        val (hostGate, forgerId) = forgerAgainstAVerifier { issued -> issued }
+        assertTrue(forgerId in hostGate.peers.value, "the rig's proof must be good but for the nonce")
+    }
+
+    /**
+     * A verifier, and a raw joiner holding the real code that answers its challenge over whatever
+     * nonce [nonceToProve] picks. Returns the verifier's gate and the joiner's id.
+     */
+    private suspend fun TestScope.forgerAgainstAVerifier(
+        nonceToProve: (issued: ByteArray) -> ByteArray,
+    ): Pair<Seam, PeerId> {
         val token = LogTapJoinToken.issue(Random(1), clockAt(t0), ttl = 5.minutes)
         val loom = InMemoryLoom()
         val hostSeam = loom.host(Pattern("gate-test"))
         val joinerSeam = loom.join(InMemoryTag("attacker"))
-        // Host is a real verifier; the "attacker" joiner is raw (not a Prover) so we can forge.
-        val hostGate = hostSeam.tokenGated(GateRole.Verifier(token, clockAt(t0), Random(7)), backgroundScope)
-
-        // Answer the challenge with a proof over a DIFFERENT nonce than the one issued.
         backgroundScope.launch {
             joinerSeam.incoming.collect { swatch ->
                 val challenge = TapAdmitMessage.decode(swatch.toByteArray()) as? TapAdmitMessage.Challenge ?: return@collect
-                // Correct code, wrong nonce — a stale/replayed proof.
-                val foreignNonce = ByteArray(16) { 0x5A }
-                check(!foreignNonce.contentEquals(challenge.nonce.toByteArray())) { "nonce collision in test" }
-                val tag = ByteString(hmacSha256(token.code.encodeToByteArray(), foreignNonce))
-                swatch.sender?.let { joinerSeam.sendTo(it, TapAdmitMessage.encode(TapAdmitMessage.Proof(tag))) }
+                val verifierId = swatch.sender ?: return@collect
+                val proverNonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES) { 3 })
+                val tag = admissionTag(
+                    code = token.code,
+                    verifierId = verifierId,
+                    proverId = joinerSeam.selfId,
+                    challengeNonce = ByteString(nonceToProve(challenge.nonce.toByteArray())),
+                    proverNonce = proverNonce,
+                )
+                joinerSeam.sendTo(verifierId, TapAdmitMessage.encode(TapAdmitMessage.Proof(proverNonce, ByteString(tag))))
             }
         }
-
-        val surfaced = withTimeoutOrNull(1.minutes) {
-            hostGate.peers.first { peers -> peers.any { it != hostGate.selfId } }
-        }
-        assertNull(surfaced, "a proof over a foreign nonce is refused")
+        val hostGate = hostSeam.tokenGated(GateRole.Verifier(token, clockAt(t0), Random(7)), backgroundScope)
+        runCurrent()
+        return hostGate to joinerSeam.selfId
     }
 
     /**
-     * Offline-harvest hardening (#1052): in the role-inverted topology the prover hosts the
-     * session, so any joiner can send it a [TapAdmitMessage.Challenge] purely to harvest
-     * `HMAC(code, nonce)` for an offline crack of the join code (bounded only by the token
-     * TTL on the plaintext wire). The prover binds to the first host it answers and must NOT
-     * answer a challenge from any other sender thereafter.
+     * The prover answers whoever asks, and the answer is good for the asker alone. Answering only the
+     * first challenger let a stranger lock the real device out (#1865), so the safety moved from *who
+     * gets an answer* to *what the answer is good for*.
      */
     @Test
-    fun proverAnswersOnlyItsBoundHost() = runTest(UnconfinedTestDispatcher()) {
+    fun proverAnswersEveryChallengerWithATagNamingThatChallenger() = runTest(UnconfinedTestDispatcher()) {
         val loom = InMemoryLoom()
         val proverSeam = loom.host(Pattern("prover-hosts"))
-        val hostSeam = loom.join(InMemoryTag("host")) // the legitimate verifier device
-        val attackerSeam = loom.join(InMemoryTag("attacker"))
-        val proverGate = proverSeam.tokenGated(GateRole.Prover("CODE1234"), backgroundScope)
-        val proverId = proverGate.selfId
+        val deviceSeam = loom.join(InMemoryTag("device"))
+        val strangerSeam = loom.join(InMemoryTag("stranger"))
+        val proverGate = proverSeam.tokenGated(GateRole.Prover("CODE1234", Random(11)), backgroundScope)
+        val nonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES) { 1 })
 
-        // The legitimate host challenges first; the prover binds to it and answers.
-        hostSeam.sendTo(proverId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(ByteString(ByteArray(16) { 1 }))))
-        val hostProof = withTimeoutOrNull(1.minutes) {
-            hostSeam.incoming.first { TapAdmitMessage.decode(it.toByteArray()) is TapAdmitMessage.Proof }
+        suspend fun answerTo(challenger: Seam): TapAdmitMessage.Proof {
+            challenger.sendTo(proverGate.selfId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
+            val frame = withTimeout(1.minutes) {
+                challenger.incoming.first { TapAdmitMessage.decode(it.toByteArray()) is TapAdmitMessage.Proof }
+            }
+            return TapAdmitMessage.decode(frame.toByteArray()) as TapAdmitMessage.Proof
         }
-        assertTrue(hostProof != null, "prover answers the host it first binds to")
 
-        // An attacker now challenges the hosting prover; it must be ignored (different sender).
-        attackerSeam.sendTo(proverId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(ByteString(ByteArray(16) { 2 }))))
-        val attackerProof = withTimeoutOrNull(1.minutes) {
-            attackerSeam.incoming.first { TapAdmitMessage.decode(it.toByteArray()) is TapAdmitMessage.Proof }
+        fun tagNaming(verifier: Seam, proof: TapAdmitMessage.Proof) = ByteString(
+            admissionTag("CODE1234", verifier.selfId, proverGate.selfId, nonce, proof.proverNonce),
+        )
+
+        // The stranger asks first, which is the order that used to shut the device out.
+        val toStranger = answerTo(strangerSeam)
+        val toDevice = answerTo(deviceSeam)
+
+        assertAll(
+            { assertEquals(tagNaming(strangerSeam, toStranger), toStranger.tag, "the stranger's answer names the stranger") },
+            { assertEquals(tagNaming(deviceSeam, toDevice), toDevice.tag, "the device's answer names the device") },
+            { assertNotEquals(tagNaming(deviceSeam, toStranger), toStranger.tag, "the stranger's answer is no use at the device") },
+        )
+    }
+
+    /** Each answer's nonce comes from the source the prover was given, a fresh draw every time. */
+    @Test
+    fun proverDrawsAFreshNonceFromItsSourceForEachAnswer() = runTest(UnconfinedTestDispatcher()) {
+        val loom = InMemoryLoom()
+        val proverSeam = loom.host(Pattern("prover-hosts"))
+        val challengerSeam = loom.join(InMemoryTag("challenger"))
+        val proverGate = proverSeam.tokenGated(GateRole.Prover("CODE1234", Random(11)), backgroundScope)
+        val answers = mutableListOf<TapAdmitMessage.Proof>()
+        backgroundScope.launch {
+            challengerSeam.incoming.collect { swatch ->
+                (TapAdmitMessage.decode(swatch.toByteArray()) as? TapAdmitMessage.Proof)?.let { answers += it }
+            }
         }
-        assertNull(attackerProof, "prover must not answer a challenge from an unexpected sender")
+        val frame = TapAdmitMessage.encode(TapAdmitMessage.Challenge(ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES))))
+
+        repeat(2) { challengerSeam.sendTo(proverGate.selfId, frame) }
+        runCurrent()
+
+        val source = Random(11)
+        assertEquals(
+            List(2) { ByteString(source.nextBytes(TapAdmitMessage.Challenge.NONCE_BYTES)) },
+            answers.map { it.proverNonce },
+            "each answer must carry the next draw from the prover's own source",
+        )
     }
 
     /**
-     * Fixed-width nonce enforcement, at the live prover (#1820). The prover MACs
-     * `Challenge.nonce` verbatim with the join code, so a peer that can pick the width picks how
-     * many bytes of the MAC input exist — a zero-length nonce removes it entirely, leaving
-     * `HMAC(code, "")`, a value with no per-attempt freshness at all.
-     *
-     * Two properties, both required: the malformed challenge draws **no proof**, and it does not
-     * consume the single-use [GateRole.Prover] host binding — the legitimate host that challenges
-     * afterwards must still be answered, or a one-byte frame would be a permanent lockout.
+     * Fixed-width nonce enforcement, at the live prover (#1820). The prover MACs `Challenge.nonce`
+     * verbatim, so a peer that can pick the width picks how many bytes of the MAC input exist. The
+     * malformed challenge must draw **no proof**, and the prover must still answer the next one.
      */
     @Test
     fun proverIgnoresAChallengeWhoseNonceIsTheWrongWidth() = runTest(UnconfinedTestDispatcher()) {
@@ -143,17 +198,15 @@ class TokenGatedSeamTest {
         val proverSeam = loom.host(Pattern("prover-hosts"))
         val attackerSeam = loom.join(InMemoryTag("attacker"))
         val hostSeam = loom.join(InMemoryTag("host")) // the legitimate verifier device
-        val proverGate = proverSeam.tokenGated(GateRole.Prover("CODE1234"), backgroundScope)
+        val proverGate = proverSeam.tokenGated(GateRole.Prover("CODE1234", Random(11)), backgroundScope)
         val proverId = proverGate.selfId
 
-        // A zero-length nonce: HMAC(code, "") has no per-attempt freshness whatsoever.
         attackerSeam.sendTo(proverId, challengeFrameWithNonce(ByteArray(0)))
         val harvested = withTimeoutOrNull(1.minutes) {
             attackerSeam.incoming.first { TapAdmitMessage.decode(it.toByteArray()) is TapAdmitMessage.Proof }
         }
         assertNull(harvested, "a wrong-width nonce must never be MAC'd with the join code")
 
-        // …and the malformed frame must not have burned the prover's host binding.
         val nonce = ByteString(ByteArray(TapAdmitMessage.Challenge.NONCE_BYTES) { 1 })
         hostSeam.sendTo(proverId, TapAdmitMessage.encode(TapAdmitMessage.Challenge(nonce)))
         val hostProof = withTimeoutOrNull(1.minutes) {
@@ -201,7 +254,7 @@ class TokenGatedSeamTest {
         val hostSeam = loom.host(Pattern("gate-test"))
         val joinerSeam = loom.join(InMemoryTag("puller"))
         val hostGate = hostSeam.tokenGated(GateRole.Verifier(token, verifierClock, Random(7)), scope)
-        val joinerGate = joinerSeam.tokenGated(GateRole.Prover(presentedCode), scope)
+        val joinerGate = joinerSeam.tokenGated(GateRole.Prover(presentedCode, Random(11)), scope)
         return hostGate to joinerGate
     }
 }

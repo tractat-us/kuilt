@@ -4,6 +4,8 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,17 +27,21 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.tap.admit.Token
 internal sealed interface GateRole {
     /**
      * Offering side: challenge every joiner with a nonce and admit only those whose
-     * [TapAdmitMessage.Proof] matches `HMAC(token.code, nonce)` while [token] is valid.
+     * [TapAdmitMessage.Proof] carries the [admissionTag] for this exchange while [token] is valid.
      */
     class Verifier(val token: LogTapJoinToken, val clock: Clock, val random: Random) : GateRole
 
-    /** Pulling side: answer a [TapAdmitMessage.Challenge] with `HMAC(code, nonce)`. */
-    class Prover(val code: String) : GateRole
+    /**
+     * Pulling side: answer each [TapAdmitMessage.Challenge] with a fresh nonce from [random] and the
+     * [admissionTag] for this exchange. [random] must be secure in production, as
+     * [us.tractat.kuilt.otel.tap.LogTapAdmission.Present] says.
+     */
+    class Prover(val code: String, val random: Random) : GateRole
 }
 
 /**
  * A [Seam] decorator that runs the tap's token-gated admission handshake, so an
- * unauthorized peer never reaches the replicator riding above it.
+ * unauthorized peer never reaches the replicator riding above it on the offering side.
  *
  * On the **verifier** (offering) side, an unverified peer is invisible in both
  * directions: it is absent from [peers], its frames never reach [incoming], and
@@ -43,14 +49,91 @@ internal sealed interface GateRole {
  * nor leak log state to a peer that has not proven the join code. Admission frames the
  * gate itself sends use the inner seam directly, bypassing that filter. On the
  * **prover** (pulling) side the gate is transparent apart from answering challenges and
- * stripping admit frames from what the replicator sees. A prover binds to the first host
- * it answers and ignores challenges from any other sender — so, in the role-inverted
- * topology where the prover hosts the session, a stray joiner that loses that race cannot
- * farm `HMAC(code, nonce)` tags for an offline crack. A joiner that *wins* it still gets one
- * tag over a nonce it chose, which is precomputable and so not bounded by the token TTL;
- * closing that needs prover-contributed freshness in the `Proof` frame (#1865).
+ * stripping admit frames from what the replicator sees. It authenticates nobody, so on a fabric
+ * where joiners reach each other, the puller's replicator exchanges state with any peer that turns
+ * up, including what it has already pulled from the device.
  *
- * Scope-owning: two collectors (of `inner.incoming` and of `inner.peers`) run in [scope];
+ * ## The prover answers everyone
+ *
+ * A prover cannot tell a device from a stranger before answering, because proving who you are is what
+ * the answer is for. It used to answer only the first peer to challenge it, which let a stranger who
+ * got there first lock the real device out, and bought little: an attacker lurking on the rendezvous
+ * is always first. Now every challenger gets an answer good for that challenger alone.
+ *
+ * The cost is that any peer reaching the prover can collect a tag to grind offline, where before it
+ * had to win a race. One tag is all a grind needs and a passive listener on a plaintext wire already
+ * has one, and with the prover's nonce in the input the grind cannot start until the tag is in hand,
+ * so the token's TTL bounds it. See "Entropy ↔ TTL" on [LogTapJoinToken].
+ *
+ * ## A proof never waits on the collector
+ *
+ * Answering everyone means a stranger decides how many frames head its way, and a stranger who stops
+ * reading fills its own buffer until the next [Seam.sendTo] suspends, as that call is entitled to.
+ * The sole collector of `inner.incoming` must not be the coroutine suspended there, because every
+ * other peer's frames arrive through it. So a proof goes out in a job of its own, and the collector
+ * moves on. The job starts undispatched: queued, it could be cancelled by the next challenge before it
+ * had run, and two challenges in one go would draw one answer.
+ *
+ * One challenger holds at most one such job. A newer challenge cancels the send still parked for that
+ * peer, so a flood costs one job and one frame rather than one per challenge, and a peer back on a
+ * fresh link is answered there rather than behind a send to the link it left.
+ *
+ * A challenger that leaves gives its job up too, since nothing obliges a seam to wake a send parked
+ * for a peer that has gone. Every answer cancels the jobs of peers no longer in [peers], so the jobs
+ * never outnumber the peers there at the last challenge, and leaving wins a stranger nothing it could
+ * not hold by staying. Only an answer can add a job, so an answer is the one place the check has to
+ * run. A collector of `inner.peers` would free the last jobs sooner, at the price of a second thread
+ * into this map and a lock, and it would still miss a peer that came and went between two emissions.
+ * A timeout on the send would be a bound in time and not in jobs, and it would drop an answer to a
+ * slow honest peer, who gets no other.
+ *
+ * A verifier's sends stay on their collectors, deliberately. It challenges a peer only when [peers]
+ * shows the peer arriving, and a challenge draws at most one reject, so a connection draws two frames.
+ * That is not enough to fill anything, and it answers nothing else until the peer is admitted.
+ *
+ * ## What the peer ids buy
+ *
+ * [admissionTag] covers the verifier's and the prover's ids as each side reads them off its own seam:
+ * [Seam.selfId] for itself and [Swatch.sender] for the other. They agree because that is the seam
+ * contract, asserted by `SeamConformanceSuite`, and an honest pair is refused on a fabric that breaks
+ * it. The binding stops a relayer who shows up as itself, since the puller's answer then names the
+ * relayer and the device expects to be named.
+ *
+ * No fabric here authenticates a peer id against anything, so the ids are worth what the fabric makes
+ * them hard to claim:
+ * - **`InMemoryLoom`:** the loom mints every id. A relay on one mesh is simply closed.
+ * - **Multipeer, Nearby:** the id is claimed by the peer, as a suffix of its display name or in a
+ *   connection hello, and Multipeer accepts any Mac on the LAN. A relayer has to be the puller's id to
+ *   the device and the device's id to the puller, which takes more than one identity and takes knowing
+ *   both ids. On Multipeer those identities can sit in one session, as extra display names.
+ * - **Network.framework:** the same claim, behind TLS keyed from the room key, so a relayer must first
+ *   hold the room key.
+ * - **WebSocket, TCP, WebRTC:** the id is claimed in the dial or a hello. A one-to-one seam never puts
+ *   a relayer between two honest peers on one session, so the relay needs two: answer a device dialling
+ *   a spoofed advertisement under the puller's id, and dial the puller under the device's. Then the ids
+ *   match and this binding does nothing. A room relayed through a hub is the Multipeer case instead.
+ *
+ * So the binding closes the relay for a relayer that shows up as itself, and leaves open one that
+ * wears both ids, which `aRelayWearingBothIdsAcrossTwoSessionsIsStillAdmitted` pins. Closing that takes
+ * a key exchange the code authenticates, which is a different protocol.
+ *
+ * ## Admission belongs to an id, not to a connection
+ *
+ * [verified] holds ids, and an id leaves it only when [peers] shows that peer going. So wherever a
+ * fabric carries a second connection under an admitted id without moving the roster, that connection
+ * is admitted too, with no relay and no code. It can send as that id, and it may read what the device
+ * sends that id, depending on which connection the fabric picks. By reading the source and not by
+ * running it, Multipeer does this, stamping [Swatch.sender] from a display name and sending to the
+ * first session peer wearing the id, and so does a hub with no attestation, replacing the route.
+ *
+ * The same stamp lets a stranger send a bad proof as a peer and use up that peer's challenge. A used-up
+ * challenge is not reissued, and neither is one that failed to send, so either way the peer waits
+ * until it reconnects, which here means until [peers] shows it leave and return. Reissuing on any
+ * roster move only ever rescued the first case, by luck, and it gave a stranger who stopped reading a
+ * way to fill its own buffer and stall the gate. `anAdmittedIdStaysAdmittedWhoeverIsWearingIt` and
+ * `aForgedProofStampedWithAPeersIdUsesUpThatPeersChallenge` pin the gate's half. #3079 tracks the rest.
+ *
+ * Scope-owning: collectors of `inner.incoming` and, on a verifier, of `inner.peers` run in [scope];
  * cancel it to stop the gate. State is guarded by a [reentrantLock] with every suspending
  * inner-seam send performed outside the lock, so the gate is correct under a multi-threaded
  * dispatcher.
@@ -58,7 +141,7 @@ internal sealed interface GateRole {
 internal class TokenGatedSeam(
     private val inner: Seam,
     private val role: GateRole,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
 ) : Seam by inner {
 
     private val lock = reentrantLock()
@@ -69,12 +152,9 @@ internal class TokenGatedSeam(
     // Verifier-only: peers that have proven the code. Always includes selfId (peers invariant).
     private val verified = MutableStateFlow(setOf(inner.selfId))
 
-    // Prover-only: the peer we bound to on the first challenge we answered. We answer only
-    // challenges from this sender thereafter — in the role-inverted topology the prover hosts
-    // the session, so any joiner could otherwise send a Challenge purely to harvest
-    // HMAC(code, nonce) for an offline crack of the code. Cleared when the bound host departs
-    // so a legitimate reconnect (the token is reusable) can re-bind. See LogTapJoinToken.
-    private var boundHost: PeerId? = null
+    // Prover-only, and touched only by the sole `inner.incoming` collector: the latest proof for each
+    // challenger, which may have gone out already. Cancelling a finished job does nothing.
+    private val parkedProofs = mutableMapOf<PeerId, Job>()
 
     // Replication frames surfaced to the replicator. Buffered so the sole relay collector
     // never blocks; a fresh Seam has no subscriber for a brief construction window.
@@ -89,25 +169,15 @@ internal class TokenGatedSeam(
     override val incoming: Flow<Swatch> get() = relayed.asSharedFlow()
 
     init {
-        when (role) {
-            is GateRole.Verifier -> scope.launch {
+        if (role is GateRole.Verifier) {
+            scope.launch {
                 var known = setOf(inner.selfId)
                 inner.peers.collect { current ->
                     // Drop admission state for peers that disconnected, so a same-PeerId
                     // reconnect must re-prove and pendingNonces cannot grow without bound.
                     val departed = known - current
                     if (departed.isNotEmpty()) prune(departed)
-                    for (peer in current) if (peer != inner.selfId) maybeChallenge(peer)
-                    known = current
-                }
-            }
-            is GateRole.Prover -> scope.launch {
-                var known = setOf(inner.selfId)
-                inner.peers.collect { current ->
-                    // Release the challenge binding when the bound host departs, so a
-                    // legitimate reconnect can re-bind rather than being locked out.
-                    val departed = known - current
-                    if (departed.isNotEmpty()) lock.withLock { if (boundHost in departed) boundHost = null }
+                    for (peer in current - known) if (peer != inner.selfId) maybeChallenge(peer)
                     known = current
                 }
             }
@@ -189,37 +259,42 @@ internal class TokenGatedSeam(
         }
     }
 
-    private suspend fun respondToChallenge(host: PeerId, challenge: TapAdmitMessage.Challenge) {
+    // Runs only from the sole `inner.incoming` collector, so the draw from `random` is never concurrent.
+    private fun respondToChallenge(challenger: PeerId, challenge: TapAdmitMessage.Challenge) {
         val prover = role as GateRole.Prover
-        // Bind to the first host we answer and refuse challenges from any other sender: this
-        // narrows the offline-harvest surface in the role-inverted topology where the prover
-        // hosts the session and a stray joiner could otherwise farm HMAC(code, nonce) tags.
-        val bound = lock.withLock {
-            when (boundHost) {
-                null -> { boundHost = host; true }
-                host -> true
-                else -> false
-            }
+        val proverNonce = ByteString(prover.random.nextBytes(TapAdmitMessage.Challenge.NONCE_BYTES))
+        val tag = admissionTag(
+            code = prover.code,
+            verifierId = challenger,
+            proverId = inner.selfId,
+            challengeNonce = challenge.nonce,
+            proverNonce = proverNonce,
+        )
+        val frame = TapAdmitMessage.encode(TapAdmitMessage.Proof(proverNonce, ByteString(tag)))
+        parkedProofs[challenger]?.cancel()
+        parkedProofs[challenger] = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            runCatchingCancellable { inner.sendTo(challenger, frame) }
+                .onFailure { logger.debug { "proof send to $challenger failed: ${it.message}" } }
         }
-        if (!bound) {
-            logger.debug { "ignoring challenge from unexpected sender $host (bound to another host)" }
-            return
-        }
-        val tag = ByteString(hmacSha256(prover.code.encodeToByteArray(), challenge.nonce.toByteArray()))
-        runCatchingCancellable { inner.sendTo(host, TapAdmitMessage.encode(TapAdmitMessage.Proof(tag))) }
-            .onFailure { logger.debug { "proof send to $host failed: ${it.message}" } }
+        for (peer in parkedProofs.keys - inner.peers.value) parkedProofs.remove(peer)?.cancel()
     }
 
     private suspend fun verify(peer: PeerId, proof: TapAdmitMessage.Proof) {
         val verifier = role as GateRole.Verifier
         val admitted = lock.withLock {
             val nonce = pendingNonces[peer] ?: return
-            val expected = hmacSha256(verifier.token.code.encodeToByteArray(), nonce.toByteArray())
+            val expected = admissionTag(
+                code = verifier.token.code,
+                verifierId = inner.selfId,
+                proverId = peer,
+                challengeNonce = nonce,
+                proverNonce = proof.proverNonce,
+            )
             // Constant-time compare AND validity check — both under the same decision.
             val ok = constantTimeEquals(expected, proof.tag.toByteArray()) && verifier.token.isValid(verifier.clock.now())
             // Consume the nonce whichever way it went: on success the peer is admitted; on a
             // reject the entry is cleared so it cannot linger or be reused, and a retry needs a
-            // fresh challenge.
+            // fresh challenge, which takes a reconnect.
             pendingNonces.remove(peer)
             if (ok) verified.value = verified.value + peer
             ok

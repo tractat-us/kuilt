@@ -69,7 +69,7 @@ class GatedLoopbackWebSocketTest {
                 }
                 val clientSeam = clientLoom.join(advertisement)
                 val host = hostDeferred.await()
-                val client = LogTapClient(clientSeam, replicatorScope, admission = LogTapAdmission.Present(token.code))
+                val client = LogTapClient(clientSeam, replicatorScope, admission = LogTapAdmission.Present(token.code, Random(11)))
                 try {
                     client.pull()
                 } finally {
@@ -109,7 +109,7 @@ class GatedLoopbackWebSocketTest {
                 }
                 val clientSeam = clientLoom.join(advertisement)
                 val host = hostDeferred.await()
-                val client = LogTapClient(clientSeam, replicatorScope, config, LogTapAdmission.Present("WRONGGGG"))
+                val client = LogTapClient(clientSeam, replicatorScope, config, LogTapAdmission.Present("WRONGGGG", Random(11)))
                 try {
                     assertFailsWith<TimeoutCancellationException> { client.pull() }
                 } finally {

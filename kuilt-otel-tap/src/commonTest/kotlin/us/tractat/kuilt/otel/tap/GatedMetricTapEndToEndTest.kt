@@ -53,7 +53,7 @@ class GatedMetricTapEndToEndTest {
         val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
         val loom = InMemoryLoom()
         host = installMetricTap(loom, exporterWith(7), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
-        val c = MetricTapClient(loom.join(InMemoryTag("puller")), backgroundScope, config, LogTapAdmission.Present(token.code))
+        val c = MetricTapClient(loom.join(InMemoryTag("puller")), backgroundScope, config, LogTapAdmission.Present(token.code, Random(11)))
             .also { client = it }
 
         val snap = c.pull()
@@ -66,7 +66,7 @@ class GatedMetricTapEndToEndTest {
         val token = LogTapJoinToken.issue(Random(1), clock, ttl = 5.minutes)
         val loom = InMemoryLoom()
         host = installMetricTap(loom, exporterWith(7), backgroundScope, config, LogTapAdmission.Verify(token, clock, Random(7)))
-        val c = MetricTapClient(loom.join(InMemoryTag("attacker")), backgroundScope, config, LogTapAdmission.Present("WRONGGGG"))
+        val c = MetricTapClient(loom.join(InMemoryTag("attacker")), backgroundScope, config, LogTapAdmission.Present("WRONGGGG", Random(11)))
             .also { client = it }
 
         // The host never admits the attacker, so it never sends its buffer; pull() times out.
