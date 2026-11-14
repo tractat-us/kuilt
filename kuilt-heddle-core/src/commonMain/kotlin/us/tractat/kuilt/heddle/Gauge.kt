@@ -87,18 +87,26 @@ public data class Gauge(
     @Serializable(with = RationalSerializer::class)
     public val floor: Rational,
     public val folded: Long,
+    public val ticksHigh: Long = 0L,
+    public val ticksLow: Long = 0L,
 ) {
     init {
         require(folded >= 0L) { "Gauge folded must be non-negative, was $folded" }
+        require(ticksHigh >= 0L) { "Gauge ticks must be non-negative, was $ticks" }
     }
+
+    internal val ticks: Int128 get() = Int128.fromTwosComplement(ticksHigh, ticksLow)
 
     /**
      * The componentwise least upper bound of `this` and [other] — `max` on each component
      * independently. See the class KDoc for why this is not a lexicographic pick.
      */
     public fun join(other: Gauge): Gauge =
-        Gauge(Rational.max(floor, other.floor), maxOf(folded, other.folded))
+        Gauge(Rational.max(floor, other.floor), maxOf(folded, other.folded), maxOf(ticksHigh, other.ticksHigh), maxOf(ticksLow, other.ticksLow))
 }
+
+/** A gauge asserting the position [ticks] at the fold [folded], with no legacy floor. */
+internal fun gaugeAt(ticks: Int128, folded: Long): Gauge = Gauge(Rational.ZERO, folded, ticks.high, ticks.low)
 
 /**
  * The **gross** virtual service an edge of weight [weight] reads at base issuance [baseIssued] —
