@@ -436,3 +436,20 @@ check(store.read(StoreKey("never-written")) == null)
 store.delete(key)
 check(store.read(key) == null)
 ```
+
+## Which kuilt wrote this
+
+**Intent:** record which kuilt release wrote something you keep, such as a snapshot, a saved ledger or a log header, so a later run can tell old data from new. Don't copy the version string into your own code: the copy goes stale on the next upgrade, and a snapshot build never matches it.
+**Primitive:** `KuiltVersion.VERSION` (`:kuilt-core`, so every module brings it) — a `const val` generated from the version the build publishes: `<line>.0-dev` locally, `<line>.0-dev.<run>` in a snapshot, the tag's `x.y.z` in a release.
+
+Being a `const val`, it is copied into your code when your code compiles. It names the kuilt you compiled against, which is the one you run unless a jar is swapped under an already-built binary.
+
+<!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/KuiltVersionSamples.kt#sampleKuiltVersion -->
+```kotlin
+// Save the version beside the bytes it describes.
+val snapshotHeader = mapOf("writtenBy" to KuiltVersion.VERSION)
+
+// A later run compares it with the kuilt it is running now.
+val writtenByThisKuilt = snapshotHeader["writtenBy"] == KuiltVersion.VERSION
+check(writtenByThisKuilt)
+```
