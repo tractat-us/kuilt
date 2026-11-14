@@ -131,7 +131,7 @@ class FairShareAllocatorTest {
             { assertEquals(0, granted, "nothing is servable in the joining round") },
             {
                 assertEquals(
-                    Gauge(Rational.of(200L), folded = 0L),
+                    gaugeOfUnits(200L, folded = 0L),
                     cell.current.gauge(e3),
                     "seated at the front over e1 alone — the waker is a joiner too",
                 )

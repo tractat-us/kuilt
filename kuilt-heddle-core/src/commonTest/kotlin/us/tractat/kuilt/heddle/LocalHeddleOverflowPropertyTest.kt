@@ -130,14 +130,14 @@ class LocalHeddleOverflowPropertyTest {
             seats++
             // The rig: children seated at their siblings' front rather than at their own origin.
             // The pre-grid seat stored that front, a weighted mean, as it was, and that is what grew.
-            // A gauge's floor in ticks less its fold is the seat's own height above the origin, and
+            // A gauge's stored position less its fold is the seat's own height above the origin, and
             // a checkpoint preserves it, so this sees a front seat however often the child ran since.
             val ledger = engine.snapshot().ledger
             for (child in attached) {
                 val edge = ledger.lineageOf(topology.attachedChildId(rt, child))?.lastOrNull() ?: continue
                 val gauge = ledger.gauge(edge) ?: continue
                 val weight = ledger.record(edge)?.weight ?: continue
-                if (ticksAt(gauge.floor, weight) > GRID * gauge.folded) seatedAtAFront += child
+                if (gauge.storedTicks(weight) > gauge.folded.timesWide(GRID)) seatedAtAFront += child
             }
             engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST))
             picks++

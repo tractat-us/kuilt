@@ -150,7 +150,7 @@ class LocalHeddleApplyTest {
             { assertTrue(front > Rational.of(10L), "the rig: the front is far from the origin, at $front") },
             { assertEquals(emptyList(), result.refusals) },
             { assertEquals(4L, gauge.folded, "folded at the four re-homed units") },
-            { assertEquals(front, gauge.floor - Rational.of(4L, 4L), "seated at the front, then advanced 4 units at weight 4") },
+            { assertEquals(front, gauge.assertedAt(Weight.of(4L)) - Rational.of(4L, 4L), "seated at the front, then advanced 4 units at weight 4") },
             { assertEquals(front + Rational.ONE, l.virtualService(h.edgeInto(acme))) },
             { assertEquals(emptyList(), leases.map { h.complete(it.id, 2L) }.filter { it != LeaseOutcome.Done(2L, 0L) }) },
         )
