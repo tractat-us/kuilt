@@ -575,23 +575,28 @@ class LocalHeddlePersistenceTest {
         )
     }
 
+    /**
+     * This release writes format 2 and reads formats 1 and 2 (#3192). Format 3 is a later
+     * release's, refused by name with nothing past the version read.
+     */
     @Test
     fun unsupportedVersionIsNamed() {
-        val later = GOLDEN_FORMAT_1.replaceFirst("[1,", "[2,")
+        val later = GOLDEN_FORMAT_1.replaceFirst("[1,", "[3,")
+        val supported = listOf(1, 2)
         assertAll(
             { assertTrue(later != GOLDEN_FORMAT_1, "the rig: the version was rewritten") },
-            { assertEquals(RestoreResult.UnsupportedVersion(2, listOf(1)), LocalHeddle.decode(later, Json)) },
-            { assertEquals(RestoreResult.UnsupportedVersion(0, listOf(1)), LocalHeddle.decode("""[0,{}]""", Json)) },
+            { assertEquals(RestoreResult.UnsupportedVersion(3, supported), LocalHeddle.decode(later, Json)) },
+            { assertEquals(RestoreResult.UnsupportedVersion(0, supported), LocalHeddle.decode("""[0,{}]""", Json)) },
             {
                 assertEquals(
-                    RestoreResult.UnsupportedVersion(9, listOf(1)),
+                    RestoreResult.UnsupportedVersion(9, supported),
                     LocalHeddle.decode("""[9,{"a shape":"this release has never seen"}]""", Json),
                     "nothing past the version is read",
                 )
             },
-            { assertEquals(RestoreResult.UnsupportedVersion(3, listOf(1)), LocalHeddle.decode("""[3]""", Json), "with no state at all") },
-            { assertEquals(listOf(1), LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS) },
-            { assertEquals(1, LocalHeddleSnapshot.FORMAT_VERSION) },
+            { assertEquals(RestoreResult.UnsupportedVersion(3, supported), LocalHeddle.decode("""[3]""", Json), "with no state at all") },
+            { assertEquals(supported, LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS) },
+            { assertEquals(2, LocalHeddleSnapshot.FORMAT_VERSION) },
         )
     }
 
