@@ -1022,7 +1022,11 @@ public class WarpLogRecordExporter(
      *
      * A refused index read is [Load.Refused], and a refused segment read is not: the index
      * names a segment it could not read, so the segment stays named and the next start reads it.
-     * Nothing names the index.
+     * Nothing names the index. **The active segment is the exception, and it is not closed:** an
+     * unread one is installed as empty under its own number, so the next export writes over it.
+     *
+     * Every store call here must classify its own failure where it is made. Anything that
+     * reaches [readPersistedState]'s outer catch is treated as [Load.Undecodable] and starts fresh.
      */
     private suspend fun loadPersistedState(): Load {
         val indexBytes = try {
@@ -1035,7 +1039,7 @@ public class WarpLogRecordExporter(
         if (indexBytes == null) return migrateLegacyBlob()
         val index = runCatchingCancellable { cbor.decodeFromByteArray(indexSerializer, indexBytes) }
             .getOrElse { cause -> return Load.Undecodable(cause) }
-        // Only after the index has been read: its presence is what proves the legacy key superseded.
+        // Only after the index has been read; see sweepLegacyKey for what its presence proves.
         sweepLegacyKey()
         // Finish any retirement a crash interrupted between the ledger write and the delete.
         // Idempotent: a key already gone deletes again as a no-op.
@@ -1081,7 +1085,11 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * Delete the legacy key, which the presence of an index proves is superseded.
+     * Delete the legacy key once an index is present. An index means one of two things: the
+     * migration's index write landed, so the blob is copied into segment [LEGACY_SEGMENT]; or a
+     * run already read the blob, found it undecodable, and started fresh. Either way no records
+     * this exporter could load are in it. A blob the store refused to read never gets here,
+     * because a refused read writes no index.
      *
      * Guarded on its own: a failed delete of known garbage must never cost the log.
      * This runs on every start, so a store whose `delete` throws would otherwise fail
@@ -1122,7 +1130,8 @@ public class WarpLogRecordExporter(
      * would write an index naming only segment 0 and overwrite it, orphaning every
      * other segment permanently in a format with no key-enumeration API to sweep them.
      * One bad read must cost one segment's records, which is what this KDoc has always
-     * promised.
+     * promised. For a sealed segment that cost is for this run only; for the active segment it
+     * is not yet (see [loadPersistedState]).
      *
      * The same holds for a `CancellationException` the store mints at this live caller: the
      * remaining segments follow, so `ensureActive` lets only this coroutine's own cancellation
@@ -1327,6 +1336,13 @@ public class WarpLogRecordExporter(
      * ones would drop everything after the first failed turn, permanently, on every
      * batch, for as long as the condition lasts. So the loop runs to the end and the
      * **first** [ExportResult.Failure] is returned once it does.
+     *
+     * **The exception is a persisted state still unread.** After a refused read in [recover],
+     * a turn reads again before it admits anything. While the read is still refused, the turn
+     * admits nothing, and the rest of the batch returns that [ExportResult.Failure] unadmitted.
+     * Those records are **not** held anywhere: a caller that drops a failed batch, as
+     * `CapturingAppender.drain` does, loses them. Re-exporting them is safe, because a record
+     * whose id was already taken is skipped.
      *
      * A turn also never admits more than [maxRecords] records, so the eviction it
      * computes is always a prefix of what the buffer already held.
@@ -1901,7 +1917,8 @@ public class WarpLogRecordExporter(
      *
      * A failed **sweep**, by contrast, must not fail the export: the record was durably written,
      * and reporting [ExportResult.Failure] because a delete of superseded garbage was refused
-     * would make [ExporterHealth.failed] stop meaning "the store is rejecting writes". So sweeps
+     * would make [ExporterHealth.failed] stop meaning "a durable write threw, or a turn was
+     * refused over a persisted state the store would not let it read". So sweeps
      * are best-effort ([sweep]) and an unswept number simply stays in the ledger.
      *
      * **[logFailure] runs once per outage, not once per refused write** (#2237): a refused write is
@@ -2609,9 +2626,10 @@ public class WarpLogRecordExporter(
     /**
      * Record that [recover] could not restore the persisted state.
      *
-     * Deliberately does **not** touch [ExporterHealth.failed] — a failed recovery
-     * is not a failed write, and conflating them would make `failed > 0` stop
-     * meaning "the store is rejecting writes".
+     * Deliberately does **not** touch [ExporterHealth.failed]. A failed recovery is not a failed
+     * turn, and `failed` counts turns: a durable write that threw, or a turn refused because the
+     * persisted state was still unreadable when it ran. Each turn refused that way counts there,
+     * through [failure], and the recovery itself counts once, here.
      */
     private fun recordRecoveryFailure(cause: Throwable) {
         healthState.update { it.copy(recoveryFailed = true, lastFailure = cause) }

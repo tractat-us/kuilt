@@ -110,6 +110,28 @@ class WarpExporterSilentDeathTest {
         )
     }
 
+    /**
+     * The other half of the rule above: bytes that do not decode are not a refusal. Through the
+     * whole surface, the first log export after an undecodable index succeeds and the index is
+     * read once, never retried as if the store had refused it.
+     */
+    @Test
+    fun telemetryLogsStartFreshOnAnUndecodableIndex() = runTest {
+        val store = RecordingStore()
+        store.putRaw(StoreKey("otel.logs.idx"), byteArrayOf(0x7f, 0x00, 0x13))
+        val telemetry = WarpTelemetry(replica = replica, store = store)
+
+        telemetry.recover()
+        val exported = telemetry.logs.export(record(1))
+        val indexReads = store.operations().count { it.kind == StoreOpKind.READ && it.key == StoreKey("otel.logs.idx") }
+
+        assertAll(
+            { assertTrue(telemetry.logs.health.value.recoveryFailed, "precondition: the index decoded") },
+            { assertEquals(ExportResult.Success, exported, "an undecodable index left log export dead") },
+            { assertEquals(1, indexReads, "an undecodable index was read $indexReads times, not once") },
+        )
+    }
+
     @Test
     fun spanRecoverSurvivesAThrowingStoreRead() = runTest {
         val exporter = WarpSpanExporter(replica = replica, store = ReadFailsStore())
