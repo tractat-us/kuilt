@@ -61,7 +61,7 @@ class ExactArithmeticOracleTest {
             assertEquals(oa * ob, (a * b).oracle(), "$oa * $ob")
             assertEquals(oa.compareTo(ob).coerceIn(-1, 1), a.compareTo(b).coerceIn(-1, 1), "$oa <=> $ob")
             assertEquals(oa.gcd(ob), a.gcd(b).oracle(), "gcd($oa, $ob)")
-            assertEquals(oa.bitLength(), a.abs().bitLength(), "bitLength($oa)")
+            assertEquals(oa.abs().bitLength(), a.abs().bitLength(), "bitLength($oa)")
             val shift = random.nextInt(0, 130)
             assertEquals(oa.shiftLeft(shift), a.shl(shift).oracle(), "$oa << $shift")
             if (ob.signum() != 0) {
