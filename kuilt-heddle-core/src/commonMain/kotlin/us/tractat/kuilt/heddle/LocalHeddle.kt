@@ -395,16 +395,19 @@ public sealed interface LeaseOutcome {
  * one virtual time, its wake offset first and then its gauge fold, as far as the demanding child
  * furthest behind allows, and an idle child no further than a sixteenth of its ceiling below
  * zero. Every competing child moves alike, so no pick changes. The ceiling is still reachable
- * three ways:
+ * two ways:
  * - a demanding child sits at zero and is never served, which holds the rebase at nothing;
  * - a parent is only ever charged through [admit], [extend] or an overrun at [complete], and never
- *   picked at, so it is never rebased;
- * - an edge's lifetime **returned** service, reserved but not charged by a [complete] below the
- *   reservation or a [cancel], passes about [positionCeiling]`(w) / 16` units, about
- *   `5.8 × 10¹⁷ / w.denominator`, since a rebase cannot bring returns down (#3360). At
- *   [MAX_RESERVATION] charged 1 unit, a weight of 3/7 gets there in about 4,700 leases; a
- *   600,000-unit reservation returned in full takes about 1.4 × 10¹¹ leases at that weight. A
- *   workload that charges what it reserves never reaches it.
+ *   picked at, so it is never rebased.
+ *
+ * Service reserved and handed back unused, by a [complete] below the reservation or a [cancel],
+ * does not count toward it. A rebase moves gross and raw positions together, so it cannot bring
+ * returns down; instead each return folds into the gauge of every edge it crosses, in the call's
+ * one swap ([Gauge.returnsFolded], #3360). In this engine's ledger an edge's gross position is
+ * therefore net of its returns, and the raw position a pick reads is unchanged by the fold. Before
+ * it, [MAX_RESERVATION] charged 1 unit took a weight of 3/7 to its ceiling in 4,681 leases. What
+ * bounds an edge now is its `issued` counter, a `Long`: 524,288 leases at [MAX_RESERVATION] before
+ * it leaves `Long`, which throws. A replicated `HeddleNode` ledger does not fold returns (#3353).
  *
  * A seat or a wake clamp taken against a front that includes a position at
  * its ceiling lands at the joiner's own ceiling, the penalty end, so nothing an understated front

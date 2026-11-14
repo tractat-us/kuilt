@@ -191,11 +191,10 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
 - **A ceiling the engine stays clear of.** Each child's progress is a `Long`
   count of sixteenths of a unit, and it has a ceiling. Long before a busy fork
   gets there, a pick moves all its children back down by the same amount, so
-  nobody's turn changes. A fork can still get there in three ways. One waiting
+  nobody's turn changes. A fork can still get there in two ways. One waiting
   child is never served. Or the fork is only ever charged through `admit`,
-  `extend` or an overrun, and never picked at. Or one child's reserved but
-  uncharged time adds up past about `5.8 × 10¹⁷` units, divided by its weight's
-  denominator. A team that charges what it reserves never meets the last one.
+  `extend` or an overrun, and never picked at. Time a lease reserved and handed
+  back unused does not count toward the ceiling, however much of it piles up.
   At the ceiling, `acquire` and `extend` at that fork return `PositionCeiling`
   and change nothing, while `admit` and `complete` still charge. Pick a coarse unit anyway, minutes or seconds rather than
   nanoseconds: one reservation can be at most 2⁴⁴ units.

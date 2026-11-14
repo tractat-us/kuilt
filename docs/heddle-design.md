@@ -741,8 +741,15 @@ ledger, a fold a rebase has raised above it (below):
 
 ```text
 gross(e) = floor(e) + (baseIssued(e) − folded(e)) / w(e)     (no gauge ⇒ baseIssued(e) / w(e))
-v_raw(e) = gross(e) − returned(e) / w(e)
+v_raw(e) = gross(e) − (returned(e) − returnsFolded(e)) / w(e)
 ```
+
+`returnsFolded` is a `LocalHeddle` ledger's alone (#3360). Each return there
+raises the gauge's fold and its returns marker by the returns not yet folded, so
+`gross` comes down by what was handed back and `v_raw` does not move. In a
+`LocalHeddle` ledger "gross" is therefore net of returns, and service handed back
+unused never climbs toward the position ceiling. A replicated ledger's marker is
+always `0`: `HeddleNode` never writes one and refuses a ledger that carries one.
 
 Which is design §7.1's `b(e) + committedService(e) / w(e)` with `b` supplied by the
 gauge — and with the **base** issuance as the fold axis, deliberately not the effective
@@ -838,24 +845,26 @@ the rebase: a lowered offset kept without its raised folds would be credit. A
 delegation that is not a pick (`admit`, `extend`, an overrun at `complete`)
 never rebases, so a parent only ever charged that way is never rebased.
 
-**Where the ceiling is still reached.** Three ways, and `PositionCeiling` answers
-all of them:
+**Where the ceiling is still reached.** Two ways, and `PositionCeiling` answers
+both:
 
 - A demanding child that is never served holds `Δ` at zero.
   `LocalHeddlePositionCeilingTest` rigs it.
 - A parent only ever charged through `admit`, `extend` or an overrun, and never
   picked at, is never rebased.
-- **Returns are never brought down** (#3360). A position less the edge's raw
-  position is its lifetime returned service, `returned · G` ticks, and a rebase
-  moves both together. So an edge reaches its ceiling once its lifetime returned
-  service, reserved but not charged by a `complete` below the reservation or a
-  `cancel`, passes about `positionCeiling(w) / 16` units, about
-  `5.8 × 10¹⁷ / w.denominator`. At the largest reservation charged 1 unit, a
-  weight of `3/7` gets there in about 4,700 leases. A 6 × 10⁵-unit reservation
-  returned in full takes about 1.4 × 10¹¹ leases at that weight. At denominator 1,
-  with milliseconds as the unit, it is about 18 million years of returned time. A
-  workload that charges what it reserves never reaches it. The fix rides #3192's
-  format 2.
+
+Returns used to be a third way (#3360). A rebase moves gross and raw together,
+so it could never bring down the `returned · G` ticks gross kept, and at the
+largest reservation charged 1 unit a weight of `3/7` reached its ceiling in
+4,681 leases. Each return now folds into the gauge of every edge it crosses,
+inside the call's one swap (§7.1), so gross holds no returns once the call
+returns. `LocalHeddleReturnsFoldTest` runs that workload for 100,000 picks below
+a quarter of the ceiling, beside a twin with the fold off that refuses at q's
+4,681st lease. The marker rides format 2. What bounds a `LocalHeddle` edge now
+is its `issued` counter: 2⁶³ / 2⁴⁴ = 524,288 leases at the largest reservation
+before it leaves `Long`, which throws. The replicated `HeddleNode` still keeps
+every return in gross, so there the bound stands, about
+`5.8 × 10¹⁷ / w.denominator` units of lifetime returns; its fold is #3353's.
 
 The rebase is `LocalHeddle`'s alone. Under replication, a peer that has not yet
 seen a rebase would seat a newborn at the old front, and a concurrent

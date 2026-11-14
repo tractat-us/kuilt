@@ -163,6 +163,8 @@ whole ledger inherits the three merge laws for free.
   names a peer as the *cause* rather than as a party to the fault).
 - `Gauge` — an edge's replicated virtual-time seat: where a new child starts competing, written by
   the scheduler and merged by taking the larger reading, so no single peer's guess is frozen in.
+  In a `LocalHeddle` it also folds in each return as it is made, so service handed back unused
+  never builds up toward the position ceiling; a replicated ledger never carries that fold.
 - `EdgeSummary` — the parent-facing projection of one edge (`issued`/`returned`/
   `spent` and the derived `outstanding`).
 - `EntitlementLedger` — the replicated `Quilted` state itself.
@@ -189,7 +191,9 @@ Arithmetic that would exceed `Long` throws rather than wrapping: a fair-share
 tally that silently overflowed would be worse than one that stopped. The one
 exception is a child's position, which is held at a ceiling instead. A pick that
 would have to order a position there is refused with a typed `PositionCeiling`
-outcome, and a charge still lands.
+outcome, and a charge still lands. A lease that hands back what it reserved does
+not move a `LocalHeddle` position toward the ceiling: the return folds into the
+gauge.
 
 ## Deciding who runs next
 
