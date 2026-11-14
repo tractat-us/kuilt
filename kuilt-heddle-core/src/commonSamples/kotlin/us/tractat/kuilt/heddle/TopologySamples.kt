@@ -151,3 +151,35 @@ internal fun sampleRuntimeChildren() {
     check(ledger.lineageOf(tenant) == null)
     check(pool.attachRuntimeChild(listOf("tenants"), "x", ledger, generation = 0).first() is TopologyStep.Prepare)
 }
+
+/**
+ * A ledger id read back into the names a config file uses, and those names turned into an id,
+ * without a lookup table of your own: [Topology.findPath] and [Topology.findGroupId] are exact
+ * inverses, and neither throws.
+ */
+@Suppress("unused")
+internal fun sampleGroupPathRoundTrip() {
+    val pool = draft("pool") {
+        group("tenants") {
+            lane("x")
+            runtimeChildren()
+        }
+    }
+    // A declared lane and a runtime child share the name `x`, and their paths stay apart.
+    val lane = GroupPath.Declared(listOf("tenants", "x"))
+    val tenant = GroupPath.RuntimeChild(group = listOf("tenants"), name = "x")
+    val laneId = checkNotNull(pool.findGroupId(lane))
+    val tenantId = checkNotNull(pool.findGroupId(tenant))
+    check(laneId == pool.groupId("tenants", "x") && tenantId == pool.runtimeChildId(listOf("tenants"), "x"))
+    check(laneId != tenantId)
+
+    // Back from an id: the arm says whether the last name is a runtime child's.
+    check(pool.findPath(laneId) == lane && pool.findPath(tenantId) == tenant)
+    check(pool.findPath(tenantId)?.names == listOf("tenants", "x"))
+    check(pool.findPath(pool.groupId()) == GroupPath.Declared(emptyList()))
+
+    // Not in this topology: `null`, never an exception.
+    check(pool.findGroupId(GroupPath.Declared(listOf("tenants", "y"))) == null)
+    check(pool.findGroupId(GroupPath.RuntimeChild(listOf("tenants", "x"), "y")) == null)
+    check(pool.findPath(GroupId("elsewhere/tenants")) == null)
+}
