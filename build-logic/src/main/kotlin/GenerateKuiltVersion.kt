@@ -1,42 +1,36 @@
 import org.gradle.api.DefaultTask
-import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
-import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputDirectory
-import org.gradle.api.tasks.PathSensitive
-import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 
 /**
- * Writes `KuiltVersion.kt`, the `commonMain` source carrying the library's own version as a
- * `public val` (deliberately not `const`, see the generated KDoc), so a consumer that records which
- * kuilt wrote something reads it instead of hand-copying a string that drifts on every upgrade
- * (#3323).
+ * Writes `GeneratedVersion.kt`, the `commonMain` source holding the version this build publishes as
+ * `internal const val GENERATED_VERSION`, so a consumer that records which kuilt wrote something
+ * reads it instead of hand-copying a string that drifts on every upgrade (#3323).
  *
- * One module carries it, [CARRIER], in [PACKAGE]. It depends on nothing, so every module that needs
- * the value can `api` it — including `:kuilt-heddle-core`, which bans the coroutines `:kuilt-core`
- * would bring — and there is one class with one fully qualified name, never a split package.
+ * The public face is hand-written: `public object KuiltVersion { public val VERSION = GENERATED_VERSION }`
+ * in [CARRIER]'s `src/commonMain`, in [PACKAGE]. Only the string is generated, for two reasons.
+ * The module then has declared source of its own, so `forbidSourcelessKmpTarget`, which ignores
+ * anything under `build/` (#2374), sees a real target rather than a source-less one. And the KDoc
+ * and its `@sample` sit in `src/`, where `verifySampleLinks` and Dokka read them directly. The
+ * `const` is `internal`, so it is inlined only inside [CARRIER]; consumers read the non-`const`
+ * `VERSION` at run time, and the value stays out of the ABI.
+ *
+ * One module carries it. It depends on nothing, so every module that needs the value can `api` it —
+ * including `:kuilt-heddle-core`, which bans the coroutines `:kuilt-core` would bring — and there is
+ * one class with one fully qualified name, never a split package.
  *
  * [libraryVersion] is an `@Input`, so a `-Pversion=…` override reruns this task and the compile
  * tasks behind it rather than serving the previous version's source. The value is checked against
  * [VERSION_SHAPE] before it is written: it lands inside a Kotlin string literal, and a version
  * carrying a quote, a backslash or a `$` would otherwise compile into something else, or not at all.
- *
- * The generated KDoc carries `@sample us.tractat.kuilt.sampleKuiltVersion`. `verifySampleLinks`
- * scans only `src/`, so it never sees a tag in generated source; this task checks the tag's target
- * instead, reading [samples] for that function in that package, and refuses to write a dangling tag.
  */
 abstract class GenerateKuiltVersion : DefaultTask() {
 
     @get:Input
     abstract val libraryVersion: Property<String>
-
-    /** The module's `src/commonSamples/kotlin` sources, where the KDoc's `@sample` must resolve. */
-    @get:InputFiles
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val samples: ConfigurableFileCollection
 
     @get:OutputDirectory
     abstract val outputDirectory: DirectoryProperty
@@ -48,19 +42,9 @@ abstract class GenerateKuiltVersion : DefaultTask() {
             "Refusing to generate KuiltVersion for version '$version': it must match $VERSION_SHAPE " +
                 "to be written into a Kotlin string literal unescaped."
         }
-        val packageLine = Regex("""(?m)^package\s+${Regex.escape(PACKAGE)}\s*$""")
-        val sampleFun = Regex("""(?<![A-Za-z0-9_])fun\s+$SAMPLE_NAME\s*\(""")
-        val sampleFound = samples.files.any { f ->
-            f.isFile && f.readText().let { packageLine.containsMatchIn(it) && sampleFun.containsMatchIn(it) }
-        }
-        check(sampleFound) {
-            "KuiltVersion's KDoc cites @sample $PACKAGE.$SAMPLE_NAME, but no file under the module's " +
-                "src/commonSamples/kotlin declares `fun $SAMPLE_NAME(` in package $PACKAGE. Add the sample, " +
-                "or the tag would render nothing."
-        }
         val root = outputDirectory.get().asFile
         root.deleteRecursively()
-        val file = root.resolve(PACKAGE.replace('.', '/')).resolve("KuiltVersion.kt")
+        val file = root.resolve(PACKAGE.replace('.', '/')).resolve("GeneratedVersion.kt")
         file.parentFile.mkdirs()
         file.writeText(source(version))
     }
@@ -72,37 +56,15 @@ abstract class GenerateKuiltVersion : DefaultTask() {
         /** The one module that carries `KuiltVersion`. The plugin refuses to apply anywhere else. */
         const val CARRIER: String = ":kuilt-base"
 
-        /** The package `KuiltVersion` is generated into: `us.tractat.kuilt.KuiltVersion`. */
+        /** The package of the hand-written `KuiltVersion` and of the generated constant beside it. */
         const val PACKAGE: String = "us.tractat.kuilt"
-
-        /** The sample the generated KDoc cites, in [PACKAGE] under the carrier's `commonSamples`. */
-        const val SAMPLE_NAME: String = "sampleKuiltVersion"
 
         fun source(version: String): String = """
             |// Generated by the kuilt.version-constant convention plugin. Do not edit.
             |package $PACKAGE
             |
-            |/**
-            | * The version of the kuilt that is running.
-            | *
-            | * It is the same string the build publishes the artifact under: `<line>.0-dev` from a local
-            | * build, `<line>.0-dev.<run>` from a snapshot, and the tag's `x.y.z` from a release.
-            | *
-            | * It lives in `$CARRIER`, which depends on nothing. Most kuilt modules bring that module with
-            | * them, so a consumer rarely declares it. The value is the version of `$CARRIER`; import the
-            | * BOM to keep every kuilt module at that version.
-            | *
-            | * It is deliberately a plain `val`, not a `const`, for two reasons. A `const` is copied into
-            | * the code that reads it when that code compiles, so it would name the kuilt a consumer
-            | * compiled against rather than the one actually running. And a `const` puts its value in
-            | * this module's ABI, so every release would recompile every module built against it.
-            | *
-            | * @sample $PACKAGE.$SAMPLE_NAME
-            | */
-            |public object KuiltVersion {
-            |    /** The running kuilt's version, for example `0.7.0-dev`, `0.7.0-dev.412` or `0.7.4`. */
-            |    public val VERSION: String = "$version"
-            |}
+            |/** The version this build publishes. Read it through [KuiltVersion.VERSION]; see there for why that is not a `const`. */
+            |internal const val GENERATED_VERSION: String = "$version"
             |""".trimMargin()
     }
 }
