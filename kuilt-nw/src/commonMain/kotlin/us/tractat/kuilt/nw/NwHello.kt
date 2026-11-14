@@ -112,12 +112,9 @@ internal data class NwHello(val peerId: PeerId, val nonce: ByteArray) {
 
 /** Order-independent link identity from the two endpoint nonces — identical on both ends. */
 internal fun canonicalLinkNonce(a: ByteArray, b: ByteArray): String {
-    val (lo, hi) = listOf(a.toHex(), b.toHex()).sorted()
+    val (lo, hi) = listOf(a.toHexString(), b.toHexString()).sorted()
     return "$lo:$hi"
 }
-
-/** Hex-encode [this] for use in the canonical link-nonce comparison string. */
-private fun ByteArray.toHex(): String = joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
 
 /** Write [value] as a 4-byte big-endian integer into [this] at [offset]. */
 private fun ByteArray.writeInt(value: Int, offset: Int) {
