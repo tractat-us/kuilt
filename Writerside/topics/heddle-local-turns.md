@@ -188,8 +188,9 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
   [#3238](https://github.com/tractat-us/kuilt/issues/3238). The networked
   `HeddleNode` does not take this path: its `complete` keeps an unused
   reservation at the leaf instead of returning it up the path.
-- **A ceiling the engine stays clear of.** Each child's progress is a `Long`
-  count of sixteenths of a unit, and it has a ceiling. Long before a busy fork
+- **A ceiling the engine stays clear of.** Each child's progress is a count of
+  sixteenths of a unit. It is stored exactly, in 128 bits, and a pick reads it
+  as a `Long` with a ceiling. Long before a busy fork
   gets there, a pick moves all its children back down by the same amount, so
   nobody's turn changes. A fork can still get there in three ways. One waiting
   child is never served. Or the fork is only ever charged through `admit`,

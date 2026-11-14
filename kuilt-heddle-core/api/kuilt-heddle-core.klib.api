@@ -1007,16 +1007,22 @@ final class us.tractat.kuilt.heddle/FairShareAllocator { // us.tractat.kuilt.hed
 }
 
 final class us.tractat.kuilt.heddle/Gauge { // us.tractat.kuilt.heddle/Gauge|null[0]
-    constructor <init>(us.tractat.kuilt.heddle/Rational, kotlin/Long) // us.tractat.kuilt.heddle/Gauge.<init>|<init>(us.tractat.kuilt.heddle.Rational;kotlin.Long){}[0]
+    constructor <init>(us.tractat.kuilt.heddle/Rational = ..., kotlin/Long, kotlin/Long = ..., kotlin/Long = ...) // us.tractat.kuilt.heddle/Gauge.<init>|<init>(us.tractat.kuilt.heddle.Rational;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
 
     final val floor // us.tractat.kuilt.heddle/Gauge.floor|{}floor[0]
         final fun <get-floor>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Gauge.floor.<get-floor>|<get-floor>(){}[0]
     final val folded // us.tractat.kuilt.heddle/Gauge.folded|{}folded[0]
         final fun <get-folded>(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.folded.<get-folded>|<get-folded>(){}[0]
+    final val ticksHigh // us.tractat.kuilt.heddle/Gauge.ticksHigh|{}ticksHigh[0]
+        final fun <get-ticksHigh>(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.ticksHigh.<get-ticksHigh>|<get-ticksHigh>(){}[0]
+    final val ticksLow // us.tractat.kuilt.heddle/Gauge.ticksLow|{}ticksLow[0]
+        final fun <get-ticksLow>(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.ticksLow.<get-ticksLow>|<get-ticksLow>(){}[0]
 
     final fun component1(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Gauge.component1|component1(){}[0]
     final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.component2|component2(){}[0]
-    final fun copy(us.tractat.kuilt.heddle/Rational = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/Gauge // us.tractat.kuilt.heddle/Gauge.copy|copy(us.tractat.kuilt.heddle.Rational;kotlin.Long){}[0]
+    final fun component3(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.component3|component3(){}[0]
+    final fun component4(): kotlin/Long // us.tractat.kuilt.heddle/Gauge.component4|component4(){}[0]
+    final fun copy(us.tractat.kuilt.heddle/Rational = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/Gauge // us.tractat.kuilt.heddle/Gauge.copy|copy(us.tractat.kuilt.heddle.Rational;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/Gauge.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/Gauge.hashCode|hashCode(){}[0]
     final fun join(us.tractat.kuilt.heddle/Gauge): us.tractat.kuilt.heddle/Gauge // us.tractat.kuilt.heddle/Gauge.join|join(us.tractat.kuilt.heddle.Gauge){}[0]

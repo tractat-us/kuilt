@@ -44,9 +44,9 @@ class FairShareAllocatorJoinersFrontTest {
         val pick = checkNotNull(allocator.pickChild(root, ledger(listOf(newborn, w1, w2), supply = 1L), { wants }, { wants })) {
             "a pick with every child wanting a unit and one unit held"
         }
-        val newbornFloor = checkNotNull(pick.ledger.gauge(newborn.id)) { "the newborn is seated" }.floor
+        val newbornFloor = checkNotNull(pick.ledger.gauge(newborn.id)) { "the newborn is seated" }.assertedAt(Weight.ONE)
         assertAll(
-            { assertEquals(ticksToVirtual(800L, Weight.ONE), newbornFloor, "the newborn's floor is w1's position") },
+            { assertEquals(ticksToVirtual(800L, Weight.ONE), newbornFloor, "the newborn is seated at w1's position") },
             { assertEquals(ticksToVirtual(640L, Weight.ONE), allocator.memory.wakeOffsets[w2.id], "w2's offset is w1 less w2") },
         )
     }

@@ -890,7 +890,7 @@ class HeddleControlPlaneTest {
         val joiningFront = assertNotNull(governed.ledger.value.virtualService(first))
         governed.schedule(root)
         assertEquals(
-            Gauge(joiningFront, folded = 0L),
+            Gauge(Rational.ZERO, folded = 0L, ticksLow = onTheUnitGrid(joiningFront)),
             governed.ledger.value.gauge(second),
             "a joiner is seated at the front it is joining, exactly — never at 0, and never at a rounded ⌈V⌉",
         )
@@ -1107,4 +1107,11 @@ class HeddleControlPlaneTest {
             return delegate.readIndex()
         }
     }
+}
+
+/** [v] at weight one in ticks of 1/16 unit, where a seat stores it (#3353). Exact: [v] is on the grid. */
+private fun onTheUnitGrid(v: Rational): Long {
+    val ticks = v * Rational.of(16L)
+    check(ticks.denominator == 1L) { "$v is off the 1/16-unit grid" }
+    return ticks.numerator
 }

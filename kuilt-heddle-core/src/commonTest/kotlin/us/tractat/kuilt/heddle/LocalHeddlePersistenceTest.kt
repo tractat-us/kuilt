@@ -413,14 +413,16 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
-     * Format 2 adds nothing the waker scenario writes, so its golden and format 1's hold one
-     * snapshot: the bump changed what a snapshot may carry, not what this one means.
+     * Format 1 and format 2 hold one snapshot of the waker scenario. Format 1 stores each position in
+     * a gauge's floor, as v0.7.4 wrote it; format 2 stores it in the gauge's ticks (#3353). Read
+     * as ticks, the two are equal: the change is in where a position is kept, not in what it is.
      */
     @Test
     fun formatOneAndFormatTwoGoldensHoldTheSameSnapshot() {
         assertAll(
             { assertTrue(GOLDEN_FORMAT_2.startsWith("[2,") && GOLDEN_FORMAT_1.startsWith("[1,"), "the rig: one golden per format") },
-            { assertEquals(decoded(GOLDEN_FORMAT_1), decoded(GOLDEN_FORMAT_2)) },
+            { assertTrue(decoded(GOLDEN_FORMAT_1) != decoded(GOLDEN_FORMAT_2), "the rig: format 1 keeps floors, format 2 ticks") },
+            { assertEquals(decoded(GOLDEN_FORMAT_1).withGaugesAsTicks(), decoded(GOLDEN_FORMAT_2)) },
         )
     }
 
@@ -453,7 +455,10 @@ class LocalHeddlePersistenceTest {
         assertAll(
             { assertEquals(GOLDEN_FORMAT_2_CBOR, hex, "format 2 changed in CBOR; the encoding is now:\n$hex\n") },
             { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_2_CBOR), Cbor)) },
-            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_1_CBOR), Cbor), "format 1's CBOR still reads") },
+            {
+                val formatOne = assertIs<RestoreResult.Restored>(LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_1_CBOR), Cbor)).snapshot
+                assertEquals(snapshot, formatOne.withGaugesAsTicks(), "format 1's CBOR still reads")
+            },
         )
     }
 
@@ -716,7 +721,7 @@ class LocalHeddlePersistenceTest {
         val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
         assertAll(
             { assertTrue(GOLDEN_FORMAT_1_RICH_GRID.startsWith("[1,"), "the rig: format 1") },
-            { assertEquals(reference.persist(), snapshot, "the same snapshot the current format writes") },
+            { assertEquals(reference.persist(), snapshot.withGaugesAsTicks(), "the same snapshot the current format writes, read as ticks") },
             { assertEquals(richContinuation(reference, open), richContinuation(restored, open)) },
         )
     }

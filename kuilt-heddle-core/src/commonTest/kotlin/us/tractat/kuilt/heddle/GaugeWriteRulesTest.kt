@@ -263,11 +263,11 @@ class GaugeWriteRulesTest {
 
         assertTrue(g.seatIfAbsent("t", Rational.of(400L)), "gauge absence admits the seat")
         assertAll(
-            { assertEquals(Gauge(Rational.of(400L), 0L), g.gauge("t"), "seated at the front, folding 0") },
+            { assertEquals(gaugeOfUnits(400L, 0L), g.gauge("t"), "seated at the front, folding 0") },
             // And it is now idempotent: a second bump is refused, so a repeated round cannot
             // ratchet the edge forward.
             { assertTrue(!g.seatIfAbsent("t", Rational.of(900L)), "a seated edge is never re-seated") },
-            { assertEquals(Gauge(Rational.of(400L), 0L), g.gauge("t"), "…and the register is unchanged") },
+            { assertEquals(gaugeOfUnits(400L, 0L), g.gauge("t"), "…and the register is unchanged") },
         )
     }
 
