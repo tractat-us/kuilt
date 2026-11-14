@@ -41,8 +41,21 @@ class FairShareAllocatorUnifiedFrontTest {
      * One [FairShareAllocator.schedule] over children seated at [seats] ticks, every one of them seen
      * idle before, so each that wants service now is a waker. [idle] still want nothing.
      */
-    private fun wake(seats: Map<AttachmentRecord, Long>, idle: Set<AttachmentRecord>, supply: Long): Run {
-        val children = seats.keys.toList()
+    private fun wake(seats: Map<AttachmentRecord, Long>, idle: Set<AttachmentRecord>, supply: Long): Run =
+        schedule(seats, newborns = emptyList(), observed = seats.keys.associateWith { false }, idle, supply)
+
+    /**
+     * One [FairShareAllocator.schedule] over children seated at [seats] ticks plus unseated
+     * [newborns], each child in [observed] last seen demanding or not. [idle] want nothing.
+     */
+    private fun schedule(
+        seats: Map<AttachmentRecord, Long>,
+        newborns: List<AttachmentRecord>,
+        observed: Map<AttachmentRecord, Boolean>,
+        idle: Set<AttachmentRecord>,
+        supply: Long,
+    ): Run {
+        val children = seats.keys.toList() + newborns
         var l = shapedLedger(root, children)
         l = l.piece(EntitlementLedger.of(gauges = seats.map { (edge, ticks) -> edge.id to Gauge(ticksToVirtual(ticks, edge.weight), 0L) }.toMap()))
         l = l.piece(l.mint(MintId("m"), root, LOCAL, supply).delta)
@@ -50,7 +63,7 @@ class FairShareAllocatorUnifiedFrontTest {
         val allocator = FairShareAllocator(
             LOCAL,
             PolicyConfig(quantum = 1L),
-            AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = children.associate { it.id to false }),
+            AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = observed.mapKeys { it.key.id }),
         )
         val outcome = allocator.schedule(root, cell, earmarked = 0L) { id -> if (idle.any { it.id == id }) Demand.NONE else wants }
         return Run(outcome, cell.granted, allocator.memory)
@@ -81,6 +94,41 @@ class FairShareAllocatorUnifiedFrontTest {
             { assertEquals(AllocationOutcome.Delegated(100), run.outcome, "the rig: all 100 units went out") },
             { assertEquals(50, run.granted[a], "a takes half") },
             { assertEquals(50, run.granted[b], "and so does b") },
+        )
+    }
+
+    /**
+     * S4b, a known regression that origins fix: a runner `b` at −100, a waker `a` at −100 and a
+     * newborn `n`. `b` is a demanding non-joiner, so the front is its mean, −100, and the newborn's
+     * seat cannot go below its own origin, 0. It waits 100 behind them both. The old rule raised the
+     * front to the newborn's origin whenever wakers joined beside it, which penalised the waker
+     * instead: 117/17/16. A runner gets below zero only through `LocalHeddle`'s fold rebase, which
+     * slice 7 of #3353 replaces with per-parent origins; that slice flips this arm to the newborn
+     * not waiting.
+     */
+    @Test
+    fun aNewbornBehindASubZeroRunnerWaitsUntilOrigins() {
+        val n = edgeOf(root, GroupId("p/n"))
+        val run = schedule(
+            seats = mapOf(b to -1_600L, a to -1_600L),
+            newborns = listOf(n),
+            observed = mapOf(b to true, a to false),
+            idle = emptySet(),
+            supply = 150L,
+        )
+        assertAll(
+            { assertEquals(AllocationOutcome.Delegated(150), run.outcome, "the rig: all 150 units went out") },
+            {
+                assertEquals(
+                    Rational.ZERO,
+                    run.memory.wakeOffsets[a.id] ?: Rational.ZERO,
+                    "a is clamped to the runner's −100, which moves it nothing; the old raise moved it 100",
+                )
+            },
+            { assertEquals(true, run.memory.demandingObserved[a.id], "the rig: a was observed waking") },
+            { assertEquals(75, run.granted[a], "the waker comes level with the runner") },
+            { assertEquals(75, run.granted[b], "and the runner keeps its half") },
+            { assertEquals(null, run.granted[n], "the newborn, seated at its origin 100 ahead, waits: slice 7 flips this") },
         )
     }
 }

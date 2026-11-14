@@ -671,9 +671,17 @@ public class FairShareAllocator(
      *   This can cost a joiner a turn; it can never give one.
      *
      * It replaces three older rules: the maximum over the idle non-joiners alone, a `null` front
-     * when only joiners were left, and raising a front to the newborns' origins. The first let a
-     * waker come back level with an idle bystander far behind its sibling: with `a` at 100 and `b`
-     * at 0 both waking beside `c` idle at 10, `b` was clamped to 10 and took 95 of the next 100.
+     * when only joiners were left, and raising a front to the newborns' origins whenever newborns
+     * joined beside wakers. The first let a waker come back level with an idle bystander far behind
+     * its sibling: with `a` at 100 and `b` at 0 both waking beside `c` idle at 10, `b` was clamped
+     * to 10 and took 95 of the next 100.
+     *
+     * The third is gone from the competing case too, so that case did change. With a demanding
+     * runner below zero, the mean sits below a newborn's origin; the newborn is seated at its origin
+     * (a seat cannot go below it) and waits behind the runner, where the old raise clamped the
+     * wakers up to it instead. Nothing but `LocalHeddle`'s fold rebase puts a demanding child below
+     * zero, and per-parent origins replace that rebase in a later slice of #3353; until then
+     * `aNewbornBehindASubZeroRunnerWaitsUntilOrigins` pins the wait.
      *
      * Either way the front reads the ceiling when a child it was taken over is at its ceiling, so a
      * joiner seated or clamped against it lands at the penalty end (#3313).
