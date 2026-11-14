@@ -188,11 +188,11 @@ public object HeddlePolicy {
      * replicated [Gauge] rather than off any field of the record (issue #1752):
      *
      * ```
-     * grossEv = floor + (baseIssued − folded) / w      (no gauge ⇒ baseIssued / w)
+     * grossEv = (P + (baseIssued − folded) · G) / (G · w)      (no gauge ⇒ baseIssued / w)
      * ev      = grossEv − returned / w
      * ```
      *
-     * `b` is the gauge's [floor][Gauge.floor], carried with the issuance the writer had actually
+     * `P` is the gauge's position, `max(⌈floor · w · G⌉, ticks)`, carried with the issuance the writer had actually
      * observed when it asserted it, so a stale seat is self-limiting rather than a permanent lie;
      * an edge nothing has seated yet reads from its own origin. The numerator stays *committed*
      * (not merely spent) service, so a grant advances the child the instant it is issued —

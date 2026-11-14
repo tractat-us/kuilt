@@ -51,8 +51,10 @@ internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS
  * [POSITION_HEADROOM]`) / w.denominator`.
  *
  * The bound has two jobs. Divided by the weight's denominator, it keeps the position's own virtual
- * time representable: a floor on the wire is `ticks / (G · w)`, whose numerator is at most
- * `ticks · w.denominator` ([ticksToVirtual]). Short of `Long.MAX_VALUE` by [POSITION_HEADROOM], it
+ * time representable: a position read as a virtual time, by the public reads and in a stored wake
+ * offset, is `ticks / (G · w)`, whose numerator is at most `ticks · w.denominator`
+ * ([ticksToVirtual]). A gauge stores its position in 128-bit ticks and is not held here; only a
+ * read of it is (#3353). Short of `Long.MAX_VALUE` by [POSITION_HEADROOM], it
  * leaves a deadline room. A position that would pass it **saturates** here instead of throwing
  * (#3313): it no longer orders exactly, so a pick that would have to order it is refused with
  * [AcquireOutcome.PositionCeiling], while a charge, which may not be refused, lands with the
@@ -180,8 +182,9 @@ private fun absRemainder(a: Long, b: Long): Long {
 
 /**
  * [ticks] on the grid of an edge of weight [w], as the virtual time it stands for:
- * `ticks / (G · w)`. The form a position takes on the wire, in a [Gauge.floor] and in the stored
- * wake offsets, so that a peer reading it as a [Rational] reads the exact value.
+ * `ticks / (G · w)`. The form a position takes in the public virtual-time reads and in the stored
+ * wake offsets, and the form a build before #3353 wrote a [Gauge.floor] in, so that a peer
+ * reading it as a [Rational] reads the exact value.
  *
  * `G · w.numerator` is divided out of [ticks] first, so the only overflow left is the reduced
  * numerator's own: at least `ticks · w.denominator / (G · w.numerator)`, the position's service
