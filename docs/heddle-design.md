@@ -516,6 +516,110 @@ drain *on top of* `MovableTree`'s convergence, and kuilt is unusually well
 placed to try because the hard CRDT is already in the zoo, GC'd by `Quilter`'s
 causal-stability machinery.
 
+### 5.5 Forgetting retired edges
+
+Picture a group with one child per user: a child is attached when a user
+arrives and detached when the user goes idle. Every departure leaves something
+behind. Detaching retires the child's edge, and a retired edge stays in the
+ledger for good, because the work done under it still counts in the books. So
+an engine that runs for months grows with every arrival and departure, in
+memory and on disk, without bound. This section records how a single-process
+engine will forget those edges while keeping the books exact, and why peers
+cannot yet do the same.
+
+#### As built: kept for good, summed once
+
+`holdings(parent)` subtracts every child's net inflow, `effIssued − returned`,
+retired children included: a retired child that served has a net inflow equal
+to what it spent. Task L0 (#3189) pre-sums the retired children per parent and
+replica in an index, `retiredOutflow`, which is derived from the ledger's own
+slots and never encoded. That made reads fast at 50,000 retired edges. Nothing
+bounds the size.
+
+Three other readers need a retired edge:
+
+- **conservation.** `leafSpentTotal()` sums each edge's effective leaf spend over
+  every edge, retired included;
+- **the generation floor.** It is one global maximum over every edge, retired
+  included, so that no id is ever reused;
+- **`Topology.diff`'s `hasChildEdges` test,** which asks whether a group has any
+  child edge in any lifecycle, to decide whether a reload needs a `Reconcile`.
+
+#### The design: fold, then forget
+
+Decided in #3192, and not yet built.
+
+**A new encoded component, `forgotten`.** It is the ledger's seventeenth, written
+through `CanonicalMapSerializer` at every level, with its own arm in
+`:kuilt-heddle`'s `EntitlementLedgerCanonicalEncodingTest`. It holds:
+
+- per parent, a map from replica to the folded `effIssued − returned` of its
+  forgotten children: the term `holdings` subtracts;
+- per replica, the folded effective leaf spend of the forgotten edges, so that
+  conservation still balances;
+- `forgottenGenerationFloor: Long`, the highest generation any forgotten edge
+  carried, since the floor is a single global maximum.
+
+`holdings`, the conservation check in `validate()`, the generation floor and
+`hasChildEdges` each read the fold as well as the live edges.
+
+**When an edge may be forgotten.** All of these hold:
+
+- it is RETIRED with outstanding 0, and no open lease's captured path crosses it;
+- its child has no child edges, so leaves go first;
+- `holdings(child)` is 0;
+- no transfer rows sit at its path;
+- `strandRelocation` would move nothing.
+
+A PREPARED edge that will never activate carries no history, so it is forgotten
+with only the floor updated.
+
+**When it happens.** Automatically, in the same swap that retires the edge
+(`detachRuntimeChild`, `apply`). There is no new API. The same swap prunes the
+edge from the allocator's wake memory, `AllocatorMemory`, since
+`forgetDepartedChildren` finds an edge's parent through its record and could not
+once the record is gone.
+
+**Forgetting is not a join.** Every other mutator only adds to the lattice; this
+one removes slots. So it is outside §10 invariant 2, scoped to a single writer,
+as invariant 4's quiesced-edge exception is. Three guards hold the scope:
+
+- `forget` is internal to `:kuilt-heddle-core`, and `LocalHeddle` is its only
+  caller;
+- `piece` refuses a delta that carries a non-empty `forgotten`, or that names an
+  unknown edge at or below the forgotten floor;
+- `:kuilt-heddle` requires `forgotten` to be empty.
+
+**What `validate()` checks.** An edge's `ClosureViolation` and `PerEdgeSafety`
+are checked when it is forgotten, since nothing is left to check afterwards. One
+new invariant: the fold is never negative.
+
+**The format.** `forgotten` is encoded under snapshot format 2, which reads
+formats 1 and 2. v0.7.4 wrote format 1. Every encoded change for the next
+release goes under that one bump.
+
+**Until it is built,** keep a runtime child attached rather than detaching it
+when its user goes idle.
+
+#### Settled — don't reopen
+
+- An explicit compaction call: forgetting happens in the retire's own swap, so
+  there is no new API (#3192).
+- Leaving the allocator's wake memory to prune itself later: its pruning needs
+  the record that forgetting removes (#3192).
+- A snapshot format bump per encoded change: one bump, format 2, per release
+  (#3192).
+
+#### Open
+
+- **Forgetting between peers.** A replicated ledger would need causal stability
+  per edge plus a tombstone, and a stored aggregate risks the drift that rejected
+  candidate B ([`heddle-ledger-design.md`](heddle-ledger-design.md), *How this
+  was chosen*). Raised in #3192.
+- **The coupling to the position ceiling.** If #3329 settles on generation
+  turnover, every turnover retires a parent's children, and this forgetting
+  becomes its prerequisite. Tracked by #3329.
+
 ## 6. Demand is an `EphemeralMap`, and that is not an accident
 
 A child advertises how much *more* outstanding entitlement it could usefully
