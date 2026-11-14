@@ -12,6 +12,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onEach
@@ -33,6 +34,8 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Seam
+import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
@@ -1180,6 +1183,60 @@ public abstract class RoomConformanceSuite {
             )
         }
 
+    /**
+     * **A room that has left reads [SeamState.Torn] on its channel views, on both roles (#3129).**
+     *
+     * A channel view's `state` forwards the room's own seam state ([Room.channel]), so
+     * `room.channel(id).state` is the public signal for "this room has ended", whether it left or
+     * its transport tore. It is what a handler parked inside a host's `onRoom` can wait on. A room
+     * whose views still read `Woven` after it left gives that handler nothing to wake on, and every
+     * consumer of such a room inherits a handler that never ends.
+     *
+     * Two views per room: one taken **before** the leave, which is the view a consumer already
+     * holds, and one taken **after**, so a room cannot pass by tearing only the views it had already
+     * handed out. The joiner leaves first so that its `Torn` is caused by its own leave: the host
+     * leaving first would end the joiner's room by host loss, a different path. On a per-connection
+     * fabric the joiner's leave also tears the host's seam, so the host room may already have left
+     * by itself and the host's `leave()` here is the idempotent second call. The obligation holds
+     * either way: after `leave()` returns, the views read `Torn`.
+     *
+     * The precondition is part of the obligation, not decoration: a room whose views read `Torn`
+     * from the start would satisfy every later line.
+     */
+    @Test
+    public fun channelStateTornAfterLeave(): TestResult =
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+            val h = newHarness(backgroundScope)
+            val hostRoom = h.hostFactory.host(Pattern("Alice"))
+            val joinerRoom = h.joinerFactory.join(InMemoryTag("Bob"))
+            hostRoom.awaitRoster("roster.size == 1 — the joiner is admitted") { it.size == 1 }
+            joinerRoom.awaitRoster("roster.isNotEmpty() — the host is visible") { it.isNotEmpty() }
+
+            val hostView = hostRoom.channel(TERMINAL_STATE_CHANNEL)
+            val joinerView = joinerRoom.channel(TERMINAL_STATE_CHANNEL)
+            val hostBefore = hostView.state.value
+            val joinerBefore = joinerView.state.value
+
+            joinerRoom.leave()
+            joinerRoom.awaitTorn(joinerView, "the joiner's view taken before it left")
+            joinerRoom.awaitTorn(
+                joinerRoom.channel(TERMINAL_STATE_CHANNEL_AFTER),
+                "a view the joiner minted after it left",
+            )
+
+            hostRoom.leave()
+            hostRoom.awaitTorn(hostView, "the host's view taken before it left")
+            hostRoom.awaitTorn(
+                hostRoom.channel(TERMINAL_STATE_CHANNEL_AFTER),
+                "a view the host minted after it left",
+            )
+
+            assertAll(
+                { assertFalse(hostBefore is SeamState.Torn, "rig: the host's view is live before anything leaves, got $hostBefore") },
+                { assertFalse(joinerBefore is SeamState.Torn, "rig: the joiner's view is live before anything leaves, got $joinerBefore") },
+            )
+        }
+
     private suspend fun TestScope.assertLeaveEndsTheRosterFirst(room: Room, member: PeerId) {
         val channelView = room.channel("terminal-room")
         val leftEvents = mutableListOf<MembershipEvent.Left>()
@@ -2113,6 +2170,22 @@ public abstract class RoomConformanceSuite {
         }
     }
 
+    /**
+     * Suspend until [view]'s state reads [SeamState.Torn] and return it; on expiry of [awaitBudget]
+     * fail naming the state the view was left in. A view stuck at `Woven` after its room left is
+     * the defect [channelStateTornAfterLeave] exists to catch, so the message has to say which.
+     */
+    private suspend fun Room.awaitTorn(view: Seam, expected: String): SeamState.Torn {
+        val budget = awaitBudget ?: return view.state.filterIsInstance<SeamState.Torn>().first()
+        return withTimeoutOrNull(budget) { view.state.filterIsInstance<SeamState.Torn>().first() }
+            ?: fail(
+                "the channel view never read Torn: $expected (last state ${view.state.value})",
+                budget,
+                "A channel view's state forwards the room's seam state, and a room's leave ends its " +
+                    "seam. A view still live after leave() is a room whose end no consumer can observe.",
+            )
+    }
+
     /** Broadcast [count] frames `"<prefix>0"`, `"<prefix>1"`, … in order. */
     private suspend fun Room.broadcastNumbered(prefix: String, count: Int) {
         repeat(count) { broadcast(applicationPayload("$prefix$it")) }
@@ -2203,6 +2276,12 @@ public abstract class RoomConformanceSuite {
          * [awaitBudget], so it can never be the thing that expires a wait.
          */
         val SLOW_TEARDOWN = 1.seconds
+
+        /** The channel [channelStateTornAfterLeave] takes its views on before the leave. */
+        const val TERMINAL_STATE_CHANNEL = "terminal-state"
+
+        /** A second channel, first minted after the leave, so its view cannot pre-date it. */
+        const val TERMINAL_STATE_CHANNEL_AFTER = "terminal-state-after-leave"
 
         /** The message on the throwable the failing-teardown properties inject, so a red names itself. */
         const val INJECTED_TEARDOWN_FAILURE =
