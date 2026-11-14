@@ -18,6 +18,11 @@ import kotlin.test.assertTrue
  *
  * JVM only: the constant is one generated `commonMain` file every target compiles, so there is no
  * per-target value to disagree, and the POM is a file only a JVM test can read.
+ *
+ * What CI proves: the PR build runs this only at the default `<line>.0-dev`. The publish jobs pass
+ * `-Pversion` (a snapshot's `<line>.0-dev.<run>`, a tag's `x.y.z`) but run no tests, so the override
+ * path is proven by a local `-Pversion=…` run, not by CI. `:kuilt-heddle-core` has the same test
+ * for its own copy.
  */
 class KuiltVersionTest {
 
@@ -26,7 +31,7 @@ class KuiltVersionTest {
         val pomPath = assertNotNull(
             // ALLOW-selfSkipGate: the build's handover of the POM path; a missing one fails, never skips
             System.getProperty("kuilt.publishedPom"),
-            "kuilt.publishedPom is unset — the jvmTest wiring in kuilt-core/build.gradle.kts is missing",
+            "kuilt.publishedPom is unset — the jvmTest wiring in kuilt.version-constant is missing",
         )
         val pom = File(pomPath)
         assertTrue(pom.isFile, "the publication's POM was not generated at $pomPath")
