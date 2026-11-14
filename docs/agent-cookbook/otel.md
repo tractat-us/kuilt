@@ -48,6 +48,28 @@ val result = exporter.record(
 check(result == MetricExportResult.Success) // every kind it touched is on disk
 ```
 
+**Intent:** keep histogram counts that arrive already bucketed — an OpenTelemetry SDK's histogram, one interval at a time — without unrolling each bucket into `recordHistogram` calls, and without `mergeHistogram`, which joins instead of adding.
+**Primitive:** `MetricUpdate.AddExponentialHistogram` (`:kuilt-otel`) handed to `record`, over `DDSketch.addBuckets` (`:kuilt-crdt`). `KuiltMetricExporter` (`:kuilt-otel-sdk`) already asks the SDK for exponential histograms at `WarpMetricExporter.histogramScale` and bridges them this way.
+
+The update is a delta: delivering the same interval twice counts it twice, as `IncrementSum` does. A finer scale than `histogramScale` merges exactly; a coarser one cannot be split without losing the sketch's accuracy, so `record` refuses the whole batch holding it and applies nothing. The SDK bridge drops such a point with a WARN instead, and a larger `maxBuckets` makes it rarer.
+
+<!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleAddExponentialHistogram -->
+```kotlin
+// OTLP buckets 160..162 at the exporter's own scale: 3 + 0 + 5 values, plus 2 zeros.
+val interval = MetricUpdate.AddExponentialHistogram(
+    latency,
+    scale = exporter.histogramScale,
+    zeroCount = 2L,
+    positiveOffset = 160,
+    positiveCounts = listOf(3L, 0L, 5L),
+    negativeOffset = 0,
+    negativeCounts = emptyList(),
+)
+exporter.record(listOf(interval))
+exporter.record(listOf(interval)) // a delta: the next interval adds, it does not replace
+check(exporter.histogramSnapshot(latency).count == 20L)
+```
+
 **Intent:** stamp which session / game / request / screen a log line belongs to — an MDC equivalent, a "logger context". Don't keep a mutable global holding "the current session" for a `CaptureConfig.attributeMapper` to read.
 **Primitive:** `withLogContext(attributes) { … }` (`:kuilt-otel-logging`).
 

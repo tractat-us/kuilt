@@ -351,6 +351,37 @@ sealed interface us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/M
         final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.AddCardinality.toString|toString(){}[0]
     }
 
+    final class AddExponentialHistogram : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Int, kotlin/Long, kotlin/Int, kotlin.collections/List<kotlin/Long>, kotlin/Int, kotlin.collections/List<kotlin/Long>) // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Int;kotlin.Long;kotlin.Int;kotlin.collections.List<kotlin.Long>;kotlin.Int;kotlin.collections.List<kotlin.Long>){}[0]
+
+        final val key // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.key.<get-key>|<get-key>(){}[0]
+        final val negativeCounts // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.negativeCounts|{}negativeCounts[0]
+            final fun <get-negativeCounts>(): kotlin.collections/List<kotlin/Long> // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.negativeCounts.<get-negativeCounts>|<get-negativeCounts>(){}[0]
+        final val negativeOffset // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.negativeOffset|{}negativeOffset[0]
+            final fun <get-negativeOffset>(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.negativeOffset.<get-negativeOffset>|<get-negativeOffset>(){}[0]
+        final val positiveCounts // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.positiveCounts|{}positiveCounts[0]
+            final fun <get-positiveCounts>(): kotlin.collections/List<kotlin/Long> // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.positiveCounts.<get-positiveCounts>|<get-positiveCounts>(){}[0]
+        final val positiveOffset // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.positiveOffset|{}positiveOffset[0]
+            final fun <get-positiveOffset>(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.positiveOffset.<get-positiveOffset>|<get-positiveOffset>(){}[0]
+        final val scale // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.scale|{}scale[0]
+            final fun <get-scale>(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.scale.<get-scale>|<get-scale>(){}[0]
+        final val zeroCount // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.zeroCount|{}zeroCount[0]
+            final fun <get-zeroCount>(): kotlin/Long // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.zeroCount.<get-zeroCount>|<get-zeroCount>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.component1|component1(){}[0]
+        final fun component2(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.component3|component3(){}[0]
+        final fun component4(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.component4|component4(){}[0]
+        final fun component5(): kotlin.collections/List<kotlin/Long> // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.component5|component5(){}[0]
+        final fun component6(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.component6|component6(){}[0]
+        final fun component7(): kotlin.collections/List<kotlin/Long> // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.component7|component7(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Int = ..., kotlin/Long = ..., kotlin/Int = ..., kotlin.collections/List<kotlin/Long> = ..., kotlin/Int = ..., kotlin.collections/List<kotlin/Long> = ...): us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Int;kotlin.Long;kotlin.Int;kotlin.collections.List<kotlin.Long>;kotlin.Int;kotlin.collections.List<kotlin.Long>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.toString|toString(){}[0]
+    }
+
     final class IncrementSum : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.IncrementSum|null[0]
         constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Long = ...) // us.tractat.kuilt.otel/MetricUpdate.IncrementSum.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
 
@@ -840,6 +871,8 @@ final class us.tractat.kuilt.otel/WarpMetricExporter { // us.tractat.kuilt.otel/
 
     final val health // us.tractat.kuilt.otel/WarpMetricExporter.health|{}health[0]
         final fun <get-health>(): kotlinx.coroutines.flow/StateFlow<us.tractat.kuilt.otel/PersistenceHealth> // us.tractat.kuilt.otel/WarpMetricExporter.health.<get-health>|<get-health>(){}[0]
+    final val histogramScale // us.tractat.kuilt.otel/WarpMetricExporter.histogramScale|{}histogramScale[0]
+        final fun <get-histogramScale>(): kotlin/Int // us.tractat.kuilt.otel/WarpMetricExporter.histogramScale.<get-histogramScale>|<get-histogramScale>(){}[0]
 
     final fun cardinalityEstimate(us.tractat.kuilt.otel/MetricKey): kotlin/Long // us.tractat.kuilt.otel/WarpMetricExporter.cardinalityEstimate|cardinalityEstimate(us.tractat.kuilt.otel.MetricKey){}[0]
     final fun cardinalitySnapshot(us.tractat.kuilt.otel/MetricKey): us.tractat.kuilt.crdt/HyperLogLog // us.tractat.kuilt.otel/WarpMetricExporter.cardinalitySnapshot|cardinalitySnapshot(us.tractat.kuilt.otel.MetricKey){}[0]

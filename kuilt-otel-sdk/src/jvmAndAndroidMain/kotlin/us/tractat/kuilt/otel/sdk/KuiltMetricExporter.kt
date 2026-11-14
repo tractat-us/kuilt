@@ -3,9 +3,11 @@ package us.tractat.kuilt.otel.sdk
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.opentelemetry.api.common.Attributes
 import io.opentelemetry.sdk.common.CompletableResultCode
+import io.opentelemetry.sdk.metrics.Aggregation
 import io.opentelemetry.sdk.metrics.InstrumentType
 import io.opentelemetry.sdk.metrics.data.AggregationTemporality
 import io.opentelemetry.sdk.metrics.data.DoublePointData
+import io.opentelemetry.sdk.metrics.data.ExponentialHistogramPointData
 import io.opentelemetry.sdk.metrics.data.LongPointData
 import io.opentelemetry.sdk.metrics.data.MetricData
 import io.opentelemetry.sdk.metrics.data.MetricDataType
@@ -28,8 +30,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  * [WarpMetricExporter] buffer — the metric twin of `KuiltLogRecordExporter`.
  *
  * For apps **already** running the OTel SDK: register this on the metric reader and every
- * monotonic counter and gauge also lands in kuilt's offline-first buffer, extractable via
- * the metric tap — without adopting kuilt's own instrumentation. Purely additive.
+ * monotonic counter, gauge and histogram also lands in kuilt's offline-first buffer, extractable
+ * via the metric tap — without adopting kuilt's own instrumentation. Purely additive.
  *
  * ## Temporality (load-bearing)
  *
@@ -47,8 +49,24 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *   moved, so each one is a `setGauge` write per collection.
  * - **Gauges and histograms** → [AggregationTemporality.DELTA]. A gauge's point is a level
  *   either way; under delta the SDK sends it only when it was recorded in the interval, so
- *   an unchanged gauge is not rewritten with a fresh timestamp each collection. Histograms
- *   are dropped, so theirs only sets how much the SDK holds between collections.
+ *   an unchanged gauge is not rewritten with a fresh timestamp each collection. A histogram's
+ *   delta is exactly the bucket counts to add to the series. Delta also restarts the SDK's
+ *   histogram at the top scale each collection, so one wide burst lowers the scale of its own
+ *   interval only, where cumulative would lower it for the rest of the process.
+ *
+ * ## Histograms
+ *
+ * [getDefaultAggregation] asks the SDK for a base-2 **exponential** histogram for every
+ * `HISTOGRAM` instrument, with at most [maxBuckets] buckets per sign and a scale no finer than
+ * `WarpMetricExporter.histogramScale`, the scale the buffer keeps its sketches at. A reader
+ * consults this only when it is built from the exporter, as a `PeriodicMetricReader` is; a View
+ * that names another aggregation overrides it.
+ *
+ * The SDK lowers a point's scale when its values span more than [maxBuckets] buckets. A point that
+ * arrives at the buffer's scale maps exactly. One that arrives coarser cannot be split back into
+ * finer buckets without losing the sketch's accuracy, so that point is dropped with a WARN and its
+ * interval's counts are lost. [DEFAULT_MAX_BUCKETS] covers twenty doublings of the value at the
+ * default scale, against five for the SDK's own default, so that takes a wide spread.
  *
  * ## Non-blocking bridge
  *
@@ -63,10 +81,14 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  * - monotonic `LONG_SUM` → `incrementSum`; monotonic `DOUBLE_SUM` → `incrementSumDouble`.
  * - non-monotonic sums (UpDownCounter) and gauges → `setGauge`. An UpDownCounter arrives
  *   cumulative (above), so the gauge it becomes holds its current level.
- * - histograms / exponential histograms / summaries → **dropped** (WARN), never a failure.
- *   `WarpMetricExporter` does keep histograms (a `DDSketch` per series), but it takes them one
- *   raw value at a time through `recordHistogram`; the SDK hands over buckets already counted,
- *   and `mergeHistogram` is a join, so adding one interval's buckets to the last has no entry point.
+ * - delta exponential histograms → `MetricUpdate.AddExponentialHistogram`, which adds the
+ *   interval's bucket counts to the series' `DDSketch`. The point's `sum`, `min`, `max` and
+ *   exemplars are not kept; a sketch has no field for them.
+ * - **dropped** (WARN), never a failure: an exponential histogram coarser than the buffer's
+ *   scale (above), or one that arrived cumulative, whose counts would be added again each
+ *   collection; an explicit-bucket histogram, which reaches the bridge only when a View asks for
+ *   it, since no single value stands for a bucket within the sketch's accuracy; and a summary,
+ *   whose quantiles do not merge.
  * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it), and so is a
  *   NaN delta (WARN). Either is one dropped point, never a failed export: the export is one
  *   batch, so a point it could not apply would otherwise take every other point with it.
@@ -77,11 +99,29 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *
  * @param exporter the durable kuilt buffer points are written into.
  * @param scope the drain coroutine's scope (required — never a real-dispatcher default).
+ * @param maxBuckets the most buckets per sign the SDK keeps for one histogram series in one
+ *   interval, [DEFAULT_MAX_BUCKETS] by default. It sets the SDK's memory per series, and how wide
+ *   a spread fits at the buffer's scale before a point arrives too coarse and is dropped.
+ * @throws IllegalArgumentException if the SDK refuses [maxBuckets] (it needs at least 2).
  */
-public class KuiltMetricExporter(
+public class KuiltMetricExporter @JvmOverloads constructor(
     private val exporter: WarpMetricExporter,
     scope: CoroutineScope,
+    public val maxBuckets: Int = DEFAULT_MAX_BUCKETS,
 ) : MetricExporter {
+
+    /**
+     * Built eagerly, so a [maxBuckets] the SDK refuses fails here rather than at the first instrument.
+     *
+     * The `(maxBuckets, maxScale)` overload is deprecated in favour of `Base2ExponentialHistogramOptions`,
+     * but that class first shipped in OpenTelemetry SDK 1.60.0. The SDK is `compileOnly` here, so the
+     * app's own version is the one on the classpath, and on 1.59 or older the options class would
+     * throw `NoClassDefFoundError` from this constructor — taking counters and gauges down with the
+     * histograms. The deprecated overload exists on every version this bridge supports.
+     */
+    @Suppress("DEPRECATION")
+    private val histogramAggregation: Aggregation =
+        Aggregation.base2ExponentialBucketHistogram(maxBuckets, exporter.histogramScale)
 
     private class Batch(val metrics: Collection<MetricData>, val code: CompletableResultCode)
 
@@ -130,6 +170,14 @@ public class KuiltMetricExporter(
         }
 
     /**
+     * An exponential histogram capped at the buffer's scale for `HISTOGRAM` instruments, so the
+     * SDK hands over buckets that map onto the buffer's sketches exactly; the SDK's own default for
+     * every other instrument. See the class KDoc.
+     */
+    override fun getDefaultAggregation(instrumentType: InstrumentType): Aggregation =
+        if (instrumentType == InstrumentType.HISTOGRAM) histogramAggregation else Aggregation.defaultAggregation()
+
+    /**
      * Append one metric's points to [into] as [MetricUpdate]s. A dropped metric — unsupported, or a
      * sum with the wrong temporality — adds none, which is not a failure.
      */
@@ -154,12 +202,50 @@ public class KuiltMetricExporter(
                 md.longGaugeData.points.forEach { gauge(name, it.attributes, it.value.toDouble(), it.epochNanos, into) }
             MetricDataType.DOUBLE_GAUGE ->
                 md.doubleGaugeData.points.forEach { gauge(name, it.attributes, it.value, it.epochNanos, into) }
-            MetricDataType.HISTOGRAM, MetricDataType.EXPONENTIAL_HISTOGRAM, MetricDataType.SUMMARY ->
-                logger.warn {
-                    "KuiltMetricExporter: dropping unsupported metric '$name' (${md.type}) — the SDK sends " +
-                        "pre-bucketed deltas, and WarpMetricExporter records histograms one value at a time"
+            MetricDataType.EXPONENTIAL_HISTOGRAM -> {
+                val h = md.exponentialHistogramData
+                if (h.aggregationTemporality != AggregationTemporality.DELTA) {
+                    logger.warn {
+                        "KuiltMetricExporter: dropping exponential histogram '$name' — it arrived " +
+                            "${h.aggregationTemporality} and the bridge adds deltas; register it on a reader that asks the exporter"
+                    }
+                    return
                 }
+                h.points.forEach { histogram(name, it, into) }
+            }
+            MetricDataType.HISTOGRAM ->
+                logger.warn {
+                    "KuiltMetricExporter: dropping explicit-bucket histogram '$name' — no one value stands for a " +
+                        "bucket within the sketch's accuracy; remove the View that asks for explicit buckets"
+                }
+            MetricDataType.SUMMARY ->
+                logger.warn { "KuiltMetricExporter: dropping summary '$name' — quantiles do not merge" }
         }
+    }
+
+    /**
+     * One delta point of an exponential histogram, as the bucket counts to add — unless it is
+     * coarser than the buffer's scale, when it is dropped with a WARN rather than handed to
+     * `WarpMetricExporter.record`, which would refuse the whole export for it.
+     */
+    private fun histogram(name: String, p: ExponentialHistogramPointData, into: MutableList<MetricUpdate>) {
+        if (p.scale < exporter.histogramScale) {
+            logger.warn {
+                "KuiltMetricExporter: dropping ${p.count} values of histogram '$name' — the SDK lowered its scale to " +
+                    "${p.scale}, below the buffer's ${exporter.histogramScale}, and its buckets cannot be split; " +
+                    "raise maxBuckets (now $maxBuckets) if this spread is normal"
+            }
+            return
+        }
+        into += MetricUpdate.AddExponentialHistogram(
+            key = MetricKey(name, MetricKind.EXPONENTIAL_HISTOGRAM, attrs(p.attributes)),
+            scale = p.scale,
+            zeroCount = p.zeroCount,
+            positiveOffset = p.positiveBuckets.offset,
+            positiveCounts = p.positiveBuckets.bucketCounts,
+            negativeOffset = p.negativeBuckets.offset,
+            negativeCounts = p.negativeBuckets.bucketCounts,
+        )
     }
 
     /**
@@ -209,4 +295,13 @@ public class KuiltMetricExporter(
     }
 
     private fun attrs(a: Attributes): Map<String, String> = buildMap { a.forEach { k, v -> put(k.key, v.toString()) } }
+
+    public companion object {
+        /**
+         * The default [maxBuckets]: 640, twenty doublings of the value at the buffer's default scale
+         * 5. The SDK's own default, 160, fits five, past which a point arrives too coarse and is
+         * dropped.
+         */
+        public const val DEFAULT_MAX_BUCKETS: Int = 640
+    }
 }

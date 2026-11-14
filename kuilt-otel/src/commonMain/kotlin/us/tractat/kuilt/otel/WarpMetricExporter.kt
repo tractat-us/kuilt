@@ -56,7 +56,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  *   scale — configure via [alphaForOtlpScale] (the default [histogramPrototype] is
  *   scale-[DEFAULT_OTLP_HISTOGRAM_SCALE]-aligned, α ≈ 1.08%). Like [HyperLogLog]
  *   precision, the sketch configuration is a cluster-wide constant: sketches merge
- *   only when it matches exactly.
+ *   only when it matches exactly. Values arrive one at a time through [recordHistogram], or
+ *   already bucketed — one interval of an SDK's exponential histogram — as a
+ *   [MetricUpdate.AddExponentialHistogram] at [histogramScale] or finer.
  *
  * ## Key inversion
  *
@@ -142,9 +144,23 @@ public class WarpMetricExporter(
         require(histogramPrototype.count == 0L) {
             "histogramPrototype must be an empty sketch, had count ${histogramPrototype.count}"
         }
-        // Fail fast on a non-OTLP-aligned accuracy (throws IllegalArgumentException).
-        otlpScaleFor(histogramPrototype.relativeAccuracy)
     }
+
+    /**
+     * The OTLP exponential-histogram scale every histogram series here is kept at — the scale
+     * [histogramPrototype]'s accuracy aligns with, [DEFAULT_OTLP_HISTOGRAM_SCALE] by default.
+     *
+     * Every series holds exactly [histogramPrototype]'s configuration, so this one number describes
+     * them all: a new series starts from the prototype, [mergeHistogram] refuses a sketch of any
+     * other configuration, and [recover] drops a persisted series of another configuration.
+     *
+     * A [MetricUpdate.AddExponentialHistogram] must arrive at this scale or a finer one: a coarser
+     * bucket cannot be split without breaking the sketch's accuracy, so [record] refuses it. A
+     * producer that controls its bucketing, such as an OpenTelemetry SDK's exponential-histogram
+     * aggregation, should cap its own scale at this value.
+     */
+    // Computing it fails fast on a non-OTLP-aligned accuracy (throws IllegalArgumentException).
+    public val histogramScale: Int = otlpScaleFor(histogramPrototype.relativeAccuracy)
 
     // Two-tier locking, both explicit primitives (repo policy: correctness must hold under a real
     // multi-threaded dispatcher; limitedParallelism(1) confinement is BANNED).
@@ -315,8 +331,28 @@ public class WarpMetricExporter(
             logger.warn(cause) { "otel.metrics.histograms: corrupt store entry, starting fresh" }
             return
         }
-        lock.withLock { recovered.forEach { (k, v) -> histograms[k] = v } }
+        // A series written under another configuration — the prototype changed across a restart —
+        // cannot be kept: its bucket indices mean other values, so an AddExponentialHistogram mapped
+        // at histogramScale would land at the wrong values, and a peer's merge would refuse it.
+        val (kept, foreign) = recovered.entries.partition { (_, sketch) -> sketch.hasPrototypeConfiguration() }
+        if (foreign.isNotEmpty()) {
+            logger.warn {
+                "otel.metrics.histograms: dropping ${foreign.size} recovered series written under another " +
+                    "configuration than histogramPrototype (${foreign.first().value.configuration()} vs " +
+                    "${histogramPrototype.configuration()}); the next histogram write removes them from the store"
+            }
+        }
+        lock.withLock { kept.forEach { (k, v) -> histograms[k] = v } }
     }
+
+    /** Whether this sketch can live in [histograms]: [histogramPrototype]'s exact configuration. */
+    private fun DDSketch.hasPrototypeConfiguration(): Boolean =
+        relativeAccuracy == histogramPrototype.relativeAccuracy &&
+            minIndexedValue == histogramPrototype.minIndexedValue &&
+            maxIndexedValue == histogramPrototype.maxIndexedValue
+
+    private fun DDSketch.configuration(): String =
+        "(α=$relativeAccuracy, range=[$minIndexedValue, $maxIndexedValue])"
 
     private suspend fun recoverSumsDouble() {
         val bytes = runCatchingCancellable { store.read(SUM_DOUBLE_STORE_KEY) }.getOrElse { cause ->
@@ -469,7 +505,8 @@ public class WarpMetricExporter(
      *   touched, and a partial refusal moves both `acknowledged` and `failed`.
      *
      * In memory the exporter ends where applying [updates] one by one through [incrementSum],
-     * [incrementSumDouble], [setGauge], [addCardinality] and [recordHistogram] would leave it,
+     * [incrementSumDouble], [setGauge], [addCardinality] and [recordHistogram] — or, for a
+     * [MetricUpdate.AddExponentialHistogram], through a batch of that one update — would leave it,
      * eviction included: the [maxMetrics] cap is decided per update, in order. On disk, a touched
      * kind holds its state as of the **end** of the batch. The one place that differs from the
      * single-point sequence is a kind whose series a *later* update of another kind evicted: written
@@ -477,13 +514,18 @@ public class WarpMetricExporter(
      * already gone. A kind the batch never touched is not rewritten, as before.
      *
      * An empty [updates] is [MetricExportResult.Success] and touches neither memory nor the store.
-     * Each [MetricUpdate] validates its own arguments at construction, so a batch that was built
-     * cannot fail half-way through being applied.
+     * Each [MetricUpdate] validates its own arguments at construction, and what only this exporter
+     * can judge — a [MetricUpdate.AddExponentialHistogram] coarser than [histogramScale] — is
+     * checked for **every** update before **any** is applied. So a batch cannot fail half-way
+     * through being applied: it applies whole, or throws with nothing changed in memory or on disk.
      *
+     * @throws IllegalArgumentException if an update holds an exponential histogram whose scale is
+     *   below [histogramScale]; nothing in the batch is applied.
      * @sample us.tractat.kuilt.otel.sampleWarpMetricExporterBatch
      */
     public suspend fun record(updates: List<MetricUpdate>): MetricExportResult {
         if (updates.isEmpty()) return MetricExportResult.Success
+        updates.forEach(::validate)
         return writeMutex.withLock {
             val writes = lock.withLock {
                 // The last series each kind's updates named — only for the failure log line.
@@ -512,6 +554,33 @@ public class WarpMetricExporter(
         GAUGES(GAUGE_STORE_KEY),
         CARDINALITIES(CARDINALITY_STORE_KEY),
         HISTOGRAMS(HISTOGRAM_STORE_KEY),
+    }
+
+    /**
+     * Refuse an update this exporter cannot apply, before [record] applies any of the batch. Every
+     * variant has an arm, so a new one has to decide what it needs checked here; most need nothing,
+     * because their constructor already refused what their CRDT would.
+     */
+    private fun validate(update: MetricUpdate) {
+        when (update) {
+            is MetricUpdate.IncrementSum,
+            is MetricUpdate.IncrementSumDouble,
+            is MetricUpdate.SetGauge,
+            is MetricUpdate.AddCardinality,
+            is MetricUpdate.RecordHistogram,
+            -> Unit
+            is MetricUpdate.AddExponentialHistogram -> {
+                require(update.scale >= histogramScale) {
+                    "AddExponentialHistogram for ${update.key.name} is at scale ${update.scale}, coarser than this " +
+                        "exporter's histogramScale $histogramScale; its buckets cannot be split without losing accuracy"
+                }
+                // Checked at construction too, but the lists are the caller's: one mutated since would
+                // otherwise make DDSketch.addBuckets throw after earlier updates were applied.
+                require(update.positiveCounts.all { it >= 0L } && update.negativeCounts.all { it >= 0L }) {
+                    "AddExponentialHistogram for ${update.key.name} holds a negative count"
+                }
+            }
+        }
     }
 
     /** Apply one update to its map, evicting first if it opens a new series. Called inside [lock]. */
@@ -546,6 +615,41 @@ public class WarpMetricExporter(
             histograms[update.key] = current.piece(current.add(replica, update.value).delta)
             StoredKind.HISTOGRAMS
         }
+        is MetricUpdate.AddExponentialHistogram -> {
+            maybeEvictForNewKey(update.key, histograms)
+            val current = histograms.getOrPut(update.key) { histogramPrototype }
+            val shift = update.scale - histogramScale
+            val patch = current.addBuckets(
+                replica,
+                positive = sketchBuckets(update.positiveOffset, update.positiveCounts, shift),
+                negative = sketchBuckets(update.negativeOffset, update.negativeCounts, shift),
+                zeroCount = update.zeroCount,
+            )
+            histograms[update.key] = current.piece(patch.delta)
+            StoredKind.HISTOGRAMS
+        }
+    }
+
+    /**
+     * Re-index one sign's OTLP buckets, `offset + i` at a scale [shift] steps finer than
+     * [histogramScale], into the sketch's own indices at [histogramScale].
+     *
+     * Dropping [shift] steps of scale merges each run of `2^shift` buckets into one, so OTLP index
+     * `j` becomes `j >> shift` — the floor of `j / 2^shift`. It must be the **arithmetic** shift:
+     * integer division truncates toward zero, which puts a negative odd index one bucket too high.
+     * The sketch's index is the OTLP index plus one, the inverse of the OTLP render. The arithmetic
+     * is in `Long` so an absurd offset cannot wrap; anything past the sketch's range is clamped by
+     * [DDSketch.addBuckets].
+     */
+    private fun sketchBuckets(offset: Int, counts: List<Long>, shift: Int): Map<Int, Long> {
+        val out = LinkedHashMap<Int, Long>()
+        counts.forEachIndexed { i, n ->
+            if (n == 0L) return@forEachIndexed
+            val index = ((offset.toLong() + i) shr shift) + 1L
+            val clamped = index.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
+            out[clamped] = (out[clamped] ?: 0L) + n
+        }
+        return out
     }
 
     /** Encode one kind's whole map. Called inside [lock]. */
@@ -743,14 +847,18 @@ public class WarpMetricExporter(
      * Idempotent and lossless: the merged sketch equals the sketch of the combined
      * measurement stream. Returns [MetricExportResult.Success] after the durable write.
      *
-     * @throws IllegalArgumentException if [remote]'s relative accuracy is not
-     *   OTLP-aligned (see [alphaForOtlpScale]), or if [key] already holds a sketch
-     *   with a different configuration (DDSketch configs must match exactly to merge).
+     * @throws IllegalArgumentException if [remote]'s configuration — relative accuracy,
+     *   `minIndexedValue` and `maxIndexedValue` — is not exactly [histogramPrototype]'s. Every
+     *   series here holds that configuration, which is what lets [histogramScale] describe them
+     *   all; a fresh key does not take a foreign one either.
      */
     public suspend fun mergeHistogram(key: MetricKey, remote: DDSketch): MetricExportResult {
         // Validation stays outside the mutex: it throws by contract, and a throwing caller has no
         // business holding the durable-write section.
-        otlpScaleFor(remote.relativeAccuracy) // reject non-OTLP-aligned sketches up front
+        require(remote.hasPrototypeConfiguration()) {
+            "mergeHistogram for ${key.name}: remote sketch ${remote.configuration()} does not match " +
+                "histogramPrototype ${histogramPrototype.configuration()}"
+        }
         return writeMutex.withLock {
             val encoded = lock.withLock {
                 val current = histograms[key]

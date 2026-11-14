@@ -242,6 +242,7 @@ public final class us/tractat/kuilt/crdt/DDSketch : us/tractat/kuilt/crdt/Quilte
 	public static final field DEFAULT_MIN_INDEXED_VALUE D
 	public static final field DEFAULT_RELATIVE_ACCURACY D
 	public final fun add-V4bVmxY (Ljava/lang/String;D)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun addBuckets-fjENvQQ (Ljava/lang/String;Ljava/util/Map;Ljava/util/Map;J)Lus/tractat/kuilt/crdt/Quilted;
 	public fun causalDots ()Ljava/util/Set;
 	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
 	public fun equals (Ljava/lang/Object;)Z

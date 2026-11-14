@@ -6,11 +6,20 @@ public final class us/tractat/kuilt/otel/sdk/KuiltLogRecordExporter : io/opentel
 }
 
 public final class us/tractat/kuilt/otel/sdk/KuiltMetricExporter : io/opentelemetry/sdk/metrics/export/MetricExporter {
+	public static final field Companion Lus/tractat/kuilt/otel/sdk/KuiltMetricExporter$Companion;
+	public static final field DEFAULT_MAX_BUCKETS I
 	public fun <init> (Lus/tractat/kuilt/otel/WarpMetricExporter;Lkotlinx/coroutines/CoroutineScope;)V
+	public fun <init> (Lus/tractat/kuilt/otel/WarpMetricExporter;Lkotlinx/coroutines/CoroutineScope;I)V
+	public synthetic fun <init> (Lus/tractat/kuilt/otel/WarpMetricExporter;Lkotlinx/coroutines/CoroutineScope;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun export (Ljava/util/Collection;)Lio/opentelemetry/sdk/common/CompletableResultCode;
 	public fun flush ()Lio/opentelemetry/sdk/common/CompletableResultCode;
 	public fun getAggregationTemporality (Lio/opentelemetry/sdk/metrics/InstrumentType;)Lio/opentelemetry/sdk/metrics/data/AggregationTemporality;
+	public fun getDefaultAggregation (Lio/opentelemetry/sdk/metrics/InstrumentType;)Lio/opentelemetry/sdk/metrics/Aggregation;
+	public final fun getMaxBuckets ()I
 	public fun shutdown ()Lio/opentelemetry/sdk/common/CompletableResultCode;
+}
+
+public final class us/tractat/kuilt/otel/sdk/KuiltMetricExporter$Companion {
 }
 
 public final class us/tractat/kuilt/otel/sdk/OtelSdkTraceContextProvider : us/tractat/kuilt/otel/logging/TraceContextProvider {

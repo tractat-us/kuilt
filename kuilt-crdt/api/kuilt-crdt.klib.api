@@ -1294,6 +1294,7 @@ final class us.tractat.kuilt.crdt/DDSketch : us.tractat.kuilt.crdt/Quilted<us.tr
         final fun <get-zeroCount>(): kotlin/Long // us.tractat.kuilt.crdt/DDSketch.zeroCount.<get-zeroCount>|<get-zeroCount>(){}[0]
 
     final fun add(us.tractat.kuilt.crdt/ReplicaId, kotlin/Double): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/DDSketch> // us.tractat.kuilt.crdt/DDSketch.add|add(us.tractat.kuilt.crdt.ReplicaId;kotlin.Double){}[0]
+    final fun addBuckets(us.tractat.kuilt.crdt/ReplicaId, kotlin.collections/Map<kotlin/Int, kotlin/Long>, kotlin.collections/Map<kotlin/Int, kotlin/Long>, kotlin/Long): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/DDSketch> // us.tractat.kuilt.crdt/DDSketch.addBuckets|addBuckets(us.tractat.kuilt.crdt.ReplicaId;kotlin.collections.Map<kotlin.Int,kotlin.Long>;kotlin.collections.Map<kotlin.Int,kotlin.Long>;kotlin.Long){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.crdt/DDSketch.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.crdt/DDSketch.hashCode|hashCode(){}[0]
     final fun piece(us.tractat.kuilt.crdt/DDSketch): us.tractat.kuilt.crdt/DDSketch // us.tractat.kuilt.crdt/DDSketch.piece|piece(us.tractat.kuilt.crdt.DDSketch){}[0]

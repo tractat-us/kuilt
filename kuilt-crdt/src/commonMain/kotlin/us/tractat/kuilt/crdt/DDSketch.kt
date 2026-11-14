@@ -147,6 +147,72 @@ public class DDSketch private constructor(
     }
 
     /**
+     * Record counts that were **already bucketed** elsewhere, as observed by [replica]: [positive]
+     * and [negative] map a bucket index — in this sketch's own indices, the keys of
+     * [positiveBuckets] and [negativeBuckets] — to how many values fell in it, and [zeroCount]
+     * counts the values that were zero.
+     *
+     * This is the weighted twin of [add]. Adding `n` to a bucket here leaves the sketch exactly as
+     * `n` calls to [add] with values from that bucket would: each touched cell is this replica's
+     * [GCounter] slot, incremented by the count with `inc(by)`. So successive calls **add**, which
+     * is what a stream of per-interval bucket deltas needs, where [piece] — a join — would keep only
+     * the larger of two deltas. A re-delivered patch is still absorbed idempotently, as with [add].
+     *
+     * Indices outside the indexable range clamp the way [add] clamps a value, at bucket
+     * granularity: a bucket below the one holding [minIndexedValue] counts as zeros, and a bucket
+     * above the one holding [maxIndexedValue] lands in that top bucket and is counted in
+     * [overflowCount]. The two edge buckets themselves are kept as given, since a bucket count
+     * cannot say which side of the threshold its values were on.
+     *
+     * A count of zero is skipped, so it creates no empty cell; the patch for an all-zero call is
+     * empty. The receiver is unchanged; apply with [piece].
+     *
+     * @throws IllegalArgumentException if any count, or [zeroCount], is negative.
+     */
+    public fun addBuckets(
+        replica: ReplicaId,
+        positive: Map<Int, Long>,
+        negative: Map<Int, Long>,
+        zeroCount: Long,
+    ): Patch<DDSketch> {
+        require(zeroCount >= 0L) { "DDSketch zeroCount must not be negative, was $zeroCount" }
+        positive.forEach { (index, n) -> require(n >= 0L) { "DDSketch positive bucket $index count must not be negative, was $n" } }
+        negative.forEach { (index, n) -> require(n >= 0L) { "DDSketch negative bucket $index count must not be negative, was $n" } }
+        val lowest = bucketIndex(minIndexedValue)
+        val highest = bucketIndex(maxIndexedValue)
+        var toZeros = zeroCount
+        var toOverflow = 0L
+        // Fold each sign's counts onto the indices `add` could have produced, then increment once per cell.
+        fun clamped(buckets: Map<Int, Long>): Map<Int, Long> {
+            val out = LinkedHashMap<Int, Long>()
+            for ((index, n) in buckets) {
+                if (n == 0L) continue
+                when {
+                    index < lowest -> toZeros += n
+                    index > highest -> {
+                        toOverflow += n
+                        out[highest] = (out[highest] ?: 0L) + n
+                    }
+                    else -> out[index] = (out[index] ?: 0L) + n
+                }
+            }
+            return out
+        }
+        fun cells(store: Map<Int, GCounter>, counts: Map<Int, Long>): Map<Int, GCounter> =
+            counts.mapValues { (index, n) -> (store[index] ?: GCounter.ZERO).inc(replica, n).delta }
+        val positiveCells = cells(this.positive, clamped(positive))
+        val negativeCells = cells(this.negative, clamped(negative))
+        return Patch(
+            delta(
+                positive = positiveCells,
+                negative = negativeCells,
+                zeros = if (toZeros > 0L) zeros.inc(replica, toZeros).delta else GCounter.ZERO,
+                overflows = if (toOverflow > 0L) overflows.inc(replica, toOverflow).delta else GCounter.ZERO,
+            ),
+        )
+    }
+
+    /**
      * Estimate the [q]-quantile (q in `[0, 1]`) of all recorded values.
      *
      * Walks the buckets in ascending value order (negative store by descending
