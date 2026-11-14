@@ -1,6 +1,7 @@
 package us.tractat.kuilt.otel.otlp
 
 import kotlinx.io.bytestring.ByteString
+import kotlinx.io.bytestring.toHexString
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.MetricPoint
 import us.tractat.kuilt.otel.SpanKind
@@ -9,16 +10,10 @@ import us.tractat.kuilt.otel.SpanRecord
 
 private const val HEX_DIGITS = "0123456789abcdef"
 
-/** Lowercase-hex encoding of the raw bytes, as OTLP/JSON requires for trace/span ids. */
-internal fun ByteString.toHex(): String = buildString(size * 2) {
-    for (i in 0 until size) {
-        val b = this@toHex[i].toInt() and 0xFF
-        append(HEX_DIGITS[b ushr 4])
-        append(HEX_DIGITS[b and 0x0F])
-    }
-}
-
-/** Inverse of [toHex] — decode a lowercase-hex string back to a [ByteString]. */
+/**
+ * Inverse of `toHexString()`, whose default format is the lowercase hex OTLP/JSON requires for
+ * trace and span ids — decode a lowercase-hex string back to a [ByteString].
+ */
 internal fun String.hexToByteString(): ByteString {
     require(length % 2 == 0) { "hex string must have an even length; got $length" }
     val out = ByteArray(length / 2)
@@ -59,16 +54,16 @@ internal fun tracesRequestOf(
     val linksByFrom = links.groupBy { it.fromSpanId }
     val otlpSpans = spans.map { s ->
         OtlpSpan(
-            traceId = s.traceId.toHex(),
-            spanId = s.spanId.toHex(),
-            parentSpanId = s.parentSpanId?.toHex(),
+            traceId = s.traceId.toHexString(),
+            spanId = s.spanId.toHexString(),
+            parentSpanId = s.parentSpanId?.toHexString(),
             name = s.name,
             kind = s.kind.toOtlp(),
             startTimeUnixNano = s.startEpochNanos.toString(),
             endTimeUnixNano = s.endEpochNanos.toString(),
             attributes = attrs(s.attributes),
             links = (linksByFrom[s.spanId] ?: emptyList()).map {
-                OtlpLink(it.linkedTraceId.toHex(), it.linkedSpanId.toHex(), attrs(it.attributes))
+                OtlpLink(it.linkedTraceId.toHexString(), it.linkedSpanId.toHexString(), attrs(it.attributes))
             },
         )
     }
@@ -87,8 +82,8 @@ internal fun logsRequestOf(logs: Set<LogRecord>, envelope: OtlpEnvelope): LogsRe
             severityText = r.severityText,
             body = r.body?.let { AnyValue(it) },
             attributes = attrs(r.attributes),
-            traceId = r.traceId?.toHex(),
-            spanId = r.spanId?.toHex(),
+            traceId = r.traceId?.toHexString(),
+            spanId = r.spanId?.toHexString(),
         )
     }
     return LogsRequest(listOf(ResourceLogs(envelope.jsonResource(), listOf(ScopeLogs(envelope.jsonScope(), recs)))))

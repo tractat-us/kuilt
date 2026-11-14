@@ -201,9 +201,6 @@ private const val NONCE_BYTES = 16
 /** Length of the leading wire-version field, in bytes. */
 private const val VERSION_BYTES = 1
 
-/** Hex-encode [this] for use in the canonical link-nonce comparison string. */
-private fun ByteArray.toHex(): String = joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
-
 /**
  * A handshaked link: the remote peer, its conn, the canonical link nonce both ends agree on, and
  * the host-verified [Principal] that rode the original connection (`null` = unattested).
@@ -606,7 +603,7 @@ private suspend fun closeBestEffort(conn: Connection) {
 
 /** Order-independent link identity from the two endpoint nonces — identical on both ends. */
 private fun canonicalLinkNonce(a: ByteArray, b: ByteArray): String {
-    val (lo, hi) = listOf(a.toHex(), b.toHex()).sorted()
+    val (lo, hi) = listOf(a.toHexString(), b.toHexString()).sorted()
     return "$lo:$hi"
 }
 

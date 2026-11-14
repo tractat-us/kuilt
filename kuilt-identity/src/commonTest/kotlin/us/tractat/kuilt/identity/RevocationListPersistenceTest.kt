@@ -264,7 +264,7 @@ class RevocationListPersistenceTest {
         // version 1, then per subject its 33-byte compressed point and an 8-byte big-endian cutoff.
         val encoded = RevocationListLayout.encode(mapOf(SUBJECT to CUTOFF))
         assertAll(
-            { assertEquals(GOLDEN, encoded.toHex()) },
+            { assertEquals(GOLDEN, encoded.toHexString()) },
             { assertEquals(mapOf(SUBJECT to CUTOFF), assertNotNull(RevocationListLayout.decode(encoded))) },
             { assertEquals(emptyMap(), assertNotNull(RevocationListLayout.decode(HEADER)), "a header alone is an empty list") },
             {
@@ -385,7 +385,5 @@ class RevocationListPersistenceTest {
         val MAGIC = "KRL".encodeToByteArray()
         val HEADER = MAGIC + byteArrayOf(0x01)
         const val GOLDEN = "4b524c01" + "02" + "1111111111111111111111111111111111111111111111111111111111111111" + "0102030405060708"
-
-        fun ByteArray.toHex(): String = joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
     }
 }

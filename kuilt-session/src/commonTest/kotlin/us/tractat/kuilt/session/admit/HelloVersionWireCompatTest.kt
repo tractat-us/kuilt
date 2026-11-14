@@ -41,7 +41,7 @@ class HelloVersionWireCompatTest {
             goldenVersionlessHello,
             AdmitMessage.encode(
                 AdmitMessage.Hello(displayName = "Ada", sessionId = "s-1", targetRoom = "room-7"),
-            ).toHex(),
+            ).toHexString(),
         )
     }
 
@@ -59,8 +59,6 @@ class HelloVersionWireCompatTest {
         val decoded = AdmitMessage.decode(encoded) as AdmitMessage.Hello
         assertEquals(ProtocolVersion.CURRENT, decoded.protocolVersion)
     }
-
-    private fun ByteArray.toHex(): String = joinToString("") { b -> (b.toInt() and 0xFF).toString(16).padStart(2, '0') }
 
     private fun String.hexToBytes(): ByteArray =
         ByteArray(length / 2) { i -> substring(i * 2, i * 2 + 2).toInt(16).toByte() }

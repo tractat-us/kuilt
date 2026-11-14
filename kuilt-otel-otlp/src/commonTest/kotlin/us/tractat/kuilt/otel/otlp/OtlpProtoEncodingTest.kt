@@ -32,11 +32,6 @@ class OtlpProtoEncodingTest {
     private fun tId(b: Byte) = ByteString(ByteArray(16) { b })
     private fun sId(b: Byte) = ByteString(ByteArray(8) { b })
 
-    private fun ByteArray.toHex(): String = joinToString("") {
-        val v = it.toInt() and 0xFF
-        "0123456789abcdef"[v ushr 4].toString() + "0123456789abcdef"[v and 0x0F]
-    }
-
     // Hand-verified against opentelemetry-proto trace.proto / common.proto. Layout:
     //   0a 38                    ExportTraceServiceRequest.resource_spans (f1, len 56)
     //     12 36                  ResourceSpans.scope_spans (f2, len 54)
@@ -66,7 +61,7 @@ class OtlpProtoEncodingTest {
             name = "op", kind = SpanKind.SERVER, startEpochNanos = 5L, endEpochNanos = 9L,
         )
         val bytes = proto.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(setOf(span), emptyList(), OtlpEnvelope.NONE))
-        assertEquals(goldenSpanHex, bytes.toHex())
+        assertEquals(goldenSpanHex, bytes.toHexString())
     }
 
     @Test
@@ -177,7 +172,7 @@ class OtlpProtoEncodingTest {
             startEpochNanos = 0L, timeEpochNanos = 5L,
         )
         val bytes = proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p), OtlpEnvelope.NONE))
-        assertEquals(goldenExpHistHex, bytes.toHex())
+        assertEquals(goldenExpHistHex, bytes.toHexString())
     }
 
     @Test
@@ -238,7 +233,7 @@ class OtlpProtoEncodingTest {
     private val envelope = OtlpEnvelope(mapOf("service.name" to "svc"), scopeName = "lib", scopeVersion = "1")
 
     /** UTF-8 bytes of [s] as lowercase hex, spelled independently of the encoder under test. */
-    private fun utf8Hex(s: String): String = s.encodeToByteArray().toHex()
+    private fun utf8Hex(s: String): String = s.encodeToByteArray().toHexString()
 
     // Hand-verified against opentelemetry-proto resource.proto / common.proto / trace.proto.
     // goldenSpanHex's span, now wrapped in a resource and a scope:
@@ -270,8 +265,8 @@ class OtlpProtoEncodingTest {
         val bare = proto.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(setOf(span), emptyList(), OtlpEnvelope.NONE))
         val enveloped = proto.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(setOf(span), emptyList(), envelope))
         assertAll(
-            { assertEquals(goldenSpanHex, bare.toHex()) },
-            { assertEquals(goldenEnvelopedSpanHex, enveloped.toHex()) },
+            { assertEquals(goldenSpanHex, bare.toHexString()) },
+            { assertEquals(goldenEnvelopedSpanHex, enveloped.toHexString()) },
         )
     }
 

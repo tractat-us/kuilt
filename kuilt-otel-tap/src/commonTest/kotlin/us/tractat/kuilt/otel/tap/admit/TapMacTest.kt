@@ -13,7 +13,7 @@ class TapMacTest {
         val key = "Jefe".encodeToByteArray()
         val data = "what do ya want for nothing?".encodeToByteArray()
         val expectedHex = "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
-        assertEquals(expectedHex, hmacSha256(key, data).toHex())
+        assertEquals(expectedHex, hmacSha256(key, data).toHexString())
     }
 
     @Test
@@ -23,7 +23,4 @@ class TapMacTest {
         assertFalse(constantTimeEquals(byteArrayOf(1, 2, 3), byteArrayOf(1, 2)))
         assertTrue(constantTimeEquals(ByteArray(0), ByteArray(0)))
     }
-
-    private fun ByteArray.toHex(): String =
-        joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
 }

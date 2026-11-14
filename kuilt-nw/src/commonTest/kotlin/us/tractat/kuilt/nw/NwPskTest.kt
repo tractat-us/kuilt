@@ -9,9 +9,6 @@ import kotlin.test.assertFalse
 
 class NwPskTest {
 
-    private fun ByteArray.toHex(): String =
-        joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
-
     @Test
     fun determinismProducesByteIdenticalMaterial() {
         val a = NwPsk.derive("swatch-oyster-42", "_kuilt._tcp")
@@ -65,7 +62,7 @@ class NwPskTest {
     fun knownAnswerVector() {
         val m = NwPsk.derive("swatch-oyster-42", "_kuilt._tcp")
         assertAll(
-            { assertEquals("16a4dda7f5f049c8344d983475f8694fe2c97b85e7eccf7ff2c04137944d8f25", m.psk.toHex()) },
+            { assertEquals("16a4dda7f5f049c8344d983475f8694fe2c97b85e7eccf7ff2c04137944d8f25", m.psk.toHexString()) },
             // Same underlying HKDF output as before #1577 — only the REPRESENTATION changed: the
             // identity now IS this hex string (ASCII), rather than the raw bytes it encodes. The
             // vector's purpose (catching cross-platform HMAC drift) is unchanged.

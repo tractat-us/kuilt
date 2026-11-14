@@ -102,7 +102,7 @@ internal class MeshTruncatedFrameException(message: String) : MeshWireFormatExce
  * than 16 MiB — so `0x00` is, in practice, the signature of a peer on the older wire.
  */
 internal class MeshUnknownFrameTypeException(val code: Byte) : MeshWireFormatException(
-    "unknown mesh frame type 0x${code.toHexByte()} — this build reads HELLO=0x01/DATA=0x02/GOODBYE=0x03" +
+    "unknown mesh frame type 0x${code.toHexString()} — this build reads HELLO=0x01/DATA=0x02/GOODBYE=0x03" +
         if (code == LEGACY_UNTYPED_LEADING_BYTE) {
             "; a leading 0x00 is what an older build's untyped identity preamble looks like, so this " +
                 "peer is almost certainly on the pre-#2474 wire and the two cannot form a session"
@@ -188,6 +188,3 @@ internal object MeshWire {
         }
     }
 }
-
-/** Two lowercase hex digits for [this], for a diagnostic that names a byte it could not classify. */
-private fun Byte.toHexByte(): String = (toInt() and 0xff).toString(16).padStart(2, '0')

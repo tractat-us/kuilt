@@ -75,7 +75,7 @@ public class ResumeSecret(bytes: ByteArray) {
             PrimitiveSerialDescriptor("us.tractat.kuilt.session.partition.ResumeSecret", PrimitiveKind.STRING)
 
         override fun serialize(encoder: Encoder, value: ResumeSecret) {
-            encoder.encodeString(value.bytes.toHex())
+            encoder.encodeString(value.bytes.toHexString())
         }
 
         override fun deserialize(decoder: Decoder): ResumeSecret {
@@ -92,16 +92,5 @@ public class ResumeSecret(bytes: ByteArray) {
                 in 'a'..'f' -> c - 'a' + 10
                 else -> throw SerializationException("ResumeSecret hex has a non-hex character at $index")
             }
-
-        private fun ByteArray.toHex(): String =
-            buildString(size * 2) {
-                for (b in this@toHex) {
-                    val v = b.toInt() and 0xFF
-                    append(HEX[v ushr 4])
-                    append(HEX[v and 0x0F])
-                }
-            }
-
-        private const val HEX = "0123456789abcdef"
     }
 }

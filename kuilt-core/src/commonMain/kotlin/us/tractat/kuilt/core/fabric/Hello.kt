@@ -83,7 +83,7 @@ public object Hello {
     public fun decode(frame: ByteArray): PeerId {
         val magicSeen = minOf(frame.size, HELLO_MAGIC_BYTES)
         if ((0 until magicSeen).any { frame[it] != HELLO_MAGIC[it] }) {
-            throw HelloBadMagicException(frame.copyOf(magicSeen).toHex())
+            throw HelloBadMagicException(frame.copyOf(magicSeen).toHexString())
         }
         if (frame.size < HELLO_VERSION_OFFSET + HELLO_VERSION_BYTES) throw HelloTruncatedException(frame.size)
         val version = frame.readUnsignedBe(HELLO_VERSION_OFFSET, HELLO_VERSION_BYTES).toInt()
@@ -222,6 +222,3 @@ public class HelloSelfConnectionException(
  */
 public class HelloUnencodableIdException(cause: Throwable) :
     IllegalArgumentException("Hello cannot encode this PeerId: it is not valid UTF-16", cause)
-
-/** Lowercase hex, two digits per byte. */
-private fun ByteArray.toHex(): String = joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
