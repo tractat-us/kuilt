@@ -145,11 +145,18 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     (Iain, 2026-11-13, #3306's review).** The Keystore's JCA surface answers a passing failure as
     "absent" (`containsAlias` false, `getCertificate` null), so the store reads with `getKey` first and
     treats a null certificate beside a key as a fault, never as "half-made", on API 31+. On API 33+ a
-    load or sign failure is judged by its `android.security.KeyStoreException` cause: transient
-    (`isTransientFailure()`) throws and keeps the key; a permanent code (e.g. `INVALID_KEY_BLOB`), or an
-    `UnrecoverableKeyException` with no `KeyStoreException` cause, replaces it. Below API 33, where no
-    cause separates the two, a failure count kept beside the grants replaces the key after 3
-    consecutive failed launches. A replaced key is a new device returning through ordinary admission.
+    load or sign failure is judged by its `android.security.KeyStoreException` cause. **Amended (Iain,
+    2026-11-13, #3306):** AOSP flags `isTransientFailure()` on only nine codes and not on
+    `SYSTEM_ERROR`, so "transient keeps, all else replaces" would replace on an outage. The rule is:
+    transient, `isSystemError()` or `requiresUserAuthentication()` throws and keeps the key; a
+    key-specific code (`KEY_NOT_FOUND`/`KEY_PERMANENTLY_INVALIDATED`, `VALUE_CORRUPTED`, and an
+    unflagged code 10, where `INVALID_KEY_BLOB` lands) or an `UnrecoverableKeyException` with no
+    `KeyStoreException` cause replaces it; any other code counts a failed launch. Below API 33, where
+    no cause separates the two, every failure counts. The count is kept beside the grants, and the 3rd
+    consecutive failed launch replaces the key; a successful read clears it. On API 30 and earlier
+    `getKey` answers null on an outage, so a "key was made" marker beside the grants turns
+    null-with-marker into a counted failure rather than a first launch. A replaced key is a new device
+    returning through ordinary admission.
 
 ## Goals
 
