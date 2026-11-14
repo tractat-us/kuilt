@@ -766,10 +766,13 @@ kuilt-crdt           delta-state CRDT zoo — plain value types  → kuilt-math 
   ├── kuilt-bolt       write-only op archive kept beside a live replica  → kuilt-crdt
   └── kuilt-deal       fair card dealing + fair-random (SRA / commit-reveal)  → kuilt-crdt + kuilt-core
 
-kuilt-store          durable key→bytes storage (DurableStore) — depends on NO other kuilt module
+kuilt-store          durable key→bytes storage (DurableStore) — depends on NO other kuilt module but kuilt-base
   └── kuilt-identity  one key per device, named by a did:key; revocations and the key stores' grants kept in a DurableStore  → kuilt-store
 
-kuilt-seal           public-key sealed boxes (SealedBox) — depends on NO other kuilt module
+kuilt-seal           public-key sealed boxes (SealedBox) — depends on NO other kuilt module but kuilt-base
+
+kuilt-base           KuiltVersion, the running kuilt's version — depends on nothing; every root above
+                     and kuilt-heddle-core `api` it, and those arrows are left out of the tree
 
 kuilt-bom            Gradle/Maven platform constraining every module to one aligned version (not a code module)
 ```
@@ -777,8 +780,9 @@ kuilt-bom            Gradle/Maven platform constraining every module to one alig
 Four roots, and that is the point. `kuilt-core` carries the networking contract;
 `kuilt-crdt` carries data types that need no network at all; `kuilt-store` carries
 "keep these bytes safe", and `kuilt-seal` "keep these bytes secret", and each knows
-about none of the others. Each depends on no other kuilt module and can be used
-entirely on its own. Everything else hangs off one of the four, and the arrow only ever points *down* — nothing points back into a root. Keeping `kuilt-core` free of fabric imports is what
+about none of the others. Each can be used entirely on its own: none depends on
+another root, only on `kuilt-base`, which depends on nothing and carries one value
+(and `kuilt-crdt` on `kuilt-math`, likewise dependency-free). Everything else hangs off one of the four, and the arrow only ever points *down* — nothing points back into a root. Keeping `kuilt-core` free of fabric imports is what
 lets the whole boundary be build-enforced when consumed as a composite build or a
 published artifact.
 
