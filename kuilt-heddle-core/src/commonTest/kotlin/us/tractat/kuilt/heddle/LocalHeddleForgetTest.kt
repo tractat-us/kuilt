@@ -39,7 +39,7 @@ class LocalHeddleForgetTest {
     /**
      * Two thousand users arrive, are served once and leave, and the snapshot after the last is
      * within a few digits of the snapshot after the twentieth. Before the engine forgot, every
-     * departure left a retired edge behind, about 200 bytes of it.
+     * departure left a retired edge behind, about 410 bytes of it.
      */
     @Test
     fun detachAndReattachKeepTheSnapshotBounded() {
@@ -86,19 +86,25 @@ class LocalHeddleForgetTest {
     }
 
     /**
-     * The oracle: the same calls on an engine that forgets and on one that keeps everything
-     * ([LocalHeddle.forgetsForTest]) give the same outcomes, picks included, and agree on every
-     * live group's holdings, on conservation, on the open leases, and on the allocator's memory of
-     * every edge the forgetting engine still holds, which is the only memory it keeps. Every edge
-     * either engine adds is numbered above every generation the forgetting engine ever held, so a
-     * re-attach never reuses a forgotten id.
+     * The oracle, for RETIRED edges: the same calls on an engine that forgets and on one that keeps
+     * everything ([LocalHeddle.forgetsForTest]) give the same outcomes, picks included, and agree on
+     * every live group's holdings, on conservation, on the open leases, and on the allocator's
+     * memory of every edge the forgetting engine still holds, which is the only memory it keeps.
+     * Every edge either engine adds is numbered above every generation the forgetting engine ever
+     * held, so a re-attach never reuses a forgotten id.
+     *
+     * Every edge the subject forgets is RETIRED in the reference, and the rig counts them. These
+     * calls never leave a PREPARED edge nothing wants (none over the eight seeds), and the oracle
+     * could not take one: a later diff that wants it back prepares a new edge where the reference
+     * adopts the old one, so the two step lists differ by design. Forgetting a PREPARED edge is
+     * pinned by [aPreparedEdgeNothingWantsIsForgottenWithOnlyTheFloorMoved] and the two tests after it.
      *
      * The draws walk sorted lists, so the trajectory is the same on every target (#2592).
      */
     @Test
     fun anEngineThatForgetsBehavesAsOneThatKeepsEverything() {
-        var forgottenAtEnd = 0
         var checked = 0
+        var retiredForgets = 0
         for (seed in 0 until 8) {
             val subject = engine()
             val reference = engine().also { it.forgetsForTest = false }
@@ -108,6 +114,7 @@ class LocalHeddleForgetTest {
             val rr = Random(seed)
             var top = -1L
             var held = subject.snapshot().ledger.allEdges()
+            var gone = emptySet<AttachmentId>()
             repeat(300) { i ->
                 val label = "seed $seed call $i"
                 assertEquals(call(reference, attachedR, rr, at = i.toLong()), call(subject, attachedS, rs, at = i.toLong()), label)
@@ -127,15 +134,20 @@ class LocalHeddleForgetTest {
                     { assertEquals(ref.allocatorMemory.demandingObserved.filterKeys { it in edges }, s.allocatorMemory.demandingObserved, "$label: demanding observed") },
                     { assertEquals(emptyList(), s.ledger.validate(), "$label: validate") },
                 )
+                val forgottenNow = ref.ledger.allEdges() - edges
+                for (id in forgottenNow - gone) {
+                    assertEquals(Lifecycle.RETIRED, ref.ledger.lifecycle(id), "$label: forgot ${id.value}")
+                    retiredForgets++
+                }
+                gone = forgottenNow
                 top = maxOf(top, edges.mapNotNull { generationOf(it) }.maxOrNull() ?: -1L)
                 held = edges
                 checked++
             }
-            forgottenAtEnd += reference.snapshot().ledger.allEdges().size - subject.snapshot().ledger.allEdges().size
         }
         assertAll(
             { assertEquals(8 * 300, checked, "the rig: every call was compared") },
-            { assertTrue(forgottenAtEnd >= 100, "the rig: the subject holds $forgottenAtEnd fewer edges than the reference") },
+            { assertTrue(retiredForgets >= 100, "the rig: the subject forgot $retiredForgets retired edges") },
         )
     }
 
