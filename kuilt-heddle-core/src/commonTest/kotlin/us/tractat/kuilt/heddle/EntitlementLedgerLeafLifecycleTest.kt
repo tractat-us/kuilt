@@ -193,7 +193,7 @@ class EntitlementLedgerLeafLifecycleTest {
             val grants = FairShareAllocator(alice, PolicyConfig(quantum = 10L)).schedule(g, cell, earmarked = 0L) { hungry }
             if ((sa != null || sb != null) && l.activeChildren(g).isEmpty()) childrenButNoActiveOne++
             checks += { assertEquals(l.activeChildren(g).isEmpty(), leaf, "$label: isLeaf is the allocator's view") }
-            checks += { assertTrue(spends != (grants > 0), "$label: spends=$spends grants=$grants, exactly one") }
+            checks += { assertTrue(spends != (grants is AllocationOutcome.Delegated), "$label: spends=$spends grants=$grants, exactly one") }
             checks += { assertEquals(emptyList(), l.validate(), "$label: validate") }
             if (!leaf) checks += { assertFailsWith<IllegalArgumentException>("$label") { l.spend(alice, g, 1L) } }
         }

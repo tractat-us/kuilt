@@ -25,14 +25,20 @@ public sealed interface ReserveOutcome {
 }
 
 /**
- * What [GovernedHeddleNode.schedule] did — delegated something, found nothing to delegate, or was
- * refused because this peer may not author entitlement yet (issue #1892).
+ * What [HeddleNode.schedule] and [GovernedHeddleNode.schedule] did: delegated something, found
+ * nothing to delegate, stopped because the parent cannot be ordered, or, on a governed node only,
+ * was refused because this peer may not author entitlement yet (issue #1892).
+ *
+ * [NothingToDelegate] clears by itself once holdings or demand arrive. [PositionCeiling] and
+ * [WeightBudget] do not: they are properties of the parent's children, so every later call at that
+ * parent answers the same until the children change.
  */
 public sealed interface ScheduleOutcome {
 
     /**
      * [grants] allocation rounds landed, each one a delegation down the tree. Always positive — zero
-     * grants is [NothingToDelegate], never `Delegated(0)`.
+     * grants is [NothingToDelegate], never `Delegated(0)`. A call that granted and then met a
+     * refusal answers this, and the next call at that parent answers the refusal.
      */
     public data class Delegated(public val grants: Int) : ScheduleOutcome {
         init {
@@ -42,10 +48,26 @@ public sealed interface ScheduleOutcome {
 
     /**
      * The scheduler ran and delegated nothing: it found no holdings to move toward any advertised
-     * demand, or the parent has a child at its position ceiling, where picks are refused
-     * ([HeddleNode.schedule]; telling the two apart is tracked by #3353).
+     * demand, or no child of the parent is asking for any.
      */
     public data object NothingToDelegate : ScheduleOutcome
+
+    /**
+     * A child of [parent] holds a virtual position at its ceiling, so no pick there orders exactly,
+     * and none was made (#3313). Each position is a `Long` of 1/16-unit ticks that grows with the
+     * service handed down under [parent], so a busy parent reaches it, at about 2⁵⁷ units of
+     * service at a weight of `3/7`. This node has no way yet to bring the positions back down.
+     */
+    public data class PositionCeiling(public val parent: GroupId) : ScheduleOutcome
+
+    /**
+     * [parent]'s active children carry weights whose products a pick forms leave `Long`, so no pick
+     * there can be computed, and nothing was written (#3353). The control log refuses such a set
+     * act by act, but the replicated ledger can still hold one: two peers each activating a child
+     * that fits beside what they see, or one peer receiving a later `Activate` before an earlier
+     * `Close`. It clears once one of the children closes.
+     */
+    public data class WeightBudget(public val parent: GroupId) : ScheduleOutcome
 }
 
 /**
@@ -103,4 +125,12 @@ public data class GateClosed(
          */
         public data class UnreadableControlEntry(public val index: Long, public val version: Int?) : Reason
     }
+}
+
+/** [FairShareAllocator.schedule]'s answer as [HeddleNode.schedule]'s: one arm for one arm. */
+internal fun AllocationOutcome.toScheduleOutcome(): ScheduleOutcome = when (this) {
+    is AllocationOutcome.Delegated -> ScheduleOutcome.Delegated(grants)
+    AllocationOutcome.NothingToDelegate -> ScheduleOutcome.NothingToDelegate
+    is AllocationOutcome.PositionCeiling -> ScheduleOutcome.PositionCeiling(parent)
+    is AllocationOutcome.WeightBudget -> ScheduleOutcome.WeightBudget(parent)
 }

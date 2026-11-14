@@ -57,7 +57,7 @@ class FairShareAllocatorJoinersFrontTest {
         val cell = RecordingCell(ledger(listOf(w1, w2, w3), supply = 3L), listOf(w1, w2, w3))
         val grants = allocator.schedule(root, cell, earmarked = 0L) { wants }
         assertAll(
-            { assertEquals(3, grants) },
+            { assertEquals(AllocationOutcome.Delegated(3), grants) },
             { assertEquals(ticksToVirtual(640L, Weight.ONE), allocator.memory.wakeOffsets[w2.id], "w2 clamped to w1") },
             { assertEquals(ticksToVirtual(320L, Weight.ONE), allocator.memory.wakeOffsets[w3.id], "w3 clamped to w1") },
             // Level at 800, so the id breaks the tie: w1, then w2 and w3, each behind w1's grant.

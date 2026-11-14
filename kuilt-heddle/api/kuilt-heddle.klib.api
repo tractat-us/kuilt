@@ -166,6 +166,32 @@ sealed interface us.tractat.kuilt.heddle/ScheduleOutcome { // us.tractat.kuilt.h
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ScheduleOutcome.Delegated.toString|toString(){}[0]
     }
 
+    final class PositionCeiling : us.tractat.kuilt.heddle/ScheduleOutcome { // us.tractat.kuilt.heddle/ScheduleOutcome.PositionCeiling|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/ScheduleOutcome.PositionCeiling.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val parent // us.tractat.kuilt.heddle/ScheduleOutcome.PositionCeiling.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/ScheduleOutcome.PositionCeiling.parent.<get-parent>|<get-parent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/ScheduleOutcome.PositionCeiling.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/ScheduleOutcome.PositionCeiling // us.tractat.kuilt.heddle/ScheduleOutcome.PositionCeiling.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ScheduleOutcome.PositionCeiling.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ScheduleOutcome.PositionCeiling.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ScheduleOutcome.PositionCeiling.toString|toString(){}[0]
+    }
+
+    final class WeightBudget : us.tractat.kuilt.heddle/ScheduleOutcome { // us.tractat.kuilt.heddle/ScheduleOutcome.WeightBudget|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/ScheduleOutcome.WeightBudget.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val parent // us.tractat.kuilt.heddle/ScheduleOutcome.WeightBudget.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/ScheduleOutcome.WeightBudget.parent.<get-parent>|<get-parent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/ScheduleOutcome.WeightBudget.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/ScheduleOutcome.WeightBudget // us.tractat.kuilt.heddle/ScheduleOutcome.WeightBudget.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ScheduleOutcome.WeightBudget.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ScheduleOutcome.WeightBudget.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/ScheduleOutcome.WeightBudget.toString|toString(){}[0]
+    }
+
     final object NothingToDelegate : us.tractat.kuilt.heddle/ScheduleOutcome { // us.tractat.kuilt.heddle/ScheduleOutcome.NothingToDelegate|null[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/ScheduleOutcome.NothingToDelegate.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/ScheduleOutcome.NothingToDelegate.hashCode|hashCode(){}[0]
@@ -361,7 +387,7 @@ final class us.tractat.kuilt.heddle/HeddleNode : us.tractat.kuilt.heddle/FairSha
     final fun prepare(us.tractat.kuilt.heddle/AttachmentRecord): kotlin/Boolean // us.tractat.kuilt.heddle/HeddleNode.prepare|prepare(us.tractat.kuilt.heddle.AttachmentRecord){}[0]
     final fun reserve(us.tractat.kuilt.heddle/GroupId, kotlin/Long): us.tractat.kuilt.heddle/ReserveOutcome // us.tractat.kuilt.heddle/HeddleNode.reserve|reserve(us.tractat.kuilt.heddle.GroupId;kotlin.Long){}[0]
     final fun retire(us.tractat.kuilt.heddle/AttachmentId): kotlin/Boolean // us.tractat.kuilt.heddle/HeddleNode.retire|retire(us.tractat.kuilt.heddle.AttachmentId){}[0]
-    final fun schedule(us.tractat.kuilt.heddle/GroupId): kotlin/Int // us.tractat.kuilt.heddle/HeddleNode.schedule|schedule(us.tractat.kuilt.heddle.GroupId){}[0]
+    final fun schedule(us.tractat.kuilt.heddle/GroupId): us.tractat.kuilt.heddle/ScheduleOutcome // us.tractat.kuilt.heddle/HeddleNode.schedule|schedule(us.tractat.kuilt.heddle.GroupId){}[0]
 
     final object Companion // us.tractat.kuilt.heddle/HeddleNode.Companion|null[0]
 }

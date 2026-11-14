@@ -149,36 +149,61 @@ public class FairShareAllocator(
      * @param demand the current appetite of one child edge, [Demand.NONE] for an edge that wants
      *   nothing. Asked once per active child each time the policy input is built, so it should
      *   answer from live state rather than a copy taken before the call.
-     * @return the count of grants applied this call. It stops early, with nothing written for the
-     *   pick it stops at, when a child of [parent] reaches its position ceiling (#3313).
+     * Two states stop it, and neither throws. A child of [parent] at its position ceiling (#3313)
+     * stops it at the pick that would have to order it. Active children whose weights put a pick's
+     * products out of `Long` ([weightsFitTheBudget]) stop it before the seat step, writing nothing:
+     * the replicated ledger can merge such a set from writes that each fit (#3353).
+     *
+     * @return [AllocationOutcome.Delegated] with the count of grants applied this call, even when a
+     *   refusal stopped it after them; otherwise [AllocationOutcome.PositionCeiling] or
+     *   [AllocationOutcome.WeightBudget] when [parent] cannot be ordered, and
+     *   [AllocationOutcome.NothingToDelegate] when it simply had nothing to grant.
      */
     public fun schedule(
         parent: GroupId,
         ledger: LedgerCell,
         earmarked: Long,
         demand: (AttachmentId) -> Demand,
-    ): Int {
+    ): AllocationOutcome {
+        // Before the seat step, which already multiplies by a weight: a replicated ledger can hold a
+        // set no single write would have admitted (#3353), and every pick over it would throw.
+        if (!childWeightsFit(ledger.current, parent)) return AllocationOutcome.WeightBudget(parent)
         settleJoiners(parent, ledger, demand)
         var grants = 0
+        var refusal: AllocationOutcome? = null
         while (grants < MAX_ROUNDS_PER_CALL) {
             // One pick, inside the cell's write step, on the state the grant lands on. Nothing
             // delegable ⇒ mutateOrSkip writes nothing and answers false (#2090). Peeking on
             // `ledger.current` first would run the policy twice per grant, the peek deciding
             // against a state an inbound write may already have moved past.
-            val applied = try {
-                ledger.mutateOrSkip { s ->
-                    pickOne(s, parent, earmarked, demand)?.let { grant -> s.delegate(self, grant.attachment, grant.amount) }
+            val applied = ledger.mutateOrSkip { s ->
+                // Again on each round's state: a merge between two rounds can bring the set over.
+                if (!childWeightsFit(s, parent)) {
+                    refusal = AllocationOutcome.WeightBudget(parent)
+                    return@mutateOrSkip null
                 }
-            } catch (_: PositionCeilingException) {
-                // The pick would have to order a position at its ceiling (#3313): grant nothing more
-                // here. The throw left the transform before it returned a patch, so nothing was written.
-                false
+                try {
+                    pickOne(s, parent, earmarked, demand)?.let { grant -> s.delegate(self, grant.attachment, grant.amount) }
+                } catch (_: PositionCeilingException) {
+                    // The pick would have to order a position at its ceiling (#3313): grant nothing
+                    // more here. No patch is returned, so nothing is written.
+                    refusal = AllocationOutcome.PositionCeiling(parent)
+                    null
+                }
             }
             if (!applied) break
             grants++
         }
-        return grants
+        // Progress first: a refusal met after a grant is reported by the next call, which meets it at once.
+        return when {
+            grants > 0 -> AllocationOutcome.Delegated(grants)
+            else -> refusal ?: AllocationOutcome.NothingToDelegate
+        }
     }
+
+    /** Whether [parent]'s active children in [s] fit [weightsFitTheBudget], so a pick there can be computed. */
+    private fun childWeightsFit(s: EntitlementLedger, parent: GroupId): Boolean =
+        weightsFitTheBudget(s.activeChildren(parent).mapNotNull { s.record(it.attachment)?.weight })
 
     /**
      * Make **one** pick at [parent]: seat the newborns and clamp the wakers exactly as [schedule]
@@ -422,7 +447,9 @@ public class FairShareAllocator(
 
     /**
      * [parent]'s **current virtual time** `V` in [ledger] — this allocator's front (design §7.2;
-     * issue #1688). `null` when [parent] has no active children in [ledger].
+     * issue #1688). `null` when [parent] has no active children in [ledger], and `null` too when
+     * their weights fail [weightsFitTheBudget], where no front can be computed and [schedule]
+     * answers [AllocationOutcome.WeightBudget] (#3353).
      *
      * A **diagnostic**: it depends on [demand] and on this allocator's non-replicated wake clamps,
      * so two peers legitimately read different values at the same instant.
@@ -431,7 +458,8 @@ public class FairShareAllocator(
         ledger: EntitlementLedger,
         parent: GroupId,
         demand: (AttachmentId) -> Demand,
-    ): Rational? = HeddlePolicy.front(policyEdges(ledger, parent, demand))
+    ): Rational? =
+        if (childWeightsFit(ledger, parent)) HeddlePolicy.front(policyEdges(ledger, parent, demand)) else null
 
     /**
      * [edge]'s effective virtual service as a pick at [parent] would read it in [ledger]: its
@@ -721,6 +749,48 @@ public class FairShareAllocator(
         /** A backstop against a policy that never runs dry; one call never applies more grants. */
         const val MAX_ROUNDS_PER_CALL: Int = 100_000
     }
+}
+
+/**
+ * What one [FairShareAllocator.schedule] call did at a parent: delegated something, found nothing to
+ * delegate, or stopped because the parent cannot be ordered at all.
+ *
+ * The two refusals are separate arms because they clear differently. [NothingToDelegate] is the
+ * ordinary answer, and it clears by itself once holdings or demand arrive. [PositionCeiling] and
+ * [WeightBudget] are properties of the parent's children, and they last until those change.
+ */
+public sealed interface AllocationOutcome {
+
+    /**
+     * [grants] allocation rounds landed, each a delegation down the tree. Always positive: zero
+     * grants is [NothingToDelegate], never `Delegated(0)`. A call that granted and then met a
+     * refusal answers this, and the next call answers the refusal.
+     */
+    public data class Delegated(public val grants: Int) : AllocationOutcome {
+        init {
+            require(grants > 0) { "Delegated needs at least one grant, was $grants; zero is NothingToDelegate" }
+        }
+    }
+
+    /**
+     * The allocator ran and delegated nothing: it found no holdings to move toward any demand, no
+     * child wants anything, or no child is seated yet.
+     */
+    public data object NothingToDelegate : AllocationOutcome
+
+    /**
+     * A child of [parent] holds a position at its ceiling, so no pick there orders exactly, and none
+     * was made (#3313). Nothing was written for the refused pick.
+     */
+    public data class PositionCeiling(public val parent: GroupId) : AllocationOutcome
+
+    /**
+     * [parent]'s active children carry weights whose products a pick forms leave `Long`, so no pick
+     * there can be computed (#3353). Nothing was written. A replicated ledger can hold such a set
+     * however carefully each write was checked: two peers can each activate a child that fits on its
+     * own view, and the merge of the two does not fit.
+     */
+    public data class WeightBudget(public val parent: GroupId) : AllocationOutcome
 }
 
 /**

@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,8 @@ import us.tractat.kuilt.quilter.MonotonicMillis
 import us.tractat.kuilt.quilter.Quilter
 import kotlin.jvm.JvmInline
 import kotlin.time.Instant
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.HeddleNode")
 
 /** Identity of one local reservation — a leaf earmark awaiting completion (design §4.4). */
 @JvmInline
@@ -214,23 +217,6 @@ public class HeddleNode internal constructor(
     private val selfPeer = PeerId(self.value)
     private val scopeRef = scope
 
-    init {
-        // Demand board: single-collect our channel, fold each frame into the local TTL tracker.
-        scope.launch {
-            demandSeam.incoming.collect { swatch ->
-                val update = runCatchingCancellable {
-                    Cbor.decodeFromByteArray(demandSerializer, swatch.toByteArray())
-                }.getOrNull() ?: return@collect
-                lock.withLock { demandTracker.received(update) }
-            }
-        }
-        // Liveness: single-collect the liveness channel; fan out to per-peer detectors.
-        scope.launch { livenessSeam.incoming.collect { rawLiveness.emit(it) } }
-        scope.launch {
-            peersFlow.collect { peers -> reconcileDetectors(peers) }
-        }
-    }
-
     // ─────────────────────────────────────────────────────────────────────────────
     // Topology — the strict-drain lifecycle transitions, applied through the Quilter so
     // they replicate. Each returns whether it took effect (false = the ledger refused;
@@ -340,9 +326,19 @@ public class HeddleNode internal constructor(
     // ─────────────────────────────────────────────────────────────────────────────
     // Scheduling — one or more EEVDF allocation rounds at [parent], delegating this
     // peer's holdings down toward demanding children. Pure and bounded: each grant
-    // reduces this peer's holdings at [parent], so the loop terminates. Returns the
-    // number of quanta delegated.
+    // reduces this peer's holdings at [parent], so the loop terminates. Answers a
+    // ScheduleOutcome: what was delegated, or why nothing could be.
     // ─────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The parents whose last [schedule] answered [ScheduleOutcome.WeightBudget], so the warning
+     * fires once per transition into that state rather than on every call. Under [lock].
+     */
+    private val overBudgetParents = HashSet<GroupId>()
+
+    /** How many times [schedule] has warned of a parent entering the weight-budget state: a test's witness. */
+    internal var weightBudgetWarningsForTest: Int = 0
+        private set
 
     /**
      * Run allocation rounds at [parent] until nothing more can be delegated: build the
@@ -365,21 +361,43 @@ public class HeddleNode internal constructor(
      * child's virtual position is a `Long` of 1/16-unit ticks, and it grows with the service handed
      * down under the parent over its lifetime, so it is bounded. Past the bound it saturates instead
      * of throwing (#3313). A pick that would have to order a saturated position is refused, and
-     * the rounds stop at that parent, so [schedule] returns what it granted before, `0` from then
-     * on. This node has no rebase to bring the positions back down, and it does not yet say why it
-     * stopped; both are tracked by #3353. At [LocalHeddle.MAX_RESERVATION]-size grants and a weight
-     * of `3/7`, the bound is about 9,000 grants, some 2⁵⁷ units of service.
+     * the rounds stop at that parent: a call that granted first answers [ScheduleOutcome.Delegated],
+     * and every call after it [ScheduleOutcome.PositionCeiling]. This node has no rebase to bring the
+     * positions back down yet (#3353). At [LocalHeddle.MAX_RESERVATION]-size grants and a weight of
+     * `3/7`, the bound is about 9,000 grants, some 2⁵⁷ units of service.
      *
-     * @return the count of grants applied this call.
+     * @return [ScheduleOutcome.Delegated] with the count of grants applied this call,
+     *   [ScheduleOutcome.NothingToDelegate] when none was, or [ScheduleOutcome.PositionCeiling] or
+     *   [ScheduleOutcome.WeightBudget] when [parent]'s children cannot be ordered. Never
+     *   [GateClosed]: a static node has no write gate.
+     *
+     * A parent that starts answering [ScheduleOutcome.WeightBudget] is also logged, once, at
+     * `warn`, naming its active edges and their weights, so a caller that discards the outcome
+     * still sees it. It logs again only after some call there answers anything else.
      */
-    public fun schedule(parent: GroupId): Int = lock.withLock {
-        allocator.schedule(parent, ledgerCell, earmarked = earmarks[parent] ?: 0L, demand = ::liveDemand)
+    public fun schedule(parent: GroupId): ScheduleOutcome = lock.withLock {
+        val outcome = allocator.schedule(parent, ledgerCell, earmarked = earmarks[parent] ?: 0L, demand = ::liveDemand)
+            .toScheduleOutcome()
+        if (outcome !is ScheduleOutcome.WeightBudget) {
+            overBudgetParents.remove(parent)
+        } else if (overBudgetParents.add(parent)) {
+            weightBudgetWarningsForTest++
+            val s = ledger.value
+            val edges = s.activeChildren(parent).joinToString { c -> "${c.attachment.value} (${s.record(c.attachment)?.weight})" }
+            logger.warn {
+                "heddle: no pick at ${parent.value} can be computed, its active children's weights put a " +
+                    "pick's sums out of Long; nothing is delegated there until one closes. Active: $edges"
+            }
+        }
+        outcome
     }
 
     /**
      * [parent]'s **current virtual time** `V` on this peer (design §7.2; issue #1688) — a
      * **diagnostic** read of this view's front. `null` when [parent] has no active children in
-     * *this peer's view* and there is therefore no front to take.
+     * *this peer's view* and there is therefore no front to take, and `null` too when their
+     * weights put the front's sums out of `Long`, where [schedule] answers
+     * [ScheduleOutcome.WeightBudget].
      *
      * **Nothing has to be done with this value any more, and that is the point** (issue #1752).
      * It used to be the number a caller rounded into a newborn's record, which made a local
@@ -745,5 +763,24 @@ public class HeddleNode internal constructor(
 
         /** NamedMux channel carrying liveness heartbeats (design §8.1). */
         internal const val LIVENESS_CHANNEL: String = "heddle.liveness"
+    }
+
+    // Last in the class body, so every field the collectors read is filled before any of them
+    // runs (#2482).
+    init {
+        // Demand board: single-collect our channel, fold each frame into the local TTL tracker.
+        scope.launch {
+            demandSeam.incoming.collect { swatch ->
+                val update = runCatchingCancellable {
+                    Cbor.decodeFromByteArray(demandSerializer, swatch.toByteArray())
+                }.getOrNull() ?: return@collect
+                lock.withLock { demandTracker.received(update) }
+            }
+        }
+        // Liveness: single-collect the liveness channel; fan out to per-peer detectors.
+        scope.launch { livenessSeam.incoming.collect { rawLiveness.emit(it) } }
+        scope.launch {
+            peersFlow.collect { peers -> reconcileDetectors(peers) }
+        }
     }
 }

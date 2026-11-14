@@ -34,9 +34,10 @@ and a snapshot to survive a restart, and no `Seam` or Raft underneath.
   `earmarked`), so code that only spends, such as `:kuilt-warp-heddle`'s admission gate, takes
   either node.
 - `ReserveOutcome` / `ScheduleOutcome` / `GateClosed` — what a spend call did. `reserve` answers
-  `Reserved` or `NoHoldings`; a governed node's `schedule` answers `Delegated` or
-  `NothingToDelegate` (a static node's returns a plain grant count). Only a governed node adds
-  `GateClosed`, with a `Reason`, when this peer may not author entitlement at all.
+  `Reserved` or `NoHoldings`; `schedule` answers `Delegated` or `NothingToDelegate`, or
+  `PositionCeiling` or `WeightBudget` when the parent's children cannot be ordered at all. Only a
+  governed node adds `GateClosed`, with a `Reason`, when this peer may not author entitlement at
+  all.
 - `HeddleNode` / `heddleStatic` — the node that runs the tally, demand board, reservations,
   and liveness over a `Seam`, and its fixed-roster bootstrap (see below).
 - `GovernedHeddleNode` / `heddleGoverned` — the same node with runtime supply creation and
@@ -104,8 +105,8 @@ and nothing else does:
   `ControlConflict.WeightBudget`. Every peer decides it from the same log, so every peer refuses.
   `heddleStatic` checks the same weights in its starting tree and in `prepare` and `activate`,
   which answer `false`. But a static peer checks only what it can see itself, so two peers
-  activating siblings at once can still add up past the limit together. Catching that when a pick
-  reads the tree is still to come (#3353).
+  activating siblings at once can still add up past the limit together. `schedule` catches that
+  when it reads the tree: it answers `WeightBudget` for the parent and hands nothing out there.
 - **The everyday path is untouched.** Handing out and charging for work — `schedule`, `reserve`,
   `complete` — never goes through the agreement step, at any rate. That is the whole point:
   agreement appears only at the two rare moments that need it.

@@ -219,7 +219,9 @@ and wasmJs.
 exhaustion: build each child's input from the ledger, pick, apply the grant, repeat
 until nothing more can move. Before the first pick it seats any child that has no seat
 yet and clamps any child that just woke, both against one front, so neither joiner
-drags the front down to meet itself. It remembers, between calls, which children it
+drags the front down to meet itself. It answers an `AllocationOutcome`: `Delegated`
+with the grant count, `NothingToDelegate`, or `PositionCeiling` or `WeightBudget`
+when the parent's children cannot be ordered at all. It remembers, between calls, which children it
 has seen idle and what clamp each carries; that memory is local to the allocator and
 is never part of the ledger.
 

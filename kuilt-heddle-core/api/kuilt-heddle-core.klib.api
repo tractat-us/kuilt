@@ -112,6 +112,53 @@ sealed interface us.tractat.kuilt.heddle/AcquireOutcome { // us.tractat.kuilt.he
 
 sealed interface us.tractat.kuilt.heddle/AdmitOutcome // us.tractat.kuilt.heddle/AdmitOutcome|null[0]
 
+sealed interface us.tractat.kuilt.heddle/AllocationOutcome { // us.tractat.kuilt.heddle/AllocationOutcome|null[0]
+    final class Delegated : us.tractat.kuilt.heddle/AllocationOutcome { // us.tractat.kuilt.heddle/AllocationOutcome.Delegated|null[0]
+        constructor <init>(kotlin/Int) // us.tractat.kuilt.heddle/AllocationOutcome.Delegated.<init>|<init>(kotlin.Int){}[0]
+
+        final val grants // us.tractat.kuilt.heddle/AllocationOutcome.Delegated.grants|{}grants[0]
+            final fun <get-grants>(): kotlin/Int // us.tractat.kuilt.heddle/AllocationOutcome.Delegated.grants.<get-grants>|<get-grants>(){}[0]
+
+        final fun component1(): kotlin/Int // us.tractat.kuilt.heddle/AllocationOutcome.Delegated.component1|component1(){}[0]
+        final fun copy(kotlin/Int = ...): us.tractat.kuilt.heddle/AllocationOutcome.Delegated // us.tractat.kuilt.heddle/AllocationOutcome.Delegated.copy|copy(kotlin.Int){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AllocationOutcome.Delegated.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AllocationOutcome.Delegated.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AllocationOutcome.Delegated.toString|toString(){}[0]
+    }
+
+    final class PositionCeiling : us.tractat.kuilt.heddle/AllocationOutcome { // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val parent // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.parent.<get-parent>|<get-parent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.toString|toString(){}[0]
+    }
+
+    final class WeightBudget : us.tractat.kuilt.heddle/AllocationOutcome { // us.tractat.kuilt.heddle/AllocationOutcome.WeightBudget|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/AllocationOutcome.WeightBudget.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val parent // us.tractat.kuilt.heddle/AllocationOutcome.WeightBudget.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AllocationOutcome.WeightBudget.parent.<get-parent>|<get-parent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AllocationOutcome.WeightBudget.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/AllocationOutcome.WeightBudget // us.tractat.kuilt.heddle/AllocationOutcome.WeightBudget.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AllocationOutcome.WeightBudget.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AllocationOutcome.WeightBudget.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AllocationOutcome.WeightBudget.toString|toString(){}[0]
+    }
+
+    final object NothingToDelegate : us.tractat.kuilt.heddle/AllocationOutcome { // us.tractat.kuilt.heddle/AllocationOutcome.NothingToDelegate|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AllocationOutcome.NothingToDelegate.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AllocationOutcome.NothingToDelegate.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AllocationOutcome.NothingToDelegate.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.heddle/GroupPath { // us.tractat.kuilt.heddle/GroupPath|null[0]
     abstract val names // us.tractat.kuilt.heddle/GroupPath.names|{}names[0]
         abstract fun <get-names>(): kotlin.collections/List<kotlin/String> // us.tractat.kuilt.heddle/GroupPath.names.<get-names>|<get-names>(){}[0]
@@ -1002,7 +1049,7 @@ final class us.tractat.kuilt.heddle/FairShareAllocator { // us.tractat.kuilt.hed
         final fun <get-memory>(): us.tractat.kuilt.heddle/AllocatorMemory // us.tractat.kuilt.heddle/FairShareAllocator.memory.<get-memory>|<get-memory>(){}[0]
 
     final fun pickChild(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/EntitlementLedger, kotlin/Function1<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand>, kotlin/Function1<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand>): us.tractat.kuilt.heddle/ChildPick? // us.tractat.kuilt.heddle/FairShareAllocator.pickChild|pickChild(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.EntitlementLedger;kotlin.Function1<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>;kotlin.Function1<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>){}[0]
-    final fun schedule(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/LedgerCell, kotlin/Long, kotlin/Function1<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand>): kotlin/Int // us.tractat.kuilt.heddle/FairShareAllocator.schedule|schedule(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.LedgerCell;kotlin.Long;kotlin.Function1<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>){}[0]
+    final fun schedule(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/LedgerCell, kotlin/Long, kotlin/Function1<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand>): us.tractat.kuilt.heddle/AllocationOutcome // us.tractat.kuilt.heddle/FairShareAllocator.schedule|schedule(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.LedgerCell;kotlin.Long;kotlin.Function1<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>){}[0]
     final fun virtualTime(us.tractat.kuilt.heddle/EntitlementLedger, us.tractat.kuilt.heddle/GroupId, kotlin/Function1<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand>): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/FairShareAllocator.virtualTime|virtualTime(us.tractat.kuilt.heddle.EntitlementLedger;us.tractat.kuilt.heddle.GroupId;kotlin.Function1<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>){}[0]
 }
 

@@ -119,7 +119,7 @@ class HeddleWeightBudgetTest {
                 { assertFalse(prepared, "prepare") },
                 { assertFalse(activated, "activate of an edge never prepared") },
                 { assertEquals(before, node.ledger.value, "the ledger is unchanged") },
-                { assertEquals(0, node.schedule(ROOT), "schedule does not throw") },
+                { assertEquals(ScheduleOutcome.NothingToDelegate, node.schedule(ROOT), "schedule does not throw") },
             )
         }
 
@@ -138,7 +138,7 @@ class HeddleWeightBudgetTest {
             assertAll(
                 { assertFalse(activated, "activate") },
                 { assertEquals(before, node.ledger.value, "the ledger is unchanged") },
-                { assertTrue(node.schedule(ROOT) > 0, "the sibling that fits is served, and nothing throws") },
+                { assertIs<ScheduleOutcome.Delegated>(node.schedule(ROOT), "the sibling that fits is served, and nothing throws") },
             )
         }
 
@@ -155,7 +155,7 @@ class HeddleWeightBudgetTest {
             )
             node.advertise(E1, HUNGRY)
             node.advertise(E2, HUNGRY)
-            assertTrue(node.schedule(ROOT) > 0)
+            assertIs<ScheduleOutcome.Delegated>(node.schedule(ROOT))
         }
 
     /**
