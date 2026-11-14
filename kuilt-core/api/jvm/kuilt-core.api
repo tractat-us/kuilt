@@ -170,7 +170,7 @@ public final class us/tractat/kuilt/core/InMemoryTag : us/tractat/kuilt/core/Tag
 
 public final class us/tractat/kuilt/core/KuiltVersion {
 	public static final field INSTANCE Lus/tractat/kuilt/core/KuiltVersion;
-	public static final field VERSION Ljava/lang/String;
+	public final fun getVERSION ()Ljava/lang/String;
 }
 
 public final class us/tractat/kuilt/core/LatchingToKt {
