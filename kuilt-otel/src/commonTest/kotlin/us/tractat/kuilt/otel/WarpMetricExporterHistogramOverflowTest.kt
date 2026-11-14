@@ -88,6 +88,34 @@ class WarpMetricExporterHistogramOverflowTest {
         assertRefusedWhole(store, exporter, listOf(MetricUpdate.RecordHistogram(latency, 12.5)))
     }
 
+    /**
+     * Both signs share one overflow counter. Negative values have filled it while the positive top
+     * bucket is still empty, so a large positive value is refused by the overflow slot alone.
+     */
+    @Test
+    fun aPositiveValueIntoAnOverflowSlotNegativeValuesFilledIsRefusedWhole() = runTest {
+        val store = RecordingStore()
+        val exporter = exporter(store)
+        val probe = WarpMetricExporter(replica = replica, store = InMemoryDurableStore())
+        probe.recordHistogram(latency, 1e30)
+        val top = probe.histogramSnapshot(latency).positiveBuckets.keys.single()
+        // The sketch's index is the OTLP index plus one, so OTLP index `top` lands one past the top bucket.
+        val negativeOverflow = MetricUpdate.AddExponentialHistogram(
+            latency, scale = exporter.histogramScale, zeroCount = 0L,
+            positiveOffset = 0, positiveCounts = emptyList(),
+            negativeOffset = top, negativeCounts = listOf(Long.MAX_VALUE),
+        )
+        assertEquals(MetricExportResult.Success, exporter.record(listOf(negativeOverflow)))
+        val seeded = exporter.histogramSnapshot(latency)
+        assertAll(
+            { assertEquals(Long.MAX_VALUE, seeded.overflowCount, "the rig: the overflow slot is full") },
+            { assertEquals(Long.MAX_VALUE, seeded.negativeBuckets[top], "the rig: the negative top slot is full") },
+            { assertEquals(emptyMap(), seeded.positiveBuckets, "the rig: the positive top slot is empty") },
+        )
+
+        assertRefusedWhole(store, exporter, listOf(MetricUpdate.RecordHistogram(latency, 1e30)))
+    }
+
     /** Two OTLP buckets at a finer scale fold into one sketch bucket, and their sum is past [Long.MAX_VALUE]. */
     @Test
     fun countsThatFoldPastLongMaxValueAtAFinerScaleAreRefusedWhole() = runTest {

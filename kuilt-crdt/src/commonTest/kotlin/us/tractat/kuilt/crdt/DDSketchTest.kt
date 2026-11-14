@@ -406,7 +406,15 @@ class DDSketchTest {
         val full = empty.piece(
             empty.addBuckets(r1, mapOf(index to Long.MAX_VALUE, top + 1 to Long.MAX_VALUE - 1L), emptyMap(), Long.MAX_VALUE).delta,
         )
+        // The overflow slot full while the positive top slot is empty: only negative values reached it,
+        // so a positive overflowing value is refused by the overflow slot alone.
+        val crossSign = empty.piece(empty.addBuckets(r1, emptyMap(), mapOf(top + 1 to Long.MAX_VALUE), 0L).delta)
         assertAll(
+            { assertEquals(Long.MAX_VALUE, crossSign.negativeBuckets[top], "the rig: the negative top slot is full") },
+            { assertEquals(Long.MAX_VALUE, crossSign.overflowCount, "the rig: the overflow slot is full") },
+            { assertTrue(crossSign.positiveBuckets.isEmpty(), "the rig: the positive top slot is empty") },
+            { assertNull(crossSign.addOrNull(r1, 1e30), "the overflow slot, across signs") },
+            { assertNotNull(crossSign.addOrNull(r1, 10.0), "the control: a value that does not overflow fits") },
             { assertEquals(Long.MAX_VALUE, full.positiveBuckets[index], "the rig: 10's slot is full") },
             { assertEquals(Long.MAX_VALUE, full.zeroCount, "the rig: the zero slot is full") },
             { assertEquals(Long.MAX_VALUE - 1L, full.overflowCount, "the rig: the overflow slot is one short") },
