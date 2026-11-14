@@ -149,14 +149,20 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     2026-11-13, #3306):** AOSP flags `isTransientFailure()` on only nine codes and not on
     `SYSTEM_ERROR`, so "transient keeps, all else replaces" would replace on an outage. The rule is:
     transient, `isSystemError()` or `requiresUserAuthentication()` throws and keeps the key; a
-    key-specific code (`KEY_NOT_FOUND`/`KEY_PERMANENTLY_INVALIDATED`, `VALUE_CORRUPTED`, and an
-    unflagged code 10, where `INVALID_KEY_BLOB` lands) or an `UnrecoverableKeyException` with no
-    `KeyStoreException` cause replaces it; any other code counts a failed launch. Below API 33, where
-    no cause separates the two, every failure counts. The count is kept beside the grants, and the 3rd
-    consecutive failed launch replaces the key; a successful read clears it. On API 30 and earlier
-    `getKey` answers null on an outage, so a "key was made" marker beside the grants turns
-    null-with-marker into a counted failure rather than a first launch. A replaced key is a new device
-    returning through ordinary admission.
+    key-specific code (`KEY_NOT_FOUND`/`KEY_PERMANENTLY_INVALIDATED`, `VALUE_CORRUPTED`) or an
+    `UnrecoverableKeyException` with no `KeyStoreException` cause replaces it, as does a
+    `KeyPermanentlyInvalidatedException` on every version; any other failure, unflagged code 10
+    included (AOSP's KeyMint bucket mixes `INVALID_KEY_BLOB` with passing TEE faults), is a failure
+    of unknown cause. Below API 33 every failure but the last is of unknown cause. **Amended again
+    (Iain, 2026-11-13, #3306's re-review: "simplicity, not perverse corner cases"):** a failure of
+    unknown cause replaces the key once the Keystore has been failing for at least an hour with no
+    successful read in between. The store keeps one timestamp beside the grants, the start of the
+    current run of failures; any successful read clears it. No launch is counted, so processes and
+    process churn don't matter. On API 30 and earlier `getKey` answers null on an outage, so a "key
+    was made" marker beside the grants turns null-with-marker into a failure of unknown cause rather
+    than a first launch. The Android store requires API 26 (`@RequiresApi(26)` on `platform`; its
+    grants store uses `java.nio.file`). A replaced key is a new device returning through ordinary
+    admission.
 
 ## Goals
 
