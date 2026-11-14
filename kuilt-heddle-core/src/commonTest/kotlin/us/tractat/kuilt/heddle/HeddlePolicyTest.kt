@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -563,13 +564,13 @@ class HeddlePolicyTest {
     }
 
     /**
-     * With nobody demanding, the front falls back to the highest position, and it reads the
-     * ceiling when **any** child is at its ceiling, not only the highest (review of #3352). A
-     * saturated child can read below the top and truly stand above it, so a newborn seated at the
-     * top's position would sit behind the true front.
+     * With nobody demanding, the front falls back to the highest position, compared exactly (#3353).
+     * The review of #3352 made it read the ceiling whenever **any** child was at its ceiling, since a
+     * saturated child could read below the top and truly stand above it. Nothing is saturated before
+     * the front is taken now, so the front is the exact top: here `y`, though `x` is at its ceiling.
      */
     @Test
-    fun anIdleFrontReadsTheCeilingWhenAnyChildIsThere() {
+    fun anIdleFrontIsTheExactTopWhenAChildIsAtItsCeiling() {
         val heavy = Weight.of(1000)
         val light = Weight.of(1, 1000)
         val idle = Demand(targetOutstanding = 0L, maximumUsefulGrant = 0L)
@@ -579,6 +580,7 @@ class HeddlePolicyTest {
         val top = Sim("y", light, seat = ticksToVirtual(10_000_000_000_000L, light), demand = idle)
         check(!HeddlePolicy.isAtCeiling(top.edge()) && HeddlePolicy.isAtCeiling(saturated.edge())) { "the rig: only x is saturated" }
         val front = checkNotNull(HeddlePolicy.frontTime(listOf(saturated.edge(), top.edge())))
-        assertEquals(positionCeiling(Weight.ONE), front.ticksFor(Weight.ONE))
+        // y's virtual time, 10¹³ · 1000 / 16, on weight 1's grid: 10¹⁶ ticks.
+        assertEquals(Int128.of(10_000_000_000_000_000L), front.ticksForWide(Weight.ONE))
     }
 }

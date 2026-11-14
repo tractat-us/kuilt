@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalVersionOverloading::class)
+
 package us.tractat.kuilt.heddle
 
 import kotlinx.serialization.Serializable
@@ -125,8 +127,8 @@ public data class Gauge(
     @Serializable(with = RationalSerializer::class)
     public val floor: Rational = Rational.ZERO,
     public val folded: Long,
-    public val ticksHigh: Long = 0L,
-    public val ticksLow: Long = 0L,
+    @IntroducedAt("0.7.5") public val ticksHigh: Long = 0L,
+    @IntroducedAt("0.7.5") public val ticksLow: Long = 0L,
 ) {
     init {
         require(folded >= 0L) { "Gauge folded must be non-negative, was $folded" }

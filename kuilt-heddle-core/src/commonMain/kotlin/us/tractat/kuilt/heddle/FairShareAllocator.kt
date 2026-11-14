@@ -1044,9 +1044,12 @@ internal class Rebase(val ledger: EntitlementLedger, val offsets: Map<Attachment
  * be exported as the virtual time [AllocatorMemory] holds it in.
  */
 internal class StoredOffset(val ticks: Int128, val weight: Weight) {
-    /** The clamp as the virtual time it stands for. */
-    fun asVirtualTime(): Rational =
-        ticksToVirtual(checkNotNull(ticks.toLongOrNull()) { "a wake clamp of $ticks ticks is past Long" }, weight)
+    /**
+     * The clamp as the virtual time it stands for, held at the edge's [positionCeiling]: the form
+     * [AllocatorMemory] still keeps a clamp in, which cannot hold one past `Long`. A clamp there
+     * already puts its edge's effective position at the ceiling, where a pick refuses.
+     */
+    fun asVirtualTime(): Rational = ticksToVirtual(saturated(ticks, weight), weight)
 }
 
 /**
