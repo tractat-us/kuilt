@@ -59,9 +59,23 @@ class MulDivTest {
         { assertEquals(1L, Long.MAX_VALUE.timesWide(Long.MAX_VALUE) % (Long.MAX_VALUE - 1L)) },
     )
 
+    // A zero divisor throws what `Long / 0` throws, so a caller already catching that catches this.
     @Test
-    fun aZeroDivisorIsACallerBug() {
-        assertFailsWith<IllegalArgumentException> { mulDiv(1L, 1L, 0L, Rounding.FLOOR) }
+    fun mulDivByZeroThrowsLikeLongDivision() {
+        val e = assertFailsWith<ArithmeticException> { mulDiv(1L, 1L, 0L, Rounding.FLOOR) }
+        assertTrue("division by zero" in e.message.orEmpty(), "message: ${e.message}")
+    }
+
+    @Test
+    fun divideOrNullByZeroThrowsLikeLongDivision() {
+        val e = assertFailsWith<ArithmeticException> { Int128.MIN_VALUE.divideOrNull(0L, Rounding.CEILING) }
+        assertTrue("division by zero" in e.message.orEmpty(), "message: ${e.message}")
+    }
+
+    @Test
+    fun remByZeroThrowsLikeLongRem() {
+        val e = assertFailsWith<ArithmeticException> { Int128.of(7L) % 0L }
+        assertTrue("division by zero" in e.message.orEmpty(), "message: ${e.message}")
     }
 
     /**

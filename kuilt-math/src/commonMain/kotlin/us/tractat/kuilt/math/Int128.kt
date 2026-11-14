@@ -4,15 +4,22 @@ package us.tractat.kuilt.math
  * An exact signed 128-bit integer.
  *
  * Its job is to hold the result of an operation on `Long`s that a `Long` cannot: the product of two
- * of them ([timesWide]), or a running sum of many. Every such value fits with room to spare: a
- * product of two `Long`s needs at most 127 bits, and fewer than 2⁶³ `Long` terms cannot sum past
- * 2¹²⁷. So comparing two products, or summing terms in any order, is exact here, and the only
- * question left is whether the final answer fits back in a `Long` — which [toLongOrNull] and
- * [divideOrNull] answer with `null` rather than a wrapped value.
+ * of them ([timesWide]), or a running sum of many. A product of two `Long`s lies in
+ * `[−2¹²⁶ + 2⁶³, 2¹²⁶]`, and its top, 2¹²⁶, needs all 128 signed bits. Up to 2⁶⁴ `Long` terms cannot
+ * sum outside `[−2¹²⁷, 2¹²⁷)`. So comparing two products, or summing `Long` terms in any order, is
+ * exact here, and the only question left is whether the final answer fits back in a `Long` — which
+ * [toLongOrNull] and [divideOrNull] answer with `null` rather than a wrapped value.
  *
- * Arithmetic between two `Int128`s ([plus], [minus]) throws [ArithmeticException] if
- * it leaves 128 bits. Reaching that from `Long` inputs takes about 2⁶³ terms, so a throw there is a
- * caller bug rather than a data condition, and it is never a silent wrap.
+ * Arithmetic between two `Int128`s ([plus], [minus]) throws [ArithmeticException] if it leaves 128
+ * bits, and it is never a silent wrap. How near that is depends on what is being summed:
+ *
+ * - **`Long` terms.** It takes more than 2⁶⁴ of them, so a throw is a caller bug rather than a data
+ *   condition.
+ * - **Products of `Long`s.** Two are enough. `Long.MIN_VALUE.timesWide(Long.MIN_VALUE)` is 2¹²⁶,
+ *   and twice that is 2¹²⁷, one past the largest value. That is the only sum of two products that
+ *   leaves; the difference of two products always fits; a third term can leave. So a sum of
+ *   products is a data condition, and a caller whose inputs can reach it bounds them, or the number
+ *   of terms, before it adds.
  *
  * The value is two's complement over two words, `high · 2⁶⁴ + unsigned(low)`. Both words are public
  * because a caller keeping a hot accumulator needs to read and rebuild them without allocating;
@@ -70,10 +77,10 @@ public class Int128 private constructor(
      * a quota rounds a share *down* so it never hands out more than it holds. A default would make
      * that choice silently.
      *
-     * @throws IllegalArgumentException if [divisor] is zero.
+     * @throws ArithmeticException if [divisor] is zero, as `Long / 0` does.
      */
     public fun divideOrNull(divisor: Long, rounding: Rounding): Long? {
-        require(divisor != 0L) { "division by zero: $this / 0" }
+        if (divisor == 0L) throw ArithmeticException("division by zero: $this / 0")
         val negative = isNegative != (divisor < 0L)
         val n = magnitude()
         val d = if (divisor < 0L) (-divisor).toULong() else divisor.toULong() // |MIN_VALUE| = 2⁶³ fits.
@@ -98,10 +105,10 @@ public class Int128 private constructor(
      * it: the result has this value's sign and is smaller than [divisor] in magnitude, so it always
      * fits in a `Long`. It is what Euclid's algorithm needs to take a gcd of a 128-bit value.
      *
-     * @throws IllegalArgumentException if [divisor] is zero.
+     * @throws ArithmeticException if [divisor] is zero, as `Long % 0` does.
      */
     public operator fun rem(divisor: Long): Long {
-        require(divisor != 0L) { "division by zero: $this % 0" }
+        if (divisor == 0L) throw ArithmeticException("division by zero: $this % 0")
         val n = magnitude()
         val d = if (divisor < 0L) (-divisor).toULong() else divisor.toULong()
         val r = divideUnsigned(n.high.toULong(), n.low.toULong(), d).remainder // < |divisor| ≤ 2⁶³
@@ -181,8 +188,13 @@ public fun Long.timesWide(other: Long): Int128 {
     val bLo = other and LOW_32
     val bHi = other shr 32
     val p0 = aLo * bLo // < 2⁶⁴, read as unsigned
-    val t = aHi * bLo + (p0 ushr 32) // |aHi·bLo| < 2⁶³ − 2³², plus < 2³²
-    val w1 = (t and LOW_32) + aLo * bHi // |aLo·bHi| < 2⁶³ − 2³², plus < 2³²
+    // aHi·bLo ∈ [−2⁶³ + 2³¹, 2⁶³ − 2³² − 2³¹ + 1]. The extreme magnitude, 2⁶³ − 2³¹ at aHi = −2³¹ and
+    // bLo = 2³² − 1, is negative, where adding p0 ushr 32 ∈ [0, 2³²) cannot overflow; the positive
+    // end leaves room for it. So t ∈ [−2⁶³ + 2³¹, 2⁶³ − 2³¹].
+    val t = aHi * bLo + (p0 ushr 32)
+    // The same bounds with the roles swapped: aLo·bHi ∈ [−2⁶³ + 2³¹, 2⁶³ − 2³² − 2³¹ + 1], plus a
+    // value in [0, 2³²), so w1 ∈ [−2⁶³ + 2³¹, 2⁶³ − 2³¹].
+    val w1 = (t and LOW_32) + aLo * bHi
     val high = aHi * bHi + (t shr 32) + (w1 shr 32)
     return Int128.fromTwosComplement(high, this * other)
 }

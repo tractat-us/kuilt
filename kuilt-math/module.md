@@ -27,7 +27,7 @@ assertNull(mulDiv(Long.MAX_VALUE, 2L, 1L, Rounding.FLOOR))
   fallback, or a throw — instead of the operator deciding to wrap.
 - **`Int128`**, an exact signed 128-bit integer. The product of two `Long`s always fits in one
   (`Long.timesWide`), so comparing two fractions by cross-multiplying (`compareProducts`) is exact
-  for every input. A running sum of `Long`s fits too, in any order.
+  for every input. A running sum of up to 2⁶⁴ `Long`s fits too, in any order.
 - **`mulDiv(a, b, divisor, rounding)`**: `a · b / divisor` with the product formed in 128 bits, so
   only the final quotient has to fit in a `Long`. The rounding is a required argument —
   `Rounding.FLOOR` or `Rounding.CEILING` — because the direction is usually the decision: round a
@@ -42,8 +42,15 @@ peer's update — needs to turn that fact into an answer it can return, and a `n
 compiler where an exception is not. Code that genuinely wants the throw writes
 `a.plusOrNull(b) ?: throw ArithmeticException(…)`, and the message is its own.
 
-`Int128` arithmetic is the one place that throws. Leaving 128 bits from `Long` inputs takes about
-2⁶³ additions, so getting there is a bug, not data.
+`Int128` arithmetic is the one place an overflow throws, and how near that is depends on what is
+being summed. A sum of `Long`s needs more than 2⁶⁴ terms to leave 128 bits, so getting there is a
+bug, not data. A sum of products is different. Each `timesWide` product can be as large as 2¹²⁶,
+so two of them — `Long.MIN_VALUE` squared, twice — already reach 2¹²⁷ and throw. The difference of
+two products always fits, and a third term can leave. Code that sums products of its data bounds
+those inputs, or the number of terms, before it adds.
+
+Dividing by zero throws `ArithmeticException`, as `Long` division does. A zero divisor is a bug in
+the caller, not an answer that fails to fit.
 
 ## Identical on every target
 
