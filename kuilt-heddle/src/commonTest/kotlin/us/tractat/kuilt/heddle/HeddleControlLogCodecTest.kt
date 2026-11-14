@@ -171,7 +171,8 @@ internal object ControlLogVectors {
             "bf677265636f726473bfff666d696e746564bfff" +
             "66697373756564bf6165bf66636f756e7473bf617003ffffff" +
             "6872657475726e6564bfff696c6561665370656e74bfff6b726f6c6c75705370656e74bfff697472616e7366657273bfff" +
-            "66676175676573bf6165bf65666c6f6f72bf696e756d657261746f72016b64656e6f6d696e61746f7202ff66666f6c64656404ffff" +
+            "66676175676573bf6165bf65666c6f6f72bf696e756d657261746f72006b64656e6f6d696e61746f7201ff66666f6c64656404" +
+            "697469636b734869676801687469636b734c6f7708ffff" +
             "ff" + CLOSING,
         "Reconcile" to OPENING + "7830" + NS + "5265636f6e63696c65" + "bf656368696c646163" + CLOSING,
         "Quiesce" to OPENING + "782e" + NS + "51756965736365" + "bf64656467656165" + CLOSING,
@@ -191,12 +192,15 @@ internal object ControlLogVectors {
         "Retire" to ControlCommand.Retire(EDGE),
         // What `GovernedHeddleNode.retire` actually sends: it always carries a witness, which brings
         // the ledger, the gauge, `Rational` and `GCounter` into this format. One counter and one gauge
-        // on one edge, so no map here has two entries and key order cannot move these bytes.
+        // on one edge, so no map here has two entries and key order cannot move these bytes. The
+        // gauge is the shape a seat or checkpoint writes since #3353: floor zero and the position in
+        // ticks, here past 2⁶⁴ so both of its words are in the bytes. Changed in place, with no
+        // version bump: nothing deployed reads the replicated wire of an earlier build.
         "RetireWithWitness" to ControlCommand.Retire(
             EDGE,
             EntitlementLedger.of(
                 issued = mapOf(EDGE to GCounter.of(P to 3L)),
-                gauges = mapOf(EDGE to Gauge(Rational.of(1L, 2L), 4L)),
+                gauges = mapOf(EDGE to Gauge(Rational.ZERO, 4L, ticksHigh = 1L, ticksLow = 8L)),
             ).drainWitnessFor(EDGE),
         ),
         "Reconcile" to ControlCommand.Reconcile(GroupId("c")),

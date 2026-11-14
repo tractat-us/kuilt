@@ -851,7 +851,7 @@ class HeddleNodeTest {
         node.schedule(root)
         h.pump()
         assertEquals(
-            Gauge(Rational.of(200L), folded = 0L),
+            Gauge(Rational.ZERO, folded = 0L, ticksLow = 200L * 16L),
             node.ledger.value.gauge(newborn.id),
             "the newborn is seated at the front over the set it is joining — e1 alone, since the " +
                 "waker is a joiner too and cannot be averaged into it",
@@ -951,8 +951,8 @@ class HeddleNodeTest {
             },
             {
                 assertEquals(
-                    Rational.ZERO,
-                    assertNotNull(a.ledger.value.gauge(behind.id)).floor,
+                    Gauge(Rational.ZERO, folded = 0L),
+                    assertNotNull(a.ledger.value.gauge(behind.id)),
                     "…and merged e3's seat at the origin, written when B's front was still there",
                 )
             },
