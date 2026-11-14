@@ -188,6 +188,43 @@ class GaugeTicksTest {
         )
     }
 
+    /**
+     * A stored position at the ceiling reads the ceiling whatever the fold says. A seat taken from
+     * a front at its ceiling stores the ceiling ([VirtualTime.ticksFor] still narrows the front),
+     * and that position may stand for more: a view holding less issuance than the fold must not
+     * read it back below the ceiling as if it were exact.
+     */
+    @Test
+    fun ticksAtTheCeilingReadTheCeilingWhateverTheFold() {
+        val ceiling = positionCeiling(Weight.ONE)
+        val atCeiling = gaugeAt(Int128.of(ceiling), 10L)
+        assertEquals(
+            ticksToVirtual(ceiling, Weight.ONE),
+            ledgerWith(Weight.ONE, issued = 5L, gauge = atCeiling).grossVirtualService(EDGE),
+        )
+    }
+
+    /**
+     * A legacy floor is read exactly through the `max`, past `Long` too: the one place a floor
+     * used to be capped on the way in was [ticksAt], and the stored read no longer goes through it.
+     * Both quotient paths of [wideTicksAt] are reached: a denominator product that fits, and one
+     * that does not.
+     */
+    @Test
+    fun aLegacyFloorIsReadExactlyPastLong() {
+        val big = Gauge(Rational.of(Long.MAX_VALUE / 2L), 0L)
+        val fatDenominators = Gauge(Rational.of(Long.MAX_VALUE - 1L, 3_037_000_493L), 0L)
+        val fatWeight = Weight.of(1L, 3_037_000_507L)
+        assertAll(
+            { assertEquals((Long.MAX_VALUE / 2L).timesWide(TICKS_PER_UNIT), big.storedTicks(Weight.ONE)) },
+            {
+                // ⌈(2⁶³ − 2) · 16 / (3037000493 · 3037000507)⌉: the product of the denominators is past Long.
+                assertTrue(3_037_000_493L.timesWide(3_037_000_507L).toLongOrNull() == null, "the rig: the two-step path")
+                assertEquals(Int128.of(16L), fatDenominators.storedTicks(fatWeight))
+            },
+        )
+    }
+
     // ── the wire ─────────────────────────────────────────────────────────────────────────
 
     /** `ticks` is elided at zero, so a floor-only gauge encodes as it did before #3353. */
