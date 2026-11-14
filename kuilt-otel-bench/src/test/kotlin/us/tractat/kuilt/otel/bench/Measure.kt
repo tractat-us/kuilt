@@ -25,7 +25,7 @@ data class Sample(
  */
 private val threadBean = ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
 
-private fun allocatedBytes(): Long = threadBean.currentThreadAllocatedBytes
+fun allocatedBytes(): Long = threadBean.currentThreadAllocatedBytes
 
 /**
  * Runs [op] `opsPerRound` times per round for [rounds] rounds and times each round as a whole. For
@@ -116,7 +116,7 @@ suspend fun warmUp(ops: Int, op: suspend (index: Int) -> Unit) {
     for (i in 0 until ops) op(i)
 }
 
-private fun DoubleArray.median(): Double {
+fun DoubleArray.median(): Double {
     val sorted = sorted()
     val mid = sorted.size / 2
     return if (sorted.size % 2 == 1) sorted[mid] else (sorted[mid - 1] + sorted[mid]) / 2

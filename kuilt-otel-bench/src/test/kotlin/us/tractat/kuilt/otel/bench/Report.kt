@@ -35,4 +35,6 @@ fun millis(nanos: Double): String = "%.2f".format(Locale.ROOT, nanos / 1_000_000
 
 fun kib(bytes: Double): String = "%.1f".format(Locale.ROOT, bytes / 1024.0)
 
+fun ratio(value: Double): String = "%.2f".format(Locale.ROOT, value)
+
 fun percent(part: Double, whole: Double): String = "%.0f%%".format(Locale.ROOT, 100.0 * part / whole)

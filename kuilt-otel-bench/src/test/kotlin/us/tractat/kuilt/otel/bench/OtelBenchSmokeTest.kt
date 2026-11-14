@@ -62,6 +62,9 @@ class OtelBenchSmokeTest {
                 { assertEquals(2L, row.sample.executed, "$row") },
                 { assertTrue(row.requestBytesPerDrain > 0L, "$row") },
                 { assertTrue(row.edgeBytesWrittenPerDrain > 0L, "$row") },
+                // Both halves of the split were reached: the stub drain and the timer in the edge.
+                { assertTrue(row.bridgeNanosPerDrain > 0.0, "$row") },
+                { assertTrue(row.edgeDigestNanosPerDrain > 0.0 && row.edgeSendNanosPerDrain > 0.0, "$row") },
             )
         }
         assertAll(*checks.toTypedArray())
