@@ -60,6 +60,13 @@ internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS
  */
 internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADROOM) / w.denominator
 
+/**
+ * The position, in ticks, past which [LocalHeddle] rebases a parent: a sixteenth of [w]'s
+ * [positionCeiling] (#3329). Far enough below the ceiling that the spread of a busy parent's
+ * children above the rebased one never reaches it, and far enough above zero that a rebase is rare.
+ */
+internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16
+
 /** Whether [ticks] is at [w]'s [positionCeiling]: a position there may stand for a larger one. */
 internal fun atCeiling(ticks: Long, w: Weight): Boolean = ticks >= positionCeiling(w)
 
@@ -178,7 +185,7 @@ internal fun ticksToVirtual(ticks: Long, w: Weight): Rational {
     return Rational.of(checkedMul(ticks / g, w.denominator), scale / g)
 }
 
-private tailrec fun gcdOf(a: Long, b: Long): Long = if (b == 0L) a else gcdOf(b, a % b)
+internal tailrec fun gcdOf(a: Long, b: Long): Long = if (b == 0L) a else gcdOf(b, a % b)
 
 /**
  * A virtual time kept unreduced, as a sum of positions over a weight: `V = ticks / (G · w)`, where

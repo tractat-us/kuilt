@@ -23,6 +23,10 @@ import kotlin.test.assertTrue
  * since a run that gets there by picks takes thousands of maximum-size leases. Every arm first
  * asserts that its lane is where the rig put it, so a refusal is the ceiling's doing and not a
  * fixture that never got there.
+ *
+ * The engine rebases a parent long before a child gets there (#3329), so an arm that wants the
+ * ceiling keeps a demanding sibling near its origin: the rebase can move no demanding child below
+ * zero, so that sibling holds it at nothing, the one way a running engine still reaches the ceiling.
  */
 class LocalHeddlePositionCeilingTest {
 
@@ -124,12 +128,16 @@ class LocalHeddlePositionCeilingTest {
         // No warm-up: a carries no wake offset, so the pick itself reads a below its ceiling and
         // only the delegation can be what crosses.
         val engine = engine()
-        check(engine.snapshot().allocatorMemory.wakeOffsets.isEmpty()) { "a fresh engine has no wake offsets" }
+        // One pick with a and b both waiting seats b near its origin and wakes nobody. b then
+        // waits beside a, which holds the rebase at nothing.
+        val seating = (engine.acquire(setOf(a, b), setOf(a, b), startedAt = 99L) as AcquireOutcome.Acquired).lease
+        engine.complete(seating.id, actualCost = 1L)
+        check(engine.snapshot().allocatorMemory.wakeOffsets.isEmpty()) { "nobody has woken, so there are no wake offsets" }
         // One unit is 16 ticks: one tick under the ceiling, a pick of a is still exact, and its
         // delegation is what would cross.
         engine.pushTowardCeiling(a, below = 1L)
         val stateBefore = engine.snapshot()
-        val refused = engine.acquire(setOf(a), setOf(a), startedAt = 100L)
+        val refused = engine.acquire(setOf(a, b), setOf(a), startedAt = 100L)
         assertAll(
             { assertEquals(AcquireOutcome.PositionCeiling(root), refused) },
             { assertEquals(stateBefore, engine.snapshot()) },
@@ -140,7 +148,8 @@ class LocalHeddlePositionCeilingTest {
     @Test
     fun anExtendAcrossTheCeilingRefusesTypedAndChangesNothing() {
         val engine = engine()
-        val lease = (engine.acquire(setOf(a), setOf(a), startedAt = 100L) as AcquireOutcome.Acquired).lease
+        // b waits beside a, near its origin, so the rebase before the extension moves nothing.
+        val lease = (engine.acquire(setOf(a, b), setOf(a), startedAt = 100L) as AcquireOutcome.Acquired).lease
         engine.pushTowardCeiling(a, below = 1L)
         val stateBefore = engine.snapshot()
         val bytesBefore = engine.bytes()

@@ -2,6 +2,10 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.Rounding
+import us.tractat.kuilt.math.mulDiv
+import us.tractat.kuilt.math.plusOrNull
+import us.tractat.kuilt.math.timesOrNull
 
 /**
  * Where a [FairShareAllocator] reads the ledger and lands its writes.
@@ -103,7 +107,15 @@ public class FairShareAllocator(
     internal fun fork(): FairShareAllocator = FairShareAllocator(self, policy).also {
         it.wakeOffsets.putAll(wakeOffsets)
         it.demandingObserved.putAll(demandingObserved)
+        it.rebasesForTest = rebasesForTest
     }
+
+    /**
+     * How many [rebased] calls moved a position: the witness a test reads that its rig fired. Not
+     * part of [memory], so an allocator built from one starts at zero.
+     */
+    internal var rebasesForTest: Int = 0
+        private set
 
     /** The demanding state [edge] was last observed in, or `null` when it has never been observed. */
     internal fun lastObservedDemanding(edge: AttachmentId): Boolean? = demandingObserved[edge]
@@ -192,10 +204,33 @@ public class FairShareAllocator(
         ledger: EntitlementLedger,
         waiting: (AttachmentId) -> Demand,
         eligible: (AttachmentId) -> Demand,
+    ): ChildPick? = pickChildOn(parent, ledger, waiting, eligible, rebase = false)
+
+    /**
+     * [pickChild], with [parent] [rebased] between the seat-and-wake step and the pick: the form
+     * [LocalHeddle] calls (#3329). The rebase runs on the settled ledger, so every child already
+     * carries a gauge seated at a front that leaves the wakers out, and every waker its clamp. A
+     * rebase taken before that step would seat a newborn against a front that still counts a
+     * waker's stale position, the lifetime credit #1752 removed.
+     */
+    internal fun pickChildRebasing(
+        parent: GroupId,
+        ledger: EntitlementLedger,
+        waiting: (AttachmentId) -> Demand,
+        eligible: (AttachmentId) -> Demand,
+    ): ChildPick? = pickChildOn(parent, ledger, waiting, eligible, rebase = true)
+
+    private fun pickChildOn(
+        parent: GroupId,
+        ledger: EntitlementLedger,
+        waiting: (AttachmentId) -> Demand,
+        eligible: (AttachmentId) -> Demand,
+        rebase: Boolean,
     ): ChildPick? {
         val cell = ValueCell(ledger)
         settleJoiners(parent, cell, waiting)
-        val seated = cell.current
+        val settled = cell.current
+        val seated = if (rebase) rebased(parent, settled, waiting) ?: settled else settled
         val grant = pickOne(seated, parent, earmarked = 0L, eligible) ?: return null
         return ChildPick(seated, grant)
     }
@@ -218,6 +253,126 @@ public class FairShareAllocator(
         val front = HeddlePolicy.frontTime(edges, excluding = unseated)
         val patch = seatPatch(ledger, unseated, front) ?: return ledger
         return ledger.piece(patch.delta)
+    }
+
+    /**
+     * [ledger] with [parent]'s active children moved down by one common virtual time `Δ`, once one
+     * of them has climbed past its [rebaseThreshold]; `null` when nothing moved (#3329). For a single
+     * writer only: [LocalHeddle] calls it, and the replicated [schedule] never does (#3353).
+     *
+     * ## What moves: the effective position
+     *
+     * A pick reads an edge's **effective** position, its raw position plus the wake offset this
+     * allocator stores for it ([HeddlePolicy.effectiveTicks]), so that is what comes down, and what
+     * the threshold and `Δ` are measured on. The two parts come down differently:
+     * - **the wake offset first**, in whole units. It is a difference, the front less the raw
+     *   position at the last wake, and it only grows while a child idles between picks: a busy lane
+     *   that waits half the time carries an offset many times its own service, and left alone it
+     *   reaches the ceiling while the raw position is a hundredth of the way there.
+     * - **then the gauge's fold**. A raw position reads `⌈floor · w · G⌉ + (issued − folded) · G`
+     *   ([grossTicksAt]), so raising the fold by `k` units lowers it by exactly `k · G` ticks. The
+     *   gauge joins its fold by `max`, so a raised fold survives every later checkpoint, where a
+     *   lowered floor would be undone by the next one: a checkpoint `delegate` writes reads this
+     *   very gauge, so until issuance passes the raised fold it asserts a lower floor at a lower
+     *   fold, and the join keeps the pair that reads the same.
+     *
+     * ## Why it changes no pick
+     *
+     * `Δ` is a whole multiple of `L`, the least common multiple of the children's weight
+     * denominators, so `Δ · w · G` is a whole number of units' worth of ticks on every child's grid.
+     * Every demanding child's effective position comes down by exactly that, so the weighted mean
+     * over them comes down by `Δ`, and `⌈V · w · G⌉` by exactly `Δ · w · G`: eligibility, deadlines
+     * and seats are unchanged. The next wake clamp is unchanged too. It stores
+     * `max(carried, front − raw)`, and taking `a` ticks off the carried offset while the raw position
+     * comes down `a` fewer takes `a` off both sides of the `max`. The pick sequence is the one an
+     * engine with no ceiling would make.
+     *
+     * ## How far
+     *
+     * `Δ` is the largest multiple of `L` no greater than the smallest effective virtual time among the
+     * children [demand] says are **demanding**, so none of them goes below zero. A child that is not
+     * demanding comes down at most to `−`[rebaseThreshold]. Anything further would be credit its wake
+     * clamp takes back when it next competes (§10.6), and the clamp does take it all back: a child
+     * lifted there is at least `R` behind a front at or above zero, so its next clamp exceeds the
+     * offset it carries by more than the lift. Left alone, an idle child would be carried toward
+     * `Long`'s other end one rebase at a time. Unseated children are seated first, at the front
+     * [demand] gives, so every child the shift reaches has a gauge: a caller passes a view that does
+     * not count a waker as demanding, or calls it after the wake step, as [pickChildRebasing] does.
+     *
+     * It does nothing at a parent with a child at its ceiling: that position may stand for more, and
+     * a floor at the ceiling stays there whatever the fold says. Nor while a demanding child is at or
+     * below zero, which holds `Δ` at nothing. The threshold sits far enough below the ceiling that a
+     * running engine rebases long before either.
+     */
+    internal fun rebased(parent: GroupId, ledger: EntitlementLedger, demand: (AttachmentId) -> Demand): EntitlementLedger? {
+        if (policyEdges(ledger, parent, demand).none { it.gauge != null && pastRebaseThreshold(it) }) return null
+        val seated = seatUnseated(parent, ledger, demand)
+        val edges = policyEdges(seated, parent, demand)
+        if (edges.any { it.gauge == null || HeddlePolicy.isAtCeiling(it) }) return null
+        val l = lcmOfDenominators(edges) ?: return null
+        val steps = edges.filter { HeddlePolicy.isDemanding(it) }.minOfOrNull { stepsOf(it, l) ?: return null } ?: return null
+        if (steps <= 0L) return null
+        val gauges = LinkedHashMap<AttachmentId, Gauge>()
+        val offsets = LinkedHashMap<AttachmentId, Long>()
+        for (edge in edges) {
+            val w = edge.record.weight
+            val full = steps.timesOrNull(l / w.denominator)?.timesOrNull(w.numerator)?.timesOrNull(TICKS_PER_UNIT) ?: return null
+            val move = if (HeddlePolicy.isDemanding(edge)) full else minOf(full, roomAboveFloor(edge))
+            if (move == 0L) continue
+            // The wake offset first, in whole units: it is a difference that only grows while the
+            // child idles, so a rebase that left it would let it reach the ceiling on its own.
+            val offset = ticksAt(edge.virtualOffset, w)
+            val absorbed = minOf(offset.floorDiv(TICKS_PER_UNIT) * TICKS_PER_UNIT, move)
+            if (absorbed > 0L) offsets[edge.record.id] = offset - absorbed
+            val shift = (move - absorbed) / TICKS_PER_UNIT
+            if (shift == 0L) continue
+            val gauge = checkNotNull(edge.gauge) { "${edge.record.id.value} was seated above" }
+            gauges[edge.record.id] = Gauge(gauge.floor, gauge.folded.plusOrNull(shift) ?: return null)
+        }
+        if (gauges.isEmpty() && offsets.isEmpty()) return null
+        for ((id, left) in offsets) {
+            val w = checkNotNull(seated.record(id)) { "${id.value} has a record" }.weight
+            if (left == 0L) wakeOffsets.remove(id) else wakeOffsets[id] = ticksToVirtual(left, w)
+        }
+        rebasesForTest++
+        return if (gauges.isEmpty()) seated else seated.piece(EntitlementLedger.of(gauges = gauges))
+    }
+
+    /** Whether [edge]'s gross or effective position has climbed past its [rebaseThreshold]. */
+    private fun pastRebaseThreshold(edge: PolicyEdge): Boolean {
+        val w = edge.record.weight
+        val threshold = rebaseThreshold(w)
+        return edge.gauge.grossTicksAt(edge.baseIssued, w) >= threshold || HeddlePolicy.effectiveTicks(edge) >= threshold
+    }
+
+    /** The least common multiple of [edges]' weight denominators, or `null` when it leaves `Long`. */
+    private fun lcmOfDenominators(edges: List<PolicyEdge>): Long? {
+        var l = 1L
+        for (edge in edges) {
+            val d = edge.record.weight.denominator
+            l = (l / gcdOf(l, d)).timesOrNull(d) ?: return null
+        }
+        return l
+    }
+
+    /**
+     * [edge]'s effective virtual time in whole steps of `l`: `⌊p / (G · w · l)⌋`, computed as
+     * `⌊⌊p · d / (n · l)⌋ / G⌋`, or `null` when `n · l` or the quotient leaves `Long`.
+     */
+    private fun stepsOf(edge: PolicyEdge, l: Long): Long? {
+        val w = edge.record.weight
+        val inUnits = mulDiv(HeddlePolicy.effectiveTicks(edge), w.denominator, w.numerator.timesOrNull(l) ?: return null, Rounding.FLOOR)
+            ?: return null
+        return inUnits.floorDiv(TICKS_PER_UNIT)
+    }
+
+    /**
+     * How far, in ticks and in whole units, [edge]'s effective position can come down before it
+     * passes below `−`[rebaseThreshold]: `⌊(p + R) / G⌋ · G`, and none when it is already there.
+     */
+    private fun roomAboveFloor(edge: PolicyEdge): Long {
+        val above = HeddlePolicy.effectiveTicks(edge).plusOrNull(rebaseThreshold(edge.record.weight)) ?: Long.MAX_VALUE
+        return maxOf(0L, above.floorDiv(TICKS_PER_UNIT)) * TICKS_PER_UNIT
     }
 
     /**

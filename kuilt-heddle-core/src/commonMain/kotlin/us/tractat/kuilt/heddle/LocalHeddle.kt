@@ -531,7 +531,7 @@ public class LocalHeddle private constructor(
         var group = root
         while (group !in eligible || !local.isLeasable(group)) {
             val pick = try {
-                allocator.pickChild(group, local, demands.waiting, demands.eligible) ?: return Descent.Refused(group)
+                pickChild(group, local, demands) ?: return Descent.Refused(group)
             } catch (_: PositionCeilingException) {
                 return Descent.Ceiling(group)
             }
@@ -551,6 +551,14 @@ public class LocalHeddle private constructor(
         return Descent.Reached(local, group, levels)
     }
 
+    /** One level's pick at [group], rebasing it first unless a test switched that off (#3329). */
+    private fun pickChild(group: GroupId, local: EntitlementLedger, demands: Demands): ChildPick? =
+        if (rebaseForTest) {
+            allocator.pickChildRebasing(group, local, demands.waiting, demands.eligible)
+        } else {
+            allocator.pickChild(group, local, demands.waiting, demands.eligible)
+        }
+
     /**
      * The ledger a pick of [reservation] runs on, or `null` when the root cannot fund it. The one
      * supply check [acquire] and [explain] share, so the two cannot disagree about it. It reads the
@@ -565,7 +573,10 @@ public class LocalHeddle private constructor(
      */
     private fun scratch(over: EntitlementLedger): LocalHeddle =
         LocalHeddle(root, policy, epoch, over, FairShareAllocator(SELF, policyConfig(policy), allocator.memory), leasable)
-            .also { it.capacity = capacity }
+            .also {
+                it.capacity = capacity
+                it.rebaseForTest = rebaseForTest
+            }
 
     /**
      * Charge work another scheduler already started at [leaf]: open a lease for it with no pick,
@@ -1108,7 +1119,7 @@ public class LocalHeddle private constructor(
     internal var rebaseForTest: Boolean = true
 
     /** How many rebases moved this engine's positions, counting only calls it kept: the witness a test reads. */
-    internal val rebasesForTest: Int get() = 0
+    internal val rebasesForTest: Int get() = allocator.rebasesForTest
 
     /** The path [lease] charges, for tests: what it was opened on, or what a reweight moved it onto. */
     internal fun capturedPath(lease: LeaseId): List<AttachmentId>? = open[lease]?.path
@@ -1158,6 +1169,12 @@ public class LocalHeddle private constructor(
      * front over the seated ones as [seatDemand] sees them, so no delegation writes an edge's first
      * gauge at its own origin (#1752). `null` when an edge cannot be seated or cannot take the
      * delegation; [start] is not changed either way.
+     *
+     * Each edge's parent is rebased before the delegation, reading [seatDemand] for who is
+     * demanding (#3329), so a path [admit], [extend] or an overrun at [complete] charges keeps its
+     * positions as far from their ceiling as a pick does. A seat the rebase makes is safe because
+     * [seatDemand] never counts an unclamped waker: [observedDemand] marks only children last seen
+     * demanding, and in [descend] the pick has already seated and clamped every child of the parent.
      */
     private fun seatThenDelegate(
         start: EntitlementLedger,
@@ -1167,11 +1184,12 @@ public class LocalHeddle private constructor(
     ): EntitlementLedger? {
         var local = start
         for (edge in path) {
+            val parent = local.record(edge)?.parent ?: return null
             if (local.gauge(edge) == null) {
-                val parent = local.record(edge)?.parent ?: return null
                 local = allocator.seatUnseated(parent, local, seatDemand)
                 if (local.gauge(edge) == null) return null
             }
+            if (rebaseForTest) local = allocator.rebased(parent, local, seatDemand) ?: local
             val patch = local.delegate(SELF, edge, amount) ?: return null
             local = local.piece(patch.delta)
         }
