@@ -104,6 +104,29 @@ public class LocalHeddleSnapshot internal constructor(
     /** Every open lease, in [LeaseId] order. */
     public val leases: List<Lease> get() = open.map { it.lease }
 
+    /**
+     * Ask this snapshot what the engine that took it would answer, with no engine: who goes next,
+     * why a leaf is waiting, and what share it is owed (see [LocalHeddleView]). Changes nothing,
+     * here or anywhere.
+     *
+     * [policy] is required because a snapshot does not keep one: pass the policy the engine ran
+     * with, and the view answers exactly as that engine did when it took this snapshot. It sizes
+     * [totalSlots] as [LocalHeddle.restore] does.
+     *
+     * @throws IllegalArgumentException when [policy] cannot size [totalSlots] (see
+     *   [LocalHeddle.reconcileCapacity]).
+     * @sample us.tractat.kuilt.heddle.sampleSnapshotView
+     */
+    public fun view(policy: LocalPolicy): LocalHeddleView = LocalHeddleView(
+        root = root,
+        policy = policy,
+        epoch = epoch,
+        ledger = ledger,
+        allocator = FairShareAllocator(LocalHeddle.SELF, LocalHeddle.policyConfig(policy), allocatorMemory),
+        capacity = Capacity.sized(totalSlots, policy),
+        leasable = Leasable.ByTopology(lastApplied),
+    )
+
     override fun equals(other: Any?): Boolean =
         other is LocalHeddleSnapshot &&
             epoch == other.epoch &&

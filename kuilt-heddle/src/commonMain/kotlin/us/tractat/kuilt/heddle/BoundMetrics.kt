@@ -1,6 +1,8 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.Rounding
+import us.tractat.kuilt.math.timesWide
 
 /**
  * The three consistent pieces of the temporary fairness-error bound at one parent
@@ -50,6 +52,12 @@ public data class BoundMetrics(
          * bound must count), the set of [demanding] child edges (those advertising live
          * demand), and the [config] caps. Pure — a function of the arguments, computed
          * identically on every peer that has merged the same state.
+         *
+         * @throws ArithmeticException when the demanding children's weight sum, or one demanding
+         * child's reduced share of it, does not fit in a `Long`. Either needs the weights' common
+         * denominator `L` or their numerator sum `S` over it to pass `Long`. `LocalHeddle`'s
+         * apply-time weight budget refuses such weight sets; `BoundMetrics` is still reachable with
+         * them through a replicated ledger (`HeddleNode`).
          */
         public fun at(
             ledger: EntitlementLedger,
@@ -86,6 +94,16 @@ public data class BoundMetrics(
          * lag over the backlogged set, design §8.2), so it is excluded from both the total and
          * the max. Exact rational throughout — no floating point — so every peer computes the
          * same value from the same state.
+         *
+         * @throws ArithmeticException when the demanding weight sum `W`, or a demanding child's
+         * reduced share `w_i/W`, does not fit in a `Long`. Both need `L`, the weights' common
+         * denominator, or `S`, their numerators' sum over `L`, to pass `Long`: `W` reduced is `S/L`, and a
+         * share reduced is at most `S` over at most `S`. `L` alone can do it: weights `1/(2³²+1)` and
+         * `1/(2³²−1)` give `S = 2³³` but `L = 2⁶⁴−1`. The scheduler forms the same `L` and `S` for a
+         * front over these children, and `VirtualTime.mean` can throw there too (`pick` and
+         * `frontTime` take their mean over a different set of children). `W` can still fit: `2⁵⁷/3` and `1/192`
+         * sum to `S = 2⁶³+1` over `L = 192`, `W` reduces to `((2⁶³+1)/3)/64`, and the first share is
+         * `2⁶³/(2⁶³+1)`. A quotient whose reduced form fits never throws.
          */
         private fun observedDeviation(
             ledger: EntitlementLedger,
@@ -107,24 +125,34 @@ public data class BoundMetrics(
             }
             if (totalCommitted == 0L || weightSum == Rational.ZERO) return 0L
 
-            var maxDeviation = Rational.ZERO
+            var maxDeviation = 0L
             for (c in children) {
                 val w = weights[c.attachment] ?: continue
                 val share = Rational.of(w.numerator, w.denominator) / weightSum
-                val ideal = share * Rational.of(totalCommitted)
-                val actual = Rational.of(c.committedService)
-                val diff = ideal - actual
-                val magnitude = Rational.max(diff, Rational.ZERO - diff)
-                maxDeviation = Rational.max(maxDeviation, magnitude)
+                maxDeviation = maxOf(maxDeviation, gap(share, totalCommitted, c.committedService))
             }
-            return ceilToLong(maxDeviation)
+            return maxDeviation
         }
 
-        /** The smallest `Long ≥ r`, for a non-negative rational. */
-        private fun ceilToLong(r: Rational): Long {
-            if (r.numerator <= 0L) return 0L
-            // ceil(n/d) = (n + d - 1) / d for positive n, d.
-            return checkedAdd(r.numerator, r.denominator - 1L) / r.denominator
+        /**
+         * `⌈|share · total − committed|⌉`, for a reduced `share = p/q`: the numerator
+         * `|p·total − committed·q|` is formed in 128 bits and divided by `q` rounding up, so no
+         * intermediate decides whether it fits — only the answer does (#3319). Multiplying the
+         * share by a lifetime total as a `Long` rational threw once `p · total / gcd(total, q)` passed
+         * `2⁶³`, and on every call after that: a `31 : 1` split did at a total of `2⁵⁹ − 1`, which two
+         * edges can carry.
+         *
+         * The answer always fits when `0 ≤ committed ≤ total` and `0 ≤ share ≤ 1`, which holds for
+         * every demanding child of a ledger whose committed service is non-negative: the gap is then
+         * at most `total`. Were a committed service ever negative the gap could pass `Long`, and that
+         * throws, as an overflow anywhere else in the scheduler does.
+         */
+        private fun gap(share: Rational, total: Long, committed: Long): Long {
+            val ideal = share.numerator.timesWide(total)
+            val actual = committed.timesWide(share.denominator)
+            val difference = if (ideal >= actual) ideal - actual else actual - ideal
+            return difference.divideOrNull(share.denominator, Rounding.CEILING)
+                ?: throw ArithmeticException("fairness gap does not fit in a Long: $share · $total − $committed")
         }
     }
 }

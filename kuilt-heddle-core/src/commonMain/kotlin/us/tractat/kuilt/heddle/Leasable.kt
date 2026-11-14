@@ -55,3 +55,23 @@ internal sealed interface Leasable {
         override fun declares(group: GroupId): Boolean = true
     }
 }
+
+/**
+ * Whether a lease can end at [group] in a tree rooted at [root]: a leaf (no ACTIVE child edge)
+ * other than the root that [leasable] declares. The one predicate every caller reads, the engine
+ * and a [LocalHeddleView] alike; see "What a lease ends at" on [LocalHeddle].
+ */
+internal fun EntitlementLedger.isLeasable(group: GroupId, root: GroupId, leasable: Leasable): Boolean =
+    group != root && isLeaf(group) && leasable.declares(group)
+
+/**
+ * Every group of [groups] a lease can end at and a delegation from [root] can reach — leasable,
+ * with every edge of its lineage ACTIVE — together with every group on those lineages: the lift
+ * a demand view, an admission and an explanation all read.
+ */
+internal fun EntitlementLedger.reachable(groups: Collection<GroupId>, root: GroupId, leasable: Leasable): Set<GroupId> =
+    withDelegableLineages(groups.filter { isLeasable(it, root, leasable) })
+
+/** Whether a lease can end at [group] and a delegation reach it: [isLeasable], through ACTIVE edges only. */
+internal fun EntitlementLedger.canEndAt(group: GroupId, root: GroupId, leasable: Leasable): Boolean =
+    group in reachable(listOf(group), root, leasable)

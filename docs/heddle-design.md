@@ -525,18 +525,19 @@ arrives and detached when the user goes idle. Every departure leaves something
 behind. Detaching retires the child's edge, and a retired edge stays in the
 ledger for good, because the work done under it still counts in the books. So
 an engine that runs for months grows with every arrival and departure, in
-memory and on disk, without bound. This section records how a single-process
-engine will forget those edges while keeping the books exact, and why peers
-cannot yet do the same.
+memory and on disk, without bound. This section records how a ledger forgets
+those edges while keeping the books exact, how much of that is built, and why
+peers cannot yet do the same. The ledger half is built; the engine half, which
+decides when to forget, is not built yet and is recorded as a design.
 
-#### As built: kept for good, summed once
+#### Kept for good, summed once
 
 `holdings(parent)` subtracts every child's net inflow, `effIssued − returned`,
 retired children included: a retired child that served has a net inflow equal
 to what it spent. Task L0 (#3189) pre-sums the retired children per parent and
 replica in an index, `retiredOutflow`, which is derived from the ledger's own
-slots and never encoded. That made reads fast at 50,000 retired edges. Nothing
-bounds the size.
+slots and never encoded. That made reads fast at 50,000 retired edges. It
+bounds the cost of a read, not the size.
 
 Three other readers need a retired edge:
 
@@ -547,61 +548,103 @@ Three other readers need a retired edge:
 - **`Topology.diff`'s `hasChildEdges` test.** It asks whether a group has any
   child edge in any lifecycle, to decide whether a reload needs a `Reconcile`.
 
-#### The design: fold, then forget
+#### As built: the ledger forgets
 
-Decided in #3192, and not yet built.
+Decided in #3192. The ledger half is built: a ledger can forget an edge, and a
+replicated ledger refuses one that has (#3357). The engine does not forget
+anything yet; see *The design: the engine forgets*.
 
-**A new encoded component, `forgotten`.** It is the ledger's seventeenth, written
-through `CanonicalMapSerializer` at every level, with its own arm in
+**The seventeenth component, `forgotten`.** It is an internal `ForgottenEdges`,
+written through `CanonicalMapSerializer` at every level, with its own arm in
 `:kuilt-heddle`'s `EntitlementLedgerCanonicalEncodingTest`. It holds:
 
-- per parent, a map from replica to the folded `effIssued − returned` of its
-  forgotten children: the term `holdings` subtracts;
-- per replica, the folded effective leaf spend of the forgotten edges, so that
-  conservation still balances;
-- `forgottenGenerationFloor: Long`, the highest generation any forgotten edge
-  carried, since the floor is a single global maximum.
+- `outflow`: per parent, a map from replica to the folded `effIssued − returned`
+  of its forgotten children, the term `holdings` subtracts;
+- `leafSpend`: per replica, the folded effective leaf spend of the forgotten
+  edges, so that conservation still balances;
+- `generationFloor`: the highest generation any forgotten edge carried, `-1` for
+  none, since the floor is a single global maximum.
 
-`holdings`, the conservation check in `validate()`, the generation floor and
-`hasChildEdges` each read the fold as well as the live edges.
+`holdings`, `leafSpentTotal`, the generation floor and `hasChildEdges` each read
+the fold beside the live edges. A parent gets a row in `outflow` once any of its
+children is forgotten, even a row that nets to nothing, so it still counts as
+having child edges. A ledger with nothing forgotten holds `ForgottenEdges.NONE`,
+which a default `Json` or `Cbor` does not encode, so its bytes are what they
+were before the component existed.
 
-**When an edge may be forgotten.** All of these hold:
+**When an edge may be forgotten.** When all of these hold. `forgetRefusal`
+names the first one an edge fails, as a `ForgetRefusal`, checking in the order
+`ForgetRefusal` declares:
 
-- it is RETIRED with outstanding 0, and no open lease's captured path crosses it;
-- its child has no child edges, so leaves go first;
-- `holdings(child)` is 0;
-- no transfer rows sit at its path;
-- `strandRelocation` would move nothing.
+- the ledger knows the edge, its id is in the topology grammar (the floor can
+  only carry an id that has a generation), and one record names it;
+- it is RETIRED, or PREPARED;
+- its child has no child edges in any lifecycle, forgotten ones included, so
+  leaves go first;
+- no transfer row, base or relocation, sits at its path;
+- a PREPARED edge has no counter and no gauge;
+- a RETIRED edge's books closed: charged plus returned within issued, no
+  negative effective spend in total, no negative net inflow or effective leaf
+  spend in any one replica's share, nothing outstanding, nothing stranded on it
+  for any replica, and its child holding nothing.
 
-A PREPARED edge that will never activate carries no history, so it is forgotten
-with only the floor updated.
+Whether an open lease's captured path crosses the edge is the engine's
+question, not the ledger's. With nothing outstanding, no lease is charging it.
 
-**When it happens.** Automatically, in the same swap that retires the edge
-(`detachRuntimeChild`, `apply`). There is no new API. The same swap prunes the
-edge from the allocator's wake memory, `AllocatorMemory`, since
-`forgetDepartedChildren` finds an edge's parent through its record and could not
-once the record is gone.
+`forget(edges)` is all or nothing: it returns `null`, and forgets nothing, when
+any edge is refused. A RETIRED edge folds its net inflow, its leaf spend and its
+generation. A PREPARED edge carries no history, so it folds only its generation,
+plus the parent's row. That a forgotten PREPARED edge will never activate is the
+caller's precondition. If it is activated anyway, `activate` finds no record and
+refuses, and a delta built elsewhere names an id at or below the floor, which
+`piece` refuses.
 
 **Forgetting is not a join.** Every other mutator only adds to the lattice; this
 one removes slots. So it is outside §10 invariant 2, scoped to a single writer,
 as invariant 4's quiesced-edge exception is. Three guards hold the scope:
 
-- `forget` is internal to `:kuilt-heddle-core`, and `LocalHeddle` is its only
-  caller;
-- `piece` refuses a delta that carries a non-empty `forgotten`, or that names an
-  unknown edge at or below the forgotten floor;
-- `:kuilt-heddle` requires `forgotten` to be empty.
+- `forget` is internal to `:kuilt-heddle-core`, and `LocalHeddle` is to be its
+  only caller.
+- `piece` throws rather than take a fold that is not the receiver's own: a
+  ledger with no fold cannot take one, and two different folds do not join. It
+  also throws when one side names an edge the other does not hold, at or below
+  the other's forgotten floor: an edge the forgetting side may have forgotten,
+  coming back. So `piece` is partial, in exactly the states a single writer
+  never produces.
+- `:kuilt-heddle` never lets a fold in. `ReplicatedLedgerSerializer` refuses to
+  decode a ledger that carries one, so the replicator drops such a frame as
+  unreadable instead of throwing from `piece` inside its pump. A `Retire`
+  command's `witness` decodes through the same serializer, and `HeddleNode`
+  refuses to start from a ledger with a fold.
 
-**What `validate()` checks.** An edge's `ClosureViolation` and `PerEdgeSafety`
-are checked when it is forgotten, since nothing is left to check afterwards. One
-new invariant: the fold is never negative.
+**What `validate()` checks.** Nothing new. An edge's `ClosureViolation`,
+`PerEdgeSafety` and `NegativeEffectiveSpend` are checked when it is forgotten,
+since nothing is left to check afterwards. The fold is never negative, and that
+is the type's rule rather than a `validate()` arm: `ForgottenEdges` refuses a
+negative entry when it is built, so a hand-built or corrupt snapshot that
+carries one fails to decode.
 
 **The format.** `forgotten` is encoded under snapshot format 2, which reads
-formats 1 and 2. v0.7.4 wrote format 1. Every encoded change for the next
+formats 1 and 2. v0.7.4 wrote format 1, and a format-1 snapshot that carries a
+fold is refused, since format 1 predates it. Every encoded change for the next
 release goes under that one bump.
 
-**Until it is built,** keep a runtime child attached rather than detaching it
-when its user goes idle.
+#### The design: the engine forgets
+
+None of this is built. The ledger half above is what exists.
+
+**When it happens.** The engine is to forget automatically, in the
+same swap that retires an edge (`detachRuntimeChild`, `apply`), with no new
+API. That swap also sweeps every forgettable RETIRED edge no open lease
+crosses, so a restored v0.7.4 snapshot compacts too. It prunes the edge from the
+allocator's wake memory, `AllocatorMemory`, in the same swap, since
+`forgetDepartedChildren` finds an edge's parent through its record and could
+not once the record is gone. A PREPARED edge the topology no longer wants moves
+the floor and gives its parent a row, nothing else. Until that lands, nothing
+outside the tests calls `forget`, and an engine grows as it did before.
+
+**Until the engine forgets,** keep a runtime child attached rather than
+detaching it when its user goes idle.
 
 #### Settled — don't reopen
 
@@ -615,6 +658,8 @@ when its user goes idle.
   rebase that retires no child (§7.1, #3329), so this forgetting is not its
   prerequisite. Generation turnover, which would have made it one, was not
   chosen.
+- A `validate()` arm for a negative fold: the type refuses one, so there is
+  nothing left for the diagnostic to report (#3357).
 
 #### Open
 
@@ -622,6 +667,14 @@ when its user goes idle.
   per edge plus a tombstone, and a stored aggregate risks the drift that rejected
   candidate B ([`heddle-ledger-design.md`](heddle-ledger-design.md), *How this
   was chosen*). Tracked by #3332.
+- **A reweighted or reparented child's old edge stays.** A reweight or a move
+  retires the child's old edge and gives it a new one, so the child lives on and
+  usually holds something, and `CHILD_HOLDS` refuses the old edge while it does.
+  Only a child that is gone for good compacts reliably.
+- **A group whose children were forgotten is never forgotten itself.** Its row
+  in the fold keeps it counting as having child edges, and leaves go first. A
+  runtime child is always a leaf, so this bites a declared group removed after
+  its runtime children came and went.
 
 ## 6. Demand is an `EphemeralMap`, and that is not an accident
 
@@ -1179,8 +1232,8 @@ Carried over from the source intact; each is a named property test (§13).
    ledger peers exchange.** A single-writer engine's forgetting of retired edges
    (§5.5) removes slots and is not a join. It is confined, like invariant 4's
    exception, to a ledger no other writer touches: `forget` is internal to
-   `:kuilt-heddle-core`, `piece` refuses a delta that carries a non-empty
-   `forgotten`, and `:kuilt-heddle` requires it to be empty.
+   `:kuilt-heddle-core`, `piece` refuses a fold that is not the receiver's own,
+   and `:kuilt-heddle` refuses to decode a ledger that carries one.
 3. **Per-edge safety.** `0 ≤ spent(e) + returned(e) ≤ issued(e)`.
 4. **Path-relative accounting.** A completion charges every edge of the path
    captured at reservation; history never moves to a newer generation —
@@ -1397,19 +1450,19 @@ and never decides whether the caller runs anything.
 An admin's screen wants to show who goes next: of the twelve jobs waiting, which
 three run when the next three slots free up. The engine answers without moving
 anything, by playing the picks forward on a throwaway copy of itself. Two things
-limited that answer. The caller had to fix each pick's reservation up front,
-though in practice it depends on which leaf wins, since each leaf's next job has
-its own estimate. That one is fixed: each leaf can now bring its own queue. And
-it needs a live engine, so a reader holding only a saved snapshot has to restore
-a whole engine to ask. This section records the fix for both.
+limited that answer, and both are now fixed. The caller had to fix each pick's
+reservation up front, though in practice it depends on which leaf wins, since
+each leaf's next job has its own estimate: each leaf now brings its own queue.
+And the answer needed a live engine, so a reader holding only a saved snapshot
+had to restore a whole engine to ask: that reader now asks a view of the
+snapshot.
 
-#### As built: each leaf's own head, on a live engine
+#### As built: each leaf's own head
 
-`LocalHeddle.previewPicks(waiting: Map<GroupId, Int>, eligible, reservations:
-List<Long>)` takes each leaf's queue as a count, and pick `i` reserves
-`reservations[i]`. It runs real `acquire`s on a scratch engine that carries a
-copy of the wake memory, so it changes nothing, and it stops at the first call
-that would not acquire.
+`previewPicks(waiting: Map<GroupId, Int>, eligible, reservations: List<Long>)`
+takes each leaf's queue as a count, and pick `i` reserves `reservations[i]`. It
+runs real `acquire`s on a scratch engine that carries a copy of the wake memory,
+so it changes nothing, and it stops at the first call that would not acquire.
 
 **Preview with each leaf's own head.** `previewPicks(queues: Map<GroupId,
 List<Long>>, eligible, reservation = defaultReservation)`, built in #3321. Each
@@ -1426,8 +1479,9 @@ scratch engine.
   question.
 - The list stops at the first refusal, including the position-ceiling refusal
   the overflow fix adds (#3313). When the `acquire` lands and its `extend` is
-  refused, that pick is left out: the caller's lease would hold less than its
-  job needs.
+  refused, that pick is left out and the list ends there, even when the root
+  could still fund the next leaf: the caller's lease would hold less than its job
+  needs, and its loop stops at that lease.
 - Every queued reservation, not only the heads a pick reaches, is checked
   against `1..MAX_RESERVATION` before anything runs.
 - Pinned: across random histories, mixed weights, with and without a reconciled
@@ -1435,22 +1489,29 @@ scratch engine.
   and changes nothing.
 - The count-based `previewPicks` stays.
 
-`explain` and `entitlement` read the live engine too. To ask without moving the
-real engine's wake memory, a caller holding a snapshot restores a throwaway
-engine from it, under `epoch + 1`, on every decision.
+#### As built: the same answers, on a snapshot
 
-#### The design: the same answers, on a snapshot
+**A view of a snapshot.** `snapshot.view(policy): LocalHeddleView`, built in
+#3321, carries `previewPicks` in both forms, `explain` and `entitlement`. The engine's own
+methods are that view over its live state, so the two cannot disagree. Before
+it, a reader holding a snapshot restored a throwaway engine from it, under
+`epoch + 1`, on every question.
 
-Decided in #3321, and not yet built.
-
-**A view of a snapshot.** `snapshot.view(policy): LocalHeddleView` carries
-`previewPicks`, `explain` and `entitlement`, and the engine's own methods
-delegate to it, so the two cannot disagree.
-
-- The policy is a required parameter, because a snapshot does not keep one.
+- The policy is a required parameter, because a snapshot does not keep one. A
+  policy that cannot size the snapshot's `totalSlots` throws, as `restore` does.
 - The view is built from the value `persist()` returns, `LocalHeddleSnapshot`.
   `snapshot()`'s `LocalHeddleState` will not do: it lacks the reconciled capacity
   and the topology last applied, and a pick reads both.
+- It reads the root, the ledger, the wake memory, the capacity and the topology
+  last applied. It does not read the open leases: no pick or explanation does.
+- Each question plays forward on a throwaway engine with its own fork of the wake
+  memory, so a view is a value: asking twice gives the same answer twice, and
+  readers may share one. It is additive ABI, with no format change.
+- Pinned: across random histories, with and without a reconciled capacity and a
+  reload, a view answers as the engine and as an `epoch + 1` restore, and moves
+  neither the engine nor the snapshot. Two control arms, one forgetting the wake
+  memory and one the capacity, each answer differently, so the match rests on
+  the view reading both.
 
 The overflow fix's slices it waited on, which make each call atomic and add the
 position-ceiling refusal, landed in #3352.
