@@ -41,6 +41,16 @@ tasks.withType<Test>().configureEach {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
+// `KuiltVersionTest` compares the generated `KuiltVersion.VERSION` with the version the published
+// POM declares (#3323), so it needs that POM built and its path. The POM task is wired as an input,
+// which gives both the edge and a rerun when the version changes. Resolved inside the lazy
+// `jvmTest` configuration, by which point KGP and maven-publish have registered the publication.
+tasks.named<Test>("jvmTest") {
+    val pomTask = tasks.named<GenerateMavenPom>("generatePomFileForKotlinMultiplatformPublication")
+    inputs.files(pomTask).withPropertyName("publishedPom").withPathSensitivity(PathSensitivity.NONE)
+    systemProperty("kuilt.publishedPom", pomTask.get().destination.absolutePath)
+}
+
 kotlin {
     sourceSets {
         commonMain.dependencies {
