@@ -263,6 +263,15 @@ public sealed interface ControlConflict {
      * cannot read. The [reason] is a diagnostic string.
      */
     public data class Refused(public val reason: String) : ControlConflict
+
+    /**
+     * A [ControlCommand.Prepare] or [ControlCommand.Activate] that would leave [parent]'s children
+     * with a weight set a pick cannot do arithmetic on: a product of their weights would leave
+     * `Long`, and every pick at [parent] would then throw (#3353). A `Prepare` is refused when
+     * [edge]'s own weight fails alone; an `Activate` when it fails beside the children already
+     * active at [parent]. Every peer decides it on the same log-pure state, so every peer refuses.
+     */
+    public data class WeightBudget(public val parent: GroupId, public val edge: AttachmentId) : ControlConflict
 }
 
 /**
@@ -763,19 +772,27 @@ internal class HeddleControlPlane(
             is ControlCommand.Prepare -> {
                 val patch = projection.prepare(command.record)
                 when {
-                    patch != null -> {
-                        apply(patch)
-                        ControlOutcome.Applied(index)
-                    }
                     // Id already known with the SAME record — an idempotent no-op, applied.
-                    projection.record(command.record.id) == command.record -> ControlOutcome.Applied(index)
+                    patch == null && projection.record(command.record.id) == command.record ->
+                        ControlOutcome.Applied(index)
                     // Id already bound to a DIFFERENT record (or a divergent set) — refuse, don't lie Applied.
-                    else -> ControlOutcome.Conflict(
+                    // First-wins answers before the budget: this act could not apply at any weight.
+                    patch == null -> ControlOutcome.Conflict(
                         index,
                         ControlConflict.Refused(
                             "prepare: id ${command.record.id.value} already bound to a different record",
                         ),
                     )
+                    // A weight that fails alone fails beside any siblings, so the edge never enters
+                    // the projection to be activated (#3353).
+                    !weightFitsTheBudget(command.record.weight) -> ControlOutcome.Conflict(
+                        index,
+                        ControlConflict.WeightBudget(command.record.parent, command.record.id),
+                    )
+                    else -> {
+                        apply(patch)
+                        ControlOutcome.Applied(index)
+                    }
                 }
             }
 
@@ -796,14 +813,19 @@ internal class HeddleControlPlane(
                             )
                         } else {
                             val patch = projection.activate(command.edge)
-                            if (patch == null) {
-                                ControlOutcome.Conflict(
+                            when {
+                                patch == null -> ControlOutcome.Conflict(
                                     index,
                                     ControlConflict.Refused("activate refused (retired/divergent) ${command.edge.value}"),
                                 )
-                            } else {
-                                apply(patch)
-                                ControlOutcome.Applied(index)
+                                // After the lifecycle gate, so a closed edge is refused for being closed.
+                                // On the projection, never the gossip-merged ledger, so every peer agrees.
+                                !projection.activationFitsTheBudget(command.edge) ->
+                                    ControlOutcome.Conflict(index, ControlConflict.WeightBudget(record.parent, command.edge))
+                                else -> {
+                                    apply(patch)
+                                    ControlOutcome.Applied(index)
+                                }
                             }
                         }
                     }

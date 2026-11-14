@@ -316,6 +316,9 @@ public class GovernedHeddleNode internal constructor(
      * The log still orders two concurrent proposals for one id **first-wins**, answering the loser
      * with a [ControlConflict.Refused] naming the bound id — that is about the record's *intent*
      * (its parent, child and weight), which two honest proposers can still disagree on.
+     *
+     * A record whose weight, alone under its parent, would put a product a pick forms out of `Long`
+     * is refused with a [ControlConflict.WeightBudget] (#3353), so it never reaches the ledger.
      */
     public suspend fun prepare(record: AttachmentRecord, timeout: Duration? = null): ControlOutcome =
         control.submit(ControlCommand.Prepare(record), timeout)
@@ -324,7 +327,9 @@ public class GovernedHeddleNode internal constructor(
      * Open delegation across [edge], serialized through the log (design §9 #2). The **reshape
      * serialization point**: if the log-order state already gives [edge]'s child a live inbound
      * generation, this act loses and returns [ControlOutcome.Conflict] with a
-     * [ControlConflict.DualInbound].
+     * [ControlConflict.DualInbound]. It is refused with a [ControlConflict.WeightBudget] when
+     * [edge]'s weight, beside the children already active at its parent in log order, would put a
+     * product a pick forms out of `Long` (#3353).
      */
     public suspend fun activate(edge: AttachmentId, timeout: Duration? = null): ControlOutcome =
         control.submit(ControlCommand.Activate(edge), timeout)

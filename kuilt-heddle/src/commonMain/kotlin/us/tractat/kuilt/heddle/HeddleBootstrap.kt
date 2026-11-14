@@ -51,7 +51,8 @@ import kotlin.time.Instant
  *   `[0, 2^31)`.
  * @throws IllegalArgumentException if [topology] is not a tree — two records share an
  *   [AttachmentId], a group has two parents ([LedgerConflict.DualActiveInbound]), or the records
- *   close a loop ([LedgerConflict.LineageCycle]). The message names the records at fault. Nothing
+ *   close a loop ([LedgerConflict.LineageCycle]) — or if a parent's children carry weights a pick
+ *   cannot do arithmetic on (#3353). The message names the records at fault. Nothing
  *   has been launched on the scope when it throws.
  */
 public fun CoroutineScope.heddleStatic(
@@ -85,6 +86,9 @@ public fun CoroutineScope.heddleStatic(
  * *which* of two colliding records survived depended on the caller's list order, so two peers
  * passing the same records in different orders booted different ledgers.
  *
+ * **A weight set a pick cannot do arithmetic on is refused the same way (#3353)**: each record is
+ * checked beside the siblings activated before it, as [HeddleNode.activate] checks a runtime one.
+ *
  * **Then `validate()` over the result, rejecting any conflict at all.** Its "a diagnostic, not a
  * gate" caveat is about partial delivery and in-flight rebalancing; this ledger was built whole,
  * locally, with no delivery and no spend, so every report on it is a fault in the input. The kinds
@@ -105,6 +109,10 @@ internal fun buildInitialLedger(
                 "${topology.filter { it.id == record.id }}"
         }
         ledger = ledger.piece(prepared)
+        require(ledger.activationFitsTheBudget(record.id)) {
+            "heddleStatic topology puts ${record.parent}'s weights out of the budget at $record: " +
+                "a pick there would overflow Long"
+        }
         val activated = requireNotNull(ledger.activate(record.id)) {
             "heddleStatic could not activate $record after preparing it"
         }

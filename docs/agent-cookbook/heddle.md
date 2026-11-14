@@ -579,7 +579,8 @@ reshapes don't corrupt the tree.
 **Primitive:** `heddleGoverned(...)` → `GovernedHeddleNode` (`:kuilt-heddle`) — the same data
 plane as `heddleStatic`, but `mint`/`prepare`/`activate`/`close`/`retire` are serialized
 through `:kuilt-raft`; each returns a `ControlOutcome` (`Applied`, `Conflict` with the
-structured reason when it loses a race, or `Indeterminate` when this peer halted with the call in
+structured reason when it loses a race or names a weight the picks cannot do arithmetic on
+(`ControlConflict.WeightBudget`), or `Indeterminate` when this peer halted with the call in
 flight, so the act may still commit and a blind retry can double-mint). If a gossip-lagged peer's `retire` races a delegate
 and strands budget on a since-reparented child, `reconcile(child)` re-homes it — net inflow
 *and* any service already charged through it — onto the child's live lineage through the log,

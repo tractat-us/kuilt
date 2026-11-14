@@ -257,12 +257,25 @@ public class HeddleNode internal constructor(
      * **The record carries no seat** (issue #1752), so nothing about *when* it is prepared decides
      * where the child starts competing: [schedule]'s seat bump writes the [Gauge] at the front the
      * edge is actually joining, on every peer that still sees it unseated.
+     *
+     * **A weight a pick cannot do arithmetic on is refused** (#3353): `false` when [record]'s weight,
+     * alone under its parent, would put a product a pick forms out of `Long`, as
+     * [GovernedHeddleNode.prepare][GovernedHeddleNode.prepare] answers a
+     * [ControlConflict.WeightBudget].
      */
     public fun prepare(record: AttachmentRecord): Boolean =
-        applyIfPresent { it.prepare(record) }
+        applyIfPresent { if (weightFitsTheBudget(record.weight)) it.prepare(record) else null }
 
-    /** Open delegation across [edge] ([EntitlementLedger.activate]); returns whether it applied. */
-    public fun activate(edge: AttachmentId): Boolean = applyIfPresent { it.activate(edge) }
+    /**
+     * Open delegation across [edge] ([EntitlementLedger.activate]); returns whether it applied.
+     *
+     * `false` as well when [edge]'s weight, beside the children already active at its parent on
+     * this peer's view, would put a product a pick forms out of `Long` (#3353). The view is local:
+     * a sibling another peer activated concurrently is not in it, which is why only the governed
+     * path's log order makes this check the same on every peer.
+     */
+    public fun activate(edge: AttachmentId): Boolean =
+        applyIfPresent { if (it.activationFitsTheBudget(edge)) it.activate(edge) else null }
 
     /** Stop new delegation across [edge] ([EntitlementLedger.close]); returns whether it applied. */
     public fun close(edge: AttachmentId): Boolean = applyIfPresent { it.close(edge) }

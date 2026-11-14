@@ -50,6 +50,19 @@ public final class us/tractat/kuilt/heddle/ControlConflict$Refused : us/tractat/
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/heddle/ControlConflict$WeightBudget : us/tractat/kuilt/heddle/ControlConflict {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-urUY4Jo ()Ljava/lang/String;
+	public final fun component2-i0YUZAc ()Ljava/lang/String;
+	public final fun copy-cWw4_R4 (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/heddle/ControlConflict$WeightBudget;
+	public static synthetic fun copy-cWw4_R4$default (Lus/tractat/kuilt/heddle/ControlConflict$WeightBudget;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/ControlConflict$WeightBudget;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
+	public final fun getParent-urUY4Jo ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface class us/tractat/kuilt/heddle/ControlOutcome {
 	public static final field COMMIT_UNKNOWN J
 	public static final field Companion Lus/tractat/kuilt/heddle/ControlOutcome$Companion;
