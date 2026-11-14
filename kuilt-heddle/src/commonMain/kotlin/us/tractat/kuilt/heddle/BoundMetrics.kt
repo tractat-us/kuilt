@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalVersionOverloading::class)
+
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.ReplicaId
@@ -35,12 +37,18 @@ import us.tractat.kuilt.math.timesWide
  *   *active/backlogged* set), so it is excluded — otherwise a fair scheduler legitimately
  *   serving only the demanding child would read as a bound violation. Zero when the
  *   demanding children sit exactly on their weight ratio.
+ * @property peakPositionFraction the highest effective position among [parent]'s active children,
+ *   each as a fraction of its own position ceiling (#3353): how close a pick there is to refusing
+ *   with [ScheduleOutcome.PositionCeiling]. A rebase keeps a busy parent's well below one; a child
+ *   idle since many rebases ago reads below zero. Zero when [parent] has no active children. It
+ *   reads the scheduler-local wake clamps, so it is this peer's reading, not a replicated value.
  */
 public data class BoundMetrics(
     public val parent: GroupId,
     public val configuredWorstCase: Long,
     public val currentBound: Long,
     public val observedDeviation: Long,
+    @IntroducedAt("0.7.5") public val peakPositionFraction: Double = 0.0,
 ) {
     /** True when the three pieces are ordered as design §8.2 requires. */
     public val isConsistent: Boolean
@@ -67,6 +75,7 @@ public data class BoundMetrics(
             roster: Set<ReplicaId>,
             demanding: Set<AttachmentId>,
             config: HeddleConfig,
+            @IntroducedAt("0.7.5") peakPositionFraction: Double = 0.0,
         ): BoundMetrics {
             val discretization = config.policy.quantum
             val peerCount = maxOf(1, roster.size).toLong()
@@ -88,6 +97,7 @@ public data class BoundMetrics(
                 configuredWorstCase = configuredWorstCase,
                 currentBound = currentBound,
                 observedDeviation = observedDeviation(ledger, parent, demanding),
+                peakPositionFraction = peakPositionFraction,
             )
         }
 

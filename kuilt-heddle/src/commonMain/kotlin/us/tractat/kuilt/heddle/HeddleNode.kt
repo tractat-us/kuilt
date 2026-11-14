@@ -427,13 +427,27 @@ public class HeddleNode internal constructor(
      */
     public fun boundMetrics(parent: GroupId): BoundMetrics {
         val s = ledger.value
+        var peak = 0.0
         val demanding = lock.withLock {
             val live = demandTracker.live()
+            // Under the lock: the peak reads the allocator's wake clamps, which only the lock guards.
+            peak = allocator.peakPositionFraction(s, parent) { edge -> foldDemand(live, edge) }
             s.activeChildren(parent)
                 .mapNotNullTo(HashSet()) { c -> c.attachment.takeIf { foldDemand(live, it).targetOutstanding > 0L } }
         }
-        return BoundMetrics.at(s, parent, roster(), demanding, config)
+        return BoundMetrics.at(s, parent, roster(), demanding, config, peakPositionFraction = peak)
     }
+
+    /**
+     * Whether [schedule] rebases a busy parent by raising its origin (#3353). A test switches it off
+     * to run a twin that never rebases.
+     */
+    internal var rebaseForTest: Boolean
+        get() = lock.withLock { allocator.rebaseEnabled }
+        set(value) = lock.withLock { allocator.rebaseEnabled = value }
+
+    /** How many origin raises [schedule] has landed on this node: a test's witness that its rig fired. */
+    internal val rebasesForTest: Int get() = lock.withLock { allocator.rebases }
 
     // ─────────────────────────────────────────────────────────────────────────────
     // Reservations — leaf earmark → completion, with local single-writer idempotence.
