@@ -263,6 +263,15 @@ public sealed interface ControlConflict {
      * cannot read. The [reason] is a diagnostic string.
      */
     public data class Refused(public val reason: String) : ControlConflict
+
+    /**
+     * A [ControlCommand.Prepare] or [ControlCommand.Activate] that would leave [parent]'s children
+     * with a weight set a pick cannot do arithmetic on: a product of their weights would leave
+     * `Long`, and every pick at [parent] would then throw (#3353). A `Prepare` is refused when
+     * [edge]'s own weight fails alone; an `Activate` when it fails beside the children already
+     * active at [parent]. Every peer decides it on the same log-pure state, so every peer refuses.
+     */
+    public data class WeightBudget(public val parent: GroupId, public val edge: AttachmentId) : ControlConflict
 }
 
 /**
@@ -763,6 +772,12 @@ internal class HeddleControlPlane(
             is ControlCommand.Prepare -> {
                 val patch = projection.prepare(command.record)
                 when {
+                    // Before the patch: a weight that fails alone fails beside any siblings, so the
+                    // edge never enters the projection to be activated (#3353).
+                    !weightFitsTheBudget(command.record.weight) -> ControlOutcome.Conflict(
+                        index,
+                        ControlConflict.WeightBudget(command.record.parent, command.record.id),
+                    )
                     patch != null -> {
                         apply(patch)
                         ControlOutcome.Applied(index)
@@ -794,6 +809,8 @@ internal class HeddleControlPlane(
                                 index,
                                 ControlConflict.DualInbound(record.child, incumbent, command.edge),
                             )
+                        } else if (!projection.activationFitsTheBudget(command.edge)) {
+                            ControlOutcome.Conflict(index, ControlConflict.WeightBudget(record.parent, command.edge))
                         } else {
                             val patch = projection.activate(command.edge)
                             if (patch == null) {
