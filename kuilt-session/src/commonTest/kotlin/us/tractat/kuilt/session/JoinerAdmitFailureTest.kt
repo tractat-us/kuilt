@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineScope
@@ -6,7 +8,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -26,6 +28,10 @@ import kotlin.time.Duration.Companion.seconds
  * no signal — every admit-path regression presented as an opaque hang.
  */
 class JoinerAdmitFailureTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
+
     private fun factory(
         loom: InMemoryLoom,
         scope: CoroutineScope,
@@ -34,7 +40,7 @@ class JoinerAdmitFailureTest {
         loom,
         scope,
         clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) },
-        deviceKeyStore = InMemoryDeviceKeyStore(),
+        deviceKeyStore = fakeKeyStore(nextDevice++),
         admitTimeout = admitTimeout,
     )
 

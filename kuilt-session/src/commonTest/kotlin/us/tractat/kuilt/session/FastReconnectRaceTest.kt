@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -31,7 +31,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.fabric.hubMesh
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.RejectCode
 import us.tractat.kuilt.session.partition.RoomId
@@ -255,7 +255,7 @@ class FastReconnectRaceTest {
             memberName = "table-7",
             scope = backgroundScope,
             clock = clock,
-            device = keyedDevice(),
+            device = RoomDevice.of(fakeKeyStore(0)),
             heartbeatConfig = hostConfig,
             roomId = RoomId("room-1"),
         ).also { it.start() }
@@ -278,7 +278,7 @@ class FastReconnectRaceTest {
             memberName = "client",
             scope = backgroundScope,
             clock = clock,
-            device = keyedDevice(),
+            device = RoomDevice.of(fakeKeyStore(1)),
             heartbeatConfig = joinerConfig,
             roomId = null,
             reweave = {

@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session.election
 
 import kotlinx.coroutines.CancellationException
@@ -16,7 +18,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
 import us.tractat.kuilt.test.FakeSeam
@@ -44,6 +46,10 @@ import kotlin.time.Instant
  *    parked in its original `awaitRoom` on the same seam acks it.
  */
 class LobbyPromotionTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
+
     private fun lobby(seam: Seam, loom: InMemoryLoom, scope: kotlinx.coroutines.CoroutineScope) =
         SeamElectionLobby(
             seam = seam,
@@ -51,7 +57,7 @@ class LobbyPromotionTest {
                 loom,
                 scope,
                 clock = { Instant.fromEpochMilliseconds(0L) },
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = fakeKeyStore(nextDevice++),
             ),
             scope = scope,
             clock = { Instant.fromEpochMilliseconds(0L) },

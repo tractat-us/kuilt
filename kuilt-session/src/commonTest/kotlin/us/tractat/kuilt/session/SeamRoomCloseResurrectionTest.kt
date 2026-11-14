@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalCoroutinesApi::class)
+@file:OptIn(ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -18,7 +18,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
@@ -80,7 +80,7 @@ class SeamRoomCloseResurrectionTest {
                     memberName = "host",
                     scope = backgroundScope,
                     clock = { Instant.fromEpochMilliseconds(0L) },
-                    device = keyedDevice(),
+                    device = RoomDevice.of(fakeKeyStore(0)),
                     heartbeatConfig = HeartbeatConfig(),
                 )
             room.start()

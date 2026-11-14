@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.flow.first
@@ -6,7 +8,7 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.Rendezvous
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -24,10 +26,10 @@ class JoinDeviceIdTest {
     fun helloCarriesTheSuppliedDeviceId() =
         runTest {
             val loom = InMemoryLoom()
-            val host = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore()).host(Pattern("Alice"))
-            val withId = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore())
+            val host = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(0)).host(Pattern("Alice"))
+            val withId = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(1))
                 .join(InMemoryTag("Alice"), memberName = "Bob", deviceId = "d-1")
-            val withoutId = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore())
+            val withoutId = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(2))
                 .join(InMemoryTag("Alice"), memberName = "Carol")
 
             val roster = host.roster.first { it.size == 2 }.associateBy { it.identity.displayName }
@@ -49,8 +51,8 @@ class JoinDeviceIdTest {
             val hostSeam = loom.weave(Rendezvous.New(Pattern("s")))
             val joinerSeam = loom.weave(Rendezvous.Existing(InMemoryTag("s")))
             // Two devices, so two factories: one store would make the host and the joiner one device.
-            val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore())
-            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore())
+            val hostFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(3))
+            val joinerFactory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(4))
 
             val hostRoom = hostFactory.adopt(hostSeam, SessionRole.Host, memberName = "Alice")
             val joinerRoom = joinerFactory.adopt(joinerSeam, SessionRole.Joiner, memberName = "Bob", deviceId = "d-2")

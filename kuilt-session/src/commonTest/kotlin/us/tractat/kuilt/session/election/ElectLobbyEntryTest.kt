@@ -1,10 +1,12 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session.election
 
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.SeamRoomFactory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -18,7 +20,7 @@ class ElectLobbyEntryTest {
                 loom,
                 backgroundScope,
                 clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) },
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = fakeKeyStore(0),
             )
             val lobby = factory.electLobby(Pattern("game"))
             // Alone on the mesh → this peer is the elected host.
