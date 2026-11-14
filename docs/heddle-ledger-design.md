@@ -224,7 +224,7 @@ derives it from the very slots it sums.
 `validate()` builds its own copy from scratch, so a defect in how `piece` carries the index
 forward cannot hide from the diagnostic.
 
-**A single writer forgets retired leaf edges (#3192, design §5.5).** The index makes reads
+**A single writer can forget retired leaf edges (#3192, design §5.5).** The index makes reads
 fast, but every retired edge is still stored. So a ledger can fold a finished leaf's edge into
 a seventeenth encoded component, `forgotten`, and drop the edge's slots. It folds three things:
 per parent and replica, the `effIssued − returned` term this formula subtracts; per replica,
