@@ -56,9 +56,11 @@ class OracleTest {
             assertEquals(bab, Big.of(ab), "$a * $b")
             assertEquals(bab.toString(), ab.toString(), "$a * $b in decimal")
             assertEquals(bab.compareTo(bcd).coerceIn(-1, 1), compareProducts(a, b, c, d).coerceIn(-1, 1), "$a*$b <=> $c*$d")
-            // Two products can leave 128 bits at one corner only, MIN·MIN ± MIN·MIN = ±2¹²⁷.
+            // Products lie in [−2¹²⁶ + 2⁶³, 2¹²⁶], so a sum of two leaves 128 bits at one corner only,
+            // MIN·MIN + MIN·MIN = 2¹²⁷, and a difference never does: it is within ±(2¹²⁷ − 2⁶³). So
+            // the difference has no throw arm to check, and a throw there fails the test.
             assertSumMatches(bab + bcd) { ab + cd }
-            assertSumMatches(bab - bcd) { ab - cd }
+            assertEquals(bab - bcd, Big.of(ab - cd), "$ab - $cd")
             assertEquals(bab.toLongOrNull(), ab.toLongOrNull(), "$ab narrowed")
             // (a·b) − (c·d) + (c·d) = a·b: the two operators undo each other, wherever the first fits.
             if (bab - bcd in Big.of(Int128.MIN_VALUE)..Big.of(Int128.MAX_VALUE)) assertEquals(ab, ab - cd + cd, "$ab - $cd + $cd")
