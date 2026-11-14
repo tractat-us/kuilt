@@ -14,6 +14,10 @@ import kotlinx.io.bytestring.ByteString
  * on `:kuilt-otel`; they should not need to depend on `:kuilt-core` just to wire up
  * a backend.
  *
+ * A throw from any of these methods fails that signal's leg of the drain and no other, and a
+ * `CancellationException` this edge mints at a live caller, from its own `withTimeout` say, is
+ * reported the same way: as that leg's [SignalFailure] (#3392).
+ *
  * ## Implementations
  *
  * - A Ktor HTTP client that POSTs to `POST /v1/traces` (OTLP/HTTP protobuf).
@@ -33,8 +37,7 @@ public interface OtlpEdge {
      * delta: only spans absent from the digest are sent over the wire.
      *
      * Throws on connectivity failure; [WarpOtlpBridge] reports the exception, tagged
-     * [OtlpSignal.SPANS], in a [DrainResult.Partial] or [DrainResult.Failure]. A
-     * `CancellationException` this edge mints from its own `withTimeout` is reported the same way.
+     * [OtlpSignal.SPANS], in a [DrainResult.Partial] or [DrainResult.Failure].
      */
     public suspend fun digest(): SpanDigest
 
@@ -56,8 +59,7 @@ public interface OtlpEdge {
      * [spans] is non-empty when called by the bridge (an empty delta is never sent).
      *
      * Throws on send failure; [WarpOtlpBridge] reports the exception, tagged
-     * [OtlpSignal.SPANS], in a [DrainResult.Partial] or [DrainResult.Failure]. A
-     * `CancellationException` this edge mints from its own `withTimeout` is reported the same way.
+     * [OtlpSignal.SPANS], in a [DrainResult.Partial] or [DrainResult.Failure].
      */
     public suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink> = emptyList())
 

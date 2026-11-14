@@ -159,7 +159,8 @@ private suspend fun attempt(signal: OtlpSignal, buffered: Boolean, leg: suspend 
         // ("Connection refused", "Unresolved address") carry the whole diagnosis, while the
         // trace is the same HTTP-client frames every time. Attaching it also makes a routine
         // offline drain a candidate for the process's first symbolication, which on an Apple
-        // target is a one-time cost that collapses under load (#1596; see docs/usage.md).
+        // target is a one-time cost that collapses under load (#1596; see docs/usage.md). The
+        // throwable itself still reaches the caller, in SignalFailure.cause.
         logger.debug { "WarpOtlpBridge: ${signal.noun} drain failed: $cause" }
         SignalOutcome.Failed(SignalFailure(signal, cause))
     }

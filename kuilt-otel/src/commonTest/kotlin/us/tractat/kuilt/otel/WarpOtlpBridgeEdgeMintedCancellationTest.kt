@@ -47,6 +47,39 @@ class WarpOtlpBridgeEdgeMintedCancellationTest {
         metrics.incrementSum(MetricKey("req", MetricKind.SUM), by = 2L)
     }
 
+    // ---- Every edge call: each is inside its own signal's leg ----
+
+    /**
+     * A mint on any [OtlpEdge] call fails exactly that call's signal. An edge call moved out of its
+     * leg's `attempt` (into `drain`, after `classify`, say) escapes the drain, and its arm reds by
+     * name.
+     */
+    @Test
+    fun aCancellationTheEdgeMintsOnAnyEdgeCallFailsOnlyThatCallsSignal() = runTest {
+        val verdicts = EdgeCall.entries.map { call ->
+            val edge = CancellationScriptedEdge()
+            edge.arm(call, StoreAct.MINT)
+            val outcome = escapeOf { WarpOtlpBridge(telemetryWithAllThreeSignals(), clock).drain(edge) }
+            Triple(call, edge.minted, outcome)
+        }
+
+        assertAll(
+            *verdicts.flatMap { (call, minted, outcome) ->
+                listOf<() -> Unit>(
+                    { assertEquals(1, minted, "$call: the rig never fired") },
+                    { assertNull(outcome.escaped, "$call: a cancellation the edge minted escaped the drain: ${outcome.escaped}") },
+                    {
+                        assertEquals(
+                            listOf(call.signal),
+                            (outcome.returned as? DrainResult.Partial)?.failures?.map { it.signal },
+                            "$call: the drain reported ${outcome.returned}",
+                        )
+                    },
+                )
+            }.toTypedArray(),
+        )
+    }
+
     // ---- The first leg: what follows it must still run ----
 
     @Test
@@ -141,8 +174,19 @@ class WarpOtlpBridgeEdgeMintedCancellationTest {
     }
 }
 
-/** The [OtlpEdge] calls a [CancellationScriptedEdge] can be armed on. */
-private enum class EdgeCall { SEND_SPANS, LOG_DIGEST, RETAIN_METRICS }
+/**
+ * Every [OtlpEdge] method, each with the signal whose leg calls it. A method added to [OtlpEdge]
+ * and left out of this enum is not swept by [WarpOtlpBridgeEdgeMintedCancellationTest].
+ */
+private enum class EdgeCall(val signal: OtlpSignal) {
+    DIGEST(OtlpSignal.SPANS),
+    SEND_SPANS(OtlpSignal.SPANS),
+    LOG_DIGEST(OtlpSignal.LOGS),
+    SEND_LOGS(OtlpSignal.LOGS),
+    METRIC_DIGEST(OtlpSignal.METRICS),
+    SEND_METRICS(OtlpSignal.METRICS),
+    RETAIN_METRICS(OtlpSignal.METRICS),
+}
 
 /**
  * A recording [OtlpEdge] that mints a cancellation on, or parks, the **next** call matching its
@@ -203,7 +247,10 @@ private class CancellationScriptedEdge : OtlpEdge {
         }
     }
 
-    override suspend fun digest(): SpanDigest = SpanDigest(emptySet())
+    override suspend fun digest(): SpanDigest {
+        intercept(EdgeCall.DIGEST)
+        return SpanDigest(emptySet())
+    }
 
     override suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink>) {
         intercept(EdgeCall.SEND_SPANS)
@@ -217,15 +264,18 @@ private class CancellationScriptedEdge : OtlpEdge {
     }
 
     override suspend fun sendLogs(logs: Set<LogRecord>) {
+        intercept(EdgeCall.SEND_LOGS)
         lock.withLock { logsSent += logs.size }
     }
 
     override suspend fun metricDigest(): MetricDigest {
         lock.withLock { metricDigestCount++ }
+        intercept(EdgeCall.METRIC_DIGEST)
         return MetricDigest(emptyMap())
     }
 
     override suspend fun sendMetrics(points: Set<MetricPoint>) {
+        intercept(EdgeCall.SEND_METRICS)
         lock.withLock { metricsSent += points.size }
     }
 
