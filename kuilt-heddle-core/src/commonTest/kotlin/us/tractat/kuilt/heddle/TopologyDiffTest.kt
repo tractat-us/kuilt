@@ -162,6 +162,10 @@ class TopologyDiffTest {
     /**
      * A ceiling is engine configuration, not ledger state: changing only `maxConcurrent`, on a group,
      * a lane or a runtime marker with a child attached, keeps every edge and emits no step.
+     *
+     * This is a **pin**: it cannot red until enforcement reads the ceiling, because `diff` has
+     * nothing to emit for a ceiling today. It exists so the day that changes, this test is the one
+     * that says so.
      */
     @Test
     fun changingOnlyACeilingEmitsNoStep() {

@@ -341,6 +341,24 @@ class TopologyTest {
         )
     }
 
+    /**
+     * A runtime-children ceiling belongs to the marker: a document group with a ceiling but no
+     * `runtimeChildren` drops it, and the topology built is the same as one without it.
+     */
+    @Test
+    fun aRuntimeChildrenCeilingWithoutAMarkerIsDropped() {
+        fun document(cap: Long?) = TopologyDocument(
+            "root",
+            listOf(TopologyDocument.Group("acme", children = listOf(TopologyDocument.Lane("batch")), runtimeChildrenMaxConcurrent = cap)),
+        )
+        val parsed = Topology.from(document(5L))
+
+        assertAll(
+            { assertEquals(Topology.from(document(null)), parsed) },
+            { assertEquals(null, ((parsed as TopologyParse.Valid).topology.children.single() as Topology.Group).runtimeChildren) },
+        )
+    }
+
     /** A ceiling survives every form a topology takes, and a node without one writes no key. */
     @Test
     fun aCeilingRoundTripsAndAnAbsentOneIsNotWritten() {

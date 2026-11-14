@@ -24,7 +24,7 @@ import kotlinx.serialization.encoding.Encoder
  * decode through the generated serializer — runs the same check, and throws [TopologyException]
  * naming every problem at once. Because the tree is nested, it cannot express a cycle or a child
  * with two parents. What remains to check is that every name is non-empty and unique among its siblings,
- * and that every group has a child to give its share to.
+ * that every group has a child to give its share to, and that no ceiling is negative.
  *
  * The check runs once, at construction, against the lists you pass. Pass lists you will not mutate
  * afterwards: a list changed after the check is a tree nothing has checked.
@@ -66,8 +66,8 @@ public data class Topology(public val root: String, public val children: List<No
 
         /**
          * The most leases that may be open beneath this child at once, or `null` for no ceiling.
-         * `0` pauses it: nothing beneath it is picked. Never negative. `LocalHeddle` does not yet
-         * enforce it (#3324).
+         * `0` pauses it: nothing beneath it is picked. Never negative. `LocalHeddle` does not read it
+         * yet. Enforcement is tracked by #3324.
          */
         public val maxConcurrent: Long?
     }
@@ -82,7 +82,8 @@ public data class Topology(public val root: String, public val children: List<No
      *   it never has children of its own. Declared groups nest to any depth; runtime ones do not
      *   yet, and letting them is tracked by #3314.
      * @property maxConcurrent the most leases open beneath this group at once, counted across all
-     *   its children; `null` for no ceiling, `0` to pause it.
+     *   its children; `null` for no ceiling, `0` to pause it. `LocalHeddle` does not read it yet.
+     *   Enforcement is tracked by #3324.
      */
     @Serializable
     @SerialName("group")
@@ -98,7 +99,7 @@ public data class Topology(public val root: String, public val children: List<No
      * A leaf of the tree: work is charged here.
      *
      * @property maxConcurrent the most leases open on this lane at once; `null` for no ceiling,
-     *   `0` to pause it.
+     *   `0` to pause it. `LocalHeddle` does not read it yet. Enforcement is tracked by #3324.
      */
     @Serializable
     @SerialName("lane")
@@ -114,7 +115,7 @@ public data class Topology(public val root: String, public val children: List<No
      *
      * @property maxConcurrent the most leases open on **each** runtime child at once, not on all of
      *   them together; `null` for no ceiling, `0` to pause every one. Never negative. `LocalHeddle`
-     *   does not yet enforce it (#3324).
+     *   does not read it yet. Enforcement is tracked by #3324.
      */
     @Serializable
     public data class RuntimeChildren(
@@ -172,7 +173,7 @@ public sealed interface TopologyParse {
  * `a/b` can never be mistaken for an index or for two levels.
  *
  * A problem about a child's name or weight and a problem about that same child as a group (an empty
- * group, a bad runtime-children weight) share its path; [kind] tells them apart.
+ * group, a bad runtime-children weight) share its path; problems at one path are told apart by [kind] and [detail].
  *
  * @property path the child indices from the root to the node this problem concerns; `[]` is the
  *   root. Every index is `>= 0`.
