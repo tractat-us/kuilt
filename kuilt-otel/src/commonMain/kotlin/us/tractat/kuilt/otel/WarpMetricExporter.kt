@@ -5,6 +5,8 @@ package us.tractat.kuilt.otel
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.getAndUpdate
@@ -239,7 +241,7 @@ public class WarpMetricExporter(
      * split, so the failing pair is `otel.metrics.histograms` against `otel.metrics.sums`.
      *
      * ([WarpSpanExporter] needs no set: its three write paths share one key, and its clock persist
-     * rides inside the same `runCatchingCancellable`, so a partial refusal fails the whole turn and
+     * rides inside the same guarded turn, so a partial refusal fails the whole turn and
      * leaves the latch open. [WarpLogRecordExporter] is immune for the same grouping reason.
      * [persist] has no such grouping, which is what makes the set necessary here specifically.)
      *
@@ -317,6 +319,10 @@ public class WarpMetricExporter(
      *
      * If persisted state is corrupt or absent for a given kind, that kind starts fresh
      * (a warning is logged). The other kinds are unaffected.
+     *
+     * A refused read costs its kind alone in the same way, and that includes a
+     * `CancellationException` the [store] mints at this live caller, from its own `withTimeout`,
+     * say. A cancellation of the caller's own job still propagates (#3388).
      */
     public suspend fun recover() {
         recoverSums()
@@ -327,7 +333,12 @@ public class WarpMetricExporter(
     }
 
     private suspend fun recoverHistograms() {
-        val bytes = runCatchingCancellable { store.read(HISTOGRAM_STORE_KEY) }.getOrElse { cause ->
+        val bytes = try {
+            store.read(HISTOGRAM_STORE_KEY)
+        } catch (cause: Throwable) {
+            // The other kinds' recovery follows, so only this coroutine's own cancellation may end
+            // it; one the store minted is a refused read (#3388).
+            currentCoroutineContext().ensureActive()
             persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.metrics.histograms: store read failed, starting fresh" }
             return
@@ -363,7 +374,12 @@ public class WarpMetricExporter(
         "(α=$relativeAccuracy, range=[$minIndexedValue, $maxIndexedValue])"
 
     private suspend fun recoverSumsDouble() {
-        val bytes = runCatchingCancellable { store.read(SUM_DOUBLE_STORE_KEY) }.getOrElse { cause ->
+        val bytes = try {
+            store.read(SUM_DOUBLE_STORE_KEY)
+        } catch (cause: Throwable) {
+            // The other kinds' recovery follows, so only this coroutine's own cancellation may end
+            // it; one the store minted is a refused read (#3388).
+            currentCoroutineContext().ensureActive()
             persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.metrics.sums.double: store read failed, starting fresh" }
             return
@@ -379,7 +395,12 @@ public class WarpMetricExporter(
     }
 
     private suspend fun recoverSums() {
-        val bytes = runCatchingCancellable { store.read(SUM_STORE_KEY) }.getOrElse { cause ->
+        val bytes = try {
+            store.read(SUM_STORE_KEY)
+        } catch (cause: Throwable) {
+            // The other kinds' recovery follows, so only this coroutine's own cancellation may end
+            // it; one the store minted is a refused read (#3388).
+            currentCoroutineContext().ensureActive()
             persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.metrics.sums: store read failed, starting fresh" }
             return
@@ -395,7 +416,12 @@ public class WarpMetricExporter(
     }
 
     private suspend fun recoverGauges() {
-        val bytes = runCatchingCancellable { store.read(GAUGE_STORE_KEY) }.getOrElse { cause ->
+        val bytes = try {
+            store.read(GAUGE_STORE_KEY)
+        } catch (cause: Throwable) {
+            // The other kinds' recovery follows, so only this coroutine's own cancellation may end
+            // it; one the store minted is a refused read (#3388).
+            currentCoroutineContext().ensureActive()
             persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.metrics.gauges: store read failed, starting fresh" }
             return
@@ -411,7 +437,12 @@ public class WarpMetricExporter(
     }
 
     private suspend fun recoverCardinalities() {
-        val bytes = runCatchingCancellable { store.read(CARDINALITY_STORE_KEY) }.getOrElse { cause ->
+        val bytes = try {
+            store.read(CARDINALITY_STORE_KEY)
+        } catch (cause: Throwable) {
+            // The other kinds' recovery follows, so only this coroutine's own cancellation may end
+            // it; one the store minted is a refused read (#3388).
+            currentCoroutineContext().ensureActive()
             persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.metrics.cardinalities: store read failed, starting fresh" }
             return
@@ -463,13 +494,20 @@ public class WarpMetricExporter(
             cardinalities.clear()
             histograms.clear()
         }
-        runCatchingCancellable {
+        val deleted = try {
             store.delete(SUM_STORE_KEY)
             store.delete(SUM_DOUBLE_STORE_KEY)
             store.delete(GAUGE_STORE_KEY)
             store.delete(CARDINALITY_STORE_KEY)
             store.delete(HISTOGRAM_STORE_KEY)
-        }.fold(
+            Result.success(Unit)
+        } catch (cause: Throwable) {
+            // `clear` never throws: a cancellation the store minted is a refused delete, and only
+            // this coroutine's own cancellation propagates (#3388).
+            currentCoroutineContext().ensureActive()
+            Result.failure(cause)
+        }
+        deleted.fold(
             onSuccess = {
                 persistence.acknowledged(CLEAR_WORK)
                 MetricExportResult.Success
@@ -1024,29 +1062,38 @@ public class WarpMetricExporter(
      * [MetricExportResult.Failure] carrying the cause regardless, so deduplicating the *line* hides
      * nothing from a programmatic reader.
      */
-    private suspend fun persist(storeKey: StoreKey, encoded: ByteArray, metricKey: MetricKey): MetricExportResult =
-        runCatchingCancellable { store.write(storeKey, encoded) }
-            .fold(
-                onSuccess = {
-                    persistence.acknowledged(setOf(storeKey))
-                    // The store took THIS key back. It says nothing about the others, so only this
-                    // one leaves the set; the outage stays open while any key is still refused.
-                    durableWriteOutage.update { it - storeKey }
-                    MetricExportResult.Success
-                },
-                onFailure = { cause ->
-                    persistence.failed(setOf(storeKey), cause)
-                    // One CAS decides and records: the caller that finds the set empty is the one
-                    // that opened the outage, and it is the only one that reports.
-                    val before = durableWriteOutage.getAndUpdate { it + storeKey }
-                    if (before.isEmpty()) {
-                        logger.error(cause) {
-                            "WarpMetricExporter: durable write failed for metric ${metricKey.name} (${metricKey.kind})"
-                        }
+    private suspend fun persist(storeKey: StoreKey, encoded: ByteArray, metricKey: MetricKey): MetricExportResult {
+        val written = try {
+            store.write(storeKey, encoded)
+            Result.success(Unit)
+        } catch (cause: Throwable) {
+            // Only this coroutine's own cancellation propagates. One the store minted from its own
+            // `withTimeout` is a refused write, so the caller gets a Failure it can retry (#3388).
+            currentCoroutineContext().ensureActive()
+            Result.failure(cause)
+        }
+        return written.fold(
+            onSuccess = {
+                persistence.acknowledged(setOf(storeKey))
+                // The store took THIS key back. It says nothing about the others, so only this
+                // one leaves the set; the outage stays open while any key is still refused.
+                durableWriteOutage.update { it - storeKey }
+                MetricExportResult.Success
+            },
+            onFailure = { cause ->
+                persistence.failed(setOf(storeKey), cause)
+                // One CAS decides and records: the caller that finds the set empty is the one
+                // that opened the outage, and it is the only one that reports.
+                val before = durableWriteOutage.getAndUpdate { it + storeKey }
+                if (before.isEmpty()) {
+                    logger.error(cause) {
+                        "WarpMetricExporter: durable write failed for metric ${metricKey.name} (${metricKey.kind})"
                     }
-                    MetricExportResult.Failure(cause)
-                },
-            )
+                }
+                MetricExportResult.Failure(cause)
+            },
+        )
+    }
 
     // ── Eviction (called inside lock) ─────────────────────────────────────────
 
