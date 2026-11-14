@@ -96,6 +96,15 @@ public class FairShareAllocator(
             demandingObserved = demandingObserved.entries.sortedBy { it.key }.associate { it.key to it.value },
         )
 
+    /**
+     * An allocator that remembers exactly what this one does, and that later calls on either leave
+     * the other alone: [memory] without the sort, for a caller that copies on every call.
+     */
+    internal fun fork(): FairShareAllocator = FairShareAllocator(self, policy).also {
+        it.wakeOffsets.putAll(wakeOffsets)
+        it.demandingObserved.putAll(demandingObserved)
+    }
+
     /** The demanding state [edge] was last observed in, or `null` when it has never been observed. */
     internal fun lastObservedDemanding(edge: AttachmentId): Boolean? = demandingObserved[edge]
 
