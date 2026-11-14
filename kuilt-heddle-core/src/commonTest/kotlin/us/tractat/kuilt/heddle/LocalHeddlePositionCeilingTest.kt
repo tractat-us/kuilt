@@ -148,7 +148,8 @@ class LocalHeddlePositionCeilingTest {
     @Test
     fun anExtendAcrossTheCeilingRefusesTypedAndChangesNothing() {
         val engine = engine()
-        // b waits beside a, near its origin, so the rebase before the extension moves nothing.
+        // An extend never rebases, only a pick does, so its delegation is what crosses. b waits
+        // beside a near its origin all the same, which also holds the acquire's rebase at nothing.
         val lease = (engine.acquire(setOf(a, b), setOf(a), startedAt = 100L) as AcquireOutcome.Acquired).lease
         engine.pushTowardCeiling(a, below = 1L)
         val stateBefore = engine.snapshot()

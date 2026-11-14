@@ -6,7 +6,8 @@ import us.tractat.kuilt.math.timesWide
 
 /**
  * One edge's replicated **virtual-time gauge**: an asserted lower bound on its gross virtual
- * service, paired with the base issuance the writer had actually observed when it asserted it.
+ * service, paired with the base issuance the writer had actually observed when it asserted it, or,
+ * in a `LocalHeddle` ledger, with a fold a rebase has raised above that (see below).
  *
  * A gauge is a claim of the form *"when this edge's base issuance stood at [folded], its gross
  * virtual service was at least [floor]"*. The pairing is the whole point. The read reconstructs
@@ -52,6 +53,11 @@ import us.tractat.kuilt.math.timesWide
  * non-monotonicity. The one place the lower half gives is the position ceiling (#3313): a position
  * past it reads as the ceiling, behind what it stands for, and every pick that would order it is
  * refused, so the shortfall is never spent.
+ *
+ * In a `LocalHeddle` ledger the sandwich is **relative**, not absolute: a rebase lowers every
+ * child of a parent by one virtual time together, so a position reads its service less every
+ * rebase taken since, and can read below zero, down to `−R` for an idle child (#3329). Read the
+ * bounds against the siblings, not against the origin.
  *
  * ## A fold above issuance: `LocalHeddle`'s rebase
  *
