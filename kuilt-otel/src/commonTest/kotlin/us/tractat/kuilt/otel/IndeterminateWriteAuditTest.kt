@@ -1,9 +1,12 @@
 package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.bytestring.ByteString
@@ -30,12 +33,21 @@ class IndeterminateWriteAuditTest {
 
     @Test
     fun stampedSpanRollbackDoesNotUndoTheDurableWriteAndRestartRetryDuplicates() = runTest {
-        for (cancel in listOf(false, true)) {
-            val store = CommitThenFailStore(StoreKey("otel.spans"), cancel)
+        for (mode in CommitMode.entries) {
+            val store = CommitThenFailStore(StoreKey("otel.spans"), mode)
             val clock = WarpCausalClock(replica)
             val exporter = WarpSpanExporter(replica, store, causalClock = clock)
-            if (cancel) assertFailsWith<CancellationException> { exporter.export(span) }
-            else assertIs<ExportResult.Failure>(exporter.export(span))
+            if (mode == CommitMode.CANCEL_CALLER) {
+                // The caller is cancelled while the store call is parked after its commit.
+                val returned = cancelWhileParked(store) { exporter.export(span) }
+                assertAll(
+                    { assertEquals(1, store.parked, "the export write must park after committing") },
+                    { assertNull(returned, "the export must be cancelled, not return: $returned") },
+                )
+            } else {
+                // A cancellation the store mints at a live caller is a refused write (#3388).
+                assertIs<ExportResult.Failure>(exporter.export(span))
+            }
             val live = exporter.snapshot().elements
             val recoveredClock = WarpCausalClock(replica).also { it.recover(store) }
             val recovered = WarpSpanExporter(replica, store, causalClock = recoveredClock).also { it.recover() }
@@ -44,9 +56,9 @@ class IndeterminateWriteAuditTest {
             assertIs<ExportResult.Success>(recovered.export(span))
             val retried = recovered.snapshot().elements
             assertAll(
-                { assertEquals(1, store.injections, "span commit-before-failure injection must fire") },
-                { assertEquals(0, live.size, "failure and cancellation both roll the minted stamp back") },
-                { assertEquals(1, durable.size, "a Failure does not mean the span was not persisted") },
+                { assertEquals(1, store.injections, "$mode: span commit-before-failure injection must fire") },
+                { assertEquals(0, live.size, "$mode: a refused or cancelled export rolls the minted stamp back") },
+                { assertEquals(1, durable.size, "$mode: an unacknowledged export may still have been persisted") },
                 { assertEquals(2, retried.size, "audit: retry after recovery creates another stamped copy") },
                 { assertEquals(2, retried.map { it.causalStamp?.dot }.toSet().size, "recovery must not reuse the dot") },
                 { assertTrue(retried.any { requireNotNull(it.causalStamp).dot.seq > firstDot.seq }) },
@@ -186,8 +198,8 @@ class IndeterminateWriteAuditTest {
 
     @Test
     fun clockCommitBeforeFailureRecoversItsHighWaterMark() = runTest {
-        for (cancel in listOf(false, true)) {
-            val store = CommitThenFailStore(WarpCausalClock.STORE_KEY, cancel)
+        for (mode in listOf(CommitMode.FAIL, CommitMode.MINT_CANCEL)) {
+            val store = CommitThenFailStore(WarpCausalClock.STORE_KEY, mode)
             val clock = WarpCausalClock(replica)
             val minted = clock.tick().dot
             assertFailsWith<Exception> { clock.persist(store) }
@@ -204,8 +216,8 @@ class IndeterminateWriteAuditTest {
 
     @Test
     fun metricSnapshotsRecoverAndRewriteWithoutReapplyingTheOperation() = runTest {
-        for (cancel in listOf(false, true)) {
-            val store = CommitThenFailStore(null, cancel)
+        for (mode in CommitMode.entries) {
+            val store = CommitThenFailStore(null, mode)
             val exporter = WarpMetricExporter(replica, store)
             val sum = MetricKey("sum", MetricKind.SUM)
             val doubleSum = MetricKey("double", MetricKind.SUM)
@@ -221,8 +233,18 @@ class IndeterminateWriteAuditTest {
             )
             for (write in writes) {
                 store.armed = true
-                if (cancel) assertFailsWith<CancellationException> { write() }
-                else assertIs<MetricExportResult.Failure>(write())
+                if (mode == CommitMode.CANCEL_CALLER) {
+                    // Cancelled while the store call is parked after its commit; memory keeps the mutation.
+                    val parkedBefore = store.parked
+                    val returned = cancelWhileParked(store) { write() }
+                    assertAll(
+                        { assertEquals(parkedBefore + 1, store.parked, "the metric write must park after committing") },
+                        { assertNull(returned, "the metric write must be cancelled, not return: $returned") },
+                    )
+                } else {
+                    // A cancellation the store mints at a live caller is a refused write (#3388).
+                    assertIs<MetricExportResult.Failure>(write())
+                }
             }
             val recovered = WarpMetricExporter(replica, store).also { it.recover() }
             val durable = recovered.snapshotAll()
@@ -234,12 +256,22 @@ class IndeterminateWriteAuditTest {
             exporter.mergeHistogram(histogram, exporter.histogramSnapshot(histogram))
             val rewritten = WarpMetricExporter(replica, store).also { it.recover() }.snapshotAll()
             assertAll(
-                { assertEquals(writes.size, store.injections, "every metric kind must reach the injection") },
+                { assertEquals(writes.size, store.injections, "$mode: every metric kind must reach the injection") },
                 { assertEquals(exporter.snapshotAll(), durable) },
                 { assertEquals(durable, rewritten, "rewriting state must not reapply increments/samples") },
                 { assertEquals(3L, recovered.sumValue(sum)) },
             )
         }
+    }
+
+    /** Run [block] in a child job and cancel it once [store] has parked after its commit. */
+    private suspend fun <T : Any> TestScope.cancelWhileParked(store: CommitThenFailStore, block: suspend () -> T): T? {
+        val parkedBefore = store.parked
+        var returned: T? = null
+        val job: Job = launch { returned = block() }
+        testScheduler.runCurrent()
+        if (store.parked > parkedBefore) job.cancelAndJoin() else job.join()
+        return returned
     }
 
     private fun otherSpan(id: Byte) = span.copy(spanId = ByteString(ByteArray(8) { id }))
@@ -275,11 +307,27 @@ class IndeterminateWriteAuditTest {
         }
     }
 
-    /** A minted cancellation exercises propagation; real caller cancellation is covered by the log fixture. */
-    private class CommitThenFailStore(private val target: StoreKey?, private val cancel: Boolean) : DurableStore {
+    private enum class CommitMode {
+        /** Commit, then throw an ordinary exception. */
+        FAIL,
+
+        /** Commit, then throw a `CancellationException` at a caller whose job is alive. */
+        MINT_CANCEL,
+
+        /** Commit, then park until the caller is cancelled: the caller's own cancellation after a landed write. */
+        CANCEL_CALLER,
+    }
+
+    /**
+     * Commits, then ends the call per [mode]. [CommitMode.MINT_CANCEL] is read by the exporters as a
+     * refused write (#3388), while [WarpCausalClock.persist], which has no guard, lets it through.
+     * [CommitMode.CANCEL_CALLER] parks so the test can cancel the caller itself.
+     */
+    private class CommitThenFailStore(private val target: StoreKey?, private val mode: CommitMode) : DurableStore {
         private val backing = InMemoryDurableStore()
         var armed = true
         var injections = 0
+        var parked = 0
         override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
         override suspend fun delete(key: StoreKey) = backing.delete(key)
         override suspend fun write(key: StoreKey, bytes: ByteArray) {
@@ -287,8 +335,14 @@ class IndeterminateWriteAuditTest {
             if (armed && (target == null || target == key)) {
                 armed = false
                 injections++
-                if (cancel) throw CancellationException("committed before cancellation")
-                throw Exception("committed before failure")
+                when (mode) {
+                    CommitMode.FAIL -> throw Exception("committed before failure")
+                    CommitMode.MINT_CANCEL -> throw CancellationException("committed before cancellation")
+                    CommitMode.CANCEL_CALLER -> {
+                        parked++
+                        awaitCancellation()
+                    }
+                }
             }
         }
     }

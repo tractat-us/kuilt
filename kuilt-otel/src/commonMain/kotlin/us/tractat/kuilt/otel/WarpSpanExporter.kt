@@ -6,6 +6,8 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -146,7 +148,7 @@ public class WarpSpanExporter(
      * ## Why a boolean here, where [WarpMetricExporter] needs a set of keys
      *
      * Because a partial refusal cannot alternate this latch. [export] and [clear] write the causal
-     * clock's key *and* [STORE_KEY] inside one `runCatchingCancellable`, so a store refusing either
+     * clock's key *and* [STORE_KEY] inside one guarded turn, so a store refusing either
      * one fails the whole turn and the latch stays open; a success means every write in the turn
      * landed. [WarpLogRecordExporter.commit] groups a turn's writes the same way. [WarpMetricExporter]
      * does not — each of its calls writes exactly one key — so a store refusing one key while
@@ -188,9 +190,16 @@ public class WarpSpanExporter(
      * any calls to [export].
      *
      * If no persisted state exists, the exporter starts with an empty set.
+     *
+     * A refused read is recorded as a recovery failure and the exporter starts fresh. That includes
+     * a `CancellationException` the [store] mints at this live caller, from its own `withTimeout`,
+     * say; a cancellation of the caller's own job still propagates (#3388).
      */
     public suspend fun recover() {
-        val bytes = runCatchingCancellable { store.read(STORE_KEY) }.getOrElse { cause ->
+        val bytes = try {
+            store.read(STORE_KEY)
+        } catch (cause: Throwable) {
+            currentCoroutineContext().ensureActive()
             persistence.recoveryFailed(cause)
             logger.error(cause) { "otel.spans: store read failed, starting fresh" }
             return
@@ -246,9 +255,10 @@ public class WarpSpanExporter(
      * window recovers it, and retrying the original unstamped span mints another dot and
      * creates a second stamped copy.
      *
-     * Returns [ExportResult.Success] after the durable write returns. A non-cancellation
-     * failure in that section returns [ExportResult.Failure]; neither failure nor
-     * cancellation establishes that the span was not persisted. See [DurableStore.write]
+     * Returns [ExportResult.Success] after the durable write returns. A failure in that section
+     * returns [ExportResult.Failure], and so does a `CancellationException` the [store] mints at
+     * this live caller from its own `withTimeout`: only the caller's own cancellation propagates
+     * (#3388). Neither failure nor cancellation establishes that the span was not persisted. See [DurableStore.write]
      * for the indeterminate commit outcome.
      *
      * When the buffer is full, the eviction policy fires first, logging the
@@ -274,7 +284,7 @@ public class WarpSpanExporter(
         // clock persist and the span write are one ordered unit (#1053).
         return try {
             ioMutex.withLock {
-                runCatchingCancellable {
+                val written = try {
                     // Re-encode the *latest* spans inside the section so no concurrent add is
                     // dropped by a stale snapshot; encoding before the persist keeps the
                     // persisted seq ≥ every dot in this snapshot (seq is monotonic).
@@ -284,7 +294,14 @@ public class WarpSpanExporter(
                     // the span, never re-mint its dot on recover (#1053).
                     causalClock?.persist(store)
                     store.write(STORE_KEY, encoded)
-                }.fold(
+                    Result.success(Unit)
+                } catch (cause: Throwable) {
+                    // Only this coroutine's own cancellation propagates, to the rollback below. One
+                    // the store minted from its own `withTimeout` is a refused write (#3388).
+                    currentCoroutineContext().ensureActive()
+                    Result.failure(cause)
+                }
+                written.fold(
                     onSuccess = {
                         persistence.acknowledged(clockAndSpanWork)
                         durableWriteSucceeded()
@@ -294,8 +311,8 @@ public class WarpSpanExporter(
                         persistence.failed(clockAndSpanWork, cause)
                         if (minted) removeFromMemory(stamped)
                         // Roll back before the outage report; the health count above records the turn
-                        // either way. Cancellation propagates past this fold, so it is counted as
-                        // neither acknowledged nor failed; reporting only opens an outage once.
+                        // either way. The caller's own cancellation propagates past this fold, so it is
+                        // counted as neither acknowledged nor failed; reporting only opens an outage once.
                         durableWriteFailed(cause) {
                             logger.error(it) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
                         }
@@ -344,10 +361,16 @@ public class WarpSpanExporter(
         // Share the durable-write section with export() so a concurrent export()+merge()
         // cannot lost-update the STORE_KEY snapshot (#1053).
         return ioMutex.withLock {
-            runCatchingCancellable {
+            val written = try {
                 val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
                 store.write(STORE_KEY, encoded)
-            }.fold(
+                Result.success(Unit)
+            } catch (cause: Throwable) {
+                // A cancellation the store minted is a refused write; only our own propagates (#3388).
+                currentCoroutineContext().ensureActive()
+                Result.failure(cause)
+            }
+            written.fold(
                 onSuccess = {
                     persistence.acknowledged(spanWork)
                     durableWriteSucceeded()
@@ -407,7 +430,7 @@ public class WarpSpanExporter(
      * drop precedes the write.
      */
     public suspend fun clear(): ExportResult = ioMutex.withLock {
-        runCatchingCancellable {
+        val written = try {
             val encoded = lock.withLock {
                 spans = spans.piece { it.removeAll(it.elements) }
                 cbor.encodeToByteArray(spanSerializer, spans)
@@ -421,7 +444,13 @@ public class WarpSpanExporter(
             // Clock before spans, the same order and for the same reason as export() (#1053).
             causalClock?.persist(store)
             store.write(STORE_KEY, encoded)
-        }.fold(
+            Result.success(Unit)
+        } catch (cause: Throwable) {
+            // A cancellation the store minted is a refused write; only our own propagates (#3388).
+            currentCoroutineContext().ensureActive()
+            Result.failure(cause)
+        }
+        written.fold(
             onSuccess = {
                 persistence.acknowledged(clockAndSpanWork)
                 durableWriteSucceeded()
