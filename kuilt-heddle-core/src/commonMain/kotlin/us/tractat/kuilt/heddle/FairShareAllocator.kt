@@ -8,6 +8,21 @@ import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.math.timesOrNull
 
 /**
+ * SPIKE (#3376), test-only switch: 0 = main's clamp; 1 = lag kept across an idle gap, no rejoin
+ * correction; 2 = lag kept with the `(W + w) / W` rejoin correction.
+ */
+internal var spikeLagRule: Int = 0
+
+/** SPIKE (#3376): Fable's UNIFIED front (#3353 slice 4), as in `af173-probe-switch.diff` rule 2. */
+internal var spikeUnified: Boolean = false
+
+/** SPIKE (#3376): the most positive lag, in service units, a departure keeps; `null` for none. */
+internal var spikeLagCap: Long? = null
+
+/** SPIKE (#3376): when true, the cap also counts what the departing edge has outstanding. */
+internal var spikeCapCountsOutstanding: Boolean = false
+
+/**
  * Where a [FairShareAllocator] reads the ledger and lands its writes.
  *
  * In `:kuilt-heddle` this is the replicator that keeps the ledger converged across peers. For a
@@ -79,6 +94,10 @@ public class FairShareAllocator(
     private val wakeOffsets = HashMap<AttachmentId, Rational>()
     private val demandingObserved = HashMap<AttachmentId, Boolean>()
 
+    /** SPIKE (#3376): the parent's front when an edge was seen leave, and the lag it left with. */
+    private class Departure(val anchor: Rational, val lag: Rational)
+    private val departures = HashMap<AttachmentId, Departure>()
+
     /**
      * An allocator that resumes from [memory], as if it were the allocator [memory] was exported
      * from. Building one over a copy of a live allocator's [FairShareAllocator.memory] gives a
@@ -107,6 +126,11 @@ public class FairShareAllocator(
     internal fun fork(): FairShareAllocator = FairShareAllocator(self, policy).also {
         it.wakeOffsets.putAll(wakeOffsets)
         it.demandingObserved.putAll(demandingObserved)
+        it.departures.putAll(departures)
+        it.af80Clock.putAll(af80Clock)
+        it.af80Total.putAll(af80Total)
+        it.af80Now = af80Now
+        it.netLast.putAll(netLast)
         it.rebasesForTest = rebasesForTest
     }
 
@@ -126,6 +150,7 @@ public class FairShareAllocator(
     internal fun forget(edges: Set<AttachmentId>) {
         wakeOffsets.keys.removeAll(edges)
         demandingObserved.keys.removeAll(edges)
+        departures.keys.removeAll(edges)
     }
 
     /** The demanding state [edge] was last observed in, or `null` when it has never been observed. */
@@ -539,18 +564,31 @@ public class FairShareAllocator(
         forgetDepartedChildren(edges, s, parent)
         if (edges.isEmpty()) return
 
+        if (spikeLagRule == 5) tickClock(parent, edges)
+        if (spikeLagRule in 6..8) tickNetClock(parent, edges, countDeparted = spikeLagRule == 8)
+        if (spikeLagRule != 0) recordDepartures(edges)
         val unseated = edges.filter { it.gauge == null }.mapTo(HashSet()) { it.record.id }
         val wakers = edges
             .filter { HeddlePolicy.isDemanding(it) && demandingObserved[it.record.id] == false }
             .mapTo(HashSet()) { it.record.id }
         val joiners = HashSet(unseated).apply { addAll(wakers) }
-        val taken = if (joiners.isEmpty()) null else HeddlePolicy.frontTime(edges, excluding = joiners) ?: joinersFront(edges, joiners, wakers)
-        val front = if (taken != null && wakers.isNotEmpty()) atLeastTheNewborns(taken, edges, unseated) else taken
+        val front = if (spikeUnified) {
+            when {
+                joiners.isEmpty() -> null
+                edges.any { it.record.id !in joiners && HeddlePolicy.isDemanding(it) } -> HeddlePolicy.frontTime(edges, excluding = joiners)
+                else -> joinersFront(edges, edges.mapTo(HashSet()) { it.record.id }, joiners)
+            }
+        } else {
+            val taken = if (joiners.isEmpty()) null else HeddlePolicy.frontTime(edges, excluding = joiners) ?: joinersFront(edges, joiners, wakers)
+            if (taken != null && wakers.isNotEmpty()) atLeastTheNewborns(taken, edges, unseated) else taken
+        }
 
         if (unseated.isNotEmpty()) {
             ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
         }
-        if (front != null) clampWakers(edges, wakers, front)
+        if (front != null) {
+            if (spikeLagRule == 0) clampWakers(edges, wakers, front) else placeWakers(edges, wakers, joiners, front)
+        }
         for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
     }
 
@@ -631,6 +669,7 @@ public class FairShareAllocator(
         }
         demandingObserved.keys.removeAll(departed)
         wakeOffsets.keys.removeAll(departed)
+        departures.keys.removeAll(departed)
     }
 
     /**
@@ -705,6 +744,132 @@ public class FairShareAllocator(
             // Held at the ceiling, like any position, so it stays representable; a pick over a clamp
             // there refuses ([HeddlePolicy.isAtCeiling]).
             wakeOffsets[edge.record.id] = ticksToVirtual(minOf(maxOf(carried, computed), positionCeiling(weight)), weight)
+        }
+    }
+
+    private fun spikeEff(edge: PolicyEdge): Rational {
+        val eff = ticksToVirtual(HeddlePolicy.effectiveTicks(edge), edge.record.weight)
+        return if (spikeLagRule == 4) eff - Rational.of(edge.summary.outstanding) / weightOf(edge) else eff
+    }
+
+    private fun weightOf(edge: PolicyEdge): Rational = Rational.of(edge.record.weight.numerator, edge.record.weight.denominator)
+
+    /**
+     * SPIKE (#3376): for each edge seen demanding last round and not now, keep the front of last
+     * round's competing set at current positions (its anchor) and its lag against that front.
+     */
+    private val af80Clock = HashMap<GroupId, Rational>()
+    private val af80Total = HashMap<GroupId, Long>()
+    private var af80Now = Rational.ZERO
+
+    /** REVIEW PROBE (af80), rule 5: a per-parent clock that advances by service issued / weight of the set seen asking. */
+    private fun tickClock(parent: GroupId, edges: List<PolicyEdge>) {
+        val total = edges.fold(0L) { acc, e -> acc + e.baseIssued }
+        val delta = total - (af80Total[parent] ?: total)
+        af80Total[parent] = total
+        val w = edges.filter { demandingObserved[it.record.id] == true && it.gauge != null }.fold(Rational.ZERO) { acc, e -> acc + weightOf(e) }
+        var clock = af80Clock[parent] ?: Rational.ZERO
+        if (delta > 0L && w > Rational.ZERO) clock += Rational.of(delta) / w
+        af80Clock[parent] = clock
+        af80Now = clock
+    }
+
+    /** SPIKE (#3376 net-service clock): each edge's `baseIssued − returned` at the last tick. */
+    private val netLast = HashMap<AttachmentId, Long>()
+
+    /**
+     * SPIKE (#3376), rules 6–8: a per-parent clock advanced by NET service (issued less returned)
+     * since the last tick, divided by the weight of the set seen asking last round. Rules 6 and 7
+     * count only the deltas of edges seen asking last round, so a departed child's own refund moves
+     * its own position and not the clock; rule 8 counts every edge (the double-credit control).
+     */
+    private fun tickNetClock(parent: GroupId, edges: List<PolicyEdge>, countDeparted: Boolean) {
+        var delta = 0L
+        var w = Rational.ZERO
+        for (e in edges) {
+            val net = e.baseIssued - e.summary.returned
+            val last = netLast[e.record.id]
+            netLast[e.record.id] = net
+            val asked = demandingObserved[e.record.id] == true && e.gauge != null
+            if (asked) w += weightOf(e)
+            if (last != null && (asked || countDeparted)) delta += net - last
+        }
+        var clock = af80Clock[parent] ?: Rational.ZERO
+        if (w > Rational.ZERO) clock += Rational.of(delta) / w
+        af80Clock[parent] = clock
+        af80Now = clock
+    }
+
+    private fun recordDepartures(edges: List<PolicyEdge>) {
+        val prev = edges.filter { demandingObserved[it.record.id] == true && it.gauge != null }
+        val leaving = prev.filter { !HeddlePolicy.isDemanding(it) }
+        if (leaving.isEmpty()) return
+        if (spikeLagRule in 5..8) {
+            for (e in leaving) departures[e.record.id] = Departure(af80Now, Rational.ZERO)
+            return
+        }
+        var sw = Rational.ZERO
+        var swv = Rational.ZERO
+        for (e in prev) {
+            sw += weightOf(e)
+            swv += weightOf(e) * spikeEff(e)
+        }
+        val v = swv / sw
+        for (e in leaving) {
+            val lag = v - spikeEff(e)
+            val cap = spikeLagCap
+            if (cap == null) {
+                departures[e.record.id] = Departure(v, lag)
+            } else {
+                val units = if (spikeCapCountsOutstanding) maxOf(0L, cap - e.summary.outstanding) else cap
+                val limit = Rational.of(units) / weightOf(e)
+                departures[e.record.id] = if (lag > limit) Departure(v - (lag - limit), limit) else Departure(v, lag)
+            }
+        }
+    }
+
+    /**
+     * SPIKE (#3376): a waker seen leave is moved forward by how far the front moved while it was
+     * away (rule 2: against the front its own return makes); one never seen leave is clamped as on
+     * main.
+     */
+    private fun placeWakers(edges: List<PolicyEdge>, wakers: Set<AttachmentId>, joiners: Set<AttachmentId>, front: VirtualTime) {
+        val competing = edges.filter { it.record.id !in joiners && HeddlePolicy.isDemanding(it) }
+        val ws = competing.fold(Rational.ZERO) { acc, e -> acc + weightOf(e) }
+        val f = when {
+            spikeLagRule != 4 -> front.toRational()
+            competing.isNotEmpty() -> competing.fold(Rational.ZERO) { acc, e -> acc + weightOf(e) * spikeEff(e) } / ws
+            else -> edges.maxOf { spikeEff(it) }
+        }
+        var fStar = f
+        if (spikeLagRule >= 2 && ws > Rational.ZERO) {
+            var sum = Rational.ZERO
+            for (e in edges) {
+                if (e.record.id !in wakers) continue
+                val d = departures[e.record.id] ?: continue
+                sum += weightOf(e) * d.lag
+            }
+            fStar = f - sum / ws
+        }
+        for (edge in edges) {
+            if (edge.record.id !in wakers) continue
+            val weight = edge.record.weight
+            val d = departures.remove(edge.record.id)
+            if (d == null) {
+                clampWakers(listOf(edge), setOf(edge.record.id), front)
+                continue
+            }
+            val carried = ticksAt(wakeOffsets[edge.record.id] ?: Rational.ZERO, weight)
+            // Rule 3 is the positive control: a waker that keeps its raw position banks every idle stretch.
+            val shift = when (spikeLagRule) {
+                3 -> 0L
+                5, 6, 8 -> maxOf(0L, ticksAt(af80Now, weight) - ticksAt(d.anchor, weight))
+                // Rule 7: signed, so a gap over which the clock ran backward (a sibling refunded more than it was
+                // issued) moves the returner back too; the offset itself never goes below zero.
+                7 -> maxOf(-carried, ticksAt(af80Now, weight) - ticksAt(d.anchor, weight))
+                else -> maxOf(0L, ticksAt(fStar - d.anchor, weight))
+            }
+            wakeOffsets[edge.record.id] = ticksToVirtual(minOf(carried + shift, positionCeiling(weight)), weight)
         }
     }
 
