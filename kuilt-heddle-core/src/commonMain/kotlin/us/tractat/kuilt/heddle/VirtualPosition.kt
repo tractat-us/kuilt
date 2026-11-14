@@ -207,65 +207,48 @@ internal tailrec fun gcdOf(a: Long, b: Long): Long = if (b == 0L) a else gcdOf(b
  * A front is a weighted mean, `Σ w·v / Σ w`, and `w·v` is just an edge's position over `G`, so the
  * mean is `Σ p / (G · Σ w)`: a plain sum of positions over a sum of weights. Keeping that pair,
  * rather than dividing it out into a [Rational], is what stops a front's denominator ever reaching
- * a stored value. The sum is 128-bit because it is a sum of many `Long` positions (#3313: the sum of
- * positions is the site that overflowed first).
+ * a stored value. The sum is 128-bit because it is a sum of many positions (#3313: the sum of
+ * positions is the site that overflowed first), and so are the positions themselves (#3353): a
+ * front is taken over effective positions before anything narrows them.
  *
- * The one thing read off it is [ticksFor], a joiner's position on its own grid, so the comparison
- * a pick makes and the position a seat writes are the same expression.
+ * The one thing read off it is [ticksForWide], a joiner's position on its own grid, so the
+ * comparison a pick makes and the position a seat writes are the same expression.
  */
 internal class VirtualTime(
     private val ticks: Int128,
     private val weightNumerator: Long,
     private val weightDenominator: Long,
-    /**
-     * Whether a position this time was taken over is at its ceiling, so the time may stand for a
-     * later one. Then every [ticksFor] reads the ceiling: a seat or clamp taken against it lands at
-     * the penalty end, never below a front it cannot see (§10.5, #3313).
-     */
-    private val atCeiling: Boolean = false,
 ) {
     init {
         require(weightNumerator > 0L && weightDenominator > 0L) { "weight must be positive" }
     }
 
     /**
-     * This time on the grid of an edge of weight [w]: `⌈V · w · G⌉`. Where a newborn of weight [w]
-     * is seated, where a waker is clamped to, and the highest position at which an edge of weight
-     * [w] is still eligible (design §7.3 step 3, read at grid resolution).
+     * This time on the grid of an edge of weight [w], exactly: `⌈V · w · G⌉` ticks, in 128 bits.
+     * Where a newborn of weight [w] is seated, relative to its parent's origin, and where a waker
+     * is clamped to. Nothing caps it (#3353).
      *
-     * `V · w · G = ticks · (wDen · w.num) / (wNum · w.den)`. The floor quotient `ticks / divisor`
-     * is split off first so no intermediate needs more than 128 bits: it fits in a `Long` because
-     * the divisor is at least the number of positions summed (each edge's integer weight is at
-     * least one) and every position is a `Long`. The remainder is taken against that floor
-     * quotient, so it is in `[0, divisor)` for a negative sum too: a position can be negative when
-     * an edge has returned more than its base issuance, relocation credit included.
-     *
-     * A result above [w]'s [positionCeiling] is held there ([saturated]): a seat or a clamp there
-     * lands at the ceiling, and an eligibility bound there admits every position below it, as the
-     * exact bound would.
+     * `V · w · G = ticks · (wDen · w.num) / (wNum · w.den)`, formed by [mulDiv] in 192 bits so only
+     * the result has to fit.
      *
      * @throws ArithmeticException if a weight product does not fit in a `Long`, which
-     *   [weightsFitTheBudget] rules out for a topology [LocalHeddle.apply] accepted.
+     *   [weightsFitTheBudget] rules out for a topology [LocalHeddle.apply] accepted, or the result
+     *   leaves 128 bits.
      */
-    fun ticksFor(w: Weight): Long {
-        if (atCeiling) return positionCeiling(w)
+    fun ticksForWide(w: Weight): Int128 {
         val multiplier = checkedMul(weightDenominator, w.numerator)
         val divisor = checkedMul(weightNumerator, w.denominator)
-        val whole = ticks.divideOrNull(divisor, Rounding.FLOOR)
-            ?: throw ArithmeticException("Long overflow: $ticks / $divisor")
-        // The floor remainder, in [0, divisor): `ticks % divisor` truncates, which differs for a negative sum.
-        val remainder = checkNotNull((ticks - whole.timesWide(divisor)).toLongOrNull()) {
-            "a floor remainder is below its divisor: $ticks − $whole · $divisor"
-        }
-        val fraction = checkNotNull(mulDiv(remainder, multiplier, divisor, Rounding.CEILING)) {
-            "remainder · m / d < m always fits: $remainder · $multiplier / $divisor"
-        }
-        return saturated(whole.timesWide(multiplier) + fraction, w)
+        return mulDiv(ticks, multiplier, divisor, Rounding.CEILING)
+            ?: throw ArithmeticException("Int128 overflow: $ticks · $multiplier / $divisor")
     }
 
-    /** This time, marked as taken over a position at its ceiling when [saturated] says so. */
-    fun atCeilingIf(saturated: Boolean): VirtualTime =
-        if (saturated && !atCeiling) VirtualTime(ticks, weightNumerator, weightDenominator, atCeiling = true) else this
+    /**
+     * [ticksForWide] narrowed to a position a pick orders, held at [w]'s [positionCeiling]
+     * ([saturated]): the highest position at which an edge of weight [w] is still eligible (design
+     * §7.3 step 3, read at grid resolution). A bound at the ceiling admits every position below it,
+     * as the exact bound would.
+     */
+    fun ticksFor(w: Weight): Long = saturated(ticksForWide(w), w)
 
     /** This time as an exact [Rational], for diagnostics. Throws when it does not fit one. */
     fun toRational(): Rational {
@@ -282,9 +265,10 @@ internal class VirtualTime(
          * The weights are brought to one denominator, their least common multiple `L`, so
          * `Σ w = S / L` with `S` an integer.
          *
-         * @throws ArithmeticException if `L` or `S` does not fit in a `Long`.
+         * @throws ArithmeticException if `L` or `S` does not fit in a `Long`, or the sum leaves
+         *   128 bits.
          */
-        fun mean(positions: List<Long>, weights: List<Weight>): VirtualTime {
+        fun mean(positions: List<Int128>, weights: List<Weight>): VirtualTime {
             require(positions.size == weights.size && positions.isNotEmpty())
             val l = weights.fold(1L) { acc, w -> checkedMul(acc / gcd(acc, w.denominator), w.denominator) }
             val s = weights.fold(0L) { acc, w -> checkedAdd(acc, checkedMul(w.numerator, l / w.denominator)) }
@@ -293,7 +277,7 @@ internal class VirtualTime(
         }
 
         /** One edge's own time: its position [ticks] at weight [w]. */
-        fun of(ticks: Long, w: Weight): VirtualTime = VirtualTime(Int128.of(ticks), w.numerator, w.denominator)
+        fun of(ticks: Int128, w: Weight): VirtualTime = VirtualTime(ticks, w.numerator, w.denominator)
 
         private tailrec fun gcd(a: Long, b: Long): Long = if (b == 0L) a else gcd(b, a % b)
 
@@ -312,3 +296,19 @@ internal class VirtualTime(
 internal fun compareVirtual(a: Long, wa: Weight, b: Long, wb: Weight): Int =
     a.timesWide(checkedMul(wa.denominator, wb.numerator))
         .compareTo(b.timesWide(checkedMul(wb.denominator, wa.numerator)))
+
+/**
+ * [compareVirtual] for two wide positions: the sign of `a · ka − b · kb` with `ka = wa.den · wb.num`
+ * and `kb = wb.den · wa.num`, both positive. Exact for every pair (#3353): it compares
+ * `⌊a · ka / kb⌋` with `b`, which decides the order unless they are equal, and then the remainder
+ * does. A quotient past 128 bits is past every `b`, so its sign decides.
+ */
+internal fun compareVirtualWide(a: Int128, wa: Weight, b: Int128, wb: Weight): Int {
+    val ka = checkedMul(wa.denominator, wb.numerator)
+    val kb = checkedMul(wb.denominator, wa.numerator)
+    val floor = mulDiv(a, ka, kb, Rounding.FLOOR) ?: return if (a < Int128.ZERO) -1 else 1
+    val byFloor = floor.compareTo(b)
+    if (byFloor != 0) return if (byFloor < 0) -1 else 1
+    // ⌊a · ka / kb⌋ = b: equal exactly when nothing was left over, above `b` otherwise.
+    return if (mulDiv(a, ka, kb, Rounding.CEILING) == floor) 0 else 1
+}
