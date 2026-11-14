@@ -77,9 +77,19 @@ class OtlpHttpEdgeSentVersionsTest {
             private set
         var failNext: Boolean = false
 
+        /** Runs once, inside the next POST, before it is answered: a write that lands mid-request. */
+        var duringNextPost: (suspend () -> Unit)? = null
+        var duringPostFired: Int = 0
+            private set
+
         val client: HttpClient = HttpClient(
             MockEngine {
                 posts++
+                duringNextPost?.let { during ->
+                    duringNextPost = null
+                    duringPostFired++
+                    during()
+                }
                 if (failNext) {
                     failNext = false
                     failures++
@@ -255,6 +265,56 @@ class OtlpHttpEdgeSentVersionsTest {
         assertAll(
             { assertEquals(2.0.toRawBits(), disk[g], "precondition: the collector last received 2.0") },
             { assertEquals(DrainResult.Success(spansSent = 0, metricPointsSent = 1), result, "1.0 is owed to the collector again") },
+        )
+    }
+
+    /**
+     * The same two edges, but the second one's write lands INSIDE the first one's POST, between
+     * the first's digest and its write. The first sends only `s`, so its write must keep the gauge
+     * the second edge recorded: a write built on the digest-time copy puts back `g = 1.0`, and when
+     * the gauge returns to 1.0 the drain believes the collector already has it.
+     */
+    @Test
+    fun aWriteByAnotherEdgeDuringAPostIsKept() = runTest {
+        val store = RiggedStore()
+        val firstCollector = Collector()
+        val secondCollector = Collector()
+        val first = OtlpHttpEdge(firstCollector.client, endpoint, store)
+        val second = OtlpHttpEdge(secondCollector.client, "$endpoint/", store)
+        val t = telemetry()
+        val bridge = WarpOtlpBridge(t, clock)
+        val g = MetricKey("queue.depth", MetricKind.GAUGE)
+        val s = key("s")
+
+        t.metrics.setGauge(g, 1.0, timestamp = 1L)
+        t.metrics.incrementSum(s)
+        assertEquals(DrainResult.Success(spansSent = 0, metricPointsSent = 2), bridge.drain(first))
+
+        // The first edge's next drain carries only `s`; while its POST is in flight the gauge moves
+        // and the second edge delivers it.
+        t.metrics.incrementSum(s)
+        var inner: DrainResult? = null
+        firstCollector.duringNextPost = {
+            t.metrics.setGauge(g, 2.0, timestamp = 2L)
+            inner = bridge.drain(second)
+        }
+        val outer = bridge.drain(first)
+        val disk = onDisk(store, firstCollector)
+
+        t.metrics.setGauge(g, 1.0, timestamp = 3L)
+        val returned = bridge.drain(first)
+        assertAll(
+            { assertEquals(1, firstCollector.duringPostFired, "precondition: the second edge ran inside the POST") },
+            {
+                assertEquals(
+                    DrainResult.Success(spansSent = 0, metricPointsSent = 2),
+                    inner,
+                    "precondition: the second edge delivered the gauge (and `s`) mid-POST",
+                )
+            },
+            { assertEquals(DrainResult.Success(spansSent = 0, metricPointsSent = 1), outer, "precondition: the first edge sent `s`") },
+            { assertEquals(2.0.toRawBits(), disk[g], "the first edge's write must keep the gauge the second edge recorded") },
+            { assertEquals(DrainResult.Success(spansSent = 0, metricPointsSent = 1), returned, "1.0 is owed to the collector again") },
         )
     }
 }
