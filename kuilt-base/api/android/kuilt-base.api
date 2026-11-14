@@ -1,0 +1,5 @@
+public final class us/tractat/kuilt/KuiltVersion {
+	public static final field INSTANCE Lus/tractat/kuilt/KuiltVersion;
+	public final fun getVERSION ()Ljava/lang/String;
+}
+
