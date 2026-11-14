@@ -873,9 +873,20 @@ public class WarpLogRecordExporter(
      * is never installed at all: the exporter goes silently dead for the whole
      * process lifetime, on every launch, with nothing written and nothing
      * logged (#1860).
+     *
+     * That includes a `CancellationException` the [store] mints at this live caller, from its own
+     * `withTimeout`, say: it is a read that failed, and each guard here asks
+     * `currentCoroutineContext().ensureActive()` before treating it so. A cancellation of the
+     * caller's own job still propagates (#3384).
      */
     public suspend fun recover() {
-        val recovered = runCatchingCancellable { loadPersistedState() }.getOrElse { cause ->
+        val loaded = try {
+            Result.success(loadPersistedState())
+        } catch (cause: Throwable) {
+            currentCoroutineContext().ensureActive()
+            Result.failure(cause)
+        }
+        val recovered = loaded.getOrElse { cause ->
             logger.error(cause) { "otel.logs: persisted state could not be read, starting fresh" }
             recordRecoveryFailure(cause)
             return
@@ -967,7 +978,12 @@ public class WarpLogRecordExporter(
      * recovery forever, on every launch — the exact silent-death shape #1860 is about.
      */
     private suspend fun sweepLegacyKey() {
-        runCatchingCancellable { store.delete(LEGACY_KEY) }.onFailure { cause ->
+        try {
+            store.delete(LEGACY_KEY)
+        } catch (cause: Throwable) {
+            // The rest of recovery follows, so only this coroutine's own cancellation may end it;
+            // one the store minted is a refused delete (#3384).
+            currentCoroutineContext().ensureActive()
             logger.warn(cause) { "otel.logs: superseded legacy entry could not be deleted; retrying next start" }
         }
     }
@@ -997,9 +1013,13 @@ public class WarpLogRecordExporter(
      * other segment permanently in a format with no key-enumeration API to sweep them.
      * One bad read must cost one segment's records, which is what this KDoc has always
      * promised.
+     *
+     * The same holds for a `CancellationException` the store mints at this live caller: the
+     * remaining segments follow, so `ensureActive` lets only this coroutine's own cancellation
+     * through (#3384).
      */
     private suspend fun readSegment(number: Long): Rga<LogRecord>? =
-        runCatchingCancellable {
+        try {
             val bytes = store.read(segmentKey(number))
             if (bytes == null) {
                 logger.debug { "otel.logs: segment $number is named by the index but absent" }
@@ -1007,7 +1027,8 @@ public class WarpLogRecordExporter(
             } else {
                 cbor.decodeFromByteArray(logSerializer, bytes)
             }
-        }.getOrElse { cause ->
+        } catch (cause: Throwable) {
+            currentCoroutineContext().ensureActive()
             logger.warn(cause) { "otel.logs: segment $number is unreadable, dropping its records" }
             null
         }
