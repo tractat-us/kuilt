@@ -14,6 +14,7 @@
 package us.tractat.kuilt.quilter
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -22,9 +23,11 @@ import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.MuxSeam
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.BoundedCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.test.FakeSeam
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
@@ -196,5 +199,48 @@ class BoundedCounterTransferCoordinatorOversizedQuotaTest {
                 },
             )
         }
+    }
+
+    /**
+     * At a low-water threshold of exactly [Long.MAX_VALUE], C, past it at 2⁶³, is above the threshold
+     * and asks nobody for quota, while A, at 1, is at or below it and does. Read as [Long.MAX_VALUE],
+     * C's quota would sit *at* the threshold and C would borrow too.
+     */
+    @Test
+    fun aQuotaPastLongMaxValueIsAboveALowWaterThresholdOfLongMaxValue() = runTest(UnconfinedTestDispatcher()) {
+        val a = ReplicaId("threshold-a")
+        val b = ReplicaId("threshold-b")
+        val c = ReplicaId("threshold-c")
+        val everyone = setOf(PeerId(a.value), PeerId(b.value), PeerId(c.value))
+        val initial = receivedPastLongMax(a, b, c, kept = 1L)
+        val config = BoundedCounterTransferConfig(
+            lowWaterThreshold = Long.MAX_VALUE,
+            requestedAmount = 10L,
+            surplusFloor = 0L,
+            maxRetries = 1,
+            initialRetryDelay = 10.milliseconds,
+        )
+
+        fun borrower(self: ReplicaId): FakeSeam {
+            val seam = FakeSeam(selfId = PeerId(self.value), initialPeers = everyone)
+            BoundedCounterTransferCoordinator(
+                coordSeam = seam,
+                state = MutableStateFlow(initial),
+                self = self,
+                applyTransfer = {},
+                scope = backgroundScope,
+                config = config,
+            )
+            return seam
+        }
+        val seamA = borrower(a)
+        val seamC = borrower(c)
+        testScheduler.advanceUntilIdle()
+
+        assertAll(
+            { assertFailsWith<ArithmeticException>("the rig: C's quota does not fit in a Long") { initial.quota(c) } },
+            { assertTrue(seamA.directed.isNotEmpty(), "the rig: A, at 1, is at or below the threshold and asks") },
+            { assertEquals(emptyList(), seamC.directed.map { it.first }, "C, past Long.MAX_VALUE, asks nobody") },
+        )
     }
 }
