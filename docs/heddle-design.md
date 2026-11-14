@@ -571,8 +571,8 @@ having child edges. A ledger with nothing forgotten holds `ForgottenEdges.NONE`,
 which a default `Json` or `Cbor` does not encode, so its bytes are what they
 were before the component existed.
 
-**When an edge may be forgotten.** `forgetRefusal` names the first check an
-edge fails, as a `ForgetRefusal`, in this order:
+**When an edge may be forgotten.** When all of these hold. `forgetRefusal`
+names the first one an edge fails, as a `ForgetRefusal`:
 
 - the ledger knows the edge, its id is in the topology grammar (the floor can
   only carry an id that has a generation), and one record names it;

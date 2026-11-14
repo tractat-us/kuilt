@@ -224,17 +224,18 @@ derives it from the very slots it sums.
 `validate()` builds its own copy from scratch, so a defect in how `piece` carries the index
 forward cannot hide from the diagnostic.
 
-**A single writer will forget retired leaf edges (#3192, design §5.5; not yet built).** The
-index makes reads fast, but every retired edge is still stored. So the single-writer
-`LocalHeddle` will fold a finished leaf's edge into a new encoded component, `forgotten`, and
-drop the edge. It folds three things: per parent and replica, the `effIssued − returned` term
-this formula subtracts; per replica, the edge's effective leaf spend, which conservation sums;
-and the highest generation forgotten, since the generation floor is a single global maximum.
-`holdings` then subtracts the parent's `forgotten` entry beside the index's. This *is* a
-stored aggregate, so it is candidate B's shape, and it is sound only because nothing ships
-it: forgetting is not a join, `piece` refuses a delta that carries `forgotten`, and
-`:kuilt-heddle`'s replicated ledger requires it to be empty. Forgetting between peers is
-tracked by #3332.
+**A single writer forgets retired leaf edges (#3192, design §5.5).** The index makes reads
+fast, but every retired edge is still stored. So a ledger can fold a finished leaf's edge into
+a seventeenth encoded component, `forgotten`, and drop the edge's slots. It folds three things:
+per parent and replica, the `effIssued − returned` term this formula subtracts; per replica,
+the edge's effective leaf spend, which conservation sums; and the highest generation forgotten,
+since the generation floor is a single global maximum. `holdings` subtracts the parent's
+`forgotten` entry beside the index's. This *is* a stored aggregate, so it is candidate B's
+shape, and it is sound only because nothing ships it. Forgetting is not a join: `piece`
+refuses a fold that is not the receiver's own, so a ledger with no fold cannot take one, and
+`:kuilt-heddle` refuses at decode any replicated ledger that carries one. The ledger half
+shipped in #3357. The single-writer `LocalHeddle` does not call it yet, so an engine's ledger
+still keeps every retired edge until it does. Forgetting between peers is tracked by #3332.
 
 **Quarantine — narrower than "in the `validate()` conflict set".** An earlier draft of this
 section said `holdings` returns 0 whenever any edge on `group`'s lineage appears in the
