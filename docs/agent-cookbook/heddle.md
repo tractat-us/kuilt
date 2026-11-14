@@ -601,7 +601,10 @@ quantifies over (`enrolledReplicas()` reads it back); only a peer may depart its
 **`enroll(self)` is what opens a node's write gate** — until it applies, `reserve` and
 `schedule` answer `GateClosed` (with the replica and a `Reason`), which is a separate arm from
 `ReserveOutcome.NoHoldings` and `ScheduleOutcome.NothingToDelegate`, so a node that never
-enrolled can no longer pass for an idle one. **A peer that cannot read a log entry stops there**:
+enrolled can no longer pass for an idle one. Nor can a parent whose children cannot be ordered:
+`schedule` answers `PositionCeiling(parent)` once a child's position saturates, and
+`WeightBudget(parent)` when gossip merged an active set whose weights a pick cannot sum in `Long`,
+both on a static node too. **A peer that cannot read a log entry stops there**:
 `GateClosed.Reason.UnreadableControlEntry` names the log index and format version, `enroll` is
 refused, and a restart stops at the same entry, so it takes a build that can read the entry or a
 fresh log. The same bytes stop every peer on that build, and one peer on a newer build stops older
