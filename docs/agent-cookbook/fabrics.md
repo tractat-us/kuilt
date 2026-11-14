@@ -440,9 +440,9 @@ check(store.read(key) == null)
 ### Which kuilt wrote what you saved
 
 **Intent:** record which kuilt release wrote something you keep, such as a snapshot, a saved ledger or a log header, so a later run can tell old data from new. Don't copy the version string into your own code: the copy goes stale on the next upgrade, and a snapshot build never matches it.
-**Primitive:** `KuiltVersion.VERSION` (`:kuilt-core`, so every module brings it) — a `const val` generated from the version the build publishes: `<line>.0-dev` locally, `<line>.0-dev.<run>` in a snapshot, the tag's `x.y.z` in a release.
+**Primitive:** `KuiltVersion.VERSION` (`:kuilt-core`, so every module brings it) — a value generated from the version the build publishes: `<line>.0-dev` locally, `<line>.0-dev.<run>` in a snapshot, the tag's `x.y.z` in a release.
 
-Being a `const val`, it is copied into your code when your code compiles. It names the kuilt you compiled against, which is the one you run unless a jar is swapped under an already-built binary.
+It is a plain `val`, not a `const`, so it names the kuilt actually running, not the one your code compiled against. A `const` would be copied into your code at compile time, and would make every kuilt release recompile everything built on `:kuilt-core`.
 
 <!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/KuiltVersionSamples.kt#sampleKuiltVersion -->
 ```kotlin

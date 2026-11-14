@@ -1,8 +1,9 @@
 // kuilt.version-constant — generates `KuiltVersion.VERSION` into the module's commonMain (#3323).
 //
-// Applied by `:kuilt-core` alone, AFTER kuilt.kmp-library. One module carries the constant
+// Applied by `:kuilt-core` alone, AFTER kuilt.kmp-library. One module carries the value
 // because every other module depends on `:kuilt-core`; generating it everywhere would put the same
-// class in the same package into several klibs.
+// class in the same package into several klibs. It is a plain `val`, not a `const`: a `const` is
+// inlined into consumers and would put the version in `:kuilt-core`'s ABI (see GenerateKuiltVersion).
 //
 // The value is `project.version`, which the root build sets for every project before any
 // subproject evaluates — the same value the publications take their coordinates from. It is read
