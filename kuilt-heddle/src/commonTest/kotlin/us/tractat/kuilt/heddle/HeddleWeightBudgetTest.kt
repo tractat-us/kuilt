@@ -48,7 +48,8 @@ class HeddleWeightBudgetTest {
             governed.advertise(E1, HUNGRY)
 
             assertAll(
-                { assertIs<ControlOutcome.Conflict>(prepared, "prepare") },
+                { assertTrue(!weightFitsTheBudget(OVER_ALONE), "rig: the weight fails the budget alone") },
+                { assertEquals(ControlConflict.WeightBudget(ROOT, E1), assertIs<ControlOutcome.Conflict>(prepared, "prepare").conflict) },
                 { assertIs<ControlOutcome.Conflict>(activated, "activate of an edge never prepared") },
                 { assertEquals(before, governed.ledger.value, "the ledger is unchanged") },
                 { assertEquals(ScheduleOutcome.NothingToDelegate, governed.schedule(ROOT), "schedule does not throw") },
@@ -62,13 +63,17 @@ class HeddleWeightBudgetTest {
             assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E1, ROOT, C1, BIG_SIBLING)), "rig: fits alone")
             assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E2, ROOT, C2, SMALL_SIBLING)), "rig: fits alone")
             assertIs<ControlOutcome.Applied>(governed.activate(E1), "rig: one sibling fits")
+            assertAll(
+                { assertTrue(weightFitsTheBudget(BIG_SIBLING) && weightFitsTheBudget(SMALL_SIBLING), "rig: each fits alone") },
+                { assertFalse(governed.ledger.value.activationFitsTheBudget(E2), "rig: the pair does not") },
+            )
             val before = governed.ledger.value
             val activated = governed.activate(E2)
             governed.advertise(E1, HUNGRY)
             governed.advertise(E2, HUNGRY)
 
             assertAll(
-                { assertIs<ControlOutcome.Conflict>(activated, "activate") },
+                { assertEquals(ControlConflict.WeightBudget(ROOT, E2), assertIs<ControlOutcome.Conflict>(activated, "activate").conflict) },
                 { assertEquals(before, governed.ledger.value, "the ledger is unchanged") },
                 { assertEquals(Lifecycle.PREPARED, governed.ledger.value.lifecycle(E2), "the edge stays prepared") },
                 { assertIs<ScheduleOutcome.Delegated>(governed.schedule(ROOT), "the sibling that fits is served, and nothing throws") },
