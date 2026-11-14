@@ -100,6 +100,7 @@ public class HeddleNode internal constructor(
         // holds a fold (design §5.5); every ledger a peer sends is refused with one, by
         // [ReplicatedLedgerSerializer], and this is the same rule for the one this node starts from.
         require(!initialLedger.hasForgotten()) { "a replicated ledger never carries forgotten edges: forgetting is one writer's act" }
+        require(!initialLedger.hasFoldedReturns()) { "a replicated ledger never carries folded returns: folding a return is one writer's act" }
     }
 
     // ── channels over the one physical seam (byte-frugal String namespace) ──────────

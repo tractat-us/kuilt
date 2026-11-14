@@ -524,10 +524,16 @@ class LocalHeddlePersistenceTest {
      * `batch/x` lease is cancelled; the engine is restored under epoch 1 and leases once more, so the
      * open leases span two epochs. Returns that engine and its open leases. With [forgets] false
      * both engines keep every edge ([LocalHeddle.forgetsForTest]); nothing here is forgettable
-     * either way, since the one retired edge is a group's.
+     * either way, since the one retired edge is a group's. With [folds] false the first engine folds
+     * no return into a gauge ([LocalHeddle.foldReturnsForTest]), as no engine did before #3360; the
+     * restored one folds from then on, as every restored engine does.
      */
-    private fun richScenario(forgets: Boolean = true): Pair<LocalHeddle, List<Lease>> {
-        val h = LocalHeddle.fromTopology(richBefore, richPolicy, epoch = 0L).also { it.reconcileCapacity(4L); it.forgetsForTest = forgets }
+    private fun richScenario(forgets: Boolean = true, folds: Boolean = true): Pair<LocalHeddle, List<Lease>> {
+        val h = LocalHeddle.fromTopology(richBefore, richPolicy, epoch = 0L).also {
+            it.reconcileCapacity(4L)
+            it.forgetsForTest = forgets
+            it.foldReturnsForTest = folds
+        }
         check(h.attachRuntimeChild(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
         val interactive = h.lease(setOf(richBefore.groupId("acme", "interactive")), reservation = 2L, startedAt = 10L)
         val spare = h.lease(setOf(richBefore.groupId("spare")), reservation = 3L, startedAt = 11L)
@@ -706,12 +712,13 @@ class LocalHeddlePersistenceTest {
 
     /**
      * The rich scenario as format 1, on the 1/16-unit grid (#3313): never written by a release, but
-     * the same snapshot the current format writes, and an engine restored from it carries on exactly
-     * as the engine that wrote it would have.
+     * the same snapshot the current format writes from an engine that folds no return (#3360), and
+     * an engine restored from it carries on exactly as the engine that wrote it would have, folding
+     * the backlog its cancel left as it goes.
      */
     @Test
     fun richFormatOneOnTheGridStillRestoresAndCarriesOn() {
-        val (reference, open) = richScenario()
+        val (reference, open) = richScenario(folds = false)
         val snapshot = decoded(GOLDEN_FORMAT_1_RICH_GRID)
         val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
         assertAll(

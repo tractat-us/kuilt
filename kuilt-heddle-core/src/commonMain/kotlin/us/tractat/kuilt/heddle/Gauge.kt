@@ -16,8 +16,12 @@ import us.tractat.kuilt.math.timesWide
  *
  * ```
  * grossEv(e) = floor + (baseIssued(e) − folded) / w      (no gauge ⇒ baseIssued(e) / w)
- * ev(e)      = grossEv(e) − returned(e) / w
+ * ev(e)      = grossEv(e) − (returned(e) − returnsFolded) / w
  * ```
+ *
+ * In a `LocalHeddle` ledger "gross" is therefore net of the returns the gauge has folded, which is
+ * every return once a call has finished (see "Folded returns" below). In a replicated ledger the
+ * marker is always `0` and gross keeps every return.
  *
  * ## Why the pair, and not just the floor (issue #1752, F1)
  *
@@ -70,17 +74,42 @@ import us.tractat.kuilt.math.timesWide
  * a lower fold, a pair the raised one dominates on both components and reads the same as. The
  * replicated `HeddleNode` never raises a fold this way (#3353).
  *
+ * ## Folded returns: `LocalHeddle`'s returns marker
+ *
+ * A rebase lowers gross and raw alike, so on its own it can never bring down the returns gross
+ * keeps, service reserved and handed back unused. Left there, an edge's lifetime returns would
+ * reach its position ceiling: at [LocalHeddle.MAX_RESERVATION] charged one unit, a weight of 3/7
+ * got there in 4,681 leases (#3360). So each return `LocalHeddle` makes raises [folded] **and**
+ * [returnsFolded] by the `k = returned − returnsFolded` units not yet folded: gross comes down by
+ * `k / w`, the raw read subtracts `k` fewer returns, and `ev` does not move, so no pick changes.
+ * [returnsFolded] joins by `max` like the other two components, so the register is still a product
+ * of total orders, and a checkpoint carries it, so a checkpoint read alone reads the same.
+ *
+ * The replicated `HeddleNode` never writes the marker, and refuses a ledger that carries one: the
+ * replicated form of the fold is #3353's, and until it lands a replicated edge's returns stay
+ * bounded by its position ceiling, about `5.8 × 10¹⁷ / w.denominator` units.
+ *
+ * What still bounds a `LocalHeddle` edge is its `issued` counter, a `Long`: at
+ * [LocalHeddle.MAX_RESERVATION] a lease, an edge can issue `2⁶³ / 2⁴⁴ = 524,288` leases before it
+ * leaves `Long`, which throws rather than wraps (§10.12). The fold runs ahead of the issuance by at
+ * most the edge's highest position in units, a small fraction of `Long`, so it leaves `Long` at
+ * about the same point, and throws there too.
+ *
  * ## Wire form
  *
- * [folded] is an issuance count and so non-negative; the `init` check below is the read-path
- * guard for it — the generated deserializer calls this primary constructor, so an off-wire
+ * [folded] and [returnsFolded] are counts and so non-negative; the `init` check below is the
+ * read-path guard for them — the generated deserializer calls this primary constructor, so an off-wire
  * `folded` cannot bypass it (the same shape as [MintRecord]). [floor] carries its own guard
  * separately, because [Rational] keeps its invariant in a factory that a generated deserializer
  * *would* bypass: see [RationalSerializer], which this property routes through explicitly.
+ * [returnsFolded] is optional on the wire: a gauge with nothing folded encodes exactly as it did
+ * before the marker existed, and bytes from before it decode with `0`.
  *
  * @property floor the asserted lower bound on gross virtual service at [folded].
  * @property folded the base issuance the writer observed when it asserted [floor], or above it
- *   once a `LocalHeddle` rebase has raised it; non-negative.
+ *   once a `LocalHeddle` rebase or a folded return has raised it; non-negative.
+ * @property returnsFolded the edge's returns already folded into [folded], so the raw read leaves
+ *   them out; `0` except in a `LocalHeddle` ledger (#3360). Non-negative.
  */
 @Serializable
 public data class Gauge(
@@ -148,10 +177,32 @@ internal fun Gauge?.grossTicksAt(baseIssued: Long, weight: Weight): Long {
 }
 
 /**
- * A gross position less [returned] units, the raw position a pick reads: exact below the ceiling,
- * and the ceiling itself for a gross held there, since what is left after the returns of an amount
- * that may be larger is not known either. The one copy, shared by [HeddlePolicy] and
- * [EntitlementLedger.virtualService] so the two public reads cannot disagree at the ceiling.
+ * The raw position a pick reads: the gross position at [baseIssued] less the returns the gauge has
+ * not folded, `returned − returnsFolded` units (#3360). Exact below the ceiling, and the ceiling
+ * itself for a gross held there, since what is left after the returns of an amount that may be
+ * larger is not known either. The one copy, shared by [HeddlePolicy] and
+ * [EntitlementLedger.virtualService], so the two public reads cannot disagree at the ceiling, nor
+ * subtract a folded return a second time.
+ *
+ * @param returned the edge's lifetime returns, `Σ_r returned(e)[r]`.
  */
-internal fun netTicks(gross: Long, returned: Long, weight: Weight): Long =
-    if (atCeiling(gross, weight)) gross else checkedSub(gross, ticksOf(returned))
+internal fun Gauge?.rawTicksAt(baseIssued: Long, returned: Long, weight: Weight): Long {
+    val gross = grossTicksAt(baseIssued, weight)
+    if (atCeiling(gross, weight)) return gross
+    return checkedSub(gross, ticksOf(checkedSub(returned, this?.returnsFolded ?: 0L)))
+}
+
+/**
+ * This gauge with every return not yet folded, `returned − returnsFolded` units, folded into it:
+ * the fold and the marker both raised by that many (#3360). Gross comes down by exactly those
+ * returns and the raw read ([rawTicksAt]) does not move, so no pick changes. `null` when there is
+ * nothing to fold. Only `LocalHeddle` calls this; the replicated form is #3353's.
+ *
+ * @param returned the edge's lifetime returns, `Σ_r returned(e)[r]`.
+ * @throws ArithmeticException if the fold leaves `Long`, which no ledger reaches (§10.12).
+ */
+internal fun Gauge.foldingReturns(returned: Long): Gauge? {
+    val unfolded = checkedSub(returned, returnsFolded)
+    if (unfolded <= 0L) return null
+    return copy(folded = checkedAdd(folded, unfolded), returnsFolded = returned)
+}

@@ -51,12 +51,11 @@ class LocalHeddleRebaseTest {
     private fun LocalHeddle.edgeOf(lane: GroupId): AttachmentId =
         checkNotNull(snapshot().ledger.lineageOf(lane)?.last()) { "${lane.value} has no lineage" }
 
-    /** [lane]'s raw position in ticks: gross, less what it returned. */
+    /** [lane]'s raw position in ticks: gross, less what it returned and the gauge has not folded. */
     private fun LocalHeddle.ticks(lane: GroupId): Long {
         val ledger = snapshot().ledger
         val edge = edgeOf(lane)
-        val gross = ledger.gauge(edge).grossTicksAt(ledger.baseIssuance(edge), Weight.ONE)
-        return netTicks(gross, ledger.edge(edge)?.returned ?: 0L, Weight.ONE)
+        return ledger.gauge(edge).rawTicksAt(ledger.baseIssuance(edge), ledger.edge(edge)?.returned ?: 0L, Weight.ONE)
     }
 
     /** Put [lane]'s position at exactly [ticks] by raising its gauge floor at its current fold. */

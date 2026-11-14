@@ -18,6 +18,13 @@ import kotlinx.serialization.encoding.Encoder
  * when the field was unknown: the replicator logs the frame and drops it, and the control log reads
  * the entry as unreadable.
  *
+ * A gauge's returns marker ([Gauge.returnsFolded], #3360) is refused the same way and for the same
+ * reason: only `LocalHeddle` folds a return, and the replicated form of the fold is #3353's. A
+ * marker that reached [EntitlementLedger.piece] would join in by `max`, and the replica holding it
+ * would read that edge's returns as folded while every other read them unfolded. A ledger with no
+ * marker encodes exactly as it did before the marker existed, so the bytes peers exchange are
+ * unchanged.
+ *
  * The descriptor is the ledger's own, so nothing that reads it, or the bytes, can tell the two apart.
  */
 internal object ReplicatedLedgerSerializer : KSerializer<EntitlementLedger> {
@@ -31,6 +38,9 @@ internal object ReplicatedLedgerSerializer : KSerializer<EntitlementLedger> {
         val value = ledger.deserialize(decoder)
         if (value.hasForgotten()) {
             throw SerializationException("a replicated ledger never carries forgotten edges: forgetting is one writer's act")
+        }
+        if (value.hasFoldedReturns()) {
+            throw SerializationException("a replicated ledger never carries folded returns: folding a return is one writer's act")
         }
         return value
     }

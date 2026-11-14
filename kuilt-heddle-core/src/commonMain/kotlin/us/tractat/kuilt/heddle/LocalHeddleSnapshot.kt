@@ -256,9 +256,13 @@ private class SnapshotFormat1(
     val leases: List<LeaseFormat1>,
     val lastApplied: Topology,
 ) {
-    /** The snapshot, and throws [IllegalArgumentException] when the ledger carries a fold, which format 1 predates. */
+    /**
+     * The snapshot, and throws [IllegalArgumentException] when the ledger carries a fold of forgotten
+     * edges or a gauge's returns marker (#3360), both of which format 1 predates.
+     */
     fun toSnapshot(): LocalHeddleSnapshot {
         require(!ledger.hasForgotten()) { "a format-1 snapshot carries forgotten edges, which format 1 predates" }
+        require(!ledger.hasFoldedReturns()) { "a format-1 snapshot carries folded returns, which format 1 predates" }
         return LocalHeddleSnapshot(epoch, ledger, allocatorMemory, totalSlots, leases.map { it.toPersisted(ledger) }, lastApplied)
     }
 }

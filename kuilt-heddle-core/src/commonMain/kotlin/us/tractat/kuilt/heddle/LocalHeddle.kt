@@ -1302,7 +1302,15 @@ public class LocalHeddle private constructor(
         return start.piece(spend.delta)
     }
 
-    /** Hand [amount] back up [path], leaf first. */
+    /**
+     * Hand [amount] back up [path], leaf first, then fold every return on the path into its edge's
+     * gauge (#3360): each gauge's fold and returns marker rise by the returns it has not folded, so
+     * the edge's gross position comes down by what was handed back and its raw position, the one a
+     * pick reads, stays where the return put it. No pick changes, and returned service no longer
+     * climbs toward the position ceiling. It runs inside the caller's [atomically], so the fold is
+     * kept with the returns or neither is. A backlog the gauge has not folded, as a v0.7.4 snapshot
+     * carries, folds with the first return across the edge.
+     */
     private fun releaseUp(start: EntitlementLedger, path: List<AttachmentId>, amount: Long): EntitlementLedger {
         if (amount == 0L) return start
         var local = start
@@ -1310,7 +1318,8 @@ public class LocalHeddle private constructor(
             val patch = checkNotNull(local.release(SELF, edge, amount)) { "the release of $amount up ${edge.value} was refused" }
             local = local.piece(patch.delta)
         }
-        return local
+        if (!foldReturnsForTest) return local
+        return local.returnsFold(path)?.let(local::piece) ?: local
     }
 
     /**

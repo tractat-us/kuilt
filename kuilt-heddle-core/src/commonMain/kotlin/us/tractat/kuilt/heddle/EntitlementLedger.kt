@@ -452,6 +452,11 @@ public class EntitlementLedger private constructor(
      * rounded up once ([grossTicksAt], #3313). `null` if [id] is unknown *or divergent* (no single record ⇒ no
      * single weight to divide by).
      *
+     * In a `LocalHeddle` ledger "gross" is net of the returns the gauge has folded: each return
+     * raises the fold by what it hands back ([Gauge.returnsFolded], #3360), so gross there counts
+     * only the returns not yet folded, which is none once a call has finished. In a replicated
+     * ledger nothing folds a return, and gross keeps every one of them until #3353.
+     *
      * ## Base issuance, not effective (issue #1752, F2)
      *
      * The fold axis is the **base** `issued` counter — deliberately *not* `effIssued`, which adds
@@ -471,16 +476,18 @@ public class EntitlementLedger private constructor(
         recordOf(id)?.let { grossVirtualService(id, it.weight) }
 
     /**
-     * [id]'s virtual service net of returns — `grossVirtualService − returned / w` (design §7.1's
-     * `b + committedService / weight`, with the gauge supplying `b` and the fold). `null` if [id]
-     * is unknown or divergent. At the ceiling it reads the ceiling, as a pick does ([netTicks]).
+     * [id]'s virtual service net of returns — `grossVirtualService − (returned − returnsFolded) / w`
+     * (design §7.1's `b + committedService / weight`, with the gauge supplying `b` and the fold).
+     * [grossVirtualService] is already net of the returns the gauge has folded ([Gauge.returnsFolded],
+     * #3360), so only the rest are subtracted, and the read is the same whether a return has been
+     * folded or not. `null` if [id] is unknown or divergent. At the ceiling it reads the ceiling, as
+     * a pick does ([rawTicksAt]).
      *
      * @throws ArithmeticException if the returns, in ticks, leave `Long`.
      */
     public fun virtualService(id: AttachmentId): Rational? {
         val w = recordOf(id)?.weight ?: return null
-        val gross = gauges[id].grossTicksAt(counterValue(issued, id), w)
-        return ticksToVirtual(netTicks(gross, counterValue(returned, id), w), w)
+        return ticksToVirtual(gauges[id].rawTicksAt(counterValue(issued, id), counterValue(returned, id), w), w)
     }
 
     /** [grossVirtualService] once the edge's single weight is in hand. */
@@ -1551,9 +1558,12 @@ public class EntitlementLedger private constructor(
         if (amount > holdings(rec.parent, r)) return null
         val lineage = lineageEdges(rec.parent) ?: return null
         val issuedAfter = checkedAdd(counterValue(issued, edge), amount)
+        // The checkpoint carries the returns marker it read the floor through (#3360): on its own, a
+        // pair with a zero marker would read every folded return as still to subtract.
+        val checkpoint = Gauge(grossVirtualServiceAt(edge, rec.weight, issuedAfter), issuedAfter, gauges[edge]?.returnsFolded ?: 0L)
         val bump = of(
             issued = mapOf(edge to bumpedSlot(issued, edge, r, amount)),
-            gauges = mapOf(edge to Gauge(grossVirtualServiceAt(edge, rec.weight, issuedAfter), issuedAfter)),
+            gauges = mapOf(edge to checkpoint),
         )
         return Patch(bump.piece(witness(r, lineage)))
     }
@@ -1605,6 +1615,21 @@ public class EntitlementLedger private constructor(
         val observed = counterValue(issued, edge)
         val floor = ticksToVirtual(minOf(maxOf(ticks, saturatedTicksOf(observed, w)), positionCeiling(w)), w)
         return Patch(of(gauges = mapOf(edge to Gauge(floor, observed))))
+    }
+
+    /**
+     * The gauges of [edges] with every return each has not folded folded in ([Gauge.foldingReturns],
+     * #3360), as a delta to [piece] in; `null` when there is nothing to fold. An edge with no gauge
+     * is left alone: folding into it would seat it at its own origin. `LocalHeddle` calls this after
+     * each return, in the same swap; the replicated ledger never folds (#3353).
+     */
+    internal fun returnsFold(edges: Collection<AttachmentId>): EntitlementLedger? {
+        val folded = LinkedHashMap<AttachmentId, Gauge>()
+        for (edge in edges) {
+            val gauge = gauges[edge] ?: continue
+            gauge.foldingReturns(counterValue(returned, edge))?.let { folded[edge] = it }
+        }
+        return if (folded.isEmpty()) null else of(gauges = folded)
     }
 
     /**

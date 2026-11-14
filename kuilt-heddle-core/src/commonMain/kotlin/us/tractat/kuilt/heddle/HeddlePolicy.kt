@@ -189,8 +189,12 @@ public object HeddlePolicy {
      *
      * ```
      * grossEv = floor + (baseIssued − folded) / w      (no gauge ⇒ baseIssued / w)
-     * ev      = grossEv − returned / w
+     * ev      = grossEv − (returned − returnsFolded) / w
      * ```
+     *
+     * A `LocalHeddle` folds each return into the gauge as it is made ([Gauge.returnsFolded], #3360),
+     * so there `grossEv` is already net of the returns folded and only the rest are subtracted here.
+     * A replicated ledger never folds one, so its marker is `0` and the read is as it always was.
      *
      * `b` is the gauge's [floor][Gauge.floor], carried with the issuance the writer had actually
      * observed when it asserted it, so a stale seat is self-limiting rather than a permanent lie;
@@ -211,7 +215,7 @@ public object HeddlePolicy {
 
     /** [virtualService] as a position: whole ticks of the edge's own service. */
     internal fun rawTicks(edge: PolicyEdge): Long =
-        netTicks(edge.gauge.grossTicksAt(edge.baseIssued, edge.record.weight), edge.summary.returned, edge.record.weight)
+        edge.gauge.rawTicksAt(edge.baseIssued, edge.summary.returned, edge.record.weight)
 
     /**
      * The position a pick reads: [rawTicks] plus the scheduler-local wake clamp, both in ticks, held

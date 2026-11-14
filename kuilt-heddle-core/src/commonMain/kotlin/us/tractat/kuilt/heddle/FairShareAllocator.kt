@@ -377,7 +377,7 @@ public class FairShareAllocator(
             val shift = (move - absorbed) / TICKS_PER_UNIT
             if (shift == 0L) continue
             val gauge = checkNotNull(edge.gauge) { "${edge.record.id.value} was seated above" }
-            gauges[edge.record.id] = Gauge(gauge.floor, gauge.folded.plusOrNull(shift) ?: return null)
+            gauges[edge.record.id] = gauge.copy(folded = gauge.folded.plusOrNull(shift) ?: return null)
         }
         if (gauges.isEmpty() && offsets.isEmpty()) return null
         return Rebase(if (gauges.isEmpty()) ledger else ledger.piece(EntitlementLedger.of(gauges = gauges)), offsets)
