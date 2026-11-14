@@ -8,7 +8,7 @@ package us.tractat.kuilt.math
  * to fit. That is the difference from `a.timesOrNull(b)?.let { it / divisor }`, which refuses
  * `(2⁶² · 4) / 8` although the answer, 2⁶¹, is small.
  *
- * @throws IllegalArgumentException if [divisor] is zero.
+ * @throws ArithmeticException if [divisor] is zero, as `Long / 0` does.
  * @sample us.tractat.kuilt.math.sampleMulDiv
  */
 public fun mulDiv(a: Long, b: Long, divisor: Long, rounding: Rounding): Long? =

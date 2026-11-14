@@ -70,10 +70,10 @@ public class Int128 private constructor(
      * a quota rounds a share *down* so it never hands out more than it holds. A default would make
      * that choice silently.
      *
-     * @throws IllegalArgumentException if [divisor] is zero.
+     * @throws ArithmeticException if [divisor] is zero, as `Long / 0` does.
      */
     public fun divideOrNull(divisor: Long, rounding: Rounding): Long? {
-        require(divisor != 0L) { "division by zero: $this / 0" }
+        if (divisor == 0L) throw ArithmeticException("division by zero: $this / 0")
         val negative = isNegative != (divisor < 0L)
         val n = magnitude()
         val d = if (divisor < 0L) (-divisor).toULong() else divisor.toULong() // |MIN_VALUE| = 2⁶³ fits.
@@ -98,10 +98,10 @@ public class Int128 private constructor(
      * it: the result has this value's sign and is smaller than [divisor] in magnitude, so it always
      * fits in a `Long`. It is what Euclid's algorithm needs to take a gcd of a 128-bit value.
      *
-     * @throws IllegalArgumentException if [divisor] is zero.
+     * @throws ArithmeticException if [divisor] is zero, as `Long % 0` does.
      */
     public operator fun rem(divisor: Long): Long {
-        require(divisor != 0L) { "division by zero: $this % 0" }
+        if (divisor == 0L) throw ArithmeticException("division by zero: $this % 0")
         val n = magnitude()
         val d = if (divisor < 0L) (-divisor).toULong() else divisor.toULong()
         val r = divideUnsigned(n.high.toULong(), n.low.toULong(), d).remainder // < |divisor| ≤ 2⁶³
