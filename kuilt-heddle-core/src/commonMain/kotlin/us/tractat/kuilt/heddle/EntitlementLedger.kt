@@ -2338,8 +2338,13 @@ public class EntitlementLedger private constructor(
     /** The highest generation any edge this ledger has forgotten carried, or `-1`: part of the generation floor. */
     internal fun forgottenGenerationFloor(): Long = forgotten.generationFloor
 
-    /** Whether this ledger has forgotten anything. A replicated ledger never has. */
-    internal fun hasForgotten(): Boolean = !forgotten.isEmpty()
+    /**
+     * Whether this ledger has forgotten anything. A replicated ledger never has: `:kuilt-heddle` reads
+     * this to refuse, at decode, a ledger a peer sent with a fold in it. [HeddleInternalApi] because
+     * `internal` cannot cross the module boundary.
+     */
+    @HeddleInternalApi
+    public fun hasForgotten(): Boolean = !forgotten.isEmpty()
 
     /** Every edge id mentioned by any component. */
     internal fun allEdges(): Set<AttachmentId> =
