@@ -55,6 +55,8 @@ class WarpMetricExporterBatchTest {
                 is MetricUpdate.SetGauge -> setGauge(u.key, u.value, u.timestamp)
                 is MetricUpdate.AddCardinality -> addCardinality(u.key, u.element)
                 is MetricUpdate.RecordHistogram -> recordHistogram(u.key, u.value)
+                // No single-point mutator: its single-point form is a batch of one.
+                is MetricUpdate.AddExponentialHistogram -> record(listOf(u))
             }
             if (firstFailure == null && r is MetricExportResult.Failure) firstFailure = r
         }

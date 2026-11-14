@@ -56,7 +56,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  *   scale — configure via [alphaForOtlpScale] (the default [histogramPrototype] is
  *   scale-[DEFAULT_OTLP_HISTOGRAM_SCALE]-aligned, α ≈ 1.08%). Like [HyperLogLog]
  *   precision, the sketch configuration is a cluster-wide constant: sketches merge
- *   only when it matches exactly.
+ *   only when it matches exactly. Values arrive one at a time through [recordHistogram], or
+ *   already bucketed — one interval of an SDK's exponential histogram — as a
+ *   [MetricUpdate.AddExponentialHistogram] at [histogramScale] or finer.
  *
  * ## Key inversion
  *
@@ -142,9 +144,19 @@ public class WarpMetricExporter(
         require(histogramPrototype.count == 0L) {
             "histogramPrototype must be an empty sketch, had count ${histogramPrototype.count}"
         }
-        // Fail fast on a non-OTLP-aligned accuracy (throws IllegalArgumentException).
-        otlpScaleFor(histogramPrototype.relativeAccuracy)
     }
+
+    /**
+     * The OTLP exponential-histogram scale every histogram series here is kept at — the scale
+     * [histogramPrototype]'s accuracy aligns with, [DEFAULT_OTLP_HISTOGRAM_SCALE] by default.
+     *
+     * A [MetricUpdate.AddExponentialHistogram] must arrive at this scale or a finer one: a coarser
+     * bucket cannot be split without breaking the sketch's accuracy, so [record] refuses it. A
+     * producer that controls its bucketing, such as an OpenTelemetry SDK's exponential-histogram
+     * aggregation, should cap its own scale at this value.
+     */
+    // Computing it fails fast on a non-OTLP-aligned accuracy (throws IllegalArgumentException).
+    public val histogramScale: Int = otlpScaleFor(histogramPrototype.relativeAccuracy)
 
     // Two-tier locking, both explicit primitives (repo policy: correctness must hold under a real
     // multi-threaded dispatcher; limitedParallelism(1) confinement is BANNED).
@@ -469,7 +481,8 @@ public class WarpMetricExporter(
      *   touched, and a partial refusal moves both `acknowledged` and `failed`.
      *
      * In memory the exporter ends where applying [updates] one by one through [incrementSum],
-     * [incrementSumDouble], [setGauge], [addCardinality] and [recordHistogram] would leave it,
+     * [incrementSumDouble], [setGauge], [addCardinality] and [recordHistogram] — or, for a
+     * [MetricUpdate.AddExponentialHistogram], through a batch of that one update — would leave it,
      * eviction included: the [maxMetrics] cap is decided per update, in order. On disk, a touched
      * kind holds its state as of the **end** of the batch. The one place that differs from the
      * single-point sequence is a kind whose series a *later* update of another kind evicted: written
@@ -477,13 +490,18 @@ public class WarpMetricExporter(
      * already gone. A kind the batch never touched is not rewritten, as before.
      *
      * An empty [updates] is [MetricExportResult.Success] and touches neither memory nor the store.
-     * Each [MetricUpdate] validates its own arguments at construction, so a batch that was built
-     * cannot fail half-way through being applied.
+     * Each [MetricUpdate] validates its own arguments at construction, and what only this exporter
+     * can judge — a [MetricUpdate.AddExponentialHistogram] coarser than [histogramScale] — is
+     * checked for **every** update before **any** is applied. So a batch cannot fail half-way
+     * through being applied: it applies whole, or throws with nothing changed in memory or on disk.
      *
+     * @throws IllegalArgumentException if an update holds an exponential histogram whose scale is
+     *   below [histogramScale]; nothing in the batch is applied.
      * @sample us.tractat.kuilt.otel.sampleWarpMetricExporterBatch
      */
     public suspend fun record(updates: List<MetricUpdate>): MetricExportResult {
         if (updates.isEmpty()) return MetricExportResult.Success
+        updates.forEach(::validate)
         return writeMutex.withLock {
             val writes = lock.withLock {
                 // The last series each kind's updates named — only for the failure log line.
@@ -512,6 +530,23 @@ public class WarpMetricExporter(
         GAUGES(GAUGE_STORE_KEY),
         CARDINALITIES(CARDINALITY_STORE_KEY),
         HISTOGRAMS(HISTOGRAM_STORE_KEY),
+    }
+
+    /**
+     * Refuse an update this exporter cannot apply, before [record] applies any of the batch. Every
+     * variant has an arm, so a new one has to decide what it needs checked here; most need nothing,
+     * because their constructor already refused what their CRDT would.
+     */
+    private fun validate(update: MetricUpdate) {
+        when (update) {
+            is MetricUpdate.IncrementSum,
+            is MetricUpdate.IncrementSumDouble,
+            is MetricUpdate.SetGauge,
+            is MetricUpdate.AddCardinality,
+            is MetricUpdate.RecordHistogram,
+            -> Unit
+            is MetricUpdate.AddExponentialHistogram -> Unit
+        }
     }
 
     /** Apply one update to its map, evicting first if it opens a new series. Called inside [lock]. */
@@ -546,6 +581,7 @@ public class WarpMetricExporter(
             histograms[update.key] = current.piece(current.add(replica, update.value).delta)
             StoredKind.HISTOGRAMS
         }
+        is MetricUpdate.AddExponentialHistogram -> TODO("#3291: apply")
     }
 
     /** Encode one kind's whole map. Called inside [lock]. */

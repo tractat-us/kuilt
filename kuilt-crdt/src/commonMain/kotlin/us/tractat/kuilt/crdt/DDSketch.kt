@@ -147,6 +147,38 @@ public class DDSketch private constructor(
     }
 
     /**
+     * Record counts that were **already bucketed** elsewhere, as observed by [replica]: [positive]
+     * and [negative] map a bucket index — in this sketch's own indices, the keys of
+     * [positiveBuckets] and [negativeBuckets] — to how many values fell in it, and [zeroCount]
+     * counts the values that were zero.
+     *
+     * This is the weighted twin of [add]. Adding `n` to a bucket here leaves the sketch exactly as
+     * `n` calls to [add] with values from that bucket would: each touched cell is this replica's
+     * [GCounter] slot, incremented by the count with `inc(by)`. So successive calls **add**, which
+     * is what a stream of per-interval bucket deltas needs, where [piece] — a join — would keep only
+     * the larger of two deltas. A re-delivered patch is still absorbed idempotently, as with [add].
+     *
+     * Indices outside the indexable range clamp the way [add] clamps a value, at bucket
+     * granularity: a bucket below the one holding [minIndexedValue] counts as zeros, and a bucket
+     * above the one holding [maxIndexedValue] lands in that top bucket and is counted in
+     * [overflowCount]. The two edge buckets themselves are kept as given, since a bucket count
+     * cannot say which side of the threshold its values were on.
+     *
+     * A count of zero is skipped, so it creates no empty cell; the patch for an all-zero call is
+     * empty. The receiver is unchanged; apply with [piece].
+     *
+     * @throws IllegalArgumentException if any count, or [zeroCount], is negative.
+     */
+    public fun addBuckets(
+        replica: ReplicaId,
+        positive: Map<Int, Long>,
+        negative: Map<Int, Long>,
+        zeroCount: Long,
+    ): Patch<DDSketch> {
+        TODO("#3291: addBuckets")
+    }
+
+    /**
      * Estimate the [q]-quantile (q in `[0, 1]`) of all recorded values.
      *
      * Walks the buckets in ascending value order (negative store by descending
