@@ -307,7 +307,7 @@ class LocalHeddlePositionCeilingTest {
             }
         }
         assertAll(
-            { assertEquals(0, allocator.schedule(root, cell, earmarked = 0L) { wants }) },
+            { assertEquals(AllocationOutcome.PositionCeiling(root), allocator.schedule(root, cell, earmarked = 0L) { wants }) },
             { assertEquals(ledger, cell.current, "the refused pick wrote nothing") },
             { assertFailsWith<ArithmeticException> { allocator.pickChild(root, ledger, { wants }, { wants }) } },
         )
