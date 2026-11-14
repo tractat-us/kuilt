@@ -191,8 +191,8 @@ A finite product of semilattices is a semilattice, so
 `GCounter` delta carries the resulting absolute slot value, so re-delivering any patch is
 absorbed idempotently by max — **duplicate-delivery idempotence comes from the lattice, not
 event ids.** No component decrements; `outstanding`/`holdings` are derived and may fall.
-The one planned exception is a single writer's forgetting of retired edges (see `holdings`
-below), which removes slots and is therefore not a join; `piece` refuses a delta that carries it.
+The one exception is a single writer's forgetting of retired edges, and of prepared edges
+its topology does not want (see `holdings` below), which removes slots and is therefore not a join; `piece` refuses a delta that carries it.
 
 ## `holdings(group, r)`
 
@@ -234,8 +234,9 @@ since the generation floor is a single global maximum. `holdings` subtracts the 
 shape, and it is sound only because nothing ships it. Forgetting is not a join: `piece`
 refuses a fold that is not the receiver's own, so a ledger with no fold cannot take one, and
 `:kuilt-heddle` refuses at decode any replicated ledger that carries one. The ledger half
-shipped in #3357. The single-writer `LocalHeddle` does not call it yet, so an engine's ledger
-still keeps every retired edge until it does. Forgetting between peers is tracked by #3332.
+shipped in #3357. The single-writer `LocalHeddle` forgets in the swap that retires an edge, so
+an engine's ledger keeps a retired edge only while its books are still open. Forgetting between
+peers is tracked by #3332.
 
 **Quarantine — narrower than "in the `validate()` conflict set".** An earlier draft of this
 section said `holdings` returns 0 whenever any edge on `group`'s lineage appears in the

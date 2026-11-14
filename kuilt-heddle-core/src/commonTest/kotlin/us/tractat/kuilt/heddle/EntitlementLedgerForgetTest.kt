@@ -200,6 +200,29 @@ class EntitlementLedgerForgetTest {
         )
     }
 
+    /**
+     * A prepare of an id at or below the forgotten floor is refused where it is asked, with `null`,
+     * rather than handed back as a patch that the resurrection guard in [EntitlementLedger.piece]
+     * then throws on. The ledger cannot tell a forgotten id from one it never held, so the floor
+     * refuses both. An id outside the topology grammar has no generation, and no floor names it.
+     */
+    @Test
+    fun aPrepareAtOrBelowTheForgottenFloorIsRefused() {
+        val forgot = checkNotNull(closed().forget(listOf(e)))
+        val child = GroupId("root/n")
+        fun prepareAt(generation: Long) = forgot.prepare(AttachmentRecord(attachmentIdOf(child, Weight.ONE, generation), root, child, Weight.ONE))
+        val outsideGrammar = AttachmentId("root>n")
+        assertAll(
+            { assertEquals(3L, forgot.forgottenGenerationFloor(), "the rig: the floor is the forgotten edge's generation") },
+            { assertNull(forgot.prepare(AttachmentRecord(e, root, c, Weight.ONE)), "the forgotten id itself") },
+            { assertNull(prepareAt(3L), "another id at the floor") },
+            { assertNull(prepareAt(0L), "an id below it") },
+            { assertTrue(prepareAt(4L) != null, "the control: the id above the floor is prepared") },
+            { assertTrue(forgot.prepare(AttachmentRecord(outsideGrammar, root, child, Weight.ONE)) != null, "an id with no generation") },
+            { assertTrue(closed().prepare(AttachmentRecord(attachmentIdOf(child, Weight.ONE, 0L), root, child, Weight.ONE)) != null, "a ledger that forgot nothing has no floor") },
+        )
+    }
+
     // ── the join refuses what a second writer would produce ───────────────────────────────────
 
     @Test
@@ -307,7 +330,8 @@ class EntitlementLedgerForgetTest {
         val tally = Tally()
         for (seed in 0 until 12) {
             val r = Random(seed)
-            val history = History(LocalHeddle.fromTopology(tree, policy, epoch = 0L).also { it.reconcileCapacity(4L) })
+            // An engine that keeps everything, so its ledger holds the retired edges this forgets.
+            val history = History(LocalHeddle.fromTopology(tree, policy, epoch = 0L).also { it.reconcileCapacity(4L); it.forgetsForTest = false })
             repeat(6) { round ->
                 repeat(40) { step(history, r, at = round * 100L + it) }
                 checkpoint(history, r, tally, "seed $seed round $round")

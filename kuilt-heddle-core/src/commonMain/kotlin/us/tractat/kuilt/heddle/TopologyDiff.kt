@@ -105,7 +105,9 @@ public sealed interface TopologyStep {
  *
  * A prepared edge nothing wants is left prepared. It carries nothing and nothing can cross it, and
  * closing it would make it a second live edge into its child — which quarantines the child, and
- * with it every group below, until the retire lands. If its weight comes back, it is adopted. A
+ * with it every group below, until the retire lands. If its weight comes back, it is adopted, unless
+ * the ledger has forgotten it: [LocalHeddle] forgets such an edge in the swap that lands a list
+ * ([unwantedPrepared]), and a new edge is prepared instead. A
  * runtime child nothing wants is the exception, as above: its prepared edge is closed, ahead of its
  * live edge, and retired, so the child cannot come back with the marker. Between that close and
  * that retire the child has two live inbound edges, which is why the list is applied as one unit
@@ -172,6 +174,44 @@ public fun Topology.Companion.diff(new: Topology, ledger: EntitlementLedger, gen
         }
     }
     return planned.sortedWith(STEP_ORDER).map { it.step }
+}
+
+/**
+ * The edges among [candidates] that a [Topology.Companion.diff] of this topology against [ledger]
+ * leaves PREPARED and names in no step: the prepared edges nothing wants, which [LocalHeddle]
+ * forgets with only the generation floor moved (design §5.5). Each is an edge the diff owns, and
+ * one of:
+ * - into a declared child, other than the edge it adopts;
+ * - into a declared child this topology no longer has, since a removal leaves a prepared edge
+ *   alone ([planRemoval]);
+ * - into a runtime child still attached under its marker, other than the edge it adopts. Only
+ *   when there is one: otherwise this prepared edge may be what says the child is attached, and
+ *   forgetting it would detach the child.
+ *
+ * A runtime child whose marker is gone is never in it, since the diff closes and retires its
+ * prepared edges. Forgetting one of these changes this diff not at all, but a later one: a diff
+ * that wants the edge back, at the same weight, prepares a new edge above the generation floor
+ * where it would have adopted the old one. Reads [candidates]' children's own edges from the
+ * index, not every edge.
+ */
+internal fun Topology.unwantedPrepared(candidates: Collection<AttachmentId>, ledger: EntitlementLedger): List<AttachmentId> {
+    if (candidates.isEmpty()) return emptyList()
+    val declared = declaredChildren().associateBy { it.child }
+    return candidates.filter { id ->
+        val owned = ledger.ownedEdge(id, root)?.takeIf { it.lifecycle == Lifecycle.PREPARED } ?: return@filter false
+        val child = owned.record.child
+        val edges = ledger.ownedEdgesInto(child, root)
+        val path = pathOf(child)
+        val want = declared[child] ?: run {
+            if (path?.runtime != true) return@filter true
+            // No attached() check: the candidate is itself a PREPARED edge in [edges].
+            val marker = markerAt(path.names.drop(1).dropLast(1)) ?: return@filter false
+            WantedChild(child, parentOf(child), marker.weight, group = false)
+        }
+        val adopted = edges.adoptable(want)
+        if (path?.runtime == true && adopted == null) return@filter false
+        adopted?.id != id
+    }
 }
 
 /**

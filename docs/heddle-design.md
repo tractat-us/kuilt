@@ -526,9 +526,8 @@ behind. Detaching retires the child's edge, and a retired edge stays in the
 ledger for good, because the work done under it still counts in the books. So
 an engine that runs for months grows with every arrival and departure, in
 memory and on disk, without bound. This section records how a ledger forgets
-those edges while keeping the books exact, how much of that is built, and why
-peers cannot yet do the same. The ledger half is built; the engine half, which
-decides when to forget, is not built yet and is recorded as a design.
+those edges while keeping the books exact, when the engine has it forget them,
+and why peers cannot yet do the same. Both halves are built.
 
 #### Kept for good, summed once
 
@@ -550,9 +549,9 @@ Three other readers need a retired edge:
 
 #### As built: the ledger forgets
 
-Decided in #3192. The ledger half is built: a ledger can forget an edge, and a
-replicated ledger refuses one that has (#3357). The engine does not forget
-anything yet; see *The design: the engine forgets*.
+Decided in #3192. A ledger can forget an edge, and a replicated ledger refuses
+one that has (#3357). When the engine forgets is the next part, *As built: the
+engine forgets*.
 
 **The seventeenth component, `forgotten`.** It is an internal `ForgottenEdges`,
 written through `CanonicalMapSerializer` at every level, with its own arm in
@@ -597,14 +596,17 @@ generation. A PREPARED edge carries no history, so it folds only its generation,
 plus the parent's row. That a forgotten PREPARED edge will never activate is the
 caller's precondition. If it is activated anyway, `activate` finds no record and
 refuses, and a delta built elsewhere names an id at or below the floor, which
-`piece` refuses.
+`piece` refuses. A `prepare` of any id at or below the floor returns `null`, so
+the refusal comes where the edge is asked for, not as a throw from `piece`. The
+floor cannot tell a forgotten id from one the ledger never held, so it refuses
+both. That costs nothing, since a diff and an attach number every edge above it.
 
 **Forgetting is not a join.** Every other mutator only adds to the lattice; this
 one removes slots. So it is outside §10 invariant 2, scoped to a single writer,
 as invariant 4's quiesced-edge exception is. Three guards hold the scope:
 
-- `forget` is internal to `:kuilt-heddle-core`, and `LocalHeddle` is to be its
-  only caller.
+- `forget` is internal to `:kuilt-heddle-core`, and `LocalHeddle` is its only
+  caller.
 - `piece` throws rather than take a fold that is not the receiver's own: a
   ledger with no fold cannot take one, and two different folds do not join. It
   also throws when one side names an edge the other does not hold, at or below
@@ -629,22 +631,33 @@ formats 1 and 2. v0.7.4 wrote format 1, and a format-1 snapshot that carries a
 fold is refused, since format 1 predates it. Every encoded change for the next
 release goes under that one bump.
 
-#### The design: the engine forgets
+#### As built: the engine forgets
 
-None of this is built. The ledger half above is what exists.
+`LocalHeddle` forgets automatically, with no new API, in the swap that lands
+each `apply`, `attachRuntimeChild` and `detachRuntimeChild`. That swap forgets:
 
-**When it happens.** The engine is to forget automatically, in the
-same swap that retires an edge (`detachRuntimeChild`, `apply`), with no new
-API. That swap also sweeps every forgettable RETIRED edge no open lease
-crosses, so a restored v0.7.4 snapshot compacts too. It prunes the edge from the
-allocator's wake memory, `AllocatorMemory`, in the same swap, since
-`forgetDepartedChildren` finds an edge's parent through its record and could
-not once the record is gone. A PREPARED edge the topology no longer wants moves
-the floor and gives its parent a row, nothing else. Until that lands, nothing
-outside the tests calls `forget`, and an engine grows as it did before.
+- every RETIRED edge `forgetRefusal` passes and no open lease's path crosses.
+  Every one, not only the edges this swap retired, so a ledger restored from a
+  v0.7.4 snapshot compacts in its first swap;
+- every PREPARED edge the topology in force does not want: a diff of that
+  topology would leave it prepared and name it in no step. It moves the floor and
+  gives its parent a row, nothing else. A runtime child's prepared edge is kept
+  unless the child has another edge the diff adopts, since a prepared edge may be
+  what says the child is attached.
 
-**Until the engine forgets,** keep a runtime child attached rather than
-detaching it when its user goes idle.
+The same swap prunes each forgotten edge from the allocator's wake memory,
+`AllocatorMemory`, since `forgetDepartedChildren` finds an edge's parent through
+its record and could not once the record is gone. The sweep reads every edge's
+lifecycle once. It walks the counters for their replicas twice, once to choose
+the candidates and once to forget them, rather than once per candidate.
+
+Measured on the JVM: 2,000 users each attached, served once and detached leave
+the snapshot within 64 bytes of where it stood after the first 20. Before, each
+one added about 410 bytes. Where the edges forgotten are retired ones, an engine
+that forgets and one that keeps everything give the same picks, holdings and
+conservation on the same calls. A forgotten prepared edge does change a later
+diff: one that wants that edge back prepares a new edge above the floor instead
+of adopting the old one.
 
 #### Settled — don't reopen
 
@@ -1229,8 +1242,8 @@ Carried over from the source intact; each is a named property test (§13).
 2. **Monotonicity.** Every replicated component only grows; merge is a join;
    the lattice laws hold (`piece` idempotent, commutative, associative).
    `outstanding` may fall but is always derived, never stored. **Scope: every
-   ledger peers exchange.** A single-writer engine's forgetting of retired edges
-   (§5.5) removes slots and is not a join. It is confined, like invariant 4's
+   ledger peers exchange.** A single-writer engine's forgetting of retired edges,
+   and of prepared edges its topology does not want (§5.5), removes slots and is not a join. It is confined, like invariant 4's
    exception, to a ledger no other writer touches: `forget` is internal to
    `:kuilt-heddle-core`, `piece` refuses a fold that is not the receiver's own,
    and `:kuilt-heddle` refuses to decode a ledger that carries one.
@@ -1339,9 +1352,9 @@ one child, at the marker's weight, numbered by the same generation floor as the 
 Which runtime children exist is the ledger's to say, and the diff owns them as it owns
 declared edges: under a marker the new tree keeps, an attached child is kept, history
 and all; a new marker weight regenerates it on a new edge; and when the marker goes, or
-its group does, the child is closed. Each detach leaves a retired edge behind, and for
-now it stays for good: until the forgetting in §5.5 is built, keep a runtime child
-attached rather than detaching it when it goes idle.
+its group does, the child is closed. Each detach retires the child's edge, and the
+engine forgets it in the same swap once its books close (§5.5), so a runtime child
+can be detached whenever it goes idle.
 
 A runtime child is a leaf, one level below its marked group: it cannot carry a marker
 itself, so nothing discovered while running has children of its own. §1's "any depth"

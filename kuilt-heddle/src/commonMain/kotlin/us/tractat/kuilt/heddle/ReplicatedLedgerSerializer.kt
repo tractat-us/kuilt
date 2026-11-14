@@ -10,7 +10,7 @@ import kotlinx.serialization.encoding.Encoder
  * [EntitlementLedger]'s own serializer, for every ledger a peer sends: it writes the same bytes, and
  * it refuses to decode a ledger that has forgotten edges (#3192, design §5.5, §10 invariant 2).
  *
- * Forgetting is one writer's act. `LocalHeddle` is to be its only caller (#3192 S2), and a ledger peers exchange never
+ * Forgetting is one writer's act. `LocalHeddle` is its only caller, and a ledger peers exchange never
  * holds a fold, so a frame carrying one is a corrupt or foreign frame. Refusing it here, as a decode
  * failure, keeps it out of [EntitlementLedger.piece], which throws on a fold that is not the
  * receiver's own. That throw would land inside a replicator's long-lived pump, ending it, and on
