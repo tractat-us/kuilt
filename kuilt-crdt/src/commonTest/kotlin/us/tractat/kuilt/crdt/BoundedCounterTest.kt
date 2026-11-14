@@ -193,4 +193,51 @@ class BoundedCounterTest {
             { assertEquals(Long.MAX_VALUE, spentOne.totalBudget) },
         )
     }
+
+    // ── Quota past Long.MAX_VALUE (#3343) ────────────────────────────────────────────────────
+
+    /**
+     * Two donors hand C transfers that add up to one past [Long.MAX_VALUE]. C's quota does not fit
+     * and is refused rather than wrapped, and C can still spend and transfer out of it: those
+     * compare against the exact quota. Before the fix the quota wrapped to [Long.MIN_VALUE], so C
+     * was refused every spend.
+     */
+    @Test
+    fun aQuotaReceivedPastLongMaxValueIsRefusedYetStillSpendsAndTransfers() {
+        val c = ReplicaId("C")
+        val bc = receivedPastLongMax(c)
+        assertAll(
+            { assertEquals(0L, bc.quota(a), "the rig: A gave all of its quota to C") },
+            { assertEquals(0L, bc.quota(b), "the rig: B gave all of its quota to C") },
+            { assertFailsWith<ArithmeticException> { bc.quota(c) } },
+            { assertNotNull(bc.trySpend(c, Long.MAX_VALUE), "C holds 2^63, so it can spend Long.MAX_VALUE") },
+            { assertNotNull(bc.transfer(c, a, 1L), "C holds 2^63, so it can give 1 back") },
+        )
+    }
+
+    /**
+     * C, holding one past [Long.MAX_VALUE], gives it all away to D and E. Its transfers out add up
+     * past [Long.MAX_VALUE] too, and its quota is exactly 0 again.
+     */
+    @Test
+    fun aQuotaWhoseTransfersOutAddUpPastLongMaxValueIsExact() {
+        val c = ReplicaId("C")
+        val d = ReplicaId("D")
+        val e = ReplicaId("E")
+        val received = receivedPastLongMax(c)
+        val toD = apply(received, assertNotNull(received.transfer(c, d, Long.MAX_VALUE)))
+        val toE = apply(toD, assertNotNull(toD.transfer(c, e, 1L)))
+        assertAll(
+            { assertEquals(0L, toE.quota(c)) },
+            { assertEquals(Long.MAX_VALUE, toE.quota(d)) },
+            { assertEquals(1L, toE.quota(e)) },
+        )
+    }
+
+    /** A gives C [Long.MAX_VALUE] and B gives C 1, so C has received 2⁶³ from two donors. */
+    private fun receivedPastLongMax(c: ReplicaId): BoundedCounter {
+        val seeded = BoundedCounter.init(mapOf(a to Long.MAX_VALUE, b to 1L))
+        val fromA = apply(seeded, assertNotNull(seeded.transfer(a, c, Long.MAX_VALUE)))
+        return apply(fromA, assertNotNull(fromA.transfer(b, c, 1L)))
+    }
 }
