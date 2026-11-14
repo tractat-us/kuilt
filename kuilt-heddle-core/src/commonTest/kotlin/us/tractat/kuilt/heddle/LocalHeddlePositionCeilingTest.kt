@@ -243,8 +243,12 @@ class LocalHeddlePositionCeilingTest {
     fun scheduleStopsAtASaturatedParentAndPickChildThrows() {
         val engine = engine().apply { warmUp() }
         engine.pushTowardCeiling(a, below = 0L)
+        // Supply at the root, so the allocator reaches a pick at all rather than stopping at empty holdings.
+        engine.mintSupply(100L)
         val ledger = engine.snapshot().ledger
-        val allocator = FairShareAllocator(ReplicaId("local"), PolicyConfig(quantum = 1L))
+        val self = ReplicaId("local")
+        check(ledger.holdings(root, self) > 0L) { "the root holds supply for the allocator to grant" }
+        val allocator = FairShareAllocator(self, PolicyConfig(quantum = 1L))
         val wants = Demand(targetOutstanding = 10L, maximumUsefulGrant = 1L)
         val cell = object : LedgerCell {
             override var current: EntitlementLedger = ledger
@@ -256,6 +260,7 @@ class LocalHeddlePositionCeilingTest {
         }
         assertAll(
             { assertEquals(0, allocator.schedule(root, cell, earmarked = 0L) { wants }) },
+            { assertEquals(ledger, cell.current, "the refused pick wrote nothing") },
             { assertFailsWith<ArithmeticException> { allocator.pickChild(root, ledger, { wants }, { wants }) } },
         )
     }

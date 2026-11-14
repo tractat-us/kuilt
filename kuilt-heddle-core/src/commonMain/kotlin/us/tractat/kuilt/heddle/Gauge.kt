@@ -1,6 +1,8 @@
 package us.tractat.kuilt.heddle
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.timesWide
 
 /**
  * One edge's replicated **virtual-time gauge**: an asserted lower bound on its gross virtual
@@ -99,16 +101,25 @@ public data class Gauge(
  * needs migrating, and since the ceiling is monotone it commutes with the join's `max`, so peers
  * that merge in any order still read the same position.
  *
- * @throws ArithmeticException if the arithmetic would exceed `Long` (§10.12 — a deterministic
- *   throw, never a silent wrap; see [CheckedMath]).
+ * A position past the edge's [positionCeiling] reads as the ceiling (#3313): saturating is a
+ * deterministic function of the view, so every replica reads the same value, and the pick that
+ * would have to order it refuses instead (see [AcquireOutcome.PositionCeiling]).
+ *
+ * @throws ArithmeticException if the fold is past `Long` below the issuance, which no ledger reaches
+ *   (§10.12 — a deterministic throw, never a silent wrap; see [CheckedMath]).
  */
 internal fun Gauge?.grossVirtualServiceAt(baseIssued: Long, weight: Weight): Rational =
     ticksToVirtual(grossTicksAt(baseIssued, weight), weight)
 
-/** [grossVirtualServiceAt] as a position: whole ticks of the edge's own service. */
+/**
+ * [grossVirtualServiceAt] as a position: whole ticks of the edge's own service, held at the edge's
+ * [positionCeiling] (#3313). The sum is formed in 128 bits, so it saturates only when the position
+ * itself would pass the ceiling, never on the way: a floor at the ceiling with a fold above the
+ * issuance reads exactly.
+ */
 internal fun Gauge?.grossTicksAt(baseIssued: Long, weight: Weight): Long =
     if (this == null) {
-        ticksOf(baseIssued)
+        saturatedTicksOf(baseIssued, weight)
     } else {
-        checkedAdd(ticksAt(floor, weight), ticksOf(checkedSub(baseIssued, folded)))
+        saturated(Int128.of(ticksAt(floor, weight)) + checkedSub(baseIssued, folded).timesWide(TICKS_PER_UNIT), weight)
     }

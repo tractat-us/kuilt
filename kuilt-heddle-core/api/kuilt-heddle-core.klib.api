@@ -84,6 +84,19 @@ sealed interface us.tractat.kuilt.heddle/AcquireOutcome { // us.tractat.kuilt.he
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AcquireOutcome.NoLiveLineage.toString|toString(){}[0]
     }
 
+    final class PositionCeiling : us.tractat.kuilt.heddle/AcquireOutcome { // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val parent // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.parent.<get-parent>|<get-parent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.toString|toString(){}[0]
+    }
+
     final object NothingEligible : us.tractat.kuilt.heddle/AcquireOutcome { // us.tractat.kuilt.heddle/AcquireOutcome.NothingEligible|null[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AcquireOutcome.NothingEligible.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AcquireOutcome.NothingEligible.hashCode|hashCode(){}[0]
@@ -163,6 +176,19 @@ sealed interface us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.hedd
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.toString|toString(){}[0]
+    }
+
+    final class PositionCeiling : us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val parent // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.parent.<get-parent>|<get-parent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.toString|toString(){}[0]
     }
 
     final class Stale : us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.heddle/LeaseOutcome.Stale|null[0]
@@ -617,6 +643,7 @@ sealed interface us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.h
         enum entry NOT_ELIGIBLE // us.tractat.kuilt.heddle/WaitExplanation.Kind.NOT_ELIGIBLE|null[0]
         enum entry NOT_WAITING // us.tractat.kuilt.heddle/WaitExplanation.Kind.NOT_WAITING|null[0]
         enum entry NO_LIVE_LINEAGE // us.tractat.kuilt.heddle/WaitExplanation.Kind.NO_LIVE_LINEAGE|null[0]
+        enum entry POSITION_CEILING // us.tractat.kuilt.heddle/WaitExplanation.Kind.POSITION_CEILING|null[0]
         enum entry SUPPLY_EXHAUSTED // us.tractat.kuilt.heddle/WaitExplanation.Kind.SUPPLY_EXHAUSTED|null[0]
         enum entry WOULD_BE_PICKED_NEXT // us.tractat.kuilt.heddle/WaitExplanation.Kind.WOULD_BE_PICKED_NEXT|null[0]
 
@@ -667,6 +694,21 @@ sealed interface us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.h
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.toString|toString(){}[0]
+    }
+
+    final class PositionCeiling : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val kind // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.kind|{}kind[0]
+            final fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.kind.<get-kind>|<get-kind>(){}[0]
+        final val parent // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.parent.<get-parent>|<get-parent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.toString|toString(){}[0]
     }
 
     final object NotEligible : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.NotEligible|null[0]

@@ -1531,14 +1531,24 @@ public class EntitlementLedger private constructor(
      * `⌈V · w · G⌉` a scheduler reads off its front ([VirtualTime.ticksFor]). The floor written is
      * `max(ticks, baseIssued · G)` ticks, stored as the virtual time it stands for, so it is on the
      * grid and every later read of it is exact. Rounding the front up to [ticks] is the only
-     * rounding a seat does (design §7.2).
+     * rounding a seat does (design §7.2). A seat above the edge's [positionCeiling] is written at
+     * the ceiling: a seat is part of a charge that may not be refused (#3313).
      */
     internal fun seatAt(edge: AttachmentId, ticks: Long): Patch<EntitlementLedger>? {
         val w = recordOf(edge)?.weight ?: return null
         if (edge in gauges) return null
         val observed = counterValue(issued, edge)
-        val floor = ticksToVirtual(maxOf(ticks, ticksOf(observed)), w)
+        val floor = ticksToVirtual(minOf(maxOf(ticks, saturatedTicksOf(observed, w)), positionCeiling(w)), w)
         return Patch(of(gauges = mapOf(edge to Gauge(floor, observed))))
+    }
+
+    /**
+     * Whether [edge]'s gross position is at its [positionCeiling], where it may stand for a larger
+     * one ([grossTicksAt]). `false` for an edge this ledger does not know.
+     */
+    internal fun isAtPositionCeiling(edge: AttachmentId): Boolean {
+        val w = recordOf(edge)?.weight ?: return false
+        return atCeiling(gauges[edge].grossTicksAt(counterValue(issued, edge), w), w)
     }
 
     /**

@@ -3,6 +3,7 @@ package us.tractat.kuilt.heddle
 import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.math.Rounding
 import us.tractat.kuilt.math.mulDiv
+import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.math.timesOrNull
 import us.tractat.kuilt.math.timesWide
 
@@ -59,6 +60,50 @@ internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS
  */
 internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADROOM) / w.denominator
 
+/** Whether [ticks] is at [w]'s [positionCeiling]: a position there may stand for a larger one. */
+internal fun atCeiling(ticks: Long, w: Weight): Boolean = ticks >= positionCeiling(w)
+
+/**
+ * [ticks] held at [w]'s [positionCeiling]: the one place a position saturates rather than throws.
+ *
+ * @throws ArithmeticException if [ticks] is below `Long.MIN_VALUE`, a position no service reaches.
+ */
+internal fun saturated(ticks: Int128, w: Weight): Long {
+    val ceiling = positionCeiling(w)
+    if (ticks >= Int128.of(ceiling)) return ceiling
+    return ticks.toLongOrNull() ?: throw ArithmeticException("Long overflow: a position of $ticks ticks")
+}
+
+/** [units] of an edge's own service as ticks, held at [w]'s [positionCeiling] ([saturated]). */
+internal fun saturatedTicksOf(units: Long, w: Weight): Long = saturated(units.timesWide(TICKS_PER_UNIT), w)
+
+/**
+ * Thrown where a pick would have to order a position at its ceiling, or where a deadline leaves
+ * `Long` (#3313). It is an [ArithmeticException], as the overflow it replaces was, so a caller of
+ * [HeddlePolicy.pick] or [FairShareAllocator.pickChild] sees the same type; the engine catches this
+ * subtype and answers a choosing call with a typed refusal instead.
+ */
+internal class PositionCeilingException(message: String) : ArithmeticException(message)
+
+/**
+ * Whether one parent's children, of [weights], keep every product a pick forms in `Long`: the
+ * least common multiple `L` of the denominators, the sum `S = Σ n · L/d`, and `L · n`, `S · d`,
+ * `G · S` and every `d_a · n_b` ([VirtualTime.mean], [VirtualTime.ticksFor], [compareVirtual]).
+ * A subset's `L` and `S` are at most the whole set's, so a set that passes keeps every front a pick
+ * takes over part of it in range too. A reload that would break it is refused at
+ * [LocalHeddle.apply] (#3313).
+ */
+internal fun weightsFitTheBudget(weights: List<Weight>): Boolean {
+    if (weights.isEmpty()) return true
+    var l = 1L
+    for (w in weights) l = (l / gcdOf(l, w.denominator)).timesOrNull(w.denominator) ?: return false
+    var sum = 0L
+    for (w in weights) sum = sum.plusOrNull(w.numerator.timesOrNull(l / w.denominator) ?: return false) ?: return false
+    if (sum.timesOrNull(TICKS_PER_UNIT) == null) return false
+    if (weights.any { l.timesOrNull(it.numerator) == null || sum.timesOrNull(it.denominator) == null }) return false
+    return weights.maxOf { it.denominator }.timesOrNull(weights.maxOf { it.numerator }) != null
+}
+
 /**
  * [units] of an edge's own service as ticks: `units · G`. Exact; throws on `Long` overflow
  * (design §10.12).
@@ -76,12 +121,23 @@ internal fun ticksOf(units: Long): Long = checkedMul(units, TICKS_PER_UNIT)
  * The fraction is reduced crosswise before anything multiplies, and when the two denominators'
  * product still leaves `Long` the division is done in two ceiling steps instead
  * (`⌈⌈x / a⌉ / b⌉ = ⌈x / (a · b)⌉` for positive `a` and `b`; the same holds for floors). So an
- * older peer's fat denominator throws only when the **result** does not fit, never on the way to
- * a small one.
+ * older peer's fat denominator never throws on the way to a small result. A result above [w]'s
+ * [positionCeiling], or past `Long`, reads as the ceiling (#3313).
  *
- * @throws ArithmeticException if the result does not fit in a `Long`.
+ * @throws ArithmeticException if the result is negative and below `Long.MIN_VALUE`.
  */
 internal fun ticksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILING): Long {
+    val ticks = exactTicksAt(v, w, rounding)
+    // Past Long is past the ceiling too, for a positive value: hold it there.
+    return when {
+        ticks != null -> minOf(ticks, positionCeiling(w))
+        v.numerator > 0L -> positionCeiling(w)
+        else -> throw ArithmeticException("Long overflow: ⌈$v · $w · $TICKS_PER_UNIT⌉")
+    }
+}
+
+/** [ticksAt] without the ceiling: `null` when the result leaves `Long`. */
+private fun exactTicksAt(v: Rational, w: Weight, rounding: Rounding): Long? {
     val scale = checkedMul(w.numerator, TICKS_PER_UNIT)
     val g1 = gcdOf(w.denominator, absRemainder(v.numerator, w.denominator))
     val g2 = gcdOf(v.denominator, scale)
@@ -89,11 +145,10 @@ internal fun ticksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILI
     val weightDenominator = w.denominator / g1
     val denominator = v.denominator / g2
     val reducedScale = scale / g2
-    fun overflow(): Nothing = throw ArithmeticException("Long overflow: ⌈$v · $w · $TICKS_PER_UNIT⌉")
     val divisor = denominator.timesOrNull(weightDenominator)
-    if (divisor != null) return mulDiv(numerator, reducedScale, divisor, rounding) ?: overflow()
-    val inner = mulDiv(numerator, reducedScale, denominator, rounding) ?: overflow()
-    return mulDiv(inner, 1L, weightDenominator, rounding) ?: overflow()
+    if (divisor != null) return mulDiv(numerator, reducedScale, divisor, rounding)
+    val inner = mulDiv(numerator, reducedScale, denominator, rounding) ?: return null
+    return mulDiv(inner, 1L, weightDenominator, rounding)
 }
 
 /** `|a mod b|` for a positive [b]: in `[0, b)`, and never a negation of `Long.MIN_VALUE`. */
@@ -155,7 +210,12 @@ internal class VirtualTime(
      * quotient, so it is in `[0, divisor)` for a negative sum too: a position can be negative when
      * an edge has returned more than its base issuance, relocation credit included.
      *
-     * @throws ArithmeticException if the result, or a weight product, does not fit in a `Long`.
+     * A result above [w]'s [positionCeiling] is held there ([saturated]): a seat or a clamp there
+     * lands at the ceiling, and an eligibility bound there admits every position below it, as the
+     * exact bound would.
+     *
+     * @throws ArithmeticException if a weight product does not fit in a `Long`, which
+     *   [weightsFitTheBudget] rules out for a topology [LocalHeddle.apply] accepted.
      */
     fun ticksFor(w: Weight): Long {
         val multiplier = checkedMul(weightDenominator, w.numerator)
@@ -169,8 +229,7 @@ internal class VirtualTime(
         val fraction = checkNotNull(mulDiv(remainder, multiplier, divisor, Rounding.CEILING)) {
             "remainder · m / d < m always fits: $remainder · $multiplier / $divisor"
         }
-        return (whole.timesWide(multiplier) + fraction).toLongOrNull()
-            ?: throw ArithmeticException("Long overflow: ⌈$ticks · $multiplier / $divisor⌉")
+        return saturated(whole.timesWide(multiplier) + fraction, w)
     }
 
     /** This time as an exact [Rational], for diagnostics. Throws when it does not fit one. */

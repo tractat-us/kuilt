@@ -332,14 +332,14 @@ class GaugeTest {
      * `33 / (16 · 3037000507)`. The floor was written off the grid — only an older peer or a
      * hand-built gauge can do that — and the read rounds it once, in the direction §10.5 allows.
      *
-     * What still throws is a **position** past `Long`: an issuance whose ticks do not fit. That is
-     * a deterministic refusal every replica makes alike (§10.12), never a wrap.
+     * A **position** past its ceiling, an issuance whose ticks do not fit, reads as the ceiling: a
+     * deterministic value every replica reads alike, never a wrap and no longer a throw (#3313).
      *
      * Reached through the [EntitlementLedger] read rather than bare arithmetic, so the guarantee is
      * pinned where consumers actually stand.
      */
     @Test
-    fun anOffGridFloorIsReadUpToTheGridAndOnlyAPositionPastLongThrows() {
+    fun anOffGridFloorIsReadUpToTheGridAndAPositionPastLongReadsAsTheCeiling() {
         val offGrid = ledgerWith(
             weight = Weight.of(3_037_000_507L, 1L),
             issued = 1L,
@@ -352,10 +352,10 @@ class GaugeTest {
         )
         assertAll(
             { assertEquals(Rational.of(33L, 16L * 3_037_000_507L), offGrid.grossVirtualService(EDGE)) },
+            // Held at the ceiling rather than thrown or wrapped (#3313): the read never fails, and a
+            // pick that would order it refuses instead.
             {
-                assertFailsWith<ArithmeticException>("must throw, never wrap (§10.12)") {
-                    pastLong.grossVirtualService(EDGE)
-                }
+                assertEquals(ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE), pastLong.grossVirtualService(EDGE))
             },
         )
     }

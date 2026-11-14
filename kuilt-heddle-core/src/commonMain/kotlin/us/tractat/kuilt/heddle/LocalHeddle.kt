@@ -281,12 +281,17 @@ public sealed interface LeaseOutcome {
  *
  * ## All or nothing
  *
- * Each operation runs on a local ledger value and is swapped in once at the end, so an outcome
- * that changes nothing leaves [snapshot]'s ledger the very same object. A whole reload is one
- * operation, however many children it changes. **The one exception is the
- * allocator's wake memory, which a failed [acquire] may still advance:** the pick it tried at the
- * root observed who was waiting, and forgetting that would treat the next observation as the
- * first.
+ * Every call that changes the engine runs on a working copy of its whole state (ledger, open
+ * leases, wake memory, capacity) and the engine keeps that copy only when the call returns. So a
+ * call that **throws** changes nothing, whatever it throws, and neither does one refused at a
+ * position ceiling ([AcquireOutcome.PositionCeiling], [LeaseOutcome.PositionCeiling]): the engine
+ * reads, and its [persist]ed snapshot encodes, exactly as before, and the next call starts clean. A
+ * whole reload is one operation, however many children it changes.
+ *
+ * **The ordinary refusals keep one change, the allocator's wake memory.** An [acquire] refused with
+ * [AcquireOutcome.NoLiveLineage] leaves the ledger as it was, but the pick it tried at the root
+ * observed who was waiting, and forgetting that would treat the next observation as the first. A
+ * ceiling refusal keeps nothing, because its pick could not order the children it observed.
  *
  * ## Supply
  *
@@ -345,13 +350,25 @@ public sealed interface LeaseOutcome {
  * Nothing suspends and nothing times out. An argument out of range throws
  * [IllegalArgumentException], a reservation or extension above [MAX_RESERVATION] included.
  *
- * Arithmetic that would leave `Long` throws [ArithmeticException] rather than wrapping, and one
- * place it is reachable is a lifetime ceiling on an edge's **position**: its service in ticks of
- * 1/16 of a unit, which a joiner inherits from the front it is seated at, scaled by its weight
- * against its siblings'. So the service under one parent is bounded, the bound depends on the
- * weights, and it no longer depends on how often the waiting set changes (#3313): positions are
- * whole ticks, so no join can grow a denominator. A throw changes nothing, so once a parent is past
- * its ceiling every later [acquire] there throws too.
+ * Arithmetic that would leave `Long` throws [ArithmeticException] rather than wrapping. The one
+ * place a running engine could reach it is now a typed refusal instead: an edge's **position**, its
+ * service in ticks of 1/16 of a unit, has a ceiling, `Long.MAX_VALUE` less room for one
+ * [MAX_RESERVATION] deadline, divided by its weight's denominator. A joiner inherits its position
+ * from the front it is seated at, scaled by its weight against its siblings', so the service one
+ * parent can hand down over its lifetime is bounded, and the bound depends on the weights. It no
+ * longer depends on how often the waiting set changes: positions are whole ticks, so no join can
+ * grow a denominator (#3313, #3231). At the ceiling:
+ * - a call that **chooses**, [acquire] or [extend], is refused with a `PositionCeiling` outcome
+ *   naming the parent, and changes nothing. A position there no longer orders exactly, so a pick
+ *   over it would be a guess;
+ * - a call that **charges**, [admit] or [complete], lands as usual. The books stay exact; only the
+ *   position is held at the ceiling.
+ *
+ * A parent at its ceiling refuses picks until its positions come back down (#3329).
+ *
+ * [apply] keeps the weight arithmetic in range the same way: a reload whose weights would put one
+ * parent's products of numerators and denominators out of `Long` refuses that child with a
+ * [StepRefusal.Refused], and its siblings land.
  *
  * A state the engine's own invariants rule out throws [IllegalStateException]: that is a bug in
  * the engine, or a ledger conflict the engine did not create, such as two live inbound edges into
@@ -367,25 +384,87 @@ public class LocalHeddle private constructor(
     private val policy: LocalPolicy,
     /** The boot counter this engine issues lease ids under. */
     public val epoch: Long,
-    private var ledger: EntitlementLedger,
-    private val allocator: FairShareAllocator,
-    /** What the topology lets a lease end at; see "What a lease ends at". Replaced by each [apply]. */
-    private var leasable: Leasable,
+    ledger: EntitlementLedger,
+    allocator: FairShareAllocator,
+    leasable: Leasable,
 ) {
     init {
         require(epoch >= 0L) { "epoch must be non-negative, was $epoch" }
     }
 
-    /** Open leases by id. Looked up, never iterated without sorting. */
-    private val open = HashMap<LeaseId, OpenLease>()
-    private var nextSeq = 0L
+    /**
+     * Everything a call can change, in one object, so that a call keeps all of it or none of it: see
+     * [atomically]. A field of the engine that changes and is not in here would survive a throw.
+     */
+    private class Core(
+        var ledger: EntitlementLedger,
+        /** The wake memory lives in the allocator, so the allocator is state, not a collaborator. */
+        val allocator: FairShareAllocator,
+        /** What the topology lets a lease end at; see "What a lease ends at". Replaced by each [apply]. */
+        var leasable: Leasable,
+        /** Open leases by id. Looked up, never iterated without sorting. */
+        val open: HashMap<LeaseId, OpenLease>,
+        var nextSeq: Long,
+        /** The capacity last reconciled, and the supply levels it sizes. */
+        var capacity: Capacity,
+        /** Mints [complete] and [admit] wrote to cover a shortfall at the root. */
+        var forcedMints: Int,
+    ) {
+        /** A working copy: the ledger and leasable are immutable values; the two mutable maps are copied. */
+        fun fork(): Core = Core(ledger, allocator.fork(), leasable, HashMap(open), nextSeq, capacity, forcedMints)
+    }
 
-    /** The capacity last reconciled, and the supply levels it sizes. */
-    private var capacity = Capacity.NONE
+    private var core = Core(ledger, allocator, leasable, HashMap(), nextSeq = 0L, capacity = Capacity.NONE, forcedMints = 0)
+
+    /**
+     * Run [block] on a working copy of [core], and keep the copy only if [block] returns a result
+     * [keep] accepts. On a throw, or a result it refuses, the committed state is put back with one
+     * assignment. The body reads and writes the engine's fields as it would without this, because
+     * they all resolve through [core]. One swap of one reference, rather than a restore per field, is
+     * what makes a forgotten field impossible: there is nowhere else for one to live.
+     */
+    private inline fun <T> atomically(keep: (T) -> Boolean = { true }, block: () -> T): T {
+        val committed = core
+        core = committed.fork()
+        val result = try {
+            block()
+        } catch (failure: Throwable) {
+            core = committed
+            throw failure
+        }
+        if (!keep(result)) core = committed
+        return result
+    }
+
+    private var ledger: EntitlementLedger
+        get() = core.ledger
+        set(value) {
+            core.ledger = value
+        }
+    private val allocator: FairShareAllocator get() = core.allocator
+    private var leasable: Leasable
+        get() = core.leasable
+        set(value) {
+            core.leasable = value
+        }
+    private val open: HashMap<LeaseId, OpenLease> get() = core.open
+    private var nextSeq: Long
+        get() = core.nextSeq
+        set(value) {
+            core.nextSeq = value
+        }
+    private var capacity: Capacity
+        get() = core.capacity
+        set(value) {
+            core.capacity = value
+        }
 
     /** Mints [complete] and [admit] wrote to cover a shortfall at the root. */
-    internal var forcedMints: Int = 0
-        private set
+    internal var forcedMints: Int
+        get() = core.forcedMints
+        private set(value) {
+            core.forcedMints = value
+        }
 
     /** The engine's whole state, as an immutable value. Costs a sort of the open leases and of the wake memory. */
     public fun snapshot(): LocalHeddleState =
@@ -401,7 +480,9 @@ public class LocalHeddle private constructor(
      * [AcquireOutcome.SupplyExhausted] when the root holds less than [reservation] and no capacity
      * is reconciled, and [AcquireOutcome.NoLiveLineage] when no eligible leaf can be reached. In
      * each of those cases the ledger is unchanged, with no top-up either; only the allocator's wake
-     * memory may have moved (see the class KDoc).
+     * memory may have moved (see the class KDoc). [AcquireOutcome.PositionCeiling] when a pick on
+     * the way would order a position at its ceiling, or the delegation would take one there; that
+     * changes nothing at all.
      *
      * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION], or
      *   [eligible] is not a subset of [waiting].
@@ -412,14 +493,15 @@ public class LocalHeddle private constructor(
         eligible: Set<GroupId>,
         startedAt: Long,
         reservation: Long = policy.defaultReservation,
-    ): AcquireOutcome {
+    ): AcquireOutcome = atomically(keep = { it !is AcquireOutcome.PositionCeiling }) {
         requireReservation("reservation", reservation)
         require(waiting.containsAll(eligible)) { "eligible must be a subset of waiting" }
-        if (eligible.isEmpty()) return AcquireOutcome.NothingEligible
+        if (eligible.isEmpty()) return@atomically AcquireOutcome.NothingEligible
         // Topped up on the working value only: a descent that then fails discards the mint with it.
-        val base = fundedBase(reservation) ?: return AcquireOutcome.SupplyExhausted
-        return when (val descent = descend(base, demands(base, waiting, eligible, reservation), eligible, reservation)) {
+        val base = fundedBase(reservation) ?: return@atomically AcquireOutcome.SupplyExhausted
+        when (val descent = descend(base, demands(base, waiting, eligible, reservation), eligible, reservation)) {
             is Descent.Refused -> AcquireOutcome.NoLiveLineage(descent.at)
+            is Descent.Ceiling -> AcquireOutcome.PositionCeiling(descent.at)
             is Descent.Reached -> {
                 ledger = descent.ledger
                 AcquireOutcome.Acquired(open(descent.leaf, descent.levels.map { it.edge }, reservation, startedAt))
@@ -439,7 +521,11 @@ public class LocalHeddle private constructor(
         val levels = ArrayList<Level>()
         var group = root
         while (group !in eligible || !local.isLeasable(group)) {
-            val pick = allocator.pickChild(group, local, demands.waiting, demands.eligible) ?: return Descent.Refused(group)
+            val pick = try {
+                allocator.pickChild(group, local, demands.waiting, demands.eligible) ?: return Descent.Refused(group)
+            } catch (_: PositionCeilingException) {
+                return Descent.Ceiling(group)
+            }
             afterPickForTest(group)
             val edge = pick.grant.attachment
             check(pick.grant.amount == reservation) {
@@ -449,6 +535,8 @@ public class LocalHeddle private constructor(
             local = checkNotNull(seatThenDelegate(pick.ledger, listOf(edge), reservation, demands.waiting)) {
                 "the delegation of $reservation down ${edge.value}, just picked, was refused"
             }
+            // The delegation saturated the edge it picked: the grant would be charged inexactly.
+            if (local.isAtPositionCeiling(edge)) return Descent.Ceiling(group)
             group = checkNotNull(local.record(edge)) { "picked edge ${edge.value} has no record" }.child
         }
         return Descent.Reached(local, group, levels)
@@ -482,39 +570,44 @@ public class LocalHeddle private constructor(
      * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION].
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
-    public fun admit(leaf: GroupId, startedAt: Long, reservation: Long = policy.defaultReservation): AdmitOutcome {
+    public fun admit(leaf: GroupId, startedAt: Long, reservation: Long = policy.defaultReservation): AdmitOutcome = atomically {
         requireReservation("reservation", reservation)
         val base = ledger
-        if (!base.canEndAt(leaf)) return AcquireOutcome.NoLiveLineage(leaf)
+        if (!base.canEndAt(leaf)) return@atomically AcquireOutcome.NoLiveLineage(leaf)
         val path = checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }
 
         val (funded, minted) = fund(base, reservation)
         val local = seatThenDelegate(funded, path, reservation, observedDemand(reservation))
-            ?: return AcquireOutcome.NoLiveLineage(leaf)
+            ?: return@atomically AcquireOutcome.NoLiveLineage(leaf)
         ledger = local
         forcedMints += minted
-        return AcquireOutcome.Acquired(open(leaf, path, reservation, startedAt))
+        AcquireOutcome.Acquired(open(leaf, path, reservation, startedAt))
     }
 
     /**
      * Reserve [amount] more for [lease], down the path it was opened on. Not a new pick.
      *
-     * Returns [LeaseOutcome.PathDraining] when an edge of that path is no longer ACTIVE, and
+     * Returns [LeaseOutcome.PathDraining] when an edge of that path is no longer ACTIVE,
      * [LeaseOutcome.SupplyExhausted] when the root holds less than [amount] and no capacity is
-     * reconciled. Neither changes anything.
+     * reconciled, and [LeaseOutcome.PositionCeiling] when an edge of the path is at its position
+     * ceiling once [amount] is delegated. None of them changes anything.
      *
      * @throws IllegalArgumentException when [amount] is not in `1..`[MAX_RESERVATION].
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
-    public fun extend(lease: LeaseId, amount: Long): LeaseOutcome {
+    public fun extend(lease: LeaseId, amount: Long): LeaseOutcome = atomically(keep = { it !is LeaseOutcome.PositionCeiling }) {
         requireReservation("extend amount", amount)
-        val current = open[lease] ?: return missing(lease)
+        val current = open[lease] ?: return@atomically missing(lease)
         val base = ledger
-        base.firstNotActive(current.path)?.let { return LeaseOutcome.PathDraining(it) }
-        val funded = supplied(base, amount) ?: return LeaseOutcome.SupplyExhausted
-        ledger = delegateOrFail(funded, current.path, amount)
+        base.firstNotActive(current.path)?.let { return@atomically LeaseOutcome.PathDraining(it) }
+        val funded = supplied(base, amount) ?: return@atomically LeaseOutcome.SupplyExhausted
+        val delegated = delegateOrFail(funded, current.path, amount)
+        current.path.firstOrNull { delegated.isAtPositionCeiling(it) }?.let { edge ->
+            return@atomically LeaseOutcome.PositionCeiling(checkNotNull(delegated.record(edge)) { "path edge ${edge.value} has no record" }.parent)
+        }
+        ledger = delegated
         open[lease] = current.copy(lease = current.lease.copy(reserved = checkedAdd(current.lease.reserved, amount)))
-        return LeaseOutcome.Done(charged = 0L, overrun = 0L)
+        LeaseOutcome.Done(charged = 0L, overrun = 0L)
     }
 
     /**
@@ -530,9 +623,9 @@ public class LocalHeddle private constructor(
      * @throws IllegalArgumentException when [actualCost] is negative.
      * @sample us.tractat.kuilt.heddle.sampleLocalLease
      */
-    public fun complete(lease: LeaseId, actualCost: Long): LeaseOutcome {
+    public fun complete(lease: LeaseId, actualCost: Long): LeaseOutcome = atomically {
         require(actualCost >= 0L) { "actualCost must be non-negative, was $actualCost" }
-        val current = open[lease] ?: return missing(lease)
+        val current = open[lease] ?: return@atomically missing(lease)
         val path = current.path
         val reserved = current.lease.reserved
         val overrun = maxOf(0L, actualCost - reserved)
@@ -556,7 +649,7 @@ public class LocalHeddle private constructor(
         ledger = local
         forcedMints += minted
         open.remove(lease)
-        return LeaseOutcome.Done(charged = actualCost, overrun = overrun)
+        LeaseOutcome.Done(charged = actualCost, overrun = overrun)
     }
 
     /**
@@ -564,11 +657,11 @@ public class LocalHeddle private constructor(
      *
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
-    public fun cancel(lease: LeaseId): LeaseOutcome {
-        val current = open[lease] ?: return missing(lease)
+    public fun cancel(lease: LeaseId): LeaseOutcome = atomically {
+        val current = open[lease] ?: return@atomically missing(lease)
         ledger = releaseUp(ledger, current.path, current.lease.reserved)
         open.remove(lease)
-        return LeaseOutcome.Done(charged = 0L, overrun = 0L)
+        LeaseOutcome.Done(charged = 0L, overrun = 0L)
     }
 
     /**
@@ -611,8 +704,9 @@ public class LocalHeddle private constructor(
      * [reservation]. Past those, the
      * answer is the pick itself, run on a [scratch] copy of the engine with the allocator's wake
      * memory, so a group waking from idle is clamped here exactly as the acquire would clamp it:
-     * [WaitExplanation.WouldBePickedNext] when the pick ends at [leaf], and otherwise
-     * [WaitExplanation.BehindAtLevel] at the first group where it goes another way.
+     * [WaitExplanation.WouldBePickedNext] when the pick ends at [leaf],
+     * [WaitExplanation.PositionCeiling] when it is refused at a position ceiling on the way, and
+     * otherwise [WaitExplanation.BehindAtLevel] at the first group where it goes another way.
      *
      * @throws IllegalArgumentException as [acquire] does: [reservation] out of range, or [eligible]
      *   not a subset of [waiting].
@@ -634,6 +728,7 @@ public class LocalHeddle private constructor(
         val trial = scratch(base)
         val demands = demands(base, waiting, eligible, reservation)
         val descent = trial.descend(base, demands, eligible, reservation)
+        if (descent is Descent.Ceiling) return WaitExplanation.PositionCeiling(descent.at)
         // An eligible leaf the pick can end at, with the root funded: the root's pick has a candidate
         // in the leaf's own top edge, and every pick below goes toward an eligible leaf.
         check(descent is Descent.Reached) { "no pick reached any leaf, though ${leaf.value} is eligible and reachable" }
@@ -712,7 +807,7 @@ public class LocalHeddle private constructor(
      *   `totalSlots × defaultReservation × targetSlots`, is above `Long.MAX_VALUE / 4`.
      * @sample us.tractat.kuilt.heddle.sampleLocalLease
      */
-    public fun reconcileCapacity(totalSlots: Long) {
+    public fun reconcileCapacity(totalSlots: Long): Unit = atomically {
         require(totalSlots >= 0L) { "totalSlots must be non-negative, was $totalSlots" }
         val rounds = policy.supply
         val perRound = policy.defaultReservation
@@ -791,13 +886,13 @@ public class LocalHeddle private constructor(
      * @throws IllegalArgumentException if [new]'s root is not [root], or [generation] is negative.
      * @sample us.tractat.kuilt.heddle.sampleLocalReload
      */
-    public fun apply(new: Topology, generation: Long): ApplyResult {
+    public fun apply(new: Topology, generation: Long): ApplyResult = atomically {
         require(new.groupId() == root) {
             "the topology's root ${new.groupId().value} is not this engine's ${root.value}: a change of root is not a reload"
         }
         val result = run(Topology.diff(new, ledger, generation))
         leasable = Leasable.ByTopology(new)
-        return result
+        result
     }
 
     /**
@@ -811,7 +906,7 @@ public class LocalHeddle private constructor(
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun attachRuntimeChild(group: List<String>, name: String, generation: Long): ApplyResult =
-        run(topology().attachRuntimeChild(group, name, ledger, generation))
+        atomically { run(topology().attachRuntimeChild(group, name, ledger, generation)) }
 
     /**
      * Detach the runtime child [name] from the group at [group] ([Topology.detachRuntimeChild]):
@@ -823,7 +918,7 @@ public class LocalHeddle private constructor(
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun detachRuntimeChild(group: List<String>, name: String): ApplyResult =
-        run(topology().detachRuntimeChild(group, name, ledger))
+        atomically { run(topology().detachRuntimeChild(group, name, ledger)) }
 
     private fun topology(): Topology =
         checkNotNull((leasable as? Leasable.ByTopology)?.topology) { "an engine over a hand-built ledger has no topology" }
@@ -913,13 +1008,21 @@ public class LocalHeddle private constructor(
             // Retires run bottom-up, so a group's retire waits on every group below it whose change did
             // not land: one stopped in this attempt, or one left out of it.
             val below = (stopped.asSequence() + leftOut.asSequence()).filter { it.value.startsWith(child.value + "/") }.minOrNull()
-            val next = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
+            val stepped = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
+            // An activation whose weight would put its parent's weight products out of Long: the
+            // ledger would take it, and every pick at that parent would then throw (#3313).
+            val overBudget = stepped != null && step is TopologyStep.Activate && !stepped.siblingWeightsFit(step.edge)
+            val next = if (overBudget) null else stepped
             if (next != null) {
                 local = next
                 applied += step
                 continue
             }
-            val reason = if (below != null) "${below.value}, below it, did not retire" else "the ledger refused it"
+            val reason = when {
+                below != null -> "${below.value}, below it, did not retire"
+                overBudget -> "its weight would put its siblings' weight arithmetic out of Long"
+                else -> "the ledger refused it"
+            }
             if (child in replaced.values) {
                 // Every unit this engine held across the old edge was released above, so what is
                 // still outstanding there is another writer's, or an engine bug: not a drain.
@@ -978,7 +1081,7 @@ public class LocalHeddle private constructor(
      * [steps] applied as [apply] applies a diff, for tests: the seam for a list no diff writes, such
      * as one with a step the ledger refuses outright.
      */
-    internal fun applyStepsForTest(steps: List<TopologyStep>): ApplyResult = run(steps)
+    internal fun applyStepsForTest(steps: List<TopologyStep>): ApplyResult = atomically { run(steps) }
 
     /**
      * Called after each level's pick, once the wake memory has moved and before the delegation: the
@@ -1192,6 +1295,9 @@ public class LocalHeddle private constructor(
 
         /** No pick could be made at [at]. */
         class Refused(val at: GroupId) : Descent
+
+        /** The pick at [at] would order a position at its ceiling, or its delegation would reach one. */
+        class Ceiling(val at: GroupId) : Descent
     }
 
     /** One level of a [Descent]: the pick at [parent] chose [edge], on [seated], the ledger with [parent]'s children seated. */
@@ -1244,6 +1350,12 @@ public class LocalHeddle private constructor(
             path.indexOfFirst { lifecycle(it) != Lifecycle.ACTIVE }.takeIf { it >= 0 }
 
         private fun Weight.asRational(): Rational = Rational.of(numerator, denominator)
+
+        /** Whether the active children beside [edge], itself included, fit [weightsFitTheBudget]. */
+        private fun EntitlementLedger.siblingWeightsFit(edge: AttachmentId): Boolean {
+            val parent = record(edge)?.parent ?: return true
+            return weightsFitTheBudget(activeChildren(parent).mapNotNull { record(it.attachment)?.weight })
+        }
 
         /** What [edge] still carries: issued, less returned and spent. `0` for an edge this ledger does not know. */
         private fun EntitlementLedger.outstanding(edge: AttachmentId): Long = edge(edge)?.outstanding ?: 0L
