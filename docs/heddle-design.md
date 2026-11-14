@@ -1375,7 +1375,7 @@ Carried over from the source intact; each is a named property test (§13).
     report everywhere and quarantine their lineage; nothing is resolved by
     timestamp.
 12. **Overflow rejection.** Arithmetic that would exceed `Long` fails
-   deterministically, never wraps. The one exception is the effective position
+    deterministically, never wraps. The one exception is the effective position
     narrowed for a pick, which saturates at its ceiling; a pick that would order it
     refuses with a typed outcome instead (§7.1). Everything before it is 128-bit:
     a gauge's stored position, a parent's origin, the raw position, the front and
