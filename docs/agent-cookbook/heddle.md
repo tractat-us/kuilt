@@ -114,8 +114,8 @@ Children the app creates while running go under a group marked `runtimeChildren`
 attach and detach one child, at the marker's weight, under a name of any spelling that never
 collides with a declared child; a detach drains like a removal. `Topology.attachRuntimeChild` and
 `detachRuntimeChild` list the same steps without applying them. A reload that keeps the marker
-keeps the child and its history; one that drops the marker closes it. Every detach leaves a
-retired edge in the ledger for good, so keep a child that comes back often attached between uses.
+keeps the child and its history; one that drops the marker closes it. A detach's own swap forgets
+the child's retired edge once its books close, so detach a child whenever it goes idle.
 A runtime child is always a leaf: it cannot be marked in turn, so a tree you discover while running
 is one level deep under its marked group. For two levels, such as a repository and then its
 authors, declare each repository as a group marked `runtimeChildren`, and `LocalHeddle.apply` a

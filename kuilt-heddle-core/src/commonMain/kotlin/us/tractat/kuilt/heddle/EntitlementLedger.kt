@@ -191,7 +191,7 @@ import kotlinx.serialization.Transient
  * read the fold beside the live edges, so each answers as it did before.
  *
  * Forgetting removes slots, so it is not a join, and it breaks §10 invariant 2 (monotonicity). It is
- * scoped to a single writer, as invariant 4's quiesced edge is: `LocalHeddle` is to be its only caller (#3192 S2),
+ * scoped to a single writer, as invariant 4's quiesced edge is: `LocalHeddle` is its only caller,
  * and [piece] throws rather than take a fold that is not the receiver's own, or accept from a
  * ledger that never forgot an edge numbered at or below the floor of the one that did. A replicated
  * ledger never holds a fold, and `:kuilt-heddle` refuses one at decode. Forgetting between peers is
@@ -2218,8 +2218,8 @@ public class EntitlementLedger private constructor(
      * the edge was held, so no reader of that question sees the forget either.
      *
      * **Not a join.** Every other mutator only adds to the lattice; this removes slots, so the result
-     * is not above `this`, and it breaks §10 invariant 2. It is one writer's act: `LocalHeddle` is to be its
-     * only caller (#3192 S2), a replicated ledger never forgets, and [piece] refuses what a second writer would
+     * is not above `this`, and it breaks §10 invariant 2. It is one writer's act: `LocalHeddle` is its
+     * only caller, a replicated ledger never forgets, and [piece] refuses what a second writer would
      * produce (see [joinForgotten]).
      *
      * What it rests on: [validate] can no longer see a forgotten edge, so its [LedgerConflict.PerEdgeSafety],
