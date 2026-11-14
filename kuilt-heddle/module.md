@@ -97,6 +97,12 @@ and nothing else does:
   second comes back as a **structured conflict** (`ControlConflict.DualInbound`) for the operator
   to resolve — never a silent overwrite, never a coin-flip on a timestamp. Reshapes that don't
   touch the same child don't wait on each other at all.
+- **A weight the scheduler cannot do sums on is turned away.** Each pick multiplies the weights
+  of a parent's children together, so a big enough weight, or a big enough mix of them, leaves a
+  64-bit number and every pick there would fail. `prepare` refuses such a weight on its own, and
+  `activate` refuses one that only overflows beside its siblings, each answering
+  `ControlConflict.WeightBudget`. Every peer decides it from the same log, so every peer refuses.
+  `heddleStatic`'s `prepare` and `activate` refuse the same weights, answering `false`.
 - **The everyday path is untouched.** Handing out and charging for work — `schedule`, `reserve`,
   `complete` — never goes through the agreement step, at any rate. That is the whole point:
   agreement appears only at the two rare moments that need it.

@@ -863,7 +863,11 @@ checkpoint's floor would pair with the raised fold. The replicated `HeddleNode`
 stops granting at a saturated parent. Its rebase and refusal surface are tracked
 by #3353. `apply` keeps the weight products in range the same way: an activation
 whose weights would put its parent's `L`, `S`, `G · S` or `S · d` out of `Long`
-is refused with a `StepRefusal`.
+is refused with a `StepRefusal`. The replicated ledger is held to the same rule
+where a topology act enters it (§9): the control log refuses a `Prepare` whose
+own weight fails it and an `Activate` that fails it beside the parent's active
+children, and `HeddleNode`'s ungoverned `prepare` and `activate` refuse the same
+on the local view.
 
 Why a grid at all, against the exact `Rational` this section used to prescribe:
 a joiner stored the front, a weighted mean whose denominator carries `Σw` of the
@@ -1137,7 +1141,11 @@ the heddle introduces **no new category of coordination**:
    the log order is the serialization, and the loser surfaces as a reported
    conflict, never a timestamp resolution. Non-overlapping subtree operations
    don't contend, and — the important half — **scheduling and spending never
-   wait on this log** at any frequency.
+   wait on this log** at any frequency. The same apply decides the weight
+   budget (§7.1, #3353): a `Prepare` whose own weight would put a pick's
+   products out of `Long`, or an `Activate` that would do so beside the
+   parent's active children, is refused with `ControlConflict.WeightBudget`.
+   It reads the log-pure projection, so every peer refuses the same act.
 3. **Fencing / recovery.** The source's abstract "owner epoch" is a Raft
    term; a control-plane operation that revokes a crashed peer's holdings is
    proposed by the leader after a `readIndex()` quorum fence — the same
