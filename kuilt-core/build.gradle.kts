@@ -1,6 +1,7 @@
 plugins {
     id("kuilt.kmp-library")
-    // Generates `KuiltVersion.VERSION` into commonMain (#3323). Here alone: every module depends on this one.
+    // Generates `us.tractat.kuilt.core.KuiltVersion` into commonMain (#3323). `:kuilt-heddle-core`
+    // carries its own copy, since it may not depend on this module; the rest carry none.
     id("kuilt.version-constant")
     alias(libs.plugins.kotlinSerialization)
 }
@@ -41,16 +42,6 @@ tasks.withType<Test>().configureEach {
 // normal run too. `ALL-UNNAMED` because JNA sits on the test classpath, not the module path.
 tasks.withType<Test>().configureEach {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
-}
-
-// `KuiltVersionTest` compares the generated `KuiltVersion.VERSION` with the version the published
-// POM declares (#3323), so it needs that POM built and its path. The POM task is wired as an input,
-// which gives both the edge and a rerun when the version changes. Resolved inside the lazy
-// `jvmTest` configuration, by which point KGP and maven-publish have registered the publication.
-tasks.named<Test>("jvmTest") {
-    val pomTask = tasks.named<GenerateMavenPom>("generatePomFileForKotlinMultiplatformPublication")
-    inputs.files(pomTask).withPropertyName("publishedPom").withPathSensitivity(PathSensitivity.NONE)
-    systemProperty("kuilt.publishedPom", pomTask.get().destination.absolutePath)
 }
 
 kotlin {
