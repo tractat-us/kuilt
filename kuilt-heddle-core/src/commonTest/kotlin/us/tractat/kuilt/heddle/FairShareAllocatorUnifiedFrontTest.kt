@@ -1,6 +1,7 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.Patch
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -42,14 +43,20 @@ class FairShareAllocatorUnifiedFrontTest {
      * idle before, so each that wants service now is a waker. [idle] still want nothing.
      */
     private fun wake(seats: Map<AttachmentRecord, Long>, idle: Set<AttachmentRecord>, supply: Long): Run =
-        schedule(seats, newborns = emptyList(), observed = seats.keys.associateWith { false }, idle, supply)
+        schedule(
+            seats.mapValues { (_, ticks) -> gaugeAt(Int128.of(ticks), folded = 0L) },
+            newborns = emptyList(),
+            observed = seats.keys.associateWith { false },
+            idle,
+            supply,
+        )
 
     /**
-     * One [FairShareAllocator.schedule] over children seated at [seats] ticks plus unseated
-     * [newborns], each child in [observed] last seen demanding or not. [idle] want nothing.
+     * One [FairShareAllocator.schedule] over children carrying [seats] plus unseated [newborns],
+     * each child in [observed] last seen demanding or not. [idle] want nothing.
      */
     private fun schedule(
-        seats: Map<AttachmentRecord, Long>,
+        seats: Map<AttachmentRecord, Gauge>,
         newborns: List<AttachmentRecord>,
         observed: Map<AttachmentRecord, Boolean>,
         idle: Set<AttachmentRecord>,
@@ -57,7 +64,7 @@ class FairShareAllocatorUnifiedFrontTest {
     ): Run {
         val children = seats.keys.toList() + newborns
         var l = shapedLedger(root, children)
-        l = l.piece(EntitlementLedger.of(gauges = seats.map { (edge, ticks) -> edge.id to Gauge(ticksToVirtual(ticks, edge.weight), 0L) }.toMap()))
+        l = l.piece(EntitlementLedger.of(gauges = seats.mapKeys { it.key.id }))
         l = l.piece(l.mint(MintId("m"), root, LOCAL, supply).delta)
         val cell = CountingCell(l, children)
         val allocator = FairShareAllocator(
@@ -103,14 +110,15 @@ class FairShareAllocatorUnifiedFrontTest {
      * seat cannot go below its own origin, 0. It waits 100 behind them both. The old rule raised the
      * front to the newborn's origin whenever wakers joined beside it, which penalised the waker
      * instead: 117/17/16. A runner gets below zero only through `LocalHeddle`'s fold rebase, which
-     * slice 7 of #3353 replaces with per-parent origins; that slice flips this arm to the newborn
-     * not waiting.
+     * raises a gauge's fold above its issuance, and that is how the rig puts them there: a fold of
+     * 100 over no issuance reads −100. Slice 7 of #3353 replaces that rebase with per-parent origins,
+     * and flips this arm to the newborn not waiting.
      */
     @Test
     fun aNewbornBehindASubZeroRunnerWaitsUntilOrigins() {
         val n = edgeOf(root, GroupId("p/n"))
         val run = schedule(
-            seats = mapOf(b to -1_600L, a to -1_600L),
+            seats = mapOf(b to gaugeAt(Int128.ZERO, folded = 100L), a to gaugeAt(Int128.ZERO, folded = 100L)),
             newborns = listOf(n),
             observed = mapOf(b to true, a to false),
             idle = emptySet(),
