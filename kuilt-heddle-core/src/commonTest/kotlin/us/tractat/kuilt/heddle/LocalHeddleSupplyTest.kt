@@ -22,6 +22,7 @@ class LocalHeddleSupplyTest {
     private val c = GroupId("é#%@")
 
     private val oneLeaf = shapedLedger(root, listOf(edgeOf(root, a)))
+    private val twoLeaves = shapedLedger(root, listOf(edgeOf(root, a), edgeOf(root, b)))
     private val threeLeaves = shapedLedger(root, listOf(edgeOf(root, a, 3), edgeOf(root, b, 2), edgeOf(root, c, 1)))
 
     private fun policy(reservation: Long, low: Long = 1L, target: Long = 2L): LocalPolicy =
@@ -222,6 +223,31 @@ class LocalHeddleSupplyTest {
         assertAll(
             { assertEquals(listOf(a), preview) },
             { assertEquals(LeaseOutcome.SupplyExhausted, h.extend(second.id, 4L), "the second pick's extend ran out") },
+        )
+    }
+
+    /**
+     * A refused extend ends a queues preview even when the root could still fund another acquire
+     * (#3321): the caller's loop stops at the lease it could not size for its job, and does not go
+     * on to the next leaf. `b`'s second job, 6, is the one that runs out: after `b` and `a` each
+     * take 2 of 9, `b` wins the tie for the third slot, the acquire lands at 2, and the extend by 4
+     * finds 3. The rig, on the real engine: that extend is refused, and an acquire for `a`, still
+     * queued, would land.
+     */
+    @Test
+    fun aRefusedExtendEndsThePreviewThoughTheRootCouldFundMore() {
+        val h = engineOver(twoLeaves, root, supply = 9L, policy = policy(reservation = 2L))
+        val preview = h.previewPicks(mapOf(a to listOf(2L, 2L), b to listOf(2L, 6L)), setOf(a, b))
+        val first = h.lease(setOf(a, b), reservation = 2L)
+        val second = h.lease(setOf(a, b), reservation = 2L)
+        val third = h.lease(setOf(a, b), reservation = 2L)
+        assertAll(
+            { assertEquals(listOf(first.leaf, second.leaf), preview, "the two picks before the refused extend, and nothing after") },
+            { assertEquals(setOf(a, b), setOf(first.leaf, second.leaf), "the rig: b's first job and a's first job went first") },
+            { assertEquals(b, third.leaf, "the rig: the third pick is b, whose head is now 6") },
+            { assertEquals(LeaseOutcome.SupplyExhausted, h.extend(third.id, 4L), "the rig: its extend by 4 is refused") },
+            { assertEquals(3L, h.atRoot(), "the rig: the root still holds 3") },
+            { assertEquals(a, h.lease(setOf(a), reservation = 2L).leaf, "the rig: and a's next job could still be acquired") },
         )
     }
 
