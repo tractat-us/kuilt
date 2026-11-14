@@ -628,8 +628,9 @@ class LocalHeddlePersistenceTest {
 
     /**
      * Format 2's rich golden carries a ceiling on a group, a lane and a runtime marker, and an engine
-     * restored from it enforces them: `interactive` (ceiling 2) has one lease open in the golden,
-     * so it takes one more and then nothing (#3324).
+     * restored from it enforces each one, told apart by the ceiling `explain` names (#3324). The
+     * golden has two leases open beneath `acme` (ceiling 3), one of them at `interactive` (ceiling
+     * 2), and one at the runtime child `t1` (ceiling 2 each).
      */
     @Test
     fun formatTwosGoldenCarriesACeiling() {
@@ -637,15 +638,36 @@ class LocalHeddlePersistenceTest {
         val acme = assertIs<Topology.Group>(snapshot.lastApplied.children.first { it.name == "acme" })
         val tenants = assertIs<Topology.Group>(snapshot.lastApplied.children.first { it.name == "tenants" })
         val interactive = richBefore.groupId("acme", "interactive")
+        val x = richBefore.groupId("acme", "batch", "x")
+        val y = richBefore.groupId("acme", "batch", "y")
+        val t1 = richBefore.runtimeChildId(listOf("tenants"), "t1")
         val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
-        val second = restored.acquire(setOf(interactive), setOf(interactive), startedAt = 0L)
-        val third = restored.acquire(setOf(interactive), setOf(interactive), startedAt = 0L)
+        fun only(leaf: GroupId) = restored.acquire(setOf(leaf), setOf(leaf), startedAt = 0L)
+        fun why(leaf: GroupId) = restored.explain(leaf, setOf(leaf), setOf(leaf))
+        // interactive's second lease fills both its own ceiling and acme's.
+        val second = only(interactive)
+        val bothFull = why(interactive)
+        // Completing y's lease frees acme and leaves interactive full: the lane's own ceiling.
+        check(restored.complete(snapshot.leases.single { it.leaf == y }.id, 1L) is LeaseOutcome.Done)
+        val laneFull = only(interactive)
+        val laneWhy = why(interactive)
+        // x is uncapped, so only acme's ceiling stops it after its first lease.
+        val underAcme = only(x)
+        val acmeWhy = why(x)
+        val tenant = only(t1)
+        val tenantWhy = why(t1)
         assertAll(
             { assertTrue("\"maxConcurrent\":3" in GOLDEN_FORMAT_2_RICH, "the ceiling is in the bytes") },
             { assertEquals(listOf(3L, 2L, 2L), listOf(acme.maxConcurrent, acme.children.first { it.name == "interactive" }.maxConcurrent, tenants.runtimeChildren?.maxConcurrent)) },
-            { assertEquals(1, snapshot.leases.count { it.leaf == interactive }, "the rig: one lease open at interactive") },
+            { assertEquals(listOf(1, 1, 1), listOf(interactive, y, t1).map { leaf -> snapshot.leases.count { it.leaf == leaf } }, "the rig: the leases open in the golden") },
             { assertIs<AcquireOutcome.Acquired>(second) },
-            { assertEquals(AcquireOutcome.NothingEligible, third, "interactive is at its ceiling") },
+            { assertEquals(WaitExplanation.AtCeiling(richBefore.groupId("acme"), 3L), bothFull, "both full: the topmost is named") },
+            { assertEquals(AcquireOutcome.NothingEligible, laneFull) },
+            { assertEquals(WaitExplanation.AtCeiling(interactive, 2L), laneWhy, "the lane's ceiling") },
+            { assertIs<AcquireOutcome.Acquired>(underAcme) },
+            { assertEquals(WaitExplanation.AtCeiling(richBefore.groupId("acme"), 3L), acmeWhy, "the group's ceiling") },
+            { assertIs<AcquireOutcome.Acquired>(tenant) },
+            { assertEquals(WaitExplanation.AtCeiling(t1, 2L), tenantWhy, "the runtime marker's ceiling, on t1 alone") },
         )
     }
 
