@@ -46,11 +46,16 @@ class WarpLogRecordExporterSegmentNumberingTest {
         segmentOps = segmentOps,
     )
 
-    private fun foreignLog(count: Int = 6): Rga<LogRecord> {
+    private fun foreignLog(
+        count: Int = 6,
+        author: ReplicaId = replicaB,
+        firstId: Int = 500,
+        label: String = "foreign",
+    ): Rga<LogRecord> {
         var rga = Rga.empty<LogRecord>()
         var tail = RgaId.HEAD
         repeat(count) { i ->
-            val (next, op) = rga.insertAfter(replica = replicaB, after = tail, value = record(500 + i, "foreign$i"))
+            val (next, op) = rga.insertAfter(replica = author, after = tail, value = record(firstId + i, "$label$i"))
             rga = next
             tail = op.id
         }
@@ -159,6 +164,35 @@ class WarpLogRecordExporterSegmentNumberingTest {
             { assertTrue(refusedWrites > 0, "the rig never refused a write") },
             { assertTrue(refused is ExportResult.Failure, "the refused merge reported $refused") },
             { assertEquals(ExportResult.Success, retried) },
+            { assertTrue((0 until 6).all { "foreign$it" in bodies }, "the retried merge never persisted: $bodies") },
+        )
+    }
+
+    @Test
+    fun aDifferentMergeLandingInBetweenDoesNotExcuseTheRetry() = runTest {
+        // The second merge adopts only its own remote, so its success says nothing about the
+        // first one's ops, which are still in memory alone.
+        val backing = RecordingStore()
+        val store = WriteRefusingStore(backing) { key -> key.name.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }
+        val exporter = exporterFor(store)
+        repeat(3) { exporter.export(record(it)) }
+        val first = foreignLog()
+        val second = foreignLog(author = ReplicaId("C"), firstId = 700, label = "other")
+
+        store.refuseWrites()
+        val refused = exporter.merge(first)
+        store.allowWrites()
+        val between = exporter.merge(second)
+        val retried = exporter.merge(first)
+
+        val restarted = exporterFor(backing).also { it.recover() }
+        val bodies = restarted.snapshot().toList().map { it.body }
+
+        assertAll(
+            { assertTrue(refused is ExportResult.Failure, "the rig never refused the first merge: $refused") },
+            { assertEquals(ExportResult.Success, between) },
+            { assertEquals(ExportResult.Success, retried) },
+            { assertTrue((0 until 6).all { "other$it" in bodies }, "the merge in between never persisted: $bodies") },
             { assertTrue((0 until 6).all { "foreign$it" in bodies }, "the retried merge never persisted: $bodies") },
         )
     }
