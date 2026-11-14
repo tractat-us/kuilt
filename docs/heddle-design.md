@@ -772,11 +772,13 @@ the rebase: a lowered offset kept without its raised folds would be credit. A
 delegation that is not a pick (`admit`, `extend`, an overrun at `complete`)
 never rebases, so a parent only ever charged that way is never rebased.
 
-**Where the ceiling is still reached.** Two ways, and `PositionCeiling` answers
-both:
+**Where the ceiling is still reached.** Three ways, and `PositionCeiling` answers
+all of them:
 
 - A demanding child that is never served holds `Δ` at zero.
   `LocalHeddlePositionCeilingTest` rigs it.
+- A parent only ever charged through `admit`, `extend` or an overrun, and never
+  picked at, is never rebased.
 - **Returns are never brought down** (#3360). A position less the edge's raw
   position is its lifetime returned service, `returned · G` ticks, and a rebase
   moves both together. So an edge reaches its ceiling once its lifetime returned
@@ -951,6 +953,11 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   idle children to `−R`, and that old rule then put a newborn about `R` ahead of
   the wakers, which took every pick until they caught up. With nobody waking, a
   cohort of newborns is still seated each at its own origin, as above.
+
+  The same seat floor reaches the ordinary fronts too. Whenever newborns join
+  beside wakers, the front is raised to the newborns' origins. The idle fallback
+  can sit below them, at a sibling a rebase lifted to `−R`, and a waker clamped
+  there would otherwise keep credit over a newborn seated at its origin.
 
 ### 7.3 Selection
 
