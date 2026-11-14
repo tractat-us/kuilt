@@ -11,96 +11,77 @@ import kotlin.test.assertFailsWith
  * [BoundMetrics.observedDeviation] at lifetime totals large enough that the old arithmetic
  * (`share × totalCommitted` as a `Long` rational) overflowed and threw on every later call (#3319).
  *
- * The first four rows are #3319's measured first-throw totals, split exactly 50/50 between two
- * demanding children of `root`, so the deviation is `|share₁ − ½| · T` rounded up. The expected values
- * were computed outside Kotlin with exact rationals (Python's `fractions.Fraction`), not by the
- * formula under test.
+ * **What the ledger can hold.** An edge that carries service has `16·n` and `16·c` inside `Long`
+ * for its weight's numerator `n` and its committed total `c` (`ticksAt`'s scale in `seat` and
+ * `delegate`, and `ticksOf`), and `(c / gcd(c, n))·d` inside `Long` for its weight's denominator `d`
+ * (`ticksToVirtual`, the gauge `delegate` writes). An edge nobody has delegated to need never be
+ * seated, so it takes any weight `prepare` accepts. Every row keeps `n ≤ 2⁵⁸` and `c·d ≤ 2⁵⁸` on an
+ * edge that carries service, a margin under all three, so no row sits on a ceiling it is not testing.
  *
- * The 128-bit order and gcd-first sum of #3313 already moved two of those thresholds: an exact
- * 50/50 split no longer throws at `2⁵¹` or `2⁵⁶`, but the same weights still threw at `2⁵⁴` and `2⁵⁷`,
- * where `share × T` itself leaves `Long`. Those two rows pin the overflow that was left. Both totals
- * are reachable: the pick's own ceiling (`committed / weight` in the gauge `delegate` writes) holds
- * at each of them, which the rig proves by delegating that service.
- *
- * Two rows carry a weight near `Long.MAX_VALUE`, where forming the share itself used to throw (#3347).
- * Their expected values come from `fractions` too.
+ * Every row but the last three reds on the old arithmetic with an `ArithmeticException` from
+ * `Rational.times` inside `observedDeviation`. The expected values were computed outside Kotlin
+ * with exact rationals (Python's `fractions.Fraction`), not by the formula under test.
  */
 class BoundMetricsTest {
 
+    /** A `31 : 1` split: the share `31/32` times a total of `2⁵⁹ − 1`, coprime to 32, passes `2⁶³`. */
     @Test
-    fun thousandthAgainstTheRestAtTwoToThe51() {
-        assertEquals(1_123_648_107_028_939L, deviation(Weight.of(1L, 1000L), Weight.of(999L, 1000L), 1L shl 51))
-    }
-
-    @Test
-    fun thousandthAgainstTheRestAtTwoToThe54() {
-        assertEquals(8_989_184_856_231_511L, deviation(Weight.of(1L, 1000L), Weight.of(999L, 1000L), 1L shl 54))
-    }
-
-    @Test
-    fun coprimeDenominatorsAtTwoToThe56() {
-        assertEquals(1_549_625_678_235_010L, deviation(Weight.of(1L, 97L), Weight.of(1L, 89L), 1L shl 56))
-    }
-
-    @Test
-    fun coprimeDenominatorsAtTwoToThe57() {
-        assertEquals(3_099_251_356_470_019L, deviation(Weight.of(1L, 97L), Weight.of(1L, 89L), 1L shl 57))
-    }
-
-    @Test
-    fun mixedFractionsAtTwoToThe60() {
-        assertEquals(19_877_956_975_980_121L, deviation(Weight.of(3L, 7L), Weight.of(2L, 5L), 1L shl 60))
-    }
-
-    @Test
-    fun threeToOneAtTwoToThe62() {
-        assertEquals(1L shl 60, deviation(Weight.of(3L), Weight.ONE, 1L shl 62))
+    fun skewedWeightsAtTheLargestTotal() {
+        assertEquals(
+            270_215_977_642_229_760L,
+            deviation(Weight.of(31L), Weight.ONE, committed1 = 1L shl 58, committed2 = (1L shl 58) - 1L),
+        )
     }
 
     /**
-     * A weight near `Long.MAX_VALUE` (#3347). The share `w₁ / W` is `(2⁶³−3)/2 ÷ (2⁶³−1)/2`, whose
-     * straight-across product `(2⁶³−3) · 2` leaves `Long` although the share itself,
-     * `(2⁶³−3)/(2⁶³−1)`, fits; `Rational.div` threw there on the first call, at any total.
+     * Fractional weights with coprime denominators: `64/3 : 1/5` is a share of `320/323`, each child
+     * committed up to `c·d ≤ 2⁵⁸`.
      */
     @Test
-    fun aWeightNearLongMaxAgainstOneAtTwoToThe62() {
-        val heavy = Weight.of(Long.MAX_VALUE - 2L, 2L)
-        assertEquals(2_305_843_009_213_693_951L, deviation(heavy, Weight.ONE, committed1 = 1L shl 61, committed2 = 1L shl 61))
-    }
-
-    /** The same share with three children, so the heavy child's quotient is not the only one formed. */
-    @Test
-    fun threeChildrenWithOneWeightNearLongMax() {
-        val children = listOf(
-            Child(Weight.of(Long.MAX_VALUE - 4L, 2L), 1L shl 60),
-            Child(Weight.ONE, 1L shl 61),
-            Child(Weight.ONE, 0L),
+    fun mixedFractionsWithCoprimeDenominators() {
+        assertEquals(
+            56_218_308_661_169_783L,
+            deviation(Weight.of(64L, 3L), Weight.of(1L, 5L), committed1 = (1L shl 58) / 3L, committed2 = (1L shl 58) / 5L),
         )
-        assertEquals(2_305_843_009_213_693_952L, observedDeviationOf(children))
     }
 
     /**
-     * The residual overflow, documented and pinned: the weight sum `W = (3·2⁶⁰+1)/3` fits a `Long`,
-     * but the share `(2⁶²+1)/4 ÷ W = (3·2⁶²+3)/(3·2⁶²+4)` is already reduced and both parts pass
-     * `Long.MAX_VALUE`, so the metric throws. Both weights are accepted by `prepare` and the rig
-     * builds, so the throw is the metric's and scheduling is unaffected.
+     * A weight near `Long.MAX_VALUE` (#3347). No edge can carry service at that weight, but a
+     * demanding child that has not yet been served can hold it: `prepare` and `activate` accept it
+     * and nothing seats it. Its share `(2⁶³−3)/(2⁶³−1)` times the other child's service passes `2⁶³`.
+     */
+    @Test
+    fun anUnservedWeightNearLongMaxAgainstOne() {
+        val heavy = Weight.of(Long.MAX_VALUE - 2L, 2L)
+        assertEquals(1L shl 58, deviation(heavy, Weight.ONE, committed1 = 0L, committed2 = 1L shl 58))
+    }
+
+    /** The same with three children, so the unserved child's gap is not the only one formed. */
+    @Test
+    fun threeChildrenWithAnUnservedWeightNearLongMax() {
+        val children = listOf(
+            Child(Weight.of(Long.MAX_VALUE - 4L, 2L), 0L),
+            Child(Weight.ONE, 1L shl 58),
+            Child(Weight.ONE, 1L shl 57),
+        )
+        assertEquals((1L shl 58) + (1L shl 57), observedDeviationOf(children))
+    }
+
+    /**
+     * The residual overflow, documented and pinned. Both weights can carry service: `2⁵⁷/3` and
+     * `1/192`. Over the common denominator 192 their numerators sum to `2⁶³ + 1`, which leaves `Long`,
+     * yet the reduced weight sum `W = ((2⁶³+1)/3) / 64` fits. The share `2⁵⁷/3 ÷ W = 2⁶³/(2⁶³+1)` is
+     * already reduced and fits nowhere, so the metric throws. Returning from [metricsRigOf] at all
+     * means `prepare`, `activate`, `seat` and `delegate` accepted both weights.
      */
     @Test
     fun aReducedShareThatDoesNotFitThrows() {
         val children = listOf(
-            Child(Weight.of((1L shl 62) + 1L, 4L), 1L),
-            Child(Weight.of(1L, 12L), 1L),
+            Child(Weight.of(1L shl 57, 3L), 1L),
+            Child(Weight.of(1L, 192L), 1L),
         )
-        // Returning at all means `prepare`, activate, seat and delegate accepted both weights, and the rig's own equality assert held.
         val metric = metricsRigOf(children)
         assertFailsWith<ArithmeticException> { metric() }
-    }
-
-    /** On the weight ratio exactly, at the largest total two children can hold, the deviation is zero. */
-    @Test
-    fun onRatioAtTheLargestTotalIsZero() {
-        val third = Long.MAX_VALUE / 3 // 3 · third ≤ Long.MAX_VALUE, so the root can fund both edges
-        assertEquals(0L, deviation(Weight.of(2L), Weight.ONE, committed1 = 2 * third, committed2 = third))
     }
 
     /** Rounded up, never down: `1/3 · 1 − 0` is a third of a unit, which owes a whole one. */
@@ -120,9 +101,6 @@ class BoundMetricsTest {
         assertEquals(2L, observedDeviationOf(equal))
     }
 
-    private fun deviation(w1: Weight, w2: Weight, total: Long): Long =
-        deviation(w1, w2, committed1 = total / 2, committed2 = total - total / 2)
-
     private fun deviation(w1: Weight, w2: Weight, committed1: Long, committed2: Long): Long =
         observedDeviationOf(listOf(Child(w1, committed1), Child(w2, committed2)))
 }
@@ -132,12 +110,16 @@ internal data class Child(val weight: Weight, val committed: Long, val demanding
 
 /**
  * [BoundMetrics.observedDeviation] at `root` over [children], with the ledger built only through
- * public mutators: mint at the root, then prepare, activate, seat and delegate each edge. Shared with
- * the JVM oracle, so both check the same rig.
+ * public mutators: mint at the root, then prepare and activate each edge, and seat and delegate the
+ * ones that carry service. Shared with the JVM oracle, so both check the same rig.
  */
 internal fun observedDeviationOf(children: List<Child>): Long = metricsRigOf(children)()
 
-/** Builds [observedDeviationOf]'s rig and asserts it, returning the metric call unrun so a test can tell setup from the call. */
+/**
+ * Builds [observedDeviationOf]'s rig and asserts it, returning the metric call unrun so a test can
+ * tell setup from the call. An edge with no committed service is left unseated, as one the scheduler
+ * has not yet picked is, so a row can give it a weight no edge could carry service at.
+ */
 internal fun metricsRigOf(children: List<Child>): () -> Long {
     val root = GroupId("root")
     val alice = ReplicaId("alice")
@@ -147,8 +129,10 @@ internal fun metricsRigOf(children: List<Child>): () -> Long {
     children.forEachIndexed { i, c ->
         ledger = ledger.piece(requireNotNull(ledger.prepare(AttachmentRecord(edges[i], root, GroupId("g$i"), c.weight))))
         ledger = ledger.piece(requireNotNull(ledger.activate(edges[i])))
-        ledger = ledger.piece(requireNotNull(ledger.seat(edges[i], Rational.ZERO)))
-        if (c.committed > 0L) ledger = ledger.piece(requireNotNull(ledger.delegate(alice, edges[i], c.committed)))
+        if (c.committed > 0L) {
+            ledger = ledger.piece(requireNotNull(ledger.seat(edges[i], Rational.ZERO)))
+            ledger = ledger.piece(requireNotNull(ledger.delegate(alice, edges[i], c.committed)))
+        }
     }
     // The rig: every edge really carries the committed service its child names.
     assertEquals(children.map { it.committed }, edges.map { ledger.edge(it)?.committedService })
