@@ -274,7 +274,7 @@ class GaugeTest {
      * set alone — just a coarser one than the `lcm`. Either way, depth is not a variable in it.
      *
      * What *does* reach the ceiling is pinned separately by
-     * [anExtremeWeightRatioIsWhatReachesTheCeilingAndItThrows].
+     * [anExtremeWeightRatioIsWhatReachesTheCeilingAndItRoundsUp].
      */
     @Test
     fun topologyDepthDoesNotCompoundTheFloorDenominator() {
@@ -328,29 +328,39 @@ class GaugeTest {
      * and a weight numerator coprime to it is the hard constraint. At `~3.04e9` each, that product
      * exceeds `Long.MAX_VALUE` in a single addition.
      *
-     * Under [CheckedMath] that **throws**, which is the right failure and the reason this is an
-     * accepted cost rather than a defect: a wrapped denominator would invert
-     * [Rational.compareTo]'s cross-multiplication and silently reorder siblings cluster-wide,
-     * whereas a throw is a loud, local, deterministic refusal that every replica makes alike.
+     * The read computes in [ExactTime] and narrows once, so past the ceiling it neither wraps nor
+     * throws: it rounds **up** onto a power-of-two grid, the side §10.5 allows, by less than one grid
+     * step. A wrapped denominator would invert [Rational.compareTo] and reorder siblings; a throw
+     * would wedge every later pick at the parent. Every replica rounds alike, since the narrowing is
+     * a function of the exact value alone.
      *
      * Reached through the [EntitlementLedger] read rather than bare arithmetic, so the guarantee is
      * pinned where consumers actually stand.
      */
     @Test
-    fun anExtremeWeightRatioIsWhatReachesTheCeilingAndItThrows() {
+    fun anExtremeWeightRatioIsWhatReachesTheCeilingAndItRoundsUp() {
         // Two primes just over sqrt(Long.MAX_VALUE): coprime, so nothing reduces, and their
-        // product overflows.
+        // product has no Long form. The exact value is 1/p + 1/q = (p + q) / (p · q).
+        val p = 3_037_000_493L
+        val q = 3_037_000_507L
         val overflowing = ledgerWith(
-            weight = Weight.of(3_037_000_507L, 1L),
+            weight = Weight.of(q, 1L),
             issued = 1L,
-            gauge = Gauge(Rational.of(1L, 3_037_000_493L), 0L),
+            gauge = Gauge(Rational.of(1L, p), 0L),
         )
-        assertFailsWith<ArithmeticException>("must throw, never wrap (§10.12)") {
-            overflowing.grossVirtualService(EDGE)
-        }
+        val read = checkNotNull(overflowing.grossVirtualService(EDGE))
+        // read − exact = (read.num · p · q − (p + q) · read.den) / (read.den · p · q).
+        val pq = BigInt.of(p) * BigInt.of(q)
+        val excess = BigInt.of(read.numerator) * pq - BigInt.of(p + q) * BigInt.of(read.denominator)
+        assertAll(
+            { assertEquals(0L, read.denominator and (read.denominator - 1), "a rounded read sits on a power-of-two grid: $read") },
+            { assertTrue(excess.signum >= 0, "the read rounds up, never down: $read") },
+            // Less than one grid step, 1/read.den, above the exact value.
+            { assertTrue(excess < pq, "the read is less than one grid step above the exact value: $read") },
+        )
 
-        // The neighbouring case that fits is exact — so the throw is a real ceiling and not an
-        // over-eager guard.
+        // The neighbouring case that fits is exact — so rounding happens only past a real ceiling,
+        // never to a value a Rational can hold.
         val fits = ledgerWith(
             weight = Weight.of(3_037_000_499L, 1L),
             issued = 1L,
