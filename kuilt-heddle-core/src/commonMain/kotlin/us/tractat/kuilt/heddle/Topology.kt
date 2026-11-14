@@ -306,7 +306,7 @@ private fun documentProblems(root: String, children: List<TopologyDocument.Node>
     buildList {
         val at = Address(emptyList(), listOf(root))
         if (root.isEmpty()) add(at.problem(TopologyProblem.Kind.EMPTY_NAME, "the root has no name"))
-        walkGroup(at, children, runtimeChildren = null)
+        walkGroup(at, children, runtimeChildren = null, runtimeChildrenMaxConcurrent = null)
     }
 
 /** Where a node sits: its child indices from the root, and the names along the way for display. */
@@ -319,9 +319,13 @@ private fun MutableList<TopologyProblem>.walkGroup(
     group: Address,
     children: List<TopologyDocument.Node>,
     runtimeChildren: String?,
+    runtimeChildrenMaxConcurrent: Long?,
 ) {
     if (runtimeChildren != null && parseWeightText(runtimeChildren) == null) {
         add(group.problem(TopologyProblem.Kind.INVALID_WEIGHT, "runtime children weight ${quoted(runtimeChildren)} $NOT_A_WEIGHT"))
+    }
+    if (runtimeChildrenMaxConcurrent != null && runtimeChildrenMaxConcurrent < 0L) {
+        add(group.problem(TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT, "runtime children maxConcurrent $runtimeChildrenMaxConcurrent $NEGATIVE_CEILING"))
     }
     if (children.isEmpty() && runtimeChildren == null) {
         add(group.problem(TopologyProblem.Kind.EMPTY_GROUP, "the group has no children and is not marked for runtime children"))
@@ -341,8 +345,16 @@ private fun MutableList<TopologyProblem>.walkGroup(
         if (parseWeightText(child.weight) == null) {
             add(at.problem(TopologyProblem.Kind.INVALID_WEIGHT, "weight ${quoted(child.weight)} $NOT_A_WEIGHT"))
         }
-        if (child is TopologyDocument.Group) walkGroup(at, child.children, child.runtimeChildren)
+        val ceiling = child.maxConcurrent
+        if (ceiling != null && ceiling < 0L) {
+            add(at.problem(TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT, "maxConcurrent $ceiling $NEGATIVE_CEILING"))
+        }
+        if (child is TopologyDocument.Group) {
+            walkGroup(at, child.children, child.runtimeChildren, child.runtimeChildrenMaxConcurrent)
+        }
     }
 }
 
 private const val NOT_A_WEIGHT = "is not a positive whole number or ratio, such as \"3\" or \"3/2\""
+
+private const val NEGATIVE_CEILING = "is negative; write 0 to pause, or leave it out for no ceiling"
