@@ -3,12 +3,20 @@ package us.tractat.kuilt.heddle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
+import us.tractat.kuilt.core.InMemoryTag
+import us.tractat.kuilt.core.NamedMux
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.HeartbeatConfig
+import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.raft.RaftRole
 import us.tractat.kuilt.raft.test.FakeRaftNode
@@ -17,6 +25,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -48,7 +57,7 @@ class HeddleWeightBudgetTest {
             governed.advertise(E1, HUNGRY)
 
             assertAll(
-                { assertTrue(!weightFitsTheBudget(OVER_ALONE), "rig: the weight fails the budget alone") },
+                { assertFalse(weightFitsTheBudget(OVER_ALONE), "rig: the weight fails the budget alone") },
                 { assertEquals(ControlConflict.WeightBudget(ROOT, E1), assertIs<ControlOutcome.Conflict>(prepared, "prepare").conflict) },
                 { assertIs<ControlOutcome.Conflict>(activated, "activate of an edge never prepared") },
                 { assertEquals(before, governed.ledger.value, "the ledger is unchanged") },
@@ -149,17 +158,157 @@ class HeddleWeightBudgetTest {
             assertTrue(node.schedule(ROOT) > 0)
         }
 
-    private suspend fun TestScope.bootGoverned(): GovernedHeddleNode {
-        val governed = backgroundScope.governedOn(this, FakeRaftNode(initialRole = RaftRole.Leader))
+    /**
+     * An edge already active is not counted twice: re-activating it checks its siblings beside it,
+     * not beside a second copy of itself. `2⁵⁸` fits alone, and two of it do not.
+     */
+    @Test
+    fun aGovernedReactivationIsNotCountedBesideItself() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val governed = bootGoverned()
+            assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E1, ROOT, C1, HALF_THE_ROOM)), "rig: prepared")
+            val first = governed.activate(E1)
+            val second = governed.activate(E1)
+            assertAll(
+                { assertFalse(weightsFitTogether(HALF_THE_ROOM, HALF_THE_ROOM), "rig: two of it would not fit") },
+                { assertIs<ControlOutcome.Applied>(first, "first activate") },
+                { assertIs<ControlOutcome.Applied>(second, "second activate") },
+            )
+        }
+
+    @Test
+    fun anUngovernedReactivationIsNotCountedBesideItself() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val node = bootStatic()
+            assertTrue(node.prepare(AttachmentRecord(E1, ROOT, C1, HALF_THE_ROOM)), "rig: prepared")
+            val first = node.activate(E1)
+            val second = node.activate(E1)
+            assertAll(
+                { assertFalse(weightsFitTogether(HALF_THE_ROOM, HALF_THE_ROOM), "rig: two of it would not fit") },
+                { assertTrue(first, "first activate") },
+                { assertTrue(second, "second activate") },
+            )
+        }
+
+    /**
+     * The log decides on its own projection, not on the gossip-merged ledger. Here the data plane
+     * is ahead of the log: another peer's `Close` of [E1] has reached it by gossip, and the log has
+     * not applied one. In log order [E1] is still active, so activating [E2] beside it fails the
+     * budget, which is what every peer applying this log decides. A plane reading the merged
+     * ledger would see [E1] closing and let [E2] in, on this peer only.
+     */
+    @Test
+    fun aGovernedActivateDecidesOnTheLogNotOnTheGossipedLedger() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val loom = InMemoryLoom()
+            val governed = bootGoverned(loom)
+            assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E1, ROOT, C1, BIG_SIBLING)), "rig: prepared")
+            assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E2, ROOT, C2, SMALL_SIBLING)), "rig: prepared")
+            assertIs<ControlOutcome.Applied>(governed.activate(E1), "rig: one sibling active")
+
+            val ahead = loom.join(InMemoryTag("ahead"))
+            val ledgerChannel = NamedMux(ahead, backgroundScope).channel(HeddleNode.LEDGER_CHANNEL)
+            backgroundScope.launch { ledgerChannel.incoming.collect { } }
+            advanceTimeBy(200L)
+            runCurrent()
+            val close = checkNotNull(governed.ledger.value.close(E1)) { "rig: E1 closes" }
+            val messages = QuiltMessage.serializer(EntitlementLedger.serializer())
+            val frame = Cbor.encodeToByteArray(messages, QuiltMessage.Delta(ReplicaId("ahead"), 1L, close.delta))
+            for (peer in ahead.peers.value - ahead.selfId) ledgerChannel.sendTo(peer, frame)
+            advanceTimeBy(200L)
+            runCurrent()
+
+            val gossiped = governed.ledger.value
+            val activated = governed.activate(E2)
+            assertAll(
+                { assertEquals(Lifecycle.CLOSING, gossiped.lifecycle(E1), "rig: the data plane holds the Close") },
+                { assertTrue(gossiped.activationFitsTheBudget(E2), "rig: on the gossiped ledger E2 would fit") },
+                { assertEquals(ControlConflict.WeightBudget(ROOT, E2), assertIs<ControlOutcome.Conflict>(activated, "activate").conflict) },
+                { assertEquals(Lifecycle.PREPARED, governed.ledger.value.lifecycle(E2), "the edge stays prepared") },
+            )
+        }
+
+    /** A closed edge is refused for being closed: the budget is not asked about an act that cannot apply. */
+    @Test
+    fun aGovernedActivateOfAClosingEdgeIsRefusedForItsLifecycleFirst() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val governed = bootGoverned()
+            assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E1, ROOT, C1, BIG_SIBLING)), "rig: prepared")
+            assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E2, ROOT, C2, SMALL_SIBLING)), "rig: prepared")
+            assertIs<ControlOutcome.Applied>(governed.activate(E1), "rig: activated")
+            assertIs<ControlOutcome.Applied>(governed.close(E1), "rig: closed")
+            assertIs<ControlOutcome.Applied>(governed.activate(E2), "rig: its sibling activates once it is closed")
+            val activated = governed.activate(E1)
+            assertAll(
+                { assertFalse(governed.ledger.value.activationFitsTheBudget(E1), "rig: it would fail the budget too") },
+                { assertIs<ControlConflict.Refused>(assertIs<ControlOutcome.Conflict>(activated, "activate").conflict) },
+            )
+        }
+
+    /** First-wins answers a second record under a bound id, whatever that record's weight. */
+    @Test
+    fun aGovernedPrepareUnderABoundIdIsRefusedAsBoundFirst() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val governed = bootGoverned()
+            assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E1, ROOT, C1, BIG_SIBLING)), "rig: bound")
+            val prepared = governed.prepare(AttachmentRecord(E1, ROOT, C1, OVER_ALONE))
+            assertAll(
+                { assertFalse(weightFitsTheBudget(OVER_ALONE), "rig: the second record fails the budget too") },
+                { assertIs<ControlConflict.Refused>(assertIs<ControlOutcome.Conflict>(prepared, "prepare").conflict) },
+            )
+        }
+
+    /** A static node's starting tree is held to the budget too, and a refused record refuses the boot. */
+    @Test
+    fun heddleStaticRefusesATopologyThatLeavesTheBudget() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val alone = listOf(AttachmentRecord(E1, ROOT, C1, OVER_ALONE))
+            val pair = listOf(AttachmentRecord(E1, ROOT, C1, BIG_SIBLING), AttachmentRecord(E2, ROOT, C2, SMALL_SIBLING))
+            val fits = listOf(AttachmentRecord(E1, ROOT, C1, BIG_SIBLING), AttachmentRecord(E2, ROOT, C2, Weight.ONE))
+            val aloneSeam = InMemoryLoom().host(Pattern("topology-alone"))
+            val pairSeam = InMemoryLoom().host(Pattern("topology-pair"))
+            val fitsSeam = InMemoryLoom().host(Pattern("topology-fits"))
+            assertAll(
+                { assertFailsWith<IllegalArgumentException>("alone") { staticOn(aloneSeam, alone) } },
+                { assertFailsWith<IllegalArgumentException>("the pair") { staticOn(pairSeam, pair) } },
+                { assertEquals(SUPPLY, staticOn(fitsSeam, fits).ledger.value.mintedTotal(), "the control: a topology that fits boots") },
+            )
+        }
+
+    private fun TestScope.staticOn(seam: Seam, topology: List<AttachmentRecord>): HeddleNode {
+        val self = ReplicaId(seam.selfId.value)
+        return backgroundScope.heddleStatic(
+            seam = seam,
+            self = self,
+            root = ROOT,
+            mint = mapOf(self to SUPPLY),
+            topology = topology,
+            clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+            config = config(),
+            epoch = 0L,
+        )
+    }
+
+    /** Whether [b] activates beside an active [a], on the ledger alone: the rig's own arithmetic check. */
+    private fun weightsFitTogether(a: Weight, b: Weight): Boolean {
+        var ledger = EntitlementLedger.bootstrap(ROOT, emptyMap(), nonce = "weights-fit-together")
+        ledger = ledger.piece(checkNotNull(ledger.prepare(AttachmentRecord(E1, ROOT, C1, a))).delta)
+        ledger = ledger.piece(checkNotNull(ledger.activate(E1)).delta)
+        ledger = ledger.piece(checkNotNull(ledger.prepare(AttachmentRecord(E2, ROOT, C2, b))).delta)
+        return ledger.activationFitsTheBudget(E2)
+    }
+
+    private suspend fun TestScope.bootGoverned(loom: InMemoryLoom = InMemoryLoom()): GovernedHeddleNode {
+        val governed = backgroundScope.governedOn(this, FakeRaftNode(initialRole = RaftRole.Leader), loom)
         assertIs<ControlOutcome.Applied>(governed.enroll(SELF), "rig: enrolled")
         assertIs<ControlOutcome.Applied>(governed.mint(SELF, SUPPLY), "rig: minted")
         assertTrue(governed.isWritable, "rig: the gate is open")
         return governed
     }
 
-    private suspend fun CoroutineScope.governedOn(test: TestScope, raft: FakeRaftNode): GovernedHeddleNode =
+    private suspend fun CoroutineScope.governedOn(test: TestScope, raft: FakeRaftNode, loom: InMemoryLoom): GovernedHeddleNode =
         heddleGoverned(
-            seam = InMemoryLoom().host(Pattern("heddle-weight-budget")),
+            seam = loom.host(Pattern("heddle-weight-budget")),
             self = SELF,
             raft = raft,
             root = ROOT,
@@ -209,6 +358,9 @@ class HeddleWeightBudgetTest {
 
         /** `2⁵⁷/3`, which fits alone; beside [SMALL_SIBLING] the sum over `L = 192` is `2⁶³ + 1`. */
         val BIG_SIBLING: Weight = Weight.of(1L shl 57, 3L)
+
+        /** `2⁵⁸`, which fits alone and not twice: `16 · 2⁵⁹` leaves `Long`. */
+        val HALF_THE_ROOM: Weight = Weight.of(1L shl 58)
 
         /** `1/192`, which fits alone. */
         val SMALL_SIBLING: Weight = Weight.of(1L, 192L)
