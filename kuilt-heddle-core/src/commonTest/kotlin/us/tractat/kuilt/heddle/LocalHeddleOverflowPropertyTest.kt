@@ -36,6 +36,38 @@ class LocalHeddleOverflowPropertyTest {
     @Test
     fun theStartPathNeverOverflowsAsTheWaitingSetChanges() = assertNeverOverflows(seed = 11L, startPath = true)
 
+    /**
+     * #3231's trigger, which is magnitude rather than compounding: fractional weights `3/7 : 2/5`,
+     * every lease at [LocalHeddle.MAX_RESERVATION] and charged in full, with both lanes always
+     * waiting. Before the fix the pick threw at cycle 4,995, about `2⁵⁶` units of service under the
+     * parent, and every later acquire there threw too. Twice that many cycles run here.
+     */
+    @Test
+    fun fractionalWeightsPickPastTheOldServiceCeiling() {
+        val topology = draft("ceiling") {
+            lane("a", Weight.of(3, 7))
+            lane("b", Weight.of(2, 5))
+        }
+        val engine = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+            .apply { reconcileCapacity(1L) }
+        val lanes = listOf(topology.groupId("a"), topology.groupId("b"))
+        val picked = IntArray(lanes.size)
+        repeat(CEILING_CYCLES) { cycle ->
+            val outcome = try {
+                engine.acquire(lanes.toSet(), lanes.toSet(), startedAt = cycle.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
+            } catch (e: ArithmeticException) {
+                throw AssertionError("cycle ${cycle + 1} threw $e", e)
+            }
+            check(outcome is AcquireOutcome.Acquired) { "cycle ${cycle + 1}: expected a lease, got $outcome" }
+            picked[lanes.indexOf(outcome.lease.leaf)]++
+            engine.complete(outcome.lease.id, actualCost = LocalHeddle.MAX_RESERVATION)
+        }
+        assertAll(
+            { assertEquals(CEILING_CYCLES, picked.sum(), "every cycle made one pick") },
+            { assertTrue(picked.all { it > CEILING_CYCLES / 3 }, "both lanes are served near 15 : 14: ${picked.toList()}") },
+        )
+    }
+
     private fun assertNeverOverflows(seed: Long, startPath: Boolean) {
         val topology = draft("fs") {
             LANES.forEach { (name, weight) -> lane(name, weight) }
@@ -84,6 +116,7 @@ class LocalHeddleOverflowPropertyTest {
     private companion object {
         const val PICKS = 100_000
         const val SAMPLE_EVERY = 100
+        const val CEILING_CYCLES = 10_000
         const val MAX_COST = 3_600
 
         val LANES = listOf(

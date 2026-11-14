@@ -326,13 +326,11 @@ public sealed interface LeaseOutcome {
  * Nothing suspends and nothing times out. An argument out of range throws
  * [IllegalArgumentException], a reservation or extension above [MAX_RESERVATION] included.
  *
- * Arithmetic that would leave `Long` throws [ArithmeticException] rather than wrapping, and one
- * place it is reachable is a lifetime ceiling on service. A pick compares virtual times as exact
- * rationals over `Long`, and their numerators grow with the service a parent has handed down,
- * scaled by its children's weights. So the total service under one parent is bounded, and the bound
- * depends on the weights. In one measurement, integer weights 3 : 1 ran past 2^60 units, while
- * fractional weights 3/7 : 2/5 threw near 2^56. A throw changes nothing, so once a parent is past
- * its ceiling every later [acquire] there throws too.
+ * Arithmetic that would leave `Long` throws [ArithmeticException] rather than wrapping. A pick is
+ * not one of those places: it compares virtual times in exact arithmetic of unbounded size, and a
+ * virtual time it stores is rounded up only when no `Long` rational can hold it (see
+ * [HeddlePolicy.pick]), so neither the service a parent has handed down nor a waiting set that
+ * changes between picks can make it throw.
  *
  * A state the engine's own invariants rule out throws [IllegalStateException]: that is a bug in
  * the engine, or a ledger conflict the engine did not create, such as two live inbound edges into
@@ -1185,8 +1183,8 @@ public class LocalHeddle private constructor(
         /**
          * The largest single reservation or extension: 2^44, about 1.8 × 10^13 cost units. A lease
          * that runs longer is [extend]ed, or charged its overrun at [complete], which this does not
-         * bound. It does not bound the service a parent hands down over its lifetime either; that
-         * ceiling depends on the children's weights (see "Failure surface" in the class KDoc).
+         * bound. It does not bound the service a parent hands down over its lifetime either; that is
+         * bounded only by the `Long` counters that tally it.
          *
          * It exists to keep [UNBOUNDED_TARGET] unbounded in practice. Every pick asks for
          * `UNBOUNDED_TARGET − outstanding` on an edge, so the edge goes on reading as wanting the
