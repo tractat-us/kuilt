@@ -1328,11 +1328,15 @@ class HeddleNodeTest {
 
     /**
      * The review's F1 case (#3353): a waker idle since long before the origin passed it gets no
-     * extra service. `b`, at weight 1000, idles while `a`, at weight 1/1000, runs on far enough to
-     * raise the origin to where `b`'s raw position, on its own grid, is far below `Long`. When `b`
-     * wakes, its clamp is taken wide and it comes back level with `a`, exactly as exact arithmetic
-     * would put it; a clamp taken after narrowing the raw position would leave it some 2⁶⁶ ticks
-     * behind, and it would take every pick until it caught up.
+     * extra service. `b`, at weight 15, idles while `a`, at weight 1, runs on through rebases until
+     * `b`'s raw position, on its own grid, is below `Long`: about −2⁶⁴ ticks. When `b` wakes, its
+     * clamp is taken wide and it comes back level with `a`, where exact arithmetic would put it. A
+     * clamp taken after narrowing the raw position would leave it some 2⁶³ ticks behind, and it
+     * would take every pick until it caught up.
+     *
+     * The weights are chosen so that the front `b` wakes to, `a`'s position after a rebase, stays
+     * below `b`'s own ceiling on `b`'s grid: at a wider spread the wake itself refuses, the known
+     * limit of a parent whose weights are far apart.
      */
     @Test
     fun aWakerFarBehindTheOriginComesBackLevel() = runTest(
@@ -1340,8 +1344,8 @@ class HeddleNodeTest {
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val lanes = listOf(
-            AttachmentRecord(AttachmentId("a"), root, GroupId("a"), Weight.of(1L, 1000L)),
-            AttachmentRecord(AttachmentId("b"), root, GroupId("b"), Weight.of(1000L)),
+            AttachmentRecord(AttachmentId("a"), root, GroupId("a"), Weight.ONE),
+            AttachmentRecord(AttachmentId("b"), root, GroupId("b"), Weight.of(15L)),
         )
         val (a, b) = lanes.map { it.id }
         val h = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = lanes, quantum = MAX_GRANT)
@@ -1352,26 +1356,28 @@ class HeddleNodeTest {
         node.advertise(a, Demand.NONE)
         node.schedule(root)
         node.advertise(b, Demand.NONE)
-        repeat(8) {
+        repeat(F1_CALLS) {
             val outstanding = node.ledger.value.edge(a)?.outstanding ?: 0L
-            node.advertise(a, Demand(targetOutstanding = outstanding + 8L * MAX_GRANT, maximumUsefulGrant = MAX_GRANT))
+            node.advertise(a, Demand(targetOutstanding = outstanding + 64L * MAX_GRANT, maximumUsefulGrant = MAX_GRANT))
             node.schedule(root)
+            if (it % 16 == 0) h.pump(1L)
         }
         h.pump()
         val origin = node.ledger.value.origin(root)
-        // b's raw position on its own grid is its service less ⌊O · 1000 · G⌋.
-        val bBehind = us.tractat.kuilt.math.mulDiv(origin, 1000L * 16L, 1L, us.tractat.kuilt.math.Rounding.FLOOR)
+        // b's raw position on its own grid is its service less ⌊O · 15 · G⌋.
+        val bBehind = us.tractat.kuilt.math.mulDiv(origin, 15L * 16L, 1L, us.tractat.kuilt.math.Rounding.FLOOR)
         // a stops asking, so the front b wakes to is the furthest-ahead child, a itself (§7.2).
         node.advertise(a, Demand.NONE)
         node.advertise(b, Demand(targetOutstanding = (node.ledger.value.edge(b)?.outstanding ?: 0L) + 4L, maximumUsefulGrant = 1L))
-        node.schedule(root)
+        val woke = node.schedule(root)
         h.pump()
         val bLevel = node.probeEffectiveVirtualService(b, others = listOf(a))
         val aLevel = node.probeEffectiveVirtualService(a, others = listOf(b))
         assertAll(
-            { assertTrue(node.rebasesForTest > 0, "the rig: the parent rebased") },
+            { assertTrue(node.rebasesForTest > 0, "the rig: the parent rebased (${node.rebasesForTest} times)") },
             { assertTrue(bBehind != null && bBehind.toLongOrNull() == null, "the rig: b sits past Long below the origin ($bBehind ticks)") },
-            // Level within the one unit b was granted at its wake, and a's grid: a tick of a is a thousand units of b.
+            { assertEquals(ScheduleOutcome.Delegated(4), woke, "the rig: b woke and was served") },
+            // Level within the four units b was granted at its wake, 4/15 of a unit of virtual time.
             { assertTrue(bLevel - aLevel <= Rational.of(1L) && aLevel - bLevel <= Rational.of(1L), "b came back level with a: b=$bLevel a=$aLevel") },
         )
     }
@@ -1580,8 +1586,8 @@ class HeddleNodeTest {
         /** The largest grant a long run makes: [LocalHeddle.MAX_RESERVATION], the deadline headroom a position keeps. */
         const val MAX_GRANT: Long = LocalHeddle.MAX_RESERVATION
 
-        /** Enough root supply for every long run here: 2⁶², about 260,000 grants of [MAX_GRANT]. */
-        const val LONG_RUN_MINT: Long = 1L shl 62
+        /** Enough root supply for every long run here, and two peers' fit a `Long`: 2⁶¹, about 130,000 grants of [MAX_GRANT]. */
+        const val LONG_RUN_MINT: Long = 1L shl 61
 
         /** Grants the mixed-weight long run made before it refused at the ceiling, before the origin rebase (JVM). */
         const val GRANTS_BEFORE_THE_CEILING: Int = 300
@@ -1590,6 +1596,9 @@ class HeddleNodeTest {
         const val LAG_GRANT: Long = LocalHeddle.MAX_RESERVATION
         const val LAG_GRANTS_PER_CALL: Long = 256L
         const val LAG_CALLS: Int = 12
+
+        /** Calls of 64 grants the F1 waker's sibling makes: past two rebases of a weight-1 lane. */
+        const val F1_CALLS: Int = 72
 
         /** The newborn the lagging peer seats. */
         val LAG_NEWBORN = AttachmentRecord(AttachmentId("l3"), GroupId("root"), GroupId("l3"), Weight.ONE)
