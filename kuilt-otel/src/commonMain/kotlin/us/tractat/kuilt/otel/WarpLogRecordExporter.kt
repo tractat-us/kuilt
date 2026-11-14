@@ -851,6 +851,44 @@ public class WarpLogRecordExporter(
     )
 
     /**
+     * What one read of the persisted state found. The split that matters is the last two arms: a
+     * store that **refused** a call leaves what is on disk unknown, while bytes that came back and
+     * did not **decode** are known to be bad.
+     */
+    private sealed interface Load {
+        /** Nothing was ever persisted. */
+        data object Absent : Load
+
+        class Found(val state: RecoveredState) : Load
+
+        /** Bytes came back and did not decode. Bad data, so the exporter starts fresh (#1860). */
+        class Undecodable(val cause: Throwable) : Load
+
+        /**
+         * The store refused a call recovery needed, a store-minted cancellation included. The
+         * index names every segment and the store cannot list keys, so nothing may be written
+         * until a read succeeds: an index written now would name only what this run invents.
+         */
+        class Refused(val cause: Throwable) : Load
+    }
+
+    /** Whether a write turn may run, or first owes a read of the persisted state. */
+    private sealed interface PersistedRead {
+        /** Read, absent, or undecodable and started fresh. Turns write. */
+        data object Settled : PersistedRead
+
+        /** The last read was [Load.Refused]. Every turn reads again first, and fails while it is refused. */
+        class Owed(val cause: Throwable) : PersistedRead
+    }
+
+    /**
+     * Settled at construction, so an exporter over a fresh store that never calls [recover] writes
+     * as it always has. Guarded by [lock]; [recover] sets it, and each write turn re-reads it under
+     * [writeMutex].
+     */
+    private var persistedRead: PersistedRead = PersistedRead.Settled
+
+    /**
      * Recover persisted log state from [store]. Call once at startup, before any call to
      * [export] **or [merge]**, and never concurrently with either.
      *
@@ -867,30 +905,87 @@ public class WarpLogRecordExporter(
      * pre-recovery call unsafe is the numbering, not the interleaving, so the fix is the contract
      * on this line rather than a lock.
      *
-     * **Never throws.** An unreadable store or an undecodable entry degrades this
-     * exporter to "start fresh" rather than propagating. The caller installs log
-     * capture *after* awaiting this, so a propagating failure here means capture
-     * is never installed at all: the exporter goes silently dead for the whole
-     * process lifetime, on every launch, with nothing written and nothing
-     * logged (#1860).
+     * **Never throws.** The caller installs log capture *after* awaiting this, so a propagating
+     * failure here means capture is never installed at all: the exporter goes silently dead for
+     * the whole process lifetime, on every launch, with nothing written and nothing logged (#1860).
+     * What a failure costs instead depends on its kind:
      *
-     * That includes a `CancellationException` the [store] mints at this live caller, from its own
-     * `withTimeout`, say: it is a read that failed, and each guard here asks
-     * `currentCoroutineContext().ensureActive()` before treating it so. A cancellation of the
-     * caller's own job still propagates (#3384).
+     * - **An undecodable entry** is bad data. The exporter starts fresh.
+     * - **A refused store call** — a throw, or a `CancellationException` the [store] mints at this
+     *   live caller from its own `withTimeout` — leaves what is on disk unknown. The exporter
+     *   **fails closed**: every [export], [merge] and [clear] reads again first, and returns
+     *   [ExportResult.Failure] and writes nothing while the read is refused. The first read that
+     *   succeeds installs the persisted log and that turn runs. Starting fresh here instead wrote
+     *   an index naming only segment 0 over an index this run never read, and the store cannot
+     *   list keys, so every other segment was lost (#3384).
+     *
+     * Each guard asks `currentCoroutineContext().ensureActive()` before treating a throw as a
+     * refusal, so a cancellation of the caller's own job still propagates (#3384).
      */
     public suspend fun recover() {
-        val loaded = try {
-            Result.success(loadPersistedState())
-        } catch (cause: Throwable) {
-            currentCoroutineContext().ensureActive()
-            Result.failure(cause)
+        val read = readPersistedState()
+        if (read is PersistedRead.Owed) {
+            logger.error(read.cause) {
+                "otel.logs: persisted state could not be read; every write turn fails until a read succeeds"
+            }
+            recordRecoveryFailure(read.cause)
         }
-        val recovered = loaded.getOrElse { cause ->
-            logger.error(cause) { "otel.logs: persisted state could not be read, starting fresh" }
-            recordRecoveryFailure(cause)
-            return
-        } ?: return
+    }
+
+    /**
+     * Read the persisted state, install what it found, and record whether writes may now run.
+     * Shared by [recover] and the read a write turn owes after a refusal ([afterPersistedRead]).
+     */
+    private suspend fun readPersistedState(): PersistedRead {
+        val load = try {
+            loadPersistedState()
+        } catch (cause: Throwable) {
+            // Every store call below is guarded where it is made and classified there, so what
+            // reaches this arm threw outside the store: treated as bad data, as it always was.
+            currentCoroutineContext().ensureActive()
+            Load.Undecodable(cause)
+        }
+        val read = when (load) {
+            Load.Absent -> PersistedRead.Settled
+            is Load.Found -> {
+                installRecovered(load.state)
+                PersistedRead.Settled
+            }
+            is Load.Undecodable -> {
+                logger.error(load.cause) { "otel.logs: persisted state could not be decoded, starting fresh" }
+                recordRecoveryFailure(load.cause)
+                PersistedRead.Settled
+            }
+            is Load.Refused -> PersistedRead.Owed(load.cause)
+        }
+        lock.withLock { persistedRead = read }
+        return read
+    }
+
+    /**
+     * Run [turn], unless the last read of the persisted state was refused: then read again first,
+     * and while that read is still refused return [refused] of the turn's [ExportResult.Failure]
+     * without running the turn. Must hold [writeMutex].
+     *
+     * The turn never starts, so a refused read writes, deletes and mutates nothing. That is what
+     * lets the read that heals install the persisted log wholesale: nothing in memory is newer.
+     * The refusal is logged once, by [recover]; each refused turn counts on [health] and logs at
+     * debug, as a store that stays unreadable would otherwise log once per export.
+     */
+    private suspend inline fun <T> afterPersistedRead(refused: (ExportResult) -> T, turn: () -> T): T {
+        if (lock.withLock { persistedRead } is PersistedRead.Owed) {
+            val read = readPersistedState()
+            if (read is PersistedRead.Owed) {
+                logger.debug { "otel.logs: persisted state is still unreadable, so this turn writes nothing: ${read.cause}" }
+                return refused(failure(read.cause))
+            }
+            logger.info { "otel.logs: persisted state read after a refusal; writes resume" }
+        }
+        return turn()
+    }
+
+    /** Install a [Load.Found] state, starting fresh on the records alone if that throws. */
+    private fun installRecovered(recovered: RecoveredState) {
         // The in-memory swap is guarded too: walking the recovered CRDT to derive
         // tail/visibleCount/seenIds must not propagate out of recover() any more
         // than the reads or the decodes may. The walk happens BEFORE the lock is
@@ -919,15 +1014,28 @@ public class WarpLogRecordExporter(
     /**
      * Read the segments the index names and union them back into one op-log, or
      * migrate the legacy single-blob entry if this is the first start on the
-     * segmented format. Returns `null` when nothing has ever been persisted.
+     * segmented format. [Load.Absent] when nothing has ever been persisted.
      *
      * [Rga.piece] is set union, so the order the segments are absorbed in does not
      * matter and absorbing one twice is harmless — which is what makes a partition
      * of the op-log across keys an exact, order-independent reconstruction.
+     *
+     * A refused index read is [Load.Refused], and a refused segment read is not: the index
+     * names a segment it could not read, so the segment stays named and the next start reads it.
+     * Nothing names the index.
      */
-    private suspend fun loadPersistedState(): RecoveredState? {
-        val indexBytes = store.read(INDEX_KEY) ?: return migrateLegacyBlob()
-        val index = cbor.decodeFromByteArray(indexSerializer, indexBytes)
+    private suspend fun loadPersistedState(): Load {
+        val indexBytes = try {
+            store.read(INDEX_KEY)
+        } catch (cause: Throwable) {
+            // The caller's own cancellation propagates; one the store minted is a refused read (#3384).
+            currentCoroutineContext().ensureActive()
+            return Load.Refused(cause)
+        }
+        if (indexBytes == null) return migrateLegacyBlob()
+        val index = runCatchingCancellable { cbor.decodeFromByteArray(indexSerializer, indexBytes) }
+            .getOrElse { cause -> return Load.Undecodable(cause) }
+        // Only after the index has been read: its presence is what proves the legacy key superseded.
         sweepLegacyKey()
         // Finish any retirement a crash interrupted between the ledger write and the delete.
         // Idempotent: a key already gone deletes again as a no-op.
@@ -956,17 +1064,19 @@ public class WarpLogRecordExporter(
             if (absorbed != null) merged = absorbed
         }
         val active = readSegment(index.active) ?: Rga.empty()
-        return RecoveredState(
-            log = absorb(merged, active, index.active) ?: merged,
-            sealedSegments = index.sealedSegments,
-            sealedContents = contents,
-            ledger = outstanding,
-            ledgerDirty = index.retired.isNotEmpty(),
-            activeNumber = index.active,
-            activeSegment = active,
-            // The index type guarantees `next` lies past every number it names, and its reader
-            // repairs an index written before it did (see LogSegmentIndexSerializer).
-            nextSegmentNumber = index.next,
+        return Load.Found(
+            RecoveredState(
+                log = absorb(merged, active, index.active) ?: merged,
+                sealedSegments = index.sealedSegments,
+                sealedContents = contents,
+                ledger = outstanding,
+                ledgerDirty = index.retired.isNotEmpty(),
+                activeNumber = index.active,
+                activeSegment = active,
+                // The index type guarantees `next` lies past every number it names, and its reader
+                // repairs an index written before it did (see LogSegmentIndexSerializer).
+                nextSegmentNumber = index.next,
+            ),
         )
     }
 
@@ -1052,23 +1162,32 @@ public class WarpLogRecordExporter(
      * the index — the commit point — is on disk. A crash before that leaves both, and
      * the next start re-runs the whole migration idempotently; a crash after it leaves
      * a stale legacy key that [loadPersistedState] deletes.
+     *
+     * A refused read or write is [Load.Refused], so no turn writes until the migration has run.
+     * Starting fresh instead had the next export write an index of its own: over the copy in
+     * segment [LEGACY_SEGMENT], and as proof to the next start that the legacy key, which no run
+     * had read, was superseded (#3384). Past the index write, the legacy delete is best-effort,
+     * as on every later start.
      */
-    private suspend fun migrateLegacyBlob(): RecoveredState? {
-        val bytes = store.read(LEGACY_KEY) ?: return null
-        val recovered = cbor.decodeFromByteArray(logSerializer, bytes)
-        store.write(segmentKey(LEGACY_SEGMENT), bytes)
+    private suspend fun migrateLegacyBlob(): Load {
+        val bytes = try {
+            store.read(LEGACY_KEY)
+        } catch (cause: Throwable) {
+            currentCoroutineContext().ensureActive()
+            return Load.Refused(cause)
+        }
+        if (bytes == null) return Load.Absent
+        val recovered = runCatchingCancellable { cbor.decodeFromByteArray(logSerializer, bytes) }
+            .getOrElse { cause -> return Load.Undecodable(cause) }
         val index = LogSegmentIndex(
             sealedSegments = listOf(LEGACY_SEGMENT),
             active = LEGACY_SEGMENT + 1,
             next = LEGACY_SEGMENT + 2,
         )
-        store.write(INDEX_KEY, cbor.encodeToByteArray(indexSerializer, index))
-        store.delete(LEGACY_KEY)
-        logger.info {
-            "otel.logs: migrated the legacy single-blob entry (${bytes.size} bytes, " +
-                "${recovered.size} visible records) into segment $LEGACY_SEGMENT"
-        }
-        return RecoveredState(
+        // Everything that can fail outside the store, before the commit point: nothing may throw
+        // once the index is on disk.
+        val indexBytes = cbor.encodeToByteArray(indexSerializer, index)
+        val state = RecoveredState(
             log = recovered,
             sealedSegments = listOf(LEGACY_SEGMENT),
             sealedContents = mapOf(LEGACY_SEGMENT to contentOf(recovered, LEGACY_SEGMENT)),
@@ -1078,6 +1197,19 @@ public class WarpLogRecordExporter(
             activeSegment = Rga.empty(),
             nextSegmentNumber = index.next,
         )
+        try {
+            store.write(segmentKey(LEGACY_SEGMENT), bytes)
+            store.write(INDEX_KEY, indexBytes)
+        } catch (cause: Throwable) {
+            currentCoroutineContext().ensureActive()
+            return Load.Refused(cause)
+        }
+        sweepLegacyKey()
+        logger.info {
+            "otel.logs: migrated the legacy single-blob entry (${bytes.size} bytes, " +
+                "${recovered.size} visible records) into segment $LEGACY_SEGMENT"
+        }
+        return Load.Found(state)
     }
 
     /**
@@ -1215,7 +1347,12 @@ public class WarpLogRecordExporter(
         var from = 0
         var firstFailure: ExportResult.Failure? = null
         while (from < records.size) {
-            val outcome = writeMutex.withLock { exportTurn(records, from) }
+            val outcome = writeMutex.withLock {
+                // A refused read refuses the rest of the batch: the next call reads again.
+                afterPersistedRead(refused = { TurnOutcome(consumed = records.size - from, result = it) }) {
+                    exportTurn(records, from)
+                }
+            }
             val result = outcome.result
             if (firstFailure == null && result is ExportResult.Failure) firstFailure = result
             from += outcome.consumed
@@ -1554,7 +1691,8 @@ public class WarpLogRecordExporter(
      * join, the dedup rebuild, the encode, or the [store] is returned as
      * [ExportResult.Failure] and reflected on [health].
      */
-    public suspend fun merge(remote: Rga<LogRecord>): ExportResult = writeMutex.withLock { mergeTurn(remote) }
+    public suspend fun merge(remote: Rga<LogRecord>): ExportResult =
+        writeMutex.withLock { afterPersistedRead(refused = { it }) { mergeTurn(remote) } }
 
     /** [merge]'s write turn: build the actions, then apply them. Must hold [writeMutex]. */
     private suspend fun mergeTurn(remote: Rga<LogRecord>): ExportResult {
@@ -1686,7 +1824,8 @@ public class WarpLogRecordExporter(
      * must treat any non-[ExportResult.Success] as *count unknown* rather than as zero. On
      * success the count reads zero synchronously, because the drop precedes the write.
      */
-    public suspend fun clear(): ExportResult = writeMutex.withLock { clearTurn() }
+    public suspend fun clear(): ExportResult =
+        writeMutex.withLock { afterPersistedRead(refused = { it }) { clearTurn() } }
 
     /** [clear]'s write turn: build the actions, then apply them. Must hold [writeMutex]. */
     private suspend fun clearTurn(): ExportResult {

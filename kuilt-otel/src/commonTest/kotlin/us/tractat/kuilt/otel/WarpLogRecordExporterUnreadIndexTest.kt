@@ -278,4 +278,33 @@ class WarpLogRecordExporterUnreadIndexTest {
         }
         assertAll(*checks.toTypedArray())
     }
+
+    @Test
+    fun theCallersOwnCancellationInEachMigrationCallStillPropagates() = runTest {
+        // The control for the two legacy arms: without `ensureActive` each guard would read the
+        // caller's own cancellation as a refusal, and recover would return. The index read's
+        // control is in WarpLogRecordExporterStoreMintedCancellationTest.
+        val rules = listOf(
+            "legacy read" to Pair(StoreCall.READ, isLegacy),
+            "segment copy" to Pair(StoreCall.WRITE) { key: StoreKey -> key.name == segmentKeyForTest(0) },
+            "index write" to Pair(StoreCall.WRITE, isIndex),
+        )
+        val outcomes = rules.map { (name, rule) ->
+            val (backing, _) = storeWithALegacyBlob(0 until 3)
+            val store = CancellationScriptedStore(backing)
+            store.arm(rule.first, StoreAct.PARK, rule.second)
+            val returned = cancelInside(store) { exporterFor(store).recover() }
+            Triple(name, store, returned)
+        }
+
+        assertAll(
+            *outcomes.flatMap { (name, store, returned) ->
+                listOf(
+                    { assertEquals(1, store.parked, "the rig never parked the $name") },
+                    { assertEquals(1, store.cancelled, "the cancellation never landed inside the $name") },
+                    { assertEquals(null, returned, "recover cancelled in its $name returned instead of being cancelled") },
+                )
+            }.toTypedArray(),
+        )
+    }
 }

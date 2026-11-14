@@ -85,6 +85,9 @@ partly refuses moves both `acknowledged` and `failed`.
 succeeds: a healthy sum write cannot hide a failing histogram, and a successful metric
 clear cannot prove writes work. A failed startup read or decode sets `recoveryFailed`
 for the instance's lifetime; `lastFailure` retains the latest cause after recovery.
+Bad bytes start the log buffer fresh. A store that refuses the log read instead makes
+every log turn fail, and write nothing, until a later read succeeds. That keeps the
+records on disk the read would have found.
 A failed turn may still have saved its data, and a cancelled turn counts as neither
 acknowledged nor failed; a cancelled metric batch keeps the turns of the kinds it had
 already written. "Cancelled" means the caller was cancelled. When the store cancels

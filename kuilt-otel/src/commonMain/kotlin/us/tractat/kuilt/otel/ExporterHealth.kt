@@ -37,15 +37,19 @@ package us.tractat.kuilt.otel
  *   counted either, for the same reason. A successful `merge` does not move this at
  *   all — it takes no records through admission — but does clear
  *   [consecutiveFailures], because the store accepting it is evidence the store is up.
- * @property failed Durable writes that threw, cumulative across the process.
+ * @property failed Durable writes that threw, cumulative across the process — and turns
+ *   [WarpLogRecordExporter] refused without writing because the store had refused the read of
+ *   its persisted state and still did (see [WarpLogRecordExporter.recover]).
  * @property consecutiveFailures Failed writes since the last successful one.
  *   Resets to zero on any success — distinguishes "currently down" from
  *   "recovered after some trouble".
  * @property lastFailure The most recent failure cause, from either a write or a
  *   recovery. Retained after a subsequent success, as forensics.
  * @property recoveryFailed Whether `recover()` could not read or decode the
- *   persisted state, so the exporter started empty and the previously buffered
- *   telemetry is unrecoverable. Sticky for the life of the exporter.
+ *   persisted state. Undecodable state started the exporter empty, and the previously
+ *   buffered telemetry is unrecoverable. A refused read instead fails every write turn
+ *   until a read succeeds, which then installs that telemetry. Sticky for the life of the
+ *   exporter either way.
  */
 public data class ExporterHealth(
     public val accepted: Long = 0L,
