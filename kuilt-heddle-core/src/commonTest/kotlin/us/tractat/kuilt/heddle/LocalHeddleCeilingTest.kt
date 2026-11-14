@@ -385,8 +385,9 @@ class LocalHeddleCeilingTest {
                 }
             }
         }
+        println("CEILING-AGREES atCeiling=$atCeiling topmostAbove=$topmostAbove picks=$picks allCapped=$allCapped")
         assertAll(
-            { assertTrue(atCeiling > 100, "the rig: capped leaves were explained: $atCeiling") },
+            { assertTrue(atCeiling > 100,"the rig: capped leaves were explained: $atCeiling") },
             { assertTrue(topmostAbove > 20, "the rig: a group above the leaf was the one named: $topmostAbove") },
             { assertTrue(picks > 300, "the rig: the acquires picked: $picks") },
             { assertTrue(allCapped > 10, "the rig: every eligible leaf was capped: $allCapped") },
