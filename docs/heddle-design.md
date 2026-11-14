@@ -1065,9 +1065,10 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   newborns could then sit below them, and a waker clamped there would keep
   credit over a newborn seated at its origin, which took every pick until the
   waker caught up (#3329 review). When some non-joiner *is* demanding, the front
-  is that set's mean and can still sit below a newborn's origin, at a runner that
-  has returned more than it was issued. The newborn then waits behind it. That is
-  a penalty, never credit, and it is the gap per-parent origins close (#3353).
+  is that set's mean and can still sit below a newborn's origin, at a runner a
+  `LocalHeddle` rebase brought below zero. The newborn then waits behind it. That
+  is a penalty, never credit, and it is the gap per-parent origins will close,
+  when slice 7 of #3353 moves `LocalHeddle` onto them.
 
 ### 7.3 Selection
 
