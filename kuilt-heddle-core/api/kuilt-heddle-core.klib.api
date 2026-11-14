@@ -1007,7 +1007,7 @@ final class us.tractat.kuilt.heddle/FairShareAllocator { // us.tractat.kuilt.hed
 }
 
 final class us.tractat.kuilt.heddle/Gauge { // us.tractat.kuilt.heddle/Gauge|null[0]
-    constructor <init>(us.tractat.kuilt.heddle/Rational, kotlin/Long, kotlin/Long = ..., kotlin/Long = ...) // us.tractat.kuilt.heddle/Gauge.<init>|<init>(us.tractat.kuilt.heddle.Rational;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+    constructor <init>(us.tractat.kuilt.heddle/Rational = ..., kotlin/Long, kotlin/Long = ..., kotlin/Long = ...) // us.tractat.kuilt.heddle/Gauge.<init>|<init>(us.tractat.kuilt.heddle.Rational;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
 
     final val floor // us.tractat.kuilt.heddle/Gauge.floor|{}floor[0]
         final fun <get-floor>(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/Gauge.floor.<get-floor>|<get-floor>(){}[0]
