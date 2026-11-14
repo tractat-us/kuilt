@@ -67,8 +67,9 @@ class LocalHeddleAdmitWaitingTest {
                 val kind = rng.nextInt(6)
                 when {
                     kind == 0 || (kind < 4 && open.isEmpty()) -> {
-                        val waiting = subset(rng, everyLeaf).toSet()
-                        val eligible = waiting.filter { rng.nextBoolean() }.toSet()
+                        val drawn = subset(rng, everyLeaf)
+                        val waiting = drawn.toSet()
+                        val eligible = drawn.filter { rng.nextBoolean() }.toSet()
                         val r = 1L + rng.nextInt(5)
                         admits.acquire(waiting, eligible, startedAt = step.toLong(), reservation = r)
                         acquires.acquire(waiting, eligible, startedAt = step.toLong(), reservation = r)
