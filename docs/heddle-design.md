@@ -1370,21 +1370,22 @@ about one part of the tree: three builds of one repository, say, however idle
 the rest of the machines are. That is a ceiling. It gives up keeping every slot
 busy, on purpose, and only where someone set it. Without one in heddle, the
 caller has to enforce it outside, beside the fairness it interacts with. This
-section records how a ceiling will be declared and enforced in the
+section records how a ceiling is declared, enforced and reported in the
 single-process engine, `LocalHeddle` (`kuilt-heddle-core/module.md`).
 
-#### As built: the engine owns no concurrency
+#### Before it: the caller owned concurrency
 
-`LocalHeddle` opens one lease per slot it picks, and the caller owns
-concurrency: the engine keeps only total capacity, to size its supply. The
-nearest existing knob, `PolicyConfig.perChildOutstandingCap`, is a different
+`LocalHeddle` opens one lease per slot it picks, and before the ceiling the
+caller owned concurrency: the engine kept only total capacity, to size its
+supply. The nearest knob, `PolicyConfig.perChildOutstandingCap`, is a different
 concept. It is one figure for the whole policy, counted in service units, and it
 trims a grant (§7.3 step 1) rather than skipping a candidate. `LocalHeddle` pins
 it at `Long.MAX_VALUE`.
 
-#### The design: filter the candidates
+#### As built: filter the candidates
 
-Decided in #3324. Declaring it (#3358) and enforcing it (#3364) are built; reporting it is not yet.
+Decided in #3324, and built in three parts: declaring it (#3358), enforcing it
+(#3364) and reporting it (#3367).
 
 **Declaring it.** `maxConcurrent: Long? = null` on `Topology.Group`,
 `Topology.Lane` and `Topology.RuntimeChildren`, mirrored in `TopologyDocument`.
@@ -1393,6 +1394,8 @@ Decided in #3324. Declaring it (#3358) and enforcing it (#3364) are built; repor
 - On `RuntimeChildren` it caps **each** attached child, not all of them together.
 - **0 means pause:** picks stop under that node. It is not a problem.
 - A negative value is the one new `TopologyProblem.Kind`.
+- In a `draft`, `group`, `lane` and `runtimeChildren` each take it as
+  `maxConcurrent: Long?`, so a value read from config passes straight through.
 - The ceiling lives in the engine, read from the topology last applied
   (`lastApplied`), not in the ledger. `Topology.diff` keeps an existing edge by its
   weight, so it emits no step for a change of ceiling: no new edge and no
@@ -1419,14 +1422,28 @@ wake clamp (`settleJoiners`), with no banked credit (§10 invariant 6).
 
 **Reporting.**
 
-- `explain` gains a `WaitExplanation` arm of kind `AT_CEILING`, carrying the
-  capped group and its limit. Its place in the order is after `NO_LIVE_LINEAGE`,
-  before `SUPPLY_EXHAUSTED`, relative order with the overflow fix's arm agreed in
-  that PR (#3313).
-- `entitlement` treats a node at its ceiling as not competing.
-- When every waiting leaf is capped, `acquire` returns the existing
-  `NothingEligible`, whose KDoc widens to say so. There is no new
-  `AcquireOutcome` arm.
+- `explain` answers `WaitExplanation.AtCeiling(group, limit)`, of kind
+  `AT_CEILING`, for a leaf beneath a node at its ceiling. When several nodes on
+  the leaf's path are at their ceilings, `group` is the one nearest the root,
+  since the whole subtree waits on it.
+- Its place in the order is after `NO_LIVE_LINEAGE` and before
+  `SUPPLY_EXHAUSTED`, so a capped leaf is told about its ceiling even when the
+  root is empty. The overflow fix's `POSITION_CEILING` (#3313) comes after
+  `SUPPLY_EXHAUSTED`, so the order is `NOT_WAITING`, `NOT_ELIGIBLE`,
+  `NO_LIVE_LINEAGE`, `AT_CEILING`, `SUPPLY_EXHAUSTED`, `POSITION_CEILING`,
+  `BEHIND_AT_LEVEL`, `WOULD_BE_PICKED_NEXT`. Nothing persists the kind, so
+  inserting it moved no stored value.
+- A name no pick can end at, such as a group named as if it were a leaf, is still
+  `NO_LIVE_LINEAGE` from `explain` and `acquire` alike, capped or not. The filter
+  keeps such a name, and the demand lift drops it as it does with no ceiling.
+- `entitlement` treats a leaf beneath a node at its ceiling as not competing: it
+  is owed nothing, and its siblings share its slots.
+- When every eligible leaf is capped, `acquire` returns the existing
+  `NothingEligible`, whose KDoc says so. There is no new `AcquireOutcome` arm.
+- Pinned: across random histories under random ceilings, `explain` answers
+  `AtCeiling` exactly for a capped eligible leaf, naming the node a count of the
+  open leases' paths names; the acquire that follows never picks it; and
+  `entitlement` shares every slot among the uncapped leaves.
 
 **Compatibility.** A new property on a public data class changes its
 constructor and `copy` in binary, so the old constructors are kept.
@@ -1454,11 +1471,14 @@ and never decides whether the caller runs anything.
 - A new `AcquireOutcome` arm for "everything is capped": `NothingEligible`
   covers it (#3324).
 - Treating a ceiling of 0 as a problem: it means pause (#3324).
+- `AT_CEILING` before `SUPPLY_EXHAUSTED`, and `POSITION_CEILING` after it
+  (#3324, #3313).
 
 #### Open
 
-- Where `AT_CEILING` sits relative to the arm the overflow fix adds to
-  `WaitExplanation`. Tracked by #3313.
+- A document's `runtimeChildrenMaxConcurrent` on a group that does not mark
+  runtime children is dropped without a word. Reporting it needs a second new
+  `TopologyProblem.Kind`, and this section allows only one.
 
 ### 11.3 Previewing the next picks
 
