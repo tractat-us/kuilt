@@ -76,15 +76,20 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         PARK,
     }
 
+    /** The one call a [ScriptedStore] intercepts: an [op] on a key that [matches], and what it does. */
+    private data class Rule(val op: Op, val matches: (StoreKey) -> Boolean, val act: Act)
+
     /**
      * Delegates to [backing], except for the **next** call matching the armed rule, which it
      * mints a cancellation on or parks. One-shot, so the turns after it see a healthy store.
      *
-     * [minted], [parked] and [cancelled] are precondition guards, never the assertion under test.
+     * [minted], [parked], [cancelled] and [firedOn] are precondition guards, never the assertion
+     * under test.
      */
     private class ScriptedStore(private val backing: DurableStore) : DurableStore {
         private val lock = reentrantLock()
-        private var rule: Triple<Op, (StoreKey) -> Boolean, Act>? = null
+        private var rule: Rule? = null
+        private var firedKey: StoreKey? = null
         private var mintedCount = 0
         private var parkedCount = 0
         private var cancelledCount = 0
@@ -93,15 +98,18 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val parked: Int get() = lock.withLock { parkedCount }
         val cancelled: Int get() = lock.withLock { cancelledCount }
 
-        fun arm(op: Op, act: Act, matches: (StoreKey) -> Boolean): Unit =
-            lock.withLock { rule = Triple(op, matches, act) }
+        /** The key of the call the rule fired on, or `null` while it has not fired. */
+        val firedOn: StoreKey? get() = lock.withLock { firedKey }
+
+        fun arm(rule: Rule): Unit = lock.withLock { this.rule = rule }
 
         private suspend fun intercept(op: Op, key: StoreKey) {
             val act = lock.withLock {
                 val armed = rule ?: return@withLock null
-                if (armed.first != op || !armed.second(key)) return@withLock null
+                if (armed.op != op || !armed.matches(key)) return@withLock null
                 rule = null
-                armed.third
+                firedKey = key
+                armed.act
             } ?: return
             when (act) {
                 Act.MINT -> {
@@ -177,6 +185,8 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         return backing to exporter.snapshot().toList()
     }
 
+    private fun segmentNumberOf(key: StoreKey): Long = key.name.removePrefix(SEGMENT_KEY_PREFIX_FOR_TEST).toLong()
+
     private suspend fun ledgerOf(store: RecordingStore): List<Long> =
         decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST))).retired
 
@@ -189,7 +199,7 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val exporter = exporterFor(store)
         val first = exporter.export(record(0))
 
-        store.arm(Op.WRITE, Act.MINT, isSegment)
+        store.arm(Rule(Op.WRITE, isSegment, Act.MINT))
         val (minted, escaped) = escapeOf { exporter.export(record(1)) }
         val failedAfter = exporter.health.value.failed
         val bodiesBeforeRepair = bodiesAfterRestart(backing)
@@ -217,7 +227,7 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val exporter = exporterFor(store)
         exporter.export(record(0))
 
-        store.arm(Op.WRITE, Act.PARK, isSegment)
+        store.arm(Rule(Op.WRITE, isSegment, Act.PARK))
         val returned = cancelInside(store) { exporter.export(record(1)) }
         val retried = exporter.export(record(1))
         val bodies = bodiesAfterRestart(backing)
@@ -241,8 +251,14 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val store = ScriptedStore(backing)
         val exporter = exporterFor(store)
 
-        store.arm(Op.DELETE, Act.MINT, isSegment)
+        store.arm(Rule(Op.DELETE, isSegment, Act.MINT))
         val (results, escapes) = exportUntilFired(exporter, store, from = 0)
+        val key = requireNotNull(store.firedOn) { "the rig never fired" }
+        val number = segmentNumberOf(key)
+        val keptAfterMint = key.name in backing.keys()
+        // One more turn, so a turn that rewrites the index has had the chance to drop the number.
+        val next = exporter.export(record(results.size))
+        val ledgerAfterNextTurn = ledgerOf(backing)
         val live = exporter.snapshot().toList()
         val afterRestart = recovered(backing).snapshot().toList()
 
@@ -251,7 +267,11 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
             { assertEquals(emptyList(), escapes, "a cancellation the store minted on a sweep escaped export") },
             { assertTrue(results.all { it == ExportResult.Success }, "a minted sweep failed an export: $results") },
             { assertEquals(0L, exporter.health.value.failed, "a minted sweep was reported as a refused write") },
+            { assertTrue(keptAfterMint, "precondition: the minted delete of $key landed anyway") },
+            { assertEquals(ExportResult.Success, next) },
+            { assertTrue(number in ledgerAfterNextTurn, "segment $number left the ledger unswept: $ledgerAfterNextTurn") },
             { assertEquals(live, afterRestart, "a minted sweep cost records") },
+            { assertTrue(key.name !in backing.keys(), "segment $number was orphaned: the next start never swept it") },
         )
     }
 
@@ -261,7 +281,7 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val store = ScriptedStore(backing)
         val exporter = exporterFor(store)
 
-        store.arm(Op.DELETE, Act.PARK, isSegment)
+        store.arm(Rule(Op.DELETE, isSegment, Act.PARK))
         var id = 0
         var returned: ExportResult? = null
         while (store.parked == 0 && id < 500) {
@@ -282,7 +302,7 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val backing = RecordingStore()
         exporterFor(backing).also { e -> repeat(30) { e.export(record(it)) } }
         val store = ScriptedStore(backing)
-        store.arm(Op.READ, Act.MINT, isIndex)
+        store.arm(Rule(Op.READ, isIndex, Act.MINT))
 
         val exporter = exporterFor(store)
         val (_, escaped) = escapeOf { exporter.recover() }
@@ -299,7 +319,7 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val backing = RecordingStore()
         val expected = exporterFor(backing).also { e -> repeat(30) { e.export(record(it)) } }.snapshot().toList()
         val store = ScriptedStore(backing)
-        store.arm(Op.READ, Act.MINT, isSegment)
+        store.arm(Rule(Op.READ, isSegment, Act.MINT))
 
         val exporter = exporterFor(store)
         val (_, escaped) = escapeOf { exporter.recover() }
@@ -321,7 +341,7 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val backing = RecordingStore()
         val expected = exporterFor(backing).also { e -> repeat(30) { e.export(record(it)) } }.snapshot().toList()
         val store = ScriptedStore(backing)
-        store.arm(Op.DELETE, Act.MINT, isLegacy)
+        store.arm(Rule(Op.DELETE, isLegacy, Act.MINT))
 
         val exporter = exporterFor(store)
         val (_, escaped) = escapeOf { exporter.recover() }
@@ -339,17 +359,30 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val (backing, live) = storeWithALedger()
         val ledger = ledgerOf(backing)
         val store = ScriptedStore(backing)
-        store.arm(Op.DELETE, Act.MINT, isSegment)
+        store.arm(Rule(Op.DELETE, isSegment, Act.MINT))
 
         val exporter = exporterFor(store)
         val (_, escaped) = escapeOf { exporter.recover() }
+        val recoveredLog = exporter.snapshot().toList()
+        val key = requireNotNull(store.firedOn) { "the rig never fired" }
+        val number = segmentNumberOf(key)
+        val keptAfterMint = key.name in backing.keys()
+        // The recovered index is dirty once the other ledger entries are swept, so this turn
+        // rewrites it: the number survives only if recovery kept it on the ledger.
+        val next = exporter.export(record(10_000))
+        val ledgerAfterNextTurn = ledgerOf(backing)
+        recovered(backing)
 
         assertAll(
             { assertTrue(ledger.isNotEmpty(), "precondition: the fixture left no ledger to sweep") },
             { assertEquals(1, store.minted, "the rig never minted on a recovery sweep") },
             { assertNull(escaped, "a cancellation the store minted escaped recover: $escaped") },
-            { assertEquals(live, exporter.snapshot().toList(), "a minted sweep cost the recovered log") },
+            { assertEquals(live, recoveredLog, "a minted sweep cost the recovered log") },
             { assertEquals(false, exporter.health.value.recoveryFailed) },
+            { assertTrue(keptAfterMint, "precondition: the minted delete of $key landed anyway") },
+            { assertEquals(ExportResult.Success, next) },
+            { assertTrue(number in ledgerAfterNextTurn, "segment $number left the ledger unswept: $ledgerAfterNextTurn") },
+            { assertTrue(key.name !in backing.keys(), "segment $number was orphaned: the next clean start never swept it") },
         )
     }
 
@@ -359,14 +392,14 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         // and a segment read. Without `ensureActive` each would log, carry on, and return.
         val (backing, _) = storeWithALedger()
         val rules = listOf(
-            "index read" to Triple(Op.READ, isIndex, Act.PARK),
-            "legacy sweep" to Triple(Op.DELETE, isLegacy, Act.PARK),
-            "ledger sweep" to Triple(Op.DELETE, isSegment, Act.PARK),
-            "segment read" to Triple(Op.READ, isSegment, Act.PARK),
+            "index read" to Rule(Op.READ, isIndex, Act.PARK),
+            "legacy sweep" to Rule(Op.DELETE, isLegacy, Act.PARK),
+            "ledger sweep" to Rule(Op.DELETE, isSegment, Act.PARK),
+            "segment read" to Rule(Op.READ, isSegment, Act.PARK),
         )
         val outcomes = rules.map { (name, rule) ->
             val store = ScriptedStore(backing)
-            store.arm(rule.first, rule.third, rule.second)
+            store.arm(rule)
             val returned = cancelInside(store) { exporterFor(store).recover() }
             Triple(name, store, returned)
         }
