@@ -2660,10 +2660,11 @@ public class EntitlementLedger private constructor(
          * The three `forgotten…` parameters assemble the seventeenth component, the fold of the
          * edges a ledger has forgotten (`ForgottenEdges`): `forgottenOutflow` per parent and
          * replica, `forgottenLeafSpend` per replica, and `forgottenGenerationFloor`, `-1` for none.
-         * A ledger with no fold cannot take one: its [EntitlementLedger.piece] throws on any operand that carries a
-         * fold, and a ledger with a fold takes only an operand holding the same fold or none. So the
-         * lattice-law generators leave them at their defaults. A negative fold cannot be built: a
-         * negative outflow or leaf spend, or a floor below `-1`, throws [IllegalArgumentException].
+         * A ledger with no fold cannot take one: its [EntitlementLedger.piece] throws on any operand
+         * that carries a fold, and a ledger with a fold takes only an operand holding the same fold
+         * or none. So the lattice-law generators leave them at their defaults. A negative fold
+         * cannot be built: a negative outflow or leaf spend, or a floor below `-1`, throws
+         * [IllegalArgumentException].
          */
         @HeddleInternalApi
         @OptIn(ExperimentalVersionOverloading::class)
