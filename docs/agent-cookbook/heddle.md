@@ -117,6 +117,10 @@ collides with a declared child; a detach drains like a removal. `Topology.attach
 `detach` list the same steps without applying them. A reload that keeps the template
 keeps the child and its history; one that drops the template closes it. A detach's own swap forgets
 the child's retired edge once its books close, so detach a child whenever it goes idle.
+**Migrating a v0.7.4 config:** `runtimeChildren: "1"` is now `template: { weight: "1" }`. A strict
+decode refuses the old key, but a lenient one (`ignoreUnknownKeys`) drops it silently, so decode
+strictly.
+
 An attached child is always a leaf: it carries no template of its own, so a tree you discover
 while running is one level deep under its group. For two levels, such as a repository and then its
 authors, declare each repository as a group with a `template`, and `LocalHeddle.apply` a

@@ -195,7 +195,7 @@ These override the task sections below where they differ.
 @Serializable public data class TopologyDocument(public val root: String, public val children: List<Node>) {
     @Serializable public sealed interface Node { public val name: String; public val weight: String }
     @Serializable @SerialName("group") public data class Group(override val name: String, override val weight: String = "1",
-        public val children: List<Node> = emptyList(), public val template: String? = null) : Node   // template weight text
+        public val children: List<Node> = emptyList(), public val template: ChildTemplate? = null) : Node   // weight and ceiling for each attached child (#3368)
     @Serializable @SerialName("lane") public data class Lane(override val name: String, override val weight: String = "1") : Node
 }
 /** The checked value: constructible only valid. */
@@ -256,7 +256,7 @@ public object TopologyWeightSerializer : KSerializer<Weight>   // a STRING: "3" 
   - A declared child is `"<parent>/<escaped>"`. **An attached child is `"<parent>/!<escaped>"`.** `!` never survives escaping, so the two namespaces cannot collide.
   - `attachmentIdOf(child, weight, generation)` = `"${child.value}@${n}:${d}#$generation"`.
   - `generationOf(id): Long?` parses only the whole grammar.
-  - `pathOf(group: GroupId): ParsedPath?` = (raw names, `runtime: Boolean`). It is the inverse of the encoding, which lets status name a group the topology no longer declares.
+  - `pathOf(group: GroupId): ParsedPath?` = (raw names, `attached: Boolean`). It is the inverse of the encoding, which lets status name a group the topology no longer declares.
   - `EntitlementLedger.generationFloor()` takes the maximum over `allEdges()`, retired edges included, or `-1`.
   - `effectiveGeneration(supplied, ledger) = max(supplied, floor + 1)`.
 - Test support: `bootFrom(t, generation)`, and `EntitlementLedger.activeTriples()`.
@@ -362,7 +362,7 @@ internal fun EntitlementLedger.reconcileLocally(child: GroupId): Relocation   //
 
 `Topology.attach(group, name, ledger, generation)` returns `[Prepare, Activate]`, `[Activate]` or `[]` at the template's weight. `detach(group, name, ledger)` returns `[Close, Retire]`, `[Retire]` or `[]`. Both live in the `!` namespace (Task 2), so **a name never collides with a declared child, and nothing on the build path throws for it**. They throw only when the group is unmarked or the name is empty.
 
-In `diff`, owned attached children under a group that is still marked are desired at `new`'s template weight. A changed weight regenerates them, and a removed marker closes them.
+In `diff`, owned attached children under a group that still has a template are desired at `new`'s template weight. A changed weight regenerates them, and a removed template closes them.
 
 Tests:
 - `attachIsIdempotent`.
@@ -374,7 +374,7 @@ Tests:
 - `diffRegeneratesRuntimeChildrenWhenTheMarkerWeightChanges`.
 - Extend the generator.
 
-Same verification and docs rules. Commit "heddle-core: attached children in their own namespace (#3173)". After merge, tick #3173's "Done when" boxes.
+Same verification and docs rules. Commit "heddle-core: runtime children in their own namespace (#3173)". After merge, tick #3173's "Done when" boxes.
 
 ---
 

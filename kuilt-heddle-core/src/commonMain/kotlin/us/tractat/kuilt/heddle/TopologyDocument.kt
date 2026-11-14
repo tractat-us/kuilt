@@ -48,6 +48,10 @@ public data class TopologyDocument(public val root: String, public val children:
      * @property template what each child the consumer attaches while running gets, or `null` when
      *   the group has only the [children] written here. A group with a template may declare no
      *   children of its own. `template: {}` attaches children at weight 1 with no ceiling.
+     *   **Migrating from v0.7.4:** `runtimeChildren: "1"` is now `template: { weight: "1" }`. A
+     *   strict decode refuses the old key; a lenient one (`ignoreUnknownKeys`) drops it silently,
+     *   and a group that also declares children then loses its attached children without a
+     *   problem, so decode strictly.
      * @property maxConcurrent the group's ceiling, over all its children together; `null` for none.
      * @sample us.tractat.kuilt.heddle.sampleChildTemplateDocument
      */

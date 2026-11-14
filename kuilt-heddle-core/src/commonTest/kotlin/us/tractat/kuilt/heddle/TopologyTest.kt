@@ -381,6 +381,25 @@ class TopologyTest {
     }
 
     /**
+     * A v0.7.4 config's `runtimeChildren` marker is not read as a template: a strict decode refuses
+     * it, and a lenient one drops it, which a group with declared children survives without a
+     * problem. That silence is why `TopologyDocument` and the cookbook say to decode strictly.
+     */
+    @Test
+    fun aVersionSevenFourMarkerIsRefusedStrictlyAndDroppedLeniently() {
+        val old = """{"root":"root","children":[{"type":"group","name":"tenants","children":[{"type":"lane","name":"x"}],"runtimeChildren":"1"}]}"""
+        val lenient = Json { ignoreUnknownKeys = true }
+        val dropped = Topology.from(lenient.decodeFromString(TopologyDocument.serializer(), old))
+        val tenants = assertIs<Topology.Group>(assertIs<TopologyParse.Valid>(dropped).topology.children.single())
+
+        assertAll(
+            { assertFailsWith<SerializationException> { json.decodeFromString(TopologyDocument.serializer(), old) } },
+            { assertNull(tenants.template) },
+            { assertEquals(listOf("x"), tenants.children.map { it.name }) },
+        )
+    }
+
+    /**
      * [Topology.Group.template] keeps the serial name v0.7.4 stored, `runtimeChildren`, so the
      * `lastApplied` a snapshot holds reads and writes the same bytes after the rename (#3368). The
      * snapshot goldens pin the same thing end to end; this pins it on the topology alone.
