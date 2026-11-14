@@ -80,12 +80,13 @@ class HeddleWeightBudgetTest {
     fun aGovernedTopologyThatFitsTheBudgetIsAppliedAndServed() =
         runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
             val governed = bootGoverned()
-            assertAll(
-                { assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E1, ROOT, C1, BIG_SIBLING))) },
-                { assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E2, ROOT, C2, Weight.ONE))) },
-                { assertIs<ControlOutcome.Applied>(governed.activate(E1)) },
-                { assertIs<ControlOutcome.Applied>(governed.activate(E2)) },
+            val acts = listOf(
+                governed.prepare(AttachmentRecord(E1, ROOT, C1, BIG_SIBLING)),
+                governed.prepare(AttachmentRecord(E2, ROOT, C2, Weight.ONE)),
+                governed.activate(E1),
+                governed.activate(E2),
             )
+            assertTrue(acts.all { it is ControlOutcome.Applied }, "every act applied: $acts")
             governed.advertise(E1, HUNGRY)
             governed.advertise(E2, HUNGRY)
             assertIs<ScheduleOutcome.Delegated>(governed.schedule(ROOT))
@@ -163,7 +164,7 @@ class HeddleWeightBudgetTest {
             epoch = 0L,
         )
 
-    private fun TestScope.bootStatic(): HeddleNode {
+    private suspend fun TestScope.bootStatic(): HeddleNode {
         val seam = InMemoryLoom().host(Pattern("heddle-weight-budget-static"))
         val self = ReplicaId(seam.selfId.value)
         val node = backgroundScope.heddleStatic(
