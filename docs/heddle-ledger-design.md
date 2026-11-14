@@ -191,6 +191,8 @@ A finite product of semilattices is a semilattice, so
 `GCounter` delta carries the resulting absolute slot value, so re-delivering any patch is
 absorbed idempotently by max — **duplicate-delivery idempotence comes from the lattice, not
 event ids.** No component decrements; `outstanding`/`holdings` are derived and may fall.
+The one planned exception is a single writer's forgetting of retired edges (see `holdings`
+below), which removes slots and is therefore not a join; `piece` refuses a delta that carries it.
 
 ## `holdings(group, r)`
 
@@ -221,6 +223,18 @@ partial delivery they drifted from the sum they defined. This one cannot drift: 
 derives it from the very slots it sums.
 `validate()` builds its own copy from scratch, so a defect in how `piece` carries the index
 forward cannot hide from the diagnostic.
+
+**A single writer will forget retired leaf edges (#3192, design §5.5; not yet built).** The
+index makes reads fast, but every retired edge is still stored. So the single-writer
+`LocalHeddle` will fold a finished leaf's edge into a new encoded component, `forgotten`, and
+drop the edge. It folds three things: per parent and replica, the `effIssued − returned` term
+this formula subtracts; per replica, the edge's effective leaf spend, which conservation sums;
+and the highest generation forgotten, since the generation floor is a single global maximum.
+`holdings` then subtracts the parent's `forgotten` entry beside the index's. This *is* a
+stored aggregate, so it is candidate B's shape, and it is sound only because nothing ships
+it: forgetting is not a join, `piece` refuses a delta that carries `forgotten`, and
+`:kuilt-heddle`'s replicated ledger requires it to be empty. Forgetting between peers is
+tracked by #3332.
 
 **Quarantine — narrower than "in the `validate()` conflict set".** An earlier draft of this
 section said `holdings` returns 0 whenever any edge on `group`'s lineage appears in the
