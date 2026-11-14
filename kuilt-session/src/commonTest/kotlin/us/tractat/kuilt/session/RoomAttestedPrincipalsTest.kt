@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -10,7 +12,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Principal
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
 import kotlin.coroutines.ContinuationInterceptor
@@ -45,12 +47,12 @@ class RoomAttestedPrincipalsTest {
                 fabric.serverLoom,
                 backgroundScope,
                 clock = zeroClock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = fakeKeyStore(0),
             )
             val hostRoom = hostFactory.host(Pattern("room"))
 
             val joinerLoom = fabric.clientLoom(PeerId("joiner"), Random(1L), principal = principal)
-            val joinerFactory = SeamRoomFactory(joinerLoom, backgroundScope, clock = zeroClock, deviceKeyStore = InMemoryDeviceKeyStore())
+            val joinerFactory = SeamRoomFactory(joinerLoom, backgroundScope, clock = zeroClock, deviceKeyStore = fakeKeyStore(1))
             joinerFactory.join(InMemoryTag("room"))
 
             val admitted = hostRoom.roster.first { it.isNotEmpty() }.single()
@@ -66,7 +68,7 @@ class RoomAttestedPrincipalsTest {
     @Test
     fun `a non-roster room reports an empty attested-principals roster`(): TestResult = runTest {
         val mesh = InMemoryLoom()
-        val hostRoom = SeamRoomFactory(mesh, backgroundScope, zeroClock, InMemoryDeviceKeyStore()).host(Pattern("server"))
+        val hostRoom = SeamRoomFactory(mesh, backgroundScope, zeroClock, fakeKeyStore(2)).host(Pattern("server"))
         assertTrue(
             hostRoom.attestedPrincipals.value.isEmpty(),
             "a seam with no PrincipalRoster carries an empty attested-principals roster",

@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -32,7 +32,7 @@ import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.fabric.Connection
 import us.tractat.kuilt.core.fabric.peerMesh
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.session.partition.RoomId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -260,7 +260,7 @@ class DrainingGenerationReconnectTest {
             memberName = "table-7",
             scope = backgroundScope,
             clock = { Instant.fromEpochMilliseconds(0L) },
-            device = keyedDevice(),
+            device = RoomDevice.of(fakeKeyStore(0)),
             heartbeatConfig = config,
             roomId = RoomId("room-1"),
         ).also { it.start() }
@@ -291,7 +291,7 @@ class DrainingGenerationReconnectTest {
             memberName = "client",
             scope = backgroundScope,
             clock = { Instant.fromEpochMilliseconds(0L) },
-            device = keyedDevice(),
+            device = RoomDevice.of(fakeKeyStore(1)),
             heartbeatConfig = config,
             roomId = null,
             reweave = {

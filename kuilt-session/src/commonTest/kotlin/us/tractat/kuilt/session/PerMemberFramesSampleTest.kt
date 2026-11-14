@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.async
@@ -8,7 +10,7 @@ import kotlinx.coroutines.withTimeout
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -31,13 +33,13 @@ class PerMemberFramesSampleTest {
                 loom,
                 backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = fakeKeyStore(0),
             ).host(Pattern("Alice"))
             val joiner = SeamRoomFactory(
                 loom,
                 backgroundScope,
                 clock = clock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = fakeKeyStore(1),
             ).join(InMemoryTag("Bob"))
             val joinerId = host.roster.first { it.size == 1 }.single().id
 

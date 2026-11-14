@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -8,7 +10,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.Direction
 import us.tractat.kuilt.test.FaultProfile
 import us.tractat.kuilt.test.FaultySeam
@@ -48,6 +50,10 @@ import kotlin.time.Instant
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RoomResumeTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
+
     /** Fast partition-detection timings for deterministic virtual-time tests. */
     private val fastConfig = HeartbeatConfig(
         interval = 100.milliseconds,
@@ -493,7 +499,7 @@ class RoomResumeTest {
             memberName = displayName,
             scope = backgroundScope,
             clock = clock,
-            device = keyedDevice(),
+            device = RoomDevice.of(fakeKeyStore(nextDevice++)),
             heartbeatConfig = fastConfig,
             roomId = roomId,
         ).also { it.start() }

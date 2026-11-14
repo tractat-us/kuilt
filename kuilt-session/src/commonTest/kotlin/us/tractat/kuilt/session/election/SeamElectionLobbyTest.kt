@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session.election
 
 import kotlinx.coroutines.CancellationException
@@ -19,7 +21,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.Room
 import us.tractat.kuilt.session.SeamRoomFactory
 import us.tractat.kuilt.session.SessionRole
@@ -37,8 +39,12 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 class SeamElectionLobbyTest {
+    /** The number the next fake device gets: every store made in a test is a new device, so no two
+     * rooms share a key unless a test hands one store to both. */
+    private var nextDevice = 0
+
     private fun factory(loom: InMemoryLoom, scope: CoroutineScope) =
-        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = InMemoryDeviceKeyStore())
+        SeamRoomFactory(loom, scope, clock = { kotlin.time.Instant.fromEpochMilliseconds(0L) }, deviceKeyStore = fakeKeyStore(nextDevice++))
 
     private fun lobby(seam: Seam, loom: InMemoryLoom, scope: CoroutineScope) =
         SeamElectionLobby(seam = seam, factory = factory(loom, scope), scope = scope,
@@ -290,7 +296,7 @@ class SeamElectionLobbyTest {
             val clock = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
             val l = SeamElectionLobby(
                 seam = seam,
-                factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock = clock, deviceKeyStore = InMemoryDeviceKeyStore()),
+                factory = SeamRoomFactory(InMemoryLoom(), backgroundScope, clock = clock, deviceKeyStore = fakeKeyStore(nextDevice++)),
                 scope = backgroundScope,
                 clock = clock,
                 roomKey = null,

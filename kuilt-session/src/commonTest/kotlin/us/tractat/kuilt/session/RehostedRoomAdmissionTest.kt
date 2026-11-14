@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -9,7 +11,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
@@ -51,7 +53,7 @@ class RehostedRoomAdmissionTest {
                 fabric.serverLoom,
                 backgroundScope,
                 clock = zeroClock,
-                deviceKeyStore = InMemoryDeviceKeyStore(),
+                deviceKeyStore = fakeKeyStore(0),
             )
 
             hostFactory.host(Pattern("t")).leave()
@@ -62,7 +64,7 @@ class RehostedRoomAdmissionTest {
                     fabric.clientLoom(PeerId("joiner"), Random(1L)),
                     backgroundScope,
                     clock = zeroClock,
-                    deviceKeyStore = InMemoryDeviceKeyStore(),
+                    deviceKeyStore = fakeKeyStore(1),
                 )
             val joiner = joinerFactory.join(InMemoryTag("t"))
 

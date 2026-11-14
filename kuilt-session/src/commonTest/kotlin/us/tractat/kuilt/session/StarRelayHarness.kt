@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
 
 package us.tractat.kuilt.session
 
@@ -28,7 +28,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.core.TransportCapability
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.liveness.HeartbeatPartitionDetector
 import us.tractat.kuilt.test.fabric.InMemoryRoomFabric
@@ -255,7 +255,7 @@ internal suspend fun TestScope.relayStar(
     val fabric = InMemoryRoomFabric(backgroundScope, dispatcher, random = Random(0L))
 
     val hostWire = WireTapSeam(fabric.serverLoom.host(Pattern(ROOM)), backgroundScope)
-    val hostRoom = SeamRoomFactory(fabric.serverLoom, hostRoomScope, clock, InMemoryDeviceKeyStore(), relayHeartbeat)
+    val hostRoom = SeamRoomFactory(fabric.serverLoom, hostRoomScope, clock, fakeKeyStore(0), relayHeartbeat)
         .adopt(hostWire, SessionRole.Host)
     val host = observe(hostRoom, hostWire)
 
@@ -265,7 +265,7 @@ internal suspend fun TestScope.relayStar(
         // `adopt` (rather than `join`) so the harness keeps the spoke's own seam handle and can tap
         // it — mirroring LivenessRouteGateTest.star().
         val wire = WireTapSeam(loom.join(InMemoryTag(ROOM)), backgroundScope)
-        val room = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), relayHeartbeat)
+        val room = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index + 1), relayHeartbeat)
             .adopt(wire, SessionRole.Joiner)
         joiners += observe(room, wire)
         // Await THIS spoke's admission before starting the next, so admission order is loop order.
@@ -371,7 +371,7 @@ internal const val MESH_CHANNEL = "mesh-data"
 internal suspend fun TestScope.meshTrio(): MeshTrio {
     val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
     val loom = InMemoryLoom()
-    val factory = SeamRoomFactory(loom, backgroundScope, clock, InMemoryDeviceKeyStore(), relayHeartbeat)
+    val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(2), relayHeartbeat)
 
     val hostRoom = factory.host(Pattern(ROOM))
     val originRoom = factory.join(InMemoryTag("origin"))

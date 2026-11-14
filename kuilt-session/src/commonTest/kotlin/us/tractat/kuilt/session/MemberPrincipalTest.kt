@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CompletableDeferred
@@ -14,7 +16,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.time.Instant
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
+import us.tractat.kuilt.identity.test.fakeKeyStore
 
 class MemberPrincipalTest {
 
@@ -35,12 +37,12 @@ class MemberPrincipalTest {
             }
         }
 
-        val host = LoomRoomHost(attestingLoom, Pattern("server"), InMemoryDeviceKeyStore(), clock = zeroClock)
+        val host = LoomRoomHost(attestingLoom, Pattern("server"), fakeKeyStore(0), clock = zeroClock)
         val hostRoomReady = CompletableDeferred<Room>()
         val hostJob = backgroundScope.launch { host.start { room -> hostRoomReady.complete(room) } }
         val hostRoom = hostRoomReady.await()
 
-        val joiner = SeamRoomFactory(mesh, backgroundScope, zeroClock, InMemoryDeviceKeyStore()).join(InMemoryTag("server"))
+        val joiner = SeamRoomFactory(mesh, backgroundScope, zeroClock, fakeKeyStore(1)).join(InMemoryTag("server"))
 
         hostRoom.roster.first { it.size == 1 }
         assertEquals(
