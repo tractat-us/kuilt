@@ -440,9 +440,16 @@ check(store.read(key) == null)
 ### Which kuilt wrote what you saved
 
 **Intent:** record which kuilt release wrote something you keep, such as a snapshot, a saved ledger or a log header, so a later run can tell old data from new. Don't copy the version string into your own code: the copy goes stale on the next upgrade, and a snapshot build never matches it.
-**Primitive:** `KuiltVersion.VERSION` (`:kuilt-core`, so every module brings it) — a value generated from the version the build publishes: `<line>.0-dev` locally, `<line>.0-dev.<run>` in a snapshot, the tag's `x.y.z` in a release.
+**Primitive:** `KuiltVersion.VERSION` — a value generated from the version the build publishes: `<line>.0-dev` locally, `<line>.0-dev.<run>` in a snapshot, the tag's `x.y.z` in a release.
 
-It is a plain `val`, not a `const`, so it names the kuilt actually running, not the one your code compiled against. A `const` would be copied into your code at compile time, and would make every kuilt release recompile everything built on `:kuilt-core`.
+Two modules carry it, each in its own package:
+
+- `us.tractat.kuilt.core.KuiltVersion` in `:kuilt-core`, which most modules bring with them;
+- `us.tractat.kuilt.heddle.KuiltVersion` in `:kuilt-heddle-core`, for a `LocalHeddle` app, since that module keeps `:kuilt-core` and its coroutines off its classpath.
+
+Not every module depends on one of them: `:kuilt-crdt`, `:kuilt-store` and `:kuilt-seal` depend on no kuilt module, and `:kuilt-bolt` and `:kuilt-identity` reach only those. Those modules carry no copy. Their version is the same anyway, because every kuilt module publishes at one version and the BOM keeps them aligned, so either copy names them all.
+
+It is a plain `val`, not a `const`, so it names the kuilt actually running, not the one your code compiled against. A `const` would be copied into your code at compile time, and would make every kuilt release recompile everything built on the module that carries it.
 
 <!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/KuiltVersionSamples.kt#sampleKuiltVersion -->
 ```kotlin
