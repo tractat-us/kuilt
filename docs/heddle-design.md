@@ -1151,8 +1151,8 @@ Decided in #3324, and not yet built.
 - **0 means pause:** picks stop under that node. It is not a problem.
 - A negative value is the one new `TopologyProblem.Kind`.
 - The ceiling lives in the engine, read from the topology last applied
-  (`lastApplied`), not in the ledger. `Topology.diff` matches an edge on its
-  weight alone, so it emits no step for a change of ceiling: no new edge and no
+  (`lastApplied`), not in the ledger. `Topology.diff` keeps an existing edge by its
+  weight, so it emits no step for a change of ceiling: no new edge and no
   history reset.
 
 **Counting.** In leases: the open leases whose captured path passes through the
