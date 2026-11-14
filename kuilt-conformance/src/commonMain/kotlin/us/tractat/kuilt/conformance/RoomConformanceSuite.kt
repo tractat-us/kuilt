@@ -12,6 +12,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onEach
@@ -1217,15 +1218,15 @@ public abstract class RoomConformanceSuite {
             val joinerBefore = joinerView.state.value
 
             joinerRoom.leave()
-            val joinerHeld = joinerRoom.awaitTorn(joinerView, "the joiner's view taken before it left")
-            val joinerFresh = joinerRoom.awaitTorn(
+            joinerRoom.awaitTorn(joinerView, "the joiner's view taken before it left")
+            joinerRoom.awaitTorn(
                 joinerRoom.channel(TERMINAL_STATE_CHANNEL_AFTER),
                 "a view the joiner minted after it left",
             )
 
             hostRoom.leave()
-            val hostHeld = hostRoom.awaitTorn(hostView, "the host's view taken before it left")
-            val hostFresh = hostRoom.awaitTorn(
+            hostRoom.awaitTorn(hostView, "the host's view taken before it left")
+            hostRoom.awaitTorn(
                 hostRoom.channel(TERMINAL_STATE_CHANNEL_AFTER),
                 "a view the host minted after it left",
             )
@@ -1233,10 +1234,6 @@ public abstract class RoomConformanceSuite {
             assertAll(
                 { assertFalse(hostBefore is SeamState.Torn, "rig: the host's view is live before anything leaves, got $hostBefore") },
                 { assertFalse(joinerBefore is SeamState.Torn, "rig: the joiner's view is live before anything leaves, got $joinerBefore") },
-                { assertIs<SeamState.Torn>(joinerHeld, "a joiner that left reads Torn on the view it already held") },
-                { assertIs<SeamState.Torn>(joinerFresh, "a joiner that left reads Torn on a view taken afterwards") },
-                { assertIs<SeamState.Torn>(hostHeld, "a host that left reads Torn on the view it already held") },
-                { assertIs<SeamState.Torn>(hostFresh, "a host that left reads Torn on a view taken afterwards") },
             )
         }
 
@@ -2178,9 +2175,9 @@ public abstract class RoomConformanceSuite {
      * fail naming the state the view was left in. A view stuck at `Woven` after its room left is
      * the defect [channelStateTornAfterLeave] exists to catch, so the message has to say which.
      */
-    private suspend fun Room.awaitTorn(view: Seam, expected: String): SeamState {
-        val budget = awaitBudget ?: return view.state.first { it is SeamState.Torn }
-        return withTimeoutOrNull(budget) { view.state.first { it is SeamState.Torn } }
+    private suspend fun Room.awaitTorn(view: Seam, expected: String): SeamState.Torn {
+        val budget = awaitBudget ?: return view.state.filterIsInstance<SeamState.Torn>().first()
+        return withTimeoutOrNull(budget) { view.state.filterIsInstance<SeamState.Torn>().first() }
             ?: fail(
                 "the channel view never read Torn: $expected (last state ${view.state.value})",
                 budget,
