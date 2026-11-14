@@ -380,7 +380,7 @@ class BoundedCounterEqualizerTest {
 
             // A holds Long.MAX_VALUE and has already spent 10 of it; B holds 10.
             val seeded = BoundedCounter.init(mapOf(replicaA to Long.MAX_VALUE, replicaB to 10L))
-            val initial = seeded.piece(checkNotNull(seeded.trySpend(replicaA, 10L)))
+            val initial = seeded.piece(checkNotNull(seeded.trySpend(replicaA, 10L)).delta)
 
             val transferConfig = BoundedCounterTransferConfig(
                 lowWaterThreshold = 0L,
