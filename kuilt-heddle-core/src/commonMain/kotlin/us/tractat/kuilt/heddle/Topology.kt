@@ -171,7 +171,7 @@ public data class TopologyProblem(
     }
 
     /**
-     * The kinds of problem a topology can have: four that [Topology.from] finds, and [CONSUMER] for
+     * The kinds of problem a topology can have: the kinds [Topology.from] finds, and [CONSUMER] for
      * the app's own.
      */
     public enum class Kind {

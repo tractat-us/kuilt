@@ -74,7 +74,7 @@ class TopologyTest {
         val document = TopologyDocument(
             root = "",
             children = listOf(
-                TopologyDocument.Group("acme", "3", children = listOf(lane("batch"), lane("batch"))),
+                TopologyDocument.Group("acme", "3", children = listOf(lane("batch"), lane("batch"), lane(""))),
                 TopologyDocument.Group("idle", runtimeChildren = "0"),
                 TopologyDocument.Group("empty"),
                 lane("x", weight = "0"),
