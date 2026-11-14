@@ -20,6 +20,7 @@ import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
+import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.PartitionEvent
 import us.tractat.kuilt.quilter.QuilterConfig
@@ -1075,6 +1076,78 @@ class HeddleNodeTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
+    // 9. A parent whose children cannot be ordered says why (#3353).
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * A child whose position reached its ceiling stops every pick at the parent (#3313), and the
+     * node used to answer that as "nothing to delegate", the same as an idle tree. The ceiling here
+     * arrives the way any gauge does, merged into the replicated ledger.
+     */
+    @Test
+    fun aParentWithAChildAtItsCeilingAnswersPositionCeiling() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
+        val atCeiling = Gauge(Rational.of(CEILING_AT_WEIGHT_ONE, 16L), folded = 0L)
+        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling))))
+        node.advertise(e1, hungry)
+        node.advertise(e2, hungry)
+        h.pump()
+        val gauge = node.ledger.value.gauge(e1)
+        val outcome = node.schedule(root)
+        h.pump()
+        val ledger = node.ledger.value
+        assertAll(
+            { assertEquals(atCeiling, gauge, "the rig: e1 sits at its ceiling") },
+            { assertEquals(ScheduleOutcome.PositionCeiling(root), outcome, "the node says why it stopped") },
+            { assertEquals(0L, ledger.edge(e1)!!.issued + ledger.edge(e2)!!.issued, "and delegated nothing") },
+        )
+    }
+
+    /**
+     * Two static peers, cut off from each other, each activate a child that fits beside the two it
+     * sees. Merged on heal, the four weights put a pick's sums out of `Long`
+     * (`S = 2⁶³ + 385` over `L = 192`), so every pick at the root throws. The node used to throw on
+     * every [HeddleNode.schedule]; it now answers [ScheduleOutcome.WeightBudget] and writes nothing.
+     */
+    @Test
+    fun anOverBudgetSetMergedOnHealAnswersWeightBudgetAndWritesNothing() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = flatTopology())
+        h.pump()
+        val a = h.peers[0].node
+        val b = h.peers[1].node
+        val heavy = AttachmentRecord(AttachmentId("heavy"), root, GroupId("g-heavy"), Weight.of(1L shl 57, 3L))
+        val light = AttachmentRecord(AttachmentId("light"), root, GroupId("g-light"), Weight.of(1L, 192L))
+
+        h.partition(1)
+        val aAdded = a.prepare(heavy) && a.activate(heavy.id)
+        val bAdded = b.prepare(light) && b.activate(light.id)
+        h.pump()
+        val aAloneSees = a.ledger.value.activeChildren(root).size
+        h.heal(1)
+        h.pump(600)
+
+        for (edge in listOf(e1, e2, heavy.id, light.id)) a.advertise(edge, hungry)
+        val before = a.ledger.value
+        val outcome = a.schedule(root)
+        h.pump()
+        assertAll(
+            { assertTrue(aAdded && bAdded, "the rig: each peer's own view accepted its child") },
+            { assertEquals(3, aAloneSees, "the rig: A did not see B's child before the heal") },
+            { assertEquals(4, before.activeChildren(root).size, "the rig: after the heal A sees all four") },
+            { assertEquals(ScheduleOutcome.WeightBudget(root), outcome, "the node says why it stopped") },
+            { assertEquals(before, a.ledger.value, "and wrote nothing: no seat, no grant") },
+        )
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
     // harness
     // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1177,5 +1250,10 @@ class HeddleNodeTest {
             delegate.sendTo(peer, payload)
         }
         override suspend fun close(reason: CloseReason): Unit = delegate.close(reason)
+    }
+
+    private companion object {
+        /** A weight-1 edge's position ceiling in 1/16-unit ticks: `Long.MAX_VALUE` less one largest deadline. */
+        const val CEILING_AT_WEIGHT_ONE: Long = Long.MAX_VALUE - LocalHeddle.MAX_RESERVATION * 16L
     }
 }
