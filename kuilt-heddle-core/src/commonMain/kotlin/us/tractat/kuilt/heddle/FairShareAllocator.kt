@@ -222,7 +222,7 @@ public class FairShareAllocator(
     internal fun effectiveVirtualService(ledger: EntitlementLedger, parent: GroupId, edge: AttachmentId): Rational? =
         policyEdges(ledger, parent) { Demand.NONE }
             .firstOrNull { it.record.id == edge }
-            ?.let { HeddlePolicy.virtualService(it) + it.virtualOffset }
+            ?.let { HeddlePolicy.effectiveVirtualService(it).toRational() }
 
     /**
      * Build the policy input at [parent] from [s] and run one [HeddlePolicy.pick].
@@ -320,10 +320,10 @@ public class FairShareAllocator(
             .filter { HeddlePolicy.isDemanding(it) && demandingObserved[it.record.id] == false }
             .mapTo(HashSet()) { it.record.id }
         val joiners = HashSet(unseated).apply { addAll(wakers) }
-        val front = if (joiners.isEmpty()) null else HeddlePolicy.front(edges, excluding = joiners)
+        val front = if (joiners.isEmpty()) null else HeddlePolicy.exactFront(edges, excluding = joiners)
 
         if (unseated.isNotEmpty()) {
-            val seatAt = front ?: Rational.ZERO
+            val seatAt = front?.toRational() ?: Rational.ZERO
             ledger.mutateOrSkip { state -> seatPatch(state, unseated, seatAt) }
         }
         if (front != null) clampWakers(edges, wakers, front)
@@ -414,18 +414,19 @@ public class FairShareAllocator(
      * and the §8.2 caps, any peer that did observe the window clamps independently, and wake
      * offsets are scheduler-local anyway, so divergence between peers is already tolerated.
      */
-    private fun clampWakers(edges: List<PolicyEdge>, wakers: Set<AttachmentId>, front: Rational) {
+    private fun clampWakers(edges: List<PolicyEdge>, wakers: Set<AttachmentId>, front: ExactTime) {
         for (edge in edges) {
             if (edge.record.id !in wakers) continue
-            val computed = HeddlePolicy.wakeOffset(
+            val computed = HeddlePolicy.exactWakeOffset(
                 front = front,
-                vRaw = HeddlePolicy.virtualService(edge),
+                vRaw = HeddlePolicy.exactVirtualService(edge),
                 weight = edge.record.weight,
                 sleeperCredit = policy.sleeperCredit,
             )
-            // Join, never replace: the front is not monotone across wake cycles (#1714).
-            val carried = wakeOffsets[edge.record.id] ?: Rational.ZERO
-            wakeOffsets[edge.record.id] = Rational.max(carried, computed)
+            // Join, never replace: the front is not monotone across wake cycles (#1714). The join is
+            // exact; only the stored result is narrowed, which is where compounding is cut.
+            val carried = ExactTime.of(wakeOffsets[edge.record.id] ?: Rational.ZERO)
+            wakeOffsets[edge.record.id] = ExactTime.max(carried, computed).toRational()
         }
     }
 

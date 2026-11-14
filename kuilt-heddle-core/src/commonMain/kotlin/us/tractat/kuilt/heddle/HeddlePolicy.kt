@@ -108,7 +108,8 @@ public object HeddlePolicy {
      * Pick the single child to delegate the next quantum to, or `null` when no child
      * is both eligible and demanding.
      *
-     * The steps, all in exact rational arithmetic (design §7.3):
+     * The steps, all in exact rational arithmetic of unbounded size ([ExactTime]), so no step can
+     * overflow (design §7.3):
      * 1. **Candidates** — edges whose `additionalNeed = targetOutstanding − outstanding`
      *    is positive, each with a quantum trimmed to demand, holdings, and the caps;
      *    a zero quantum drops the edge.
@@ -117,7 +118,7 @@ public object HeddlePolicy {
      * 3. **Eligibility** — keep candidates with `ev ≤ V`. Non-empty *by construction*: `V`
      *    is the weighted mean of these same candidates' `ev` over strictly positive weights,
      *    so `min(ev) ≤ V` always holds, and no rounding can lose the margin — the arithmetic
-     *    is exact and an overflow throws rather than returning a wrong order. An empty set
+     *    is exact and unbounded, so it neither rounds nor overflows. An empty set
      *    would mean step 2 averaged a *different* set than this filter, or admitted a
      *    non-positive weight; either makes the round's whole ordering untrustworthy, so it
      *    fails loudly instead of scheduling against it (design §7.3 step 3).
@@ -145,12 +146,11 @@ public object HeddlePolicy {
         //    (§7.3 step 2 specifies the candidate set, so this is the correct input here). [front]
         //    shares this same helper but takes it over the **untrimmed** demanding set, so the two
         //    values coincide only when no quantum trim binds — they are not one number.
-        val v = weightedMeanVirtualTime(candidates.map { it.edge })
+        val v = exactWeightedMean(candidates.map { it.edge })
 
         // 3. Eligible candidates: ev ≤ V. Non-empty is a theorem, not a hope: [v] is the
         //    weighted mean of *these* candidates over strictly positive weights, so it is never
-        //    below their minimum, and the comparison is exact (an overflow throws rather than
-        //    rounding an order away). Substituting the minimum and carrying on — what design
+        //    below their minimum, and the comparison is exact and cannot overflow. Substituting the minimum and carrying on — what design
         //    §7.3 step 3 used to prescribe — would schedule against an ordering just proved
         //    untrustworthy, and do it silently; the assertion names the state instead (#1737).
         val eligible = candidates.filter { it.virtualService <= v }
@@ -180,19 +180,22 @@ public object HeddlePolicy {
      * observed when it asserted it, so a stale seat is self-limiting rather than a permanent lie;
      * an edge nothing has seated yet reads from its own origin. The numerator stays *committed*
      * (not merely spent) service, so a grant advances the child the instant it is issued —
-     * hoarding is charged — and a return walks it back. Exact rational; never rounded, at either
-     * end: the seat is a [Rational] too, which is why the old `⌈V⌉` creation rule is gone.
+     * hoarding is charged — and a return walks it back. Computed exactly and narrowed once by
+     * [ExactTime.toRational]: exact wherever a [Rational] can hold it, rounded up where it cannot.
      *
      * **This is the whole of the policy's virtual-time input.** It shares
      * [grossVirtualServiceAt] with [EntitlementLedger.grossVirtualService] and with the checkpoint
      * `delegate` writes, so the value the writer asserted and the value the scheduler reads are
      * one expression.
      *
-     * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12).
      */
-    public fun virtualService(edge: PolicyEdge): Rational {
+    public fun virtualService(edge: PolicyEdge): Rational = exactVirtualService(edge).toRational()
+
+    /** [virtualService] before it is narrowed: what the policy itself computes with. */
+    internal fun exactVirtualService(edge: PolicyEdge): ExactTime {
         val weight = edge.record.weight
-        return edge.gauge.grossVirtualServiceAt(edge.baseIssued, weight) - perWeight(edge.summary.returned, weight)
+        return edge.gauge.exactGrossVirtualServiceAt(edge.baseIssued, weight) -
+            ExactTime.perWeight(edge.summary.returned, weight)
     }
 
     /**
@@ -255,16 +258,23 @@ public object HeddlePolicy {
      * @param edges the parent's immediate children.
      * @param excluding edges that must not count toward the front — the joiner, plus any
      *   co-joiners being seated in the same act.
+     * Computed exactly and narrowed once by [ExactTime.toRational]: exact wherever a [Rational] can
+     * hold it, rounded up where it cannot — the side §10.5 allows for a seat.
+     *
      * @return the front, or `null` when no edge survives [excluding] and there is therefore no
      *   set to take a front of.
      */
-    public fun front(edges: List<PolicyEdge>, excluding: Set<AttachmentId> = emptySet()): Rational? {
+    public fun front(edges: List<PolicyEdge>, excluding: Set<AttachmentId> = emptySet()): Rational? =
+        exactFront(edges, excluding)?.toRational()
+
+    /** [front] before it is narrowed: what the wake clamp computes with. */
+    internal fun exactFront(edges: List<PolicyEdge>, excluding: Set<AttachmentId> = emptySet()): ExactTime? {
         val considered = if (excluding.isEmpty()) edges else edges.filterNot { it.record.id in excluding }
         if (considered.isEmpty()) return null
         val demanding = considered.filter { isDemanding(it) }
         // Nothing competing ⇒ no mean to take; fall back to the max, which can only give up.
         if (demanding.isEmpty()) return considered.maxOf { effectiveVirtualService(it) }
-        return weightedMeanVirtualTime(demanding)
+        return exactWeightedMean(demanding)
     }
 
     /**
@@ -280,14 +290,16 @@ public object HeddlePolicy {
      * @param weight the edge's weight.
      * @param sleeperCredit bounded credit the waker may keep (default `0`).
      */
-    public fun wakeOffset(front: Rational, vRaw: Rational, weight: Weight, sleeperCredit: Long): Rational {
-        val creditInVirtual = Rational.of(checkedMul(sleeperCredit, weight.denominator), weight.numerator)
-        return Rational.max(Rational.ZERO, front - vRaw - creditInVirtual)
-    }
+    public fun wakeOffset(front: Rational, vRaw: Rational, weight: Weight, sleeperCredit: Long): Rational =
+        exactWakeOffset(ExactTime.of(front), ExactTime.of(vRaw), weight, sleeperCredit).toRational()
 
-    /** Effective virtual service: [virtualService] plus the scheduler-local wake clamp. */
-    private fun effectiveVirtualService(edge: PolicyEdge): Rational =
-        virtualService(edge) + edge.virtualOffset
+    /** [wakeOffset] before it is narrowed. */
+    internal fun exactWakeOffset(front: ExactTime, vRaw: ExactTime, weight: Weight, sleeperCredit: Long): ExactTime =
+        ExactTime.max(ExactTime.ZERO, front - vRaw - ExactTime.perWeight(sleeperCredit, weight))
+
+    /** Effective virtual service: [virtualService] plus the scheduler-local wake clamp, exactly. */
+    internal fun effectiveVirtualService(edge: PolicyEdge): ExactTime =
+        exactVirtualService(edge) + ExactTime.of(edge.virtualOffset)
 
     /**
      * The trimmed quantum for [edge] this round: the smallest of the configured quantum,
@@ -316,15 +328,15 @@ public object HeddlePolicy {
     }
 
     /**
-     * `V = Σ w·ev / Σ w` over [edges] (design §7.3 step 2), exact rational. The one arithmetic
+     * `V = Σ w·ev / Σ w` over [edges] (design §7.3 step 2), exact and unbounded. The one arithmetic
      * shared by [pick]'s step 2 and [front] — over *different* sets, though: [pick] passes its
      * trimmed candidates, [front] the untrimmed demanding ones. [edges] must be non-empty.
      */
-    private fun weightedMeanVirtualTime(edges: List<PolicyEdge>): Rational {
-        var weightedSum = Rational.ZERO
-        var weightSum = Rational.ZERO
+    private fun exactWeightedMean(edges: List<PolicyEdge>): ExactTime {
+        var weightedSum = ExactTime.ZERO
+        var weightSum = ExactTime.ZERO
         for (e in edges) {
-            val w = Rational.of(e.record.weight.numerator, e.record.weight.denominator)
+            val w = ExactTime.of(e.record.weight)
             weightedSum += w * effectiveVirtualService(e)
             weightSum += w
         }
@@ -346,12 +358,9 @@ public object HeddlePolicy {
     private class Candidate(
         val edge: PolicyEdge,
         val quantum: Long,
-        val virtualService: Rational,
+        val virtualService: ExactTime,
     ) {
         /** Virtual deadline `ev + q/w = ev + q * den / num`. */
-        fun deadline(): Rational {
-            val weight = edge.record.weight
-            return virtualService + Rational.of(checkedMul(quantum, weight.denominator), weight.numerator)
-        }
+        fun deadline(): ExactTime = virtualService + ExactTime.perWeight(quantum, edge.record.weight)
     }
 }
