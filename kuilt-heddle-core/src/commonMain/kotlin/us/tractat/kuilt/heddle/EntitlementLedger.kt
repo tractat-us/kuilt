@@ -2224,7 +2224,7 @@ public class EntitlementLedger private constructor(
         val leafSpend = HashMap(forgotten.leafSpend)
         var floor = forgotten.generationFloor
         for (e in doomed) {
-            floor = maxOf(floor, generationOf(e) ?: -1L)
+            floor = maxOf(floor, checkNotNull(generationOf(e)) { "a forgettable edge is in the topology grammar" })
             val record = checkNotNull(recordOf(e)) { "a forgettable edge has one record" }
             val row = outflow.getOrPut(record.parent) { HashMap() }
             if (lifecycleOf(e) != Lifecycle.RETIRED) continue
@@ -2261,6 +2261,8 @@ public class EntitlementLedger private constructor(
     /**
      * Why [forget] would refuse [edge], or `null` when it may be forgotten. All of these must hold
      * (design §5.5):
+     * - its id is in the topology grammar, so it has a generation: the floor is the only thing that
+     *   stops a forgotten edge coming back in a later [piece], and an id without one is below no floor;
      * - one record names it, and it is RETIRED, or PREPARED with no counter and no gauge;
      * - its child has no child edges in any lifecycle, forgotten ones included, so leaves go first;
      * - no transfer row, base or relocation, sits at its path;
@@ -2273,6 +2275,7 @@ public class EntitlementLedger private constructor(
      */
     internal fun forgetRefusal(edge: AttachmentId): ForgetRefusal? {
         if (!isKnown(edge)) return ForgetRefusal.UNKNOWN
+        if (generationOf(edge) == null) return ForgetRefusal.NOT_IN_GRAMMAR
         val record = recordOf(edge) ?: return ForgetRefusal.NOT_ONE_RECORD
         val lifecycle = lifecycleOf(edge)
         if (lifecycle != Lifecycle.RETIRED && lifecycle != Lifecycle.PREPARED) return ForgetRefusal.LIVE

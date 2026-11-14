@@ -89,8 +89,19 @@ class EntitlementLedgerForgetTest {
             e to setOf(AttachmentRecord(e, root, c, Weight.ONE)),
             e2 to setOf(AttachmentRecord(e2, root, c, Weight.ONE)),
         )
+        val x = AttachmentId("x")
         val cases = listOf(
             Triple("an edge nothing names", closed(), AttachmentId("root/z@1:1#0")) to ForgetRefusal.UNKNOWN,
+            Triple(
+                "a closed edge outside the topology grammar",
+                closed(
+                    records = mapOf(x to setOf(AttachmentRecord(x, root, c, Weight.ONE))),
+                    issued = mapOf(x to counter(r1 to 5L)),
+                    leafSpent = mapOf(x to counter(r1 to 5L)),
+                    lifecycle = mapOf(x to Lifecycle.RETIRED),
+                ),
+                x,
+            ) to ForgetRefusal.NOT_IN_GRAMMAR,
             Triple("two records", closed(records = mapOf(e to divergent)), e) to ForgetRefusal.NOT_ONE_RECORD,
             Triple("an active edge", closed(lifecycle = emptyMap()), e) to ForgetRefusal.LIVE,
             Triple("a closing edge", closed(lifecycle = mapOf(e to Lifecycle.CLOSING)), e) to ForgetRefusal.LIVE,

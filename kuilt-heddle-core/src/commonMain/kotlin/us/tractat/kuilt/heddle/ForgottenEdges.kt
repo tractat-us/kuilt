@@ -61,6 +61,13 @@ internal enum class ForgetRefusal {
     /** No component names the edge. */
     UNKNOWN,
 
+    /**
+     * The edge's id is outside the topology grammar, so it has no generation. The forgotten floor is
+     * what refuses a forgotten edge that comes back in a later join, and no floor names such an id:
+     * it could return beside its own fold and count twice.
+     */
+    NOT_IN_GRAMMAR,
+
     /** The edge has two records, or none: [LedgerConflict.RecordDivergence] owns it. */
     NOT_ONE_RECORD,
 
