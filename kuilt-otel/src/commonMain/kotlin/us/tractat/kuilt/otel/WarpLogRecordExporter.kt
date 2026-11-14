@@ -843,8 +843,12 @@ public class WarpLogRecordExporter(
         val sealedContents: Map<Long, SegmentContent>,
         /** Ledger entries whose delete has **not** yet been confirmed; still owed. */
         val ledger: List<Long>,
-        /** Whether the decoded index named any [LogSegmentIndex.retired] number at all. */
-        val ledgerDirty: Boolean,
+        /**
+         * Whether the index on disk no longer describes this state, so the first turn must rewrite
+         * it: the decoded index named a [LogSegmentIndex.retired] number, or recovery sealed an
+         * unread active segment and opened a new one.
+         */
+        val indexStale: Boolean,
         val activeNumber: Long,
         val activeSegment: Rga<LogRecord>,
         val nextSegmentNumber: Long,
@@ -1022,7 +1026,13 @@ public class WarpLogRecordExporter(
      *
      * A refused index read is [Load.Refused], and a refused segment read is not: the index
      * names a segment it could not read, so the segment stays named and the next start reads it.
-     * Nothing names the index.
+     * Nothing names the index. That holds for the **active** segment only because an unread one
+     * is sealed as [SegmentContent.Pinned] and a fresh active segment opened past
+     * [LogSegmentIndex.next]: installed as empty under its own number, as it was until #3384, it
+     * was the key the next export wrote over.
+     *
+     * Every store call here must classify its own failure where it is made. Anything that
+     * reaches [readPersistedState]'s outer catch is treated as [Load.Undecodable] and starts fresh.
      */
     private suspend fun loadPersistedState(): Load {
         val indexBytes = try {
@@ -1035,7 +1045,7 @@ public class WarpLogRecordExporter(
         if (indexBytes == null) return migrateLegacyBlob()
         val index = runCatchingCancellable { cbor.decodeFromByteArray(indexSerializer, indexBytes) }
             .getOrElse { cause -> return Load.Undecodable(cause) }
-        // Only after the index has been read: its presence is what proves the legacy key superseded.
+        // Only after the index has been read; see sweepLegacyKey for what its presence proves.
         sweepLegacyKey()
         // Finish any retirement a crash interrupted between the ledger write and the delete.
         // Idempotent: a key already gone deletes again as a no-op.
@@ -1048,7 +1058,8 @@ public class WarpLogRecordExporter(
         var merged = Rga.empty<LogRecord>()
         val contents = mutableMapOf<Long, SegmentContent>()
         for (number in index.sealedSegments) {
-            val segment = readSegment(number)
+            // Absent and Unread both leave nothing to absorb, so both stay Pinned below.
+            val segment = (readSegment(number) as? SegmentRead.Read)?.segment
             val absorbed = if (segment == null) null else absorb(merged, segment, number)
             // Unknown content must mean KEEP, so this records Pinned rather than leaving a
             // lookup miss behind: a segment that could not be read must not be retirable, and
@@ -1063,25 +1074,58 @@ public class WarpLogRecordExporter(
             }
             if (absorbed != null) merged = absorbed
         }
-        val active = readSegment(index.active) ?: Rga.empty()
-        return Load.Found(
-            RecoveredState(
-                log = absorb(merged, active, index.active) ?: merged,
-                sealedSegments = index.sealedSegments,
-                sealedContents = contents,
-                ledger = outstanding,
-                ledgerDirty = index.retired.isNotEmpty(),
-                activeNumber = index.active,
-                activeSegment = active,
-                // The index type guarantees `next` lies past every number it names, and its reader
-                // repairs an index written before it did (see LogSegmentIndexSerializer).
-                nextSegmentNumber = index.next,
-            ),
-        )
+        // The index type guarantees `next` lies past every number it names, and its reader
+        // repairs an index written before it did (see LogSegmentIndexSerializer).
+        return when (val activeRead = readSegment(index.active)) {
+            // Absent is the crash window between the index write and the segment's first write:
+            // nothing was there to lose, so the segment opens empty under its own number.
+            is SegmentRead.Read, SegmentRead.Absent -> {
+                val active = (activeRead as? SegmentRead.Read)?.segment ?: Rga.empty()
+                Load.Found(
+                    RecoveredState(
+                        log = absorb(merged, active, index.active) ?: merged,
+                        sealedSegments = index.sealedSegments,
+                        sealedContents = contents,
+                        ledger = outstanding,
+                        indexStale = index.retired.isNotEmpty(),
+                        activeNumber = index.active,
+                        activeSegment = active,
+                        nextSegmentNumber = index.next,
+                    ),
+                )
+            }
+            // Bytes this run could not read, or could not decode, are kept: sealed as Pinned like
+            // any unread sealed segment, with a fresh active segment past everything the index
+            // named, as adoptNumberingOnly does. The stale index makes the first turn publish the
+            // new layout before any content reaches the new key.
+            is SegmentRead.Unread -> {
+                contents[index.active] = SegmentContent.Pinned
+                Load.Found(
+                    RecoveredState(
+                        log = merged,
+                        sealedSegments = if (index.active in index.sealedSegments) {
+                            index.sealedSegments
+                        } else {
+                            index.sealedSegments + index.active
+                        },
+                        sealedContents = contents,
+                        ledger = outstanding,
+                        indexStale = true,
+                        activeNumber = index.next,
+                        activeSegment = Rga.empty(),
+                        nextSegmentNumber = index.next + 1,
+                    ),
+                )
+            }
+        }
     }
 
     /**
-     * Delete the legacy key, which the presence of an index proves is superseded.
+     * Delete the legacy key once an index is present. An index means one of two things: the
+     * migration's index write landed, so the blob is copied into segment [LEGACY_SEGMENT]; or a
+     * run already read the blob, found it undecodable, and started fresh. Either way no records
+     * this exporter could load are in it. A blob the store refused to read never gets here,
+     * because a refused read writes no index.
      *
      * Guarded on its own: a failed delete of known garbage must never cost the log.
      * This runs on every start, so a store whose `delete` throws would otherwise fail
@@ -1108,8 +1152,20 @@ public class WarpLogRecordExporter(
             null
         }
 
+    /** What one segment read found. */
+    private sealed interface SegmentRead {
+        /** No key: expected, see [readSegment]. */
+        data object Absent : SegmentRead
+
+        class Read(val segment: Rga<LogRecord>) : SegmentRead
+
+        /** The store refused the read or the bytes did not decode. The key may hold records. */
+        class Unread(val cause: Throwable) : SegmentRead
+    }
+
     /**
-     * Read one segment, or `null` if the store cannot supply or decode it.
+     * Read one segment: [SegmentRead.Absent] when no key is there, [SegmentRead.Unread] when the
+     * store cannot supply it or its bytes do not decode.
      *
      * Absence is **expected**, not corruption: the index is written before the
      * segment it allocates, so a crash in that window leaves the index naming a
@@ -1128,19 +1184,19 @@ public class WarpLogRecordExporter(
      * remaining segments follow, so `ensureActive` lets only this coroutine's own cancellation
      * through (#3384).
      */
-    private suspend fun readSegment(number: Long): Rga<LogRecord>? =
+    private suspend fun readSegment(number: Long): SegmentRead =
         try {
             val bytes = store.read(segmentKey(number))
             if (bytes == null) {
                 logger.debug { "otel.logs: segment $number is named by the index but absent" }
-                null
+                SegmentRead.Absent
             } else {
-                cbor.decodeFromByteArray(logSerializer, bytes)
+                SegmentRead.Read(cbor.decodeFromByteArray(logSerializer, bytes))
             }
         } catch (cause: Throwable) {
             currentCoroutineContext().ensureActive()
-            logger.warn(cause) { "otel.logs: segment $number is unreadable, dropping its records" }
-            null
+            logger.warn(cause) { "otel.logs: segment $number is unreadable; its records are kept on disk but not loaded" }
+            SegmentRead.Unread(cause)
         }
 
     /**
@@ -1192,7 +1248,7 @@ public class WarpLogRecordExporter(
             sealedSegments = listOf(LEGACY_SEGMENT),
             sealedContents = mapOf(LEGACY_SEGMENT to contentOf(recovered, LEGACY_SEGMENT)),
             ledger = emptyList(),
-            ledgerDirty = false,
+            indexStale = false,
             activeNumber = index.active,
             activeSegment = Rga.empty(),
             nextSegmentNumber = index.next,
@@ -1254,9 +1310,10 @@ public class WarpLogRecordExporter(
         activeNumber = recovered.activeNumber
         activeOpCount = opCountOf(recovered.activeSegment)
         nextSegmentNumber = recovered.nextSegmentNumber
-        // A ledger the recovered index named is stale the moment its sweep lands, so leave the
-        // index dirty and let the next turn rewrite it without the confirmed deletions.
-        indexPersisted = !recovered.ledgerDirty
+        // A ledger the recovered index named is stale the moment its sweep lands, and an unread
+        // active segment sealed by recovery is not in it at all, so leave the index dirty and
+        // let the next turn rewrite it before any content reaches the active key.
+        indexPersisted = !recovered.indexStale
         installDerivedState(entries)
     }
 
@@ -1327,6 +1384,13 @@ public class WarpLogRecordExporter(
      * ones would drop everything after the first failed turn, permanently, on every
      * batch, for as long as the condition lasts. So the loop runs to the end and the
      * **first** [ExportResult.Failure] is returned once it does.
+     *
+     * **The exception is a persisted state still unread.** After a refused read in [recover],
+     * a turn reads again before it admits anything. While the read is still refused, the turn
+     * admits nothing, and the rest of the batch returns that [ExportResult.Failure] unadmitted.
+     * Those records are **not** held anywhere: a caller that drops a failed batch, as
+     * `CapturingAppender.drain` does, loses them. Re-exporting them is safe, because a record
+     * whose id was already taken is skipped.
      *
      * A turn also never admits more than [maxRecords] records, so the eviction it
      * computes is always a prefix of what the buffer already held.
@@ -1901,7 +1965,8 @@ public class WarpLogRecordExporter(
      *
      * A failed **sweep**, by contrast, must not fail the export: the record was durably written,
      * and reporting [ExportResult.Failure] because a delete of superseded garbage was refused
-     * would make [ExporterHealth.failed] stop meaning "the store is rejecting writes". So sweeps
+     * would make [ExporterHealth.failed] stop meaning "a durable write threw, or a turn was
+     * refused over a persisted state the store would not let it read". So sweeps
      * are best-effort ([sweep]) and an unswept number simply stays in the ledger.
      *
      * **[logFailure] runs once per outage, not once per refused write** (#2237): a refused write is
@@ -2609,9 +2674,10 @@ public class WarpLogRecordExporter(
     /**
      * Record that [recover] could not restore the persisted state.
      *
-     * Deliberately does **not** touch [ExporterHealth.failed] — a failed recovery
-     * is not a failed write, and conflating them would make `failed > 0` stop
-     * meaning "the store is rejecting writes".
+     * Deliberately does **not** touch [ExporterHealth.failed]. A failed recovery is not a failed
+     * turn, and `failed` counts turns: a durable write that threw, or a turn refused because the
+     * persisted state was still unreadable when it ran. Each turn refused that way counts there,
+     * through [failure], and the recovery itself counts once, here.
      */
     private fun recordRecoveryFailure(cause: Throwable) {
         healthState.update { it.copy(recoveryFailed = true, lastFailure = cause) }
