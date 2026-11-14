@@ -99,7 +99,7 @@ class EntitlementLedgerCanonicalEncodingTest {
     /** Every arm, merged both ways round, so a field that escapes canonical ordering names itself. */
     @Test
     fun everyFieldEncodesTheSameWhicheverOrderItsOperandsMerged() {
-        assertEquals(20, arms.size, "16 fields, the records' inner set, and each of the 3 matrices' inner rows")
+        assertEquals(20, arms.size, "the 16 joinable fields (forgotten has its own test), the records' inner set, and each of the 3 matrices' inner rows")
         assertAll(
             *arms.map { arm ->
                 {

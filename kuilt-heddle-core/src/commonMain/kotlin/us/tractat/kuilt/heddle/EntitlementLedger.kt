@@ -185,10 +185,10 @@ import kotlinx.serialization.Transient
  * ## Forgetting (#3192, design §5.5)
  *
  * A retired edge stays in the books for good, because the work done under it still counts, so a
- * group whose children come and go grows without bound. The internal [forget] drops a retired leaf
+ * group whose children come and go grows without bound. The internal `forget` drops a retired leaf
  * edge's slots from the sixteen components and folds what they added up to into the seventeenth,
- * `forgotten` ([ForgottenEdges]): [holdings], [leafSpentTotal], the generation floor and
- * [hasChildEdges] read the fold beside the live edges, so each answers as it did before.
+ * `forgotten`: [holdings], [leafSpentTotal], the generation floor and the "has child edges" test
+ * read the fold beside the live edges, so each answers as it did before.
  *
  * Forgetting removes slots, so it is not a join, and it breaks §10 invariant 2 (monotonicity). It is
  * scoped to a single writer, as invariant 4's quiesced edge is: `LocalHeddle` is its only caller,
@@ -801,7 +801,7 @@ public class EntitlementLedger private constructor(
      * served child retires with `issued − returned = spent > 0`, and that spend left this group.
      * The non-retired children are summed here; the retired ones come pre-summed from the [index]'s
      * per-parent fold, so a group with fifty thousand retired children pays for none of them. The
-     * children this ledger has forgotten ([forget]) come pre-summed too, from `forgotten`.
+     * children this ledger has forgotten come pre-summed too, from `forgotten`.
      *
      * The sum is kept in 128 bits and narrowed once, at the end. Wherever the old term-by-term
      * `checkedAdd`/`checkedSub` sum returned a value, this returns the same one. It now throws on
@@ -2439,7 +2439,7 @@ public class EntitlementLedger private constructor(
      * Total service charged where an edge is a path's final edge (the conservation term), at
      * **effective** values — a relocation moves leaf spend between edges in equal and opposite
      * amounts, so this sum is invariant under any move. The leaf spend of every forgotten edge is
-     * in it too, folded, so it is invariant under [forget] as well.
+     * in it too, folded, so it is invariant under forgetting as well.
      */
     @HeddleInternalApi
     public fun leafSpentTotal(): Long =
@@ -2644,7 +2644,7 @@ public class EntitlementLedger private constructor(
          * states of the still-inert lattice.
          *
          * The three `forgotten…` parameters assemble the seventeenth component, the fold of the
-         * edges a ledger has forgotten ([ForgottenEdges]): `forgottenOutflow` per parent and
+         * edges a ledger has forgotten (`ForgottenEdges`): `forgottenOutflow` per parent and
          * replica, `forgottenLeafSpend` per replica, and `forgottenGenerationFloor`, `-1` for none.
          * A ledger built with a fold merges only with one holding the same fold or none, so the
          * lattice-law generators leave them at their defaults.
