@@ -735,13 +735,16 @@ create any.
 ### 7.1 Virtual service
 
 For active edge `e` with weight `w(e)`, the baseline `b(e)` is read off the edge's
-replicated `Gauge` rather than off its record — a floor paired with a fold: the base
-issuance the writer had observed when it asserted that floor, or, in a `LocalHeddle`
-ledger, a fold a rebase has raised above it (below):
+replicated `Gauge` rather than off its record — a position paired with a fold: the base
+issuance the writer had observed when it asserted that position, or, in a `LocalHeddle`
+ledger, a fold a rebase has raised above it (below). The position is
+`P(e) = max(⌈floor(e) · w(e) · G⌉, ticks(e))`, on the edge's own grid of `G` ticks to a
+unit (below). Every seat and checkpoint writes `ticks`, a 128-bit count, exact and never
+capped (#3353). A `floor` written by an earlier build is still read, through the `max`:
 
 ```text
-gross(e) = floor(e) + (baseIssued(e) − folded(e)) / w(e)     (no gauge ⇒ baseIssued(e) / w(e))
-v_raw(e) = gross(e) − returned(e) / w(e)
+gross(e) = P(e) + (baseIssued(e) − folded(e)) · G     (no gauge ⇒ baseIssued(e) · G)
+v_raw(e) = (gross(e) − returned(e) · G) / (G · w(e))
 ```
 
 Which is design §7.1's `b(e) + committedService(e) / w(e)` with `b` supplied by the
@@ -764,12 +767,16 @@ over a sum of weights, and two edges compare by integer cross-multiplication in
 
 **A position has a ceiling, and at the ceiling it saturates (#3313).** The
 ceiling is `(Long.MAX_VALUE − 2⁴⁸) / w.denominator` ticks. Dividing by the
-denominator keeps a floor's wire form, `p · w.den / (G · w.num)`, in `Long`. The
-`2⁴⁸` is room for one largest-reservation deadline `p + q · G`. A position
-that would pass the ceiling is held there: the gauge read, a seat, a checkpoint
-and a wake clamp all saturate. Saturating is a pure function of the view, and it
-commutes with the gauge's componentwise `max`, so replicas still agree. What a
-saturated position loses is exactness, so the rule splits by call:
+denominator keeps a position's virtual time, `p · w.den / (G · w.num)`, in `Long`,
+for the public reads and a stored wake offset. The `2⁴⁸` is room for one
+largest-reservation deadline `p + q · G`. A position that would pass the ceiling
+is held there where it is narrowed to the `Long` a pick orders: the gauge read and
+a wake clamp saturate. A seat and a checkpoint do not. The gauge stores its
+position wide, exactly and uncapped, and only a read narrows it (#3353): a cap on
+an absolute position in storage would turn into credit once a per-parent origin
+passed it. Saturating is a pure function of the view, and it commutes with the
+gauge's componentwise `max`, so replicas still agree. What a saturated position
+loses is exactness, so the rule splits by call:
 
 - A call that **chooses** refuses. A pick at a parent with a child at its
   ceiling, or one whose own delegation would take a child there, returns
@@ -778,7 +785,9 @@ saturated position loses is exactness, so the rule splits by call:
 - A call that **charges** lands. `admit` and `complete` keep the books exact,
   and the position stays at the ceiling.
 - **No credit leaks through.** A front over a saturated child reads the ceiling.
-  A floor at the ceiling stays there whatever the fold says. A wake clamp to a
+  A stored position at or past the ceiling reads the ceiling whatever the fold
+  says: a seat taken from a front at its ceiling stores the ceiling, which may
+  stand for more. A wake clamp to a
   front past the waker's ceiling stores the ceiling itself. So a seat or clamp
   taken against an understated front lands at the penalty end, and nothing kept
   can outlast the saturated child as credit (§10.5).
@@ -801,7 +810,7 @@ down by one virtual time `Δ`, an idle one only as far as `−R`:
   among the **demanding** children, so none of them goes below zero.
 - Each child comes down `Δ · w · G` ticks, its **wake offset first**, in whole
   units, and then its **gauge fold**. Raising the fold by `k` units lowers the
-  read `⌈floor · w · G⌉ + (issued − folded) · G` by exactly `k · G` ticks.
+  read `P + (issued − folded) · G` by exactly `k · G` ticks.
 - An idle child comes down no further than `−R`. Anything further would be
   credit. Its next wake clamp takes all of it back when the engine saw the child
   go idle and the sleeper credit is below `R`, since a child lifted to `−R` sits
@@ -812,13 +821,14 @@ down by one virtual time `Δ`, an idle one only as far as `−R`:
   a child is at its ceiling, since that position may stand for more, or while a
   demanding child sits at zero, which holds `Δ` at nothing.
 
-**The fold, not the floor.** The gauge joins its fold by `max`, so a raised fold
-survives every later checkpoint and merge. A lowered floor would be undone by the
-next one. Until issuance passes the raised fold, a checkpoint `delegate` writes
-asserts a lower floor at a lower fold, which reads the same position, and the
-join keeps the raised pair. In a `LocalHeddle` ledger a fold can therefore stand
-above issuance. A v0.7.4 reader needs no change for it: it reads a negative
-`(issued − folded)` term.
+**The fold, not the position.** The gauge joins its fold by `max`, so a raised
+fold survives every later checkpoint and merge. A lowered position would be undone
+by the next one. Until issuance passes the raised fold, a checkpoint `delegate`
+writes asserts a lower position at a lower fold, which reads the same position,
+and the join keeps the raised pair; where that lower position would be below zero
+it is written as zero, which the join absorbs the same way. In a `LocalHeddle`
+ledger a fold can therefore stand above issuance, and the read evaluates a
+negative `(issued − folded)` term.
 
 **Why it changes no pick.** Every demanding child's effective position comes
 down `Δ` in virtual time, so the weighted mean of them comes down `Δ`, and
@@ -859,7 +869,7 @@ all of them:
 
 The rebase is `LocalHeddle`'s alone. Under replication, a peer that has not yet
 seen a rebase would seat a newborn at the old front, and a concurrent
-checkpoint's floor would pair with the raised fold. The replicated `HeddleNode`
+checkpoint's position would pair with the raised fold. The replicated `HeddleNode`
 stops granting at a saturated parent. Its rebase and refusal surface are tracked
 by #3353. `apply` keeps the weight products in range the same way: an activation
 whose weights would put its parent's `L`, `S`, `G · S` or `S · d` out of `Long`
@@ -884,7 +894,7 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   The seat is **published, not carried** (issue #1752). It is not in the record;
   it is a `Gauge` in the replicated ledger, written by the scheduler's seat bump
   on every peer that still sees the edge unseated, and the gauge's componentwise
-  join resolves those readings by `max` on the floor. That matters because `V` is
+  join resolves those readings by `max` on the position. That matters because `V` is
   a *local* reading — demand ages out by local receive time and wake clamps are not
   replicated — so a proposer that froze its own reading into the record made one
   peer's guess everyone's permanent fact, and a proposer reading a partial view
@@ -897,14 +907,14 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   tick: `1/16` of a unit at weight 1, against the whole unit the record-era
   `⌈V⌉` cost. §7.3 step 3 reads `V` on the same grid, so that sliver never keeps
   a newborn out of the round it joins. `EntitlementLedger.seat` is the single
-  implementation; the floor it writes is the position as a `Rational`, so the
-  wire form is unchanged and every later read of it is exact.
+  implementation. It stores the position itself, in the gauge's ticks, so every
+  later read of it is exact (#3353).
 
   This reverses #1752's 2026-07-30 ruling, which kept the floor an exact
   `Rational` and warned that a fixed-point floor would have to round **down**,
   because a `ceil` at every checkpoint would compound into real inflation. That
   premise does not hold here, because a checkpoint adds whole ticks. It writes
-  the floor plus the issuance since the fold, which is whole units; reading an
+  the position plus the issuance since the fold, which is whole units; reading an
   on-grid floor back is exact; and only the seat and the wake clamp round, each
   once per join. A floor written off the grid, by a peer older than #3313, is
   rounded up once, by the first checkpoint that reads it, and every checkpoint
@@ -918,7 +928,10 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   writing exact fronts into floors, so the denominators in its own state keep
   growing toward the overflow this change fixes. A new peer that merges those
   floors reads them on its grid, reducing each fraction before it multiplies, so
-  it saturates only where the position itself passes its ceiling (§7.1).
+  it saturates only where the position itself passes its ceiling (§7.1). Since
+  #3353 the question no longer arises: a peer from before `ticks` cannot decode
+  a gauge that carries them, so the two cannot share a cluster at all, and every
+  peer is upgraded together.
 - **No unlimited idle credit:** when a child goes from not-demanding to
   demanding, a local wake offset clamps it forward:
 
@@ -1004,7 +1017,7 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   **Publishing the seat dissolves the ambiguity rather than fencing it** (#1752).
   The seat bump writes `max(front, baseIssued / w)` into the edge's `Gauge`, so a
   peer with no front seats at the origin — where the edge already reads, pinning
-  it without moving it — and any better-informed peer's higher floor wins the
+  it without moving it — and any better-informed peer's higher position wins the
   join's `max`. A low reading is absorbed instead of frozen, so the fence and both
   of its residuals are gone, and a node with no control plane no longer needs to
   tell the two situations apart.
@@ -1261,8 +1274,10 @@ Carried over from the source intact; each is a named property test (§13).
    parent's current virtual time — the front over its *demanding* children,
    not over all its active ones (§7.2) — never with lifetime credit. The
    seat is published on the edge's `Gauge`, not frozen into the record, and is
-   the front rounded **up** to the edge's own grid, under one tick (§7.2), below
-   the position ceiling; at it, the seat lands at the ceiling (§7.1).
+   the front rounded **up** to the edge's own grid, under one tick (§7.2). It is
+   stored exactly and uncapped (#3353). Only the front it is taken from is still
+   narrowed, so a seat taken from a front at its ceiling lands at the ceiling
+   (§7.1).
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
    clamps forward.
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
@@ -1281,9 +1296,10 @@ Carried over from the source intact; each is a named property test (§13).
     report everywhere and quarantine their lineage; nothing is resolved by
     timestamp.
 12. **Overflow rejection.** Arithmetic that would exceed `Long` fails
-    deterministically, never wraps. The one exception is a position, which
-    saturates at its ceiling; a pick that would order it refuses with a typed
-    outcome instead (§7.1).
+    deterministically, never wraps. The one exception is a position narrowed for
+    a pick, which saturates at its ceiling; a pick that would order it refuses
+    with a typed outcome instead (§7.1). A gauge stores its position in 128 bits,
+    exactly and uncapped (#3353).
 13. **Consensus only at the embroidery.** Mint, overlapping reshape, and
     fencing use `:kuilt-raft`; nothing else coordinates, at any frequency.
 
