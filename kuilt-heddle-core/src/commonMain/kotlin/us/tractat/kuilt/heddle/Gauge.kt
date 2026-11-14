@@ -101,8 +101,11 @@ public data class Gauge(
      * The componentwise least upper bound of `this` and [other] — `max` on each component
      * independently. See the class KDoc for why this is not a lexicographic pick.
      */
-    public fun join(other: Gauge): Gauge =
-        Gauge(Rational.max(floor, other.floor), maxOf(folded, other.folded), maxOf(ticksHigh, other.ticksHigh), maxOf(ticksLow, other.ticksLow))
+    public fun join(other: Gauge): Gauge {
+        // The wider position whole: a `max` on each word would assemble one neither side asserted.
+        val wider = if (ticks >= other.ticks) this else other
+        return Gauge(Rational.max(floor, other.floor), maxOf(folded, other.folded), wider.ticksHigh, wider.ticksLow)
+    }
 }
 
 /** A gauge asserting the position [ticks] at the fold [folded], with no legacy floor. */
@@ -148,10 +151,26 @@ internal fun Gauge?.grossVirtualServiceAt(baseIssued: Long, weight: Weight): Rat
  */
 internal fun Gauge?.grossTicksAt(baseIssued: Long, weight: Weight): Long {
     if (this == null) return saturatedTicksOf(baseIssued, weight)
-    val floorTicks = ticksAt(floor, weight)
-    if (atCeiling(floorTicks, weight)) return positionCeiling(weight)
-    return saturated(Int128.of(floorTicks) + checkedSub(baseIssued, folded).timesWide(TICKS_PER_UNIT), weight)
+    val ceiling = positionCeiling(weight)
+    val stored = storedTicks(weight)
+    if (stored >= Int128.of(ceiling)) return ceiling
+    return saturated(stored + checkedSub(baseIssued, folded).timesWide(TICKS_PER_UNIT), weight)
 }
+
+/**
+ * The gross position at [baseIssued], exact and unsaturated: `max(⌈floor · w · G⌉, ticks) +
+ * (baseIssued − folded) · G`, or `baseIssued · G` with no gauge. What a checkpoint stores.
+ *
+ * @throws ArithmeticException if the sum leaves 128 bits, which only a position no service reaches
+ *   can do (§10.12).
+ */
+internal fun Gauge?.exactGrossTicksAt(baseIssued: Long, weight: Weight): Int128 {
+    if (this == null) return baseIssued.timesWide(TICKS_PER_UNIT)
+    return storedTicks(weight) + checkedSub(baseIssued, folded).timesWide(TICKS_PER_UNIT)
+}
+
+/** The position this gauge asserts at its fold: `max(⌈floor · w · G⌉, ticks)`. */
+internal fun Gauge.storedTicks(weight: Weight): Int128 = maxOf(wideTicksAt(floor, weight), ticks)
 
 /**
  * A gross position less [returned] units, the raw position a pick reads: exact below the ceiling,

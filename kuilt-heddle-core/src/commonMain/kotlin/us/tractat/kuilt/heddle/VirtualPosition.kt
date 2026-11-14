@@ -123,32 +123,31 @@ internal fun ticksOf(units: Long): Long = checkedMul(units, TICKS_PER_UNIT)
 
 /**
  * The virtual time [v] read on the grid of an edge of weight [w]: `⌈v · w · G⌉` ticks, or `⌊…⌋`
- * when [rounding] says so.
- *
- * Exact for a value already on that grid — every value this module writes is — and the one
- * rounding left for any other: a floor or offset an older peer wrote as an arbitrary rational, or a
- * front handed to the public [EntitlementLedger.seat]. Rounding up is the same side the seat takes.
- *
- * The fraction is reduced crosswise before anything multiplies, and when the two denominators'
- * product still leaves `Long` the division is done in two ceiling steps instead
- * (`⌈⌈x / a⌉ / b⌉ = ⌈x / (a · b)⌉` for positive `a` and `b`; the same holds for floors). So an
- * older peer's fat denominator never throws on the way to a small result. A result above [w]'s
- * [positionCeiling], or past `Long`, reads as the ceiling (#3313).
+ * when [rounding] says so, narrowed to a position: [wideTicksAt] held at [w]'s [positionCeiling]
+ * ([saturated], #3313). A front or an offset a pick orders is read here; a stored position is
+ * read through [wideTicksAt], which does not cap.
  *
  * @throws ArithmeticException if the result is negative and below `Long.MIN_VALUE`.
  */
-internal fun ticksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILING): Long {
-    val ticks = exactTicksAt(v, w, rounding)
-    // Past Long is past the ceiling too, for a positive value: hold it there.
-    return when {
-        ticks != null -> minOf(ticks, positionCeiling(w))
-        v.numerator > 0L -> positionCeiling(w)
-        else -> throw ArithmeticException("Long overflow: ⌈$v · $w · $TICKS_PER_UNIT⌉")
-    }
-}
+internal fun ticksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILING): Long =
+    saturated(wideTicksAt(v, w, rounding), w)
 
-/** [ticksAt] without the ceiling: `null` when the result leaves `Long`. */
-private fun exactTicksAt(v: Rational, w: Weight, rounding: Rounding): Long? {
+/**
+ * The virtual time [v] read on the grid of an edge of weight [w], exactly and uncapped:
+ * `⌈v · w · G⌉` ticks, or `⌊…⌋` when [rounding] says so (#3353).
+ *
+ * Exact for a value already on that grid — every value this module writes is — and the one
+ * rounding left for any other: a floor an older peer wrote as an arbitrary rational, or a front
+ * handed to the public [EntitlementLedger.seat]. Rounding up is the same side the seat takes.
+ *
+ * The fraction is reduced crosswise before anything multiplies. When the two denominators' product
+ * fits a `Long`, the quotient is formed as `k · s + ⌈r · s / d⌉` with `a = k · d + r`, so only the
+ * `k · s` term is wide and it is exact. When it does not, the quotient is below the scale `s` and
+ * fits a `Long`, and the division is done in two steps instead (`⌈⌈x / a⌉ / b⌉ = ⌈x / (a · b)⌉`
+ * for positive `a` and `b`; the same holds for floors). So an older peer's fat denominator never
+ * throws on the way to a small result, and a large one is never capped on the way to a big one.
+ */
+internal fun wideTicksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILING): Int128 {
     val scale = checkedMul(w.numerator, TICKS_PER_UNIT)
     val g1 = gcdOf(w.denominator, absRemainder(v.numerator, w.denominator))
     val g2 = gcdOf(v.denominator, scale)
@@ -157,9 +156,20 @@ private fun exactTicksAt(v: Rational, w: Weight, rounding: Rounding): Long? {
     val denominator = v.denominator / g2
     val reducedScale = scale / g2
     val divisor = denominator.timesOrNull(weightDenominator)
-    if (divisor != null) return mulDiv(numerator, reducedScale, divisor, rounding)
-    val inner = mulDiv(numerator, reducedScale, denominator, rounding) ?: return null
-    return mulDiv(inner, 1L, weightDenominator, rounding)
+    if (divisor != null) return mulDivWide(numerator, reducedScale, divisor, rounding)
+    val inner = mulDivWide(numerator, reducedScale, denominator, rounding)
+    return Int128.of(
+        checkNotNull(inner.divideOrNull(weightDenominator, rounding)) {
+            "a quotient over a divisor past Long is below its scale: $inner / $weightDenominator"
+        },
+    )
+}
+
+/** `a · s / d` rounded as [rounding] says, exactly in 128 bits, for positive [s] and [d]. */
+private fun mulDivWide(a: Long, s: Long, d: Long, rounding: Rounding): Int128 {
+    val k = a.floorDiv(d)
+    val r = a.mod(d) // in [0, d), so r · s / d is below s and fits
+    return k.timesWide(s) + checkNotNull(mulDiv(r, s, d, rounding)) { "r · s / d < s always fits: $r · $s / $d" }
 }
 
 /** `|a mod b|` for a positive [b]: in `[0, b)`, and never a negation of `Long.MIN_VALUE`. */
