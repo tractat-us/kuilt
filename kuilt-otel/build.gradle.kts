@@ -7,6 +7,8 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-crdt"))
+            // Checked addition for refusing a batch whose sum increment would overflow (#3318).
+            implementation(project(":kuilt-math"))
             // api, not implementation: WarpTelemetry's constructor takes a DurableStore, so the
             // type is on this module's public surface and every consumer must be able to name it.
             api(project(":kuilt-store"))

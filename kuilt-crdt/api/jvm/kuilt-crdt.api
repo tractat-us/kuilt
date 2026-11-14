@@ -689,6 +689,7 @@ public final class us/tractat/kuilt/crdt/GCounter : us/tractat/kuilt/crdt/Quilte
 	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
 	public final fun replicas ()Ljava/util/Set;
 	public fun toString ()Ljava/lang/String;
+	public final fun valueOrNull ()Ljava/lang/Long;
 }
 
 public final synthetic class us/tractat/kuilt/crdt/GCounter$$serializer : kotlinx/serialization/internal/GeneratedSerializer {

@@ -1,6 +1,7 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.math.Int128
 
 /**
  * A **bounded / escrow counter**: a shared budget pre-divided into per-replica
@@ -43,13 +44,32 @@ public class BoundedCounter private constructor(
     private val spent: GCounter,
 ) : Quilted<BoundedCounter> {
 
-    /** The total budget remaining across the whole system. */
-    public val totalBudget: Long get() = initial.value - spent.value
+    /**
+     * The total budget remaining across the whole system.
+     *
+     * Formed exactly from the initial and spent totals, so it is answered whenever the
+     * remainder fits in a `Long`, even when the initial total alone does not.
+     *
+     * @throws ArithmeticException if the remaining budget does not fit in a `Long` (#3318).
+     */
+    public val totalBudget: Long
+        get() = exactBudget.toLongOrNull()
+            ?: throw ArithmeticException("BoundedCounter budget $exactBudget does not fit in a Long")
 
-    /** Total **consumed** across the whole system (does not include transfers). */
+    /**
+     * Total **consumed** across the whole system (does not include transfers).
+     *
+     * @throws ArithmeticException if the total does not fit in a `Long` (#3318).
+     */
     public val totalSpent: Long get() = spent.value
 
-    /** [replica]'s remaining quota — what it may still spend locally. */
+    private val exactBudget: Int128 get() = initial.exactValue - spent.exactValue
+
+    /**
+     * [replica]'s remaining quota — what it may still spend locally.
+     *
+     * @throws ArithmeticException if [replica]'s transfers out add up past [Long.MAX_VALUE] (#3318).
+     */
     public fun quota(replica: ReplicaId): Long {
         val received = transfers.values.sumOf { it.count(replica) }
         val given = transfers[replica]?.value ?: 0L
@@ -61,6 +81,10 @@ public class BoundedCounter private constructor(
      * spend is within [replica]'s current quota; `null` otherwise. The caller's
      * state is unchanged in either case — apply the patch with [piece] to
      * commit. [amount] must be positive.
+     *
+     * @throws IllegalArgumentException if [amount] is not positive.
+     * @throws ArithmeticException if [quota] throws, or if [replica]'s spent slot would pass
+     *   [Long.MAX_VALUE] (#3318).
      */
     public fun trySpend(replica: ReplicaId, amount: Long = 1L): Patch<BoundedCounter>? {
         require(amount >= 1L) { "BoundedCounter spend must be positive, was $amount" }
@@ -81,6 +105,10 @@ public class BoundedCounter private constructor(
      * This is the sender-side primitive of the transfer. Rung 5b will add the
      * request/grant protocol over a Seam; without it, peers degrade
      * gracefully to "deny when low".
+     *
+     * @throws IllegalArgumentException if [amount] is not positive or [from] equals [to].
+     * @throws ArithmeticException if [quota] throws for [from], or if [from]'s transfer slot for
+     *   [to] would pass [Long.MAX_VALUE] (#3318).
      */
     public fun transfer(from: ReplicaId, to: ReplicaId, amount: Long): Patch<BoundedCounter>? {
         require(amount >= 1L) { "BoundedCounter transfer must be positive, was $amount" }
@@ -121,8 +149,9 @@ public class BoundedCounter private constructor(
         return h
     }
 
+    // Exact values, not [totalBudget]/[totalSpent]: a counter whose totals do not fit must still print.
     override fun toString(): String =
-        "BoundedCounter(budget=$totalBudget, spent=$totalSpent, initial=$initial, transfers=$transfers)"
+        "BoundedCounter(budget=$exactBudget, spent=${spent.exactValue}, initial=$initial, transfers=$transfers)"
 
     public companion object {
         /** A bounded counter with no participants and no budget. */

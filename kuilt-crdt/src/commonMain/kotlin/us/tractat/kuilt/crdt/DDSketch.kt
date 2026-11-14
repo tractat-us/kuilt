@@ -1,6 +1,7 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.math.Int128
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
@@ -89,13 +90,22 @@ public class DDSketch private constructor(
 
     private val lnGamma: Double get() = ln(gamma)
 
-    /** Total number of recorded values (bucketed + zeros). */
+    /**
+     * Total number of recorded values (bucketed + zeros).
+     *
+     * @throws ArithmeticException if one bucket's count, summed across replicas, does not fit in
+     *   a `Long` (#3318). The sum across buckets is not yet checked, tracked by #3343.
+     */
     public val count: Long
         get() = positive.values.sumOf { it.value } +
             negative.values.sumOf { it.value } +
             zeros.value
 
-    /** Number of recorded values whose magnitude was below [minIndexedValue] (including exact zeros). */
+    /**
+     * Number of recorded values whose magnitude was below [minIndexedValue] (including exact zeros).
+     *
+     * @throws ArithmeticException if the count, summed across replicas, does not fit in a `Long` (#3318).
+     */
     public val zeroCount: Long get() = zeros.value
 
     /**
@@ -103,16 +113,26 @@ public class DDSketch private constructor(
      * was clamped into the top bucket. These values are included in [count] and
      * in the top bucket; this counter makes the clamp observable — a non-zero
      * value means the configured range is too narrow for the data.
+     *
+     * @throws ArithmeticException if the count, summed across replicas, does not fit in a `Long` (#3318).
      */
     public val overflowCount: Long get() = overflows.value
 
     /** Number of distinct buckets currently held (positive + negative stores). */
     public val bucketCount: Int get() = positive.size + negative.size
 
-    /** Per-bucket counts for positive values, keyed by bucket index `⌈log_γ v⌉`. */
+    /**
+     * Per-bucket counts for positive values, keyed by bucket index `⌈log_γ v⌉`.
+     *
+     * @throws ArithmeticException if a bucket's count, summed across replicas, does not fit in a `Long` (#3318).
+     */
     public val positiveBuckets: Map<Int, Long> get() = positive.mapValues { (_, c) -> c.value }
 
-    /** Per-bucket counts for negative values, keyed by bucket index `⌈log_γ |v|⌉` (mirrored store). */
+    /**
+     * Per-bucket counts for negative values, keyed by bucket index `⌈log_γ |v|⌉` (mirrored store).
+     *
+     * @throws ArithmeticException if a bucket's count, summed across replicas, does not fit in a `Long` (#3318).
+     */
     public val negativeBuckets: Map<Int, Long> get() = negative.mapValues { (_, c) -> c.value }
 
     /**
@@ -126,6 +146,8 @@ public class DDSketch private constructor(
      * As with [GCounter], two peers must never share a [ReplicaId].
      *
      * @throws IllegalArgumentException if [value] is NaN or infinite.
+     * @throws ArithmeticException if [replica]'s slot in the bucket, or in the overflow counter,
+     *   would pass [Long.MAX_VALUE] (#3318).
      */
     public fun add(replica: ReplicaId, value: Double): Patch<DDSketch> {
         require(value.isFinite()) { "DDSketch values must be finite, was $value" }
@@ -168,6 +190,8 @@ public class DDSketch private constructor(
      * empty. The receiver is unchanged; apply with [piece].
      *
      * @throws IllegalArgumentException if any count, or [zeroCount], is negative.
+     * @throws ArithmeticException if [replica]'s slot in a bucket, or in the zero or overflow
+     *   counter, would pass [Long.MAX_VALUE] (#3318).
      */
     public fun addBuckets(
         replica: ReplicaId,
@@ -223,6 +247,7 @@ public class DDSketch private constructor(
      * `quantile(0.0)` is the minimum estimate, `quantile(1.0)` the maximum.
      *
      * @throws IllegalArgumentException if [q] is outside `[0, 1]` or the sketch is empty.
+     * @throws ArithmeticException if [count] throws, or a bucket's count does not fit in a `Long` (#3318).
      */
     public fun quantile(q: Double): Double {
         require(q in 0.0..1.0) { "quantile must be in [0, 1], was $q" }
@@ -295,9 +320,14 @@ public class DDSketch private constructor(
         return result
     }
 
+    // Exact counts, not [count]/[zeroCount]/[overflowCount]: a sketch whose counts do not fit in a
+    // `Long` must still print.
     override fun toString(): String =
-        "DDSketch(α=$relativeAccuracy, count=$count, buckets=$bucketCount, " +
-            "zeros=$zeroCount, overflows=$overflowCount)"
+        "DDSketch(α=$relativeAccuracy, count=$exactCount, buckets=$bucketCount, " +
+            "zeros=${zeros.exactValue}, overflows=${overflows.exactValue})"
+
+    private val exactCount: Int128
+        get() = (positive.values + negative.values + zeros).fold(Int128.ZERO) { sum, c -> sum + c.exactValue }
 
     // ── Private helpers ───────────────────────────────────────────────────────
 

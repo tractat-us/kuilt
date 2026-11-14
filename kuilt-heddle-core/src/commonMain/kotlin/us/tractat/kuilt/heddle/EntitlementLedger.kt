@@ -2525,11 +2525,12 @@ public enum class CounterFamily {
 }
 
 /**
- * The overflow-checked aggregate of one [GCounter]: `Σ_r counter[r]`, but folded through
- * [checkedAdd] instead of [GCounter.value]'s plain `sum()`.
+ * The overflow-checked aggregate of one [GCounter]: `Σ_r counter[r]`, folded through
+ * [checkedAdd] so an overflow throws this module's own [ArithmeticException].
  *
- * [GCounter.value] is a bare `Long` sum and **wraps** — the zoo's counters are unconstrained
- * by design and their `inc` is unchecked (see [CheckedMath]). Every *honest* state reaching
+ * [GCounter.value] also refuses a sum that does not fit, since #3318, and [GCounter.inc] refuses
+ * an overflowing slot; this fold predates both and keeps the module's own failure. Before #3318
+ * `value` was a bare `Long` sum that **wrapped**, which is what this guards. Every *honest* state reaching
  * this module is mint-bounded, so no sum of real slots can approach [Long.MAX_VALUE]; but an
  * adversarial or corrupted **deserialized** state carries whatever slot values the wire said,
  * and a silent wrap there would hand [EntitlementLedger.validate] and [EntitlementLedger.edge]

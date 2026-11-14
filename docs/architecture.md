@@ -761,7 +761,7 @@ kuilt-core         the contract + InMemoryLoom + MuxSeam + NamedMux + CompositeL
   ├── kuilt-webrtc      WebRTC data-channel fabric (wasmJs)    → kuilt-core
   └── kuilt-mdns        Bonjour discovery → WebSocket session  → kuilt-core + kuilt-websocket
 
-kuilt-crdt           delta-state CRDT zoo — plain value types, depends on NO other kuilt module
+kuilt-crdt           delta-state CRDT zoo — plain value types  → kuilt-math (which depends on NO other kuilt module)
   ├── kuilt-quilter    live replication of a CRDT over a Seam (Quilter)  → kuilt-crdt + kuilt-core
   ├── kuilt-bolt       write-only op archive kept beside a live replica  → kuilt-crdt
   └── kuilt-deal       fair card dealing + fair-random (SRA / commit-reveal)  → kuilt-crdt + kuilt-core

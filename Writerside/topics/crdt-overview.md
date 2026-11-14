@@ -14,7 +14,7 @@ Use replication when you want convergence without a central coordinator. If your
 
 `kuilt-crdt` provides more than twenty types, grouped by what they model.
 
-**`kuilt-crdt` depends on nothing else in kuilt** — not even `kuilt-core`. Add it to any project on its own and replicate over whatever transport you already have. Live replication over a `Seam` (via [`Quilter`](crdt-quilter.md)) is opt-in, not required.
+**`kuilt-crdt` does not depend on `kuilt-core`.** Its one kuilt dependency is the small `kuilt-math`, which depends on nothing. Add it to any project on its own and replicate over whatever transport you already have. Live replication over a `Seam` (via [`Quilter`](crdt-quilter.md)) is opt-in, not required.
 
 ## Pick by what you're building
 
@@ -60,7 +60,7 @@ Use replication when you want convergence without a central coordinator. If your
 
 ## Using the types without kuilt
 
-These types are plain serializable value objects, and **`kuilt-crdt` declares no dependency on `kuilt-core` or any other kuilt module** — you can add it to a project entirely on its own. You do not need a `Seam`, a `Loom`, or any other kuilt module to use them. Apply updates by calling `.piece()` directly; serialize with `kotlinx.serialization`; ship the bytes over any transport you already have.
+These types are plain serializable value objects, and **`kuilt-crdt` declares no dependency on `kuilt-core`**. Its one kuilt dependency is `kuilt-math`, a small module for counting without wrapping that depends on nothing itself, so you can add it to a project entirely on its own. You do not need a `Seam`, a `Loom`, or any other kuilt module to use them. Apply updates by calling `.piece()` directly; serialize with `kotlinx.serialization`; ship the bytes over any transport you already have.
 
 ```kotlin
 var counter = GCounter.ZERO

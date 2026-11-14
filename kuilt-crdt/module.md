@@ -1,7 +1,9 @@
 # Module kuilt-crdt
 
-A dependency-free delta-state CRDT zoo. Provides `Quilted<S>` value types only —
+A delta-state CRDT zoo. Provides `Quilted<S>` value types only —
 no transport dependency. Live replication over a `Seam` lives in `:kuilt-quilter`.
+It depends on kotlinx-serialization and on `:kuilt-math`, which itself depends on
+nothing; the counters use it to refuse an overflow instead of wrapping.
 
 ## The zoo
 

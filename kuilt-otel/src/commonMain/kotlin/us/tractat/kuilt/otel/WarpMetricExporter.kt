@@ -21,6 +21,7 @@ import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.HyperLogLog
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.store.StoreKey
@@ -70,6 +71,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * A [MetricExportResult.Failure] means "not yet durable", not "not counted": the in-memory
  * CRDT keeps the change, and the next successful write of that kind persists it. Retrying a
  * failed [incrementSum] therefore adds it twice.
+ *
+ * The one Failure that means "not counted" is a refusal, before anything is applied, of a sum
+ * increment that would carry this replica's count past [Long.MAX_VALUE]: its cause is a
+ * [MetricSumOverflowException] (#3318), and nothing was applied or written.
  *
  * ## Batches
  *
@@ -197,6 +202,9 @@ public class WarpMetricExporter(
     private val gauges: LinkedHashMap<MetricKey, LWWRegister<Double>> = LinkedHashMap()
     private val cardinalities: LinkedHashMap<MetricKey, HyperLogLog> = LinkedHashMap()
     private val histograms: LinkedHashMap<MetricKey, DDSketch> = LinkedHashMap()
+
+    /** The sum series a [record] has already been refused for; read only inside [lock] (#3318). */
+    private val refusedSums = FirstSightings()
 
     /**
      * Whether a durable-write outage is currently **open** — i.e. a refused store write has already
@@ -496,7 +504,8 @@ public class WarpMetricExporter(
      *   [MetricExportResult.Failure] (in the fixed kind order sums, double sums, gauges,
      *   cardinalities, histograms) is returned. Stopping at the first refusal would leave the later
      *   kinds off disk, which applying the updates one by one never does.
-     * - A [MetricExportResult.Failure] means "not yet durable", not "not counted": every update in
+     * - A [MetricExportResult.Failure] from a write means "not yet durable", not "not counted"
+     *   (a refused batch, below, is the one Failure that means "not counted"): every update in
      *   the batch stays in memory, and the next successful write of a refused kind persists it. So
      *   the batch is **not atomic** on disk — a kind the store took is durable even when another
      *   kind was refused — and retrying a failed batch counts its increments twice, exactly as
@@ -514,26 +523,60 @@ public class WarpMetricExporter(
      * already gone. A kind the batch never touched is not rewritten, as before.
      *
      * An empty [updates] is [MetricExportResult.Success] and touches neither memory nor the store.
-     * Each [MetricUpdate] validates its own arguments at construction, and what only this exporter
-     * can judge — a [MetricUpdate.AddExponentialHistogram] coarser than [histogramScale] — is
-     * checked for **every** update before **any** is applied. So a batch cannot fail half-way
-     * through being applied: it applies whole, or throws with nothing changed in memory or on disk.
+     * Each [MetricUpdate] validates its own arguments at construction. Before **any** update is
+     * applied, the batch is checked twice more, in this order:
+     *
+     * 1. What only this exporter's configuration can judge — a [MetricUpdate.AddExponentialHistogram]
+     *    coarser than [histogramScale], or one whose count lists the caller has since made negative —
+     *    is checked for **every** update and **thrown** as [IllegalArgumentException], since it is
+     *    a caller's mistake. Nothing in memory or on disk changes.
+     * 2. Whether a [MetricUpdate.IncrementSum] would carry this replica's count for its series past
+     *    [Long.MAX_VALUE] (#3318) is checked for the whole batch, counting its earlier increments
+     *    to the same series, against the counts as they stand. Such a batch is **refused**: it
+     *    returns a [MetricExportResult.Failure] whose cause is a [MetricSumOverflowException], and
+     *    nothing from it is applied or written. The refusal is logged at WARN the first time a
+     *    series causes one and at DEBUG after that.
+     *
+     * So neither a bad histogram scale nor a sum overflow leaves a batch applied half-way, and the
+     * one-by-one equivalence above holds for every batch this accepts.
+     *
+     * A histogram update can still throw part-way, with [ArithmeticException], leaving the earlier
+     * updates applied in memory and unwritten. A [MetricUpdate.RecordHistogram] does when its
+     * replica slot in its bucket is already at [Long.MAX_VALUE] ([DDSketch.add]); this replica's own
+     * adds raise that slot one value at a time, so only a sketch merged in under this replica's id
+     * can put it there. A [MetricUpdate.AddExponentialHistogram] does when its counts would carry
+     * this replica's slot in a bucket, or in the sketch's zero or overflow counter, past
+     * [Long.MAX_VALUE] ([DDSketch.addBuckets]); a weighted count can do that on its own.
      *
      * @throws IllegalArgumentException if an update holds an exponential histogram whose scale is
      *   below [histogramScale]; nothing in the batch is applied.
+     * @throws ArithmeticException if a histogram update would carry this replica's slot past
+     *   [Long.MAX_VALUE], as above; the updates before it stay applied in memory and unwritten.
      * @sample us.tractat.kuilt.otel.sampleWarpMetricExporterBatch
      */
     public suspend fun record(updates: List<MetricUpdate>): MetricExportResult {
         if (updates.isEmpty()) return MetricExportResult.Success
         updates.forEach(::validate)
         return writeMutex.withLock {
+            var overflow: MetricSumOverflowException? = null
+            var firstRefusal = false
             val writes = lock.withLock {
+                overflow = firstSumOverflowLocked(updates)?.also { refused ->
+                    firstRefusal = refusedSums.firstSighting(refused.key, sums.keys)
+                }
+                if (overflow != null) return@withLock emptyList()
                 // The last series each kind's updates named — only for the failure log line.
                 val touched = LinkedHashMap<StoredKind, MetricKey>()
                 updates.forEach { update -> touched[applyLocked(update)] = update.key }
                 StoredKind.entries.mapNotNull { kind ->
                     touched[kind]?.let { lastKey -> PendingWrite(kind, encode(kind), lastKey) }
                 }
+            }
+            overflow?.let { refused ->
+                // WARN once per series: a saturated delta counter is refused again on every export.
+                val line = { "WarpMetricExporter: batch of ${updates.size} refused, nothing applied: ${refused.message}" }
+                if (firstRefusal) logger.warn(line) else logger.debug(line)
+                return@withLock MetricExportResult.Failure(refused)
             }
             var firstFailure: MetricExportResult.Failure? = null
             writes.forEach { write ->
@@ -581,6 +624,27 @@ public class WarpMetricExporter(
                 }
             }
         }
+    }
+
+    /**
+     * The refusal for the first [MetricUpdate.IncrementSum] in [updates] that would carry this
+     * replica's count for its series past [Long.MAX_VALUE], counting the batch's own earlier
+     * increments to the same series, or `null` when every one fits. Called inside [lock], before
+     * anything is applied.
+     *
+     * Checked against the counts as they stand before the batch. An eviction the batch triggers can
+     * only remove a series, never raise a count, so this never accepts a batch [GCounter.inc] would
+     * refuse part-way; at worst it refuses one that would just fit after such an eviction.
+     */
+    private fun firstSumOverflowLocked(updates: List<MetricUpdate>): MetricSumOverflowException? {
+        val running = HashMap<MetricKey, Long>()
+        for (update in updates) {
+            if (update !is MetricUpdate.IncrementSum) continue
+            val count = running[update.key] ?: sums[update.key]?.count(replica) ?: 0L
+            running[update.key] = count.plusOrNull(update.by)
+                ?: return MetricSumOverflowException(update.key, count, update.by)
+        }
+        return null
     }
 
     /** Apply one update to its map, evicting first if it opens a new series. Called inside [lock]. */
@@ -671,6 +735,10 @@ public class WarpMetricExporter(
      * snapshot more than once is always safe — GCounter's element-wise max join is
      * idempotent. Sequential calls to [incrementSum] each *do* add to the total, which
      * is the correct cumulative semantics.
+     *
+     * Returns a [MetricExportResult.Failure] whose cause is a [MetricSumOverflowException], having
+     * applied and written nothing, when this replica's count for [key] cannot take [by] more
+     * without passing [Long.MAX_VALUE].
      */
     public suspend fun incrementSum(key: MetricKey, by: Long = 1L): MetricExportResult =
         record(listOf(MetricUpdate.IncrementSum(key, by)))
@@ -691,7 +759,12 @@ public class WarpMetricExporter(
             persistSums(encoded, key)
         }
 
-    /** Read the current sum value for [key], or 0 if the key has never been incremented. */
+    /**
+     * Read the current sum value for [key], or 0 if the key has never been incremented.
+     *
+     * @throws ArithmeticException if the replicas' counts for [key] add up past [Long.MAX_VALUE];
+     *   [sumSnapshot] and [GCounter.valueOrNull] read it without throwing.
+     */
     public fun sumValue(key: MetricKey): Long = lock.withLock {
         sums[key]?.value ?: 0L
     }
@@ -1044,6 +1117,34 @@ public sealed interface MetricExportResult {
     /** The metric was durably written to the local store. */
     public data object Success : MetricExportResult
 
-    /** The durable write failed; whether the metric was persisted is indeterminate. */
+    /**
+     * The durable write failed; whether the metric was persisted is indeterminate.
+     *
+     * The one exception is a [cause] that is a [MetricSumOverflowException]: then the call was
+     * refused before anything was applied, so nothing was counted and nothing written, and
+     * retrying it is refused the same way.
+     */
     public data class Failure(public val cause: Throwable) : MetricExportResult
 }
+
+/**
+ * Why a [WarpMetricExporter.record] or [WarpMetricExporter.incrementSum] was refused: an
+ * increment would carry this replica's count for the sum series [key] past [Long.MAX_VALUE]
+ * (#3318). A wrapped count would be negative, and the counter's merge, a max, would drop it, so
+ * the increment would be lost everywhere with nothing to say so. It arrives as the cause of a
+ * [MetricExportResult.Failure], and the batch that carried it applied nothing. Only the exporter
+ * constructs one; a consumer only receives it.
+ *
+ * @property key the sum series that cannot take the increment.
+ * @property count this replica's count for [key] before the refused increment, including the
+ *   batch's own earlier increments to it.
+ * @property by the refused increment.
+ */
+public class MetricSumOverflowException internal constructor(
+    public val key: MetricKey,
+    public val count: Long,
+    public val by: Long,
+) : ArithmeticException(
+    "sum series ${key.name} ${key.attributes}: this replica's count $count cannot take $by more " +
+        "without passing Long.MAX_VALUE",
+)

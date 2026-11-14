@@ -1,11 +1,13 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.json.Json
+import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class BoundedCounterTest {
 
@@ -172,5 +174,23 @@ class BoundedCounterTest {
         assertEquals(2L, merged.quota(c))
         assertEquals(10L, merged.totalBudget)       // 10 initial, 0 spent — transfers conserved
         assertEquals(0L, merged.totalSpent)         // no consumption yet
+    }
+
+    // ── Overflow (#3318) ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Quotas that add up to one past [Long.MAX_VALUE]: the budget does not fit and is refused,
+     * the counter still prints, and once one unit is spent the budget is answered exactly, so
+     * it is formed from the exact totals rather than by subtracting two checked ones.
+     */
+    @Test
+    fun aBudgetPastLongMaxValueIsRefusedYetPrintsAndIsExactOnceItFits() {
+        val bc = BoundedCounter.init(mapOf(a to Long.MAX_VALUE, b to 1L))
+        val spentOne = apply(bc, assertNotNull(bc.trySpend(b, 1L)))
+        assertAll(
+            { assertFailsWith<ArithmeticException> { bc.totalBudget } },
+            { assertTrue("budget=9223372036854775808" in bc.toString(), bc.toString()) },
+            { assertEquals(Long.MAX_VALUE, spentOne.totalBudget) },
+        )
     }
 }

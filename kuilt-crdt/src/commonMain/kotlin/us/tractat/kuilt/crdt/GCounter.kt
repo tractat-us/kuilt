@@ -1,6 +1,8 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.plusOrNull
 
 /**
  * A grow-only counter: a per-replica map of counts that only ever increase.
@@ -23,8 +25,32 @@ public class GCounter private constructor(
     private val counts: Map<ReplicaId, Long>,
 ) : Quilted<GCounter> {
 
-    /** The counter's value: the sum of all per-replica counts. */
-    public val value: Long get() = counts.values.sum()
+    /**
+     * The counter's value: the sum of all per-replica counts.
+     *
+     * The sum is formed exactly, so it is right whenever it fits in a `Long`, and refused when it
+     * does not. [inc] keeps every slot at or below [Long.MAX_VALUE], but that cannot protect the
+     * sum: slots are only added together here, after a join, and two replicas can each hold 2⁶²
+     * without either one ever making an increment it could have refused.
+     *
+     * @throws ArithmeticException if the sum of the counts does not fit in a `Long`. [valueOrNull]
+     *   answers `null` instead.
+     */
+    public val value: Long
+        get() = valueOrNull()
+            ?: throw ArithmeticException("GCounter value $exactValue does not fit in a Long")
+
+    /**
+     * [value], or `null` when the sum of the counts does not fit in a `Long`.
+     *
+     * For a caller that has to carry on past one counter it cannot read, such as an exporter
+     * draining many series: it skips that one and reports it, rather than catching an exception.
+     */
+    public fun valueOrNull(): Long? = exactValue.toLongOrNull()
+
+    /** The sum of all per-replica counts, exactly: fewer than 2⁶³ `Long` slots cannot leave 128 bits. */
+    internal val exactValue: Int128
+        get() = counts.values.fold(Int128.ZERO) { sum, count -> sum + count }
 
     /** This replica's current count (0 if it has never incremented). */
     public fun count(replica: ReplicaId): Long = counts[replica] ?: 0L
@@ -40,10 +66,19 @@ public class GCounter private constructor(
     /**
      * Increment [replica]'s own slot by [by] (must be positive). Returns the
      * delta to merge in with [piece]; the receiver is unchanged.
+     *
+     * @throws IllegalArgumentException if [by] is not positive.
+     * @throws ArithmeticException if the slot would pass [Long.MAX_VALUE]. A wrapped count would be
+     *   negative, and [piece], a max, would discard it, so the increment would be lost on every
+     *   replica with nothing to say so.
      */
     public fun inc(replica: ReplicaId, by: Long = 1L): Patch<GCounter> {
         require(by >= 1L) { "GCounter increment must be positive, was $by" }
-        val newCount = (counts[replica] ?: 0L) + by
+        val current = count(replica)
+        val newCount = current.plusOrNull(by)
+            ?: throw ArithmeticException(
+                "GCounter slot $replica at $current cannot take $by more without passing Long.MAX_VALUE",
+            )
         return Patch(GCounter(mapOf(replica to newCount)))
     }
 

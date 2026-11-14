@@ -1,6 +1,7 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
+import us.tractat.kuilt.math.Int128
 
 /**
  * A positive/negative counter: two [GCounter] halves composed in a product
@@ -24,10 +25,13 @@ import kotlinx.serialization.Serializable
  * goes negative. This matches standard PNCounter semantics. If you need a
  * floor at zero, use [BoundedCounter] instead.
  *
- * **No wraparound risk:** both halves count upward monotonically; [value] is a
- * subtraction of two non-negative `Long` sums. Overflow is theoretically
- * possible at `Long.MAX_VALUE` increments per replica, which is not a practical
- * concern.
+ * **Overflow is refused, never wrapped:** each replica's slot in either half
+ * holds at most [Long.MAX_VALUE], and [increment] or [decrement] throws
+ * [ArithmeticException] rather than carry one past it. A half's total is a sum
+ * over every replica's slot, so after a join it can pass `Long.MAX_VALUE` even
+ * though no single replica's change did; [totalIncrement] and [totalDecrement]
+ * then throw. [value] is formed exactly from both halves and throws only when
+ * the net itself does not fit.
  *
  * @sample us.tractat.kuilt.crdt.samplePNCounter
  */
@@ -37,18 +41,40 @@ public class PNCounter private constructor(
     private val dec: GCounter,
 ) : Quilted<PNCounter> {
 
-    /** The counter's net value: total incremented across all replicas minus total decremented. */
-    public val value: Long get() = inc.value - dec.value
+    /**
+     * The counter's net value: total incremented across all replicas minus total decremented.
+     *
+     * Formed exactly from both halves, so it is answered whenever the net fits in a `Long`, even
+     * when [totalIncrement] or [totalDecrement] on its own does not.
+     *
+     * @throws ArithmeticException if the net does not fit in a `Long`.
+     */
+    public val value: Long
+        get() = exactNet.toLongOrNull()
+            ?: throw ArithmeticException("PNCounter value $exactNet does not fit in a Long")
 
-    /** Total ever incremented across all replicas (monotonically non-decreasing). */
+    /**
+     * Total ever incremented across all replicas (monotonically non-decreasing).
+     *
+     * @throws ArithmeticException if the total does not fit in a `Long`.
+     */
     public val totalIncrement: Long get() = inc.value
 
-    /** Total ever decremented across all replicas (monotonically non-decreasing). */
+    /**
+     * Total ever decremented across all replicas (monotonically non-decreasing).
+     *
+     * @throws ArithmeticException if the total does not fit in a `Long`.
+     */
     public val totalDecrement: Long get() = dec.value
+
+    private val exactNet: Int128 get() = inc.exactValue - dec.exactValue
 
     /**
      * Increment [replica]'s own slot by [by] (must be positive). Returns the
      * delta to absorb with [piece]; the receiver is unchanged.
+     *
+     * @throws IllegalArgumentException if [by] is not positive.
+     * @throws ArithmeticException if [replica]'s increment slot would pass [Long.MAX_VALUE].
      */
     public fun increment(replica: ReplicaId, by: Long = 1L): Patch<PNCounter> {
         require(by >= 1L) { "PNCounter increment must be positive, was $by" }
@@ -61,6 +87,9 @@ public class PNCounter private constructor(
      *
      * [value] may go negative — there is no floor. For a floor-at-zero bounded
      * counter, use [BoundedCounter].
+     *
+     * @throws IllegalArgumentException if [by] is not positive.
+     * @throws ArithmeticException if [replica]'s decrement slot would pass [Long.MAX_VALUE].
      */
     public fun decrement(replica: ReplicaId, by: Long = 1L): Patch<PNCounter> {
         require(by >= 1L) { "PNCounter decrement must be positive, was $by" }
@@ -79,7 +108,8 @@ public class PNCounter private constructor(
 
     override fun hashCode(): Int = 31 * inc.hashCode() + dec.hashCode()
 
-    override fun toString(): String = "PNCounter(value=$value, inc=$inc, dec=$dec)"
+    // The exact net, not [value]: a counter whose value does not fit must still print.
+    override fun toString(): String = "PNCounter(value=$exactNet, inc=$inc, dec=$dec)"
 
     public companion object {
         /** The zero counter: no increments, no decrements. */

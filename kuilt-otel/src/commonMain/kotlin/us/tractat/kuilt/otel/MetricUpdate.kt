@@ -11,9 +11,11 @@ package us.tractat.kuilt.otel
  *
  * Each variant rejects at construction the arguments its CRDT would reject when applied. What a
  * variant cannot know until it meets an exporter — [AddExponentialHistogram]'s scale against the
- * exporter's [WarpMetricExporter.histogramScale] — [WarpMetricExporter.record] checks for every
- * update before it applies any. Either way nothing in a batch can throw half-way through: a batch
- * is applied whole, or refused whole with nothing applied.
+ * exporter's [WarpMetricExporter.histogramScale], and whether an [IncrementSum] would carry the
+ * exporter's count past [Long.MAX_VALUE] — [WarpMetricExporter.record] checks for every update
+ * before it applies any, so neither leaves a batch applied half-way. The one-by-one equivalence
+ * above holds for every batch `record` accepts. A histogram update whose counts would overflow can
+ * still throw part-way; [WarpMetricExporter.record] says when.
  *
  * Remote snapshot merges (`mergeSum`, `mergeGauge`, …) are not updates — they are joins of another
  * replica's state, and stay single calls.

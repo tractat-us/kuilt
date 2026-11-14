@@ -423,6 +423,12 @@ public final class us/tractat/kuilt/otel/MetricPoint$Sum : us/tractat/kuilt/otel
 	public fun valueHash ()J
 }
 
+public final class us/tractat/kuilt/otel/MetricSumOverflowException : java/lang/ArithmeticException {
+	public final fun getBy ()J
+	public final fun getCount ()J
+	public final fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+}
+
 public abstract interface class us/tractat/kuilt/otel/MetricUpdate {
 	public abstract fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
 }

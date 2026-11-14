@@ -1,9 +1,15 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
 package us.tractat.kuilt.otel
 
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.cbor.Cbor
+import us.tractat.kuilt.crdt.DDSketch
+import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.test.assertAll
@@ -297,6 +303,80 @@ class WarpOtlpBridgeTest {
         assertEquals(1, edge.sentMetrics.filterIsInstance<MetricPoint.ExponentialHistogram>().size)
     }
 
+    /**
+     * A sum series whose replicas' slots add up past [Long.MAX_VALUE] (#3318): this replica's
+     * slot is near the ceiling, and a merged slot from another replica carries it over. No single
+     * increment overflowed, so nothing refused it on the way in. The series cannot be sent as an
+     * OTLP integer sum; every other series still drains, and the drain still succeeds.
+     */
+    @Test
+    fun anOverflowingSumSeriesIsSkippedAndTheOtherSeriesStillDrain() = runTest {
+        val t = telemetry()
+        val big = MetricKey("big", MetricKind.SUM)
+        t.metrics.incrementSum(big, by = Long.MAX_VALUE - 1L)
+        t.metrics.mergeSum(big, GCounter.of(ReplicaId("other") to 2L))
+        t.metrics.incrementSum(MetricKey("s", MetricKind.SUM), by = 3L)
+        t.metrics.setGauge(MetricKey("g", MetricKind.GAUGE), value = 0.5, timestamp = 1L)
+        t.metrics.recordHistogram(MetricKey("h", MetricKind.EXPONENTIAL_HISTOGRAM), value = 12.5)
+        val edge = FakeEdge()
+
+        val result = bridge(t).drain(edge)
+
+        assertAll(
+            { assertEquals(null, t.metrics.sumSnapshot(big).valueOrNull(), "the rig: big really overflows") },
+            { assertIs<DrainResult.Success>(result) },
+            { assertEquals(setOf("s", "g", "h"), edge.sentMetrics.map { it.key.name }.toSet()) },
+        )
+    }
+
+    /**
+     * A histogram one of whose buckets counts past [Long.MAX_VALUE] once its replicas' slots are
+     * added (#3318): this replica's slot near the ceiling, another replica's merged beside it. The
+     * series cannot be rendered as an OTLP point and is skipped; every other series still drains,
+     * and the drain still succeeds.
+     */
+    @Test
+    fun aHistogramWhoseBucketOverflowsAcrossReplicasIsSkippedAndTheOtherSeriesStillDrain() = runTest {
+        val t = telemetry()
+        val h = MetricKey("h", MetricKind.EXPONENTIAL_HISTOGRAM)
+        t.metrics.mergeHistogram(h, oneBucketSketch(ReplicaId("device") to Long.MAX_VALUE - 1L))
+        t.metrics.mergeHistogram(h, oneBucketSketch(ReplicaId("other") to 2L))
+        t.metrics.incrementSum(MetricKey("s", MetricKind.SUM), by = 3L)
+        t.metrics.setGauge(MetricKey("g", MetricKind.GAUGE), value = 0.5, timestamp = 1L)
+        val edge = FakeEdge()
+
+        val result = bridge(t).drain(edge)
+
+        assertAll(
+            {
+                assertFailsWith<ArithmeticException>("the rig: the merged bucket really overflows") {
+                    t.metrics.histogramSnapshot(h).positiveBuckets
+                }
+            },
+            { assertIs<DrainResult.Success>(result) },
+            { assertEquals(setOf("s", "g"), edge.sentMetrics.map { it.key.name }.toSet()) },
+        )
+    }
+
+    /**
+     * A sketch in the exporter's histogram configuration whose one bucket holds [slot]. A replica
+     * can only reach a count near [Long.MAX_VALUE] one `add` at a time, so it is built through the
+     * sketch's wire form instead, field for field.
+     */
+    private fun oneBucketSketch(slot: Pair<ReplicaId, Long>): DDSketch {
+        val prototype = DDSketch.empty(relativeAccuracy = alphaForOtlpScale(DEFAULT_OTLP_HISTOGRAM_SCALE))
+        val wire = SketchWire(
+            relativeAccuracy = prototype.relativeAccuracy,
+            minIndexedValue = prototype.minIndexedValue,
+            maxIndexedValue = prototype.maxIndexedValue,
+            positive = mapOf(1 to GCounter.of(slot)),
+            negative = emptyMap(),
+            zeros = GCounter.ZERO,
+            overflows = GCounter.ZERO,
+        )
+        return Cbor.decodeFromByteArray(DDSketch.serializer(), Cbor.encodeToByteArray(SketchWire.serializer(), wire))
+    }
+
     @Test
     fun advancedHistogramReSendsExactlyOnce() = runTest {
         val t = telemetry()
@@ -314,3 +394,15 @@ class WarpOtlpBridgeTest {
         assertEquals(listOf(1L, 2L), sent.map { it.count })
     }
 }
+
+/** [DDSketch]'s wire form, spelled out. Field names and order are the wire format. */
+@Serializable
+private class SketchWire(
+    val relativeAccuracy: Double,
+    val minIndexedValue: Double,
+    val maxIndexedValue: Double,
+    val positive: Map<Int, GCounter>,
+    val negative: Map<Int, GCounter>,
+    val zeros: GCounter,
+    val overflows: GCounter,
+)

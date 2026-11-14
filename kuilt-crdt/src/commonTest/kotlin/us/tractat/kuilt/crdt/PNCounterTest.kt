@@ -1,10 +1,12 @@
 package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.json.Json
+import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class PNCounterTest {
 
@@ -88,10 +90,10 @@ class PNCounterTest {
      * decrements across three replicas: [PNCounter.value] is the total incremented minus the
      * total decremented, with no floor and no clamping anywhere in between.
      *
-     * Re-homed from the deleted JVM-only jqwik surface (#2101) so it runs on every target. It
-     * holds by construction today — `value` *is* `inc.value - dec.value` — which is exactly what
-     * makes it worth pinning: the day either side grows a cache, a compaction, or a reset the
-     * two definitions can part company silently.
+     * Re-homed from the deleted JVM-only jqwik surface (#2101) so it runs on every target. The
+     * two are computed separately — `value` from the exact 128-bit net (#3318), the totals each
+     * from their own half — which is exactly what makes it worth pinning: the day either side
+     * grows a cache, a compaction, or a reset the two definitions can part company silently.
      */
     @Test
     fun valueEqualsIncMinusDec() {
@@ -114,7 +116,66 @@ class PNCounterTest {
         }
     }
 
+    // ── Overflow (#3318) ─────────────────────────────────────────────────────────────────────
+
+    private fun PNCounter.inc(replica: ReplicaId, by: Long) = piece(increment(replica, by))
+
+    private fun PNCounter.dec(replica: ReplicaId, by: Long) = piece(decrement(replica, by))
+
+    @Test
+    fun incrementRefusesAnIncrementThatWouldOverflowItsSlot() {
+        val pn = PNCounter.ZERO.inc(a, Long.MAX_VALUE)
+        assertFailsWith<ArithmeticException> { pn.increment(a, 1L) }
+    }
+
+    @Test
+    fun decrementRefusesADecrementThatWouldOverflowItsSlot() {
+        val pn = PNCounter.ZERO.dec(a, Long.MAX_VALUE)
+        assertFailsWith<ArithmeticException> { pn.decrement(a, 1L) }
+    }
+
+    @Test
+    fun valueRefusesANetThatDoesNotFitInALong() {
+        val pn = PNCounter.ZERO.inc(a, QUARTER).inc(b, QUARTER)
+        assertAll(
+            { assertFailsWith<ArithmeticException> { pn.value } },
+            { assertFailsWith<ArithmeticException> { pn.totalIncrement } },
+        )
+    }
+
+    /**
+     * The net is computed exactly, so it is answered whenever it fits, even when one half's total
+     * does not. Subtracting two checked totals would refuse here; the first assertion is what
+     * proves the counter really is in that state.
+     */
+    @Test
+    fun valueIsAnsweredWhenTheNetFitsThoughTheIncrementTotalDoesNot() {
+        val pn = PNCounter.ZERO.inc(a, QUARTER).inc(b, QUARTER).dec(a, 1L)
+        assertAll(
+            { assertFailsWith<ArithmeticException> { pn.totalIncrement } },
+            { assertEquals(Long.MAX_VALUE, pn.value) },
+        )
+    }
+
+    @Test
+    fun valueReachesExactlyLongMinValueAndRefusesOnePast() {
+        val atMin = PNCounter.ZERO.dec(a, QUARTER).dec(b, QUARTER)
+        assertAll(
+            { assertEquals(Long.MIN_VALUE, atMin.value) },
+            { assertFailsWith<ArithmeticException> { atMin.dec(b, 1L).value } },
+        )
+    }
+
+    /** A counter whose value does not fit still prints, so it can appear in a log or a failure. */
+    @Test
+    fun toStringNamesTheExactNetWhenItDoesNotFitInALong() {
+        val pn = PNCounter.ZERO.inc(a, QUARTER).inc(b, QUARTER)
+        assertTrue("value=9223372036854775808" in pn.toString(), pn.toString())
+    }
+
     private companion object {
+        /** 2⁶²: two slots of it sum to one past [Long.MAX_VALUE]. */
+        const val QUARTER = 1L shl 62
         const val VALUE_INVARIANT_SEEDS = 64
         const val MAX_OPS = 6
         const val MAX_DELTA = 31
