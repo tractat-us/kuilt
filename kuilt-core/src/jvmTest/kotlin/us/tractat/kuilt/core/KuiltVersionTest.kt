@@ -24,6 +24,7 @@ class KuiltVersionTest {
     @Test
     fun `the constant is the version the published POM declares`() {
         val pomPath = assertNotNull(
+            // ALLOW-selfSkipGate: the build's handover of the POM path; a missing one fails, never skips
             System.getProperty("kuilt.publishedPom"),
             "kuilt.publishedPom is unset — the jvmTest wiring in kuilt-core/build.gradle.kts is missing",
         )
