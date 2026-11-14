@@ -893,6 +893,12 @@ ceiling, a refusal met after grants answers `Delegated` and keeps the rounds
 already landed, and the next call answers the refusal. The check is the whole
 parent's: it refuses even a pick whose own candidates would fit. The node logs
 one warning, naming the active edges, each time a parent enters that state.
+Either refusal changes nothing, as `LocalHeddle`'s does: the seats, the wake
+clamps and the first pick are worked out on a copy of the allocator and land as
+one patch. A first pick that finds nothing to grant writes nothing either, and
+keeps only what it observed: the wake clamps and who was waiting. So an idle
+`schedule` writes nothing to the replicated ledger, and a newborn is seated by
+the call that first grants at its parent.
 
 Why a grid at all, against the exact `Rational` this section used to prescribe:
 a joiner stored the front, a weighted mean whose denominator carries `Σw` of the
@@ -912,7 +918,8 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
 
   The seat is **published, not carried** (issue #1752). It is not in the record;
   it is a `Gauge` in the replicated ledger, written by the scheduler's seat bump
-  on every peer that still sees the edge unseated, and the gauge's componentwise
+  on every peer that grants at the parent while it still sees the edge unseated
+  (a call with nothing to grant writes no seat, #3353), and the gauge's componentwise
   join resolves those readings by `max` on the position. That matters because `V` is
   a *local* reading — demand ages out by local receive time and wake clamps are not
   replicated — so a proposer that froze its own reading into the record made one

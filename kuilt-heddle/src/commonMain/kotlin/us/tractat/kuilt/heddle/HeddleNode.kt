@@ -242,7 +242,8 @@ public class HeddleNode internal constructor(
      *
      * **The record carries no seat** (issue #1752), so nothing about *when* it is prepared decides
      * where the child starts competing: [schedule]'s seat bump writes the [Gauge] at the front the
-     * edge is actually joining, on every peer that still sees it unseated.
+     * edge is actually joining, on every peer that grants at the parent while it still sees it
+     * unseated.
      *
      * **A weight a pick cannot do arithmetic on is refused** (#3353): `false` when [record]'s weight,
      * alone under its parent, would put a product a pick forms out of `Long`, as
@@ -362,8 +363,10 @@ public class HeddleNode internal constructor(
      * down under the parent over its lifetime, so it is bounded. Past the bound it saturates instead
      * of throwing (#3313). A pick that would have to order a saturated position is refused, and
      * the rounds stop at that parent: a call that granted first answers [ScheduleOutcome.Delegated],
-     * and every call after it [ScheduleOutcome.PositionCeiling]. This node has no rebase to bring the
-     * positions back down yet (#3353). At [LocalHeddle.MAX_RESERVATION]-size grants and a weight of
+     * and every call after it [ScheduleOutcome.PositionCeiling]. A refused call writes nothing and
+     * leaves the wake clamps as they were, and a call with nothing to grant writes nothing either
+     * ([FairShareAllocator.schedule]). This node has no rebase to bring the positions back down
+     * yet (#3353). At [LocalHeddle.MAX_RESERVATION]-size grants and a weight of
      * `3/7`, the bound is about 9,000 grants, some 2⁵⁷ units of service.
      *
      * @return [ScheduleOutcome.Delegated] with the count of grants applied this call,
@@ -404,7 +407,7 @@ public class HeddleNode internal constructor(
      * reading of a possibly-partial view into every peer's permanent fact — a `null` was then
      * genuinely dangerous, because "no children" and "this peer has not merged the children yet"
      * wear one face and only the first licenses seating at the origin (#1713). Seating is now
-     * [schedule]'s seat bump into the replicated [Gauge], written by every peer that
+     * [schedule]'s seat bump into the replicated [Gauge], written by every peer that grants while it
      * still sees an edge unseated and resolved by `max`, so a low reading is absorbed rather than
      * frozen and there is nothing here to get irrecoverably wrong.
      *

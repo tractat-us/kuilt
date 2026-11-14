@@ -858,42 +858,41 @@ class HeddleControlPlaneTest {
         // origin-read joiner would claim, so the last phase below can tell the two reads apart.
         assertIs<ControlOutcome.Applied>(governed.mint(self, 200L))
 
-        // The first generation. Scheduled with nothing advertised, so the seat bump runs but no
-        // grant does — the stored gauge is the seat itself, not a later `delegate` checkpoint.
+        // The first generation. Scheduled with nothing advertised, the call has nothing to grant,
+        // so it writes nothing: a seat lands only with the grant it was taken for (#3353).
         val first = AttachmentId("first")
         assertNull(governed.parentVirtualTime(root), "a parent with no active children has no front")
         assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(first, root, GroupId("leaf"), Weight.ONE)))
         assertIs<ControlOutcome.Applied>(governed.activate(first))
-        governed.schedule(root)
-        assertEquals(
-            Gauge(Rational.ZERO, folded = 0L),
-            governed.ledger.value.gauge(first),
-            "the first generation is seated at the parent's origin — there was no front to join",
-        )
+        assertEquals(ScheduleOutcome.NothingToDelegate, governed.schedule(root), "nothing is advertised yet")
+        assertNull(governed.ledger.value.gauge(first), "an idle schedule writes no seat")
 
-        // Now let it render service, so the parent's front advances past the origin.
+        // Every `delegate` checkpoint writes the gross position at the new issuance with that
+        // issuance as its fold, so `ticks − folded · 16` reads back the seat, in ticks, whatever has
+        // been granted since. The positions here stay far below 2⁶³, so the low word is the whole.
+        fun seatOf(edge: AttachmentId): Long {
+            val gauge = assertNotNull(governed.ledger.value.gauge(edge), "${edge.value} is seated")
+            check(gauge.ticksHigh == 0L) { "the rig: a position this small has no high word" }
+            return gauge.ticksLow - gauge.folded * 16L
+        }
+
+        // Now let it render service, so the parent's front advances past the origin. Its first grant
+        // seats it, at the parent's origin: there was no front to join.
         governed.advertise(first, Demand(targetOutstanding = 100L, maximumUsefulGrant = 100L))
         governed.schedule(root)
         assertEquals(100L, governed.ledger.value.edge(first)?.issued, "first runs to its target")
+        assertEquals(0L, seatOf(first), "the first generation is seated at the parent's origin")
         val front = assertNotNull(governed.parentVirtualTime(root))
         assertTrue(front > Rational.ZERO, "the parent has rendered service, so its front has advanced, was $front")
 
-        // A second generation joins. It is unseated until the scheduler bumps it, and the bump takes
-        // the front with the joiner itself excluded — which, `first` being the only other active
-        // edge, is exactly `first`'s virtual service at that moment. Again scheduled with nothing
-        // newly advertised for it, so the gauge read back is the seat and not a checkpoint.
+        // A second generation joins. It is unseated until a grant at the parent seats it, and the
+        // seat takes the front with the joiner itself excluded — which, `first` being the only other
+        // active edge, is exactly `first`'s virtual service at that moment.
         val second = AttachmentId("second")
         assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(second, root, GroupId("leaf2"), Weight.ONE)))
         assertIs<ControlOutcome.Applied>(governed.activate(second))
         assertNull(governed.ledger.value.gauge(second), "a freshly activated edge carries no seat yet")
-
         val joiningFront = assertNotNull(governed.ledger.value.virtualService(first))
-        governed.schedule(root)
-        assertEquals(
-            Gauge(Rational.ZERO, folded = 0L, ticksLow = onTheUnitGrid(joiningFront)),
-            governed.ledger.value.gauge(second),
-            "a joiner is seated at the front it is joining, exactly — never at 0, and never at a rounded ⌈V⌉",
-        )
 
         // And the policy reads that seat. Both siblings now compete at equal weight for the last
         // 100 units. Seated level they interleave and `first` takes about half; a read path blind
@@ -903,6 +902,11 @@ class HeddleControlPlaneTest {
         governed.advertise(first, hungrier)
         governed.advertise(second, hungrier)
         governed.schedule(root)
+        assertEquals(
+            onTheUnitGrid(joiningFront),
+            seatOf(second),
+            "a joiner is seated at the front it is joining, exactly — never at 0, and never at a rounded ⌈V⌉",
+        )
         assertTrue(
             assertNotNull(governed.ledger.value.edge(first)).issued > 100L,
             "first must win some of the last round — a gauge-blind read would give it all to second " +

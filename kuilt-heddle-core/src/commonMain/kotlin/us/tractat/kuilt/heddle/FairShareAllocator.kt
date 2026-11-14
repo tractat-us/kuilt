@@ -142,6 +142,28 @@ public class FairShareAllocator(
      * set neither of them is in (§7.2, §10.6, #1752), so a joiner meets the front it is rejoining
      * rather than one it helped set.
      *
+     * Two states stop it, and neither throws. A child of [parent] at its position ceiling (#3313)
+     * stops it at the pick that would have to order it. Active children whose weights put a pick's
+     * products out of `Long` ([weightsFitTheBudget]) stop it before the seat step: the replicated
+     * ledger can merge such a set from writes that each fit (#3353).
+     *
+     * ## A refused or empty call writes nothing
+     *
+     * The seat step and the first pick run together, on a [fork] of this allocator, inside **one**
+     * [LedgerCell.mutateOrSkip] (#3353):
+     * - the first pick **refused**, at the ceiling or the budget: no patch, and the fork is dropped,
+     *   so no seat, no clamp and no observation is kept;
+     * - the first pick found **nothing** to grant: no patch either, so the seats are dropped with
+     *   it, but the fork's wake memory is kept, since it observed who was waiting. That is what
+     *   [LocalHeddle] does, and it means an idle call writes nothing to a replicated ledger;
+     * - the first pick **granted**: the seats and the delegation land as one patch, and the fork is
+     *   kept.
+     *
+     * The fork is adopted only once the write step has returned, so a cell that throws while writing
+     * leaves this allocator as it was. Each later round is its own write, as before: a refusal there,
+     * or a throw from the cell or the policy in round `k > 1`, keeps rounds `1..k−1`, which have
+     * already landed.
+     *
      * @param earmarked units this peer has reserved at [parent] as a leaf. They are subtracted from
      *   the holdings it may delegate: a later completion charges its captured path without a gate,
      *   relying on the earmark to have kept the units, so delegating them would overspend (design
@@ -149,11 +171,6 @@ public class FairShareAllocator(
      * @param demand the current appetite of one child edge, [Demand.NONE] for an edge that wants
      *   nothing. Asked once per active child each time the policy input is built, so it should
      *   answer from live state rather than a copy taken before the call.
-     * Two states stop it, and neither throws. A child of [parent] at its position ceiling (#3313)
-     * stops it at the pick that would have to order it. Active children whose weights put a pick's
-     * products out of `Long` ([weightsFitTheBudget]) stop it before the seat step, writing nothing:
-     * the replicated ledger can merge such a set from writes that each fit (#3353).
-     *
      * @return [AllocationOutcome.Delegated] with the count of grants applied this call, even when a
      *   refusal stopped it after them; otherwise [AllocationOutcome.PositionCeiling] or
      *   [AllocationOutcome.WeightBudget] when [parent] cannot be ordered, and
@@ -165,12 +182,21 @@ public class FairShareAllocator(
         earmarked: Long,
         demand: (AttachmentId) -> Demand,
     ): AllocationOutcome {
-        // Before the seat step, which already multiplies by a weight: a replicated ledger can hold a
-        // set no single write would have admitted (#3353), and every pick over it would throw.
-        if (!childWeightsFit(ledger.current, parent)) return AllocationOutcome.WeightBudget(parent)
-        settleJoiners(parent, ledger, demand)
-        var grants = 0
-        var refusal: AllocationOutcome? = null
+        var first: FirstRound? = null
+        ledger.mutateOrSkip { s ->
+            val round = firstRound(fork(), s, parent, earmarked, demand)
+            first = round
+            (round as? FirstRound.Granted)?.patch
+        }
+        when (val opened = checkNotNull(first) { "the cell's write step never ran its transform" }) {
+            is FirstRound.Refused -> return opened.refusal.at(parent)
+            is FirstRound.Empty -> {
+                adoptMemoryOf(opened.fork)
+                return AllocationOutcome.NothingToDelegate
+            }
+            is FirstRound.Granted -> adoptMemoryOf(opened.fork)
+        }
+        var grants = 1
         while (grants < MAX_ROUNDS_PER_CALL) {
             // One pick, inside the cell's write step, on the state the grant lands on. Nothing
             // delegable ⇒ mutateOrSkip writes nothing and answers false (#2090). Peeking on
@@ -178,32 +204,87 @@ public class FairShareAllocator(
             // against a state an inbound write may already have moved past.
             val applied = ledger.mutateOrSkip { s ->
                 // Again on each round's state: a merge between two rounds can bring the set over.
-                if (!childWeightsFit(s, parent)) {
-                    refusal = AllocationOutcome.WeightBudget(parent)
-                    return@mutateOrSkip null
-                }
+                if (!childWeightsFit(s, parent)) return@mutateOrSkip null
                 try {
                     pickOne(s, parent, earmarked, demand)?.let { grant -> s.delegate(self, grant.attachment, grant.amount) }
                 } catch (_: PositionCeilingException) {
                     // The pick would have to order a position at its ceiling (#3313): grant nothing
                     // more here. No patch is returned, so nothing is written.
-                    refusal = AllocationOutcome.PositionCeiling(parent)
                     null
                 }
             }
             if (!applied) break
             grants++
         }
-        // Progress first: a refusal met after a grant is reported by the next call, which meets it at once.
-        return when {
-            grants > 0 -> AllocationOutcome.Delegated(grants)
-            else -> refusal ?: AllocationOutcome.NothingToDelegate
-        }
+        // Progress first: a refusal in a later round follows a grant, so this call reports the
+        // grants, and the next call meets the refusal in its first round and names it.
+        return AllocationOutcome.Delegated(grants)
     }
 
     /** Whether [parent]'s active children in [s] fit [weightsFitTheBudget], so a pick there can be computed. */
     private fun childWeightsFit(s: EntitlementLedger, parent: GroupId): Boolean =
         weightsFitTheBudget(s.activeChildren(parent).mapNotNull { s.record(it.attachment)?.weight })
+
+    /** Take [fork]'s wake memory as this allocator's own: the half of a first round that is not in the ledger. */
+    private fun adoptMemoryOf(fork: FairShareAllocator) {
+        wakeOffsets.clear()
+        wakeOffsets.putAll(fork.wakeOffsets)
+        demandingObserved.clear()
+        demandingObserved.putAll(fork.demandingObserved)
+    }
+
+    /**
+     * [schedule]'s first round on [fork], against the one ledger value [s]: the seat step and the
+     * first pick. Nothing is written; the caller lands [FirstRound.Granted.patch] and adopts the fork.
+     */
+    private fun firstRound(
+        fork: FairShareAllocator,
+        s: EntitlementLedger,
+        parent: GroupId,
+        earmarked: Long,
+        demand: (AttachmentId) -> Demand,
+    ): FirstRound {
+        // Before the seat step, which already multiplies by a weight: a replicated ledger can hold a
+        // set no single write would have admitted (#3353), and a pick over it throws.
+        if (!fork.childWeightsFit(s, parent)) return FirstRound.Refused(Refusal.WEIGHT_BUDGET)
+        val cell = ValueCell(s)
+        fork.settleJoiners(parent, cell, demand)
+        val delegated = try {
+            fork.pickOne(cell.current, parent, earmarked, demand)?.let { grant ->
+                cell.mutateOrSkip { it.delegate(fork.self, grant.attachment, grant.amount) }
+            } ?: false
+        } catch (_: PositionCeilingException) {
+            // The pick would have to order a position at its ceiling (#3313): the seats go too.
+            return FirstRound.Refused(Refusal.POSITION_CEILING)
+        }
+        if (!delegated) return FirstRound.Empty(fork)
+        val written = checkNotNull(cell.written) { "a delegation that landed wrote nothing" }
+        return FirstRound.Granted(fork, Patch(written))
+    }
+
+    /** How [schedule]'s first round ended. Each arm carries exactly what the caller acts on. */
+    private sealed interface FirstRound {
+        /** The pick refused: write nothing, and drop the fork with everything it observed. */
+        class Refused(val refusal: Refusal) : FirstRound
+
+        /** Nothing to grant: write nothing, but keep [fork]'s wake memory, which saw who was waiting. */
+        class Empty(val fork: FairShareAllocator) : FirstRound
+
+        /** A grant: land [patch], the seats with the delegation, and keep [fork]. */
+        class Granted(val fork: FairShareAllocator, val patch: Patch<EntitlementLedger>) : FirstRound
+    }
+
+    /** Why [schedule] stopped at a parent it cannot order: the two refusals, and only those. */
+    private enum class Refusal {
+        POSITION_CEILING,
+        WEIGHT_BUDGET,
+        ;
+
+        fun at(parent: GroupId): AllocationOutcome = when (this) {
+            POSITION_CEILING -> AllocationOutcome.PositionCeiling(parent)
+            WEIGHT_BUDGET -> AllocationOutcome.WeightBudget(parent)
+        }
+    }
 
     /**
      * Make **one** pick at [parent]: seat the newborns and clamp the wakers exactly as [schedule]
@@ -736,11 +817,19 @@ public class FairShareAllocator(
         }
     }
 
-    /** A [LedgerCell] over a value, for [pickChild]: one caller, no other writer. */
+    /**
+     * A [LedgerCell] over a value, for [pickChild] and [schedule]'s first round: one caller, no other
+     * writer. [written] joins every delta it applied, `null` until the first, so the writes land
+     * elsewhere as one patch.
+     */
     private class ValueCell(override var current: EntitlementLedger) : LedgerCell {
+        var written: EntitlementLedger? = null
+            private set
+
         override fun mutateOrSkip(transform: (EntitlementLedger) -> Patch<EntitlementLedger>?): Boolean {
             val patch = transform(current) ?: return false
             current = current.piece(patch.delta)
+            written = written?.piece(patch.delta) ?: patch.delta
             return true
         }
     }

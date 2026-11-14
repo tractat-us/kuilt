@@ -280,8 +280,8 @@ public object HeddlePolicy {
      * **carriage**: the finished record travelled in the log entry, one proposer's reading became
      * everyone's permanent fact, and a proposer reading a partial view froze a wrong one for good
      * (issue #1713). The seat now goes into the [Gauge], whose join resolves by `max` on the position
-     * rather than preserving the reading — so every peer that still sees the edge unseated may
-     * publish its own front and the readings converge instead of racing (issue #1752). A stale
+     * rather than preserving the reading — so every peer that grants while it still sees the edge
+     * unseated may publish its own front and the readings converge instead of racing (issue #1752). A stale
      * peer's low reading is absorbed; a peer that has seen more wins.
      *
      * What that does *not* dissolve is intent divergence: two ungoverned `HeddleNode.prepare`
