@@ -2,6 +2,7 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import us.tractat.kuilt.math.plusOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -21,12 +22,6 @@ import kotlin.test.assertEquals
  * at each of them, which the rig proves by delegating that service.
  */
 class BoundMetricsTest {
-
-    private val root = GroupId("root")
-    private val e1 = AttachmentId("root->g1")
-    private val e2 = AttachmentId("root->g2")
-    private val alice = ReplicaId("alice")
-    private val config = HeddleConfig(policy = PolicyConfig(quantum = 1L), maxHoldingsPerPeer = Long.MAX_VALUE / 4)
 
     @Test
     fun thousandthAgainstTheRestAtTwoToThe51() {
@@ -74,19 +69,33 @@ class BoundMetricsTest {
     private fun deviation(w1: Weight, w2: Weight, total: Long): Long =
         deviation(w1, w2, committed1 = total / 2, committed2 = total - total / 2)
 
-    /** The ledger is built only through public mutators: mint at the root, prepare, activate, seat, delegate. */
-    private fun deviation(w1: Weight, w2: Weight, committed1: Long, committed2: Long): Long {
-        var ledger = EntitlementLedger.bootstrap(root, mapOf(alice to committed1 + committed2), nonce = "3319")
-        ledger = ledger.piece(requireNotNull(ledger.prepare(AttachmentRecord(e1, root, GroupId("g1"), w1))))
-        ledger = ledger.piece(requireNotNull(ledger.prepare(AttachmentRecord(e2, root, GroupId("g2"), w2))))
-        ledger = ledger.piece(requireNotNull(ledger.activate(e1)))
-        ledger = ledger.piece(requireNotNull(ledger.activate(e2)))
-        ledger = ledger.piece(requireNotNull(ledger.seat(e1, Rational.ZERO)))
-        ledger = ledger.piece(requireNotNull(ledger.seat(e2, Rational.ZERO)))
-        if (committed1 > 0L) ledger = ledger.piece(requireNotNull(ledger.delegate(alice, e1, committed1)))
-        if (committed2 > 0L) ledger = ledger.piece(requireNotNull(ledger.delegate(alice, e2, committed2)))
-        // The rig: both edges really carry the committed service the row names.
-        assertEquals(listOf(committed1, committed2), listOf(e1, e2).map { ledger.edge(it)?.committedService })
-        return BoundMetrics.at(ledger, root, setOf(alice), setOf(e1, e2), config).observedDeviation
+    private fun deviation(w1: Weight, w2: Weight, committed1: Long, committed2: Long): Long =
+        observedDeviationOf(listOf(Child(w1, committed1), Child(w2, committed2)))
+}
+
+/** One child of `root` in an [observedDeviationOf] rig: its edge weight, committed service, and whether it advertises demand. */
+internal data class Child(val weight: Weight, val committed: Long, val demanding: Boolean = true)
+
+/**
+ * [BoundMetrics.observedDeviation] at `root` over [children], with the ledger built only through
+ * public mutators: mint at the root, then prepare, activate, seat and delegate each edge. Shared with
+ * the JVM oracle, so both check the same rig.
+ */
+internal fun observedDeviationOf(children: List<Child>): Long {
+    val root = GroupId("root")
+    val alice = ReplicaId("alice")
+    val edges = children.indices.map { AttachmentId("root->g$it") }
+    val mint = children.fold(0L) { acc, c -> requireNotNull(acc.plusOrNull(c.committed)) { "rig mints past Long" } }
+    var ledger = EntitlementLedger.bootstrap(root, mapOf(alice to mint), nonce = "3319")
+    children.forEachIndexed { i, c ->
+        ledger = ledger.piece(requireNotNull(ledger.prepare(AttachmentRecord(edges[i], root, GroupId("g$i"), c.weight))))
+        ledger = ledger.piece(requireNotNull(ledger.activate(edges[i])))
+        ledger = ledger.piece(requireNotNull(ledger.seat(edges[i], Rational.ZERO)))
+        if (c.committed > 0L) ledger = ledger.piece(requireNotNull(ledger.delegate(alice, edges[i], c.committed)))
     }
+    // The rig: every edge really carries the committed service its child names.
+    assertEquals(children.map { it.committed }, edges.map { ledger.edge(it)?.committedService })
+    val demanding = edges.filterIndexed { i, _ -> children[i].demanding }.toSet()
+    val config = HeddleConfig(policy = PolicyConfig(quantum = 1L), maxHoldingsPerPeer = Long.MAX_VALUE / 4)
+    return BoundMetrics.at(ledger, root, setOf(alice), demanding, config).observedDeviation
 }
