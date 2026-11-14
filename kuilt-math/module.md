@@ -35,7 +35,8 @@ assertNull(mulDiv(Long.MAX_VALUE, 2L, 1L, Rounding.FLOOR))
   only the final quotient has to fit in a `Long`. The rounding is a required argument —
   `Rounding.FLOOR` or `Rounding.CEILING` — because the direction is usually the decision: round a
   share down and you never hand out more than you hold; round a newcomer's position up and it
-  never starts ahead of the people already waiting.
+  never starts ahead of the people already waiting. The `Int128` form, `mulDiv(a: Int128, b, divisor,
+  rounding)`, forms its product in 192 bits, so only the `Int128` quotient has to fit.
 
 ## Why null, not an exception
 
