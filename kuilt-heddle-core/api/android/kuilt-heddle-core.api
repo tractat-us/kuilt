@@ -393,6 +393,35 @@ public final class us/tractat/kuilt/heddle/GroupId$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public abstract interface class us/tractat/kuilt/heddle/GroupPath {
+	public abstract fun getNames ()Ljava/util/List;
+}
+
+public final class us/tractat/kuilt/heddle/GroupPath$Declared : us/tractat/kuilt/heddle/GroupPath {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/heddle/GroupPath$Declared;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/GroupPath$Declared;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/GroupPath$Declared;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getNames ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/GroupPath$RuntimeChild : us/tractat/kuilt/heddle/GroupPath {
+	public fun <init> (Ljava/util/List;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/GroupPath$RuntimeChild;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/GroupPath$RuntimeChild;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/GroupPath$RuntimeChild;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGroup ()Ljava/util/List;
+	public final fun getName ()Ljava/lang/String;
+	public fun getNames ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface annotation class us/tractat/kuilt/heddle/HeddleInternalApi : java/lang/annotation/Annotation {
 }
 
@@ -1430,6 +1459,8 @@ public final class us/tractat/kuilt/heddle/TopologyException : java/lang/Illegal
 }
 
 public final class us/tractat/kuilt/heddle/TopologyLoweringKt {
+	public static final fun findGroupId (Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/GroupPath;)Ljava/lang/String;
+	public static final fun findPath-yPrmHm4 (Lus/tractat/kuilt/heddle/Topology;Ljava/lang/String;)Lus/tractat/kuilt/heddle/GroupPath;
 	public static final fun groupId (Lus/tractat/kuilt/heddle/Topology;[Ljava/lang/String;)Ljava/lang/String;
 	public static final fun lower (Lus/tractat/kuilt/heddle/Topology;J)Ljava/util/List;
 	public static synthetic fun lower$default (Lus/tractat/kuilt/heddle/Topology;JILjava/lang/Object;)Ljava/util/List;
