@@ -40,7 +40,12 @@ val generateKuiltVersion = tasks.register<GenerateKuiltVersion>("generateKuiltVe
     packageName.set(kuiltVersionPackage)
     libraryVersion.set(project.version.toString())
     samples.from(fileTree("src/commonSamples/kotlin") { include("**/*.kt") })
-    outputDirectory.set(layout.buildDirectory.dir("generated/kuilt-version/commonMain/kotlin"))
+    // NOT under `build/generated`: Dokka's `suppressGeneratedFiles` defaults to true and drops
+    // everything there, so `KuiltVersion` was absent from the API reference, KDoc and `@sample`
+    // included. Measured: the file sat in commonMain's Dokka `sourceRoots` and in its
+    // `suppressedFiles`, and no page was rendered. Moving the output leaves that default in force for
+    // anything else a module generates.
+    outputDirectory.set(layout.buildDirectory.dir("kuilt-version/commonMain/kotlin"))
 }
 
 extensions.configure<KotlinMultiplatformExtension> {
