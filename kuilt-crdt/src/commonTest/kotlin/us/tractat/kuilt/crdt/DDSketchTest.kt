@@ -11,6 +11,8 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DDSketchTest {
@@ -388,6 +390,45 @@ class DDSketchTest {
         assertAll(
             { assertEquals(Long.MAX_VALUE, sketch.count) },
             { assertEquals(ten.quantile(1.0), sketch.quantile(1.0), "the top value is 10's bucket") },
+        )
+    }
+
+    /**
+     * [DDSketch.addOrNull] answers `null` where [DDSketch.add] throws because this replica's slot
+     * for the value — its bucket, the zero counter, or the overflow counter — is already at
+     * [Long.MAX_VALUE] (#3354), and the same patch where it is not.
+     */
+    @Test
+    fun addOrNullAnswersNullForAFullSlot() {
+        val empty = DDSketch.empty()
+        val index = empty.adding(r1, 10.0).positiveBuckets.keys.single()
+        val top = empty.adding(r1, DDSketch.DEFAULT_MAX_INDEXED_VALUE).positiveBuckets.keys.single()
+        val full = empty.piece(
+            empty.addBuckets(r1, mapOf(index to Long.MAX_VALUE, top + 1 to Long.MAX_VALUE - 1L), emptyMap(), Long.MAX_VALUE).delta,
+        )
+        // The overflow slot full while the positive top slot is empty: only negative values reached it,
+        // so a positive overflowing value is refused by the overflow slot alone.
+        val crossSign = empty.piece(empty.addBuckets(r1, emptyMap(), mapOf(top + 1 to Long.MAX_VALUE), 0L).delta)
+        assertAll(
+            { assertEquals(Long.MAX_VALUE, crossSign.negativeBuckets[top], "the rig: the negative top slot is full") },
+            { assertEquals(Long.MAX_VALUE, crossSign.overflowCount, "the rig: the overflow slot is full") },
+            { assertTrue(crossSign.positiveBuckets.isEmpty(), "the rig: the positive top slot is empty") },
+            { assertNull(crossSign.addOrNull(r1, 1e30), "the overflow slot, across signs") },
+            { assertNotNull(crossSign.addOrNull(r1, 10.0), "the control: a value that does not overflow fits") },
+            { assertEquals(Long.MAX_VALUE, full.positiveBuckets[index], "the rig: 10's slot is full") },
+            { assertEquals(Long.MAX_VALUE, full.zeroCount, "the rig: the zero slot is full") },
+            { assertEquals(Long.MAX_VALUE - 1L, full.overflowCount, "the rig: the overflow slot is one short") },
+            { assertNull(full.addOrNull(r1, 10.0), "the bucket slot") },
+            { assertNull(full.addOrNull(r1, 0.0), "the zero slot") },
+            { assertFailsWith<ArithmeticException> { full.add(r1, 10.0) } },
+            {
+                assertEquals(
+                    full.add(r1, 1e30),
+                    full.addOrNull(r1, 1e30),
+                    "the control: the overflow slot takes one more, and both give the same patch",
+                )
+            },
+            { assertNotNull(full.addOrNull(r2, 10.0), "another replica's slot is its own") },
         )
     }
 

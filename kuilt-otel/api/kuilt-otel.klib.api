@@ -664,6 +664,11 @@ final class us.tractat.kuilt.otel/MetricDigest { // us.tractat.kuilt.otel/Metric
         final fun <get-versions>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, kotlin/Long> // us.tractat.kuilt.otel/MetricDigest.versions.<get-versions>|<get-versions>(){}[0]
 }
 
+final class us.tractat.kuilt.otel/MetricHistogramOverflowException : us.tractat.kuilt.otel/MetricOverflowException { // us.tractat.kuilt.otel/MetricHistogramOverflowException|null[0]
+    final val key // us.tractat.kuilt.otel/MetricHistogramOverflowException.key|{}key[0]
+        final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricHistogramOverflowException.key.<get-key>|<get-key>(){}[0]
+}
+
 final class us.tractat.kuilt.otel/MetricKey { // us.tractat.kuilt.otel/MetricKey|null[0]
     constructor <init>(kotlin/String, us.tractat.kuilt.otel/MetricKind, kotlin.collections/Map<kotlin/String, kotlin/String> = ...) // us.tractat.kuilt.otel/MetricKey.<init>|<init>(kotlin.String;us.tractat.kuilt.otel.MetricKind;kotlin.collections.Map<kotlin.String,kotlin.String>){}[0]
 
@@ -698,7 +703,7 @@ final class us.tractat.kuilt.otel/MetricKey { // us.tractat.kuilt.otel/MetricKey
     }
 }
 
-final class us.tractat.kuilt.otel/MetricSumOverflowException : kotlin/ArithmeticException { // us.tractat.kuilt.otel/MetricSumOverflowException|null[0]
+final class us.tractat.kuilt.otel/MetricSumOverflowException : us.tractat.kuilt.otel/MetricOverflowException { // us.tractat.kuilt.otel/MetricSumOverflowException|null[0]
     final val by // us.tractat.kuilt.otel/MetricSumOverflowException.by|{}by[0]
         final fun <get-by>(): kotlin/Long // us.tractat.kuilt.otel/MetricSumOverflowException.by.<get-by>|<get-by>(){}[0]
     final val count // us.tractat.kuilt.otel/MetricSumOverflowException.count|{}count[0]
@@ -943,6 +948,11 @@ final class us.tractat.kuilt.otel/WarpTelemetry { // us.tractat.kuilt.otel/WarpT
 
     final suspend fun clear(): us.tractat.kuilt.otel/ExportResult // us.tractat.kuilt.otel/WarpTelemetry.clear|clear(){}[0]
     final suspend fun recover() // us.tractat.kuilt.otel/WarpTelemetry.recover|recover(){}[0]
+}
+
+sealed class us.tractat.kuilt.otel/MetricOverflowException : kotlin/ArithmeticException { // us.tractat.kuilt.otel/MetricOverflowException|null[0]
+    abstract val key // us.tractat.kuilt.otel/MetricOverflowException.key|{}key[0]
+        abstract fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricOverflowException.key.<get-key>|<get-key>(){}[0]
 }
 
 final const val us.tractat.kuilt.otel/DEFAULT_LOG_SEGMENT_OPS // us.tractat.kuilt.otel/DEFAULT_LOG_SEGMENT_OPS|{}DEFAULT_LOG_SEGMENT_OPS[0]

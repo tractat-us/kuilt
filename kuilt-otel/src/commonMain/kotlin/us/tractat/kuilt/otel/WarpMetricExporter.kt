@@ -22,6 +22,7 @@ import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.HyperLogLog
 import us.tractat.kuilt.crdt.LWWRegister
+import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.store.DurableStore
@@ -75,8 +76,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * failed [incrementSum] therefore adds it twice.
  *
  * The one Failure that means "not counted" is a refusal, before anything is applied, of a sum
- * increment that would carry this replica's count past [Long.MAX_VALUE]: its cause is a
- * [MetricSumOverflowException] (#3318), and nothing was applied or written.
+ * increment or histogram update that would carry one of this replica's counts past
+ * [Long.MAX_VALUE]: its cause is a [MetricOverflowException] (#3318, #3354), and nothing was
+ * applied or written.
  *
  * ## Batches
  *
@@ -207,6 +209,9 @@ public class WarpMetricExporter(
 
     /** The sum series a [record] has already been refused for; read only inside [lock] (#3318). */
     private val refusedSums = FirstSightings()
+
+    /** The histogram series a [record] has already been refused for; read only inside [lock] (#3354). */
+    private val refusedHistograms = FirstSightings()
 
     /**
      * Whether a durable-write outage is currently **open** — i.e. a refused store write has already
@@ -568,39 +573,37 @@ public class WarpMetricExporter(
      *    coarser than [histogramScale], or one whose count lists the caller has since made negative —
      *    is checked for **every** update and **thrown** as [IllegalArgumentException], since it is
      *    a caller's mistake. Nothing in memory or on disk changes.
-     * 2. Whether a [MetricUpdate.IncrementSum] would carry this replica's count for its series past
-     *    [Long.MAX_VALUE] (#3318) is checked for the whole batch, counting its earlier increments
-     *    to the same series, against the counts as they stand. Such a batch is **refused**: it
-     *    returns a [MetricExportResult.Failure] whose cause is a [MetricSumOverflowException], and
-     *    nothing from it is applied or written. The refusal is logged at WARN the first time a
-     *    series causes one and at DEBUG after that.
+     * 2. Whether an update would carry one of this replica's counts past [Long.MAX_VALUE] is
+     *    checked for the whole batch, counting its earlier updates to the same series, against the
+     *    series as they stand. For a [MetricUpdate.IncrementSum] that is this replica's count for its
+     *    sum series (#3318). For a [MetricUpdate.RecordHistogram] or
+     *    [MetricUpdate.AddExponentialHistogram] it is this replica's slot in each bucket the update
+     *    touches, and in the sketch's zero and overflow counters, and also the sum of counts that
+     *    fold onto one bucket (#3354). A weighted count can get there on its own. Such a batch is
+     *    **refused**: it returns a [MetricExportResult.Failure] whose cause is a
+     *    [MetricOverflowException] naming the series, a [MetricSumOverflowException] or a
+     *    [MetricHistogramOverflowException], and nothing from it is applied or written. The refusal
+     *    is logged at WARN the first time a series causes one and at DEBUG after that.
      *
-     * So neither a bad histogram scale nor a sum overflow leaves a batch applied half-way, and the
+     * So neither a bad histogram scale nor an overflow leaves a batch applied half-way, and the
      * one-by-one equivalence above holds for every batch this accepts.
-     *
-     * A histogram update can still throw part-way, with [ArithmeticException], leaving the earlier
-     * updates applied in memory and unwritten. A [MetricUpdate.RecordHistogram] does when its
-     * replica slot in its bucket is already at [Long.MAX_VALUE] ([DDSketch.add]); this replica's own
-     * adds raise that slot one value at a time, so only a sketch merged in under this replica's id
-     * can put it there. A [MetricUpdate.AddExponentialHistogram] does when its counts would carry
-     * this replica's slot in a bucket, or in the sketch's zero or overflow counter, past
-     * [Long.MAX_VALUE] ([DDSketch.addBuckets]); a weighted count can do that on its own.
      *
      * @throws IllegalArgumentException if an update holds an exponential histogram whose scale is
      *   below [histogramScale]; nothing in the batch is applied.
-     * @throws ArithmeticException if a histogram update would carry this replica's slot past
-     *   [Long.MAX_VALUE], as above; the updates before it stay applied in memory and unwritten.
      * @sample us.tractat.kuilt.otel.sampleWarpMetricExporterBatch
      */
     public suspend fun record(updates: List<MetricUpdate>): MetricExportResult {
         if (updates.isEmpty()) return MetricExportResult.Success
         updates.forEach(::validate)
         return writeMutex.withLock {
-            var overflow: MetricSumOverflowException? = null
+            var overflow: MetricOverflowException? = null
             var firstRefusal = false
             val writes = lock.withLock {
-                overflow = firstSumOverflowLocked(updates)?.also { refused ->
-                    firstRefusal = refusedSums.firstSighting(refused.key, sums.keys)
+                overflow = firstOverflowLocked(updates)?.also { refused ->
+                    firstRefusal = when (refused) {
+                        is MetricSumOverflowException -> refusedSums.firstSighting(refused.key, sums.keys)
+                        is MetricHistogramOverflowException -> refusedHistograms.firstSighting(refused.key, histograms.keys)
+                    }
                 }
                 if (overflow != null) return@withLock emptyList()
                 // The last series each kind's updates named — only for the failure log line.
@@ -611,7 +614,7 @@ public class WarpMetricExporter(
                 }
             }
             overflow?.let { refused ->
-                // WARN once per series: a saturated delta counter is refused again on every export.
+                // WARN once per series: a saturated delta series is refused again on every export.
                 val line = { "WarpMetricExporter: batch of ${updates.size} refused, nothing applied: ${refused.message}" }
                 if (firstRefusal) logger.warn(line) else logger.debug(line)
                 return@withLock MetricExportResult.Failure(refused)
@@ -665,24 +668,67 @@ public class WarpMetricExporter(
     }
 
     /**
-     * The refusal for the first [MetricUpdate.IncrementSum] in [updates] that would carry this
-     * replica's count for its series past [Long.MAX_VALUE], counting the batch's own earlier
-     * increments to the same series, or `null` when every one fits. Called inside [lock], before
-     * anything is applied.
+     * The refusal for the first update in [updates] that would carry one of this replica's counts
+     * past [Long.MAX_VALUE], counting the batch's own earlier updates to the same series, or `null`
+     * when every one fits. Called inside [lock], before anything is applied.
      *
-     * Checked against the counts as they stand before the batch. An eviction the batch triggers can
-     * only remove a series, never raise a count, so this never accepts a batch [GCounter.inc] would
+     * A [MetricUpdate.IncrementSum] is checked against this replica's count for its series (#3318).
+     * A histogram update is checked by making it, through [DDSketch.addOrNull] and
+     * [DDSketch.addBucketsOrNull], against a running copy of its series that the batch's earlier
+     * histogram updates have already been made to (#3354). Those are the very calls [applyLocked]
+     * makes, so the check cannot disagree with the apply about what fits, and an
+     * [MetricUpdate.AddExponentialHistogram] whose own counts fold past [Long.MAX_VALUE] is caught
+     * here too.
+     *
+     * Checked against the series as they stand before the batch. An eviction the batch triggers can
+     * only remove a series, never raise a count, so this never accepts a batch [applyLocked] would
      * refuse part-way; at worst it refuses one that would just fit after such an eviction.
      */
-    private fun firstSumOverflowLocked(updates: List<MetricUpdate>): MetricSumOverflowException? {
-        val running = HashMap<MetricKey, Long>()
+    private fun firstOverflowLocked(updates: List<MetricUpdate>): MetricOverflowException? {
+        val runningSums = HashMap<MetricKey, Long>()
+        val runningHistograms = HashMap<MetricKey, DDSketch>()
         for (update in updates) {
-            if (update !is MetricUpdate.IncrementSum) continue
-            val count = running[update.key] ?: sums[update.key]?.count(replica) ?: 0L
-            running[update.key] = count.plusOrNull(update.by)
-                ?: return MetricSumOverflowException(update.key, count, update.by)
+            when (update) {
+                is MetricUpdate.IncrementSum -> {
+                    val count = runningSums[update.key] ?: sums[update.key]?.count(replica) ?: 0L
+                    runningSums[update.key] = count.plusOrNull(update.by)
+                        ?: return MetricSumOverflowException(update.key, count, update.by)
+                }
+                is MetricUpdate.RecordHistogram,
+                is MetricUpdate.AddExponentialHistogram,
+                -> {
+                    val current = runningHistograms[update.key] ?: histograms[update.key] ?: histogramPrototype
+                    val patch = histogramPatchOrNull(current, update)
+                        ?: return MetricHistogramOverflowException(update.key)
+                    runningHistograms[update.key] = current.piece(patch.delta)
+                }
+                is MetricUpdate.IncrementSumDouble,
+                is MetricUpdate.SetGauge,
+                is MetricUpdate.AddCardinality,
+                -> Unit
+            }
         }
         return null
+    }
+
+    /**
+     * The patch [update] makes to the histogram [current], or `null` when it would carry one of this
+     * replica's slots past [Long.MAX_VALUE]. The one place a histogram update is turned into a
+     * patch, so [firstOverflowLocked]'s check and [applyLocked] cannot drift apart.
+     */
+    private fun histogramPatchOrNull(current: DDSketch, update: MetricUpdate): Patch<DDSketch>? = when (update) {
+        is MetricUpdate.RecordHistogram -> current.addOrNull(replica, update.value)
+        is MetricUpdate.AddExponentialHistogram -> {
+            val shift = update.scale - histogramScale
+            val positive = sketchBuckets(update.positiveOffset, update.positiveCounts, shift)
+            val negative = sketchBuckets(update.negativeOffset, update.negativeCounts, shift)
+            if (positive == null || negative == null) {
+                null
+            } else {
+                current.addBucketsOrNull(replica, positive, negative, update.zeroCount)
+            }
+        }
+        else -> error("not a histogram update: $update")
     }
 
     /** Apply one update to its map, evicting first if it opens a new series. Called inside [lock]. */
@@ -711,22 +757,14 @@ public class WarpMetricExporter(
             cardinalities[update.key] = current.piece(current.add(update.element).delta)
             StoredKind.CARDINALITIES
         }
-        is MetricUpdate.RecordHistogram -> {
+        is MetricUpdate.RecordHistogram,
+        is MetricUpdate.AddExponentialHistogram,
+        -> {
             maybeEvictForNewKey(update.key, histograms)
             val current = histograms.getOrPut(update.key) { histogramPrototype }
-            histograms[update.key] = current.piece(current.add(replica, update.value).delta)
-            StoredKind.HISTOGRAMS
-        }
-        is MetricUpdate.AddExponentialHistogram -> {
-            maybeEvictForNewKey(update.key, histograms)
-            val current = histograms.getOrPut(update.key) { histogramPrototype }
-            val shift = update.scale - histogramScale
-            val patch = current.addBuckets(
-                replica,
-                positive = sketchBuckets(update.positiveOffset, update.positiveCounts, shift),
-                negative = sketchBuckets(update.negativeOffset, update.negativeCounts, shift),
-                zeroCount = update.zeroCount,
-            )
+            val patch = checkNotNull(histogramPatchOrNull(current, update)) {
+                "histogram update for ${update.key.name} overflows, yet record's check passed it"
+            }
             histograms[update.key] = current.piece(patch.delta)
             StoredKind.HISTOGRAMS
         }
@@ -742,14 +780,17 @@ public class WarpMetricExporter(
      * The sketch's index is the OTLP index plus one, the inverse of the OTLP render. The arithmetic
      * is in `Long` so an absurd offset cannot wrap; anything past the sketch's range is clamped by
      * [DDSketch.addBuckets].
+     *
+     * Merged buckets' counts are added checked, and `null` means they passed [Long.MAX_VALUE]:
+     * counts that each fit can still add up past it (#3354).
      */
-    private fun sketchBuckets(offset: Int, counts: List<Long>, shift: Int): Map<Int, Long> {
+    private fun sketchBuckets(offset: Int, counts: List<Long>, shift: Int): Map<Int, Long>? {
         val out = LinkedHashMap<Int, Long>()
         counts.forEachIndexed { i, n ->
             if (n == 0L) return@forEachIndexed
             val index = ((offset.toLong() + i) shr shift) + 1L
             val clamped = index.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
-            out[clamped] = (out[clamped] ?: 0L) + n
+            out[clamped] = (out[clamped] ?: 0L).plusOrNull(n) ?: return null
         }
         return out
     }
@@ -946,6 +987,10 @@ public class WarpMetricExporter(
      * [GCounter] slots, so re-merging the same remote snapshot never inflates them.
      * Sequential [recordHistogram] calls each *do* count — the correct cumulative
      * distribution semantics.
+     *
+     * Returns a [MetricExportResult.Failure] whose cause is a [MetricHistogramOverflowException],
+     * having applied and written nothing, when this replica's slot for [value] is already at
+     * [Long.MAX_VALUE].
      *
      * @throws IllegalArgumentException if [value] is NaN or infinite.
      */
@@ -1169,7 +1214,7 @@ public sealed interface MetricExportResult {
     /**
      * The durable write failed; whether the metric was persisted is indeterminate.
      *
-     * The one exception is a [cause] that is a [MetricSumOverflowException]: then the call was
+     * The one exception is a [cause] that is a [MetricOverflowException]: then the call was
      * refused before anything was applied, so nothing was counted and nothing written, and
      * retrying it is refused the same way.
      */
@@ -1177,12 +1222,25 @@ public sealed interface MetricExportResult {
 }
 
 /**
- * Why a [WarpMetricExporter.record] or [WarpMetricExporter.incrementSum] was refused: an
- * increment would carry this replica's count for the sum series [key] past [Long.MAX_VALUE]
- * (#3318). A wrapped count would be negative, and the counter's merge, a max, would drop it, so
- * the increment would be lost everywhere with nothing to say so. It arrives as the cause of a
- * [MetricExportResult.Failure], and the batch that carried it applied nothing. Only the exporter
+ * Why a [WarpMetricExporter.record] was refused: an update would carry one of this replica's
+ * counts for the series [key] past [Long.MAX_VALUE]. A wrapped count would be negative, and a
+ * counter's merge, a max, would drop it, so the update would be lost everywhere with nothing to
+ * say so. It arrives as the cause of a [MetricExportResult.Failure], and the batch that carried it
+ * applied nothing.
+ *
+ * Which kind of series [key] names is the subclass: [MetricSumOverflowException] for a sum,
+ * [MetricHistogramOverflowException] for a histogram. A sum and a histogram can share a
+ * [MetricKey], so a caller leaving the series out of a retry needs both. Only the exporter
  * constructs one; a consumer only receives it.
+ */
+public sealed class MetricOverflowException(message: String) : ArithmeticException(message) {
+    /** The series whose count cannot take the update. */
+    public abstract val key: MetricKey
+}
+
+/**
+ * A [MetricOverflowException] for a sum: an increment would carry this replica's count for the sum
+ * series [key] past [Long.MAX_VALUE] (#3318).
  *
  * @property key the sum series that cannot take the increment.
  * @property count this replica's count for [key] before the refused increment, including the
@@ -1190,10 +1248,25 @@ public sealed interface MetricExportResult {
  * @property by the refused increment.
  */
 public class MetricSumOverflowException internal constructor(
-    public val key: MetricKey,
+    override val key: MetricKey,
     public val count: Long,
     public val by: Long,
-) : ArithmeticException(
+) : MetricOverflowException(
     "sum series ${key.name} ${key.attributes}: this replica's count $count cannot take $by more " +
         "without passing Long.MAX_VALUE",
+)
+
+/**
+ * A [MetricOverflowException] for a histogram (#3354): a [MetricUpdate.RecordHistogram] or
+ * [MetricUpdate.AddExponentialHistogram] would carry this replica's slot in one of the series'
+ * buckets, or in its zero or overflow counter, past [Long.MAX_VALUE], counting the batch's own
+ * earlier updates to it. So would counts that each fit but fold onto one bucket past it.
+ *
+ * @property key the histogram series that cannot take the update.
+ */
+public class MetricHistogramOverflowException internal constructor(
+    override val key: MetricKey,
+) : MetricOverflowException(
+    "histogram series ${key.name} ${key.attributes}: this replica's count in one of its buckets, or in its " +
+        "zero or overflow counter, cannot take this batch's values without passing Long.MAX_VALUE",
 )

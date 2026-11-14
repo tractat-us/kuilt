@@ -7,6 +7,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -127,6 +129,59 @@ class DDSketchAddBucketsTest {
             { assertEquals(0, byValue.bucketCount, "precondition: and made no bucket") },
             { assertEquals(byValue, byBuckets) },
             { assertEquals(1, atTheEdge.bucketCount, "the bottom bucket itself is in range, as add(min) is") },
+        )
+    }
+
+    /**
+     * Counts that each fit but fold onto one cell past [Long.MAX_VALUE] are refused, not wrapped
+     * (#3354). Before the fix the zero fold wrapped negative and the zeros were silently dropped,
+     * and the top-bucket fold wrapped negative and failed as a non-positive increment.
+     */
+    @Test
+    fun countsThatFoldPastLongMaxValueAreRefusedNotWrapped() {
+        val empty = DDSketch.empty()
+        val top = empty.adding(r1, DDSketch.DEFAULT_MAX_INDEXED_VALUE).positiveBuckets.keys.single()
+        val bottom = empty.adding(r1, DDSketch.DEFAULT_MIN_INDEXED_VALUE).positiveBuckets.keys.single()
+        val max = Long.MAX_VALUE
+        val zerosFit = empty.piece(empty.addBuckets(r1, mapOf(bottom - 1 to max - 1L), emptyMap(), 1L).delta)
+        val topFits = empty.piece(empty.addBuckets(r1, mapOf(top to max - 1L, top + 1 to 1L), emptyMap(), 0L).delta)
+        assertAll(
+            { assertEquals(max, zerosFit.zeroCount, "the control: one short of the fold fits") },
+            { assertEquals(mapOf(top to max), topFits.positiveBuckets, "the control: one short of the fold fits") },
+            { assertEquals(1L, topFits.overflowCount) },
+            { assertFailsWith<ArithmeticException> { empty.addBuckets(r1, mapOf(bottom - 1 to max), emptyMap(), 1L) } },
+            { assertFailsWith<ArithmeticException> { empty.addBuckets(r1, mapOf(top to max, top + 1 to 1L), emptyMap(), 0L) } },
+            { assertFailsWith<ArithmeticException> { empty.addBuckets(r1, mapOf(top + 1 to max, top + 2 to 1L), emptyMap(), 0L) } },
+            { assertNull(empty.addBucketsOrNull(r1, mapOf(bottom - 1 to max), emptyMap(), 1L)) },
+            { assertNull(empty.addBucketsOrNull(r1, mapOf(top to max, top + 1 to 1L), emptyMap(), 0L)) },
+            { assertNull(empty.addBucketsOrNull(r1, mapOf(top + 1 to max, top + 2 to 1L), emptyMap(), 0L)) },
+            // Each sign's top bucket fits, but the overflow counter takes both signs' clamped counts.
+            { assertFailsWith<ArithmeticException> { empty.addBuckets(r1, mapOf(top + 1 to max), mapOf(top + 1 to 1L), 0L) } },
+        )
+    }
+
+    /**
+     * [DDSketch.addBucketsOrNull] answers `null` where [DDSketch.addBuckets] throws because a slot
+     * would pass [Long.MAX_VALUE], and the same patch where it does not.
+     */
+    @Test
+    fun addBucketsOrNullAnswersNullForASlotThatWouldPassLongMaxValue() {
+        val empty = DDSketch.empty()
+        val index = empty.adding(r1, 10.0).positiveBuckets.keys.single()
+        val full = empty.piece(empty.addBuckets(r1, mapOf(index to Long.MAX_VALUE - 1L), emptyMap(), Long.MAX_VALUE).delta)
+        assertAll(
+            { assertEquals(Long.MAX_VALUE, full.zeroCount, "the rig: the zero slot is full") },
+            { assertNull(full.addBucketsOrNull(r1, mapOf(index to 2L), emptyMap(), 0L), "the bucket slot") },
+            { assertNull(full.addBucketsOrNull(r1, emptyMap(), emptyMap(), 1L), "the zero slot") },
+            { assertFailsWith<ArithmeticException> { full.addBuckets(r1, mapOf(index to 2L), emptyMap(), 0L) } },
+            {
+                assertEquals(
+                    full.addBuckets(r1, mapOf(index to 1L), emptyMap(), 0L),
+                    full.addBucketsOrNull(r1, mapOf(index to 1L), emptyMap(), 0L),
+                    "the control: one more fits, and both give the same patch",
+                )
+            },
+            { assertNotNull(full.addBucketsOrNull(ReplicaId("r2"), mapOf(index to 2L), emptyMap(), 1L), "another replica's slots are its own") },
         )
     }
 
