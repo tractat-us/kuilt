@@ -15,19 +15,20 @@ import org.gradle.api.tasks.TaskAction
  * kuilt wrote something reads it instead of hand-copying a string that drifts on every upgrade
  * (#3323).
  *
+ * One module carries it, [CARRIER], in [PACKAGE]. It depends on nothing, so every module that needs
+ * the value can `api` it — including `:kuilt-heddle-core`, which bans the coroutines `:kuilt-core`
+ * would bring — and there is one class with one fully qualified name, never a split package.
+ *
  * [libraryVersion] is an `@Input`, so a `-Pversion=…` override reruns this task and the compile
  * tasks behind it rather than serving the previous version's source. The value is checked against
  * [VERSION_SHAPE] before it is written: it lands inside a Kotlin string literal, and a version
  * carrying a quote, a backslash or a `$` would otherwise compile into something else, or not at all.
  *
- * The generated KDoc carries `@sample <package>.sampleKuiltVersion`. `verifySampleLinks` scans only
- * `src/`, so it never sees a tag in generated source; this task checks the tag's target instead,
- * reading [samples] for that function in that package, and refuses to write a dangling tag.
+ * The generated KDoc carries `@sample us.tractat.kuilt.sampleKuiltVersion`. `verifySampleLinks`
+ * scans only `src/`, so it never sees a tag in generated source; this task checks the tag's target
+ * instead, reading [samples] for that function in that package, and refuses to write a dangling tag.
  */
 abstract class GenerateKuiltVersion : DefaultTask() {
-
-    @get:Input
-    abstract val packageName: Property<String>
 
     @get:Input
     abstract val libraryVersion: Property<String>
@@ -47,58 +48,39 @@ abstract class GenerateKuiltVersion : DefaultTask() {
             "Refusing to generate KuiltVersion for version '$version': it must match $VERSION_SHAPE " +
                 "to be written into a Kotlin string literal unescaped."
         }
-        val pkg = packageName.get()
-        val packageLine = Regex("""(?m)^package\s+${Regex.escape(pkg)}\s*$""")
+        val packageLine = Regex("""(?m)^package\s+${Regex.escape(PACKAGE)}\s*$""")
         val sampleFun = Regex("""(?<![A-Za-z0-9_])fun\s+$SAMPLE_NAME\s*\(""")
         val sampleFound = samples.files.any { f ->
             f.isFile && f.readText().let { packageLine.containsMatchIn(it) && sampleFun.containsMatchIn(it) }
         }
         check(sampleFound) {
-            "KuiltVersion's KDoc cites @sample $pkg.$SAMPLE_NAME, but no file under the module's " +
-                "src/commonSamples/kotlin declares `fun $SAMPLE_NAME(` in package $pkg. Add the sample, " +
+            "KuiltVersion's KDoc cites @sample $PACKAGE.$SAMPLE_NAME, but no file under the module's " +
+                "src/commonSamples/kotlin declares `fun $SAMPLE_NAME(` in package $PACKAGE. Add the sample, " +
                 "or the tag would render nothing."
         }
         val root = outputDirectory.get().asFile
         root.deleteRecursively()
-        val file = root.resolve(pkg.replace('.', '/')).resolve("KuiltVersion.kt")
+        val file = root.resolve(PACKAGE.replace('.', '/')).resolve("KuiltVersion.kt")
         file.parentFile.mkdirs()
-        file.writeText(source(pkg, version))
+        file.writeText(source(version))
     }
 
     companion object {
         /** Maven/semver-shaped: what `<line>.0-dev`, `<line>.0-dev.<run>` and a tag's `x.y.z` all are. */
         val VERSION_SHAPE: Regex = Regex("""[A-Za-z0-9][A-Za-z0-9._+-]*""")
 
-        /**
-         * The modules that carry a `KuiltVersion`, each with the package its copy lives in.
-         *
-         * Two, because no one module sits under every other. `:kuilt-core` sits under most of them,
-         * but `:kuilt-heddle-core` must stay off it: it bans coroutines from its classpath, and
-         * `:kuilt-core` brings them. The packages differ because one class name in one package from
-         * two jars is a split package. Applying the plugin to a module missing here fails at
-         * configuration, so the module list the generated KDoc prints cannot fall behind.
-         */
-        val CARRIERS: Map<String, String> = linkedMapOf(
-            ":kuilt-core" to "us.tractat.kuilt.core",
-            ":kuilt-heddle-core" to "us.tractat.kuilt.heddle",
-        )
+        /** The one module that carries `KuiltVersion`. The plugin refuses to apply anywhere else. */
+        const val CARRIER: String = ":kuilt-base"
 
-        init {
-            // Runs when the plugin first reads CARRIERS, so configuration fails, not a later task.
-            require(CARRIERS.values.toSet().size == CARRIERS.size) {
-                "Two GenerateKuiltVersion.CARRIERS share a package ($CARRIERS): their KuiltVersion classes " +
-                    "would have the same fully qualified name, a split package across two jars."
-            }
-        }
+        /** The package `KuiltVersion` is generated into: `us.tractat.kuilt.KuiltVersion`. */
+        const val PACKAGE: String = "us.tractat.kuilt"
 
-        /** The sample each carrier's KDoc cites, in the carrier's own package and `commonSamples`. */
+        /** The sample the generated KDoc cites, in [PACKAGE] under the carrier's `commonSamples`. */
         const val SAMPLE_NAME: String = "sampleKuiltVersion"
 
-        fun source(pkg: String, version: String): String {
-            val carriers = CARRIERS.entries.joinToString(" and ") { (path, p) -> "`$path` (`$p`)" }
-            return """
+        fun source(version: String): String = """
             |// Generated by the kuilt.version-constant convention plugin. Do not edit.
-            |package $pkg
+            |package $PACKAGE
             |
             |/**
             | * The version of the kuilt that is running.
@@ -106,23 +88,21 @@ abstract class GenerateKuiltVersion : DefaultTask() {
             | * It is the same string the build publishes the artifact under: `<line>.0-dev` from a local
             | * build, `<line>.0-dev.<run>` from a snapshot, and the tag's `x.y.z` from a release.
             | *
-            | * Two modules carry a `KuiltVersion`: $carriers.
-            | * The modules below `:kuilt-core`, those with no kuilt dependency or only such ones, carry none.
-            | * The value is the version of the module that carries it; import the BOM to keep every
-            | * kuilt module at that version.
+            | * It lives in `$CARRIER`, which depends on nothing. Most kuilt modules bring that module with
+            | * them, so a consumer rarely declares it. The value is the version of `$CARRIER`; import the
+            | * BOM to keep every kuilt module at that version.
             | *
             | * It is deliberately a plain `val`, not a `const`, for two reasons. A `const` is copied into
             | * the code that reads it when that code compiles, so it would name the kuilt a consumer
             | * compiled against rather than the one actually running. And a `const` puts its value in
             | * this module's ABI, so every release would recompile every module built against it.
             | *
-            | * @sample $pkg.$SAMPLE_NAME
+            | * @sample $PACKAGE.$SAMPLE_NAME
             | */
             |public object KuiltVersion {
             |    /** The running kuilt's version, for example `0.7.0-dev`, `0.7.0-dev.412` or `0.7.4`. */
             |    public val VERSION: String = "$version"
             |}
             |""".trimMargin()
-        }
     }
 }
