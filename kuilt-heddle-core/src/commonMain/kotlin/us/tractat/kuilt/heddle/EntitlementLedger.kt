@@ -2199,7 +2199,13 @@ public class EntitlementLedger private constructor(
      * [holdings] subtracts, its effective leaf spend per replica into the folded leaf spend, which
      * [leafSpentTotal] counts, and its generation into the forgotten floor, which the generation
      * floor reads. A PREPARED edge never carried anything, so it folds nothing but its generation.
-     * Either way its parent keeps counting as having child edges ([hasChildEdges]), as it did while
+     * That it will never activate is the caller's precondition, not something this checks. A later
+     * activation of the forgotten id is not silent: [activate] finds no record and refuses it, and an
+     * activation delta built elsewhere and pieced in names an id at or below the forgotten floor, so
+     * [piece] throws at the resurrection guard.
+     *
+     * Either way its parent gets a row in the folded outflow, empty when nothing netted, and that
+     * row is what keeps the parent counting as having child edges ([hasChildEdges]), as it did while
      * the edge was held, so no reader of that question sees the forget either.
      *
      * **Not a join.** Every other mutator only adds to the lattice; this removes slots, so the result
