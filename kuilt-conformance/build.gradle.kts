@@ -63,6 +63,9 @@ kotlin {
             // DeviceKeyStoreConformanceSuite: every device-key store, in :kuilt-identity or a
             // consumer's, subclasses it. :kuilt-identity's own tests reach back here test-only.
             api(project(":kuilt-identity"))
+            // RoomConformanceSuite's default harness builds its rooms on fake device keys, so the
+            // suite stays on virtual time on wasmJs, where a real key waits on WebCrypto.
+            implementation(project(":kuilt-identity-test"))
             api(project(":kuilt-test"))
             // The lattice-law harness asserts byte-level canonicality of encoded CRDT
             // states (#1957), so it needs a concrete BinaryFormat. CBOR matches Quilter's

@@ -1,3 +1,5 @@
+@file:OptIn(us.tractat.kuilt.identity.test.TestOnlyKeyScheme::class)
+
 package us.tractat.kuilt.cluster
 
 import kotlinx.coroutines.Job
@@ -15,6 +17,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.identity.test.fakeDidKey
 import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.NodeId
@@ -25,7 +28,7 @@ import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_SEED
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
 import us.tractat.kuilt.raft.test.RAFT_SIM_WEDGE_BACKSTOP
 import us.tractat.kuilt.raft.test.dumpOnWedge
-import us.tractat.kuilt.identity.DeviceKey
+import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.session.LeaveReason
 import us.tractat.kuilt.session.Liveness
 import us.tractat.kuilt.session.Member
@@ -285,10 +288,15 @@ internal class ControlledRoomHost(
         }
     }
 
-    private suspend fun roomFor(id: NodeId): FakeRoom = FakeRoom(
+    /** Each node's fake device key, numbered in the order nodes first connect; a node that comes back keeps its key. */
+    private val keys = mutableMapOf<NodeId, DidKey>()
+
+    private fun keyOf(id: NodeId): DidKey = synchronized(keys) { keys.getOrPut(id) { fakeDidKey(keys.size) } }
+
+    private fun roomFor(id: NodeId): FakeRoom = FakeRoom(
         selfId = self,
         initialRoster = setOf(
-            Member(PeerId(id.value), MemberIdentity(displayName = id.value, sessionId = id.value), DeviceKey.generate().id, Liveness.Connected),
+            Member(PeerId(id.value), MemberIdentity(displayName = id.value, sessionId = id.value), keyOf(id), Liveness.Connected),
         ),
     )
 
