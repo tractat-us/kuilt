@@ -873,19 +873,23 @@ all of them:
 The rebase is `LocalHeddle`'s alone. Under replication, a peer that has not yet
 seen a rebase would seat a newborn at the old front, and a concurrent
 checkpoint's position would pair with the raised fold. The replicated `HeddleNode`
-stops granting at a saturated parent. Its rebase and refusal surface are tracked
-by #3353. `apply` keeps the weight products in range the same way: an activation
-whose weights would put its parent's `L`, `S`, `G · S` or `S · d` out of `Long`
-is refused with a `StepRefusal`. Where a topology act enters a replicated ledger
-the same rule is checked, but that does not yet keep the merged ledger in range.
-The control log refuses a `Prepare` whose own weight fails it and an `Activate`
-that fails it beside the parent's active children, on its log-pure projection
-(§9). `heddleStatic` checks its starting tree, and `HeddleNode`'s ungoverned
-`prepare` and `activate` check this peer's view only. Two gaps remain, both
-for the read-side check in `schedule` (#3353). Two ungoverned peers activating
-siblings at once can merge past the budget. And a governed peer's data plane
-can briefly hold an over-budget active set: gossip can bring it a later
-`Activate` before an earlier `Close`.
+stops granting at a saturated parent, and its `schedule` answers
+`ScheduleOutcome.PositionCeiling(parent)`. A call that granted before meeting the
+ceiling answers `Delegated`, and the next call answers the ceiling. Its rebase is
+tracked by #3353. `apply` keeps the weight products in range the same way: an
+activation whose weights would put its parent's `L`, `S`, `G · S` or `S · d` out
+of `Long` is refused with a `StepRefusal`. Where a topology act enters a
+replicated ledger the same rule is checked. The control log refuses a `Prepare`
+whose own weight fails it and an `Activate` that fails it beside the parent's
+active children, on its log-pure projection (§9). `heddleStatic` checks its
+starting tree, and `HeddleNode`'s ungoverned `prepare` and `activate` check this
+peer's view only. That does not keep the merged ledger in range. Two ungoverned
+peers activating siblings at once can merge past the budget, and a governed
+peer's data plane can briefly hold an over-budget active set when gossip brings
+it a later `Activate` before an earlier `Close`. So `HeddleNode.schedule` checks
+the parent's active children again before it seats anyone, on every round, and
+answers `ScheduleOutcome.WeightBudget(parent)` with nothing written. The check
+is the whole parent's: it refuses even a pick whose own candidates would fit.
 
 Why a grid at all, against the exact `Rational` this section used to prescribe:
 a joiner stored the front, a weighted mean whose denominator carries `Σw` of the

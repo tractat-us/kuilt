@@ -34,9 +34,10 @@ and a snapshot to survive a restart, and no `Seam` or Raft underneath.
   `earmarked`), so code that only spends, such as `:kuilt-warp-heddle`'s admission gate, takes
   either node.
 - `ReserveOutcome` / `ScheduleOutcome` / `GateClosed` — what a spend call did. `reserve` answers
-  `Reserved` or `NoHoldings`; a governed node's `schedule` answers `Delegated` or
-  `NothingToDelegate` (a static node's returns a plain grant count). Only a governed node adds
-  `GateClosed`, with a `Reason`, when this peer may not author entitlement at all.
+  `Reserved` or `NoHoldings`; `schedule` answers `Delegated` or `NothingToDelegate`, or
+  `PositionCeiling` or `WeightBudget` when the parent's children cannot be ordered at all. Only a
+  governed node adds `GateClosed`, with a `Reason`, when this peer may not author entitlement at
+  all.
 - `HeddleNode` / `heddleStatic` — the node that runs the tally, demand board, reservations,
   and liveness over a `Seam`, and its fixed-roster bootstrap (see below).
 - `GovernedHeddleNode` / `heddleGoverned` — the same node with runtime supply creation and
