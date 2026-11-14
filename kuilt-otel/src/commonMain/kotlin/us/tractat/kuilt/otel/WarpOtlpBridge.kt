@@ -98,8 +98,10 @@ public class WarpOtlpBridge(
             val digest = edge.metricDigest()
             val delta = points.filterTo(mutableSetOf()) { digest.versions[it.key] != it.valueHash() }
             if (delta.isNotEmpty()) edge.sendMetrics(delta)
-            // Every series the edge has a record of was rendered and sent at some point, so the
-            // rendered keys are the whole live set the edge needs to bound its record by (#3292).
+            // When this bridge is the only producer behind the edge's record, every series in that
+            // record was rendered and sent by this bridge, so the rendered keys are the whole live
+            // set to bound it by (#3292). A record two producers share is pruned to whichever one
+            // drained last; see OtlpEdge.retainMetrics.
             edge.retainMetrics(points.mapTo(HashSet(points.size)) { it.key })
             delta.size
         }

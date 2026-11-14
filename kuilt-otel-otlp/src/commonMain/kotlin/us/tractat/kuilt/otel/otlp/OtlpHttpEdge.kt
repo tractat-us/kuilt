@@ -59,10 +59,10 @@ public enum class OtlpWireFormat {
  * idempotently by id. This sent-set does not repair distinct stamped span values
  * created by retrying an export after an indeterminate local write.
  *
- * The metric map is read from [store] once per drain and decoded only when its bytes
- * changed since this edge last saw them, so a drain whose series mostly stood still
- * pays one read, one encode and one write of it, where it used to pay two reads and
- * two decodes on top.
+ * The metric map is read from [store] by the digest and again before each write, and
+ * decoded only when its bytes changed since this edge last saw them. With one edge per
+ * store and endpoint that is never, so a drain that sends pays two reads, one encode and
+ * one write of the map, where it used to pay two decodes on top.
  *
  * The id-set is capped at [maxSentIds] (drop-oldest) so a long-lived producer's
  * sent-set cannot grow without bound; choose a cap that exceeds the device's realistic
@@ -78,7 +78,10 @@ public enum class OtlpWireFormat {
  *   collectors never share a sent-set, the key is a fixed width whatever the URL's
  *   length, and a URL carrying credentials never reaches a filename. Length is
  *   unconstrained here.
- * @param store durable persistence for the per-endpoint sent-set.
+ * @param store durable persistence for the per-endpoint sent-set. Give each producer its
+ *   own store, or its own endpoint: every drain prunes the metric record to the draining
+ *   producer's live series, so two producers sharing one store and endpoint would each
+ *   prune the other's, then resend their whole metric set on every drain.
  * @param maxSentIds cap on the span/log sent-set size (drop-oldest). The metric
  *   sent-versions map takes no cap: every drain prunes it to the series the producer
  *   still holds ([retainMetrics]), so it is bounded by the producer's `maxMetrics`.
@@ -188,12 +191,16 @@ public class OtlpHttpEdge(
             },
         )
         val updates = points.associate { it.key to it.valueHash() }
-        sentVersionsLock.withLock { commitSentVersions(currentSentVersions().versions + updates) }
+        sentVersionsLock.withLock { commitSentVersions(refreshSentVersions().versions + updates) }
     }
 
     override suspend fun retainMetrics(live: Set<MetricKey>) {
         sentVersionsLock.withLock {
-            val current = currentSentVersions().versions
+            // Decide from the cache, so a drain with nothing to prune reads nothing more; re-read
+            // only once there is a write to build. A key another edge added since the cache was
+            // loaded is pruned by the next drain instead.
+            if (sentVersions?.versions?.keys?.all { it in live } == true) return
+            val current = refreshSentVersions().versions
             if (current.keys.all { it in live }) return
             commitSentVersions(current.filterKeys { it in live })
         }
@@ -237,25 +244,29 @@ public class OtlpHttpEdge(
         store.write(key, cbor.encodeToByteArray(idSetSerializer, capped))
     }
 
-    // ── Metric sent-versions: one decoded copy, kept equal to disk (#3292) ─────
+    // ── Metric sent-versions: one decoded copy, checked against disk (#3292) ───
     //
     // At 10k series the map is about 900 KiB of CBOR, and a drain used to read and decode it twice
-    // (once for the digest, once more to fold the sent points in) and then encode it again. Now a
-    // drain reads it once, in `metricDigest`, and decodes only when the bytes differ from the ones
-    // the cached map came from; the send and the prune fold onto that cached map.
+    // (once for the digest, once more to fold the sent points in) and then encode it again. Now it
+    // is read by the digest and again just before each write, and decoded only when the bytes
+    // differ from the ones the cached map came from, which with one edge is never.
     //
-    // Why compare the bytes rather than trust the cache outright: this instance is not the only
+    // Why re-read before every write rather than trust the cache: this instance is not the only
     // writer of its key. Two edges on one store and one endpoint share one sent-set by design
-    // (#1053; a trailing slash is the same collector), so another instance's write can land between
-    // two of this one's drains. A cache trusted past that write is silent under-delivery for a gauge
-    // that returns to an earlier value: the cache says the old value was sent, the collector holds
-    // the newer one, and the drain sends nothing. The read is what notices; the comparison is what
-    // keeps it from costing a decode.
+    // (#1053; a trailing slash is the same collector), so another instance's write can land at any
+    // point, including inside this one's POST. A write built on the digest-time copy would put that
+    // instance's entries back to their old values: silent under-delivery for a gauge that returns to
+    // an earlier value, since the record says it was sent while the collector holds the newer one.
+    // The read before the write narrows the window back to read-then-write, which is what it was
+    // before this cache. It does not close it: a write that lands between this read and this write
+    // is still lost. The byte comparison is what keeps each read from costing a decode.
     //
-    // The cache only ever holds what is on disk: it is replaced after the store's write returns, and
-    // `sendMetrics` reaches that write only after a 2xx. A failed POST or a refused write leaves it
-    // as it was. The lock makes each fold-and-write one step, so two concurrent sends on this edge
-    // cannot each fold onto the same base and lose the other's points.
+    // The cache is replaced after the store's write returns, and `sendMetrics` reaches that write
+    // only after a 2xx, so a failed POST or a refused write leaves it as it was. It is not a promise
+    // that the cache equals disk: another instance can write after it, and a store can land a write
+    // and then throw. Both are why every write starts from a fresh read. The lock makes each
+    // read-fold-write one step on this edge, so two concurrent sends cannot each fold onto the same
+    // base and lose the other's points.
 
     /** The decoded sent-versions map, beside the exact bytes on disk it came from (null: no key). */
     private class SentVersions(val bytes: ByteArray?, val versions: Map<MetricKey, Long>)
@@ -272,9 +283,6 @@ public class OtlpHttpEdge(
         if (cached != null && cached.bytes.contentEquals(bytes)) return cached
         return SentVersions(bytes, decodeVersions(bytes)).also { sentVersions = it }
     }
-
-    /** The cache when a digest has loaded it, so a send and a prune in the same drain do not re-read. */
-    private suspend fun currentSentVersions(): SentVersions = sentVersions ?: refreshSentVersions()
 
     private suspend fun commitSentVersions(versions: Map<MetricKey, Long>) {
         val bytes = cbor.encodeToByteArray(versionsSerializer, versions)

@@ -108,8 +108,16 @@ class OtlpHttpEdgeSentVersionsTest {
     private suspend fun telemetry(maxMetrics: Int = 100): WarpTelemetry =
         WarpTelemetry(ReplicaId("device-3292"), InMemoryDurableStore(), maxMetrics = maxMetrics).also { it.recover() }
 
+    /**
+     * The read budget: one read for the digest, and one more just before a write, so a write never
+     * builds on a copy another edge may have overwritten (see [aWriteByAnotherEdgeDuringAPostIsKept]).
+     * A drain with nothing to send and nothing to prune therefore reads exactly once, and a drain
+     * that sends reads at most twice; before #3292 it read twice and decoded both times. Reads are
+     * counted rather than decodes because the store is the only seam the test can see; that a
+     * matching read skips the decode is shown by the bench's `edge digest ms`, not pinned here.
+     */
     @Test
-    fun aDrainReadsTheSentSetAtMostOnce() = runTest {
+    fun aDrainReadsTheSentSetOnceAndOnceMoreBeforeAWrite() = runTest {
         val store = RiggedStore()
         val collector = Collector()
         val edge = OtlpHttpEdge(collector.client, endpoint, store)
@@ -118,20 +126,30 @@ class OtlpHttpEdgeSentVersionsTest {
         t.metrics.incrementSum(key("a"))
         t.metrics.incrementSum(key("b"))
 
-        val readsBefore = store.metricReads
-        val first = bridge.drain(edge)
-        val firstReads = store.metricReads - readsBefore
+        suspend fun drainCountingReads(): Pair<DrainResult, Int> {
+            val before = store.metricReads
+            val result = bridge.drain(edge)
+            return result to store.metricReads - before
+        }
 
+        val (first, firstReads) = drainCountingReads()
         t.metrics.incrementSum(key("a"))
-        val readsBeforeSecond = store.metricReads
-        val second = bridge.drain(edge)
-        val secondReads = store.metricReads - readsBeforeSecond
+        val (second, secondReads) = drainCountingReads()
+        val (idle, idleReads) = drainCountingReads()
 
         assertAll(
             { assertEquals(DrainResult.Success(spansSent = 0, metricPointsSent = 2), first, "precondition: the first drain sent points") },
             { assertEquals(DrainResult.Success(spansSent = 0, metricPointsSent = 1), second, "precondition: the second drain sent a point") },
-            { assertTrue(firstReads <= 1, "the first drain read the sent-set $firstReads times") },
-            { assertTrue(secondReads <= 1, "the second drain read the sent-set $secondReads times") },
+            {
+                assertEquals(
+                    DrainResult.Success(spansSent = 0, metricPointsSent = 0),
+                    idle,
+                    "precondition: the third drain had series to offer and nothing to send",
+                )
+            },
+            { assertTrue(firstReads <= 2, "the first drain read the sent-set $firstReads times") },
+            { assertTrue(secondReads <= 2, "the second drain read the sent-set $secondReads times") },
+            { assertEquals(1, idleReads, "a drain that writes nothing reads the sent-set once") },
         )
     }
 

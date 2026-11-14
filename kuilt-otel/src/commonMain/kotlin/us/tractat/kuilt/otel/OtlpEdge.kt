@@ -96,6 +96,10 @@ public interface OtlpEdge {
      * The record is per producer: an edge whose record two producers share would have each prune
      * the other's series, and then resend them on every drain.
      *
+     * A throw fails that drain's metrics leg like any other edge failure. The points [sendMetrics]
+     * already delivered in that drain are then reported as `metricPointsSent = 0`, though the
+     * collector has them.
+     *
      * The default does nothing, for an edge that keeps no record.
      */
     public suspend fun retainMetrics(live: Set<MetricKey>) {}
