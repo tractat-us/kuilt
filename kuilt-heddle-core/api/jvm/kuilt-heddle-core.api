@@ -268,6 +268,7 @@ public final class us/tractat/kuilt/heddle/EntitlementLedger : us/tractat/kuilt/
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun gauge-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Gauge;
 	public final fun grossVirtualService-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun hasForgotten ()Z
 	public fun hashCode ()I
 	public final fun holdings-uxjWRQo (Ljava/lang/String;Ljava/lang/String;)J
 	public final fun isLeaf-9eHOidQ (Ljava/lang/String;)Z
@@ -691,22 +692,6 @@ public final class us/tractat/kuilt/heddle/LedgerConflict$NegativeEffectiveSpend
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getEdge-i0YUZAc ()Ljava/lang/String;
 	public fun getOrder ()I
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class us/tractat/kuilt/heddle/LedgerConflict$NegativeForgottenFold : us/tractat/kuilt/heddle/LedgerConflict {
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public synthetic fun compareTo (Ljava/lang/Object;)I
-	public fun compareTo (Lus/tractat/kuilt/heddle/LedgerConflict;)I
-	public final fun component1-8ilV7vI ()Ljava/lang/String;
-	public final fun component2-ffK6qZA ()Ljava/lang/String;
-	public final fun copy-8VToyDw (Ljava/lang/String;Ljava/lang/String;)Lus/tractat/kuilt/heddle/LedgerConflict$NegativeForgottenFold;
-	public static synthetic fun copy-8VToyDw$default (Lus/tractat/kuilt/heddle/LedgerConflict$NegativeForgottenFold;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LedgerConflict$NegativeForgottenFold;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getGroup-8ilV7vI ()Ljava/lang/String;
-	public fun getOrder ()I
-	public final fun getReplica-ffK6qZA ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

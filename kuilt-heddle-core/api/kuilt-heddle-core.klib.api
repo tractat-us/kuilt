@@ -337,24 +337,6 @@ sealed interface us.tractat.kuilt.heddle/LedgerConflict : kotlin/Comparable<us.t
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.NegativeEffectiveSpend.toString|toString(){}[0]
     }
 
-    final class NegativeForgottenFold : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold|null[0]
-        constructor <init>(us.tractat.kuilt.heddle/GroupId?, us.tractat.kuilt.crdt/ReplicaId) // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.<init>|<init>(us.tractat.kuilt.heddle.GroupId?;us.tractat.kuilt.crdt.ReplicaId){}[0]
-
-        final val group // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.group|{}group[0]
-            final fun <get-group>(): us.tractat.kuilt.heddle/GroupId? // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.group.<get-group>|<get-group>(){}[0]
-        final val order // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.order|{}order[0]
-            final fun <get-order>(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.order.<get-order>|<get-order>(){}[0]
-        final val replica // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.replica|{}replica[0]
-            final fun <get-replica>(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.replica.<get-replica>|<get-replica>(){}[0]
-
-        final fun component1(): us.tractat.kuilt.heddle/GroupId? // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.component1|component1(){}[0]
-        final fun component2(): us.tractat.kuilt.crdt/ReplicaId // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.component2|component2(){}[0]
-        final fun copy(us.tractat.kuilt.heddle/GroupId? = ..., us.tractat.kuilt.crdt/ReplicaId = ...): us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.copy|copy(us.tractat.kuilt.heddle.GroupId?;us.tractat.kuilt.crdt.ReplicaId){}[0]
-        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.equals|equals(kotlin.Any?){}[0]
-        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.hashCode|hashCode(){}[0]
-        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LedgerConflict.NegativeForgottenFold.toString|toString(){}[0]
-    }
-
     final class OrphanedTransferPath : us.tractat.kuilt.heddle/LedgerConflict { // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath|null[0]
         constructor <init>(us.tractat.kuilt.heddle/PathKey) // us.tractat.kuilt.heddle/LedgerConflict.OrphanedTransferPath.<init>|<init>(us.tractat.kuilt.heddle.PathKey){}[0]
 
@@ -941,6 +923,7 @@ final class us.tractat.kuilt.heddle/EntitlementLedger : us.tractat.kuilt.crdt/Qu
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/EntitlementLedger.equals|equals(kotlin.Any?){}[0]
     final fun gauge(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/Gauge? // us.tractat.kuilt.heddle/EntitlementLedger.gauge|gauge(us.tractat.kuilt.heddle.AttachmentId){}[0]
     final fun grossVirtualService(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/EntitlementLedger.grossVirtualService|grossVirtualService(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun hasForgotten(): kotlin/Boolean // us.tractat.kuilt.heddle/EntitlementLedger.hasForgotten|hasForgotten(){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/EntitlementLedger.hashCode|hashCode(){}[0]
     final fun holdings(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.crdt/ReplicaId): kotlin/Long // us.tractat.kuilt.heddle/EntitlementLedger.holdings|holdings(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.crdt.ReplicaId){}[0]
     final fun isLeaf(us.tractat.kuilt.heddle/GroupId): kotlin/Boolean // us.tractat.kuilt.heddle/EntitlementLedger.isLeaf|isLeaf(us.tractat.kuilt.heddle.GroupId){}[0]
