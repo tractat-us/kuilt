@@ -205,9 +205,7 @@ public class FairShareAllocator(
         waiting: (AttachmentId) -> Demand,
         eligible: (AttachmentId) -> Demand,
     ): ChildPick? {
-        val cell = ValueCell(ledger)
-        settleJoiners(parent, cell, waiting)
-        val seated = cell.current
+        val seated = settle(parent, ledger, waiting)
         val grant = pickOne(seated, parent, earmarked = 0L, eligible) ?: return null
         return ChildPick(seated, grant)
     }
@@ -254,6 +252,19 @@ public class FairShareAllocator(
             if (offset == Rational.ZERO) wakeOffsets.remove(id) else wakeOffsets[id] = offset
         }
         rebasesForTest++
+    }
+
+    /**
+     * The step [pickChild] takes before it picks, and nothing more: seat the newborns and clamp the
+     * wakers at [parent], reading [waiting], and observe who was waiting. For a delegation that is
+     * not a pick but must leave the wake memory as the pick would have ([LocalHeddle.admit] with a
+     * waiting set, #3320). Never throws at a position ceiling, since it orders nothing: a seat or a
+     * clamp taken there saturates. Returns the seated ledger; [ledger] is not changed.
+     */
+    internal fun settle(parent: GroupId, ledger: EntitlementLedger, waiting: (AttachmentId) -> Demand): EntitlementLedger {
+        val cell = ValueCell(ledger)
+        settleJoiners(parent, cell, waiting)
+        return cell.current
     }
 
     /**

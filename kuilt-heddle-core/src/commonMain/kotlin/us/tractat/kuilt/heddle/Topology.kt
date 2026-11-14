@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalVersionOverloading::class)
+
 package us.tractat.kuilt.heddle
 
 import kotlinx.serialization.KSerializer
@@ -22,7 +24,7 @@ import kotlinx.serialization.encoding.Encoder
  * decode through the generated serializer — runs the same check, and throws [TopologyException]
  * naming every problem at once. Because the tree is nested, it cannot express a cycle or a child
  * with two parents. What remains to check is that every name is non-empty and unique among its siblings,
- * and that every group has a child to give its share to.
+ * that every group has a child to give its share to, and that no ceiling is negative.
  *
  * The check runs once, at construction, against the lists you pass. Pass lists you will not mutate
  * afterwards: a list changed after the check is a tree nothing has checked.
@@ -61,6 +63,13 @@ public data class Topology(public val root: String, public val children: List<No
 
         /** The child's share relative to its siblings. */
         public val weight: Weight
+
+        /**
+         * The most leases that may be open beneath this child at once, or `null` for no ceiling.
+         * `0` pauses it: nothing beneath it is picked. Never negative. `LocalHeddle` does not read it
+         * yet. Enforcement is tracked by #3324.
+         */
+        public val maxConcurrent: Long?
     }
 
     /**
@@ -72,6 +81,9 @@ public data class Topology(public val root: String, public val children: List<No
      *   Each runtime child is a leaf, one level below this group: it cannot be marked itself, so
      *   it never has children of its own. Declared groups nest to any depth; runtime ones do not
      *   yet, and letting them is tracked by #3314.
+     * @property maxConcurrent the most leases open beneath this group at once, counted across all
+     *   its children; `null` for no ceiling, `0` to pause it. `LocalHeddle` does not read it yet.
+     *   Enforcement is tracked by #3324.
      */
     @Serializable
     @SerialName("group")
@@ -80,23 +92,35 @@ public data class Topology(public val root: String, public val children: List<No
         @Serializable(with = TopologyWeightSerializer::class) override val weight: Weight,
         public val children: List<Node>,
         public val runtimeChildren: RuntimeChildren? = null,
+        @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
     ) : Node
 
-    /** A leaf of the tree: work is charged here. */
+    /**
+     * A leaf of the tree: work is charged here.
+     *
+     * @property maxConcurrent the most leases open on this lane at once; `null` for no ceiling,
+     *   `0` to pause it. `LocalHeddle` does not read it yet. Enforcement is tracked by #3324.
+     */
     @Serializable
     @SerialName("lane")
     public data class Lane(
         override val name: String,
         @Serializable(with = TopologyWeightSerializer::class) override val weight: Weight = Weight.ONE,
+        @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
     ) : Node
 
     /**
      * Marks a group whose children are created at runtime. Every such child gets [weight]. Its
      * name is an opaque string the consumer chooses: heddle attaches no meaning to it.
+     *
+     * @property maxConcurrent the most leases open on **each** runtime child at once, not on all of
+     *   them together; `null` for no ceiling, `0` to pause every one. Never negative. `LocalHeddle`
+     *   does not read it yet. Enforcement is tracked by #3324.
      */
     @Serializable
     public data class RuntimeChildren(
         @Serializable(with = TopologyWeightSerializer::class) public val weight: Weight,
+        @IntroducedAt("0.7.5") public val maxConcurrent: Long? = null,
     )
 
     public companion object {
@@ -149,7 +173,7 @@ public sealed interface TopologyParse {
  * `a/b` can never be mistaken for an index or for two levels.
  *
  * A problem about a child's name or weight and a problem about that same child as a group (an empty
- * group, a bad runtime-children weight) share its path; [kind] tells them apart.
+ * group, a bad runtime-children weight) share its path; problems at one path are told apart by [kind] and [detail].
  *
  * @property path the child indices from the root to the node this problem concerns; `[]` is the
  *   root. Every index is `>= 0`.
@@ -186,6 +210,12 @@ public data class TopologyProblem(
 
         /** A weight is not a positive whole number or ratio, such as `"3"` or `"3/2"`. */
         INVALID_WEIGHT,
+
+        /**
+         * A `maxConcurrent` ceiling is negative. `0` is not a problem: it pauses the node. Reported
+         * at the node's own path, or at the group's path for its runtime children's ceiling.
+         */
+        NEGATIVE_MAX_CONCURRENT,
 
         /**
          * A problem the app found in its own settings for a node, kept in the same file as the
@@ -247,9 +277,15 @@ private fun quoted(name: String): String =
     "\"" + name.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") + "\""
 
 private fun Topology.Node.written(): TopologyDocument.Node = when (this) {
-    is Topology.Group ->
-        TopologyDocument.Group(name, weight.text(), children.map { it.written() }, runtimeChildren?.weight?.text())
-    is Topology.Lane -> TopologyDocument.Lane(name, weight.text())
+    is Topology.Group -> TopologyDocument.Group(
+        name,
+        weight.text(),
+        children.map { it.written() },
+        runtimeChildren?.weight?.text(),
+        maxConcurrent = maxConcurrent,
+        runtimeChildrenMaxConcurrent = runtimeChildren?.maxConcurrent,
+    )
+    is Topology.Lane -> TopologyDocument.Lane(name, weight.text(), maxConcurrent)
 }
 
 /** Only called once [documentProblems] is empty, so every weight text parses. */
@@ -258,9 +294,10 @@ private fun TopologyDocument.Node.checked(): Topology.Node = when (this) {
         name,
         checkedWeight(weight),
         children.map { it.checked() },
-        runtimeChildren?.let { Topology.RuntimeChildren(checkedWeight(it)) },
+        runtimeChildren?.let { Topology.RuntimeChildren(checkedWeight(it), runtimeChildrenMaxConcurrent) },
+        maxConcurrent,
     )
-    is TopologyDocument.Lane -> Topology.Lane(name, checkedWeight(weight))
+    is TopologyDocument.Lane -> Topology.Lane(name, checkedWeight(weight), maxConcurrent)
 }
 
 private fun checkedWeight(text: String): Weight =
@@ -270,7 +307,7 @@ private fun documentProblems(root: String, children: List<TopologyDocument.Node>
     buildList {
         val at = Address(emptyList(), listOf(root))
         if (root.isEmpty()) add(at.problem(TopologyProblem.Kind.EMPTY_NAME, "the root has no name"))
-        walkGroup(at, children, runtimeChildren = null)
+        walkGroup(at, children, runtimeChildren = null, runtimeChildrenMaxConcurrent = null)
     }
 
 /** Where a node sits: its child indices from the root, and the names along the way for display. */
@@ -283,9 +320,13 @@ private fun MutableList<TopologyProblem>.walkGroup(
     group: Address,
     children: List<TopologyDocument.Node>,
     runtimeChildren: String?,
+    runtimeChildrenMaxConcurrent: Long?,
 ) {
     if (runtimeChildren != null && parseWeightText(runtimeChildren) == null) {
         add(group.problem(TopologyProblem.Kind.INVALID_WEIGHT, "runtime children weight ${quoted(runtimeChildren)} $NOT_A_WEIGHT"))
+    }
+    if (runtimeChildrenMaxConcurrent != null && runtimeChildrenMaxConcurrent < 0L) {
+        add(group.problem(TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT, "runtime children maxConcurrent $runtimeChildrenMaxConcurrent $NEGATIVE_CEILING"))
     }
     if (children.isEmpty() && runtimeChildren == null) {
         add(group.problem(TopologyProblem.Kind.EMPTY_GROUP, "the group has no children and is not marked for runtime children"))
@@ -305,8 +346,16 @@ private fun MutableList<TopologyProblem>.walkGroup(
         if (parseWeightText(child.weight) == null) {
             add(at.problem(TopologyProblem.Kind.INVALID_WEIGHT, "weight ${quoted(child.weight)} $NOT_A_WEIGHT"))
         }
-        if (child is TopologyDocument.Group) walkGroup(at, child.children, child.runtimeChildren)
+        val ceiling = child.maxConcurrent
+        if (ceiling != null && ceiling < 0L) {
+            add(at.problem(TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT, "maxConcurrent $ceiling $NEGATIVE_CEILING"))
+        }
+        if (child is TopologyDocument.Group) {
+            walkGroup(at, child.children, child.runtimeChildren, child.runtimeChildrenMaxConcurrent)
+        }
     }
 }
 
 private const val NOT_A_WEIGHT = "is not a positive whole number or ratio, such as \"3\" or \"3/2\""
+
+private const val NEGATIVE_CEILING = "is negative; write 0 to pause, or leave it out for no ceiling"

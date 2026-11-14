@@ -68,4 +68,10 @@ class HeddleSamplesRunTest {
 
     @Test
     fun buildFarmHolds() = sampleBuildFarm()
+
+    @Test
+    fun kuiltVersionHolds() = sampleKuiltVersion()
+
+    @Test
+    fun previewQueuesHolds() = samplePreviewQueues()
 }

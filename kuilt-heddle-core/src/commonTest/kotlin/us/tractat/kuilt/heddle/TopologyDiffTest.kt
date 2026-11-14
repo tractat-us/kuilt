@@ -159,6 +159,37 @@ class TopologyDiffTest {
         )
     }
 
+    /**
+     * A ceiling is engine configuration, not ledger state: changing only `maxConcurrent`, on a group,
+     * a lane or a runtime marker with a child attached, keeps every edge and emits no step.
+     *
+     * This is a **pin**: it cannot red until enforcement reads the ceiling, because `diff` has
+     * nothing to emit for a ceiling today. It exists so the day that changes, this test is the one
+     * that says so.
+     */
+    @Test
+    fun changingOnlyACeilingEmitsNoStep() {
+        fun tree(cap: Long?, markerWeight: Long = 1L) = Topology(
+            "root",
+            listOf(
+                Group("acme", Weight.of(3), listOf(Lane("interactive", Weight.of(3), maxConcurrent = cap), Lane("batch")), maxConcurrent = cap),
+                Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.of(markerWeight), maxConcurrent = cap)),
+            ),
+        )
+        val tenant = tree(null).runtimeChildId(listOf("tenants"), "t1")
+        val booted = served(bootFrom(tree(null)))
+        val ledger = applyAll(tree(null).attachRuntimeChild(listOf("tenants"), "t1", booted, generation = 1), booted).ledger
+
+        assertAll(
+            { assertEquals(1, ledger.liveInto(tenant).size, "the rig: a runtime child is attached") },
+            { assertEquals(emptyList(), Topology.diff(tree(null), ledger, generation = 2), "the rig: the uncapped tree is reached") },
+            { assertTrue(Topology.diff(tree(null, markerWeight = 2L), ledger, generation = 2).isNotEmpty(), "the rig: the diff sees the marker") },
+            *listOf(0L, 1L, 3L, Long.MAX_VALUE).map { cap ->
+                { assertEquals(emptyList(), Topology.diff(tree(cap), ledger, generation = 2), "ceiling $cap") }
+            }.toTypedArray(),
+        )
+    }
+
     @Test
     fun diffOfAReachedStateIsEmpty() {
         val reweighted = applyAll(Topology.diff(fairness(acmeWeight = 4), served(bootFrom(fairness())), 0), served(bootFrom(fairness())))

@@ -141,7 +141,10 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
   `complete` charged each lane, divide by the total, and compare with
   `entitlement(lane, waiting, totalSlots) / totalSlots`.
 - **Predict, then watch.** `previewPicks` lists the lanes the next acquires would
-  pick, changing nothing. Run the acquires and compare.
+  pick, changing nothing. Run the acquires and compare. When each lane knows its
+  own next job, pass each lane's queue of estimates instead of a count. Each pick
+  then reserves the default and extends to the winning lane's job, as your loop
+  would.
 - **Run the evidence.** From the repository root:
 
 ```shell

@@ -1,5 +1,8 @@
 plugins {
     id("kuilt.kmp-library")
+    // Generates `us.tractat.kuilt.core.KuiltVersion` into commonMain (#3323). `:kuilt-heddle-core`
+    // carries its own copy, since it may not depend on this module; the rest carry none.
+    id("kuilt.version-constant")
     alias(libs.plugins.kotlinSerialization)
 }
 

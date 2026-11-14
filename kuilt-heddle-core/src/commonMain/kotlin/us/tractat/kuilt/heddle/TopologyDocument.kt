@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalVersionOverloading::class)
+
 package us.tractat.kuilt.heddle
 
 import kotlinx.serialization.SerialName
@@ -35,6 +37,9 @@ public data class TopologyDocument(public val root: String, public val children:
 
         /** The child's share relative to its siblings, as text: `"3"` or `"3/2"`. */
         public val weight: String
+
+        /** The most leases open beneath this child at once, or `null` for no ceiling; see [Topology.Node.maxConcurrent]. */
+        public val maxConcurrent: Long?
     }
 
     /**
@@ -43,6 +48,10 @@ public data class TopologyDocument(public val root: String, public val children:
      * @property runtimeChildren the weight text for children the consumer creates while running,
      *   or `null` when the group has only the [children] written here. A group with the marker may
      *   declare no children of its own.
+     * @property maxConcurrent the group's ceiling; `null` for none.
+     * @property runtimeChildrenMaxConcurrent the ceiling on **each** runtime child, as
+     *   [Topology.RuntimeChildren.maxConcurrent]. It belongs to the [runtimeChildren] marker, and is
+     *   dropped when the group has none.
      */
     @Serializable
     @SerialName("group")
@@ -51,10 +60,20 @@ public data class TopologyDocument(public val root: String, public val children:
         override val weight: String = "1",
         public val children: List<Node> = emptyList(),
         public val runtimeChildren: String? = null,
+        @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
+        @IntroducedAt("0.7.5") public val runtimeChildrenMaxConcurrent: Long? = null,
     ) : Node
 
-    /** A leaf of the tree: work is charged here. */
+    /**
+     * A leaf of the tree: work is charged here.
+     *
+     * @property maxConcurrent the lane's ceiling; `null` for none.
+     */
     @Serializable
     @SerialName("lane")
-    public data class Lane(override val name: String, override val weight: String = "1") : Node
+    public data class Lane(
+        override val name: String,
+        override val weight: String = "1",
+        @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
+    ) : Node
 }

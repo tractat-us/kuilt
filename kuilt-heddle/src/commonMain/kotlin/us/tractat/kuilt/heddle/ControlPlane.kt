@@ -69,9 +69,14 @@ internal sealed interface ControlCommand {
      * CLOSING. [witness] is the proposer's observed drain witness for [edge] (its counter slots),
      * carried so the committed RETIRED patch ships the drained counters — a governed projection has
      * empty counters, so without it a laggard would transiently false-fire [LedgerConflict.ClosureViolation].
+     * A witness carrying forgotten edges does not decode ([ReplicatedLedgerSerializer]), so the entry
+     * reads as unreadable rather than reaching the projection's `piece`.
      */
     @Serializable
-    data class Retire(val edge: AttachmentId, val witness: EntitlementLedger? = null) : ControlCommand
+    data class Retire(
+        val edge: AttachmentId,
+        @Serializable(with = ReplicatedLedgerSerializer::class) val witness: EntitlementLedger? = null,
+    ) : ControlCommand
 
     /**
      * Reconcile the budget stranded on RETIRED inbound edges of [child] onto its single live inbound

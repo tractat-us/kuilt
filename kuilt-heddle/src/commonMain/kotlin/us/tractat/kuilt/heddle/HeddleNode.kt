@@ -95,6 +95,13 @@ public class HeddleNode internal constructor(
      */
     epoch: Long,
 ) : FairShareExecution {
+    init {
+        // First, so nothing has been launched on the scope when it throws. A replicated ledger never
+        // holds a fold (design §5.5); every ledger a peer sends is refused with one, by
+        // [ReplicatedLedgerSerializer], and this is the same rule for the one this node starts from.
+        require(!initialLedger.hasForgotten()) { "a replicated ledger never carries forgotten edges: forgetting is one writer's act" }
+    }
+
     // ── channels over the one physical seam (byte-frugal String namespace) ──────────
     private val peersFlow: StateFlow<Set<PeerId>> = seam.peers
     private val mux = NamedMux(seam, scope)
@@ -105,7 +112,7 @@ public class HeddleNode internal constructor(
     private val ledgerQuilter: Quilter<EntitlementLedger> = Quilter(
         seam = ledgerSeam,
         initial = initialLedger,
-        valueSerializer = EntitlementLedger.serializer(),
+        valueSerializer = ReplicatedLedgerSerializer,
         scope = scope,
         replica = self,
         config = config.quilter,

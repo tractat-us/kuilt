@@ -231,6 +231,37 @@ class LocalHeddlePositionCeilingTest {
         )
     }
 
+    /**
+     * A queues preview stops at a position-ceiling refusal from either call it makes (#3321): the
+     * acquire, when a sibling of the pick is saturated, or the extend that takes the lease up to its
+     * head, when that delegation would cross. In the second the acquire landed, and its pick is
+     * still left out. Each arm has a control that differs only in the refusal.
+     */
+    @Test
+    fun aQueuePreviewStopsAtTheCeiling() {
+        val queues = mapOf(a to listOf(1L), b to listOf(1L))
+        val unsaturated = engine().apply { warmUp() }.previewPicks(queues, setOf(b), reservation = 1L)
+        val saturated = engine().apply { warmUp() }
+        saturated.pushTowardCeiling(a, below = 0L)
+
+        // One unit is 16 ticks: 17 under, an acquire of 1 lands one tick under, and an extend crosses.
+        val crossing = engine()
+        crossing.pushTowardCeiling(a, below = 17L)
+        val before = crossing.snapshot()
+        val withoutExtend = crossing.previewPicks(mapOf(a to listOf(1L)), setOf(a), reservation = 1L)
+        val withExtend = crossing.previewPicks(mapOf(a to listOf(2L)), setOf(a), reservation = 1L)
+        val unchanged = crossing.snapshot() == before
+        val lease = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a), setOf(a), startedAt = 0L, reservation = 1L)).lease
+        assertAll(
+            { assertEquals(listOf(b), unsaturated, "the control: b is picked when a is not saturated") },
+            { assertEquals(emptyList(), saturated.previewPicks(queues, setOf(b), reservation = 1L)) },
+            { assertEquals(listOf(a), withoutExtend, "the control: the acquire alone lands") },
+            { assertEquals(emptyList(), withExtend) },
+            { assertTrue(unchanged, "neither preview moved the engine") },
+            { assertEquals(LeaseOutcome.PositionCeiling(root), crossing.extend(lease.id, 1L), "the rig: the extend is what refuses") },
+        )
+    }
+
     @Test
     fun aWeightSetOverTheBudgetIsRefusedAtApply() {
         // Two primes just over 2³², so the lcm of the denominators leaves Long.
@@ -313,6 +344,39 @@ class LocalHeddlePositionCeilingTest {
         check(engine.grossTicks(a) < positionCeiling(aWeight) / 100) { "a sits well below its ceiling" }
         check(engine.grossTicks(a).timesWide(1_000_000L) > Int128.of(positionCeiling(bWeight))) { "b's front is past b's ceiling" }
         assertEquals(AcquireOutcome.PositionCeiling(engine.root), engine.acquire(setOf(a, b), setOf(a, b), startedAt = 1L))
+    }
+
+    /**
+     * The same waker, observed by an `admit` with a waiting set (#3320). An admission is never
+     * refused, so it charges, and the clamp it takes past the waker's ceiling saturates rather than
+     * throwing: the stored offset is the ceiling itself, and the next pick refuses as it would have.
+     */
+    @Test
+    fun anAdmitThatClampsAWakerPastItsCeilingChargesAndTheClampSaturates() {
+        val clampTopology = draft("clamp") {
+            lane("a", Weight.of(1, 1000))
+            lane("b", Weight.of(1000))
+        }
+        val a = clampTopology.groupId("a")
+        val b = clampTopology.groupId("b")
+        val engine = LocalHeddle.fromTopology(clampTopology, LocalPolicy(defaultReservation = 1L, sleeperCredit = 1L), epoch = 1L)
+            .apply { reconcileCapacity(1L) }
+        for (waiting in listOf(setOf(a, b), setOf(a))) {
+            val lease = (engine.acquire(waiting, waiting, startedAt = 0L) as AcquireOutcome.Acquired).lease
+            engine.complete(lease.id, actualCost = 1L)
+        }
+        engine.pushTo(a, 10_000_000_000_000L)
+        val bWeight = Weight.of(1000)
+        val bEdge = engine.edgeOf(b)
+        check(engine.snapshot().allocatorMemory.demandingObserved[bEdge] == false) { "the rig: b was last observed idle" }
+        check(engine.grossTicks(a).timesWide(1_000_000L) > Int128.of(positionCeiling(bWeight))) { "b's front is past b's ceiling" }
+        val admitted = engine.admit(a, setOf(a, b), startedAt = 1L)
+        val offset = engine.snapshot().allocatorMemory.wakeOffsets[bEdge]
+        assertAll(
+            { assertIs<AcquireOutcome.Acquired>(admitted) },
+            { assertEquals(positionCeiling(bWeight), offset?.let { ticksAt(it, bWeight) }, "b's clamp is held at its ceiling") },
+            { assertEquals(AcquireOutcome.PositionCeiling(engine.root), engine.acquire(setOf(a, b), setOf(b), startedAt = 2L)) },
+        )
     }
 
     /**

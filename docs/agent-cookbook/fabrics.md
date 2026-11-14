@@ -436,3 +436,27 @@ check(store.read(StoreKey("never-written")) == null)
 store.delete(key)
 check(store.read(key) == null)
 ```
+
+### Which kuilt wrote what you saved
+
+**Intent:** record which kuilt release wrote something you keep, such as a snapshot, a saved ledger or a log header, so a later run can tell old data from new. Don't copy the version string into your own code: the copy goes stale on the next upgrade, and a snapshot build never matches it.
+**Primitive:** `KuiltVersion.VERSION` — a value generated from the version the build publishes: `<line>.0-dev` locally, `<line>.0-dev.<run>` in a snapshot, the tag's `x.y.z` in a release.
+
+Two modules carry it, each in its own package:
+
+- `us.tractat.kuilt.core.KuiltVersion` in `:kuilt-core`, which most modules bring with them;
+- `us.tractat.kuilt.heddle.KuiltVersion` in `:kuilt-heddle-core`, for a `LocalHeddle` app, since that module keeps `:kuilt-core` and its coroutines off its classpath.
+
+The modules below `:kuilt-core` carry no copy: those with no kuilt dependency, or only such ones, such as `:kuilt-crdt`, `:kuilt-store`, `:kuilt-seal`, `:kuilt-math`, `:kuilt-bolt` and `:kuilt-identity`. `KuiltVersion.VERSION` is the version of the module that carries it. Import the BOM to keep every kuilt module at that version.
+
+It is a plain `val`, not a `const`, so it names the kuilt actually running, not the one your code compiled against. A `const` would be copied into your code at compile time, and would make every kuilt release recompile everything built on the module that carries it.
+
+<!-- verbatim from kuilt-core/src/commonSamples/kotlin/us/tractat/kuilt/core/KuiltVersionSamples.kt#sampleKuiltVersion -->
+```kotlin
+// Save the version beside the bytes it describes.
+val snapshotHeader = mapOf("writtenBy" to KuiltVersion.VERSION)
+
+// A later run compares it with the kuilt it is running now.
+val writtenByThisKuilt = snapshotHeader["writtenBy"] == KuiltVersion.VERSION
+check(writtenByThisKuilt)
+```

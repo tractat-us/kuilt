@@ -168,6 +168,11 @@ public final class us/tractat/kuilt/core/InMemoryTag : us/tractat/kuilt/core/Tag
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class us/tractat/kuilt/core/KuiltVersion {
+	public static final field INSTANCE Lus/tractat/kuilt/core/KuiltVersion;
+	public final fun getVERSION ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/core/LatchingToKt {
 	public static final fun latchingTo (Lkotlinx/coroutines/flow/StateFlow;Lkotlinx/coroutines/flow/StateFlow;Ljava/lang/Object;)Lkotlinx/coroutines/flow/StateFlow;
 }

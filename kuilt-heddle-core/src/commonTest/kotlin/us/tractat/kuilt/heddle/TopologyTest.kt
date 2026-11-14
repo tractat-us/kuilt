@@ -7,11 +7,13 @@ import us.tractat.kuilt.heddle.TopologyProblem.Kind.DUPLICATE_NAME
 import us.tractat.kuilt.heddle.TopologyProblem.Kind.EMPTY_GROUP
 import us.tractat.kuilt.heddle.TopologyProblem.Kind.EMPTY_NAME
 import us.tractat.kuilt.heddle.TopologyProblem.Kind.INVALID_WEIGHT
+import us.tractat.kuilt.heddle.TopologyProblem.Kind.NEGATIVE_MAX_CONCURRENT
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class TopologyTest {
@@ -78,6 +80,7 @@ class TopologyTest {
                 TopologyDocument.Group("idle", runtimeChildren = "0"),
                 TopologyDocument.Group("empty"),
                 lane("x", weight = "0"),
+                TopologyDocument.Lane("capped", maxConcurrent = -1L),
             ),
         )
 
@@ -299,6 +302,112 @@ class TopologyTest {
             // The display names cannot tell the two `batch` subtrees apart; the paths can.
             { assertEquals(listOf("root", "batch", "idle"), emptyGroups[0].names) },
             { assertEquals(emptyGroups[0].names, emptyGroups[1].names) },
+        )
+    }
+
+    /**
+     * A ceiling below zero is reported at the node it is written on, and the runtime children's
+     * ceiling at the marked group, like the marker's weight. Zero is a pause, not a problem.
+     */
+    @Test
+    fun aNegativeCeilingIsAProblemAndZeroIsValid() {
+        fun document(cap: Long) = TopologyDocument(
+            "root",
+            listOf(
+                TopologyDocument.Group("acme", children = listOf(TopologyDocument.Lane("batch", maxConcurrent = cap)), maxConcurrent = cap),
+                TopologyDocument.Group("tenants", runtimeChildren = "1", runtimeChildrenMaxConcurrent = cap),
+            ),
+        )
+        fun built(cap: Long) = Topology(
+            "root",
+            listOf(
+                Topology.Group("acme", Weight.ONE, listOf(Topology.Lane("batch", maxConcurrent = cap)), maxConcurrent = cap),
+                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.ONE, maxConcurrent = cap)),
+            ),
+        )
+        val negative = listOf(
+            Key(listOf(0), NEGATIVE_MAX_CONCURRENT),
+            Key(listOf(0, 0), NEGATIVE_MAX_CONCURRENT),
+            Key(listOf(1), NEGATIVE_MAX_CONCURRENT),
+        )
+
+        assertAll(
+            { assertEquals(negative, invalid(document(-1L)).keys()) },
+            { assertEquals(negative, invalid(document(Long.MIN_VALUE)).keys()) },
+            { assertTrue(invalid(document(-1L)).all { "-1" in it.detail }, "the detail names the value: ${invalid(document(-1L))}") },
+            { assertEquals(negative, assertFailsWith<TopologyException> { built(-1L) }.problems.keys()) },
+            { assertEquals(TopologyParse.Valid(built(0L)), Topology.from(document(0L))) },
+            { assertEquals(TopologyParse.Valid(built(Long.MAX_VALUE)), Topology.from(document(Long.MAX_VALUE))) },
+        )
+    }
+
+    /**
+     * A runtime-children ceiling belongs to the marker: a document group with a ceiling but no
+     * `runtimeChildren` drops it, and the topology built is the same as one without it.
+     */
+    @Test
+    fun aRuntimeChildrenCeilingWithoutAMarkerIsDropped() {
+        fun document(cap: Long?) = TopologyDocument(
+            "root",
+            listOf(TopologyDocument.Group("acme", children = listOf(TopologyDocument.Lane("batch")), runtimeChildrenMaxConcurrent = cap)),
+        )
+        val parsed = Topology.from(document(5L))
+
+        assertAll(
+            { assertEquals(Topology.from(document(null)), parsed) },
+            { assertEquals(null, ((parsed as TopologyParse.Valid).topology.children.single() as Topology.Group).runtimeChildren) },
+        )
+    }
+
+    /** A ceiling survives every form a topology takes, and a node without one writes no key. */
+    @Test
+    fun aCeilingRoundTripsAndAnAbsentOneIsNotWritten() {
+        val capped = Topology(
+            "root",
+            listOf(
+                Topology.Group("acme", Weight.ONE, listOf(Topology.Lane("batch", maxConcurrent = 2L)), maxConcurrent = 3L),
+                Topology.Group("tenants", Weight.ONE, emptyList(), Topology.RuntimeChildren(Weight.ONE, maxConcurrent = 0L)),
+            ),
+        )
+        val document = TopologyDocument(
+            "root",
+            listOf(
+                TopologyDocument.Group("acme", children = listOf(TopologyDocument.Lane("batch", maxConcurrent = 2L)), maxConcurrent = 3L),
+                TopologyDocument.Group("tenants", runtimeChildren = "1", runtimeChildrenMaxConcurrent = 0L),
+            ),
+        )
+        val uncapped = Topology("root", listOf(Topology.Group("tenants", Weight.ONE, listOf(Topology.Lane("a")), Topology.RuntimeChildren(Weight.ONE))))
+        val encoded = json.encodeToString(Topology.serializer(), capped)
+
+        assertAll(
+            { assertEquals(capped, json.decodeFromString(Topology.serializer(), encoded)) },
+            { assertTrue("\"maxConcurrent\":3" in encoded && "\"maxConcurrent\":0" in encoded, encoded) },
+            { assertTrue("maxConcurrent" !in json.encodeToString(Topology.serializer(), uncapped)) },
+            { assertEquals(TopologyParse.Valid(capped), Topology.from(document)) },
+            // `problems` reads a Topology back through the document form; a ceiling it dropped would pass silently.
+            { assertEquals(document, json.decodeFromString(TopologyDocument.serializer(), json.encodeToString(TopologyDocument.serializer(), document))) },
+        )
+    }
+
+    /**
+     * Format 1 of [LocalHeddleSnapshot] stores the topology last applied and predates the ceiling:
+     * the snapshot v0.7.4 wrote decodes with no ceiling on any node, the runtime marker included.
+     */
+    @Test
+    fun aFormatOneSnapshotDecodesWithNoCeiling() {
+        val restored = assertIs<RestoreResult.Restored>(LocalHeddle.decode(GOLDEN_FORMAT_1_RICH, Json))
+        val lastApplied = restored.snapshot.lastApplied
+        fun Topology.Node.ceilings(): List<Long?> = when (this) {
+            is Topology.Lane -> listOf(maxConcurrent)
+            is Topology.Group ->
+                listOf(maxConcurrent) + listOfNotNull(runtimeChildren).map { it.maxConcurrent } + children.flatMap { it.ceilings() }
+        }
+        val ceilings = lastApplied.children.flatMap { it.ceilings() }
+
+        assertAll(
+            { assertTrue(lastApplied.children.any { it is Topology.Group && it.runtimeChildren != null }, "the rig: a marked group") },
+            { assertEquals(7, ceilings.size, "the rig: three groups, three lanes and a marker were walked: $ceilings") },
+            { ceilings.forEach { assertNull(it) } },
         )
     }
 
