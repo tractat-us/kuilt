@@ -8229,7 +8229,7 @@ val verifyTestResultParity by tasks.registering {
 // type argument is therefore anchored — `<SeamState>` exactly, optionally qualified — rather than
 // "mentions SeamState somewhere".
 //
-// ── The population was TEN, and is NINE ──────────────────────────────────────────────────────────
+// ── The population was TEN, and is EIGHT ─────────────────────────────────────────────────────────
 // Derived by running this guard with no markers in the tree — which is the only way to derive it,
 // since a scanner that matches nothing produces a baseline identical to one that works. #2627
 // predicted six and all six are real; the four it missed were `DelayedWovenSeam`, `FakeRoom`,
@@ -8243,9 +8243,11 @@ val verifyTestResultParity by tasks.registering {
 // many words that its exemption was the weakest in the repo — "cannot lose a write HERE", resting on
 // the confined single-threaded test dispatcher it happens to be driven from rather than on any local
 // property of the field. #2633 swept it to a `SeamStateGate` and deleted the marker, so the
-// population is NINE and every remaining member's argument is one of the five below. **Do not read
-// that as a floor to defend.** The exemptions are individually reviewable claims, not a quota; if
-// another one stops being true, sweep it and drop this number by one.
+// population was NINE. `FakeRoom` went next (#3129): its "one writer" stopped being true when
+// `leave` began tearing the seam too, so it became a gate and the population is EIGHT. Every
+// remaining member's argument is one of the five below. **Do not read that as a floor to defend.**
+// The exemptions are individually reviewable claims, not a quota; if another one stops being true,
+// sweep it and drop this number by one.
 //
 // ── The exemption is a marker in the source, and that is load-bearing ────────────────────────────
 // `forbidProductionDispatcherInTests`' mechanism, for its reason plus one this guard cares about
