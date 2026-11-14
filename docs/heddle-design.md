@@ -1479,7 +1479,7 @@ and never decides whether the caller runs anything.
 
 - A document's `runtimeChildrenMaxConcurrent` on a group that does not mark
   runtime children is dropped without a word. Reporting it needs a second new
-  `TopologyProblem.Kind`, and this section allows only one.
+  `TopologyProblem.Kind`, and this section allows only one. Tracked by #3368.
 
 ### 11.3 Previewing the next picks
 
