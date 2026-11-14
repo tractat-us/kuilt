@@ -81,12 +81,12 @@ public class Rational private constructor(
 
     /**
      * Order by exact cross-multiplication: `a/b <=> c/d` compares `a*d` against
-     * `c*b`. Both denominators are positive, so no sign flip is needed. Products are
-     * overflow-checked, so an out-of-range comparison throws rather than wrapping to
-     * a wrong verdict.
+     * `c*b`. Both denominators are positive, so no sign flip is needed. Each product of two
+     * `Long`s is formed in 128 bits, where it always fits, so every pair of rationals compares
+     * and none throws.
      */
     override fun compareTo(other: Rational): Int =
-        checkedMul(numerator, other.denominator).compareTo(checkedMul(other.numerator, denominator))
+        Int128.product(numerator, other.denominator).compareTo(Int128.product(other.numerator, denominator))
 
     /**
      * The **exact ceiling** — the least `Long` that is `>= this`. `7/2` ceils to `4`,

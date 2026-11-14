@@ -13,7 +13,10 @@ package us.tractat.kuilt.heddle
  * (design §10.12). So a sum kept here throws on fewer inputs than the same terms folded through
  * [checkedAdd], never on more, and returns the same value wherever that fold returns one.
  */
-internal data class Int128(val hi: Long, val lo: Long) {
+internal data class Int128(val hi: Long, val lo: Long) : Comparable<Int128> {
+
+    override fun compareTo(other: Int128): Int =
+        if (hi != other.hi) hi.compareTo(other.hi) else (lo xor Long.MIN_VALUE).compareTo(other.lo xor Long.MIN_VALUE)
 
     operator fun plus(v: Long): Int128 = WideSum(this).also { it.add(v) }.toInt128()
 
@@ -33,6 +36,23 @@ internal data class Int128(val hi: Long, val lo: Long) {
         val ZERO: Int128 = Int128(0L, 0L)
 
         fun of(v: Long): Int128 = Int128(v shr 63, v)
+
+        /** The exact product `a · b`, which always fits in 128 bits. */
+        fun product(a: Long, b: Long): Int128 {
+            val mask = 0xFFFF_FFFFL
+            val a0 = a and mask
+            val a1 = a ushr 32
+            val b0 = b and mask
+            val b1 = b ushr 32
+            val p01 = a0 * b1
+            val p10 = a1 * b0
+            val mid = ((a0 * b0) ushr 32) + (p01 and mask) + (p10 and mask)
+            // The unsigned high word, then the two's-complement correction for each negative factor.
+            var hi = a1 * b1 + (p01 ushr 32) + (p10 ushr 32) + (mid ushr 32)
+            if (a < 0L) hi -= b
+            if (b < 0L) hi -= a
+            return Int128(hi, a * b)
+        }
     }
 }
 
