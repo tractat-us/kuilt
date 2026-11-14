@@ -304,7 +304,7 @@ class EntitlementLedgerCanonicalEncodingTest {
         val DONOR = ReplicaId("r")
         val COUNTER = GCounter.of(ReplicaId("r") to 1L)
         val MINT = MintRecord(GroupId("root"), ReplicaId("r"), 1L)
-        val GAUGE = Gauge(Rational.ZERO, 1L, ticksLow = 16L)
+        val GAUGE = Gauge(Rational.of(1L), 1L)
 
         fun recordOf(edge: AttachmentId, child: String): AttachmentRecord =
             AttachmentRecord(edge, GroupId("root"), GroupId(child), Weight.of(1L))
