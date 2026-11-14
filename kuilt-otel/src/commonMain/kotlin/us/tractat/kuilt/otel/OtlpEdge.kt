@@ -83,6 +83,26 @@ public interface OtlpEdge {
      * points whose value-hash differs from [metricDigest].
      */
     public suspend fun sendMetrics(points: Set<MetricPoint>) {}
+
+    /**
+     * Forget what this edge recorded for every series not in [live]: the series the producer
+     * still holds. Without it, a series dropped by the `maxMetrics` cap or a `clear()` stays in the
+     * edge's record forever, so under attribute churn the record grows with every series ever sent.
+     *
+     * [WarpOtlpBridge] calls it once per drain that has any metric point to offer, after
+     * [sendMetrics] succeeds (or is skipped as up to date), with the key of every point it rendered.
+     * A drain with no metric points at all prunes nothing; the next drain that has one does.
+     *
+     * The record is per producer: an edge whose record two producers share would have each prune
+     * the other's series, and then resend them on every drain.
+     *
+     * A throw fails that drain's metrics leg like any other edge failure. The points [sendMetrics]
+     * already delivered in that drain are then reported as `metricPointsSent = 0`, though the
+     * collector has them.
+     *
+     * The default does nothing, for an edge that keeps no record.
+     */
+    public suspend fun retainMetrics(live: Set<MetricKey>) {}
 }
 
 /**

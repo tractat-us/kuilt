@@ -67,6 +67,13 @@ class BridgeExportBenchmark {
 }
 
 class EdgeDrainBenchmark {
+    /**
+     * The bridge-alone and in-edge parts are timed separately, so their sum is a check on the rig:
+     * a stub that skipped the bridge's work, or a timer around the wrong call, moves it off 1. The
+     * band is wide and the ratio is taken per round, so a busy box rarely fails it; a broken split
+     * lands far outside it. The table is written before the check, so a failure here still leaves
+     * the numbers to read, with the verdict that they are not to be trusted.
+     */
     @Test
     fun drainByChangedFraction() = runBlocking {
         val rows = OtlpWireFormat.entries.flatMap { wire ->
@@ -77,5 +84,8 @@ class EdgeDrainBenchmark {
             }
         }
         drainTable(rows)
+        rows.forEach { row ->
+            check(row.partsOverWhole in 0.6..1.4) { "the split does not sum to the whole drain: $row" }
+        }
     }
 }

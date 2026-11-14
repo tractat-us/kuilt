@@ -499,6 +499,7 @@ public abstract interface class us/tractat/kuilt/otel/OtlpEdge {
 	public abstract fun digest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun logDigest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun metricDigest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun retainMetrics (Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun send (Ljava/util/Set;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun send$default (Lus/tractat/kuilt/otel/OtlpEdge;Ljava/util/Set;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public fun sendLogs (Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -508,6 +509,7 @@ public abstract interface class us/tractat/kuilt/otel/OtlpEdge {
 public final class us/tractat/kuilt/otel/OtlpEdge$DefaultImpls {
 	public static fun logDigest (Lus/tractat/kuilt/otel/OtlpEdge;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun metricDigest (Lus/tractat/kuilt/otel/OtlpEdge;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun retainMetrics (Lus/tractat/kuilt/otel/OtlpEdge;Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun send$default (Lus/tractat/kuilt/otel/OtlpEdge;Ljava/util/Set;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static fun sendLogs (Lus/tractat/kuilt/otel/OtlpEdge;Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun sendMetrics (Lus/tractat/kuilt/otel/OtlpEdge;Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

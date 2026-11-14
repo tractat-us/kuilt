@@ -8,6 +8,7 @@ public final class us/tractat/kuilt/otel/otlp/OtlpHttpEdge : us/tractat/kuilt/ot
 	public fun digest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun logDigest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun metricDigest (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun retainMetrics (Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun send (Ljava/util/Set;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun sendLogs (Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun sendMetrics (Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

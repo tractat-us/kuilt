@@ -24,6 +24,7 @@ final class us.tractat.kuilt.otel.otlp/OtlpHttpEdge : us.tractat.kuilt.otel/Otlp
     final suspend fun digest(): us.tractat.kuilt.otel/SpanDigest // us.tractat.kuilt.otel.otlp/OtlpHttpEdge.digest|digest(){}[0]
     final suspend fun logDigest(): us.tractat.kuilt.otel/LogDigest // us.tractat.kuilt.otel.otlp/OtlpHttpEdge.logDigest|logDigest(){}[0]
     final suspend fun metricDigest(): us.tractat.kuilt.otel/MetricDigest // us.tractat.kuilt.otel.otlp/OtlpHttpEdge.metricDigest|metricDigest(){}[0]
+    final suspend fun retainMetrics(kotlin.collections/Set<us.tractat.kuilt.otel/MetricKey>) // us.tractat.kuilt.otel.otlp/OtlpHttpEdge.retainMetrics|retainMetrics(kotlin.collections.Set<us.tractat.kuilt.otel.MetricKey>){}[0]
     final suspend fun send(kotlin.collections/Set<us.tractat.kuilt.otel/SpanRecord>, kotlin.collections/List<us.tractat.kuilt.otel/SpanLink>) // us.tractat.kuilt.otel.otlp/OtlpHttpEdge.send|send(kotlin.collections.Set<us.tractat.kuilt.otel.SpanRecord>;kotlin.collections.List<us.tractat.kuilt.otel.SpanLink>){}[0]
     final suspend fun sendLogs(kotlin.collections/Set<us.tractat.kuilt.otel/LogRecord>) // us.tractat.kuilt.otel.otlp/OtlpHttpEdge.sendLogs|sendLogs(kotlin.collections.Set<us.tractat.kuilt.otel.LogRecord>){}[0]
     final suspend fun sendMetrics(kotlin.collections/Set<us.tractat.kuilt.otel/MetricPoint>) // us.tractat.kuilt.otel.otlp/OtlpHttpEdge.sendMetrics|sendMetrics(kotlin.collections.Set<us.tractat.kuilt.otel.MetricPoint>){}[0]
