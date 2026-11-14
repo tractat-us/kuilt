@@ -87,7 +87,8 @@ clear cannot prove writes work. A failed startup read or decode sets `recoveryFa
 for the instance's lifetime; `lastFailure` retains the latest cause after recovery.
 A failed turn may still have saved its data, and a cancelled turn counts as neither
 acknowledged nor failed; a cancelled metric batch keeps the turns of the kinds it had
-already written. These are local persistence signals, not confirmation of delivery to a backend.
+already written. "Cancelled" means the caller was cancelled. When the store cancels
+its own call instead, say on its own timeout, a log turn counts as `failed`. These are local persistence signals, not confirmation of delivery to a backend.
 The combined getter reads each exporter in turn, so it is not an atomic snapshot
 across signals during concurrent activity.
 
