@@ -12,6 +12,7 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.io.bytestring.ByteString
+import kotlinx.io.bytestring.toHexString
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
@@ -164,7 +165,7 @@ public class OtlpHttpEdge(
                     protobuf.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(spans, links, envelope))
             },
         )
-        recordIds(spanKey, spans.map { it.spanId.toHex() })
+        recordIds(spanKey, spans.map { it.spanId.toHexString() })
     }
 
     override suspend fun sendLogs(logs: Set<LogRecord>) {
@@ -177,7 +178,7 @@ public class OtlpHttpEdge(
                     protobuf.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(logs, envelope))
             },
         )
-        recordIds(logKey, logs.map { it.recordId.toHex() })
+        recordIds(logKey, logs.map { it.recordId.toHexString() })
     }
 
     override suspend fun sendMetrics(points: Set<MetricPoint>) {
@@ -311,7 +312,7 @@ public class OtlpHttpEdge(
 
         /** The per-endpoint sent-set tag: 128 bits of SHA-256 over [base], lowercase hex. */
         private fun endpointTag(base: String): String =
-            ByteString(*SHA256().digest(base.encodeToByteArray()).copyOf(ENDPOINT_TAG_BYTES)).toHex()
+            ByteString(*SHA256().digest(base.encodeToByteArray()).copyOf(ENDPOINT_TAG_BYTES)).toHexString()
 
         private val protobuf = ProtoBuf
         private val cbor = Cbor { alwaysUseByteString = true }
