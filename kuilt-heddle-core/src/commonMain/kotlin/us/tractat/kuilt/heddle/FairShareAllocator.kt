@@ -325,6 +325,11 @@ public class FairShareAllocator(
      * nothing. The threshold sits far enough below the ceiling that a running engine rebases long
      * before either.
      *
+     * The engine never reaches the at-ceiling guard: [pickChildRebasing] rebases only after a
+     * grant, and a pick over a child at its ceiling throws before it grants. The guard stays as a
+     * precondition for a direct caller, which is what `aParentWithAChildAtItsCeilingIsNotRebased`
+     * tests.
+     *
      * It changes nothing itself: the result is the rebased ledger and the offsets to adopt with it
      * ([adopt]).
      */
@@ -517,7 +522,8 @@ public class FairShareAllocator(
             .filter { HeddlePolicy.isDemanding(it) && demandingObserved[it.record.id] == false }
             .mapTo(HashSet()) { it.record.id }
         val joiners = HashSet(unseated).apply { addAll(wakers) }
-        val front = if (joiners.isEmpty()) null else HeddlePolicy.frontTime(edges, excluding = joiners) ?: joinersFront(edges, joiners, wakers)
+        val taken = if (joiners.isEmpty()) null else HeddlePolicy.frontTime(edges, excluding = joiners) ?: joinersFront(edges, joiners, wakers)
+        val front = if (taken != null && wakers.isNotEmpty()) atLeastTheNewborns(taken, edges, unseated) else taken
 
         if (unseated.isNotEmpty()) {
             ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
@@ -545,6 +551,25 @@ public class FairShareAllocator(
             compareVirtual(HeddlePolicy.effectiveTicks(a), a.record.weight, HeddlePolicy.effectiveTicks(b), b.record.weight)
         }
         return VirtualTime.of(HeddlePolicy.effectiveTicks(top), top.record.weight).atCeilingIf(joining.any { HeddlePolicy.isAtCeiling(it) })
+    }
+
+    /**
+     * [front], or the origin of the newborn of [unseated] furthest ahead when that is later (#3329
+     * re-review). A newborn's seat cannot go below its own origin ([EntitlementLedger.seatAt]), so
+     * when newborns and wakers join together, a front below a newborn's origin would seat the
+     * newborn there and clamp the wakers lower, leaving them credit over it. The front an idle
+     * fallback reads can be that low: a rebase lifts an idle child only to `−R`. Raised to the
+     * origin, the wakers are clamped where the newborn is seated. Usually a no-op: a fresh edge's
+     * origin is zero, and a front is at or above zero.
+     */
+    private fun atLeastTheNewborns(front: VirtualTime, edges: List<PolicyEdge>, unseated: Set<AttachmentId>): VirtualTime {
+        val newborns = edges.filter { it.record.id in unseated }
+        if (newborns.isEmpty()) return front
+        val top = newborns.maxWith { a, b ->
+            compareVirtual(HeddlePolicy.effectiveTicks(a), a.record.weight, HeddlePolicy.effectiveTicks(b), b.record.weight)
+        }
+        val origin = HeddlePolicy.effectiveTicks(top)
+        return if (origin > front.ticksFor(top.record.weight)) VirtualTime.of(origin, top.record.weight) else front
     }
 
     /**
@@ -598,11 +623,13 @@ public class FairShareAllocator(
      *
      * All wakers are excluded from the front together, not just each from its own: two siblings
      * waking in the same round would otherwise average each other's stale virtual service into
-     * the front and both keep the credit. A `null` front means nothing survived the exclusion —
-     * every **active** child under the parent is a waker, so nobody ran ahead of anybody and there
-     * is nothing to clamp to. Surviving children that are merely *idle* do not produce a `null`:
+     * the front and both keep the credit. When nothing survives the exclusion, every **active**
+     * child under the parent is joining, and the front is the joiner furthest ahead
+     * ([joinersFront]), so the wakers are clamped level with each other and with any newborn
+     * (#3329 review). Surviving children that are merely *idle* do not empty the set:
      * [HeddlePolicy.front] falls back to the maximum effective virtual service across them, the
-     * bound that can only ever give a turn up (§7.2).
+     * bound that can only ever give a turn up (§7.2). Either way, when newborns join beside the
+     * wakers, the front is raised to the newborns' origins ([atLeastTheNewborns]).
      *
      * **The stored offset is joined with `max`, never replaced** (issue #1714). [HeddlePolicy.front]
      * is a weighted mean over whoever is competing *right now*, and that mean is not monotone
