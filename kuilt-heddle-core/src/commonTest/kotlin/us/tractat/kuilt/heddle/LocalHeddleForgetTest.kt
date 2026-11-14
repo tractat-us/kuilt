@@ -219,12 +219,12 @@ class LocalHeddleForgetTest {
     /**
      * An attached child's prepared edge is the record that the child is attached, so a swap keeps one
      * that says so: `u`'s, at the template's weight, which a reload adopts, and `w`'s, at a weight the
-     * marker no longer gives, which is still the only edge `w` has. The reload then activates `u`'s,
+     * template no longer gives, which is still the only edge `w` has. The reload then activates `u`'s,
      * gives `w` an edge at the template's weight, and only then forgets `w`'s old one, which nothing
      * needs any more.
      */
     @Test
-    fun aPreparedEdgeThatStillSaysARuntimeChildIsAttachedIsKept() {
+    fun aPreparedEdgeThatStillSaysAChildIsAttachedIsKept() {
         val h = engine()
         val u = h.prepareRuntime("u", weight = 1L, generation = 5L)
         val w = h.prepareRuntime("w", weight = 2L, generation = 6L)
@@ -249,7 +249,7 @@ class LocalHeddleForgetTest {
     /**
      * A reload forgets what the topology it installs does not want, not what the one it replaces
      * did not: `u`, attached by a prepared edge at weight 1, is moved to a template of weight 2, and
-     * the weight-1 edge, which the old marker would have adopted, goes in the reload's own swap.
+     * the weight-1 edge, which the old template would have adopted, goes in the reload's own swap.
      */
     @Test
     fun aReloadForgetsWhatTheTopologyItInstallsDoesNotWant() {

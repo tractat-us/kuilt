@@ -98,7 +98,7 @@ These override the task sections below where they differ.
    - **Mint ids carry the epoch** — *corrected by Amendment 10:* one record per epoch, `"local#<epoch>"`, carrying the epoch's cumulative total read off the working ledger. This replaces Task L1's `"local#<k>"`.
    - **`snapshot()` is taken under the caller's lock; the value it returns is read without it.** D6 and P's `persist()` mean that the *value* is lock-free, not the call.
    - **No earmark in L1.** Each level of an operation hands down exactly what it receives, and a pick is capped at the reservation, so a former lane's open reservation is never handed to its new child (`aLaneThatGainsAChildKeepsItsOpenReservation`). L3's re-home moves units without that cap, so L3 Step 1 adds `rehomeKeepsAFormerLanesOpenReservationsEarmarked`.
-   - **Only a declared Lane or an attached child is leasable. That is L3's rule, because only the `Topology` can tell a Lane from a Group whose children are all inactive.** L3 adds one predicate, `isLeaf` and (Lane or attached child), and uses it for both `acquire`'s terminal and `admit`, never for one alone. L3 Step 1 adds `admitRefusesAGroupThatIsNotALaneOrRuntimeChild` and `acquireNeverEndsAtAGroupThatIsNotALaneOrRuntimeChild`.
+   - **Only a declared Lane or an attached child is leasable. That is L3's rule, because only the `Topology` can tell a Lane from a Group whose children are all inactive.** L3 adds one predicate, `isLeaf` and (Lane or attached child), and uses it for both `acquire`'s terminal and `admit`, never for one alone. L3 Step 1 adds `admitRefusesAGroupThatIsNotALaneOrAttachedChild` and `acquireNeverEndsAtAGroupThatIsNotALaneOrAttachedChild`.
    - **L3's re-home includes leases at runtime leaves under a reweighted parent.** The re-attach-mid-drain sequence `[Prepare, Retire, Activate]` matches the replacement detector, so L3 handles it on purpose and tests it.
    - **Deferred to #3199: one `piece` per operation, and the cut in `pickChild`'s scan of active children** (Amendment 3, bullets 5 and 6). Each L1 operation is all-or-nothing through one swap, but it pieces once per mutator. Batching needs an internal ledger mutator. That is a change inside `EntitlementLedger`, with no change to ledger semantics or the public API, and it is all Amendment 3's "not a ledger change" means. #3199 lands before P, or records a decision not to. Scale is recorded, not asserted: the served and unserved rows are reported from the same run.
    - **Retracted:** an earlier follow-up proposed deleting the private `childEdges` and `EdgeIndex.children` as dead. They are not dead: `childEdges` backs `hasChildEdges`, which `Topology.diff` calls (`TopologyDiff.kt` lines 263 and 391), and `buildIndex`/`carryIndex` maintain `EdgeIndex.children` for it. Answering `hasChildEdges` some other way would be a design change, not a deletion.
@@ -181,7 +181,7 @@ These override the task sections below where they differ.
 2. **One slow group in a save that also changes others.** A user expects the other children to apply. Pinned by `oneDrainingChildDoesNotBlockAnother` (Task L3) and `unrelatedGroupInTheSameSaveApplies` (Task 4).
 3. **Restart or reset with leases in flight.** A user expects a lease to be either still valid or rejected by name, and never to charge the wrong group. Pinned by `staleLeaseAfterResetIsNamed` and `restoreKeepsLeases` (Task P).
 4. **A routine reload or drain.** A user expects the status to stay healthy, so that fail-open does not fire. Pinned by `drainingIsInformationalNotDegraded` (Task S1).
-5. **Names that collide once flattened,** including an attached child named like a declared one, and a child literally named `#3`. A user expects distinct ids and an unambiguous problem path. Pinned by `flatteningIsInjectiveOverAwkwardNames` (Task 2), `runtimeNamespaceCannotCollide` (Task 5), and `emptyNameProblemDoesNotCollideWithHashNames` (Task 1).
+5. **Names that collide once flattened,** including an attached child named like a declared one, and a child literally named `#3`. A user expects distinct ids and an unambiguous problem path. Pinned by `flatteningIsInjectiveOverAwkwardNames` (Task 2), `attachedNamespaceCannotCollide` (Task 5), and `emptyNameProblemDoesNotCollideWithHashNames` (Task 1).
 
 ---
 
@@ -366,12 +366,12 @@ In `diff`, owned attached children under a group that still has a template are d
 
 Tests:
 - `attachIsIdempotent`.
-- `runtimeNamespaceCannotCollide` (declared `"x"` and runtime `"x"` coexist).
-- `runtimeChildNamesAreOpaque`.
+- `attachedNamespaceCannotCollide` (declared `"x"` and attached `"x"` coexist).
+- `attachedChildNamesAreOpaque`.
 - `reattachAfterDetachMintsAFreshGeneration`.
-- `diffLeavesRuntimeChildrenAlone`.
-- `diffClosesRuntimeChildrenWhenTheMarkerGoes`.
-- `diffRegeneratesRuntimeChildrenWhenTheMarkerWeightChanges`.
+- `diffLeavesAttachedChildrenAlone`.
+- `diffClosesAttachedChildrenWhenTheTemplateGoes`.
+- `diffRegeneratesAttachedChildrenWhenTheTemplateWeightChanges`.
 - Extend the generator.
 
 Same verification and docs rules. Commit "heddle-core: runtime children in their own namespace (#3173)". After merge, tick #3173's "Done when" boxes.

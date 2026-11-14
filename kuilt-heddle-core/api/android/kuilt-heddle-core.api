@@ -411,26 +411,26 @@ public abstract interface class us/tractat/kuilt/heddle/GroupPath {
 	public abstract fun getNames ()Ljava/util/List;
 }
 
+public final class us/tractat/kuilt/heddle/GroupPath$Attached : us/tractat/kuilt/heddle/GroupPath {
+	public fun <init> (Ljava/util/List;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/GroupPath$Attached;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/GroupPath$Attached;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/GroupPath$Attached;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGroup ()Ljava/util/List;
+	public final fun getName ()Ljava/lang/String;
+	public fun getNames ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/heddle/GroupPath$Declared : us/tractat/kuilt/heddle/GroupPath {
 	public fun <init> (Ljava/util/List;)V
 	public final fun component1 ()Ljava/util/List;
 	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/heddle/GroupPath$Declared;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/GroupPath$Declared;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/GroupPath$Declared;
 	public fun equals (Ljava/lang/Object;)Z
-	public fun getNames ()Ljava/util/List;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class us/tractat/kuilt/heddle/GroupPath$RuntimeChild : us/tractat/kuilt/heddle/GroupPath {
-	public fun <init> (Ljava/util/List;Ljava/lang/String;)V
-	public final fun component1 ()Ljava/util/List;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun copy (Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/GroupPath$RuntimeChild;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/GroupPath$RuntimeChild;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/GroupPath$RuntimeChild;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getGroup ()Ljava/util/List;
-	public final fun getName ()Ljava/lang/String;
 	public fun getNames ()Ljava/util/List;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -779,10 +779,10 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun admit-mLLTQY0 (Ljava/lang/String;Ljava/util/Set;JJ)Lus/tractat/kuilt/heddle/AdmitOutcome;
 	public static synthetic fun admit-mLLTQY0$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;Ljava/util/Set;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AdmitOutcome;
 	public final fun apply (Lus/tractat/kuilt/heddle/Topology;J)Lus/tractat/kuilt/heddle/ApplyResult;
-	public final fun attachRuntimeChild (Ljava/util/List;Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ApplyResult;
+	public final fun attach (Ljava/util/List;Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ApplyResult;
 	public final fun cancel (Lus/tractat/kuilt/heddle/LeaseId;)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun complete (Lus/tractat/kuilt/heddle/LeaseId;J)Lus/tractat/kuilt/heddle/LeaseOutcome;
-	public final fun detachRuntimeChild (Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/ApplyResult;
+	public final fun detach (Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/ApplyResult;
 	public final fun entitlement-lUmtw0Q (Ljava/lang/String;Ljava/util/Set;J)Lus/tractat/kuilt/heddle/Rational;
 	public final fun explain-mLLTQY0 (Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;J)Lus/tractat/kuilt/heddle/WaitExplanation;
 	public static synthetic fun explain-mLLTQY0$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/WaitExplanation;
@@ -1262,6 +1262,36 @@ public final synthetic class us/tractat/kuilt/heddle/Topology$$serializer : kotl
 	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
 }
 
+public final class us/tractat/kuilt/heddle/Topology$ChildTemplate {
+	public static final field Companion Lus/tractat/kuilt/heddle/Topology$ChildTemplate$Companion;
+	public fun <init> (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/Weight;
+	public final fun component2 ()Ljava/lang/Long;
+	public final fun copy (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Topology$ChildTemplate;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMaxConcurrent ()Ljava/lang/Long;
+	public final fun getWeight ()Lus/tractat/kuilt/heddle/Weight;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/Topology$ChildTemplate$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/Topology$ChildTemplate$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/Topology$ChildTemplate$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public final class us/tractat/kuilt/heddle/Topology$Companion {
 	public final fun from (Lus/tractat/kuilt/heddle/TopologyDocument;)Lus/tractat/kuilt/heddle/TopologyParse;
 	public final fun problems (Ljava/lang/String;Ljava/util/List;)Ljava/util/List;
@@ -1270,24 +1300,24 @@ public final class us/tractat/kuilt/heddle/Topology$Companion {
 
 public final class us/tractat/kuilt/heddle/Topology$Group : us/tractat/kuilt/heddle/Topology$Node {
 	public static final field Companion Lus/tractat/kuilt/heddle/Topology$Group$Companion;
-	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;)V
-	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;Ljava/lang/Long;)V
-	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;Ljava/lang/Long;)V
+	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Lus/tractat/kuilt/heddle/Weight;
 	public final fun component3 ()Ljava/util/List;
-	public final fun component4 ()Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;
+	public final fun component4 ()Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
 	public final fun component5 ()Ljava/lang/Long;
-	public final fun copy (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;)Lus/tractat/kuilt/heddle/Topology$Group;
-	public final fun copy (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/Topology$Group;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Topology$Group;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Topology$Group;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Topology$Group;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Topology$Group;
+	public final fun copy (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;)Lus/tractat/kuilt/heddle/Topology$Group;
+	public final fun copy (Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/Topology$Group;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Topology$Group;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Topology$Group;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Topology$Group;Ljava/lang/String;Lus/tractat/kuilt/heddle/Weight;Ljava/util/List;Lus/tractat/kuilt/heddle/Topology$ChildTemplate;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Topology$Group;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getChildren ()Ljava/util/List;
 	public fun getMaxConcurrent ()Ljava/lang/Long;
 	public fun getName ()Ljava/lang/String;
-	public final fun getRuntimeChildren ()Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;
+	public final fun getTemplate ()Lus/tractat/kuilt/heddle/Topology$ChildTemplate;
 	public fun getWeight ()Lus/tractat/kuilt/heddle/Weight;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -1355,42 +1385,9 @@ public final class us/tractat/kuilt/heddle/Topology$Node$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class us/tractat/kuilt/heddle/Topology$RuntimeChildren {
-	public static final field Companion Lus/tractat/kuilt/heddle/Topology$RuntimeChildren$Companion;
-	public fun <init> (Lus/tractat/kuilt/heddle/Weight;)V
-	public fun <init> (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;)V
-	public synthetic fun <init> (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Lus/tractat/kuilt/heddle/Weight;
-	public final fun component2 ()Ljava/lang/Long;
-	public final fun copy (Lus/tractat/kuilt/heddle/Weight;)Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;
-	public final fun copy (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;Lus/tractat/kuilt/heddle/Weight;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getMaxConcurrent ()Ljava/lang/Long;
-	public final fun getWeight ()Lus/tractat/kuilt/heddle/Weight;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class us/tractat/kuilt/heddle/Topology$RuntimeChildren$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lus/tractat/kuilt/heddle/Topology$RuntimeChildren$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/Topology$RuntimeChildren;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
-public final class us/tractat/kuilt/heddle/Topology$RuntimeChildren$Companion {
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
 public final class us/tractat/kuilt/heddle/TopologyDiffKt {
-	public static final fun attachRuntimeChild (Lus/tractat/kuilt/heddle/Topology;Ljava/util/List;Ljava/lang/String;Lus/tractat/kuilt/heddle/EntitlementLedger;J)Ljava/util/List;
-	public static final fun detachRuntimeChild (Lus/tractat/kuilt/heddle/Topology;Ljava/util/List;Ljava/lang/String;Lus/tractat/kuilt/heddle/EntitlementLedger;)Ljava/util/List;
+	public static final fun attach (Lus/tractat/kuilt/heddle/Topology;Ljava/util/List;Ljava/lang/String;Lus/tractat/kuilt/heddle/EntitlementLedger;J)Ljava/util/List;
+	public static final fun detach (Lus/tractat/kuilt/heddle/Topology;Ljava/util/List;Ljava/lang/String;Lus/tractat/kuilt/heddle/EntitlementLedger;)Ljava/util/List;
 	public static final fun diff (Lus/tractat/kuilt/heddle/Topology$Companion;Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/EntitlementLedger;J)Ljava/util/List;
 }
 
@@ -1419,32 +1416,61 @@ public final synthetic class us/tractat/kuilt/heddle/TopologyDocument$$serialize
 	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
 }
 
+public final class us/tractat/kuilt/heddle/TopologyDocument$ChildTemplate {
+	public static final field Companion Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/Long;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/Long;
+	public final fun copy (Ljava/lang/String;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;Ljava/lang/String;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMaxConcurrent ()Ljava/lang/Long;
+	public final fun getWeight ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/heddle/TopologyDocument$ChildTemplate$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/heddle/TopologyDocument$ChildTemplate$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public final class us/tractat/kuilt/heddle/TopologyDocument$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
 public final class us/tractat/kuilt/heddle/TopologyDocument$Group : us/tractat/kuilt/heddle/TopologyDocument$Node {
 	public static final field Companion Lus/tractat/kuilt/heddle/TopologyDocument$Group$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/Long;Ljava/lang/Long;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/Long;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;Ljava/lang/Long;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;Ljava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/util/List;
-	public final fun component4 ()Ljava/lang/String;
+	public final fun component4 ()Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;
 	public final fun component5 ()Ljava/lang/Long;
-	public final fun component6 ()Ljava/lang/Long;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)Lus/tractat/kuilt/heddle/TopologyDocument$Group;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/Long;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/TopologyDocument$Group;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyDocument$Group;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyDocument$Group;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyDocument$Group;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/Long;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyDocument$Group;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;)Lus/tractat/kuilt/heddle/TopologyDocument$Group;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;Ljava/lang/Long;)Lus/tractat/kuilt/heddle/TopologyDocument$Group;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyDocument$Group;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyDocument$Group;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/TopologyDocument$Group;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;Ljava/lang/Long;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/TopologyDocument$Group;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getChildren ()Ljava/util/List;
 	public fun getMaxConcurrent ()Ljava/lang/Long;
 	public fun getName ()Ljava/lang/String;
-	public final fun getRuntimeChildren ()Ljava/lang/String;
-	public final fun getRuntimeChildrenMaxConcurrent ()Ljava/lang/Long;
+	public final fun getTemplate ()Lus/tractat/kuilt/heddle/TopologyDocument$ChildTemplate;
 	public fun getWeight ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -1524,10 +1550,8 @@ public abstract class us/tractat/kuilt/heddle/TopologyDraft {
 }
 
 public final class us/tractat/kuilt/heddle/TopologyDraft$Group : us/tractat/kuilt/heddle/TopologyDraft {
-	public final fun runtimeChildren (Lus/tractat/kuilt/heddle/Weight;)V
-	public final fun runtimeChildren (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;)V
-	public static synthetic fun runtimeChildren$default (Lus/tractat/kuilt/heddle/TopologyDraft$Group;Lus/tractat/kuilt/heddle/Weight;ILjava/lang/Object;)V
-	public static synthetic fun runtimeChildren$default (Lus/tractat/kuilt/heddle/TopologyDraft$Group;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;ILjava/lang/Object;)V
+	public final fun template (Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;)V
+	public static synthetic fun template$default (Lus/tractat/kuilt/heddle/TopologyDraft$Group;Lus/tractat/kuilt/heddle/Weight;Ljava/lang/Long;ILjava/lang/Object;)V
 }
 
 public abstract interface annotation class us/tractat/kuilt/heddle/TopologyDraftDsl : java/lang/annotation/Annotation {
@@ -1543,12 +1567,12 @@ public final class us/tractat/kuilt/heddle/TopologyException : java/lang/Illegal
 }
 
 public final class us/tractat/kuilt/heddle/TopologyLoweringKt {
+	public static final fun attachedChildId (Lus/tractat/kuilt/heddle/Topology;Ljava/util/List;Ljava/lang/String;)Ljava/lang/String;
 	public static final fun findGroupId (Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/GroupPath;)Ljava/lang/String;
 	public static final fun findPath-yPrmHm4 (Lus/tractat/kuilt/heddle/Topology;Ljava/lang/String;)Lus/tractat/kuilt/heddle/GroupPath;
 	public static final fun groupId (Lus/tractat/kuilt/heddle/Topology;[Ljava/lang/String;)Ljava/lang/String;
 	public static final fun lower (Lus/tractat/kuilt/heddle/Topology;J)Ljava/util/List;
 	public static synthetic fun lower$default (Lus/tractat/kuilt/heddle/Topology;JILjava/lang/Object;)Ljava/util/List;
-	public static final fun runtimeChildId (Lus/tractat/kuilt/heddle/Topology;Ljava/util/List;Ljava/lang/String;)Ljava/lang/String;
 }
 
 public abstract interface class us/tractat/kuilt/heddle/TopologyParse {

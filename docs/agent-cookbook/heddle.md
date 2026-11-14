@@ -376,7 +376,8 @@ fraction, over the same competing set: work no pick can reach is owed nothing an
 
 To run no more than N of one part of the tree at once, however idle the rest is, do not count leases
 in your own loop beside the engine: set `maxConcurrent` on that group or lane, or inside a group's
-`template` to cap each attached child on its own (`0` pauses it). A pick skips every leaf beneath a node whose open leases have reached it, draining ones
+`template` to cap each attached child on its own (`0` pauses it). A pick skips every leaf
+beneath a node whose open leases have reached it, draining ones
 included, so the slot goes to a sibling, and the capped node counts as idle at its parent: it banks
 no credit and wakes clamped. `explain` tells such a leaf `AtCeiling(group, limit)`, naming the
 capped node nearest the root, before any supply check; `entitlement` owes it nothing; `previewPicks`

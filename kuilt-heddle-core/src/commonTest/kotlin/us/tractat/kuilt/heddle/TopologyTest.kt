@@ -251,10 +251,10 @@ class TopologyTest {
         val marked = Topology.Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.of(2)))
 
         assertAll(
-            { assertEquals(listOf(marked), Topology("root", listOf(marked)).children) },
+            { assertEquals(listOf(template), Topology("root", listOf(template)).children) },
             {
                 val document = TopologyDocument("root", listOf(TopologyDocument.Group("tenants", template = TopologyDocument.ChildTemplate("2"))))
-                assertEquals(TopologyParse.Valid(Topology("root", listOf(marked))), Topology.from(document))
+                assertEquals(TopologyParse.Valid(Topology("root", listOf(template))), Topology.from(document))
             },
         )
     }

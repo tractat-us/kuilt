@@ -76,7 +76,7 @@ class TopologyDraftTest {
     }
 
     @Test
-    fun runtimeChildrenMarkTheGroupTheyAreDeclaredIn() {
+    fun aTemplateLandsOnTheGroupItIsDeclaredIn() {
         val drafted = draft("pool") {
             group("tenants", Weight.of(3, 2)) {
                 template(Weight.of(2))
@@ -146,7 +146,7 @@ class TopologyDraftTest {
     }
 
     @Test
-    fun aSecondRuntimeChildrenInOneGroupThrows() {
+    fun aSecondTemplateInOneGroupThrows() {
         val thrown = assertFailsWith<IllegalStateException> {
             draft("root") {
                 group("tenants") {

@@ -18,7 +18,7 @@ import kotlin.test.assertTrue
  */
 class LocalHeddleLeasableTest {
 
-    /** `root → {acme → batch, pool (marked, empty), tenants (marked) → !c-7f3a, s}`, every weight 1. */
+    /** `root → {acme → batch, pool (template, empty), tenants (template) → !c-7f3a, s}`, every weight 1. */
     private val t = Topology(
         "root",
         listOf(
@@ -45,7 +45,7 @@ class LocalHeddleLeasableTest {
     }
 
     @Test
-    fun admitRefusesAGroupThatIsNotALaneOrRuntimeChild() {
+    fun admitRefusesAGroupThatIsNotALaneOrAttachedChild() {
         val h = engine()
         val before = h.snapshot().ledger
         val refusedPool = h.admit(pool, startedAt = 0L)
@@ -64,7 +64,7 @@ class LocalHeddleLeasableTest {
     }
 
     @Test
-    fun acquireNeverEndsAtAGroupThatIsNotALaneOrRuntimeChild() {
+    fun acquireNeverEndsAtAGroupThatIsNotALaneOrAttachedChild() {
         val h = engine()
         val everyone = setOf(acme, pool, s, c)
         val before = h.snapshot().ledger

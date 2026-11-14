@@ -424,7 +424,7 @@ class TopologyDiffTest {
         var ledger = bootFrom(fairness())
         val foreign = listOf(
             // An attached child is not on this list: since Task 5 the diff owns those, and closes one
-            // under a group that is not marked (`diffClosesRuntimeChildrenWhenTheMarkerGoes`).
+            // under a group with no template (`diffClosesAttachedChildrenWhenTheTemplateGoes`).
             AttachmentRecord(e("e#99"), GroupId("root"), GroupId("elsewhere"), Weight.ONE),
             record("pool/a@1:1#0", GroupId("pool/a"), 1),
         )

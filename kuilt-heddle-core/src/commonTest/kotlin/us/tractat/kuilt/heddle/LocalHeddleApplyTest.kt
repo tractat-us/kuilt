@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
 class LocalHeddleApplyTest {
 
     /**
-     * `root → {acme:[acmeW] → {batch:[batchW], interactive:3}, hobby:1 → default, tenants:1 (marked), s:1}`,
+     * `root → {acme:[acmeW] → {batch:[batchW], interactive:3}, hobby:1 → default, tenants:1 (template), s:1}`,
      * without `hobby` or `s` when told so, and with `batch` turned into a group over `x` when told so.
      */
     private fun tree(
@@ -339,7 +339,7 @@ class LocalHeddleApplyTest {
     }
 
     @Test
-    fun runtimeLeavesUnderAReweightedParentAreRehomed() {
+    fun attachedLeavesUnderAReweightedParentAreRehomed() {
         val h = engine()
         val attached = h.attach(listOf("tenants"), "c-7f3a", generation = 0L)
         val lease = h.lease(setOf(c), reservation = 2L)

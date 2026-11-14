@@ -81,7 +81,7 @@ class TopologyDiffPropertyTest {
             { assertTrue(tally.additions >= 200, "additions ${tally.additions}") },
             { assertTrue(cuts >= 1_000, "cuts $cuts") },
             *tally.awkwardFloors(escapedRoots = 30, escaped = 500, tieBreaks = 80),
-            { assertTrue(tally.attaches >= 100, "runtime attaches ${tally.attaches}") },
+            { assertTrue(tally.attaches >= 100, "attaches ${tally.attaches}") },
             { assertTrue(tally.runtimeClosed >= 20, "attached children closed by a reload ${tally.runtimeClosed}") },
             { assertTrue(tally.abandoned >= abandonedP1, "abandoned prepared edges closed ${tally.abandoned}") },
             { assertTrue(tally.listCuts >= cutsP1, "attach and detach prefixes asked again ${tally.listCuts}") },
@@ -343,7 +343,7 @@ class TopologyDiffPropertyTest {
     private class Churned(val ledger: EntitlementLedger, val attached: List<Attached>)
 
     /**
-     * One to four attaches and detaches under [t]'s marked groups, applied as the interpreter
+     * One to four attaches and detaches under [t]'s groups with a template, applied as the interpreter
      * would. Without [traffic] nothing may be refused; with it a detach waits for its drain, and an
      * attach behind it waits too. Every list is also cut at every prefix and asked again, which must
      * list exactly the steps that did not land. [Tally.detached] remembers every child a history
@@ -391,7 +391,7 @@ class TopologyDiffPropertyTest {
 
     /**
      * A diff cut part-way is where an attached child sits beside a PREPARED replacement, ACTIVE or
-     * draining: detach each such child of [attached] from [ledger], under [t]'s markers, and the
+     * draining: detach each such child of [attached] from [ledger], under [t]'s templates, and the
      * detach must be re-entrant at every prefix and leave no two live inbound edges.
      */
     private fun detachFromCut(
@@ -436,7 +436,7 @@ class TopologyDiffPropertyTest {
     }
 
     /**
-     * [applyAll] of the whole list, which must leave no child, declared or runtime, with two live
+     * [applyAll] of the whole list, which must leave no child, declared or attached, with two live
      * inbound edges: a prefix may, as the one-unit contract on [TopologyStep] says, but the whole
      * list may not. Counts the abandoned prepared edges the list closes.
      */
@@ -481,7 +481,7 @@ class TopologyDiffPropertyTest {
 
     private fun randomMarker(r: Random): ChildTemplate? = if (r.nextBoolean()) ChildTemplate(Weight.of(1L + r.nextInt(3))) else null
 
-    /** One to three edits: a reweight, removal, addition, lane-to-group, group-to-lane, marker change or a fresh tree. */
+    /** One to three edits: a reweight, removal, addition, lane-to-group, group-to-lane, template change or a fresh tree. */
     private fun mutate(t: Topology, r: Random): Topology {
         var current = t
         repeat(1 + r.nextInt(3)) { current = edit(current, r) }
@@ -509,7 +509,7 @@ class TopologyDiffPropertyTest {
             }
             3 -> if (node is Lane && path.size < 3) t.update(path) { Group(it.name, it.weight, listOf(Lane(names[r.nextInt(names.size)]))) } else t
             4 -> if (node is Group) t.update(path) { Lane(it.name, it.weight) } else t
-            // Mark or unmark the group, or reweight its attached children.
+            // Give the group a template or take it away, or reweight its attached children.
             5 -> if (node is Group) t.update(path) { (it as Group).copy(template = if (it.template == null) randomMarker(r) else null) } else t
             6 -> if (node is Group && node.template != null) {
                 t.update(path) { (it as Group).copy(template = ChildTemplate(Weight.of(node.template.weight.numerator % 3 + 1))) }

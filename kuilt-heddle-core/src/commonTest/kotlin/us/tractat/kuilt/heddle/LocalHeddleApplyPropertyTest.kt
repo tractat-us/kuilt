@@ -125,7 +125,7 @@ class LocalHeddleApplyPropertyTest {
         fun everyGroup(): List<GroupId> =
             (nodePaths(topology.children, emptyList()).map { topology.groupId(*it.toTypedArray()) } + declared()).distinct().sorted()
 
-        /** One to three attaches or detaches under the marked groups, through the engine. */
+        /** One to three attaches or detaches under the groups with a template, through the engine. */
         fun churn(r: Random, tally: Tally) {
             val marked = groupPaths(topology.children, emptyList()).filter { templateAt(topology, it) != null }
             if (marked.isEmpty()) return
@@ -171,7 +171,7 @@ class LocalHeddleApplyPropertyTest {
             val runtime = attached.map { (g, name) -> topology.attachedChildId(g, name) }
             // Half the leases go to an attached child when one is attached, so its re-homes are reached.
             val leaves = if (runtime.isNotEmpty() && r.nextBoolean()) runtime else declared()
-            // A tree of marked groups with nothing attached yet declares no leaf at all.
+            // A tree of groups with a template with nothing attached yet declares no leaf at all.
             if (leaves.isEmpty()) return@repeat
             val leaf = leaves[r.nextInt(leaves.size)]
             h.acquire(setOf(leaf), setOf(leaf), startedAt = step++, reservation = 1L + r.nextInt(4))
@@ -341,7 +341,7 @@ class LocalHeddleApplyPropertyTest {
     private fun randomNode(r: Random, name: String, depth: Int): Node {
         val weight = Weight.of(1L + r.nextInt(4))
         return if (depth < 3 && r.nextInt(3) == 0) {
-            // A quarter of the groups are marked and declare nothing: a leaf the ledger cannot tell
+            // A quarter of the groups have a template and declare nothing: a leaf the ledger cannot tell
             // from a lane until an attached child attaches, which is what the leasable predicate decides.
             if (r.nextInt(4) == 0) return Group(name, weight, emptyList(), template = ChildTemplate(Weight.of(1L + r.nextInt(3))))
             Group(name, weight, randomChildren(r, depth + 1), template = if (r.nextBoolean()) ChildTemplate(Weight.of(1L + r.nextInt(3))) else null)
@@ -379,7 +379,7 @@ class LocalHeddleApplyPropertyTest {
             5 -> if (node is Lane && path.size < 3) t.update(path) { Group(it.name, it.weight, listOf(Lane(names[r.nextInt(names.size)]))) } else t
             6 -> if (node is Group) t.update(path) { Lane(it.name, it.weight) } else t
             else -> if (node is Group) {
-                // Unmarking a group that declares nothing would leave it empty, so it stays marked.
+                // Taking the template from a group that declares nothing would leave it empty, so it keeps one.
                 t.update(path) { (it as Group).copy(template = if (it.template == null || it.children.isEmpty()) ChildTemplate(Weight.ONE) else null) }
             } else {
                 t

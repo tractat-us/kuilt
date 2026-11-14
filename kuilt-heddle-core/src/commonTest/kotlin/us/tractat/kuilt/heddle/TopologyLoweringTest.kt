@@ -25,7 +25,7 @@ class TopologyLoweringTest {
     /**
      * Names that a naive join would fold together: a slash inside a name against two levels, a
      * pre-escaped slash, the id grammar's own punctuation, the template, a lone surrogate
-     * against the `?` a JVM encoder substitutes for it, and a runtime `x` beside a declared `x` and
+     * against the `?` a JVM encoder substitutes for it, and an attached `x` beside a declared `x` and
      * a declared `!x`.
      */
     private val awkward = Topology(
@@ -146,7 +146,7 @@ class TopologyLoweringTest {
             { assertEquals(pairs.size, pairs.map { it.second }.toSet().size, "ids collide: ${pairs.map { it.second.value }}") },
             *pairs.map { (path, id) -> { assertEquals(id, awkward.findGroupId(path), "findGroupId($path)") } }.toTypedArray(),
             *pairs.map { (path, id) -> { assertEquals(path, awkward.findPath(id), "findPath(${id.value})") } }.toTypedArray(),
-            // A runtime `x` and a declared `x` under the same group: different ids, different arms.
+            // An attached `x` and a declared `x` under the same group: different ids, different arms.
             { assertEquals(GroupPath.Attached(listOf("g"), "x"), awkward.findPath(GroupId("root/g/!x"))) },
             { assertEquals(GroupPath.Declared(listOf("g", "x")), awkward.findPath(GroupId("root/g/x"))) },
             // Paths this topology has no group for.
@@ -160,7 +160,7 @@ class TopologyLoweringTest {
                 GroupPath.Attached(listOf("nope"), "x"),
             ).map { path -> { assertNull(awkward.findGroupId(path), "findGroupId($path)") } }.toTypedArray(),
             // Ids this topology has no group for: another root, a group it does not declare, an
-            // attached child of an unmarked group, and text in no topology's grammar.
+            // attached child of a group with no template, and text in no topology's grammar.
             *listOf(
                 "other", "other/a", "root/nope", "root/a/nope", "root/a/!x", "root/!x", "root/g/!x/y", "root/g/x/!y",
                 "", "/", "root/", "root//x", "root/a%2fb", "root/%41", "root/g/!", "root/a/b@1:1#0",

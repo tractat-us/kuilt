@@ -21,7 +21,7 @@ class TopologyChildTemplateTest {
     private val tenants = listOf("tenants")
     private val tenantsId = GroupId("root/tenants")
 
-    /** A declared lane `x` inside a group whose attached children weigh [marker]. */
+    /** A declared lane `x` inside a group whose template weighs [marker]. */
     private fun pool(marker: Long? = 2, tenantsWeight: Long = 1, acmeWeight: Long = 3) = Topology(
         "root",
         listOf(
@@ -78,7 +78,7 @@ class TopologyChildTemplateTest {
     }
 
     @Test
-    fun runtimeNamespaceCannotCollide() {
+    fun attachedNamespaceCannotCollide() {
         // Attached children named exactly like the declared lane `x`, and like the escaped `!x`.
         var ledger = bootFrom(pool())
         val x = pool().attach(tenants, "x", ledger, generation = 0)
@@ -102,7 +102,7 @@ class TopologyChildTemplateTest {
     }
 
     @Test
-    fun runtimeChildNamesAreOpaque() {
+    fun attachedChildNamesAreOpaque() {
         val names = listOf("a/b", "a%2Fb", "é", "#3", "x@1:1#0", "!x", "%21x", "\uD800", "😀", "batch", "tenants")
         var ledger = bootFrom(pool())
         val children = ArrayList<GroupId>()
@@ -113,13 +113,13 @@ class TopologyChildTemplateTest {
             ledger = applyClean(steps, ledger)
         }
         assertAll(
-            { assertEquals(names.size, children.toSet().size, "runtime ids collide: ${children.map { it.value }}") },
+            { assertEquals(names.size, children.toSet().size, "attached ids collide: ${children.map { it.value }}") },
             *names.zip(children).map { (name, child) ->
                 { assertEquals(ParsedPath(listOf("root", "tenants", name), attached = true), pathOf(child), name) }
             }.toTypedArray(),
             { assertEquals(emptyList(), Topology.diff(pool(), ledger, generation = 0)) },
             { assertEquals(emptyList(), ledger.validate()) },
-            // The only refusals: an empty name, and a group that is not marked.
+            // The only refusals: an empty name, and a group with no template.
             { assertFailsWith<IllegalArgumentException> { pool().attach(tenants, "", ledger, 0) } },
             { assertFailsWith<IllegalArgumentException> { pool().attach(listOf("acme"), "x", ledger, 0) } },
             { assertFailsWith<IllegalArgumentException> { pool().attach(emptyList(), "x", ledger, 0) } },
@@ -202,7 +202,7 @@ class TopologyChildTemplateTest {
                 )
             },
             { assertEquals(Lifecycle.RETIRED, detached.ledger.lifecycle(e("root/tenants/!x@3:1#2"))) },
-            // Detached for good: a reload under the same marker does not bring it back.
+            // Detached for good: a reload under the same template does not bring it back.
             { assertEquals(listOf(Retire(e("root/tenants/!x@2:1#1"), runtime("x"))), Topology.diff(pool(marker = 3), drained, 0)) },
             { assertEquals(emptyList(), applyClean(Topology.diff(pool(marker = 3), drained, 0), drained).liveInto(runtime("x"))) },
             { assertEquals(emptyList(), drained.validate()) },
@@ -260,7 +260,7 @@ class TopologyChildTemplateTest {
     }
 
     @Test
-    fun diffLeavesRuntimeChildrenAlone() {
+    fun diffLeavesAttachedChildrenAlone() {
         val ledger = attached(attached(bootFrom(pool()), "c-7f3a"), "x")
         val runtimeEdges = listOf(runtime("c-7f3a"), runtime("x")).flatMap { ledger.liveInto(it) }
         // A reload that changes everything around them: acme reweighted, a lane added to tenants.
@@ -283,7 +283,7 @@ class TopologyChildTemplateTest {
     }
 
     @Test
-    fun runtimeChildSurvivesAReloadWithTraffic() {
+    fun attachedChildSurvivesAReloadWithTraffic() {
         // Served, and still holding three units, when the parent group is reweighted.
         val busy = charged(attached(bootFrom(pool()), "c-7f3a"), runtime("c-7f3a"), amount = 4, spent = 1)
         val edge = e("root/tenants/!c-7f3a@2:1#1")
@@ -307,7 +307,7 @@ class TopologyChildTemplateTest {
     }
 
     @Test
-    fun diffClosesRuntimeChildrenWhenTheMarkerGoes() {
+    fun diffClosesAttachedChildrenWhenTheTemplateGoes() {
         val ledger = attached(attached(bootFrom(pool()), "c-7f3a"), "x")
         val steps = Topology.diff(pool(marker = null), ledger, generation = 0)
         val after = applyClean(steps, ledger)
@@ -340,7 +340,7 @@ class TopologyChildTemplateTest {
     }
 
     @Test
-    fun diffRegeneratesRuntimeChildrenWhenTheMarkerWeightChanges() {
+    fun diffRegeneratesAttachedChildrenWhenTheTemplateWeightChanges() {
         val ledger = attached(bootFrom(pool()), "x")
         val steps = Topology.diff(pool(marker = 3), ledger, generation = 0)
         val after = applyClean(steps, ledger)

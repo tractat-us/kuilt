@@ -129,7 +129,7 @@ class TopologyGroupPathPropertyTest {
     private fun randomName(r: Random): String =
         (1..1 + r.nextInt(2)).joinToString("") { pieces[r.nextInt(pieces.size)] }
 
-    /** Depth up to 3, up to 4 children per group, names unique among siblings; a third of the groups marked. */
+    /** Depth up to 3, up to 4 children per group, names unique among siblings; a third of the groups with a template. */
     private fun randomTree(r: Random, root: String): Topology = Topology(root, randomChildren(r, depth = 0))
 
     private fun randomChildren(r: Random, depth: Int): List<Node> {
@@ -141,7 +141,7 @@ class TopologyGroupPathPropertyTest {
         return names.map { name ->
             if (depth < 2 && r.nextInt(2) == 0) {
                 val marked = r.nextInt(3) == 0
-                Group(name, Weight.ONE, randomChildren(r, depth + 1), if (marked) ChildTemplate(Weight.ONE) else null)
+                Group(name, Weight.ONE, randomChildren(r, depth + 1), if (template) ChildTemplate(Weight.ONE) else null)
             } else {
                 Lane(name)
             }

@@ -99,7 +99,7 @@ class LocalHeddleOverflowPropertyTest {
      * the run carries on from the restored one.
      */
     @Test
-    fun churningRuntimeChildrenUnderAHeldWaitingSetNeverOverflows() {
+    fun churningAttachedChildrenUnderAHeldWaitingSetNeverOverflows() {
         val topology = draft("churn") {
             lane("a", Weight.of(3))
             group("rt", Weight.of(2)) { template(Weight.of(3, 2)) }

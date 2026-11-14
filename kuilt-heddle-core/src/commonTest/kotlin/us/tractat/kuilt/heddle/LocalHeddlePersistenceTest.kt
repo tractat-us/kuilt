@@ -328,7 +328,7 @@ class LocalHeddlePersistenceTest {
 
     /**
      * The topology comes back with the engine, so the restored one leases exactly what the persisted
-     * one did. The draft marks `pool` for attached children and attaches none, so `pool` reads as a
+     * one did. The draft gives `pool` a template and attaches none, so `pool` reads as a
      * leaf in the ledger and only the topology says it is not leasable. An engine that leased every
      * leaf after a restore would admit work there. The lane is the control: it is still leasable, so
      * the refusal is about `pool`, not a restored engine that leases nothing.
@@ -922,7 +922,7 @@ class LocalHeddlePersistenceTest {
         var withAWakeOffset = 0
         var midDrain = 0
         var afterAReload = 0
-        var withARuntimeLease = 0
+        var withAnAttachedLease = 0
         var drains = 0
         var compared = 0
         for (seed in 0 until SEEDS) {
@@ -937,7 +937,7 @@ class LocalHeddlePersistenceTest {
                     if (persisted.allocatorMemory.wakeOffsets.values.any { it != Rational.ZERO }) withAWakeOffset++
                     if (persisted.ledger.allEdges().any { persisted.ledger.lifecycle(it) == Lifecycle.CLOSING }) midDrain++
                     if (persisted.lastApplied != base) afterAReload++
-                    if (persisted.leases.any { it.leaf.value.startsWith("root/r/") }) withARuntimeLease++
+                    if (persisted.leases.any { it.leaf.value.startsWith("root/r/") }) withAnAttachedLease++
                     subject = throughJson(subject, wide)
                     restores++
                 }
@@ -996,7 +996,7 @@ class LocalHeddlePersistenceTest {
             { assertTrue(drains > 0, "the rig: some reload left an edge draining, $drains") },
             { assertTrue(midDrain > 0, "the rig: some restore landed mid-drain, $midDrain") },
             { assertTrue(afterAReload > 0, "the rig: some restore came after a reload, $afterAReload") },
-            { assertTrue(withARuntimeLease > 0, "the rig: some restore carried a lease at an attached child, $withARuntimeLease") },
+            { assertTrue(withAnAttachedLease > 0, "the rig: some restore carried a lease at an attached child, $withAnAttachedLease") },
         )
     }
 

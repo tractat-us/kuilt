@@ -197,7 +197,7 @@ class LocalHeddleViewTest {
     }
 
     /**
-     * `pool` is a leaf the topology marks for attached children and declares no lane: a view turns
+     * `pool` is a leaf the topology gives a template and declares no lane: a view turns
      * it away as the engine does, because it leases by the topology the snapshot kept. The rig: the
      * ledger alone reads `pool` as a leaf with a live lineage.
      */
