@@ -106,7 +106,5 @@ public class Creel {
 
     // ── Hash ─────────────────────────────────────────────────────────────────
 
-    private fun hash(bytes: ByteArray): BobbinHash = BobbinHash(SHA256().digest(bytes).toHex())
-
-    private fun ByteArray.toHex(): String = joinToString("") { it.toUByte().toString(16).padStart(2, '0') }
+    private fun hash(bytes: ByteArray): BobbinHash = BobbinHash(SHA256().digest(bytes).toHexString())
 }
