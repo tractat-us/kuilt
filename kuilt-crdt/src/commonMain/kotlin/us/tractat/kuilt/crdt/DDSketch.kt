@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.plusOrNull
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
@@ -147,24 +148,39 @@ public class DDSketch private constructor(
      * As with [GCounter], two peers must never share a [ReplicaId].
      *
      * @throws IllegalArgumentException if [value] is NaN or infinite.
-     * @throws ArithmeticException if [replica]'s slot in the bucket, or in the overflow counter,
-     *   would pass [Long.MAX_VALUE] (#3318).
+     * @throws ArithmeticException if [replica]'s slot in the bucket, or in the zero or overflow
+     *   counter, would pass [Long.MAX_VALUE] (#3318). [addOrNull] answers `null` instead.
      */
-    public fun add(replica: ReplicaId, value: Double): Patch<DDSketch> {
+    public fun add(replica: ReplicaId, value: Double): Patch<DDSketch> =
+        addOrNull(replica, value) ?: throw ArithmeticException(
+            "DDSketch: replica $replica's slot for $value, in its bucket or in the zero or overflow counter, is already at Long.MAX_VALUE",
+        )
+
+    /**
+     * [add], or `null` when [replica]'s slot in the bucket, or in the zero or overflow counter, is
+     * already at [Long.MAX_VALUE].
+     *
+     * For a caller that has to refuse a whole batch before applying any of it, such as a metric
+     * exporter: it asks first, rather than catching an exception part-way (#3354).
+     *
+     * @throws IllegalArgumentException if [value] is NaN or infinite.
+     */
+    public fun addOrNull(replica: ReplicaId, value: Double): Patch<DDSketch>? {
         require(value.isFinite()) { "DDSketch values must be finite, was $value" }
         val magnitude = abs(value)
         if (magnitude < minIndexedValue) {
-            return Patch(delta(zeros = zeros.inc(replica).delta))
+            return zeros.incOrNull(replica, 1L)?.let { Patch(delta(zeros = it)) }
         }
         val overflowing = magnitude > maxIndexedValue
         val index = bucketIndex(if (overflowing) maxIndexedValue else magnitude)
         val store = if (value > 0.0) positive else negative
-        val cell = mapOf(index to (store[index] ?: GCounter.ZERO).inc(replica).delta)
+        val cell = mapOf(index to ((store[index] ?: GCounter.ZERO).incOrNull(replica, 1L) ?: return null))
+        val overflowCell = if (overflowing) overflows.incOrNull(replica, 1L) ?: return null else GCounter.ZERO
         return Patch(
             delta(
                 positive = if (value > 0.0) cell else emptyMap(),
                 negative = if (value > 0.0) emptyMap() else cell,
-                overflows = if (overflowing) overflows.inc(replica).delta else GCounter.ZERO,
+                overflows = overflowCell,
             ),
         )
     }
@@ -190,16 +206,40 @@ public class DDSketch private constructor(
      * A count of zero is skipped, so it creates no empty cell; the patch for an all-zero call is
      * empty. The receiver is unchanged; apply with [piece].
      *
+     * Counts that clamp onto one cell are added together first, and that sum is checked as well:
+     * counts that each fit can still fold past [Long.MAX_VALUE] (#3354).
+     *
      * @throws IllegalArgumentException if any count, or [zeroCount], is negative.
      * @throws ArithmeticException if [replica]'s slot in a bucket, or in the zero or overflow
-     *   counter, would pass [Long.MAX_VALUE] (#3318).
+     *   counter, would pass [Long.MAX_VALUE] (#3318), or the counts folding onto one cell add up
+     *   past it (#3354). [addBucketsOrNull] answers `null` instead.
      */
     public fun addBuckets(
         replica: ReplicaId,
         positive: Map<Int, Long>,
         negative: Map<Int, Long>,
         zeroCount: Long,
-    ): Patch<DDSketch> {
+    ): Patch<DDSketch> =
+        addBucketsOrNull(replica, positive, negative, zeroCount) ?: throw ArithmeticException(
+            "DDSketch: replica $replica's slot in a bucket, or in the zero or overflow counter, cannot take " +
+                "these counts without passing Long.MAX_VALUE",
+        )
+
+    /**
+     * [addBuckets], or `null` when [replica]'s slot in a bucket, or in the zero or overflow counter,
+     * would pass [Long.MAX_VALUE], or the counts folding onto one cell add up past it.
+     *
+     * For a caller that has to refuse a whole batch before applying any of it, such as a metric
+     * exporter: it asks first, rather than catching an exception part-way (#3354).
+     *
+     * @throws IllegalArgumentException if any count, or [zeroCount], is negative.
+     */
+    public fun addBucketsOrNull(
+        replica: ReplicaId,
+        positive: Map<Int, Long>,
+        negative: Map<Int, Long>,
+        zeroCount: Long,
+    ): Patch<DDSketch>? {
         require(zeroCount >= 0L) { "DDSketch zeroCount must not be negative, was $zeroCount" }
         positive.forEach { (index, n) -> require(n >= 0L) { "DDSketch positive bucket $index count must not be negative, was $n" } }
         negative.forEach { (index, n) -> require(n >= 0L) { "DDSketch negative bucket $index count must not be negative, was $n" } }
@@ -207,34 +247,29 @@ public class DDSketch private constructor(
         val highest = bucketIndex(maxIndexedValue)
         var toZeros = zeroCount
         var toOverflow = 0L
-        // Fold each sign's counts onto the indices `add` could have produced, then increment once per cell.
-        fun clamped(buckets: Map<Int, Long>): Map<Int, Long> {
+        // Fold each sign's counts onto the indices `add` could have produced, then increment once
+        // per cell. Every fold is checked: `null` means a fold passed Long.MAX_VALUE.
+        fun clamped(buckets: Map<Int, Long>): Map<Int, Long>? {
             val out = LinkedHashMap<Int, Long>()
             for ((index, n) in buckets) {
                 if (n == 0L) continue
-                when {
-                    index < lowest -> toZeros += n
-                    index > highest -> {
-                        toOverflow += n
-                        out[highest] = (out[highest] ?: 0L) + n
-                    }
-                    else -> out[index] = (out[index] ?: 0L) + n
+                if (index < lowest) {
+                    toZeros = toZeros.plusOrNull(n) ?: return null
+                    continue
                 }
+                if (index > highest) toOverflow = toOverflow.plusOrNull(n) ?: return null
+                val cell = minOf(index, highest)
+                out[cell] = (out[cell] ?: 0L).plusOrNull(n) ?: return null
             }
             return out
         }
-        fun cells(store: Map<Int, GCounter>, counts: Map<Int, Long>): Map<Int, GCounter> =
-            counts.mapValues { (index, n) -> (store[index] ?: GCounter.ZERO).inc(replica, n).delta }
-        val positiveCells = cells(this.positive, clamped(positive))
-        val negativeCells = cells(this.negative, clamped(negative))
-        return Patch(
-            delta(
-                positive = positiveCells,
-                negative = negativeCells,
-                zeros = if (toZeros > 0L) zeros.inc(replica, toZeros).delta else GCounter.ZERO,
-                overflows = if (toOverflow > 0L) overflows.inc(replica, toOverflow).delta else GCounter.ZERO,
-            ),
-        )
+        fun cells(store: Map<Int, GCounter>, counts: Map<Int, Long>): Map<Int, GCounter>? =
+            counts.mapValues { (index, n) -> (store[index] ?: GCounter.ZERO).incOrNull(replica, n) ?: return null }
+        val positiveCells = cells(this.positive, clamped(positive) ?: return null) ?: return null
+        val negativeCells = cells(this.negative, clamped(negative) ?: return null) ?: return null
+        val zeroCell = if (toZeros > 0L) zeros.incOrNull(replica, toZeros) ?: return null else GCounter.ZERO
+        val overflowCell = if (toOverflow > 0L) overflows.incOrNull(replica, toOverflow) ?: return null else GCounter.ZERO
+        return Patch(delta(positive = positiveCells, negative = negativeCells, zeros = zeroCell, overflows = overflowCell))
     }
 
     /**
@@ -339,6 +374,10 @@ public class DDSketch private constructor(
         get() = (positive.values + negative.values + zeros).fold(Int128.ZERO) { sum, c -> sum + c.exactValue }
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /** The delta of [GCounter.inc], or `null` where `inc` would throw because the slot would pass [Long.MAX_VALUE]. */
+    private fun GCounter.incOrNull(replica: ReplicaId, by: Long): GCounter? =
+        if (count(replica).plusOrNull(by) == null) null else inc(replica, by).delta
 
     /** Bucket index for a magnitude within the indexable range: `⌈log_γ m⌉`. */
     private fun bucketIndex(magnitude: Double): Int = ceil(ln(magnitude) / lnGamma).toInt()
