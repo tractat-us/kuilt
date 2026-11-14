@@ -1249,9 +1249,9 @@ lists its jobs' reservations, head first.
   pops the head.
 - `extend` makes no pick, so the order is the slot-length order, the contract
   ruled in #3200 (plan Amendment 9), and this ships without settling the rest of
-  #3200. The head sets only what
-  the lease holds, `max(reservation, head)`. A head below the reservation would
-  need the lease to shrink, which is #3200's question.
+  #3200. The head sets only what the lease holds, `max(reservation, head)`. A
+  head below the reservation would need the lease to shrink, which is #3200's
+  question.
 - The list stops at the first refusal, including the position-ceiling refusal
   the overflow fix adds (#3313).
 - The property to pin: the preview equals the leaves the real loop picks on the
