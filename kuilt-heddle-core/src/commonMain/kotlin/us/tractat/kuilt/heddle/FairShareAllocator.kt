@@ -552,7 +552,7 @@ public class FairShareAllocator(
      *   that waits half the time carries an offset many times its own service, and left alone it
      *   reaches the ceiling while the raw position is a hundredth of the way there.
      * - **then the gauge's fold**. A raw position reads `max(⌈floor · w · G⌉, ticks) +
-     *   (issued − folded) · G` ([grossTicksAt]), so raising the fold by `k` units lowers it by
+     *   (issued − folded) · G` ([exactGrossTicksAt]), so raising the fold by `k` units lowers it by
      *   exactly `k · G` ticks. The gauge joins its fold by `max`, so a raised fold survives every
      *   later checkpoint, where a lowered position would be undone by the next one: a checkpoint
      *   `delegate` writes reads this very gauge, so until issuance passes the raised fold it asserts

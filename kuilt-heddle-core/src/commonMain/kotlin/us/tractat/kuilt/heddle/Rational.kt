@@ -40,7 +40,7 @@ import us.tractat.kuilt.math.timesWide
  *
  * **Replication is opt-in, per site, through [RationalSerializer]** — the normalizing
  * serializer routed through [of] that this stance always prescribed, and the same shape as
- * [WeightSerializer]. Two sites exist today: [PolicyEdge.virtualOffset] is scheduler-local
+ * [WeightSerializer]. Two sites exist today: a wake clamp in [AllocatorMemory] is scheduler-local
  * and design §7.2 explicitly does *not* replicate it, while [Gauge.floor] **is** replicated
  * (issue #1752) and carries `@Serializable(with = RationalSerializer::class)`. Annotate the
  * property, never this class — that is what keeps the default closed.

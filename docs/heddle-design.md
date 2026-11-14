@@ -1010,7 +1010,9 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   ticks, the same up-rounding the seat takes. Sleeper credit is service units,
   so it scales onto the grid by `G` like any other service. The stored offset is
   joined with `max` on the grid and kept there, so it never carries a front's
-  denominator into the next one.
+  denominator into the next one. The clamp and the stored offset are 128-bit
+  (#3353): a waker idle since long before the parent's origin was raised sits far
+  below its siblings, and the clamp carries it the whole way back to the front.
 
   Default `sleeperCredit = 0`. `parentVirtualTime` here is the front defined
   just below, with the waker itself — and every sibling waking in the same

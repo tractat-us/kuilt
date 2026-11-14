@@ -462,9 +462,10 @@ public class EntitlementLedger private constructor(
 
     /**
      * [id]'s **gross** virtual service — the [Gauge]'s position advanced by `(baseIssued − folded)`
-     * units, over `G · w`, or `baseIssued / w` when no gauge is stored, read on the edge's
-     * 1/16-unit grid: a legacy floor written off it is rounded up once ([grossTicksAt], #3313).
-     * `null` if [id] is unknown *or divergent* (no single record ⇒ no single weight to divide by).
+     * units, less its parent's [origin] on the edge's grid, over `G · w`, or `baseIssued / w` less
+     * the origin when no gauge is stored, read on the edge's 1/16-unit grid: a legacy floor written
+     * off it is rounded up once ([grossVirtualServiceAt], #3313, #3353). `null` if [id] is unknown
+     * *or divergent* (no single record ⇒ no single weight to divide by).
      *
      * ## Base issuance, not effective (issue #1752, F2)
      *
@@ -480,16 +481,21 @@ public class EntitlementLedger private constructor(
      *
      * A position past the edge's ceiling reads as the ceiling rather than throwing (#3313); a pick
      * that would order it refuses instead (see [AcquireOutcome.PositionCeiling]).
+     *
+     * @throws ArithmeticException if the position relative to the origin is below `Long`, which only
+     *   a child idle since long before many rebases reaches.
      */
     public fun grossVirtualService(id: AttachmentId): Rational? =
         recordOf(id)?.let { grossVirtualService(id, it) }
 
     /**
      * [id]'s virtual service net of returns — `grossVirtualService − returned / w` (design §7.1's
-     * `b + committedService / weight`, with the gauge supplying `b` and the fold). `null` if [id]
-     * is unknown or divergent. At the ceiling it reads the ceiling, as a pick does ([netTicks]).
+     * `b + committedService / weight`, with the gauge supplying `b` and the fold), relative to its
+     * parent's [origin]. The raw position a pick reads, before the wake clamp ([rawTicksAt]),
+     * computed wide and narrowed only here. `null` if [id] is unknown or divergent. Past the
+     * ceiling it reads the ceiling.
      *
-     * @throws ArithmeticException if the returns, in ticks, leave `Long`.
+     * @throws ArithmeticException if the position is below `Long`, as for [grossVirtualService].
      */
     public fun virtualService(id: AttachmentId): Rational? {
         val record = recordOf(id) ?: return null
