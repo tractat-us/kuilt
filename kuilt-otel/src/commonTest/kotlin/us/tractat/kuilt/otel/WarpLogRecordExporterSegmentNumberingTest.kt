@@ -10,9 +10,11 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -159,6 +161,108 @@ class WarpLogRecordExporterSegmentNumberingTest {
             { assertEquals(ExportResult.Success, retried) },
             { assertTrue((0 until 6).all { "foreign$it" in bodies }, "the retried merge never persisted: $bodies") },
         )
+    }
+
+    // ---- The index refuses a number it would hand out twice ----
+
+    @Test
+    fun theIndexRefusesEveryLayoutThatWouldHandOutANumberTwice() {
+        val refusals = mapOf(
+            "next equal to active" to { LogSegmentIndex(listOf(1L), active = 2L, next = 2L) },
+            "next below active (a wrap)" to { LogSegmentIndex(listOf(1L), active = Long.MAX_VALUE, next = Long.MIN_VALUE) },
+            "a segment sealed twice" to { LogSegmentIndex(listOf(1L, 1L), active = 2L, next = 3L) },
+            "active also sealed" to { LogSegmentIndex(listOf(1L, 2L), active = 2L, next = 3L) },
+            "a sealed number at next" to { LogSegmentIndex(listOf(3L), active = 2L, next = 3L) },
+            "a retired number at next" to { LogSegmentIndex(listOf(1L), active = 2L, next = 3L, retired = listOf(3L)) },
+        )
+        assertAll(
+            // The control: a well-formed index constructs, so the refusals are not a constructor
+            // that refuses everything.
+            { LogSegmentIndex(listOf(1L), active = 2L, next = 3L, retired = listOf(0L)) },
+            *refusals.map { (shape, build) ->
+                { assertFailsWith<IllegalArgumentException>("the index accepted $shape") { build() } }
+            }.toTypedArray(),
+        )
+    }
+
+    @Test
+    fun aRollThatWouldWrapRefusesTheExportInsteadOfOverwritingASegment() = runTest {
+        // One roll from the end of `Long`: the fourth record fills the segment, and the roll would
+        // open `Long.MAX_VALUE` with nothing past it to hand out next.
+        val store = RecordingStore()
+        store.putRaw(
+            INDEX_KEY_FOR_TEST,
+            legacyCbor.encodeToByteArray(
+                LogSegmentIndex.serializer(),
+                LogSegmentIndex(sealedSegments = emptyList(), active = Long.MAX_VALUE - 1, next = Long.MAX_VALUE),
+            ),
+        )
+        val exporter = exporterFor(store).also { it.recover() }
+        val results = (0 until 4).map { exporter.export(record(it)) }
+        val index = indexOf(store)
+
+        assertAll(
+            // The precondition: the store takes writes, so the refusal below is the roll's own.
+            { assertEquals(List(3) { ExportResult.Success }, results.take(3)) },
+            { assertTrue(results[3] is ExportResult.Failure, "the wrapping roll reported ${results[3]}") },
+            { assertEquals(Long.MAX_VALUE - 1, index.active, "the refused roll still moved the index: $index") },
+            {
+                assertEquals(
+                    setOf(segmentKeyForTest(Long.MAX_VALUE - 1)),
+                    segmentKeys(store),
+                    "the refused roll wrote a segment",
+                )
+            },
+        )
+    }
+
+    // ---- An index an older build wrote still reads ----
+
+    @Test
+    fun aWrappedIndexAnOlderBuildWroteIsRepairedOnReadAndLosesNoKey() = runTest {
+        // The layout the wrap left behind, as measured on `main` before #3317: `next` wrapped to
+        // `Int.MIN_VALUE`, and `Int.MAX_VALUE` both active and sealed over and over.
+        val store = RecordingStore()
+        val below = Int.MAX_VALUE.toLong() - 1
+        val wrapped = Int.MAX_VALUE.toLong()
+        store.putRaw(
+            INDEX_KEY_FOR_TEST,
+            legacyCbor.encodeToByteArray(
+                IntShapedIndex.serializer(),
+                IntShapedIndex(
+                    sealedSegments = listOf(Int.MAX_VALUE - 1, Int.MAX_VALUE, Int.MAX_VALUE, Int.MAX_VALUE),
+                    active = Int.MAX_VALUE,
+                    next = Int.MIN_VALUE,
+                ),
+            ),
+        )
+        store.putRaw(StoreKey(segmentKeyForTest(below)), segmentOf((0 until 4).map { record(it) }))
+        store.putRaw(StoreKey(segmentKeyForTest(wrapped)), segmentOf((4 until 6).map { record(it) }))
+
+        val read = indexOf(store)
+        val exporter = exporterFor(store).also { it.recover() }
+        val results = (6 until 20).map { exporter.export(record(it)) }
+        val restarted = exporterFor(store).also { it.recover() }
+        val recovered = restarted.snapshot().toList().map { it.body }.toSet()
+
+        assertAll(
+            { assertEquals(listOf(below), read.sealedSegments, "the read did not fold the repeated seals: $read") },
+            { assertEquals(wrapped, read.active) },
+            { assertEquals(wrapped + 1, read.next, "the read did not raise next past every number: $read") },
+            { assertTrue(results.all { it == ExportResult.Success }, "an export after the repair failed: $results") },
+            { assertEquals((0 until 20).map { "body-$it" }.toSet(), recovered, "a key the old index named was lost") },
+        )
+    }
+
+    private fun segmentOf(records: List<LogRecord>): ByteArray {
+        var rga = Rga.empty<LogRecord>()
+        var tail = RgaId.HEAD
+        records.forEach { r ->
+            val (next, op) = rga.insertAfter(replica = replicaA, after = tail, value = r)
+            rga = next
+            tail = op.id
+        }
+        return legacyCbor.encodeToByteArray(Rga.wireSerializer(LogRecord.serializer()), rga)
     }
 
     /** The index exactly as every build before #3317 wrote it: `Int` fields, same names. */
