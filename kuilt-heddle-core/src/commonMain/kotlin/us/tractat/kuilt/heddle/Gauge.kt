@@ -58,11 +58,17 @@ import us.tractat.kuilt.math.timesWide
  *
  * ## Absolute and uncapped (#3353)
  *
- * The ticks are an absolute position: never rebased and never capped. A seat and a checkpoint
+ * The ticks are never rewritten in place and never capped in storage. A seat and a checkpoint
  * store the exact value, past the position ceiling, and past `Long` if the edge's history goes
  * there. Saturation happens only where a position is narrowed to the `Long` a pick orders
  * ([grossTicksAt]). A cap in storage would turn into credit once a per-parent origin, the next
  * step of #3353, rose past it.
+ *
+ * They are not yet absolute in a `LocalHeddle` ledger. A rebase there raises the fold (below), and
+ * the next checkpoint after issuance passes the raised fold reads through it: ticks of `1000 · G`
+ * at fold 1000, the fold raised to 1500, and a checkpoint at issuance 1600 stores `1100 · G`, not
+ * `1600 · G`. That holds until `LocalHeddle` moves its rebase onto per-parent origins (#3353,
+ * slice 7). The replicated `HeddleNode` raises no fold, so its ticks are absolute already.
  *
  * ## The read is deliberately not monotone in the view
  *
@@ -87,10 +93,10 @@ import us.tractat.kuilt.math.timesWide
  * service, and the componentwise join keeps the raise, where a lowered position would be undone by
  * the next checkpoint. So in a `LocalHeddle` ledger a fold can stand above the edge's issuance.
  * Nothing about the read changes for it: `(baseIssued − folded)` is simply negative. A checkpoint
- * written over such a gauge asserts a lower position at a lower fold, a pair the raised one
- * dominates on both components and reads the same as; where that lower position is below zero it
- * is written as zero, which the stored position dominates just the same. The replicated
- * `HeddleNode` never raises a fold this way (#3353).
+ * written over such a gauge asserts a lower position at a lower fold, and joined with the raised
+ * gauge it reads the same as the raised gauge alone. Where that lower position is below zero it is
+ * written as zero, which reads the same way. The replicated `HeddleNode` never raises a fold this
+ * way (#3353).
  *
  * ## Wire form
  *
@@ -182,8 +188,13 @@ internal fun Gauge?.grossVirtualServiceAt(baseIssued: Long, weight: Weight): Rat
  * taken from a front at its ceiling stores the ceiling, since the front is still narrowed to a
  * `Long` ([VirtualTime.ticksFor]); that position may stand for more, so issuance the reader has
  * not seen must not bring it back below the ceiling as if it were exact. For an exact stored
- * position past the ceiling the rule only ever reads higher than the exact sum, the penalty side,
+ * position past the ceiling the rule reads at or above the saturated exact sum, the penalty side,
  * and a pick over it refuses either way.
+ *
+ * **The hold is correct only while there is no origin.** It narrows the *absolute* stored
+ * position. Once a parent's origin `O` is subtracted before a pick orders a position, a stored
+ * `X ≥ C` held here would read `C − ⌊O · w · G⌋`, below the true `X − ⌊O · w · G⌋`: credit.
+ * Slice 6 of #3353 replaces this hold with a wide raw read, narrowed only after the origin.
  */
 internal fun Gauge?.grossTicksAt(baseIssued: Long, weight: Weight): Long {
     if (this == null) return saturatedTicksOf(baseIssued, weight)

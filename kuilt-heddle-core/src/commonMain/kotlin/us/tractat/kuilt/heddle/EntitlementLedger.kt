@@ -1609,9 +1609,10 @@ public class EntitlementLedger private constructor(
      * position there, uncapped, at that fold ([exactGrossTicksAt]).
      *
      * Held at zero from below. A position can read below zero only where a `LocalHeddle` rebase has
-     * raised the fold above the issuance (#3329), and there the checkpoint is a lower position at
-     * a lower fold than the gauge it joins, which the join absorbs either way: the stored position
-     * is never negative, so zero is no higher than it.
+     * raised the fold above the issuance (#3329). There the checkpoint is a lower position at a
+     * lower fold than the gauge it joins, and the joined gauge reads the same as the raised one
+     * alone, whether the checkpoint carries that lower position or zero: the stored position is
+     * never negative, so zero is no higher than it.
      */
     private fun checkpoint(edge: AttachmentId, w: Weight, issuedAfter: Long): Gauge =
         gaugeAt(maxOf(gauges[edge].exactGrossTicksAt(issuedAfter, w), Int128.ZERO), issuedAfter)
