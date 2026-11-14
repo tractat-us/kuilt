@@ -1109,6 +1109,34 @@ class HeddleNodeTest {
     }
 
     /**
+     * A refused schedule changes nothing (#3353): the newborns it would have seated before the pick
+     * stay unseated, since the seat step and the first pick land as one patch or not at all.
+     */
+    @Test
+    fun aScheduleRefusedAtTheCeilingSeatsNoNewborn() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
+        val atCeiling = Gauge(Rational.of(CEILING_AT_WEIGHT_ONE, 16L), folded = 0L)
+        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling))))
+        val newborn = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
+        assertTrue(node.prepare(newborn) && node.activate(newborn.id))
+        for (edge in listOf(e1, e2, newborn.id)) node.advertise(edge, hungry)
+        h.pump()
+        val before = node.ledger.value
+        val outcome = node.schedule(root)
+        h.pump()
+        assertAll(
+            { assertEquals(null, before.gauge(newborn.id), "the rig: the newborn is unseated") },
+            { assertEquals(ScheduleOutcome.PositionCeiling(root), outcome, "the rig: the pick refused") },
+            { assertEquals(before, node.ledger.value, "and nothing was written, the newborn's seat included") },
+        )
+    }
+
+    /**
      * Two static peers, cut off from each other, each activate a child that fits beside the two it
      * sees. Merged on heal, the four weights put a pick's sums out of `Long`
      * (`S = 2⁶³ + 385` over `L = 192`), so every pick at the root throws. The node used to throw on

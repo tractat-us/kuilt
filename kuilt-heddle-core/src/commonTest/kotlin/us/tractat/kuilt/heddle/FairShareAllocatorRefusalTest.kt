@@ -167,4 +167,68 @@ class FairShareAllocatorRefusalTest {
             { assertEquals(AllocationOutcome.WeightBudget(root), second, "the next call names the budget") },
         )
     }
+
+    // ── A refused schedule changes nothing (#3353 slice 3) ──────────────────────────
+
+    private val e3 = AttachmentId("e3")
+
+    /**
+     * The joining rig: `e1` competing at [e1Ticks], `e2` a waker at 0 (seen idle, demanding now),
+     * `e3` a newborn with no seat, and [mint] at the root. Each joiner has something for the seat
+     * step to write: `e3` a seat, `e2` a clamp up to `e1`.
+     */
+    private fun joining(mint: Long, e1Ticks: Long): Pair<CountingCell, FairShareAllocator> {
+        val s = withChildren(seatedAt(seatedAt(flat(mint), e1, e1Ticks), e2, 0L), AttachmentRecord(e3, root, GroupId("g3"), Weight.ONE))
+        val allocator = FairShareAllocator(
+            self,
+            policy,
+            AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = mapOf(e1 to true, e2 to false)),
+        )
+        return CountingCell(s) to allocator
+    }
+
+    @Test
+    fun aRefusedFirstPickWritesNoSeatAndObservesNothing() {
+        val (cell, allocator) = joining(mint = 100L, e1Ticks = positionCeiling(Weight.ONE))
+        val before = cell.current
+        val memoryBefore = allocator.memory
+        val outcome = allocator.schedule(root, cell, earmarked = 0L) { hungry }
+        assertAll(
+            { assertTrue(before.gauge(e3) == null, "the rig: e3 is unseated") },
+            { assertEquals(false, memoryBefore.demandingObserved[e2], "the rig: e2 was seen idle, so it is waking") },
+            { assertEquals(AllocationOutcome.PositionCeiling(root), outcome, "the rig: the first pick refused") },
+            { assertEquals(before, cell.current, "no seat landed for the newborn") },
+            { assertEquals(0, cell.writes, "not one patch") },
+            { assertEquals(memoryBefore, allocator.memory, "and no clamp or observation was kept") },
+        )
+    }
+
+    /** The same parent with nothing at the root: an ordinary empty pick, which keeps what it seated and saw. */
+    @Test
+    fun anOrdinaryEmptyPickKeepsItsSeatsAndWakeMemory() {
+        val (cell, allocator) = joining(mint = 0L, e1Ticks = 1_600L)
+        val outcome = allocator.schedule(root, cell, earmarked = 0L) { hungry }
+        val memory = allocator.memory
+        assertAll(
+            { assertEquals(AllocationOutcome.NothingToDelegate, outcome, "the rig: nothing to grant") },
+            { assertEquals(Gauge(ticksToVirtual(1_600L, Weight.ONE), folded = 0L), cell.current.gauge(e3), "the newborn is seated at e1") },
+            { assertEquals(1, cell.writes, "in one patch") },
+            { assertEquals(ticksToVirtual(1_600L, Weight.ONE), memory.wakeOffsets[e2], "the waker's clamp is kept") },
+            { assertEquals(mapOf(e1 to true, e2 to true, e3 to true), memory.demandingObserved, "and so is what it saw") },
+        )
+    }
+
+    /** With supply, the seats and the first grant land together, as one patch. */
+    @Test
+    fun theFirstGrantLandsWithItsSeatsInOnePatch() {
+        val (cell, allocator) = joining(mint = 10L, e1Ticks = 1_600L)
+        val outcome = allocator.schedule(root, cell, earmarked = 0L) { hungry }
+        val issued = listOf(e1, e2, e3).sumOf { cell.current.edge(it)?.issued ?: 0L }
+        assertAll(
+            { assertEquals(AllocationOutcome.Delegated(1), outcome, "the rig: one quantum's supply, one grant") },
+            { assertEquals(10L, issued, "the grant landed") },
+            { assertTrue(cell.current.gauge(e3) != null, "and so did the newborn's seat") },
+            { assertEquals(1, cell.writes, "in a single patch") },
+        )
+    }
 }
