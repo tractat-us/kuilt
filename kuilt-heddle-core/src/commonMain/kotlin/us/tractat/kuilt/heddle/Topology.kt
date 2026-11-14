@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalVersionOverloading::class)
+
 package us.tractat.kuilt.heddle
 
 import kotlinx.serialization.KSerializer
@@ -61,6 +63,13 @@ public data class Topology(public val root: String, public val children: List<No
 
         /** The child's share relative to its siblings. */
         public val weight: Weight
+
+        /**
+         * The most leases that may be open beneath this child at once, or `null` for no ceiling.
+         * `0` pauses it: nothing beneath it is picked. Never negative. `LocalHeddle` does not yet
+         * enforce it (#3324).
+         */
+        public val maxConcurrent: Long?
     }
 
     /**
@@ -72,6 +81,8 @@ public data class Topology(public val root: String, public val children: List<No
      *   Each runtime child is a leaf, one level below this group: it cannot be marked itself, so
      *   it never has children of its own. Declared groups nest to any depth; runtime ones do not
      *   yet, and letting them is tracked by #3314.
+     * @property maxConcurrent the most leases open beneath this group at once, counted across all
+     *   its children; `null` for no ceiling, `0` to pause it.
      */
     @Serializable
     @SerialName("group")
@@ -80,23 +91,35 @@ public data class Topology(public val root: String, public val children: List<No
         @Serializable(with = TopologyWeightSerializer::class) override val weight: Weight,
         public val children: List<Node>,
         public val runtimeChildren: RuntimeChildren? = null,
+        @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
     ) : Node
 
-    /** A leaf of the tree: work is charged here. */
+    /**
+     * A leaf of the tree: work is charged here.
+     *
+     * @property maxConcurrent the most leases open on this lane at once; `null` for no ceiling,
+     *   `0` to pause it.
+     */
     @Serializable
     @SerialName("lane")
     public data class Lane(
         override val name: String,
         @Serializable(with = TopologyWeightSerializer::class) override val weight: Weight = Weight.ONE,
+        @IntroducedAt("0.7.5") override val maxConcurrent: Long? = null,
     ) : Node
 
     /**
      * Marks a group whose children are created at runtime. Every such child gets [weight]. Its
      * name is an opaque string the consumer chooses: heddle attaches no meaning to it.
+     *
+     * @property maxConcurrent the most leases open on **each** runtime child at once, not on all of
+     *   them together; `null` for no ceiling, `0` to pause every one. Never negative. `LocalHeddle`
+     *   does not yet enforce it (#3324).
      */
     @Serializable
     public data class RuntimeChildren(
         @Serializable(with = TopologyWeightSerializer::class) public val weight: Weight,
+        @IntroducedAt("0.7.5") public val maxConcurrent: Long? = null,
     )
 
     public companion object {
@@ -188,6 +211,12 @@ public data class TopologyProblem(
         INVALID_WEIGHT,
 
         /**
+         * A `maxConcurrent` ceiling is negative. `0` is not a problem: it pauses the node. Reported
+         * at the node's own path, or at the group's path for its runtime children's ceiling.
+         */
+        NEGATIVE_MAX_CONCURRENT,
+
+        /**
          * A problem the app found in its own settings for a node, kept in the same file as the
          * tree, so that one list holds everything wrong with the file. Heddle never reports this
          * kind: the app builds the problem with the node's [TopologyProblem.path] and puts it in the list itself.
@@ -247,9 +276,15 @@ private fun quoted(name: String): String =
     "\"" + name.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") + "\""
 
 private fun Topology.Node.written(): TopologyDocument.Node = when (this) {
-    is Topology.Group ->
-        TopologyDocument.Group(name, weight.text(), children.map { it.written() }, runtimeChildren?.weight?.text())
-    is Topology.Lane -> TopologyDocument.Lane(name, weight.text())
+    is Topology.Group -> TopologyDocument.Group(
+        name,
+        weight.text(),
+        children.map { it.written() },
+        runtimeChildren?.weight?.text(),
+        maxConcurrent = maxConcurrent,
+        runtimeChildrenMaxConcurrent = runtimeChildren?.maxConcurrent,
+    )
+    is Topology.Lane -> TopologyDocument.Lane(name, weight.text(), maxConcurrent)
 }
 
 /** Only called once [documentProblems] is empty, so every weight text parses. */
@@ -258,9 +293,10 @@ private fun TopologyDocument.Node.checked(): Topology.Node = when (this) {
         name,
         checkedWeight(weight),
         children.map { it.checked() },
-        runtimeChildren?.let { Topology.RuntimeChildren(checkedWeight(it)) },
+        runtimeChildren?.let { Topology.RuntimeChildren(checkedWeight(it), runtimeChildrenMaxConcurrent) },
+        maxConcurrent,
     )
-    is TopologyDocument.Lane -> Topology.Lane(name, checkedWeight(weight))
+    is TopologyDocument.Lane -> Topology.Lane(name, checkedWeight(weight), maxConcurrent)
 }
 
 private fun checkedWeight(text: String): Weight =
