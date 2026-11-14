@@ -322,44 +322,41 @@ class GaugeTest {
     }
 
     /**
-     * What *does* reach the ceiling: not depth, but a **single extreme weight ratio**. Two
-     * denominators sharing no factor multiply before [Rational] can reduce — `plus` computes
-     * `checkedMul(denominator, other.denominator)` first — so the product of a floor's denominator
-     * and a weight numerator coprime to it is the hard constraint. At `~3.04e9` each, that product
-     * exceeds `Long.MAX_VALUE` in a single addition.
+     * An off-grid floor is read **up** to the edge's grid instead of reaching a ceiling (#3313).
      *
-     * Under [CheckedMath] that **throws**, which is the right failure and the reason this is an
-     * accepted cost rather than a defect: a wrapped denominator would invert
-     * [Rational.compareTo]'s cross-multiplication and silently reorder siblings cluster-wide,
-     * whereas a throw is a loud, local, deterministic refusal that every replica makes alike.
+     * Before the grid, a single extreme weight ratio was what overflowed: a floor's denominator and
+     * a weight numerator coprime to it multiplied in `Rational.plus` before anything could reduce,
+     * so two primes near `√Long.MAX_VALUE` threw on one addition. A position is now whole ticks of
+     * the edge's own service: the floor `1/3037000493` at weight `3037000507` reads
+     * `⌈16.0000000737…⌉ = 17` ticks, and one issued unit adds 16, so the gross read is
+     * `33 / (16 · 3037000507)`. The floor was written off the grid — only an older peer or a
+     * hand-built gauge can do that — and the read rounds it once, in the direction §10.5 allows.
+     *
+     * What still throws is a **position** past `Long`: an issuance whose ticks do not fit. That is
+     * a deterministic refusal every replica makes alike (§10.12), never a wrap.
      *
      * Reached through the [EntitlementLedger] read rather than bare arithmetic, so the guarantee is
      * pinned where consumers actually stand.
      */
     @Test
-    fun anExtremeWeightRatioIsWhatReachesTheCeilingAndItThrows() {
-        // Two primes just over sqrt(Long.MAX_VALUE): coprime, so nothing reduces, and their
-        // product overflows.
-        val overflowing = ledgerWith(
+    fun anOffGridFloorIsReadUpToTheGridAndOnlyAPositionPastLongThrows() {
+        val offGrid = ledgerWith(
             weight = Weight.of(3_037_000_507L, 1L),
             issued = 1L,
             gauge = Gauge(Rational.of(1L, 3_037_000_493L), 0L),
         )
-        assertFailsWith<ArithmeticException>("must throw, never wrap (§10.12)") {
-            overflowing.grossVirtualService(EDGE)
-        }
-
-        // The neighbouring case that fits is exact — so the throw is a real ceiling and not an
-        // over-eager guard.
-        val fits = ledgerWith(
-            weight = Weight.of(3_037_000_499L, 1L),
-            issued = 1L,
-            gauge = Gauge(Rational.of(1L, 3_037_000_493L), 0L),
+        val pastLong = ledgerWith(
+            weight = Weight.ONE,
+            issued = Long.MAX_VALUE / TICKS_PER_UNIT + 1L,
+            gauge = Gauge(Rational.ZERO, 0L),
         )
-        assertEquals(
-            Rational.of(3_037_000_499L + 3_037_000_493L, 3_037_000_493L * 3_037_000_499L),
-            fits.grossVirtualService(EDGE),
-            "just under the ceiling the read is still exact",
+        assertAll(
+            { assertEquals(Rational.of(33L, 16L * 3_037_000_507L), offGrid.grossVirtualService(EDGE)) },
+            {
+                assertFailsWith<ArithmeticException>("must throw, never wrap (§10.12)") {
+                    pastLong.grossVirtualService(EDGE)
+                }
+            },
         )
     }
 

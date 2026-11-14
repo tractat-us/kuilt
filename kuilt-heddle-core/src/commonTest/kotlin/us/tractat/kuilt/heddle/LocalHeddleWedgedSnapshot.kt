@@ -1,0 +1,13 @@
+package us.tractat.kuilt.heddle
+
+/**
+ * A format-1 snapshot that v0.7.4 persisted one pick before it wedged (#3313): four lanes weighted
+ * `3/7, 2/5, 1, 3` under one parent, after 30,723 picks with a waiting set that changed between
+ * them. Its wake offsets carry denominators up to 72,557,275, and on v0.7.4 its next pick
+ * overflowed `Long`. Its floors are origin seats (`34594/3` is `4942 / (3/7)`), already on the grid.
+ *
+ * Checked in byte-for-byte as the old engine wrote it, so the restore test proves a snapshot from
+ * the field needs no migration. Never regenerate it: a snapshot written by the fixed engine would
+ * be on the grid and test nothing.
+ */
+internal const val WEDGED_AT_0_7_4: String = """[1,{"epoch":1,"totalSlots":1,"ledger":{"records":{"fs/l0@3:7#0":[{"id":"fs/l0@3:7#0","parent":"fs","child":"fs/l0","weight":{"numerator":3,"denominator":7}}],"fs/l1@2:5#0":[{"id":"fs/l1@2:5#0","parent":"fs","child":"fs/l1","weight":{"numerator":2,"denominator":5}}],"fs/l2@1:1#0":[{"id":"fs/l2@1:1#0","parent":"fs","child":"fs/l2","weight":{"numerator":1,"denominator":1}}],"fs/l3@3:1#0":[{"id":"fs/l3@3:1#0","parent":"fs","child":"fs/l3","weight":{"numerator":3,"denominator":1}}]},"minted":{"local#1":{"root":"fs","holder":"local","amount":30723}},"issued":{"fs/l0@3:7#0":{"counts":{"local":4942}},"fs/l1@2:5#0":{"counts":{"local":6310}},"fs/l2@1:1#0":{"counts":{"local":11095}},"fs/l3@3:1#0":{"counts":{"local":8753}}},"returned":{"fs/l2@1:1#0":{"counts":{"local":182}},"fs/l3@3:1#0":{"counts":{"local":195}}},"leafSpent":{"fs/l0@3:7#0":{"counts":{"local":4942}},"fs/l1@2:5#0":{"counts":{"local":6310}},"fs/l2@1:1#0":{"counts":{"local":10913}},"fs/l3@3:1#0":{"counts":{"local":8558}}},"rollupSpent":{},"transfers":{},"lifecycle":{"fs/l0@3:7#0":"ACTIVE","fs/l1@2:5#0":"ACTIVE","fs/l2@1:1#0":"ACTIVE","fs/l3@3:1#0":"ACTIVE"},"gauges":{"fs/l0@3:7#0":{"floor":{"numerator":34594,"denominator":3},"folded":4942},"fs/l1@2:5#0":{"floor":{"numerator":15775,"denominator":1},"folded":6310},"fs/l2@1:1#0":{"floor":{"numerator":11095,"denominator":1},"folded":11095},"fs/l3@3:1#0":{"floor":{"numerator":8753,"denominator":3},"folded":8753}}},"allocatorMemory":{"wakeOffsets":{"fs/l0@3:7#0":{"numerator":26802795823,"denominator":7505925},"fs/l1@2:5#0":{"numerator":48703699,"denominator":10150},"fs/l2@1:1#0":{"numerator":495600696789,"denominator":72557275},"fs/l3@3:1#0":{"numerator":779169367,"denominator":63075}},"demandingObserved":{"fs/l0@3:7#0":true,"fs/l1@2:5#0":true,"fs/l2@1:1#0":true,"fs/l3@3:1#0":false}},"leases":[],"lastApplied":{"root":"fs","children":[{"type":"lane","name":"l0","weight":"3/7"},{"type":"lane","name":"l1","weight":"2/5"},{"type":"lane","name":"l2"},{"type":"lane","name":"l3","weight":"3"}]}}]"""

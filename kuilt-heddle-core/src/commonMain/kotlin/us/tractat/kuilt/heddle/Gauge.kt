@@ -79,14 +79,6 @@ public data class Gauge(
 }
 
 /**
- * [units] of service converted to virtual time at weight [w]: `units / w = units * den / num`.
- * The one place that division happens, so the gauge read and [HeddlePolicy.virtualService] cannot
- * drift in how they weight a quantity. Overflow-checked (§10.12).
- */
-internal fun perWeight(units: Long, w: Weight): Rational =
-    Rational.of(checkedMul(units, w.denominator), w.numerator)
-
-/**
  * The **gross** virtual service an edge of weight [weight] reads at base issuance [baseIssued] —
  * `floor + (baseIssued − folded) / weight`, or `baseIssued / weight` when the receiver is `null`
  * and the edge therefore reads from its own origin.
@@ -101,12 +93,22 @@ internal fun perWeight(units: Long, w: Weight): Rational =
  * checkpoint asserts a value the read has to reproduce, so the two are one function or they are a
  * bug waiting.
  *
- * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12 — a deterministic
+ * The read is on the edge's own grid ([TICKS_PER_UNIT]): the floor is read as `⌈floor · w · G⌉`
+ * ticks, which is exact for every floor this module writes, and the issuance since the fold adds
+ * whole ticks. A floor an older peer wrote off the grid is rounded up once, here, on read; nothing
+ * needs migrating, and since the ceiling is monotone it commutes with the join's `max`, so peers
+ * that merge in any order still read the same position.
+ *
+ * @throws ArithmeticException if the arithmetic would exceed `Long` (§10.12 — a deterministic
  *   throw, never a silent wrap; see [CheckedMath]).
  */
 internal fun Gauge?.grossVirtualServiceAt(baseIssued: Long, weight: Weight): Rational =
+    ticksToVirtual(grossTicksAt(baseIssued, weight), weight)
+
+/** [grossVirtualServiceAt] as a position: whole ticks of the edge's own service. */
+internal fun Gauge?.grossTicksAt(baseIssued: Long, weight: Weight): Long =
     if (this == null) {
-        perWeight(baseIssued, weight)
+        ticksOf(baseIssued)
     } else {
-        floor + perWeight(checkedSub(baseIssued, folded), weight)
+        checkedAdd(ticksAt(floor, weight), ticksOf(checkedSub(baseIssued, folded)))
     }

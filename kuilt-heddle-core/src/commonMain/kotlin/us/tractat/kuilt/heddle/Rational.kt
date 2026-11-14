@@ -120,10 +120,10 @@ public class Rational private constructor(
      * the scheduler deals in that is a *floor*, which rounds the wrong way for fairness: it
      * would seat a joiner *behind* the front, and lower virtual service reads as "has had less
      * than its share", so the joiner would take the next grants outright (§10.5's forbidden
-     * lifetime credit). **No production path rounds a virtual time any more** — the seat lives
-     * in [Gauge.floor], which is a [Rational] (#1752), so the one caller this rule existed for
-     * is gone. It stays because the rounding direction is the non-obvious part, and the next
-     * `Long` virtual-time field would get it wrong.
+     * lifetime credit). The scheduler's own rounding, a joiner landing on its grid, goes up for
+     * the same reason (#3313); it lives beside the positions it produces rather than here, so
+     * this one has no production caller. It stays because the rounding direction is the
+     * non-obvious part, and the next `Long` virtual-time field would get it wrong.
      */
     public fun ceil(): Long {
         val quotient = numerator / denominator

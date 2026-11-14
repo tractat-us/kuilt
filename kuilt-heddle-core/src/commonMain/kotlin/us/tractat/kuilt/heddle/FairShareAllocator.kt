@@ -196,7 +196,7 @@ public class FairShareAllocator(
         val edges = policyEdges(ledger, parent, demand)
         val unseated = edges.filter { it.gauge == null }.mapTo(HashSet()) { it.record.id }
         if (unseated.isEmpty()) return ledger
-        val front = HeddlePolicy.front(edges, excluding = unseated) ?: Rational.ZERO
+        val front = HeddlePolicy.frontTime(edges, excluding = unseated)
         val patch = seatPatch(ledger, unseated, front) ?: return ledger
         return ledger.piece(patch.delta)
     }
@@ -222,7 +222,7 @@ public class FairShareAllocator(
     internal fun effectiveVirtualService(ledger: EntitlementLedger, parent: GroupId, edge: AttachmentId): Rational? =
         policyEdges(ledger, parent) { Demand.NONE }
             .firstOrNull { it.record.id == edge }
-            ?.let { HeddlePolicy.virtualService(it) + it.virtualOffset }
+            ?.let { ticksToVirtual(HeddlePolicy.effectiveTicks(it), it.record.weight) }
 
     /**
      * Build the policy input at [parent] from [s] and run one [HeddlePolicy.pick].
@@ -320,20 +320,21 @@ public class FairShareAllocator(
             .filter { HeddlePolicy.isDemanding(it) && demandingObserved[it.record.id] == false }
             .mapTo(HashSet()) { it.record.id }
         val joiners = HashSet(unseated).apply { addAll(wakers) }
-        val front = if (joiners.isEmpty()) null else HeddlePolicy.front(edges, excluding = joiners)
+        val front = if (joiners.isEmpty()) null else HeddlePolicy.frontTime(edges, excluding = joiners)
 
         if (unseated.isNotEmpty()) {
-            val seatAt = front ?: Rational.ZERO
-            ledger.mutateOrSkip { state -> seatPatch(state, unseated, seatAt) }
+            ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
         }
         if (front != null) clampWakers(edges, wakers, front)
         for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
     }
 
     /**
-     * One patch seating each of [unseated] at [front]. [EntitlementLedger.seat] refuses an edge that
-     * already carries a gauge, so an id whose seat arrived between the front being read and this
-     * patch being built is simply skipped rather than re-seated.
+     * One patch seating each of [unseated] at [front], each on its own grid
+     * ([VirtualTime.ticksFor]), or at its own origin when [front] is `null`.
+     * [EntitlementLedger.seatAt] refuses an edge that already carries a gauge, so an id whose seat
+     * arrived between the front being read and this patch being built is simply skipped rather
+     * than re-seated.
      *
      * The seats are gathered into one gauge map and assembled once. Joining them one at a time
      * copied the growing patch on every seat, which made a cohort of `n` newborns cost `n²` (5,000
@@ -342,11 +343,12 @@ public class FairShareAllocator(
     private fun seatPatch(
         s: EntitlementLedger,
         unseated: Set<AttachmentId>,
-        front: Rational,
+        front: VirtualTime?,
     ): Patch<EntitlementLedger>? {
         val gauges = LinkedHashMap<AttachmentId, Gauge>()
         for (id in unseated.sorted()) {
-            val seat = s.seat(id, front) ?: continue
+            val weight = s.record(id)?.weight ?: continue
+            val seat = s.seatAt(id, front?.ticksFor(weight) ?: 0L) ?: continue
             gauges[id] = checkNotNull(seat.delta.gauge(id)) { "a seat patch for ${id.value} carries no gauge" }
         }
         if (gauges.isEmpty()) return null
@@ -414,18 +416,20 @@ public class FairShareAllocator(
      * and the §8.2 caps, any peer that did observe the window clamps independently, and wake
      * offsets are scheduler-local anyway, so divergence between peers is already tolerated.
      */
-    private fun clampWakers(edges: List<PolicyEdge>, wakers: Set<AttachmentId>, front: Rational) {
+    private fun clampWakers(edges: List<PolicyEdge>, wakers: Set<AttachmentId>, front: VirtualTime) {
         for (edge in edges) {
             if (edge.record.id !in wakers) continue
-            val computed = HeddlePolicy.wakeOffset(
-                front = front,
-                vRaw = HeddlePolicy.virtualService(edge),
-                weight = edge.record.weight,
+            val weight = edge.record.weight
+            val computed = HeddlePolicy.wakeOffsetTicks(
+                frontTicks = front.ticksFor(weight),
+                rawTicks = HeddlePolicy.rawTicks(edge),
                 sleeperCredit = policy.sleeperCredit,
             )
-            // Join, never replace: the front is not monotone across wake cycles (#1714).
-            val carried = wakeOffsets[edge.record.id] ?: Rational.ZERO
-            wakeOffsets[edge.record.id] = Rational.max(carried, computed)
+            // Join, never replace: the front is not monotone across wake cycles (#1714). Both
+            // sides are on the waker's grid, and the result is stored on it, so a stored offset
+            // never carries a front's denominator into the next one (#3313).
+            val carried = ticksAt(wakeOffsets[edge.record.id] ?: Rational.ZERO, weight)
+            wakeOffsets[edge.record.id] = ticksToVirtual(maxOf(carried, computed), weight)
         }
     }
 

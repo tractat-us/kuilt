@@ -56,7 +56,10 @@ children that lead to a lane this agent can run:
 The winner's edge is handed `r`, which raises its `ev` by `r/w`, and the pick
 repeats one fork down. Every candidate shares the same `r`, so deadlines differ
 only by progress and weight. A heavier child moves less per build, so it wins
-more often. All of this is exact fractions: no rounding and no floating point.
+more often. Progress is counted in sixteenths of a unit, as whole numbers, so
+there is no floating point. Only a newcomer's starting place, or a waking
+child's, is rounded, up by under one sixteenth, so it never starts ahead of the
+children already waiting.
 
 The steps are `HeddlePolicy.pick`. `FairShareAllocator.pickChild` makes one such
 pick at one fork, and `LocalHeddle.acquire` walks them from the root to a lane.
@@ -181,12 +184,11 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
   [#3238](https://github.com/tractat-us/kuilt/issues/3238). The networked
   `HeddleNode` does not take this path: its `complete` keeps an unused
   reservation at the leaf instead of returning it up the path.
-- **A lifetime ceiling.** Virtual service is an exact fraction over `Long`, and
-  its numerators grow with all the service a fork has handed down, scaled by its
-  children's weights. In one measurement, weights 3 : 1 ran past 2^60 units, and
-  weights 3/7 : 2/5 threw near 2^56. Past the ceiling, every `acquire` at that
-  fork throws `ArithmeticException`. Pick a coarse unit: minutes or seconds, not
-  nanoseconds.
+- **A lifetime ceiling.** Each child's progress is a `Long` count of
+  sixteenths of a unit, and it grows with all the service its fork has handed
+  down, scaled by its weight against its siblings'. Past the ceiling, every
+  `acquire` at that fork throws `ArithmeticException`. Pick a coarse unit:
+  minutes or seconds, not nanoseconds.
 
 **Sizing estimates.** The estimate and straddle effects both vanish for a lease
 that settles at its estimate, a `cancel` aside. So aim `defaultReservation` at a

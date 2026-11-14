@@ -57,9 +57,10 @@ public sealed interface WaitExplanation {
      * clamps included, over two different sets of [parent]'s children
      * ([FairShareAllocator.virtualTime]):
      * - [eligibleFront] is over the children leading to a leaf of the eligible set: the line the
-     *   pick itself draws. Above it, the leaf's side was not a candidate this slot. At or below it,
-     *   it was one, and [nextChild]'s earlier virtual deadline (or, on a tie, its smaller edge id)
-     *   decided the pick.
+     *   pick itself draws. The pick reads it on each side's own grid, rounded up to the next tick of
+     *   that side's service (#3313), so a side up to one tick above it was still a candidate. Past
+     *   that, the leaf's side was not a candidate this slot. At or below it, it was one, and
+     *   [nextChild]'s earlier virtual deadline (or, on a tie, its smaller edge id) decided the pick.
      * - [front] is over the children leading to a leaf of the waiting set: the share line, the
      *   front a newborn is seated at and the set [LocalHeddle.entitlement] shares over. Above it,
      *   the leaf's side has had more than its share of everyone waiting; at or below it, less. It
