@@ -1323,7 +1323,8 @@ every problem in it at once. In code, the **draft** builds the same value:
 val fairness = draft("pool") {
     group("acme", Weight.of(3)) {
         lane("interactive", Weight.of(3, 2))
-        lane("batch")
+        // A ceiling: never more than two batch jobs at once, however idle the pool is.
+        lane("batch", maxConcurrent = 2)
     }
     group("tenants") { runtimeChildren() }
 }
