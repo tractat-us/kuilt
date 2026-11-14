@@ -356,20 +356,24 @@ public sealed interface LeaseOutcome {
  * a running engine reached it first is now a typed refusal instead: an edge's **position**, its
  * service in ticks of 1/16 of a unit, has a ceiling, `Long.MAX_VALUE` less room for one
  * [MAX_RESERVATION] deadline, divided by its weight's denominator. A joiner inherits its position
- * from the front it is seated at, scaled by its weight against its siblings', so the service one
- * parent can hand down over its lifetime is bounded, and the bound depends on the weights. It no
- * longer depends on how often the waiting set changes: positions are whole ticks, so no join can
- * grow a denominator (#3313, #3231). At the ceiling:
+ * from the front it is seated at, scaled by its weight against its siblings', so left alone the
+ * service one parent could hand down over its lifetime would be bounded, by a bound that depends
+ * on the weights. It does not depend on how often the waiting set changes: positions are whole
+ * ticks, so no join can grow a denominator (#3313, #3231). At the ceiling:
  * - a call that **chooses**, [acquire] or [extend], is refused with a `PositionCeiling` outcome
  *   naming the parent, and changes nothing. A position there no longer orders exactly, so a pick
  *   over it would be a guess;
  * - a call that **charges**, [admit] or [complete], lands as usual. The books stay exact; only the
  *   position is held at the ceiling.
  *
- * A parent at its ceiling refuses picks until its positions come back down (#3329). A seat or a
- * wake clamp taken against a front that includes a position at its ceiling lands at the joiner's
- * own ceiling, the penalty end, so nothing an understated front would have handed out is kept as
- * credit once the saturated child leaves.
+ * A running engine rarely gets there, because it **rebases** a parent first (#3329). Once a
+ * child's position passes a sixteenth of its ceiling, every child of that parent comes down by
+ * one virtual time, its wake offset first and then its gauge fold, as far as the demanding child
+ * furthest behind allows. Every competing child moves alike, so no pick changes. The ceiling is
+ * still reachable when a demanding child sits at zero and is never served, which holds the
+ * rebase at nothing. A seat or a wake clamp taken against a front that includes a position at
+ * its ceiling lands at the joiner's own ceiling, the penalty end, so nothing an understated front
+ * would have handed out is kept as credit once the saturated child leaves.
  *
  * The diagnostics still answer in exact [Rational]s, and those can throw [ArithmeticException]
  * before the ceiling: [explain]'s [WaitExplanation.BehindAtLevel] fronts, whose numerator carries

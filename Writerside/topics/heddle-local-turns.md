@@ -184,12 +184,14 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
   [#3238](https://github.com/tractat-us/kuilt/issues/3238). The networked
   `HeddleNode` does not take this path: its `complete` keeps an unused
   reservation at the leaf instead of returning it up the path.
-- **A lifetime ceiling.** Each child's progress is a `Long` count of
-  sixteenths of a unit, and it grows with all the service its fork has handed
-  down, scaled by its weight against its siblings'. At the ceiling, `acquire`
-  and `extend` at that fork return `PositionCeiling` and change nothing, while
-  `admit` and `complete` still charge. Pick a coarse unit: minutes or seconds,
-  not nanoseconds.
+- **A ceiling the engine stays clear of.** Each child's progress is a `Long`
+  count of sixteenths of a unit, and it has a ceiling. Long before a busy fork
+  gets there, the engine moves all its children back down by the same amount,
+  so nobody's turn changes. A fork reaches the ceiling only while one waiting
+  child is never served. Then `acquire` and `extend` at that fork return
+  `PositionCeiling` and change nothing, while `admit` and `complete` still
+  charge. Pick a coarse unit anyway, minutes or seconds rather than
+  nanoseconds: one reservation can be at most 2⁴⁴ units.
 
 **Sizing estimates.** The estimate and straddle effects both vanish for a lease
 that settles at its estimate, a `cancel` aside. So aim `defaultReservation` at a

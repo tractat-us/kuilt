@@ -53,6 +53,17 @@ import us.tractat.kuilt.math.timesWide
  * past it reads as the ceiling, behind what it stands for, and every pick that would order it is
  * refused, so the shortfall is never spent.
  *
+ * ## A fold above issuance: `LocalHeddle`'s rebase
+ *
+ * `LocalHeddle` brings a busy parent's positions back down by **raising** its children's folds
+ * (#3329): raising [folded] by `k` units lowers the read by exactly `k` units of the edge's own
+ * service, and the componentwise join keeps the raise, where a lowered floor would be undone by
+ * the next checkpoint. So in a `LocalHeddle` ledger a fold can stand above the edge's issuance.
+ * Nothing about the read changes for it: `(baseIssued − folded)` is simply negative, which a
+ * v0.7.4 reader already evaluates. A checkpoint written over such a gauge asserts a lower floor at
+ * a lower fold, a pair the raised one dominates on both components and reads the same as. The
+ * replicated `HeddleNode` never raises a fold this way (#3353).
+ *
  * ## Wire form
  *
  * [folded] is an issuance count and so non-negative; the `init` check below is the read-path
@@ -62,7 +73,8 @@ import us.tractat.kuilt.math.timesWide
  * *would* bypass: see [RationalSerializer], which this property routes through explicitly.
  *
  * @property floor the asserted lower bound on gross virtual service at [folded].
- * @property folded the base issuance the writer observed when it asserted [floor]; non-negative.
+ * @property folded the base issuance the writer observed when it asserted [floor], or above it
+ *   once a `LocalHeddle` rebase has raised it; non-negative.
  */
 @Serializable
 public data class Gauge(

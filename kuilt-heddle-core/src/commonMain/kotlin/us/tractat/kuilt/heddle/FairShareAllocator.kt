@@ -570,10 +570,15 @@ public class FairShareAllocator(
      * it never decreases. The join is a high-water mark, not a sum, so a long-lived child cannot
      * accumulate an unbounded penalty; and the one-directional stance of §10.5 — credit forbidden,
      * a sliver of penalty merely undesirable — is what makes keeping the larger offset the safe
-     * side when the front genuinely regresses. Nothing else lowers a stored offset: an edge is
-     * forgotten only when it leaves the active set, which
+     * side when the front genuinely regresses. Two other things lower a stored offset. An edge is
+     * forgotten when it leaves the active set, which
      * [EntitlementLedger.activate][EntitlementLedger.activate] makes permanent (closure dominance,
-     * §10.10), so a cleared clamp can never come back to an edge that will compete again.
+     * §10.10), so a cleared clamp can never come back to an edge that will compete again. And
+     * [rebased] takes whole units off it, by exactly as much as it leaves the edge's raw position
+     * where it was: the effective position comes down with its siblings', and the next clamp's
+     * `max` loses the same amount on both sides, so no turn moves (#3329). The offset is the front
+     * less the raw position at the last wake, so for a child that idles between picks it grows by
+     * every stretch sat out; without the rebase it would reach the ceiling on its own.
      *
      * The demanding state is sampled **once per scheduling round, at entry**, before any grant
      * lands. Sampling again after the loop would mark a child that its own grants had just
