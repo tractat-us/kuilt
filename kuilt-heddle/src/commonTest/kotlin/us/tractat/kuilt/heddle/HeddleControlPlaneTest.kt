@@ -1115,4 +1115,3 @@ private fun onTheUnitGrid(v: Rational): Long {
     check(ticks.denominator == 1L) { "$v is off the 1/16-unit grid" }
     return ticks.numerator
 }
-
