@@ -21,8 +21,9 @@ import us.tractat.kuilt.store.NSFileManagerDurableStore
  * - **mismatched key:** a well-formed JWK whose `x` and `y` are one fresh key's and whose `d` is
  *   another's, so it decodes and fails only the self-test;
  * - **cleared key:** the key file deleted;
- * - **interrupted write:** half a JWK left in a temporary file named the way the store names its
- *   own, the one file a crash mid-write leaves, beside whatever key file is there (`LeftResidue`);
+ * - **interrupted write:** half a JWK left in `device-key.jwk.Ab12Cd.tmp`, a name of the shape the
+ *   store's `mkstemps` template `device-key.jwk.XXXXXX.tmp` gives its own temporary files, the one
+ *   file a crash mid-write leaves, beside whatever key file is there (`LeftResidue`);
  * - **corrupt grants:** three bytes that are not a grants record, written through the grant store
  *   itself;
  * - **unreadable key:** the key file a symbolic link to itself, so opening it fails with `ELOOP`
@@ -45,7 +46,8 @@ class MacosFileDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() 
             },
             clearKey = { check(unlink(keyFile) == 0) { "precondition: there was a key file to clear (errno=$errno)" } },
             interruptKeyWrite = {
-                val residue = "$keyFile.tmp"
+                // The shape mkstemps gives the store's own temporary files: six random characters.
+                val residue = "$keyFile.Ab12Cd.tmp"
                 val half = SoftwareDeviceKey.generate().encodeJwk().let { it.copyOf(it.size / 2) }
                 writeFile(residue, half)
                 DeviceKeyStoreFixture.KeyWriteInterruption.LeftResidue { readFile(residue) }

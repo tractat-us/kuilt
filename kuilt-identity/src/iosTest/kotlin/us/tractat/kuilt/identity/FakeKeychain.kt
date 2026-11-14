@@ -30,9 +30,13 @@ internal class FakeKeychain : KeychainBackend {
     var updates: Int = 0
         private set
 
+    /** While set, a copy of an item that exists answers success with no data. */
+    var answeringWithoutData: Boolean = false
+
     override fun copy(service: String, account: String): KeychainCopy {
         refusing?.let { return KeychainCopy(it, null) }
         val held = items[service to account] ?: return KeychainCopy(errSecItemNotFound, null)
+        if (answeringWithoutData) return KeychainCopy(errSecSuccess, null)
         return KeychainCopy(errSecSuccess, held.copyOf())
     }
 

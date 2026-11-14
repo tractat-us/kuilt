@@ -7,6 +7,8 @@ import platform.CoreFoundation.CFDictionaryGetValue
 import platform.CoreFoundation.CFRelease
 import platform.CoreFoundation.kCFBooleanFalse
 import platform.Foundation.NSFileManager
+import platform.Foundation.NSFileProtectionCompleteUntilFirstUserAuthentication
+import platform.Foundation.NSFileProtectionKey
 import platform.Security.errSecInteractionNotAllowed
 import platform.Security.errSecMissingEntitlement
 import platform.Security.errSecNotAvailable
@@ -121,6 +123,55 @@ class KeychainDeviceKeyStoreTest {
             { assertTrue(failure is IllegalStateException, "the refused add throws: $failure") },
             { assertEquals(true, stillTheirs, "the other process's key is not overwritten") },
             { assertEquals(other.id, adopted, "and the next call adopts it") },
+        )
+    }
+
+    /**
+     * A copy that succeeds with no data says nothing about the item: the store throws, makes and writes
+     * nothing, and the key is the same key once the data comes back. Read as damaged bytes instead, it
+     * would overwrite a sound key on every launch the fault lasted.
+     */
+    @Test
+    fun aSuccessWithNoDataThrowsAndWritesNothing() = runTest {
+        val keychain = FakeKeychain()
+        val appId = freshAppId()
+        val support = freshDirectory("kuilt-keychain")
+        val service = KEYCHAIN_SERVICE_PREFIX + appId
+        val held = keychainDeviceKeyStore(appId, support, keychain) {}.deviceKey().id
+        val before = keychain.held(service, KEYCHAIN_ACCOUNT)
+
+        keychain.answeringWithoutData = true
+        var made = 0
+        val failure = failureOf { keychainDeviceKeyStore(appId, support, keychain) { made++ }.deviceKey() }
+        val during = keychain.held(service, KEYCHAIN_ACCOUNT)
+        keychain.answeringWithoutData = false
+        val after = keychainDeviceKeyStore(appId, support, keychain) {}.deviceKey().id
+
+        assertAll(
+            { assertTrue(failure is IllegalStateException, "success with no data throws IllegalStateException: $failure") },
+            { assertTrue("no data" in failure?.message.orEmpty(), "saying so: ${failure?.message}") },
+            { assertEquals(0, made, "and makes no key") },
+            { assertEquals(1 to 0, keychain.adds to keychain.updates, "and writes nothing: one add ever, no update") },
+            { assertTrue(before != null && before.contentEquals(during), "the item's bytes are untouched") },
+            { assertEquals(held, after, "once the data comes back, the key is the same key") },
+        )
+    }
+
+    /**
+     * The grants directory is created `NSFileProtectionCompleteUntilFirstUserAuthentication`, the file
+     * equivalent of the key item's `AfterFirstUnlock`, so grants read in a background reconnect while
+     * the phone is locked. The simulator neither enforces nor reports data protection (the directory's
+     * `NSFileProtectionKey` reads back `null` there, measured), so this pins what the store asks for and
+     * that opening it makes the directory, not what a device does with the class.
+     */
+    @Test
+    fun grantsDirectoryIsReadableAfterFirstUnlock() {
+        val support = freshDirectory("kuilt-keychain")
+        keychainDeviceKeyStore("my-app", support, FakeKeychain()) {}
+        val directory = identityDirectory(support, "my-app")
+        assertAll(
+            { assertEquals<Any?>(NSFileProtectionCompleteUntilFirstUserAuthentication, grantsDirectoryAttributes()[NSFileProtectionKey], "the class asked for") },
+            { assertTrue(NSFileManager.defaultManager.fileExistsAtPath(directory), "opening the store creates the directory") },
         )
     }
 

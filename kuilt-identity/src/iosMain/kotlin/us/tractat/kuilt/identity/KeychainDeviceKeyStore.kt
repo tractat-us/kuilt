@@ -2,6 +2,8 @@
 
 package us.tractat.kuilt.identity
 
+import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
@@ -21,6 +23,10 @@ import platform.CoreFoundation.kCFTypeDictionaryValueCallBacks
 import platform.Foundation.CFBridgingRelease
 import platform.Foundation.CFBridgingRetain
 import platform.Foundation.NSData
+import platform.Foundation.NSError
+import platform.Foundation.NSFileManager
+import platform.Foundation.NSFileProtectionCompleteUntilFirstUserAuthentication
+import platform.Foundation.NSFileProtectionKey
 import platform.Foundation.NSString
 import platform.Foundation.create
 import platform.Security.SecItemAdd
@@ -43,6 +49,8 @@ import platform.Security.kSecValueData
 import platform.posix.memcpy
 import us.tractat.kuilt.store.NSFileManagerDurableStore
 
+private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.KeychainDeviceKeyStore")
+
 /**
  * This device's key store on iOS: the key in a Keychain item that never leaves this device, and the
  * grants in a file under the app's Application Support directory. Opening it again with the same
@@ -59,6 +67,11 @@ import us.tractat.kuilt.store.NSFileManagerDurableStore
  *
  * The grants are in `Application Support/<appId>/kuilt-identity`. A grant is not a secret and names
  * this device's key, so the copy a backup restores to another phone is useless there and harmless.
+ * Opening the store creates that directory with the data-protection class
+ * `NSFileProtectionCompleteUntilFirstUserAuthentication`, which the grants file written inside it
+ * inherits. That is the file's equivalent of the key item's `AfterFirstUnlock`: an app with the Data
+ * Protection entitlement otherwise defaults to `NSFileProtectionComplete`, unreadable while the phone
+ * is locked, which is exactly when a background reconnect runs.
  *
  * ## Damage is replaced; a Keychain that cannot answer is not
  *
@@ -74,7 +87,10 @@ import us.tractat.kuilt.store.NSFileManagerDurableStore
  *
  * Two processes sharing one Keychain access group (an app and its extension) can both find no key and
  * both try to add one. The Keychain adds one item and answers the other `errSecDuplicateItem`, which
- * throws; the next call reads the key the first process kept. Neither overwrites the other.
+ * throws; the next call reads the key the first process kept, so on this path neither overwrites the
+ * other. Replacing a damaged item has no such guard: two processes that both read it as damaged both
+ * update it, the later update wins, and the earlier process holds a key the Keychain no longer has
+ * until its next launch. There is no lock across processes here; the stores in one process take turns.
  *
  * No Keychain call is made until the first [DeviceKeyStore.deviceKey]; that call, and every grant call,
  * does Keychain and file work on the caller's dispatcher.
@@ -97,9 +113,11 @@ internal fun keychainDeviceKeyStore(
 ): DeviceKeyStore {
     requireAppId(appId)
     val service = KEYCHAIN_SERVICE_PREFIX + appId
+    val grantsDirectory = identityDirectory(applicationSupport, appId)
+    protectUntilFirstUnlock(grantsDirectory)
     return AppleDeviceKeyStore(
         medium = KeychainKeyMedium(service, keychain),
-        grantStore = NSFileManagerDurableStore(identityDirectory(applicationSupport, appId)),
+        grantStore = NSFileManagerDurableStore(grantsDirectory),
         mediumId = "keychain:$service",
         beforeKeyIsMade = beforeKeyIsMade,
     )
@@ -110,6 +128,38 @@ internal const val KEYCHAIN_SERVICE_PREFIX: String = "us.tractat.kuilt.identity.
 
 /** The Keychain account the key's item is under, within its service. */
 internal const val KEYCHAIN_ACCOUNT: String = "device-key"
+
+/**
+ * What the grants directory is given: `NSFileProtectionCompleteUntilFirstUserAuthentication`, so the
+ * files in it read in the background once the phone has been unlocked after starting, as the key does.
+ */
+internal fun grantsDirectoryAttributes(): Map<Any?, Any?> =
+    mapOf(NSFileProtectionKey to NSFileProtectionCompleteUntilFirstUserAuthentication)
+
+/**
+ * Creates [directory] with [grantsDirectoryAttributes], and gives them to it when it already exists
+ * (`createDirectoryAtPath` applies attributes only to a directory it creates). A directory that cannot
+ * be created throws; one whose protection cannot be set is used anyway, with one warning, since the
+ * grants then only fail to read while the phone is locked.
+ */
+internal fun protectUntilFirstUnlock(directory: String) {
+    val attributes = grantsDirectoryAttributes()
+    val manager = NSFileManager.defaultManager
+    memScoped {
+        val error = alloc<ObjCObjectVar<NSError?>>()
+        if (!manager.createDirectoryAtPath(directory, withIntermediateDirectories = true, attributes = attributes, error = error.ptr)) {
+            throw IllegalStateException(
+                "kuilt-identity: could not create the grants directory $directory (${error.value?.localizedDescription})",
+            )
+        }
+        if (!manager.setAttributes(attributes, ofItemAtPath = directory, error = error.ptr)) {
+            logger.warn {
+                "kuilt-identity: could not set the data protection of $directory " +
+                    "(${error.value?.localizedDescription}); its grants may not read while the phone is locked"
+            }
+        }
+    }
+}
 
 /**
  * The key as one Keychain item, under [service]. A Keychain item is added or updated in one call, so
@@ -127,7 +177,12 @@ internal class KeychainKeyMedium(private val service: String, private val keycha
     override fun read(): ByteArray? {
         val found = keychain.copy(service, KEYCHAIN_ACCOUNT)
         return when (found.status) {
-            errSecSuccess -> found.data ?: ByteArray(0)
+            // Success with no data says nothing about the item, so it must not read as damaged bytes:
+            // that would overwrite a sound key on every launch the fault lasts.
+            errSecSuccess -> checkNotNull(found.data) {
+                "kuilt-identity: SecItemCopyMatching succeeded with no data for the Keychain item for service " +
+                    "\"$service\", so the key is kept and no key is made"
+            }
             errSecItemNotFound -> null
             else -> throw keychainFailed("cannot read the device key now, so it is kept and no key is made", found.status)
         }
@@ -205,13 +260,16 @@ internal object SecItemKeychain : KeychainBackend {
 
     override fun update(service: String, account: String, data: ByteArray): Int {
         val query = itemQuery(service, account)
-        val change = cfDictionary()
-        return try {
-            putBridged(change, kSecValueData, data.toNSData())
-            SecItemUpdate(query, change)
+        try {
+            val change = cfDictionary()
+            try {
+                putBridged(change, kSecValueData, data.toNSData())
+                return SecItemUpdate(query, change)
+            } finally {
+                CFRelease(change)
+            }
         } finally {
             CFRelease(query)
-            CFRelease(change)
         }
     }
 }
