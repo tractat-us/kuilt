@@ -24,8 +24,10 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.BoundedCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -354,6 +356,62 @@ class BoundedCounterEqualizerTest {
             assertTrue(
                 stateA.totalBudget + stateA.totalSpent == totalInitial,
                 "Conservation violated",
+            )
+        }
+    }
+
+    /**
+     * A bound — remaining budget plus spent — one past [Long.MAX_VALUE] by 10 (#3343). Both halves
+     * fit, but their sum does not; before the fix it wrapped negative, the fair share came out
+     * negative, and the equalizer never moved anything. The fair share is now formed exactly, so A
+     * hands B its excess as it would for any other bound.
+     */
+    @Test
+    fun equalizerRebalancesABoundPastLongMaxValue() {
+        val scheduler = TestCoroutineScheduler()
+        val dispatcher = StandardTestDispatcher(scheduler)
+        runTest(dispatcher, timeout = TEST_WEDGE_BACKSTOP) {
+            val loom = InMemoryLoom()
+            val rawA = loom.host(Pattern("eq-wide-bound"))
+            val rawB = loom.join(InMemoryTag("b"))
+
+            val replicaA = ReplicaId(rawA.selfId.value)
+            val replicaB = ReplicaId(rawB.selfId.value)
+
+            // A holds Long.MAX_VALUE and has already spent 10 of it; B holds 10.
+            val seeded = BoundedCounter.init(mapOf(replicaA to Long.MAX_VALUE, replicaB to 10L))
+            val initial = seeded.piece(checkNotNull(seeded.trySpend(replicaA, 10L)))
+
+            val transferConfig = BoundedCounterTransferConfig(
+                lowWaterThreshold = 0L,
+                requestedAmount = 10L,
+                surplusFloor = 0L,
+                maxRetries = 1,
+                initialRetryDelay = 1.milliseconds,
+            )
+            val equalizerConfig = BoundedCounterEqualizerConfig(
+                cadence = 10.milliseconds,
+                minImbalanceThreshold = 5L,
+                random = Random(7),
+            )
+
+            val repA = wireWithEqualizer(rawA, replicaA, initial, transferConfig, equalizerConfig, backgroundScope)
+            wireWithEqualizer(rawB, replicaB, initial, transferConfig, equalizerConfig, backgroundScope)
+
+            advanceTicks(scheduler, 5, 10L)
+
+            val state = repA.state.value
+            assertAll(
+                { assertEquals(Long.MAX_VALUE, initial.totalBudget, "the rig: the remaining budget fits") },
+                { assertEquals(10L, initial.totalSpent, "the rig: so budget + spent is past Long.MAX_VALUE") },
+                { assertEquals(10L, initial.quota(replicaB), "the rig: B starts at 10") },
+                {
+                    assertTrue(
+                        state.quota(replicaB) > Long.MAX_VALUE / 4,
+                        "A should have handed B about half the bound; B holds ${state.quota(replicaB)}",
+                    )
+                },
+                { assertEquals(Long.MAX_VALUE, state.quota(replicaA) + state.quota(replicaB), "transfers conserve quota") },
             )
         }
     }
