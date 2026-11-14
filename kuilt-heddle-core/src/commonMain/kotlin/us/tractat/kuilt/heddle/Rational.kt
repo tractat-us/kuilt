@@ -86,14 +86,20 @@ public class Rational private constructor(
         return of(reduced, checkedMul(otherScale, other.denominator / g2))
     }
 
-    /** The exact product, reduced. Throws [ArithmeticException] on `Long` overflow. */
+    /**
+     * The exact product, reduced. Throws [ArithmeticException] only when the **answer** does not fit
+     * in `Long`; see [crossReduced] for why the intermediates never decide that.
+     */
     public operator fun times(other: Rational): Rational =
-        of(checkedMul(numerator, other.numerator), checkedMul(denominator, other.denominator))
+        crossReduced(numerator, other.numerator, denominator, other.denominator)
 
-    /** The exact quotient, reduced. Throws on `Long` overflow or division by zero. */
+    /**
+     * The exact quotient, reduced. Throws [ArithmeticException] on division by zero, or when the
+     * answer does not fit in `Long`.
+     */
     public operator fun div(other: Rational): Rational {
         if (other.numerator == 0L) throw ArithmeticException("Rational division by zero")
-        return of(checkedMul(numerator, other.denominator), checkedMul(denominator, other.numerator))
+        return crossReduced(numerator, other.denominator, denominator, other.numerator)
     }
 
     /**
@@ -152,17 +158,64 @@ public class Rational private constructor(
          */
         public fun of(numerator: Long, denominator: Long): Rational {
             if (denominator == 0L) throw ArithmeticException("Rational denominator must be non-zero")
-            // Normalize sign onto the numerator (denominator strictly positive).
-            var n = numerator
-            var d = denominator
-            if (d < 0L) {
-                n = checkedNegate(n)
-                d = checkedNegate(d)
-            }
-            if (n == 0L) return ZERO
-            val g = gcd(if (n < 0L) checkedNegate(n) else n, d)
-            return Rational(n / g, d / g)
+            if (numerator == 0L) return ZERO
+            // Reduce before normalizing the sign, and on the non-positive side, where Long.MIN_VALUE
+            // has a magnitude (#3347): MIN_VALUE/4 and MIN_VALUE/-2 both fit once reduced, and only an
+            // answer whose own denominator is 2⁶³, or whose numerator is +2⁶³, still throws below.
+            val negativeG = negativeGcd(nonPositive(numerator), nonPositive(denominator))
+            if (negativeG == Long.MIN_VALUE) return ONE // both are MIN_VALUE: nothing else has |g| = 2⁶³
+            val g = -negativeG
+            val n = numerator / g
+            val d = denominator / g
+            // Normalize the sign onto the numerator, so the stored denominator is strictly positive.
+            return if (d < 0L) Rational(checkedNegate(n), checkedNegate(d)) else Rational(n, d)
         }
+
+        /**
+         * `(a·b) / (c·d)` in lowest terms, where `a/c` and `b/d` are each already in lowest terms
+         * (#3347). Multiplying straight across and reducing afterwards throws whenever a product
+         * leaves `Long`, even when the answer fits: `(2⁶²+1)/3 × 3/(2⁶²+1)` threw on the way to `1`.
+         * Cancelling each numerator against the *other* denominator first leaves the two products
+         * coprime, because nothing else they could share survives the operands' own reduction, so
+         * the products are the answer and the only overflow left is the answer's own.
+         *
+         * Magnitudes are held negated, since only the non-positive side holds `|Long.MIN_VALUE|`,
+         * and the sign is applied once at the end: an answer of `Long.MIN_VALUE / k` has a
+         * magnitude of `2⁶³` on the way, which no `Long` holds.
+         */
+        private fun crossReduced(a: Long, b: Long, c: Long, d: Long): Rational {
+            if (a == 0L || b == 0L) return ZERO
+            val na = nonPositive(a)
+            val nb = nonPositive(b)
+            val nc = nonPositive(c)
+            val nd = nonPositive(d)
+            val ad = negativeGcd(na, nd)
+            val bc = negativeGcd(nb, nc)
+            val magnitude = cancel(na, ad).timesWide(cancel(nb, bc)) // |the answer's numerator|
+            val denominator = cancel(nc, bc).timesWide(cancel(nd, ad)).toLongOrNull()
+            val negative = (a < 0L) != (b < 0L) != (c < 0L) != (d < 0L)
+            val numerator = (if (negative) Int128.ZERO - magnitude else magnitude).toLongOrNull()
+            if (numerator == null || denominator == null) {
+                throw ArithmeticException("Long overflow: ($a·$b)/($c·$d)")
+            }
+            return Rational(numerator, denominator) // already coprime, and the denominator is positive
+        }
+
+        /**
+         * `-(|x| / |g|)`, from `nx = -|x|` and `g` minus a gcd, without overflow: `-g` is a positive
+         * `Long` unless `g` is `Long.MIN_VALUE`, which divides only `Long.MIN_VALUE` itself.
+         */
+        private fun cancel(nx: Long, g: Long): Long = if (g == Long.MIN_VALUE) -1L else nx / -g
+
+        /** `-|x|`, which unlike `|x|` exists for every `Long`. */
+        private fun nonPositive(x: Long): Long = if (x > 0L) -x else x
+
+        /**
+         * Minus the gcd of `|x|` and `|y|`, for `x, y ≤ 0` not both zero. Euclid runs on the
+         * non-positive side, where `Long.MIN_VALUE` has a magnitude: the gcd of two `Long.MIN_VALUE`s
+         * is `2⁶³`, which only its negation can hold.
+         */
+        private tailrec fun negativeGcd(x: Long, y: Long): Long = if (y == 0L) x else negativeGcd(y, x % y)
 
         /** The larger of two rationals ([a] if equal). */
         public fun max(a: Rational, b: Rational): Rational = if (a >= b) a else b
