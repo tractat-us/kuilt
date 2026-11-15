@@ -144,6 +144,8 @@ public class MovableTree<V> private constructor(
      *   (`"<value>:<replica>:<ts>"`), and a [Patch] suitable for delta-propagation to
      *   peers via [Quilted.piece]. Mirrors [move]'s `Patch`-returning shape so
      *   `addNode` composes with `Quilter.apply()` without further bookkeeping.
+     * @throws ArithmeticException if [replica]'s seq is already at [Long.MAX_VALUE], as a decoded
+     *   move-log can leave it (#3417). The next seq would wrap to [Long.MIN_VALUE].
      */
     public fun addNode(replica: ReplicaId, ts: Long, parent: String, value: V): AddNodeResult<V> {
         val nodeId = "$value:${replica.value}:$ts"
@@ -164,6 +166,8 @@ public class MovableTree<V> private constructor(
      *
      * @return the updated tree and a [Patch] carrying just the new op (for
      *   delta-propagation to peers).
+     * @throws ArithmeticException if [replica]'s seq is already at [Long.MAX_VALUE], as a decoded
+     *   move-log can leave it (#3417). The next seq would wrap to [Long.MIN_VALUE].
      */
     public fun move(
         replica: ReplicaId,
@@ -294,7 +298,8 @@ public class MovableTree<V> private constructor(
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
-    private fun nextSeqFor(replica: ReplicaId): Long = (seqByReplica[replica] ?: 0L) + 1L
+    private fun nextSeqFor(replica: ReplicaId): Long =
+        (seqByReplica[replica] ?: 0L).nextTick { "MovableTree seq for $replica" }
 
     private fun applyOp(op: MoveOp<V>, seq: Long): MovableTree<V> {
         val newSeq = seqByReplica + (op.replica to maxOf(seqByReplica[op.replica] ?: 0L, seq))
