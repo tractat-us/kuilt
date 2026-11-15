@@ -222,7 +222,10 @@ class ResumeAckAfterHostLostTest {
             val firstEnded = !room.hasReconnectInFlight()
             val resumedByFirst = events.count { it is MembershipEvent.Resumed }
 
-            // Episode two: the host never answers, and the window expires.
+            // Episode two: the host never answers, and the window expires. The tear watcher fires for
+            // the first tear only; a later one reaches the room through the restored host detector,
+            // which sees the host leave the seam's peers.
+            seam.dropHost()
             seam.tear()
             runCurrent()
             val secondResumeSent = seam.resumesSent == 2 && room.hasPendingResume()
@@ -328,9 +331,9 @@ class ResumeAckAfterHostLostTest {
 
 /**
  * A joiner's seam that the test plays the host on. It starts `Woven` with the host listed, tears on
- * [tear], and is healed in place by the room's re-weave. It counts the `Resume` frames sent to the
- * host, and runs [onStateCollectionEnded] as each collection of [state] ends, saying whether the
- * collecting coroutine was cancelled.
+ * [tear], and is healed in place by the room's re-weave, which also lists a host [dropHost] took out
+ * of [peers]. It counts the `Resume` frames sent to the host, and runs [onStateCollectionEnded] as
+ * each collection of [state] ends, saying whether the collecting coroutine was cancelled.
  *
  * [deliver] queues a frame for the room's collector coroutine, which is how a real fabric delivers.
  * [deliverNow] instead runs the frame through the room's collector on the caller's own stack, now,
@@ -343,7 +346,8 @@ private class ScriptedSeam(
     private val _state = MutableStateFlow<SeamState>(SeamState.Woven)
     var onStateCollectionEnded: (cancelled: Boolean) -> Unit = {}
     override val state: StateFlow<SeamState> = EndHookedStateFlow(_state.asStateFlow()) { onStateCollectionEnded(it) }
-    override val peers: StateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId, hostId)).asStateFlow()
+    private val _peers = MutableStateFlow(setOf(selfId, hostId))
+    override val peers: StateFlow<Set<PeerId>> = _peers.asStateFlow()
 
     // Bounded, like every delivery buffer here: the test queues one frame.
     private val frames = Channel<Swatch>(capacity = 8)
@@ -371,7 +375,13 @@ private class ScriptedSeam(
         _state.value = SeamState.Torn(CloseReason.Normal)
     }
 
+    /** Takes the host out of [peers], as a fabric whose link to it closed does; [heal] lists it again. */
+    fun dropHost() {
+        _peers.value = setOf(selfId)
+    }
+
     fun heal() {
+        _peers.value = setOf(selfId, hostId)
         _state.value = SeamState.Woven
     }
 
