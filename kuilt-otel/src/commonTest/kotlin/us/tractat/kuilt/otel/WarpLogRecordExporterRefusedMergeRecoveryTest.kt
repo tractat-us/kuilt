@@ -36,8 +36,8 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
         observedEpochNanos = 1_700_000_000_000_000_000L,
     )
 
-    private fun exporterFor(store: DurableStore) =
-        WarpLogRecordExporter(replica = replicaA, store = store, maxRecords = 1_000, segmentOps = 4)
+    private fun exporterFor(store: DurableStore, maxRecords: Int = 1_000, segmentOps: Int = 4) =
+        WarpLogRecordExporter(replica = replicaA, store = store, maxRecords = maxRecords, segmentOps = segmentOps)
 
     private fun foreignLog(author: ReplicaId, firstId: Int, label: String, count: Int = 6): Rga<LogRecord> {
         var rga = Rga.empty<LogRecord>()
@@ -194,10 +194,12 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
     @Test
     fun aBatchThatAdmitsOneRecordAndDedupsAnotherStillCarriesTheDedupedOne() = runTest {
         // The active-segment write lands, so the turn reports Success. It must not do so for a
-        // deduped record that only the refused merge's in-memory join holds.
+        // deduped record that only the refused merge's in-memory join holds. The budget fits both
+        // records in ONE turn: at `segmentOps = 4` the three records before leave no room,
+        // `fitsInTurn` splits the batch, and this arm is the dedup-only arm again.
         val backing = RecordingStore()
         val store = segmentRefusing(backing)
-        val exporter = exporterFor(store)
+        val exporter = exporterFor(store, segmentOps = 16)
         repeat(3) { exporter.export(record(it)) }
         val remote = foreignLog(ReplicaId("B"), firstId = 500, label = "foreign")
 
@@ -206,14 +208,22 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
         val refusals = store.refusedWrites()
         store.allowWrites()
         val durableBefore = bodiesAfterRestart(backing)
+        val sealedBefore = indexOf(backing).sealedSegments.toSet()
+        val operationsBefore = backing.operations().size
 
         val exported = exporter.export(listOf(record(9, "local9"), record(501, "foreign1")))
+        val turnWrites = backing.operations().drop(operationsBefore).filter { it.kind == StoreOpKind.WRITE }
+        val adopted = indexOf(backing).sealedSegments.toSet() - sealedBefore
         val durable = bodiesAfterRestart(backing)
 
         assertAll(
             { assertEquals(1, refusals, "the rig refused $refusals writes, not exactly the adopted segment's") },
             { assertTrue(refused is ExportResult.Failure, "the refused merge reported $refused") },
             { assertTrue("foreign1" !in durableBefore, "the refused merge's record was durable already: $durableBefore") },
+            // One turn: the adopt's index and segment, then the active segment. Two turns would
+            // write the active segment twice.
+            { assertEquals(3, turnWrites.size, "the batch wrote ${turnWrites.map { it.key.name }}, not one adopting turn") },
+            { assertEquals(1, adopted.size, "the turn adopted $adopted, not exactly one segment") },
             { assertEquals(ExportResult.Success, exported) },
             { assertTrue("local9" in durable, "the admitted record was lost: $durable") },
             { assertTrue("foreign1" in durable, "export reported $exported for a record no key holds: $durable") },
@@ -221,9 +231,54 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
     }
 
     @Test
+    fun aWindowPassInsideAnAdoptingExportTurnKeepsTheAdoptedSegmentNamed() = runTest {
+        // The turn adopts the whole log, admits a record, and owes a window pass, so its
+        // active-segment write runs with `retire = true` beside the adopt. Every index write it
+        // emits after the adopt's own has to project the adopted number as sealed.
+        val backing = RecordingStore()
+        val store = segmentRefusing(backing)
+        val exporter = exporterFor(store, maxRecords = 2)
+        // Three records at a cap of two: one eviction, one short of a pass.
+        repeat(3) { exporter.export(record(it)) }
+        // B removes one of A's records and adds one of its own, so the merge leaves the visible
+        // count at the cap and owes no pass of its own.
+        val base = exporter.snapshot()
+        val (withForeign, foreignInsert) =
+            base.insertAfter(replica = ReplicaId("B"), after = base.entries().last().first, value = record(500, "foreign0"))
+        val remote = requireNotNull(withForeign.removeAt(0)).first
+
+        store.refuseWrites()
+        val refused = exporter.merge(remote)
+        val refusals = store.refusedWrites()
+        store.allowWrites()
+        val floorBefore = exporter.snapshot().compactedBelow[replicaA]
+        val durableBefore = bodiesAfterRestart(backing)
+        val sealedBefore = indexOf(backing).sealedSegments.toSet()
+
+        val exported = exporter.export(listOf(record(500, "foreign0"), record(3, "local3")))
+        val floorAfter = exporter.snapshot().compactedBelow[replicaA]
+        val adopted = indexOf(backing).sealedSegments.toSet() - sealedBefore
+        val durable = bodiesAfterRestart(backing)
+
+        assertAll(
+            { assertEquals(1, refusals, "the rig refused $refusals writes, not exactly the adopted segment's") },
+            { assertTrue(refused is ExportResult.Failure, "the refused merge reported $refused") },
+            { assertTrue(exporter.snapshot().entries().any { it.first == foreignInsert.id }, "the merge did not keep B's record") },
+            { assertTrue("foreign0" !in durableBefore, "the refused merge's record was durable already: $durableBefore") },
+            { assertEquals(0L, floorBefore, "a window pass ran before the export turn") },
+            { assertTrue(floorAfter > floorBefore, "no window pass ran in the export turn: floor $floorAfter") },
+            { assertEquals(1, adopted.size, "the turn adopted $adopted, not exactly one segment") },
+            { assertEquals(ExportResult.Success, exported) },
+            { assertTrue("foreign0" in durable, "export reported $exported for a record no key holds: $durable") },
+            { assertTrue("local3" in durable, "the admitted record was lost: $durable") },
+        )
+    }
+
+    @Test
     fun anExportWithNoDedupHitLeavesTheRefusedMergeToTheNextMerge() = runTest {
         // Only a dedup hit claims a merged record is durable, so only it pays for the whole-log
-        // adopt. A store that refuses large writes and takes small ones keeps taking new records.
+        // adopt. An export with none writes its active segment alone and leaves the merged records
+        // to the next merge, which adopts the whole log.
         val backing = RecordingStore()
         val store = segmentRefusing(backing)
         val exporter = exporterFor(store)
