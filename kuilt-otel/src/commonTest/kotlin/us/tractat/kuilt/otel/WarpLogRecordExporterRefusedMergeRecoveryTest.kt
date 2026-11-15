@@ -127,4 +127,90 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
             { assertTrue((0 until 6).all { "first$it" in bodies }, "the refused merge's records were lost: $bodies") },
         )
     }
+
+    @Test
+    fun aLocalExportOfARecordARefusedMergeBroughtInIsDurableBeforeItReportsSuccess() = runTest {
+        // #3384 case 2. The refused merge left the remote's records in `log`, so their ids are in
+        // `seenIds`, and a local export of one of them is a dedup hit on a clean active segment.
+        val backing = RecordingStore()
+        val store = segmentRefusing(backing)
+        val exporter = exporterFor(store)
+        repeat(3) { exporter.export(record(it)) }
+        val remote = foreignLog(ReplicaId("B"), firstId = 500, label = "foreign")
+
+        store.refuseWrites()
+        val refused = exporter.merge(remote)
+        val refusals = store.refusedWrites()
+        store.allowWrites()
+        val heldInMemory = exporter.snapshot().toList().map { it.body }
+        val durableBefore = bodiesAfterRestart(backing)
+
+        val exported = exporter.export(record(500, "foreign0"))
+        val durableAfter = bodiesAfterRestart(backing)
+        val writesAfterExport = backing.writes().size
+        val gossip = exporter.merge(remote)
+
+        assertAll(
+            { assertEquals(1, refusals, "the rig refused $refusals writes, not exactly the adopted segment's") },
+            { assertTrue(refused is ExportResult.Failure, "the refused merge reported $refused") },
+            { assertTrue("foreign0" in heldInMemory, "the export was not a dedup hit: $heldInMemory") },
+            { assertTrue("foreign0" !in durableBefore, "the refused merge's record was durable already: $durableBefore") },
+            { assertEquals(ExportResult.Success, exported) },
+            { assertTrue("foreign0" in durableAfter, "export reported $exported for a record no key holds: $durableAfter") },
+            { assertTrue((0 until 6).all { "foreign$it" in durableAfter }, "the refused merge's records were lost: $durableAfter") },
+            { assertEquals(ExportResult.Success, gossip) },
+            { assertEquals(writesAfterExport, backing.writes().size, "the export's adopt left the merge flag set") },
+        )
+    }
+
+    @Test
+    fun aDedupHitOverARefusedMergeNeverReportsSuccessWhileTheStoreStillRefuses() = runTest {
+        val backing = RecordingStore()
+        val store = segmentRefusing(backing)
+        val exporter = exporterFor(store)
+        repeat(3) { exporter.export(record(it)) }
+        val remote = foreignLog(ReplicaId("B"), firstId = 500, label = "foreign")
+
+        store.refuseWrites()
+        val refused = exporter.merge(remote)
+        val refusalsAfterMerge = store.refusedWrites()
+        val exported = exporter.export(record(500, "foreign0"))
+        val refusalsAfterExport = store.refusedWrites()
+
+        assertAll(
+            { assertEquals(1, refusalsAfterMerge, "the rig refused $refusalsAfterMerge writes, not exactly the adopt's") },
+            { assertTrue(refused is ExportResult.Failure, "the refused merge reported $refused") },
+            { assertTrue(exported is ExportResult.Failure, "export reported $exported while every segment write was refused") },
+            { assertTrue(refusalsAfterExport > refusalsAfterMerge, "the export never attempted a write") },
+        )
+    }
+
+    @Test
+    fun aBatchThatAdmitsOneRecordAndDedupsAnotherStillCarriesTheDedupedOne() = runTest {
+        // The active-segment write lands, so the turn reports Success. It must not do so for a
+        // deduped record that only the refused merge's in-memory join holds.
+        val backing = RecordingStore()
+        val store = segmentRefusing(backing)
+        val exporter = exporterFor(store)
+        repeat(3) { exporter.export(record(it)) }
+        val remote = foreignLog(ReplicaId("B"), firstId = 500, label = "foreign")
+
+        store.refuseWrites()
+        val refused = exporter.merge(remote)
+        val refusals = store.refusedWrites()
+        store.allowWrites()
+        val durableBefore = bodiesAfterRestart(backing)
+
+        val exported = exporter.export(listOf(record(9, "local9"), record(501, "foreign1")))
+        val durable = bodiesAfterRestart(backing)
+
+        assertAll(
+            { assertEquals(1, refusals, "the rig refused $refusals writes, not exactly the adopted segment's") },
+            { assertTrue(refused is ExportResult.Failure, "the refused merge reported $refused") },
+            { assertTrue("foreign1" !in durableBefore, "the refused merge's record was durable already: $durableBefore") },
+            { assertEquals(ExportResult.Success, exported) },
+            { assertTrue("local9" in durable, "the admitted record was lost: $durable") },
+            { assertTrue("foreign1" in durable, "export reported $exported for a record no key holds: $durable") },
+        )
+    }
 }
