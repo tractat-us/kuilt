@@ -1461,12 +1461,18 @@ public class WarpLogRecordExporter(
                 // inside a single batch would otherwise both be admitted.
                 val pending = HashSet<ByteString>()
                 var evictions = 0
-                var dedupedAgainstLog = false
+                // A dedup hit on an insert the active segment holds is carried by the
+                // active-segment write: a merge never puts an insert there, so only a hit outside
+                // it can be on a record a refused merge left in `log` alone. Read only while the
+                // flag is set, and once per turn: the segment does not change until applyTurn.
+                val activeInserts by lazy { activeSegmentInsertIds() }
+                var dedupedOutsideActiveSegment = false
                 while (from + consumed < records.size && fitsInTurn(consumed, evictions)) {
                     val record = records[from + consumed]
                     consumed++
-                    if (record.recordId in seenIds) {
-                        dedupedAgainstLog = true
+                    val seen = seenIds[record.recordId]
+                    if (seen != null) {
+                        if (logHoldsUncarriedMerge && seen !in activeInserts) dedupedOutsideActiveSegment = true
                         continue
                     }
                     if (!pending.add(record.recordId)) continue
@@ -1498,10 +1504,10 @@ public class WarpLogRecordExporter(
                 }
                 accepted = admitted.size
                 applied = applyTurn(admitted, evictions)
-                // A dedup hit may be on an id a refused merge left in `log` alone, so while the
-                // flag is set the turn carries the whole log, as the next merge would (#3384).
+                // A dedup hit outside the active segment may be on an id a refused merge left in
+                // `log` alone, so the turn carries the whole log, as the next merge would (#3384).
                 // Built before the pass, in the order [mergeTurn] builds its own adopt.
-                carriesMerge = logHoldsUncarriedMerge && dedupedAgainstLog
+                carriesMerge = logHoldsUncarriedMerge && dedupedOutsideActiveSegment
                 val adopting = if (carriesMerge) adoptRemoteSegment(log) else null
                 // Before pendingWrites(), never after: a pass rewrites `activeSegment`,
                 // and the active-segment write pendingWrites() already owes is what
@@ -2267,6 +2273,20 @@ public class WarpLogRecordExporter(
      * and `Success` is a claim that the record is on disk.
      */
     private fun activeSegmentUnwritten(): Boolean = activeSegment !== durableActive
+
+    /**
+     * The ids of the inserts [activeSegment] holds. Must hold [lock]. Θ([segmentOps]).
+     *
+     * A dedup hit on one of these needs no adopt: the insert is on disk already, or the turn owes
+     * the active-segment write that carries it, which [activeSegmentUnwritten] decides. That holds
+     * whoever authored the insert. In practice every one is this exporter's own, because an insert
+     * reaches the segment only through [appendToActiveSegment] from [applyTurn], or from the store
+     * on [recover]. A merge adds none, and a [windowPass] pieces in a floor and an
+     * [RgaOp.Compact], neither an insert. So a merged record is always outside the segment, and a
+     * hit on one is what [logHoldsUncarriedMerge] makes a turn adopt the whole log for.
+     */
+    private fun activeSegmentInsertIds(): Set<RgaId> =
+        activeSegment.operations().filterIsInstance<RgaOp.Insert<LogRecord>>().mapTo(HashSet()) { it.id }
 
     /**
      * **Stage** the seal of a full active segment and the opening of a fresh one, and emit the
