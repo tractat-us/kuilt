@@ -96,8 +96,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it), and so is a
  *   NaN delta (WARN). Either is one dropped point, never a failed export: the export is one
  *   batch, so a point it could not apply would otherwise take every other point with it.
- * - a monotonic sum whose count on this replica cannot grow past [Long.MAX_VALUE], or a histogram
- *   whose total count over every replica cannot, is dropped from the export (WARN the first
+ * - a monotonic sum or a histogram whose total count over every replica cannot grow past
+ *   [Long.MAX_VALUE] is dropped from the export (WARN the first
  *   time) for the same reason: `record` refuses the whole batch for it, so the export is recorded
  *   again without that series, and every other point lands once.
  * - a sum whose own temporality is not the one asked for above — a cumulative counter, or a
@@ -178,8 +178,8 @@ public class KuiltMetricExporter @JvmOverloads constructor(
      * [WarpMetricExporter.record] the export, leaving out each sum or histogram series it refuses
      * as saturated.
      *
-     * `record` refuses a whole batch, applying nothing, when one update would carry this replica's
-     * count for a sum, or a histogram series' total over every replica, past [Long.MAX_VALUE]: a [MetricExportResult.Refused] whose
+     * `record` refuses a whole batch, applying nothing, when one update would carry a sum or
+     * histogram series' total over every replica past [Long.MAX_VALUE]: a [MetricExportResult.Refused] whose
      * `overflow` is a [MetricOverflowException]. A delta
      * counter or histogram that has reached that point sends more in every export, so passing the
      * refusal on would drop every other point of every export from then on. Instead the refused
@@ -219,12 +219,7 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             }
             val line = {
                 "KuiltMetricExporter: dropping this export's updates to ${saturated.what} ${saturated.key.name} " +
-                    "${saturated.key.attributes}: " +
-                    if (saturated.histogram) {
-                        "its total count over every replica cannot grow past Long.MAX_VALUE"
-                    } else {
-                        "this replica's count for it cannot grow past Long.MAX_VALUE"
-                    }
+                    "${saturated.key.attributes}: its total count over every replica cannot grow past Long.MAX_VALUE"
             }
             if (firstDrop(saturated)) logger.warn(line) else logger.debug(line)
             remaining = remaining.filterNot(saturated::carries)

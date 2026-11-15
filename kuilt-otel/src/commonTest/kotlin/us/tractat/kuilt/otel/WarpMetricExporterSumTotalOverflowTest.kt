@@ -81,10 +81,12 @@ class WarpMetricExporterSumTotalOverflowTest {
         exporter.mergePeers(ReplicaId("B") to Long.MAX_VALUE - 1L)
         assertEquals(Long.MAX_VALUE - 1L, exporter.sumSnapshot(requests).valueOrNull(), "the rig: the merged total is one short")
 
-        assertRefusedWhole(store, exporter, listOf(MetricUpdate.IncrementSum(requests, 2L)))
+        val cause = assertRefusedWhole(store, exporter, listOf(MetricUpdate.IncrementSum(requests, 2L)))
 
         val control = exporter.incrementSum(requests, 1L)
         assertAll(
+            { assertEquals(Long.MAX_VALUE - 1L, cause.total, "the refusal carries the series' total, not this replica's 0") },
+            { assertEquals(2L, cause.by) },
             { assertEquals(MetricExportResult.Success, control, "the control: one more lands the total on Long.MAX_VALUE") },
             { assertEquals(Long.MAX_VALUE, exporter.sumValue(requests)) },
             { assertEquals(Long.MAX_VALUE, exporter.renderedSum(), "and the bridge still exports it") },
@@ -102,7 +104,7 @@ class WarpMetricExporterSumTotalOverflowTest {
         exporter.mergePeers(ReplicaId("B") to Long.MAX_VALUE - 2L)
         assertEquals(Long.MAX_VALUE - 2L, exporter.sumSnapshot(requests).valueOrNull(), "the rig: the merged total is two short")
 
-        assertRefusedWhole(
+        val cause = assertRefusedWhole(
             store,
             exporter,
             listOf(MetricUpdate.IncrementSum(requests, 1L), MetricUpdate.IncrementSum(requests, 2L)),
@@ -110,6 +112,8 @@ class WarpMetricExporterSumTotalOverflowTest {
 
         val control = exporter.record(listOf(MetricUpdate.IncrementSum(requests, 2L)))
         assertAll(
+            { assertEquals(Long.MAX_VALUE - 1L, cause.total, "the batch's own earlier increment is counted") },
+            { assertEquals(2L, cause.by) },
             { assertEquals(MetricExportResult.Success, control, "the control: either one alone fits") },
             { assertEquals(Long.MAX_VALUE, exporter.sumValue(requests)) },
             { assertEquals(Long.MAX_VALUE, exporter.renderedSum(), "and the bridge still exports it") },
@@ -136,6 +140,7 @@ class WarpMetricExporterSumTotalOverflowTest {
             { assertNull(exporter.renderedSum(), "the rig: the bridge skips the series") },
         )
 
-        assertRefusedWhole(store, exporter, listOf(MetricUpdate.IncrementSum(requests, 1L)))
+        val cause = assertRefusedWhole(store, exporter, listOf(MetricUpdate.IncrementSum(requests, 1L)))
+        assertNull(cause.total, "a total past Long has no Long to carry")
     }
 }

@@ -147,7 +147,7 @@ class WarpMetricExporterBatchTest {
         val control = exporter.record(fitsAlone)
         assertAll(
             { assertEquals(requests, cause.key) },
-            { assertEquals(Long.MAX_VALUE - 2L, cause.count, "the batch's own earlier increment is counted") },
+            { assertEquals(Long.MAX_VALUE - 2L, cause.total, "the batch's own earlier increment is counted") },
             { assertEquals(3L, cause.by) },
             { assertEquals(memoryBefore, memoryAfter, "nothing applied in memory") },
             { assertEquals(writesBefore, writesAfter, "nothing written") },

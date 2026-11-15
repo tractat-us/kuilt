@@ -529,8 +529,8 @@ public final class us/tractat/kuilt/otel/MetricPoint$Sum : us/tractat/kuilt/otel
 
 public final class us/tractat/kuilt/otel/MetricSumOverflowException : us/tractat/kuilt/otel/MetricOverflowException {
 	public final fun getBy ()J
-	public final fun getCount ()J
 	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getTotal ()Ljava/lang/Long;
 }
 
 public abstract interface class us/tractat/kuilt/otel/MetricUpdate {
