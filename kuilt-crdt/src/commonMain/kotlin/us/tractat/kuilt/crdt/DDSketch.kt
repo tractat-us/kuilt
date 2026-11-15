@@ -97,11 +97,21 @@ public class DDSketch private constructor(
      * Summed exactly across every bucket and replica, so it is answered whenever the total fits in
      * a `Long`, and refused when it does not.
      *
-     * @throws ArithmeticException if the total does not fit in a `Long` (#3343).
+     * @throws ArithmeticException if the total does not fit in a `Long` (#3343). [countOrNull]
+     *   answers `null` instead.
      */
     public val count: Long
-        get() = exactCount.toLongOrNull()
+        get() = countOrNull()
             ?: throw ArithmeticException("DDSketch count $exactCount does not fit in a Long")
+
+    /**
+     * [count], or `null` where [count] would throw because the total does not fit in a `Long`.
+     *
+     * The same exact sum as [count] — every bucket of both signs and the zero counter, over every
+     * replica, in an [Int128] — so a caller asking whether a sketch's total fits gets exactly the
+     * answer [count] would give, without catching.
+     */
+    public fun countOrNull(): Long? = exactCount.toLongOrNull()
 
     /**
      * Number of recorded values whose magnitude was below [minIndexedValue] (including exact zeros).

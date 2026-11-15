@@ -716,9 +716,11 @@ public class WarpMetricExporter(
      *    checked for the whole batch, counting its earlier updates to the same series, against the
      *    series as they stand. For a [MetricUpdate.IncrementSum] that is this replica's count for its
      *    sum series (#3318). For a [MetricUpdate.RecordHistogram] or
-     *    [MetricUpdate.AddExponentialHistogram] it is this replica's slot in each bucket the update
-     *    touches, and in the sketch's zero and overflow counters, and also the sum of counts that
-     *    fold onto one bucket (#3354). A weighted count can get there on its own. Such a batch is
+     *    [MetricUpdate.AddExponentialHistogram] it is the series' total count — summed over every
+     *    replica's slots, a peer's merged in included, across both signs' buckets and the zero
+     *    counter — which is the count the OTLP bridge exports (#3403); and with it this replica's
+     *    slot in each bucket the update touches, in the zero and overflow counters, and the sum of
+     *    counts that fold onto one bucket (#3354). A weighted count can get there on its own. Such a batch is
      *    **refused**: it returns a [MetricExportResult.Refused] whose `overflow` names the series,
      *    a [MetricSumOverflowException] or a [MetricHistogramOverflowException], and nothing from it
      *    is applied or written, the kinds that were read included. The refusal is logged at WARN the
@@ -817,7 +819,12 @@ public class WarpMetricExporter(
      * histogram updates have already been made to (#3354). Those are the very calls [applyLocked]
      * makes, so the check cannot disagree with the apply about what fits, and an
      * [MetricUpdate.AddExponentialHistogram] whose own counts fold past [Long.MAX_VALUE] is caught
-     * here too.
+     * here too. The running copy's total is then read with [DDSketch.countOrNull] (#3403): the
+     * exact sum over every replica — a peer's slots merged in included — of every bucket and the
+     * zero counter, which is the `count` the OTLP bridge exports and the one it skips the series
+     * for when it does not fit. Every slot is part of that total, so a slot that cannot take an
+     * update is one the total cannot take either, and a batch is refused exactly when the bridge
+     * could not export the series it would leave.
      *
      * Checked against the series as they stand before the batch. An eviction the batch triggers can
      * only remove a series, never raise a count, so this never accepts a batch [applyLocked] would
@@ -839,7 +846,11 @@ public class WarpMetricExporter(
                     val current = runningHistograms[update.key] ?: histograms[update.key] ?: histogramPrototype
                     val patch = histogramPatchOrNull(current, update)
                         ?: return MetricHistogramOverflowException(update.key)
-                    runningHistograms[update.key] = current.piece(patch.delta)
+                    val next = current.piece(patch.delta)
+                    // The total the bridge exports as the point's count: every replica's slots, both
+                    // signs and the zeros, summed exactly. Slots that each fit can add up past it (#3403).
+                    next.countOrNull() ?: return MetricHistogramOverflowException(update.key)
+                    runningHistograms[update.key] = next
                 }
                 is MetricUpdate.IncrementSumDouble,
                 is MetricUpdate.SetGauge,
@@ -1128,8 +1139,8 @@ public class WarpMetricExporter(
      * distribution semantics.
      *
      * Returns a [MetricExportResult.Refused] whose `overflow` is a [MetricHistogramOverflowException],
-     * having applied and written nothing, when this replica's slot for [value] is already at
-     * [Long.MAX_VALUE].
+     * having applied and written nothing, when the series' total count is already at
+     * [Long.MAX_VALUE] (#3403), or this replica's slot for [value] is.
      *
      * @throws IllegalArgumentException if [value] is NaN or infinite.
      */
@@ -1141,6 +1152,12 @@ public class WarpMetricExporter(
      *
      * Idempotent and lossless: the merged sketch equals the sketch of the combined
      * measurement stream. Returns [MetricWriteResult.Success] after the durable write.
+     *
+     * **Not refused when the join carries the total past [Long.MAX_VALUE].** [record] refuses an
+     * update that would (#3403), but a merge is a lattice join: refusing it would leave this
+     * replica's sketch apart from the peer's for good, and the peer's own sketch, and every other
+     * replica that joins it, would still hold the total. So the join is kept, the OTLP bridge skips
+     * the series with a WARN naming it, and every later [record] update to it is refused.
      *
      * @throws IllegalArgumentException if [remote]'s configuration — relative accuracy,
      *   `minIndexedValue` and `maxIndexedValue` — is not exactly [histogramPrototype]'s. Every
@@ -1477,16 +1494,19 @@ public class MetricSumOverflowException internal constructor(
 )
 
 /**
- * A [MetricOverflowException] for a histogram (#3354): a [MetricUpdate.RecordHistogram] or
- * [MetricUpdate.AddExponentialHistogram] would carry this replica's slot in one of the series'
- * buckets, or in its zero or overflow counter, past [Long.MAX_VALUE], counting the batch's own
- * earlier updates to it. So would counts that each fit but fold onto one bucket past it.
+ * A [MetricOverflowException] for a histogram: a [MetricUpdate.RecordHistogram] or
+ * [MetricUpdate.AddExponentialHistogram] would carry the series' total count past
+ * [Long.MAX_VALUE] (#3403), counting the batch's own earlier updates to it. The total is summed over
+ * every replica's slots, both signs' buckets and the zero counter, and is the count the OTLP bridge
+ * exports, so a series past it is one the bridge could not export. That includes the narrower cases
+ * of #3354: this replica's slot in a bucket, or in the zero or overflow counter, passing
+ * [Long.MAX_VALUE], and counts that each fit but fold onto one bucket past it.
  *
  * @property key the histogram series that cannot take the update.
  */
 public class MetricHistogramOverflowException internal constructor(
     override val key: MetricKey,
 ) : MetricOverflowException(
-    "histogram series ${key.name} ${key.attributes}: this replica's count in one of its buckets, or in its " +
-        "zero or overflow counter, cannot take this batch's values without passing Long.MAX_VALUE",
+    "histogram series ${key.name} ${key.attributes}: its total count, or this replica's count in one of its " +
+        "buckets or in its zero or overflow counter, cannot take this batch's values without passing Long.MAX_VALUE",
 )
