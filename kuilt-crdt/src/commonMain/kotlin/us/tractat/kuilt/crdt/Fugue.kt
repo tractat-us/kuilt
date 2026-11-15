@@ -342,20 +342,24 @@ public class Fugue<V> private constructor(
      * [insertOpViaRebuildOracle] and its differential test.
      *
      * @throws IllegalArgumentException if [index] is outside `0..size`.
+     * @throws ArithmeticException if the Lamport clock or [replica]'s seq is already at
+     *   [Long.MAX_VALUE], as a decoded op-log or a peer's op can leave it (#3417). The next value
+     *   would wrap to [Long.MIN_VALUE], the Lamport time of [FugueId.HEAD].
      */
     public fun insertAt(
         replica: ReplicaId,
         index: Int,
         value: V,
     ): Pair<Fugue<V>, FugueOp.Insert<V>> {
+        // Both clocks advance before the sequence state is stolen, so a refusal has nothing to hand back.
+        val newLamport = nextLamport()
+        val id = FugueId(lamport = newLamport, replicaId = replica, seq = nextSeqFor(replica))
         val state = stealOrRebuildSeqState()
         if (index !in 0..state.visible.size) {
             val visibleSize = state.visible.size
             releaseSeqState(state)
             throw IllegalArgumentException("insertAt($index) out of range; visible size is $visibleSize")
         }
-        val newLamport = lamport + 1L
-        val id = FugueId(lamport = newLamport, replicaId = replica, seq = nextSeqFor(replica))
         val leftOrigin = state.nodes.getValue(if (index == 0) FugueId.HEAD else state.visible[index - 1])
         val op = buildInsertOpIncremental(id, value, leftOrigin)
         if (op.id in insertsById || op.id in compactedIds) {
@@ -397,7 +401,10 @@ public class Fugue<V> private constructor(
             FugueOp.Insert(id = id, value = value, parent = parent.id, side = FugueSide.Left, rightOrigin = null)
         }
 
-    private fun nextSeqFor(replica: ReplicaId): Long = (maxSeqByReplica[replica] ?: 0L) + 1L
+    private fun nextSeqFor(replica: ReplicaId): Long =
+        (maxSeqByReplica[replica] ?: 0L).nextTick { "Fugue seq for $replica" }
+
+    private fun nextLamport(): Long = lamport.nextTick { "Fugue Lamport clock" }
 
     /**
      * Remove the visible element at [index].
@@ -624,7 +631,7 @@ public class Fugue<V> private constructor(
         require(index in 0..visible.size) {
             "insertAt($index) out of range; visible size is ${visible.size}"
         }
-        val id = FugueId(lamport = lamport + 1L, replicaId = replica, seq = nextSeqFor(replica))
+        val id = FugueId(lamport = nextLamport(), replicaId = replica, seq = nextSeqFor(replica))
         return buildInsertOp(id, value, visible, index, tree)
     }
 

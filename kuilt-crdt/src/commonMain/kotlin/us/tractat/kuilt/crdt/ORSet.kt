@@ -54,6 +54,8 @@ public class ORSet<E> private constructor(
      * resurrect the element. That failure was measured while designing this method (#2044) and
      * is pinned by `ORSetDeltaMutatorLawTest`.
      *
+     * @throws ArithmeticException if [replica]'s seq in this set's context is already at
+     *   [Long.MAX_VALUE], as a decoded context can leave it (#3417). The next dot would wrap.
      * @sample us.tractat.kuilt.crdt.sampleORSet
      */
     public fun add(replica: ReplicaId, element: E): Patch<ORSet<E>> = addPatch(replica, element)

@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import us.tractat.kuilt.math.plusOrNull
 
 /**
  * A map whose keys and **everything nested under them** share one causal context, which is never
@@ -106,6 +107,9 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
      * it walks every key, as `Causal`'s join always has.
      *
      * @throws IllegalArgumentException if [bottom] is not bottom, or the change fails a check.
+     * @throws ArithmeticException if [mutator] calls [Slot.mint] when [replica]'s next seq would
+     *   pass [Long.MAX_VALUE], as a decoded context can leave it (#3417). A mutator that mints
+     *   nothing still runs on such a context.
      */
     public fun apply(
         replica: ReplicaId,
@@ -192,6 +196,8 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
          * The next dot from the shared context, recorded so [apply] can check it is written.
          *
          * @throws IllegalStateException if called after the mutator that received this slot returned.
+         * @throws ArithmeticException if the replica's next seq would pass [Long.MAX_VALUE] (#3417).
+         *   Only minting refuses: a mutator that mints nothing still runs on such a context.
          */
         public fun mint(): Dot = minter.mint()
 
@@ -217,18 +223,24 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
      * `next(c)` for one [apply], repeated: each dot is the next sequence number of [replica] that
      * [context] has not witnessed. A local counter rather than adding each dot to [context], which
      * would re-compact the whole shared context once per minted dot.
+     *
+     * [next] is `null` once the seq has nowhere left to go (#3417). It is computed without
+     * [DotContext.nextDot], which refuses at the ceiling, so that only a mint refuses and a mutator
+     * that mints nothing still runs.
      */
     internal class Minter(private val context: DotContext, private val replica: ReplicaId) {
         private val mintedDots = mutableListOf<Dot>()
         private var closed = false
-        private var seq = context.nextDot(replica).seq
+        private var next: Long? = (context.vv[replica] ?: 0L).plusOrNull(1L)
 
         val minted: List<Dot> get() = mintedDots
 
         fun mint(): Dot {
             check(!closed) { "Slot.mint() called after apply returned; a slot is valid only inside its mutator" }
-            while (context.contains(Dot(replica, seq))) seq++
-            val dot = Dot(replica, seq++)
+            var seq = next ?: throw ArithmeticException("CausalMap slot seq for $replica is at Long.MAX_VALUE and cannot advance")
+            while (context.contains(Dot(replica, seq))) seq = seq.nextTick { "CausalMap slot seq for $replica" }
+            next = seq.plusOrNull(1L)
+            val dot = Dot(replica, seq)
             mintedDots += dot
             return dot
         }

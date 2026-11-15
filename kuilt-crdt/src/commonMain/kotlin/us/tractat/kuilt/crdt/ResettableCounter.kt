@@ -51,6 +51,9 @@ public class ResettableCounter private constructor(
      *
      * Each call mints a fresh [Dot] carrying exactly [by]. Prior increments
      * from the same replica remain live until a [reset] retires them.
+     *
+     * @throws ArithmeticException if [replica]'s seq in this counter's context is already at
+     *   [Long.MAX_VALUE], as a decoded context can leave it (#3417). The next dot would wrap.
      */
     public fun increment(replica: ReplicaId, by: Long = 1L): Patch<ResettableCounter> {
         require(by >= 1L) { "ResettableCounter increment must be positive, was $by" }
