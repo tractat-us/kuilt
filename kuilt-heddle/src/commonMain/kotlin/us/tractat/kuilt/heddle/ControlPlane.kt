@@ -269,9 +269,9 @@ public sealed interface ControlConflict {
      * with a weight set a pick cannot do arithmetic on: a product of their weights would leave
      * `Long`, and every pick at [parent] would then throw, or the set is so fine that one full lease
      * can carry a child past its ceiling, so one under-charged lease would wedge [parent] (#3353).
-     * With leases of [LocalHeddle.MAX_RESERVATION] that is any denominator above 30,719. A
-     * `Prepare` is refused when
-     * [edge]'s own weight fails alone; an `Activate` when it fails beside the children already
+     * Any denominator above 30,719 is, at any lease size, since the rule is sized for the largest
+     * lease, [LocalHeddle.MAX_RESERVATION]; staying below it is necessary, not sufficient. A
+     * `Prepare` is refused when [edge]'s own weight fails alone; an `Activate` when it fails beside the children already
      * active at [parent]. Every peer decides it on the same log-pure state, so every peer refuses.
      */
     public data class WeightBudget(public val parent: GroupId, public val edge: AttachmentId) : ControlConflict

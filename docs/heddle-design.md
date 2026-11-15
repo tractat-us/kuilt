@@ -889,8 +889,13 @@ reservation charged 1 unit, a weight of `3/7` refused after 4,681 leases. It now
 makes 100,000 with no refusal.
 
 **A weight set too fine for one full lease is refused when it is applied
-(#3353, P1′).** With leases up to `MAX_RESERVATION`, keep every weight's
-denominator at or below 30,719; a finer weight set is refused when it is applied.
+(#3353, P1′).** Keep every weight's denominator at or below 30,719; a finer
+weight set is refused when it is applied. The limit holds at any lease size,
+because it is sized for the largest lease: `H` is the constant
+`MAX_RESERVATION · G`, and `HeddlePolicy.pick` caps every grant at
+`MAX_RESERVATION`, whatever `PolicyConfig.quantum` says, so the refusal is a
+guarantee on both engines. It is necessary, not sufficient, as the step term
+below shows.
 The rebase fires only once a child passes its `R`, so a child that an
 under-charged `complete` parks between `C − H` and `R` (`H = MAX_RESERVATION · G`)
 is never rebased, yet its next full lease passes `C`. `acquire` refuses and
@@ -910,6 +915,8 @@ factor, since the step grows with their lcm. A spread like `2⁴²/1023` beside
 `1/1021`, which once wedged a parent by quantisation alone, is refused this way.
 At the edge, `{1/30,718, 1/30,719}` runs at full leases and `{1/30,719, 1/30,720}`
 is refused.
+
+**Upgrading.** Durable state that holds a weight set this now refuses, a governed log with such a `Prepare` or a `LocalHeddle` snapshot, needs those edges closed before the upgrade, or a fresh log, because a replay refuses them. `LocalHeddle.restore` does not check the budget, so a restored parent over it keeps running, but a new sibling there is refused.
 
 Where `HeddleNode` still meets the ceiling, its `schedule` answers `ScheduleOutcome.PositionCeiling(parent)`. It
 checks the ceiling after it delegates, as `LocalHeddle` does: a grant whose
@@ -1223,9 +1230,10 @@ the heddle introduces **no new category of coordination**:
    conflict, never a timestamp resolution. Non-overlapping subtree operations
    don't contend, and — the important half — **scheduling and spending never
    wait on this log** at any frequency. The same apply decides the weight
-   budget (§7.1, #3353): a `Prepare` whose own weight would put a pick's
-   products out of `Long`, or an `Activate` that would do so beside the
-   parent's active children, is refused with `ControlConflict.WeightBudget`.
+   budget (§7.1, #3353): a `Prepare` whose own weight fails it, putting a
+   pick's products out of `Long` or too fine for one full lease, or an
+   `Activate` that fails it beside the parent's active children, is refused
+   with `ControlConflict.WeightBudget`.
    It reads the log-pure projection, so every peer refuses the same act.
 3. **Fencing / recovery.** The source's abstract "owner epoch" is a Raft
    term; a control-plane operation that revokes a crashed peer's holdings is

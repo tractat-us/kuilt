@@ -125,8 +125,9 @@ internal class PositionCeilingException(message: String) : ArithmeticException(m
  * there for good (#3353 review: `{1/30,721, 1/30,722}`, one lease charged `1.172 · 10¹²`).
  *
  * The step is the whole set's, so activating one child can refuse on behalf of another:
- * activating `1/3` beside a heavy child triples that child's step. At full leases the rule keeps
- * every denominator at or below 30,719. Near that edge, several fine weights whose denominators
+ * activating `1/3` beside a heavy child triples that child's step. The rule keeps every
+ * denominator at or below 30,719, at any lease size: `H` is a constant, the largest lease, and
+ * [HeddlePolicy.pick] grants no more than that. Near that edge, several fine weights whose denominators
  * share no factor are refused too, since the step grows with their least common multiple.
  *
  * ## Subsets

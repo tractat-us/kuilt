@@ -57,15 +57,17 @@ public sealed interface ScheduleOutcome {
      * exactly, or the pick's own delegation would carry its child there, and none was made (#3313,
      * #3353). A busy parent is rebased by raising its origin long before that, so it is met only
      * where no whole step of the rebase fits: a demanding child that is never served sits at zero,
-     * and no child may go below it. A weight set so fine that one full lease from a child's rebase
-     * threshold passes its ceiling is refused when it is applied ([WeightBudget]).
+     * and no child may go below it. A weight set so fine that one step or one full lease could
+     * carry a child past its ceiling is refused when it is applied ([WeightBudget]), and no grant
+     * is larger than [LocalHeddle.MAX_RESERVATION], the lease that refusal is sized for. So on a
+     * parent whose weights fit the budget, a child that keeps being served never meets it.
      */
     public data class PositionCeiling(public val parent: GroupId) : ScheduleOutcome
 
     /**
      * [parent]'s active children carry weights whose products a pick forms leave `Long`, so no pick
-     * there can be computed, or that are too fine for one full lease, and nothing was written (#3353). The control log refuses such a set
-     * act by act, but the replicated ledger can still hold one: two peers each activating a child
+     * there can be computed, or that are too fine for one full lease, and nothing was written
+     * (#3353). The control log refuses such a set act by act, but the replicated ledger can still hold one: two peers each activating a child
      * that fits beside what they see, or one peer receiving a later `Activate` before an earlier
      * `Close`. It clears once one of the children closes.
      */

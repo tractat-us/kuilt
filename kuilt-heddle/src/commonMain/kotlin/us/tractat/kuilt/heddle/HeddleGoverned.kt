@@ -317,8 +317,8 @@ public class GovernedHeddleNode internal constructor(
      * (its parent, child and weight), which two honest proposers can still disagree on.
      *
      * A record whose weight, alone under its parent, would put a product a pick forms out of `Long`,
-     * or is too fine for one full lease (a denominator above 30,719 at
-     * [LocalHeddle.MAX_RESERVATION]), is refused with a [ControlConflict.WeightBudget] (#3353), so it
+     * or is too fine for one full lease (any denominator above 30,719 is, at any lease size), is
+     * refused with a [ControlConflict.WeightBudget] (#3353), so it
      * never reaches the ledger.
      */
     public suspend fun prepare(record: AttachmentRecord, timeout: Duration? = null): ControlOutcome =

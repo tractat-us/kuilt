@@ -231,10 +231,11 @@ its child to the position ceiling is not made, and the call answers `PositionCei
 
 Weights have a budget, and it has two halves. A pick multiplies a parent's weights
 together, so a mix whose products leave a 64-bit number is refused. And a weight set too
-fine for one full lease is refused: with leases up to `MAX_RESERVATION`, keep every
-weight's denominator at or below 30,719; a finer weight set is refused when it is
-applied. Near that edge, several fine weights whose denominators share no factor are
-refused too. `LocalHeddle.apply` answers a `StepRefusal` for such a child. It remembers, between calls, which children it
+fine for one full lease is refused: keep every weight's denominator at or below 30,719;
+a finer weight set is refused when it is applied. The limit holds at any lease size,
+because it is sized for the largest lease, `MAX_RESERVATION`, and no grant is larger. It
+is necessary, not sufficient: several fine weights whose denominators share no factor
+are refused below it too. `LocalHeddle.apply` answers a `StepRefusal` for such a child. It remembers, between calls, which children it
 has seen idle and what clamp each carries; that memory is local to the allocator and
 is never part of the ledger.
 

@@ -2,8 +2,9 @@ package us.tractat.kuilt.heddle
 
 /**
  * Whether [weight], as the only child of its parent, fits the weight budget: every product a pick
- * forms stays in `Long`, and one full lease of [LocalHeddle.MAX_RESERVATION] fits its window. With
- * leases that large, a denominator above 30,719 fails it (#3353).
+ * forms stays in `Long`, and one full lease of [LocalHeddle.MAX_RESERVATION] fits its window. A
+ * denominator above 30,719 fails it at any lease size, since the rule is sized for the largest
+ * lease and no grant is larger (#3353).
  *
  * A weight that fails this alone fails beside any siblings, so a replicated `Prepare` of it can
  * be refused before the edge exists. The rule is the one [LocalHeddle.apply] enforces; this is a

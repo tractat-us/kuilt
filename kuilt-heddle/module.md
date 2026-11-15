@@ -105,10 +105,13 @@ and nothing else does:
 - **A weight the scheduler cannot do sums on is turned away.** Each pick multiplies the weights
   of a parent's children together, so a big enough weight, or a big enough mix of them, leaves a
   64-bit number and every pick there would fail. A weight set too fine for one full lease is
-  turned away too: with leases up to `MAX_RESERVATION`, keep every weight's denominator at or
-  below 30,719; a finer weight set is refused when it is applied. Past that, one lease charged a
-  little under its size can leave a child where no rebase is due and the next lease overflows,
-  and the parent stops for good. `prepare` refuses such a weight on its own, and `activate`
+  turned away too: keep every weight's denominator at or below 30,719; a finer weight set is
+  refused when it is applied. The limit holds at any lease size, because it is sized for the
+  largest lease, `MAX_RESERVATION`, and no grant is larger. It is necessary, not sufficient:
+  several fine weights whose denominators share no factor are refused below it too. Past it, one
+  lease charged a little under its size can leave a child where no rebase is due and the next
+  lease overflows, and the parent stops for good.
+- **Upgrading.** Durable state that holds a weight set this now refuses, a governed log with such a `Prepare` or a `LocalHeddle` snapshot, needs those edges closed before the upgrade, or a fresh log, because a replay refuses them. `LocalHeddle.restore` does not check the budget, so a restored parent over it keeps running, but a new sibling there is refused. `prepare` refuses such a weight on its own, and `activate`
   refuses one that only fails beside its siblings, each answering
   `ControlConflict.WeightBudget`. Every peer decides it from the same log, so every peer refuses.
   `heddleStatic` checks the same weights in its starting tree and in `prepare` and `activate`,

@@ -247,7 +247,7 @@ public class HeddleNode internal constructor(
      *
      * **A weight a pick cannot do arithmetic on is refused** (#3353): `false` when [record]'s weight,
      * alone under its parent, would put a product a pick forms out of `Long`, or is too fine for one
-     * full lease (a denominator above 30,719 at [LocalHeddle.MAX_RESERVATION]), as
+     * full lease (any denominator above 30,719 is, at any lease size), as
      * [GovernedHeddleNode.prepare][GovernedHeddleNode.prepare] answers a
      * [ControlConflict.WeightBudget].
      */
@@ -373,13 +373,15 @@ public class HeddleNode internal constructor(
      * both write absolute positions.
      * [boundMetrics] reports the peak effective position as a fraction of its ceiling.
      *
-     * The ceiling can still be met. A demanding child that is never served holds the step at zero.
-     * And a weight set fine-grained enough that one step spans 16 times a child's threshold, its
-     * ceiling, cannot step while that child demands.
+     * The ceiling can still be met where a demanding child that is never served holds the step at
+     * zero. A weight set so fine that one step or one full lease could carry a child past its
+     * ceiling is refused before it is active ([prepare], [activate]), and no grant is larger than
+     * [LocalHeddle.MAX_RESERVATION], the lease that limit is sized for (#3353).
      *
      * A long-idle child that comes back demanding to a node that never saw it idle, after a restart,
-     * is clamped as a waker rather than read from far below the origin. A pick that would have to order a position at its ceiling is refused, and the rounds stop at
-     * that parent: a call that granted first answers [ScheduleOutcome.Delegated], and every call
+     * is clamped as a waker rather than read from far below the origin. A pick that would have to
+     * order a position at its ceiling is refused, and so is a grant whose own delegation would carry
+     * its child there (#3353); the rounds stop at that parent: a call that granted first answers [ScheduleOutcome.Delegated], and every call
      * after it [ScheduleOutcome.PositionCeiling]. A refused call writes nothing and leaves the wake
      * clamps as they were, and a call with nothing to grant writes nothing either
      * ([FairShareAllocator.schedule]).
