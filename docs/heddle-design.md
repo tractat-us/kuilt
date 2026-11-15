@@ -747,15 +747,14 @@ which would put the edge lower than it was written:
 
 ```text
 gross(e) = P(e) + (baseIssued(e) − folded(e)) · G     (no gauge ⇒ baseIssued(e) · G)
-raw(e)   = gross(e) − returned(e) · G − ⌊O(parent) · w(e) · G⌋
+raw(e)   = gross(e) − returned(e) · G
 v_raw(e) = raw(e) / (G · w(e))
 ```
 
-`O(parent)` is the parent's **origin**, one replicated max-register per parent in
-whole units of virtual time (#3353). Every child of the parent reads its position
-less the origin on its own grid, so raising the origin moves every child down
-together. Nothing raises it any more, so it reads zero (step B, below); slice 4 takes it out
-of the ledger.
+A position is how much service an edge has had, counted from its start, and it only
+goes up. Until step B the ledger also kept a per-parent **origin**, a replicated
+max-register every child read its position less of, which the rebase raised; it is
+gone from the ledger and the wire (#3472, below).
 
 Which is design §7.1's `b(e) + committedService(e) / w(e)` with `b` supplied by the
 gauge — and with the **base** issuance as the fold axis, deliberately not the effective
@@ -779,10 +778,7 @@ over a sum of weights, and two edges compare by integer cross-multiplication in
 gauge stores its position absolute, wide, exact and uncapped. The raw position,
 the front, a wake clamp `front − raw`, the stored clamp, the effective position,
 raw plus clamp, and the deadline `p + q · G` are all computed and compared in 128
-bits. The origin's share `⌊O · w · G⌋` can reach about 2¹³⁰ at budget-legal
-extreme weights, so it is a checked wide `mulDiv` that throws rather than wraps.
-Nothing absolute is ever capped: a cap on an absolute value turns into credit
-once the origin passes it. Until #3313 and #3353 a pick narrowed the effective
+bits. Nothing is ever capped. Until #3313 and #3353 a pick narrowed the effective
 position to a `Long`, refused with `PositionCeiling(parent)` at the ceiling, and
 a busy parent beside a starved child met it after about 65,000 leases of the
 largest size. The `PositionCeiling` arms are kept, unreturned, for the
@@ -938,7 +934,7 @@ an edge has had, counted from its start, and it only ever goes up.
 
 | Piece | What it protects today | After step A | Step B |
 |---|---|---|---|
-| The parent origin (`ParentRecord`, `EntitlementLedger.origin`, `raiseOrigin`, `PolicyEdge.origin`, `originTicks`) | Keeps the effective position a pick narrows inside `Long` | Nothing narrows, so it protects nothing | Deleted, from the ledger and from the wire |
+| The parent origin (`ParentRecord`, `EntitlementLedger.origin`, `raiseOrigin`, `PolicyEdge.origin`, `originTicks`) | Keeps the effective position a pick narrows inside `Long` | Nothing narrows, so it protects nothing | Done in slice 4: deleted, from the ledger and from the wire |
 | The rebase (`raiseOriginBeneath`, `raiseBeforePick`, `preSeatRaise`, `chargeRebase`, `originStep`, `wholeSteps`, `gridStepOf`, the three "raise changed no pick" checks, `Rebase`, `RebasingPick`) | Raises the origin before a child reaches its ceiling | A translation of every child alike, which changes no pick | Done in slice 3, but `gridStepOf`, which P1′ reads until slice 5 |
 | The window rule and the floor (`positionFloor`, `windowBound`, the floor arms of `landing`, `shiftOf` and `clampWakers`) | Keeps a child a rebase left below zero inside `[−C, C)` | Only a rebase puts a child below zero | Done in slice 3: a seat lands at the front, a clamp at the front less the sleeper credit, a returner where its clock puts it. `positionFloor` stays for the public reads (`inWindow`) until slice 6 |
 | The ceiling (`positionCeiling`, `rebaseThreshold`, `POSITION_HEADROOM`, `inWindow`, `readVirtual`, `peakPositionFraction`) | The largest position a `Long` pick orders | Unreachable | Deleted |
@@ -1401,8 +1397,8 @@ not depend on each other.
   so it scales onto the grid by `G` like any other service. The stored offset is
   kept on the grid, so it never carries a front's denominator into the next
   one. The clamp and the stored offset are 128-bit
-  (#3353): a waker idle since long before the parent's origin was raised sits far
-  below its siblings, and the clamp carries it the whole way back to the front.
+  (#3353): a waker idle for long sits far below its siblings, and the clamp
+  carries it the whole way back to the front.
 
   Default `sleeperCredit = 0`. `parentVirtualTime` here is the front defined
   just below, with the waker itself — and every sibling waking in the same
@@ -1926,9 +1922,7 @@ Carried over from the source intact; each is a named property test (§13).
    the joiners is demanding (§7.2) — never with lifetime credit. The
    seat is published on the edge's `Gauge`, not frozen into the record, and is
    the front rounded **up** to the edge's own grid, under one tick (§7.2). It is
-   written absolute, the origin the seating peer saw added back on the edge's
-   grid, so it means the same under any later origin, and it is stored exactly and
-   uncapped. The front it is taken from is wide too, so no seat is taken against
+   stored exactly and uncapped. The front it is taken from is wide too, so no seat is taken against
    an understated front (#3353, §7.1). No floor holds it: nothing seats a
    child below zero any more (#3472).
 6. **No unlimited idle credit.** A child that stops competing comes back moved
@@ -1959,9 +1953,9 @@ Carried over from the source intact; each is a named property test (§13).
     narrowed for a pick, which saturates at its ceiling; a pick that would order it
     refuses with a typed outcome instead (§7.1). The public reads of a position
     saturate too, at its ceiling and at its floor, so none of them throws on how
-    far a child is from its origin; a front over many children can still throw
+    far a child has climbed; a front over many children can still throw
     on the least common multiple of their denominators. Everything before it is 128-bit:
-    a gauge's stored position, a parent's origin, the raw position, the front and
+    a gauge's stored position, the raw position, the front and
     a wake clamp, and arithmetic that would leave 128 bits throws (#3353).
     Step B changes what the `Long` lifetime counters do here: a pick refuses
     with headroom, and a charge that does not fit is reported, not thrown.
