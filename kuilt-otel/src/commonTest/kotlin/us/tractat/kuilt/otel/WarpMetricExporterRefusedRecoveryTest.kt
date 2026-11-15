@@ -139,6 +139,7 @@ class WarpMetricExporterRefusedRecoveryTest {
         val afterRestart: Map<MetricKey, Any>,
         val writesOfTheKind: Int,
         val readsOfTheKind: Int,
+        val recoveryFailed: Boolean,
     )
 
     /**
@@ -170,6 +171,7 @@ class WarpMetricExporterRefusedRecoveryTest {
                 afterRestart = kind.seriesOf(restarted(backing).snapshotAll()),
                 writesOfTheKind = writes,
                 readsOfTheKind = store.readsOf(kind.storeKey),
+                recoveryFailed = exporter.health.value.recoveryFailed,
             )
         }
 
@@ -245,11 +247,13 @@ class WarpMetricExporterRefusedRecoveryTest {
 
     @Test
     fun aFirstWriteOfAKindNobodyRecoveredOverARefusingStoreWritesNothing() = runTest {
-        assertDurableIntact(
-            overwriteArms(recover = false) { exporter, kind -> exporter.record(listOf(kind.update)) } +
-                overwriteArms(recover = false) { exporter, kind -> kind.merge(exporter) },
-            "an unrecovered first write",
-            refusals = 1,
+        val arms = overwriteArms(recover = false) { exporter, kind -> exporter.record(listOf(kind.update)) } +
+            overwriteArms(recover = false) { exporter, kind -> kind.merge(exporter) }
+        assertDurableIntact(arms, "an unrecovered first write", refusals = 1)
+        assertAll(
+            *arms.map { o ->
+                { assertTrue(o.recoveryFailed, "${o.name}: a refused first read left health.recoveryFailed unset") }
+            }.toTypedArray(),
         )
     }
 
