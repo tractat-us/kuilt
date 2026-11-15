@@ -289,13 +289,14 @@ class LocalHeddleRebaseTest {
     }
 
     /**
-     * A parent with a child at its ceiling is not rebased: that position may stand for more, and its
-     * floor stays at the ceiling whatever the fold says. The engine's pick refuses before it would
-     * rebase, so this asks the rebase itself, with every other child far above zero, where a missing
-     * guard would move them.
+     * A parent with a child at its ceiling is rebased like any other (#3353 round 2). Every read up
+     * to the effective position is wide and exact, so the position there stands for no more than it
+     * says, and the raise is the one repair for a child a delegation seated past its ceiling. With
+     * every other child far above zero, the step is not held at zero. Since review of #3352 this was
+     * refused, to guard a saturated position that no longer exists.
      */
     @Test
-    fun aParentWithAChildAtItsCeilingIsNotRebased() {
+    fun aParentWithAChildAtItsCeilingIsRebased() {
         val engine = engine()
         engine.pushTo(a, positionCeiling(Weight.ONE))
         engine.pushTo(b, 2 * threshold)
@@ -303,6 +304,6 @@ class LocalHeddleRebaseTest {
         val wants = Demand(targetOutstanding = Long.MAX_VALUE, maximumUsefulGrant = 1L)
         val allocator = FairShareAllocator(LocalHeddle.SELF, PolicyConfig(quantum = 1L))
         val rebase = allocator.originRebase(engine.root, engine.snapshot().ledger) { wants }
-        assertNull(rebase, "no rebase at a parent with a child at its ceiling")
+        assertTrue(rebase != null && rebase > us.tractat.kuilt.math.Int128.ZERO, "the parent is rebased: $rebase")
     }
 }

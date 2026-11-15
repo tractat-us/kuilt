@@ -25,6 +25,7 @@ class FairShareAllocatorRefusalTest {
     private val root = GroupId("root")
     private val e1 = AttachmentId("e1")
     private val e2 = AttachmentId("e2")
+    private val e4 = AttachmentId("e4")
     private val self = ReplicaId("self")
     private val policy = PolicyConfig(quantum = 10L)
     private val hungry = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
@@ -67,7 +68,8 @@ class FairShareAllocatorRefusalTest {
 
     @Test
     fun aParentWithAChildAtItsCeilingAnswersPositionCeiling() {
-        val cell = CountingCell(seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE)))
+        // e2 is seated at zero and demanding, so the rebase is held at nothing: the never-served limit.
+        val cell = CountingCell(seatedAt(seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE)), e2, 0L))
         check(cell.current.isAtPositionCeiling(e1)) { "the rig: e1 sits at its ceiling" }
         val outcome = FairShareAllocator(self, policy).schedule(root, cell, earmarked = 0L) { hungry }
         assertAll(
@@ -179,19 +181,24 @@ class FairShareAllocatorRefusalTest {
      * `e3` a newborn with no seat, and [mint] at the root. Each joiner has something for the seat
      * step to write: `e3` a seat, `e2` a clamp up to `e1`.
      */
-    private fun joining(mint: Long, e1Ticks: Long): Pair<CountingCell, FairShareAllocator> {
-        val s = withChildren(seatedAt(seatedAt(flat(mint), e1, e1Ticks), e2, 0L), AttachmentRecord(e3, root, GroupId("g3"), Weight.ONE))
-        val allocator = FairShareAllocator(
-            self,
-            policy,
-            AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = mapOf(e1 to true, e2 to false)),
-        )
+    /**
+     * [blocker] adds `e4`, seated at zero and seen demanding: it holds the rebase at nothing, the
+     * never-served limit, so a child at its ceiling still refuses the pick (#3353 round 2).
+     */
+    private fun joining(mint: Long, e1Ticks: Long, blocker: Boolean = false): Pair<CountingCell, FairShareAllocator> {
+        var s = withChildren(seatedAt(seatedAt(flat(mint), e1, e1Ticks), e2, 0L), AttachmentRecord(e3, root, GroupId("g3"), Weight.ONE))
+        val observed = HashMap(mapOf(e1 to true, e2 to false))
+        if (blocker) {
+            s = seatedAt(withChildren(s, AttachmentRecord(e4, root, GroupId("g4"), Weight.ONE)), e4, 0L)
+            observed[e4] = true
+        }
+        val allocator = FairShareAllocator(self, policy, AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = observed))
         return CountingCell(s) to allocator
     }
 
     @Test
     fun aRefusedFirstPickWritesNoSeatAndObservesNothing() {
-        val (cell, allocator) = joining(mint = 100L, e1Ticks = positionCeiling(Weight.ONE))
+        val (cell, allocator) = joining(mint = 100L, e1Ticks = positionCeiling(Weight.ONE), blocker = true)
         val before = cell.current
         val memoryBefore = allocator.memory
         val outcome = allocator.schedule(root, cell, earmarked = 0L) { hungry }

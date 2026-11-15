@@ -119,7 +119,8 @@ class LocalHeddlePositionCeilingTest {
         assertAll(
             // The root orders a, b and g; g's own position is nowhere near its ceiling.
             { assertIs<AcquireOutcome.Acquired>(elsewhere) },
-            { assertEquals(AcquireOutcome.PositionCeiling(g), beneath) },
+            // Not refused since #3353 round 2: x's position is exact, so g's pick rebases it down first.
+            { assertIs<AcquireOutcome.Acquired>(beneath) },
         )
     }
 
@@ -384,7 +385,8 @@ class LocalHeddlePositionCeilingTest {
         assertAll(
             { assertIs<AcquireOutcome.Acquired>(admitted) },
             { assertTrue(offset != null && offset > Int128.of(positionCeiling(bWeight)), "b's clamp is exact, past its ceiling: $offset") },
-            { assertEquals(AcquireOutcome.PositionCeiling(engine.root), engine.acquire(setOf(a, b), setOf(b), startedAt = 2L)) },
+            // Not refused since #3353 round 2: the clamp is exact, and the next pick's rebase brings b down.
+            { assertIs<AcquireOutcome.Acquired>(engine.acquire(setOf(a, b), setOf(b), startedAt = 2L)) },
         )
     }
 

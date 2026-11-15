@@ -307,8 +307,8 @@ public class FairShareAllocator(
 
     /**
      * The `Δ` [raiseOriginBeneath] raises [edges]' parent's origin by, or `null` when it should not
-     * move: no child is past its [rebaseThreshold], one is at its ceiling (the pick refused first),
-     * the step leaves `Long`, or a demanding child is below one step.
+     * move: no child is past its [rebaseThreshold], the step leaves `Long`, or a child in [boundBy] is
+     * below one step.
      */
     private fun originStep(
         edges: List<PolicyEdge>,
@@ -323,7 +323,9 @@ public class FairShareAllocator(
             HeddlePolicy.effectiveTicksWide(edge) >= r || (front != null && front.ticksForWide(edge.record.weight) >= r)
         }
         if (!past) return null
-        if (edges.any { HeddlePolicy.isAtCeiling(it) }) return null
+        // No guard at a child's ceiling: every read up to the effective position is wide and exact,
+        // so a raise there brings the child down like any other, and is the one repair for a heavy
+        // joiner seated past it by a delegation that is not a pick (#3353 round 2).
         val step = gridStep(edges) ?: return null
         if (boundBy.isEmpty()) return null
         return wholeSteps(boundBy.minOf { unitsOf(it) ?: return null }, step)
@@ -382,7 +384,6 @@ public class FairShareAllocator(
         val joiners = joinersOf(edges)
         if (joiners.isEmpty()) return null
         val stayers = edges.filter { it.record.id !in joiners }
-        if (stayers.any { HeddlePolicy.isAtCeiling(it) }) return null
         val front = joinFront(edges, joiners)
         val past = edges.any { front.ticksForWide(it.record.weight) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
             stayers.any { HeddlePolicy.effectiveTicksWide(it) >= Int128.of(rebaseThreshold(it.record.weight)) }
