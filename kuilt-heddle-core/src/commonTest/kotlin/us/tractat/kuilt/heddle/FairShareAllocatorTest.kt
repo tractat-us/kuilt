@@ -225,7 +225,7 @@ class FairShareAllocatorTest {
 
         // e2 sleeps, seen leaving; then e1 stops too, and e2 returns by a clock nobody moved.
         allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to competingUnservable, starved to competingUnservable))
-        assertEquals(false, allocator.lastObservedDemanding(e2), "the rig: e2 was seen leaving")
+        assertTrue(e2 in allocator.memory.departures, "the rig: e2 was seen leaving, so it comes back as a returner")
         allocator.schedule(root, cell, earmarked = 0L, demandOf(e2 to hungry, starved to competingUnservable))
 
         assertEquals(
