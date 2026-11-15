@@ -306,7 +306,7 @@ public class EntitlementLedger private constructor(
             leafRelocOut = leafRelocOut.mergeEdgeCounters(other.leafRelocOut),
             rollupRelocIn = rollupRelocIn.mergeEdgeCounters(other.rollupRelocIn),
             rollupRelocOut = rollupRelocOut.mergeEdgeCounters(other.rollupRelocOut),
-            // The virtual-time gauge: a per-edge register joined COMPONENTWISE (max floor, max
+            // The virtual-time gauge: a per-edge register joined COMPONENTWISE (max
             // ticks as one 128-bit number, max fold) — never lexicographically by position, which
             // would keep a stale writer's pair whole and reintroduce the double count (#1752, see
             // [Gauge]).
@@ -466,8 +466,8 @@ public class EntitlementLedger private constructor(
     /**
      * [id]'s **gross** virtual service — the [Gauge]'s position advanced by `(baseIssued − folded)`
      * units, less its parent's [origin] on the edge's grid, over `G · w`, or `baseIssued / w` less
-     * the origin when no gauge is stored, read on the edge's 1/16-unit grid: a legacy floor written
-     * off it is rounded up once ([grossVirtualServiceAt], #3313, #3353). `null` if [id] is unknown
+     * the origin when no gauge is stored, read on the edge's 1/16-unit grid ([grossVirtualServiceAt],
+     * #3313, #3353). `null` if [id] is unknown
      * *or divergent* (no single record ⇒ no single weight to divide by).
      *
      * ## Base issuance, not effective (issue #1752, F2)
@@ -1650,7 +1650,7 @@ public class EntitlementLedger private constructor(
      * above the issuance any more (#3353). So the gross at any issuance reads at least that issuance.
      */
     private fun checkpoint(edge: AttachmentId, w: Weight, issuedAfter: Long): Gauge =
-        gaugeAt(gauges[edge].exactGrossTicksAt(issuedAfter, w), issuedAfter)
+        gaugeAt(gauges[edge].exactGrossTicksAt(issuedAfter), issuedAfter)
 
     /**
      * Whether [edge]'s raw position, relative to its parent's origin, is at its [positionCeiling],

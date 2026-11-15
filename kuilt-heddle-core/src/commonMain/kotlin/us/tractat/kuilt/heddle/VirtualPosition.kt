@@ -217,15 +217,15 @@ internal fun ticksOf(units: Long): Long = checkedMul(units, TICKS_PER_UNIT)
  * `⌈v · w · G⌉` ticks, or `⌊…⌋` when [rounding] says so (#3353).
  *
  * Exact for a value already on that grid — every value this module writes is — and the one
- * rounding left for any other: a floor an older peer wrote as an arbitrary rational, or a front
- * handed to the public [EntitlementLedger.seat]. Rounding up is the same side the seat takes.
+ * rounding left for any other: a front handed to the public [EntitlementLedger.seat]. Rounding up
+ * is the same side the seat takes.
  *
  * The fraction is reduced crosswise before anything multiplies. When the two denominators' product
  * fits a `Long`, the quotient is formed as `k · s + ⌈r · s / d⌉` with `a = k · d + r`, so only the
  * `k · s` term is wide and it is exact. When it does not, the quotient is below the scale `s` and
  * fits a `Long`, and the division is done in two steps instead (`⌈⌈x / a⌉ / b⌉ = ⌈x / (a · b)⌉`
- * for positive `a` and `b`; the same holds for floors). So an older peer's fat denominator never
- * throws on the way to a small result, and a large one is never capped on the way to a big one.
+ * for positive `a` and `b`; the same holds for floors). So a fat denominator never throws on the
+ * way to a small result, and a large one is never capped on the way to a big one.
  */
 internal fun wideTicksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILING): Int128 {
     val scale = checkedMul(w.numerator, TICKS_PER_UNIT)
@@ -261,8 +261,7 @@ private fun absRemainder(a: Long, b: Long): Long {
 /**
  * [ticks] on the grid of an edge of weight [w], as the virtual time it stands for:
  * `ticks / (G · w)`. The form a position takes in the public virtual-time reads and in the stored
- * wake offsets, and the form a build before #3353 wrote a [Gauge.floor] in, so that a peer
- * reading it as a [Rational] reads the exact value.
+ * wake offsets.
  *
  * `G · w.numerator` is divided out of [ticks] first, so the only overflow left is the reduced
  * numerator's own: at least `ticks · w.denominator / (G · w.numerator)`, the position's service
