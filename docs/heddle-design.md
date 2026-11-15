@@ -1005,6 +1005,198 @@ weight, so it cannot grow. The grid is `2⁻⁴` because each bit of it comes ou
 the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
 0.0170 against 0.0167 exact, and a finer grid buys nothing a test can see.
 
+#### Future: positions with no origin (step B)
+
+Decided 2026-11-15, for 0.7.5, with breaking changes to the API, the wire and the
+stored formats allowed. Not built yet. Step A lands first: every pick compares the
+full 128-bit position, so nothing narrows a position to a `Long` any more. This
+entry is what follows it. Each slice below moves its part into the text above
+when its code merges, and the entry is deleted with the last one.
+
+**In plain terms.** The origin, the rebase, the window and the floor all exist for
+one reason: a pick used to order positions in 64 bits, so a busy parent's positions
+had to be pulled back down before they ran out of room. Once a pick orders them in
+128 bits there is nothing to pull back. A position is then simply how much service
+an edge has had, counted from its start, and it only ever goes up.
+
+**What goes.**
+
+| Piece | What it protects today | After step A | Step B |
+|---|---|---|---|
+| The parent origin (`ParentRecord`, `EntitlementLedger.origin`, `raiseOrigin`, `PolicyEdge.origin`, `originTicks`) | Keeps the effective position a pick narrows inside `Long` | Nothing narrows, so it protects nothing | Deleted, from the ledger and from the wire |
+| The rebase (`raiseOriginBeneath`, `raiseBeforePick`, `preSeatRaise`, `chargeRebase`, `originStep`, `wholeSteps`, `gridStepOf`, the three "raise changed no pick" checks, `Rebase`, `RebasingPick`) | Raises the origin before a child reaches its ceiling | A translation of every child alike, which changes no pick | Deleted |
+| The window rule and the floor (`positionFloor`, `windowBound`, the floor arms of `landing`, `shiftOf` and `clampWakers`) | Keeps a child a rebase left below zero inside `[−C, C)` | Only a rebase puts a child below zero | Deleted. A seat lands at the front, a clamp at the front less the sleeper credit, a returner where its clock puts it |
+| The ceiling (`positionCeiling`, `rebaseThreshold`, `POSITION_HEADROOM`, `inWindow`, `readVirtual`, `peakPositionFraction`) | The largest position a `Long` pick orders | Unreachable | Deleted |
+| P1′'s lease clause of the weight budget (denominators at most 30,719) | One full lease from just under `R` stays below `C` | No `R` and no `C` | Replaced by the wide-range clause below. It does not shrink to nothing |
+| The multi-scheduler margin (#3458, denominator × schedulers under about 30,000) | `k` peers granting one child at once stay under `C − R` | No `C` | Gone. `k` concurrent grants only add to the edge's issuance |
+| The below-zero arm of the first-sighting rule (§7.2) | A child a fresh allocator never watched, sitting below the origin, is clamped | Only a rebase puts a child below zero | Replaced by the restart rule below: it was the only thing a restarted `HeddleNode` had |
+
+**What stays, and why.**
+
+- **The grid** of 16 ticks to a unit, and the two roundings, both up (§7.2).
+- **The seat rules.** A newborn is seated at the front of the demanding children
+  it joins, or level with the furthest-ahead child when none is demanding. A
+  child seen idle and never seen to stop is clamped to that front. Neither rule
+  read the origin: it cancelled out of both.
+- **The net-service clock for a returner (#3376, #3416).** It reads issuance and
+  returns, never a position, and a shift is a distance, so an origin never
+  entered it. Only its floor arm goes. `BurstLagTest` pins it unchanged.
+- **The `Long` products of the weight budget:** `L`, `S`, `G · S` and `S · d`.
+  Weights are still pairs of `Long`s, and a front still forms these.
+- **`MAX_RESERVATION`,** the cap on a grant and on a sleeper credit. The cap on a
+  grant now keeps `q · G` in `Long`. The cap on a sleeper credit is policy: the
+  credit a waker may keep is bounded (§10.6), and one lease is the bound.
+- **The gauge's pairing of a position with a fold, and its componentwise join**
+  (#1752). Nothing about it depended on an origin.
+
+**What bounds a position now.** Two things, and the first is reached long before
+the second.
+
+1. **The `Long` lifetime counters.** An edge's issuance and an epoch's mint are
+   `Long`s, about 9.2 · 10¹⁸ units. Today they throw. Measured on `main` at
+   `3083d775f`, JVM only: two weight-1 lanes at the largest lease, charged in
+   full, run 524,287 leases, and the next `acquire` throws
+   `ArithmeticException` from the mint. Charged one unit each they run
+   1,048,574, and the edge's issuance throws. Step B does not create this
+   limit. It makes it the only one, so it gets the typed arm the ceiling had.
+   A choosing call (`acquire`, `extend`, `schedule`) whose delegation would
+   take a lifetime counter past `Long` answers `LifetimeExhausted(parent)` and
+   changes nothing. A charging call (`admit`, a `complete` that overran) may
+   not refuse and still throws there, never wraps (§10.12). The four
+   `PositionCeiling` arms (`AcquireOutcome`, `LeaseOutcome`, `WaitExplanation`,
+   and `AllocationOutcome` with `ScheduleOutcome`) are renamed to it, not
+   deleted.
+2. **128 bits, which the weight budget puts out of reach (W1).** With the
+   counters in range, the virtual time under a parent never passes about
+   `2⁶⁴ · Σ⌈1/wᵢ⌉`: each unit of an edge's service moves that edge by `1/wᵢ`
+   and its parent's clock by no more. A position on child `b`'s grid is that
+   times `16 · w_b`, a front sums `N` of them, and the clock keeps it at
+   `16 · 720,720` ticks to a unit. So the budget asks, for a parent's `N`
+   active children, `Σ⌈1/wᵢ⌉ ≤ 2³⁶` and `N · max⌈wᵢ⌉ · Σ⌈1/wᵢ⌉ ≤ 2⁵⁶`. Then
+   every wide value stays below `2¹²⁵`, and a 128-bit overflow is a bug, not
+   an input. It still throws, never wraps. This is reasoned, not measured:
+   the slice that lands it proves the constants and pins both sides of the
+   boundary on stored extremes. If the proof wants a bit, the clause gives it
+   up, not the theorem. It admits a fine denominator up to about `2³⁶`, where
+   P1′ stopped at 30,719, and refuses a `{1, k}` spread above about `2⁵⁴`,
+   which P1′ let through up to `0.94 · 2⁵⁹`.
+
+Why the lease clause cannot simply vanish: its cap on denominators is also what
+keeps the clock inside 128 bits today. The clock was never rebased. A lone
+child of weight `1/d` runs it `d · 2²⁴` ticks a unit, which leaves 128 bits
+inside the counters for `d` above about `2⁴⁰`.
+
+**The public reads become wide.** `virtualService`, `grossVirtualService`,
+`HeddlePolicy.front`, `FairShareAllocator.virtualTime`,
+`HeddleNode.parentVirtualTime` and the three fields of
+`WaitExplanation.BehindAtLevel` are `Rational`s over `Long`, read relative to
+the origin and held inside the window. With no origin they would read absolute
+values, and a `Long` rational runs out after about `2⁵⁹ / d` units: one largest
+lease at a denominator near 30,000. So `VirtualTime` becomes the public type
+for a virtual time: comparable, exact, with a `toDouble()` for display.
+`EntitlementLedger.seat` and `HeddlePolicy.wakeOffset` take it. No read
+saturates and none throws on how much service an edge has had.
+
+**The restart rule.** The origin did one job nobody gave it: it told an
+allocator with no memory that a child had been idle. A restarted `HeddleNode`
+keeps no wake memory, so every child it sees asking is a first sighting, and a
+first sighting is clamped only when it sits below the origin (§7.2). That fires
+only for a child idle across a rebase, and no rebase happens before a child
+has had about `2⁵⁵ / d` units. In any shorter run a child that idled before the
+restart already keeps all of that as credit. With no origin the arm never
+fires. Step B replaces it with a rule that does not depend on run length: **a
+seated child an allocator has never observed, and finds demanding, is a
+waker.** It is clamped to the front of the children that are not joining, or
+level with the furthest-ahead child when all of them are, as any waker is.
+That costs a child its lag, once per allocator that first sees it, the penalty
+side (§10.5, §10.6). `LocalHeddle` persists its observations, so it meets the
+rule only for a child a plain `admit` charged and no pick has seen.
+
+**Replication.** The ledger is a product of join-semilattices, one per field,
+and step B removes one factor, the per-parent origin. What is left is still a
+product of semilattices, so the join is still idempotent, commutative and
+associative. A gauge is `(ticks, folded)`: two chains, the ticks compared as
+one 128-bit number, joined componentwise (#3470 removes the legacy `floor`).
+A seat is written at `max(⌈V · w · G⌉, observed · G)` with no origin term. So
+the one case where two peers' seats could differ by the gap between their
+origins is gone, and so is the sub-tick residue a child kept when a peer
+raised an origin it had not seen that child under. Two peers still seat one
+newborn at their own fronts and the join keeps the higher, as since #1752.
+Positions differ between peers only by their wake offsets, which were never
+replicated. The control log carries no origin and its bytes do not change. The
+weight budget it applies does, so a log written under the old budget replays
+under the new one: the standing rule, that peers of different releases never
+share a cluster, covers it.
+
+**Snapshot.** `LocalHeddleSnapshot.FORMAT_VERSION` becomes 3, and 3 is the only
+format read. Formats 1 and 2 are refused by name, as
+`RestoreResult.UnsupportedVersion(found, [3])`, before anything else is read.
+Format 2 was written only by development builds of 0.7.5. Its ledger carries
+origins, and a reader that dropped them would read every child of a rebased
+parent higher by one virtual time. No pick would change, but a format number
+that means two layouts is how a snapshot gets misread, so it is refused.
+
+**Proof the slices owe.**
+
+- **The twin (slice 1, before anything is deleted).** After step A an engine
+  with `rebaseEnabled` off never raises an origin, so every position is at or
+  above zero and no floor arm or below-zero arm can fire: it is the step B
+  engine. It and the rebasing engine make the same picks, leaf for leaf, over
+  the #3353 sweep's shapes on `WindowRuleRig`, every row of `BurstLagTest`,
+  the drivers of `LocalHeddleRebasePropertyTest`, and the governed cluster of
+  `HeddleAcceptanceTest`. Each row asserts its rig fired: the rebasing side's
+  `rebases` is above zero, and the twin's positions pass `2⁶³` ticks where the
+  row is long enough to. On JVM, `macosArm64` and `wasmJs`, read as a union.
+- **Where the two may differ, and nowhere else:** a row where the rebasing
+  side landed a joiner at its floor (`floorLandings` above zero), or clamped a
+  never-observed child below zero, which slice 2 makes common to both. Each such row is named, with the count, and
+  the difference shown to be turns the rebasing side took away.
+- **Mutations that must red.** In slice 1, an origin step that is not a whole
+  multiple of the grid step, and an `originTicks` that rounds up: each breaks
+  the translation, and the twin must diverge. In the final engine, a pick
+  compare narrowed back to `Long`, a `clampTicks` with its `max(0, …)`
+  dropped, and a returner's shift removed.
+- **The pick goldens do not move.** `HeddlePolicyGoldenVectorTest` and
+  `HeddlePolicyOracleTest` pass unchanged through every slice.
+
+**Slices,** in order, one behaviour move each. Each carries its own docs.
+
+1. **The twin proof.** Tests only. §13.
+2. **The restart rule.** A never-observed seated demanding child is a waker,
+   which takes in the below-zero arm while the rebase still runs.
+   `aRestartedSchedulerWithALongIdleChildDemandingAtBootDoesNotWedge` is its
+   pin, retargeted from "does not wedge" to "comes back level". §7.2, §10.6.
+3. **Nothing rebases.** Delete the raise sites, the floor arms and the window
+   in `FairShareAllocator` and `LocalHeddle`. The origin
+   field stays, read as zero. Retires `FairShareAllocatorOriginTest`,
+   `FairShareAllocatorWindowRuleTest` but its sleeper-credit row,
+   `LocalHeddleRebaseTest` and the twin rows of
+   `LocalHeddleRebasePropertyTest`. Retargets `LocalHeddleWindowRuleTest` and
+   the long-run rows to "never refused, and fair". Docs: this section, §10.9,
+   `kuilt-heddle-core/module.md`, `kuilt-heddle/module.md`.
+4. **The origin leaves the ledger and the wire; snapshot format 3.**
+   `ParentRecord`, `PolicyEdge.origin`, the canonical-encoding arm, the
+   snapshot golden. Docs: §7.1, §10.5, both `module.md`s,
+   `Writerside/topics/heddle-local.md`.
+5. **The weight budget: W1 for P1′.** `weightsFitTheBudget`, then the last of
+   `VirtualPosition.kt`'s ceiling constants. Retargets
+   `HeddleWeightBudgetTest`, `LocalHeddleFineWeightTest` and the budget rows of
+   `LocalHeddleApplyTest`. Docs: §7.1, §9, `docs/agent-cookbook/heddle.md`
+   (Refusals and limits), both `module.md`s. #3461's example weight changes.
+6. **`VirtualTime` is the public read.** Deletes `inWindow`, `readVirtual`,
+   `ticksToVirtual` and `peakPositionFraction`. Docs: §11,
+   `docs/agent-cookbook/heddle.md`, `Writerside/topics/heddle-local-turns.md`.
+7. **`LifetimeExhausted` for `PositionCeiling`.** The typed arm and its one
+   pre-check, asked where the ceiling was asked. Retires
+   `LocalHeddlePositionCeilingTest` for its lifetime twin. Docs: §7.1, §10.12,
+   the cookbook, both `module.md`s, `Writerside/topics/heddle-local-turns.md`.
+   #3458 is then no longer a limit.
+
+Slice 2 goes first so that slice 3 leaves the restarted scheduler's row green;
+if the restart rule is not wanted (Open, below), slice 3 retires that row's
+"level" assertion instead. Slice 4 follows 3. Slices 5, 6 and 7 follow 3 and do
+not depend on each other.
+
 ### 7.2 Neutral creation and no idle credit
 
 - **Neutral creation:** a new generation is seated at the parent's current
