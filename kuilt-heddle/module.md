@@ -110,14 +110,17 @@ and nothing else does:
   largest lease, `MAX_RESERVATION`, and no grant is larger. It is necessary, not sufficient:
   several fine weights whose denominators share no factor are refused below it too. Past it, one
   lease charged a little under its size can leave a child where no rebase is due and the next
-  lease overflows, and the parent stops for good.
-- **Upgrading.** Durable state that holds a weight set this now refuses, a governed log with such a `Prepare` or a `LocalHeddle` snapshot, needs those edges closed before the upgrade, or a fresh log, because a replay refuses them. `LocalHeddle.restore` does not check the budget, so a restored parent over it keeps running, but a new sibling there is refused. `prepare` refuses such a weight on its own, and `activate`
-  refuses one that only fails beside its siblings, each answering
+  lease overflows, and the parent stops for good. `prepare` refuses such a weight on its own,
+  and `activate` refuses one that only fails beside its siblings, each answering
   `ControlConflict.WeightBudget`. Every peer decides it from the same log, so every peer refuses.
   `heddleStatic` checks the same weights in its starting tree and in `prepare` and `activate`,
   which answer `false`. But a static peer checks only what it can see itself, so two peers
   activating siblings at once can still add up past the limit together. `schedule` catches that
   when it reads the tree: it answers `WeightBudget` for the parent and hands nothing out there.
+- **Upgrading.** Durable state that holds a weight set this now refuses, a governed log with
+  such a `Prepare` or a `LocalHeddle` snapshot, needs those edges closed before the upgrade, or a
+  fresh log, because a replay refuses them. `LocalHeddle.restore` does not check the budget, so a
+  restored parent over it keeps running, but a new sibling there is refused.
 - **The everyday path is untouched.** Handing out and charging for work — `schedule`, `reserve`,
   `complete` — never goes through the agreement step, at any rate. That is the whole point:
   agreement appears only at the two rare moments that need it.

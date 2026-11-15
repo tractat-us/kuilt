@@ -916,7 +916,11 @@ factor, since the step grows with their lcm. A spread like `2⁴²/1023` beside
 At the edge, `{1/30,718, 1/30,719}` runs at full leases and `{1/30,719, 1/30,720}`
 is refused.
 
-**Upgrading.** Durable state that holds a weight set this now refuses, a governed log with such a `Prepare` or a `LocalHeddle` snapshot, needs those edges closed before the upgrade, or a fresh log, because a replay refuses them. `LocalHeddle.restore` does not check the budget, so a restored parent over it keeps running, but a new sibling there is refused.
+**Upgrading.** Durable state that holds a weight set this now refuses, a
+governed log with such a `Prepare` or a `LocalHeddle` snapshot, needs those
+edges closed before the upgrade, or a fresh log, because a replay refuses them.
+`LocalHeddle.restore` does not check the budget, so a restored parent over it
+keeps running, but a new sibling there is refused.
 
 Where `HeddleNode` still meets the ceiling, its `schedule` answers `ScheduleOutcome.PositionCeiling(parent)`. It
 checks the ceiling after it delegates, as `LocalHeddle` does: a grant whose
