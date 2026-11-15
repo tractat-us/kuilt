@@ -99,25 +99,27 @@ class LocalHeddleFineWeightTest {
         }
         val banded = engine()
         val belowBand = engine()
-        val crossed = run(banded, setOf(a), BAND_COST)
-        val clear = run(belowBand, setOf(a), BELOW_THE_BAND)
+        var pastCeiling = 0
+        var belowPast = 0
+        val crossed = run(banded, setOf(a), BAND_COST) { if (banded.snapshot().ledger.isAtPositionCeiling(edge)) pastCeiling++ }
+        val clear = run(belowBand, setOf(a), BELOW_THE_BAND) { if (belowBand.snapshot().ledger.isAtPositionCeiling(edge)) belowPast++ }
         assertAll(
             { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, 30_721), Weight.of(1, 30_722))), "rig: apply would refuse this set") },
             { assertEquals(Run(acquired = 200, refused = 0), crossed, "every acquire leased, past the ceiling too") },
-            { assertTrue(banded.snapshot().ledger.isAtPositionCeiling(edge), "the rig: a went past its ceiling") },
+            { assertTrue(pastCeiling > 0, "the rig: a lease carried a past its ceiling") },
             { assertEquals(Run(acquired = 200, refused = 0), clear, "the control: a cost below the band runs") },
-            { assertTrue(!belowBand.snapshot().ledger.isAtPositionCeiling(edge), "the control: and stays inside its window") },
+            { assertEquals(0, belowPast, "the control: and a stays inside its window") },
         )
     }
 
     private data class Run(val acquired: Int, val refused: Int)
 
-    /** 200 full-size acquires over [waiting], each completed at [cost]. */
-    private fun run(engine: LocalHeddle, waiting: Set<GroupId>, cost: Long): Run {
+    /** 200 full-size acquires over [waiting], each completed at [cost], with [afterAcquire] run after each acquire. */
+    private fun run(engine: LocalHeddle, waiting: Set<GroupId>, cost: Long, afterAcquire: () -> Unit = {}): Run {
         var acquired = 0
         var refused = 0
         for (step in 0 until 200) {
-            when (val out = engine.acquire(waiting, waiting, startedAt = step.toLong(), reservation = full)) {
+            when (val out = engine.acquire(waiting, waiting, startedAt = step.toLong(), reservation = full).also { afterAcquire() }) {
                 is AcquireOutcome.Acquired -> {
                     acquired++
                     engine.complete(out.lease.id, actualCost = cost)
