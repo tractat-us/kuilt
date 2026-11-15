@@ -241,6 +241,7 @@ internal class GovernedCluster(
     private val test: TestScope,
     private val loom: InMemoryLoom,
     private val quantum: Long,
+    private val cap: Long,
     initial: List<GovernedPeer>,
 ) {
     private val live = initial.toMutableList()
@@ -303,7 +304,7 @@ internal class GovernedCluster(
         sim.crash(old.raftId)
         pump(1L)
         sim.restart(old.raftId)
-        val fresh = boot(test, sim, loom, old.raftId, joinAt = 100 + incarnations++, quantum = quantum)
+        val fresh = boot(test, sim, loom, old.raftId, joinAt = 100 + incarnations++, quantum = quantum, cap = cap)
         live[i] = fresh
         everyReplica += fresh.replica
         applied("${fresh.replica} enrolls after its restart") { fresh.node.enroll(fresh.replica) }
@@ -318,6 +319,7 @@ internal class GovernedCluster(
             raftId: NodeId,
             joinAt: Int,
             quantum: Long,
+            cap: Long,
         ): GovernedPeer {
             val scope = CoroutineScope(test.backgroundScope.coroutineContext + Job(test.backgroundScope.coroutineContext[Job]))
             val seam = if (joinAt == 0) loom.host(Pattern("heddle-governed")) else loom.join(InMemoryTag("governed-$joinAt"))
@@ -328,7 +330,7 @@ internal class GovernedCluster(
                 raft = sim.nodes.getValue(raftId),
                 root = ACCEPTANCE_ROOT,
                 clock = { Instant.fromEpochMilliseconds(test.testScheduler.currentTime) },
-                config = heddleTestConfig(seed = 2_000 + joinAt, quantum = quantum),
+                config = heddleTestConfig(seed = 2_000 + joinAt, quantum = quantum, cap = cap),
                 incarnation = "${raftId.value}-$joinAt",
                 epoch = joinAt.toLong(),
             )
@@ -338,13 +340,13 @@ internal class GovernedCluster(
 }
 
 /** [size] governed peers on a fresh [MultiNodeRaftSim], with a leader elected. Bootstrap them with [GovernedCluster.bootstrap]. */
-internal suspend fun TestScope.governedCluster(size: Int, quantum: Long): GovernedCluster {
+internal suspend fun TestScope.governedCluster(size: Int, quantum: Long, cap: Long): GovernedCluster {
     val ids = (1..size).map { NodeId("g$it") }
     val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
     val loom = InMemoryLoom()
-    val peers = ids.mapIndexed { i, id -> GovernedCluster.boot(this, sim, loom, id, joinAt = i, quantum = quantum) }
+    val peers = ids.mapIndexed { i, id -> GovernedCluster.boot(this, sim, loom, id, joinAt = i, quantum = quantum, cap = cap) }
     sim.awaitLeader()
-    return GovernedCluster(sim, this, loom, quantum, peers)
+    return GovernedCluster(sim, this, loom, quantum, cap, peers)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
