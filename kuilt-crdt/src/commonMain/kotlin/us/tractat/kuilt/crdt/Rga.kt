@@ -599,8 +599,10 @@ public class Rga<V> private constructor(
      * [RgaOp.Insert] per element on behalf of [replica].
      *
      * The bulk sibling of [insertAfter], and **indistinguishable from calling it in a
-     * loop**: the same ids, the same `after` links, the same Lamport clock, the same
-     * op-set. What differs is the cost. [insertAfter] rebuilds `ops` and `insertsById`
+     * loop** below the clock ceiling: the same ids, the same `after` links, the same Lamport
+     * clock, the same op-set. At the ceiling they part (#3417): a loop whose clock would
+     * pass [Long.MAX_VALUE] part-way mints the prefix that fits and then throws, while this
+     * refuses the whole run and mints nothing. Otherwise what differs is the cost. [insertAfter] rebuilds `ops` and `insertsById`
      * on every call, so appending `k` elements to an `N`-op log is `k` copies of `N` —
      * Θ(k·N). This pays **one** `ops + newOps` and **one** cache build for the whole
      * run, so it is Θ(N + k).
