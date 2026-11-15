@@ -44,9 +44,9 @@ class PersistenceHealthReportingTest {
         val exporter = WarpMetricExporter(ReplicaId("report"), store)
         capturingLogsOf("us.tractat.kuilt.otel.WarpMetricExporter") { lines ->
             store.refusedWrites = setOf(StoreKey("otel.metrics.sums"))
-            assertIs<MetricExportResult.Failure>(exporter.incrementSum(key))
-            assertEquals(MetricExportResult.Success, exporter.clear())
-            assertIs<MetricExportResult.Failure>(exporter.incrementSum(key))
+            assertIs<MetricExportResult.Partial>(exporter.incrementSum(key))
+            assertEquals(MetricWriteResult.Success, exporter.clear())
+            assertIs<MetricExportResult.Partial>(exporter.incrementSum(key))
             assertAll(
                 { assertEquals(2, store.writeFailures) },
                 { assertEquals(1L, exporter.health.value.acknowledged) },

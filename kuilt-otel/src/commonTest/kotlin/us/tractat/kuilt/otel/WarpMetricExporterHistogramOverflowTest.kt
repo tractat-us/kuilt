@@ -53,7 +53,7 @@ class WarpMetricExporterHistogramOverflowTest {
         val control = exporter.record(fitsAlone)
         assertAll(
             {
-                val cause = assertIs<MetricHistogramOverflowException>(assertIs<MetricExportResult.Failure>(result).cause)
+                val cause = assertIs<MetricHistogramOverflowException>(assertIs<MetricExportResult.Refused>(result).overflow)
                 assertEquals(latency, cause.key, "the refusal names the series")
             },
             { assertEquals(memoryBefore, memoryAfter, "nothing applied in memory") },

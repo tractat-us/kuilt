@@ -58,7 +58,7 @@ class WarpMetricExporterBatchTest {
                 // No single-point mutator: its single-point form is a batch of one.
                 is MetricUpdate.AddExponentialHistogram -> record(listOf(u))
             }
-            if (firstFailure == null && r is MetricExportResult.Failure) firstFailure = r
+            if (firstFailure == null && r != MetricExportResult.Success) firstFailure = r
         }
         return firstFailure
     }
@@ -139,7 +139,7 @@ class WarpMetricExporterBatchTest {
 
         val result = exporter.record(fitsAlone + MetricUpdate.IncrementSum(requests, 3L))
 
-        val cause = assertIs<MetricSumOverflowException>(assertIs<MetricExportResult.Failure>(result).cause)
+        val cause = assertIs<MetricSumOverflowException>(assertIs<MetricExportResult.Refused>(result).overflow)
         val memoryAfter = exporter.snapshotAll()
         val writesAfter = store.writesByKey()
         // The control: without its last increment the same batch fits, so the refusal above is the
@@ -166,7 +166,7 @@ class WarpMetricExporterBatchTest {
         val result = exporter.incrementSum(requests, 6L)
 
         assertAll(
-            { assertIs<MetricSumOverflowException>(assertIs<MetricExportResult.Failure>(result).cause) },
+            { assertIs<MetricSumOverflowException>(assertIs<MetricExportResult.Refused>(result).overflow) },
             { assertEquals(Long.MAX_VALUE - 5L, exporter.sumValue(requests)) },
             { assertEquals(writesBefore, store.writesByKey()) },
         )
@@ -198,8 +198,12 @@ class WarpMetricExporterBatchTest {
         assertAll(
             { assertEquals(2, store.refusedWrites(), "precondition: both refused kinds were attempted") },
             {
-                val failure = assertIs<MetricExportResult.Failure>(result)
-                assertEquals("store refused otel.metrics.sums.double", failure.cause.message)
+                val partial = assertIs<MetricExportResult.Partial>(result)
+                assertEquals(
+                    listOf("store refused otel.metrics.sums.double", "store refused otel.metrics.histograms"),
+                    partial.causes.map { it.message },
+                    "each refused write, in kind order",
+                )
             },
         )
     }
@@ -228,11 +232,13 @@ class WarpMetricExporterBatchTest {
             // failure is the refused sums write.
             { assertTrue(referenceStore.refusedWrites() > 0, "control rig never refused") },
             { assertTrue(store.refusedWrites() > 0, "batch rig never refused") },
-            { assertIs<MetricExportResult.Failure>(referenceResult) },
-            // The batch returns a Failure carrying the refusal, like the first failing single call.
+            { assertIs<MetricExportResult.Partial>(referenceResult) },
+            // The batch returns a Partial carrying the refusal, like the first failing single call,
+            // and lists nothing as uncounted: a refused write's updates are counted in memory.
             {
-                val failure = assertIs<MetricExportResult.Failure>(result)
-                assertEquals("store refused otel.metrics.sums", failure.cause.message)
+                val partial = assertIs<MetricExportResult.Partial>(result)
+                assertEquals(listOf("store refused otel.metrics.sums"), partial.causes.map { it.message })
+                assertEquals(emptyList(), partial.uncounted)
             },
             // "Not yet durable", not "not counted": every update is in memory on both paths.
             { assertEquals(reference.snapshotAll(), batched.snapshotAll(), "in memory") },

@@ -56,7 +56,7 @@ class WarpMetricExporterFailureReportingTest {
 
             store.refuseWrites()
             repeat(WRITES) {
-                if (exporter.incrementSum(sumKey("requests")) is MetricExportResult.Failure) failedWrites++
+                if (exporter.incrementSum(sumKey("requests")) is MetricExportResult.Partial) failedWrites++
             }
             duringFirstOutage = captured.naming(WRITE_FRAGMENT).size
             refused = store.refusedWrites()
@@ -153,7 +153,7 @@ class WarpMetricExporterFailureReportingTest {
         assertAll(
             {
                 assertTrue(
-                    results.all { it is MetricExportResult.Failure },
+                    results.all { it is MetricExportResult.Partial },
                     "precondition: ${results.count { it is MetricExportResult.Success }} of " +
                         "${results.size} kinds never failed, so their silence proves nothing",
                 )
@@ -222,7 +222,7 @@ class WarpMetricExporterFailureReportingTest {
                     MetricKey("latency", MetricKind.EXPONENTIAL_HISTOGRAM, emptyMap()),
                     value = 12.0,
                 )
-                if (histogram is MetricExportResult.Failure) histogramFailures++
+                if (histogram is MetricExportResult.Partial) histogramFailures++
                 if (exporter.incrementSum(sumKey("requests")) is MetricExportResult.Success) sumSuccesses++
             }
 
@@ -278,7 +278,7 @@ class WarpMetricExporterFailureReportingTest {
     @Test
     fun aRefusedClearDeleteDoesNotSwallowTheDurableWriteReport() = runTest {
         val store = WriteRefusingStore(FailDeleteStore(RecordingStore()))
-        var clearResult: MetricExportResult = MetricExportResult.Success
+        var clearResult: MetricWriteResult = MetricWriteResult.Success
         var writeResult: MetricExportResult = MetricExportResult.Success
         var deleteLines = 0
         var writeLinesAfterClear = 0
@@ -303,7 +303,7 @@ class WarpMetricExporterFailureReportingTest {
 
         assertAll(
             {
-                assertIs<MetricExportResult.Failure>(
+                assertIs<MetricWriteResult.Failure>(
                     clearResult,
                     "precondition: the clear rig never fired, so nothing pre-empted anything and " +
                         "this test cannot distinguish a sound key from a shared one",
@@ -327,7 +327,7 @@ class WarpMetricExporterFailureReportingTest {
                 )
             },
             {
-                assertIs<MetricExportResult.Failure>(
+                assertIs<MetricExportResult.Partial>(
                     writeResult,
                     "precondition: the armed write did not actually fail, so there was no outage " +
                         "to report",

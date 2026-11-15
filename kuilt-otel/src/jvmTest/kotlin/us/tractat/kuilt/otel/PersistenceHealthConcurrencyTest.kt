@@ -52,7 +52,7 @@ class PersistenceHealthConcurrencyTest {
                     { assertEquals(turns, outcomes.size, "every launched turn completed") },
                     { assertEquals(turns, outcomes.count { it.first == ExportResult.Success }) },
                     { assertEquals(turns, outcomes.count { it.second == MetricExportResult.Success }) },
-                    { assertEquals(turns, outcomes.count { it.third is MetricExportResult.Failure }) },
+                    { assertEquals(turns, outcomes.count { it.third is MetricExportResult.Partial }) },
                     { assertEquals(turns, refusals.get(), "the refusal rig fired on every double sum") },
                     { assertEquals(turns * 4, writes.get(), "clock, span and both sum writes ran") },
                     { assertEquals(turns.toLong(), health.spans.acknowledged) },

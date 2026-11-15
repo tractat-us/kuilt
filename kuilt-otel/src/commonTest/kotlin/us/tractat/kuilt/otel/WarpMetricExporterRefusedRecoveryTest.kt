@@ -82,7 +82,7 @@ class WarpMetricExporterRefusedRecoveryTest {
     private inner class Kind(
         val storeKey: StoreKey,
         val update: MetricUpdate,
-        val merge: suspend WarpMetricExporter.() -> MetricExportResult,
+        val merge: suspend WarpMetricExporter.() -> MetricWriteResult,
         val seriesOf: (MetricCatalog) -> Map<MetricKey, Any>,
     )
 
@@ -131,8 +131,10 @@ class WarpMetricExporterRefusedRecoveryTest {
 
     private class Overwrite(
         val name: String,
+        val update: MetricUpdate,
         val refusals: Int,
-        val result: MetricExportResult,
+        /** A [MetricExportResult] from [WarpMetricExporter.record], or a [MetricWriteResult] from a `merge*`. */
+        val result: Any,
         val seeded: Map<MetricKey, Any>,
         val afterRestart: Map<MetricKey, Any>,
         val writesOfTheKind: Int,
@@ -147,7 +149,7 @@ class WarpMetricExporterRefusedRecoveryTest {
     private suspend fun overwriteArms(
         recover: Boolean = true,
         refuse: Boolean = true,
-        write: suspend (WarpMetricExporter, Kind) -> MetricExportResult,
+        write: suspend (WarpMetricExporter, Kind) -> Any,
     ): List<Overwrite> =
         kinds().map { kind ->
             val backing = RecordingStore()
@@ -161,6 +163,7 @@ class WarpMetricExporterRefusedRecoveryTest {
             val writes = backing.operations().count { it.kind == StoreOpKind.WRITE && it.key == kind.storeKey } - writesBefore
             Overwrite(
                 name = kind.storeKey.name,
+                update = kind.update,
                 refusals = store.refusalsOf(kind.storeKey),
                 result = result,
                 seeded = seeded,
@@ -175,16 +178,29 @@ class WarpMetricExporterRefusedRecoveryTest {
             listOf<() -> Unit>(
                 { assertEquals(refusals, o.refusals, "${o.name}: the rig refused ${o.refusals} reads, not $refusals") },
                 { assertEquals(1, o.seeded.size, "${o.name}: the fixture did not seed one durable series") },
-                { assertIs<MetricExportResult.Failure>(o.result, "${o.name}: $path over an unread kind reported ${o.result}") },
-                {
-                    val unread = (o.result as? MetricExportResult.Failure)?.cause as? MetricKindUnreadException
-                    assertEquals(o.name, unread?.storeKey?.name, "${o.name}: $path did not say the kind went uncounted: ${o.result}")
-                },
+                { assertNotCounted(o, path) },
                 { assertEquals(0, o.writesOfTheKind, "${o.name}: $path wrote the kind while its read was refused") },
                 { assertEquals(o.seeded, o.afterRestart, "${o.name}: $path overwrote the durable series it never read") },
             )
         }.toTypedArray(),
     )
+
+    /**
+     * A record over the unread kind is [MetricExportResult.Partial] listing exactly the kind's update
+     * as uncounted; a merge over it is a [MetricWriteResult.Failure]. Either way the cause names the
+     * kind, and neither reports success.
+     */
+    private fun assertNotCounted(o: Overwrite, path: String) {
+        val cause = when (val r = o.result) {
+            is MetricExportResult -> {
+                val partial = assertIs<MetricExportResult.Partial>(r, "${o.name}: $path over an unread kind reported $r")
+                assertEquals(listOf(o.update), partial.uncounted, "${o.name}: $path listed ${partial.uncounted} as uncounted")
+                partial.causes.single()
+            }
+            else -> assertIs<MetricWriteResult.Failure>(r, "${o.name}: $path over an unread kind reported $r").cause
+        }
+        assertEquals(o.name, (cause as? MetricKindUnreadException)?.storeKey?.name, "${o.name}: $path did not say the kind went unread: $cause")
+    }
 
     // ---- A refused read, then a write of that kind ----
 
@@ -214,7 +230,10 @@ class WarpMetricExporterRefusedRecoveryTest {
             *arms.flatMap { o ->
                 listOf<() -> Unit>(
                     { assertEquals(1, o.seeded.size, "${o.name}: the fixture did not seed one durable series") },
-                    { assertEquals(MetricExportResult.Success, o.result, "${o.name}: the first write reported ${o.result}") },
+                    {
+                        val success: Any = if (o.result is MetricExportResult) MetricExportResult.Success else MetricWriteResult.Success
+                        assertEquals(success, o.result, "${o.name}: the first write reported ${o.result}")
+                    },
                     { assertEquals(1, o.writesOfTheKind, "${o.name}: the rig never reached the write") },
                     { assertEquals(1, o.readsOfTheKind, "${o.name}: the first turn read the kind ${o.readsOfTheKind} times, not once") },
                     { assertEquals(o.seeded, o.afterRestart.filterKeys { it in o.seeded }, "${o.name}: the first write replaced the durable series") },
@@ -251,15 +270,14 @@ class WarpMetricExporterRefusedRecoveryTest {
         StoreKind.all.forEach { store.refuse(it) }
         val exporter = WarpMetricExporter(replica, store).also { it.recover() }
 
-        val refused = exporter.record(
-            listOf(
-                MetricUpdate.IncrementSum(sum, 10L),
-                MetricUpdate.IncrementSumDouble(doubleSum, 10.0),
-                MetricUpdate.SetGauge(gauge, 99.0, gaugeTimestamp + 5),
-                MetricUpdate.AddCardinality(cardinality, "refused"),
-                MetricUpdate.RecordHistogram(histogram, 50.0),
-            ),
+        val refusedBatch = listOf(
+            MetricUpdate.IncrementSum(sum, 10L),
+            MetricUpdate.IncrementSumDouble(doubleSum, 10.0),
+            MetricUpdate.SetGauge(gauge, 99.0, gaugeTimestamp + 5),
+            MetricUpdate.AddCardinality(cardinality, "refused"),
+            MetricUpdate.RecordHistogram(histogram, 50.0),
         )
+        val refused = exporter.record(refusedBatch)
         val refusalsBeforeHeal = StoreKind.all.associateWith { store.refusalsOf(it) }
         StoreKind.all.forEach { store.heal(it) }
 
@@ -277,7 +295,7 @@ class WarpMetricExporterRefusedRecoveryTest {
 
         assertAll(
             { assertEquals(StoreKind.all.associateWith { 2 }, refusalsBeforeHeal, "the rig did not refuse recover's and the turn's read of every kind") },
-            { assertIs<MetricExportResult.Failure>(refused, "the turn over five unread kinds reported $refused") },
+            { assertEquals(refusedBatch, assertIs<MetricExportResult.Partial>(refused, "the turn over five unread kinds reported $refused").uncounted) },
             { assertEquals(MetricExportResult.Success, healed) },
             { assertEquals(7L, exporter.sumValue(sum), "sum: seeded 5 + healing 2, the refused 10 uncounted") },
             { assertEquals(7L, afterRestart.sumValue(sum), "sum after restart") },
@@ -324,7 +342,7 @@ class WarpMetricExporterRefusedRecoveryTest {
             { assertEquals(1, reads.refusalsOf(sumsKey), "the rig did not refuse recover's read of the sums") },
             { assertEquals(1, reads.refusalsOf(histogramsKey), "the rig did not refuse recover's read of the histograms") },
             { assertEquals(2, store.refusedWrites(), "the rig refused ${store.refusedWrites()} writes, not the healing turn's two") },
-            { assertIs<MetricExportResult.Failure>(refusedWrite, "the turn whose writes were refused reported $refusedWrite") },
+            { assertEquals(emptyList(), assertIs<MetricExportResult.Partial>(refusedWrite, "the turn whose writes were refused reported $refusedWrite").uncounted, "a refused write's updates were counted") },
             { assertEquals(MetricExportResult.Success, retried) },
             { assertEquals(5L, exporter.histogramSnapshot(histogram).count, "histogram in memory: three seeded + two recorded") },
             { assertEquals(5L, afterRestart.histogramSnapshot(histogram).count, "histogram after restart: three seeded + two recorded") },
@@ -391,7 +409,10 @@ class WarpMetricExporterRefusedRecoveryTest {
 
         assertAll(
             { assertEquals(2, store.refusalsOf(sumsKey), "the rig did not refuse recover's and the turn's read of the sums") },
-            { assertIs<MetricExportResult.Failure>(result, "a batch with an unread kind reported $result") },
+            {
+                val partial = assertIs<MetricExportResult.Partial>(result, "a batch with an unread kind reported $result")
+                assertEquals(listOf<MetricUpdate>(MetricUpdate.IncrementSum(otherSum, 1L)), partial.uncounted, "the updates the batch did not count")
+            },
             { assertEquals(5L, afterRestart.sumValue(sum), "the unread sums were overwritten") },
             { assertEquals(0L, afterRestart.sumValue(otherSum), "the refused kind's update was written anyway") },
             { assertEquals(2.0, afterRestart.gaugeValue(otherGauge), "the gauge write was blocked by the sums' read") },
@@ -403,13 +424,52 @@ class WarpMetricExporterRefusedRecoveryTest {
     // ---- Not counted, beside not durable ----
 
     /**
-     * The histograms' read is refused and the sums' write is refused, in one batch. The sum was
-     * counted, and is only not yet durable, so retrying it counts it twice; the histogram was not
-     * counted, so retrying it counts it once. A Failure that led with the sums' write refusal, as the
-     * kind order would, told the caller every update was counted and lost the histogram's.
+     * The gauges' read is refused and the sums' write lands, in one batch. The sum was counted and
+     * is durable; the gauge was not counted. So the Partial lists the gauge's update alone, and
+     * recording exactly that list after the heal counts each update once: the sums are not written
+     * again, and the seeded `5` plus the one increment reads back `6`. A Partial that listed the
+     * landed sum too would have a retry count it twice.
      */
     @Test
-    fun aBatchWithAnUnreadKindAndARefusedWriteLeadsWithTheUpdatesItDidNotCount() = runTest {
+    fun aRecordOverAnUnreadKindListsExactlyItsUpdatesAsUncountedAndRecordingThemAfterTheHealCountsEachOnce() = runTest {
+        val backing = RecordingStore()
+        seed(backing)
+        val store = KindReadRefusingStore(backing)
+        store.refuse(gaugesKey)
+        val exporter = WarpMetricExporter(replica, store).also { it.recover() }
+        val increment = MetricUpdate.IncrementSum(sum, 1L)
+        val level = MetricUpdate.SetGauge(otherGauge, 7.0, 1L)
+
+        val result = exporter.record(listOf(increment, level))
+        val partial = result as? MetricExportResult.Partial
+        store.heal(gaugesKey)
+        val writesBefore = backing.operations().filter { it.kind == StoreOpKind.WRITE }.groupingBy { it.key }.eachCount()
+        val retried = exporter.record(partial?.uncounted ?: emptyList())
+        val writesAfter = backing.operations().filter { it.kind == StoreOpKind.WRITE }.groupingBy { it.key }.eachCount()
+        val afterRestart = restarted(backing)
+
+        assertAll(
+            { assertEquals(2, store.refusalsOf(gaugesKey), "the rig did not refuse recover's and the turn's read of the gauges") },
+            { assertIs<MetricExportResult.Partial>(result, "the batch reported $result") },
+            { assertEquals(listOf<MetricUpdate>(level), partial?.uncounted, "the updates the batch did not count") },
+            { assertEquals(gaugesKey, (partial?.causes?.singleOrNull() as? MetricKindUnreadException)?.storeKey, "the causes ${partial?.causes}") },
+            { assertEquals(MetricExportResult.Success, retried) },
+            { assertEquals(writesBefore[sumsKey] ?: 0, writesAfter[sumsKey] ?: 0, "recording the uncounted updates wrote the sums again") },
+            { assertEquals((writesBefore[gaugesKey] ?: 0) + 1, writesAfter[gaugesKey] ?: 0, "recording the uncounted updates did not write the gauges once") },
+            { assertEquals(6L, afterRestart.sumValue(sum), "sum: seeded 5 + the one increment, counted once") },
+            { assertEquals(7.0, afterRestart.gaugeValue(otherGauge), "the uncounted gauge, counted on the retry") },
+            { assertEquals(4.0, afterRestart.gaugeValue(gauge), "the seeded gauge did not survive") },
+        )
+    }
+
+    /**
+     * The histograms' read is refused and the sums' write is refused, in one batch. The sum was
+     * counted, and is only not yet durable, so retrying it counts it twice; the histogram was not
+     * counted, so retrying it counts it once. The Partial lists the histogram's update alone, and
+     * carries both causes.
+     */
+    @Test
+    fun aBatchWithAnUnreadKindAndARefusedWriteListsOnlyTheUnreadKindsUpdatesAsUncounted() = runTest {
         val backing = RecordingStore()
         seed(backing)
         val reads = KindReadRefusingStore(backing)
@@ -421,49 +481,49 @@ class WarpMetricExporterRefusedRecoveryTest {
         val measurement = MetricUpdate.RecordHistogram(histogram, 4.0)
 
         val result = exporter.record(listOf(increment, measurement))
-        val failure = assertIs<MetricExportResult.Failure>(result, "the batch reported $result")
-        val unread = failure.cause as? MetricKindUnreadException
+        val partial = assertIs<MetricExportResult.Partial>(result, "the batch reported $result")
+        val unread = partial.causes.filterIsInstance<MetricKindUnreadException>()
 
         assertAll(
             { assertEquals(2, reads.refusalsOf(histogramsKey), "the rig did not refuse recover's and the turn's read of the histograms") },
             { assertEquals(1, store.refusedWrites(), "the rig refused ${store.refusedWrites()} writes, not the sums' one") },
-            { assertEquals(histogramsKey, unread?.storeKey, "the Failure led with ${failure.cause}, not the unread histograms") },
-            { assertTrue(unread?.carries(measurement) == true, "the unread verdict does not name the histogram update") },
-            { assertTrue(unread?.carries(increment) == false, "the unread verdict names the sum update, which was counted") },
-            { assertEquals("simulated refused read of otel.metrics.histograms", unread?.cause?.message) },
-            { assertEquals(2, failure.causes.size, "the Failure carries ${failure.causes}, not both kinds' verdicts") },
-            { assertTrue(failure.causes.last() !is MetricNotCountedException, "the sums' write refusal reads as not counted") },
-            { assertEquals("store refused otel.metrics.sums", failure.causes.last().message) },
+            { assertEquals(listOf<MetricUpdate>(measurement), partial.uncounted, "the updates the batch did not count") },
+            { assertEquals(listOf(histogramsKey), unread.map { it.storeKey }, "the unread causes ${partial.causes}") },
+            { assertEquals("simulated refused read of otel.metrics.histograms", unread.singleOrNull()?.cause?.message) },
+            { assertEquals(2, partial.causes.size, "the Partial carries ${partial.causes}, not both kinds' causes") },
+            { assertTrue(partial.causes.any { it.message == "store refused otel.metrics.sums" }, "the sums' write refusal is missing from ${partial.causes}") },
             { assertEquals(6L, exporter.sumValue(sum), "the sum was counted: seeded 5 + 1") },
             { assertEquals(0L, exporter.histogramSnapshot(histogram).count, "the histogram was counted into the unread kind") },
         )
     }
 
     /**
-     * A batch refused for an overflow applies nothing and is no turn of any kind, the kind it could
-     * not read included: a caller that leaves the saturated series out and records the rest again
-     * has made one turn of the unread kind, not two.
+     * A batch refused for an overflow is [MetricExportResult.Refused], never a Partial, even beside
+     * an unread kind: it applies nothing and is no turn of any kind, the unread one included. A caller
+     * that leaves the saturated series out and records the rest again has made one turn of the
+     * unread kind, not two.
      */
     @Test
-    fun anOverflowRefusedBatchIsNoFailedTurnOfTheKindItCouldNotRead() = runTest {
+    fun anOverflowIsRefusedByTypeAndIsNoFailedTurnOfTheKindItCouldNotRead() = runTest {
         val backing = RecordingStore()
         seed(backing)
         val store = KindReadRefusingStore(backing)
         store.refuse(histogramsKey)
         val exporter = WarpMetricExporter(replica, store).also { it.recover() }
         val failedBefore = exporter.health.value.failed
+        val measurement = MetricUpdate.RecordHistogram(histogram, 4.0)
 
-        val overflowed = exporter.record(listOf(MetricUpdate.IncrementSum(sum, Long.MAX_VALUE), MetricUpdate.RecordHistogram(histogram, 4.0)))
+        val overflowed = exporter.record(listOf(MetricUpdate.IncrementSum(sum, Long.MAX_VALUE), measurement))
         val failedAfterOverflow = exporter.health.value.failed
-        val retried = exporter.record(listOf(MetricUpdate.RecordHistogram(histogram, 4.0)))
+        val retried = exporter.record(listOf(measurement))
         val failedAfterRetry = exporter.health.value.failed
 
         assertAll(
             { assertEquals(3, store.refusalsOf(histogramsKey), "the rig did not refuse recover's and both turns' reads") },
-            { assertIs<MetricSumOverflowException>((overflowed as? MetricExportResult.Failure)?.cause, "the rig: the sum did not overflow: $overflowed") },
-            { assertEquals(1, (overflowed as? MetricExportResult.Failure)?.causes?.size, "an overflow refusal carried more than itself") },
+            { assertIs<MetricSumOverflowException>(assertIs<MetricExportResult.Refused>(overflowed, "the overflow reported $overflowed").overflow) },
+            { assertEquals(5L, exporter.sumValue(sum), "the refused batch applied its increment") },
             { assertEquals(failedBefore, failedAfterOverflow, "the overflow-refused batch counted as a failed turn") },
-            { assertIs<MetricKindUnreadException>((retried as? MetricExportResult.Failure)?.cause, "the retry reported $retried") },
+            { assertEquals(listOf<MetricUpdate>(measurement), (retried as? MetricExportResult.Partial)?.uncounted, "the retry reported $retried") },
             { assertEquals(failedBefore + 1, failedAfterRetry, "the retry did not count one failed turn") },
         )
     }
@@ -504,8 +564,8 @@ class WarpMetricExporterRefusedRecoveryTest {
             { assertEquals(3, store.refusalsOf(sumsKey), "the rig refused ${store.refusalsOf(sumsKey)} reads, not the second recover's and two turns'") },
             { assertTrue(afterRecover.recoveryFailed, "the refused second recover was not reported") },
             { assertEquals(5L, sumBefore, "the fixture's first recover did not load the sums") },
-            { assertIs<MetricExportResult.Failure>(refused, "the refused record reported $refused") },
-            { assertIs<MetricExportResult.Failure>(refusedMerge, "the refused merge reported $refusedMerge") },
+            { assertIs<MetricExportResult.Partial>(refused, "the refused record reported $refused") },
+            { assertIs<MetricWriteResult.Failure>(refusedMerge, "the refused merge reported $refusedMerge") },
             { assertEquals(afterRecover.failed + 2, afterRefused.failed, "two refused turns moved failed by ${afterRefused.failed - afterRecover.failed}") },
             { assertEquals(2L, afterRefused.outstandingFailures, "the refused turns are not outstanding") },
             { assertEquals(memoryBefore, memoryAfter, "a refused turn changed memory") },
@@ -555,7 +615,7 @@ class WarpMetricExporterRefusedRecoveryTest {
 
         assertAll(
             { assertEquals(1, store.refusedWrites(), "the rig did not refuse the write") },
-            { assertIs<MetricExportResult.Failure>(refusedWrite) },
+            { assertEquals(emptyList(), assertIs<MetricExportResult.Partial>(refusedWrite).uncounted, "a refused write's update was not counted") },
             { assertEquals(MetricExportResult.Success, healed) },
             { assertEquals(10L, exporter.sumValue(sum), "the second recover dropped the increment a refused write left in memory") },
             { assertEquals(10L, durable) },
@@ -649,7 +709,7 @@ class WarpMetricExporterRefusedRecoveryTest {
 
         assertAll(
             { assertEquals(1, store.refusedDeletes(), "the rig refused ${store.refusedDeletes()} deletes, not the histograms' one") },
-            { assertIs<MetricExportResult.Failure>(cleared, "the clear with a refused delete reported $cleared") },
+            { assertIs<MetricWriteResult.Failure>(cleared, "the clear with a refused delete reported $cleared") },
             { assertTrue(survived, "the rig: the refused delete did not leave the histograms on disk") },
             { assertEquals(MetricExportResult.Success, written) },
             { assertEquals(0, turnReads, "the write after the clear read the histograms $turnReads times") },
@@ -673,7 +733,7 @@ class WarpMetricExporterRefusedRecoveryTest {
 
         assertAll(
             { assertEquals(1, store.refusalsOf(sumsKey), "the rig refused ${store.refusalsOf(sumsKey)} reads, not recover's alone") },
-            { assertEquals(MetricExportResult.Success, cleared) },
+            { assertEquals(MetricWriteResult.Success, cleared) },
             { assertEquals(MetricExportResult.Success, written, "a kind whose key clear deleted still refused its writes") },
             { assertEquals(1L, afterRestart.sumValue(otherSum)) },
             { assertEquals(0L, afterRestart.sumValue(sum), "the cleared sums came back") },
@@ -697,7 +757,7 @@ class WarpMetricExporterRefusedRecoveryTest {
         assertAll(
             { assertEquals(2, store.minted, "the rig minted ${store.minted} cancellations, not recover's and the turn's") },
             { assertNull(minted.escaped, "a cancellation the store minted on a turn's read escaped: ${minted.escaped}") },
-            { assertIs<MetricExportResult.Failure>(minted.returned, "the minted turn read reported ${minted.returned}") },
+            { assertEquals(listOf<MetricUpdate>(MetricUpdate.IncrementSum(otherSum, 1L)), (minted.returned as? MetricExportResult.Partial)?.uncounted, "the minted turn read reported ${minted.returned}") },
             { assertEquals(5L, durable, "the turn wrote over sums it never read") },
         )
     }

@@ -17,7 +17,7 @@ import kotlin.test.assertTrue
  *
  * `runCatchingCancellable` rethrows every `CancellationException`, so each store call it guarded let
  * a store's own `withTimeout` escape: every mutator threw where it returns
- * [MetricExportResult.Failure], [WarpMetricExporter.clear] threw although it never throws, and
+ * [MetricExportResult.Partial], [WarpMetricExporter.clear] threw although it never throws, and
  * [WarpMetricExporter.recover] threw out of one kind's read and left the kinds after it unread.
  * Every mint arm has a control in which the caller really is cancelled inside the same call.
  */
@@ -139,7 +139,7 @@ class WarpMetricExporterStoreMintedCancellationTest {
         assertAll(
             { assertEquals(1, store.minted, "the rig minted ${store.minted} cancellations on the write, not one") },
             { assertNull(minted.escaped, "a cancellation the store minted escaped incrementSum: ${minted.escaped}") },
-            { assertIs<MetricExportResult.Failure>(minted.returned, "the minted write reported ${minted.returned}") },
+            { assertIs<MetricExportResult.Partial>(minted.returned, "the minted write reported ${minted.returned}") },
             { assertEquals(1L, failedAfter, "the minted write was not counted as a refused write") },
             { assertEquals(0L, durableBeforeRepair, "the minted write landed anyway, so nothing was left to repair") },
             { assertEquals(MetricExportResult.Success, repaired) },
@@ -175,7 +175,7 @@ class WarpMetricExporterStoreMintedCancellationTest {
         assertAll(
             { assertEquals(1, store.minted, "the rig never minted on a clear delete") },
             { assertNull(minted.escaped, "a cancellation the store minted escaped clear: ${minted.escaped}") },
-            { assertIs<MetricExportResult.Failure>(minted.returned, "the minted delete reported ${minted.returned}") },
+            { assertIs<MetricWriteResult.Failure>(minted.returned, "the minted delete reported ${minted.returned}") },
             { assertEquals(1L, exporter.health.value.failed, "the minted delete was not counted as a refused turn") },
             { assertEquals(0, exporter.metricCount(), "clear forgets in memory whatever the store does") },
         )

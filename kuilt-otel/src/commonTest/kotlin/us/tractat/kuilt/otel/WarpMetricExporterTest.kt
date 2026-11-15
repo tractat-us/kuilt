@@ -317,7 +317,7 @@ class WarpMetricExporterTest {
     fun exportReturnsFailureWhenStoreFails() = runTest {
         val exporter = exporterFor(store = AlwaysFailMetricStore)
         val result = exporter.incrementSum(sumKey("x"), by = 1L)
-        assertIs<MetricExportResult.Failure>(result)
+        assertIs<MetricExportResult.Partial>(result)
     }
 
     private object AlwaysFailMetricStore : DurableStore {

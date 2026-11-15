@@ -211,8 +211,8 @@ class KuiltMetricExporterBatchTest {
         val recovered = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
         assertAll(
             {
-                val refusal = assertIs<MetricExportResult.Failure>(rigRefuses, "the rig: the series really is saturated")
-                assertIs<MetricSumOverflowException>(refusal.cause)
+                val refusal = assertIs<MetricExportResult.Refused>(rigRefuses, "the rig: the series really is saturated")
+                assertIs<MetricSumOverflowException>(refusal.overflow)
             },
             { assertTrue(code.isSuccess, "a saturated series is not an export failure") },
             { assertEquals(21.5, exp.gaugeValue(gaugeKey("temp", "/a"))) },
@@ -274,7 +274,7 @@ class KuiltMetricExporterBatchTest {
         runCurrent()
 
         assertAll(
-            { assertIs<MetricExportResult.Failure>(rigRefuses, "the rig: the long series really is saturated") },
+            { assertIs<MetricExportResult.Refused>(rigRefuses, "the rig: the long series really is saturated") },
             { assertTrue(code.isSuccess) },
             { assertEquals(0.5, exp.doubleSumValue(shared), "the double point landed") },
             { assertEquals(Long.MAX_VALUE - 1L, exp.sumValue(shared)) },
@@ -311,8 +311,8 @@ class KuiltMetricExporterBatchTest {
         assertAll(
             { assertEquals(MetricExportResult.Success, seeded, "the rig: the slot was seeded") },
             {
-                val refusal = assertIs<MetricExportResult.Failure>(rigRefuses, "the rig: the series really is saturated")
-                assertEquals(latency, assertIs<MetricHistogramOverflowException>(refusal.cause).key)
+                val refusal = assertIs<MetricExportResult.Refused>(rigRefuses, "the rig: the series really is saturated")
+                assertEquals(latency, assertIs<MetricHistogramOverflowException>(refusal.overflow).key)
             },
             {
                 assertEquals(
@@ -357,7 +357,7 @@ class KuiltMetricExporterBatchTest {
         val bridge = KuiltMetricExporter(exp, backgroundScope)
         listOf("/a", "/b").forEach { r ->
             assertEquals(MetricExportResult.Success, exp.incrementSum(sumKey("requests", r), Long.MAX_VALUE - 1L))
-            assertIs<MetricExportResult.Failure>(exp.incrementSum(sumKey("requests", r), 3L), "the rig: $r saturated")
+            assertIs<MetricExportResult.Refused>(exp.incrementSum(sumKey("requests", r), 3L), "the rig: $r saturated")
         }
         val twoExport = listOf(
             metric("requests", MetricDataType.LONG_SUM, deltaCounter(listOf(longPoint(3L, "/a"), longPoint(4L, "/b"), longPoint(6L, "/c")))),
