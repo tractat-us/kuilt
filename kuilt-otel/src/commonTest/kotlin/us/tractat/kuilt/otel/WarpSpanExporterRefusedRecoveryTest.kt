@@ -201,7 +201,7 @@ class WarpSpanExporterRefusedRecoveryTest {
     // ---- The healed turn takes the live path ----
 
     /**
-     * The healing export keeps its own span, as a live export always does. Under `DROP_NEWEST` at the
+     * The healing export's own eviction never takes its span, as a live export's never does. Under `DROP_NEWEST` at the
      * cap the live path evicts the newest *stored* span before inserting, so the store holds 1 and 4.
      * Adding the export after the join and then evicting the excess evicts 4 itself instead, writes
      * {1, 2}, and returns Success for a span that exists nowhere.
@@ -224,7 +224,7 @@ class WarpSpanExporterRefusedRecoveryTest {
         assertAll(
             { assertEquals(2, refusals, "the rig did not refuse the recovery read and the export's retry") },
             { assertIs<ExportResult.Failure>(refused, "the rig: the export was not refused") },
-            { assertEquals(ids(1, 4), control, "the control: the live path did not keep the incoming span") },
+            { assertEquals(ids(1, 4), control, "the control: the live path's own eviction took the incoming span") },
             { assertEquals(ExportResult.Success, healed) },
             { assertTrue(span(4).spanId in durable, "Success for span 4, which is not durable: $durable") },
             { assertEquals(control, durable, "the healed store differs from one that never had an outage") },
@@ -234,7 +234,7 @@ class WarpSpanExporterRefusedRecoveryTest {
 
     /**
      * The same under `DROP_OLDEST`, for a healing span that started before every stored one, as a
-     * long-lived parent span does. The live path evicts the oldest stored span and keeps the parent.
+     * long-lived parent span does. The live path's eviction takes the oldest stored span, not the parent.
      */
     @Test
     fun underDropOldestAHealingSpanThatStartedFirstIsKeptAtTheCap() = runTest {
@@ -254,7 +254,7 @@ class WarpSpanExporterRefusedRecoveryTest {
         assertAll(
             { assertEquals(2, refusals, "the rig did not refuse the recovery read and the export's retry") },
             { assertIs<ExportResult.Failure>(refused, "the rig: the export was not refused") },
-            { assertEquals(ids(1, 3), control, "the control: the live path did not keep the incoming span") },
+            { assertEquals(ids(1, 3), control, "the control: the live path's own eviction took the incoming span") },
             { assertEquals(ExportResult.Success, healed) },
             { assertTrue(span(1).spanId in durable, "Success for span 1, which is not durable: $durable") },
             { assertEquals(control, durable, "the healed store differs from one that never had an outage") },
@@ -284,6 +284,61 @@ class WarpSpanExporterRefusedRecoveryTest {
             { assertEquals(ExportResult.Success, healed) },
             { assertEquals(control, restarted.liveIds(), "the join kept more than the cap, or the wrong spans") },
             { assertEquals(control, durable, "the healed write kept more than the cap, or lost a span") },
+        )
+    }
+
+    /**
+     * The landing join's excess is evicted by the policy's own end. Under `DROP_NEWEST` the join of
+     * {1, 2, 3, 4} at a cap of 2 keeps {1, 2}, and the healing export of 5 then evicts 2, as the live
+     * path does. Adding 5 first and evicting the excess after would keep {1, 2}; evicting the join's
+     * excess from the oldest end would keep {3, 5}.
+     */
+    @Test
+    fun underDropNewestTheHealingJoinEvictsItsNewestExcess() = runTest {
+        val backing = InMemoryDurableStore()
+        durableSpans(backing, 1, 2, 3, 4)
+        val store = ReadRefusingStore(backing, spansKey)
+
+        val restarted = WarpSpanExporter(replica, store, maxSpans = 2, bufferPolicy = BufferPolicy.DROP_NEWEST)
+        restarted.recover()
+        store.heal()
+        val healed = restarted.export(span(5))
+        val durable = idsAfterRestart(backing)
+        val control = idsWithoutAnOutage(byteArrayOf(1, 2, 3, 4), 2, BufferPolicy.DROP_NEWEST, 5)
+
+        assertAll(
+            { assertEquals(1, store.refusals, "the rig did not refuse the recovery read") },
+            { assertEquals(ids(1, 5), control, "the control: recover did not evict the newest excess") },
+            { assertEquals(ExportResult.Success, healed) },
+            { assertEquals(control, restarted.liveIds(), "the join evicted the wrong end, or kept too many") },
+            { assertEquals(control, durable, "the healed write evicted the wrong end, or lost its span") },
+        )
+    }
+
+    /**
+     * Under `DROP_OLDEST`, with a healing span that started before every stored one: the join of
+     * {1, 2, 3, 4} at a cap of 2 keeps {3, 4}, and the export of 0 then evicts 3. Evicting the join's
+     * excess from the newest end would keep {0, 2}.
+     */
+    @Test
+    fun underDropOldestTheHealingJoinEvictsItsOldestExcess() = runTest {
+        val backing = InMemoryDurableStore()
+        durableSpans(backing, 1, 2, 3, 4)
+        val store = ReadRefusingStore(backing, spansKey)
+
+        val restarted = WarpSpanExporter(replica, store, maxSpans = 2, bufferPolicy = BufferPolicy.DROP_OLDEST)
+        restarted.recover()
+        store.heal()
+        val healed = restarted.export(span(0))
+        val durable = idsAfterRestart(backing)
+        val control = idsWithoutAnOutage(byteArrayOf(1, 2, 3, 4), 2, BufferPolicy.DROP_OLDEST, 0)
+
+        assertAll(
+            { assertEquals(1, store.refusals, "the rig did not refuse the recovery read") },
+            { assertEquals(ids(0, 4), control, "the control: recover did not evict the oldest excess") },
+            { assertEquals(ExportResult.Success, healed) },
+            { assertEquals(control, restarted.liveIds(), "the join evicted the wrong end, or kept too many") },
+            { assertEquals(control, durable, "the healed write evicted the wrong end, or lost its span") },
         )
     }
 
@@ -428,6 +483,35 @@ class WarpSpanExporterRefusedRecoveryTest {
             { assertEquals(1, store.cancelled, "the cancellation never landed inside the retried read") },
             { assertNull(returned, "the cancelled export returned instead of being cancelled: $returned") },
             { assertEquals(ids(1, 2), durable, "the cancelled export wrote anyway") },
+        )
+    }
+
+    /**
+     * An export on an exporter nobody recovered adds its stamped span inside the write section, after
+     * the landing read. Cancelled in the write, it rolls that span back out of memory, as a recovered
+     * export rolls back its early add: otherwise the caller's retry of the unstamped span mints a
+     * second stamped copy beside it.
+     */
+    @Test
+    fun aCancelledFirstExportOnANeverRecoveredExporterRollsItsStampBack() = runTest {
+        val backing = InMemoryDurableStore()
+        durableSpans(backing, 1, 2)
+        val store = CancellationScriptedStore(backing)
+        val clock = WarpCausalClock(replica)
+        val exporter = WarpSpanExporter(replica, store, causalClock = clock)
+        val clockRecovery = clock.recover(store)
+
+        store.arm(StoreCall.WRITE, StoreAct.PARK) { it == spansKey }
+        val returned = cancelInside(store) { exporter.export(span(3)) }
+        val live = exporter.snapshot().elements
+
+        assertAll(
+            { assertEquals(ClockRecovery.Recovered, clockRecovery, "the rig: the clock could not read") },
+            { assertTrue(clock.frontier().isNotEmpty(), "the rig: the export minted no stamp") },
+            { assertEquals(1, store.parked, "the rig never parked the export's write") },
+            { assertEquals(1, store.cancelled, "the cancellation never landed inside the write") },
+            { assertNull(returned, "the cancelled export returned instead of being cancelled: $returned") },
+            { assertEquals(ids(1, 2), live.map { it.spanId }.toSet(), "the cancelled export left its stamped span in memory") },
         )
     }
 
