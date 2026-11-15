@@ -71,7 +71,7 @@ share. The snapshot taken before and after the preview is equal, which is the
 proof that asking moved nothing.
 
 Each pick here does what a typical loop does. It leases an agent at the
-default estimate, then stretches the lease to the winner's own estimate. So
+default estimate, then stretches it with `extend` to the winner's own estimate. So
 the default decides who wins each pick, and the twelve minutes count against
 web from then on.
 
@@ -133,15 +133,15 @@ What each answer means, in the order the engine checks them:
 - **`NotWaiting`**: the lane has nothing queued.
 - **`NotEligible`**: it has work, but this agent cannot run it, such as an iOS
   build offered a Linux agent.
-- **`NoLiveLineage`**: no pick can end there right now, usually because a
+- **`NoLiveLineage`**: no pick can end there right now, for example because a
   reload is removing or reshaping its part of the tree. `at` names the lane.
 - **`AtCeiling`**: a group on its path already runs as many builds as its
   ceiling allows. `group` is the one nearest the top, and `limit` the ceiling.
   A limit of `0` is a pause.
 - **`SupplyExhausted`**: the engine has no time to hand out, so nobody goes
-  next. Call `reconcileCapacity` first.
-- **`PositionCeiling`**: the pick reaches a group with a lane that has hit the
-  ceiling on how far ahead its record of service can go. Nobody below that
+  next. Most often `reconcileCapacity` has not been called yet.
+- **`PositionCeiling`**: the pick reaches a group with a child that has hit
+  the ceiling on how far ahead its record of service can go. Nobody below that
   group goes next. A short run never meets this.
 - **`BehindAtLevel`**: another child goes first at `parent`, the first group
   where the pick leaves this lane's path. `nextChild` is the one it picks.
@@ -161,10 +161,12 @@ which.
 ```kotlin
 // Of the four agents, mobile is owed one while both teams have builds queued.
 check(heddle.entitlement(mobile, waiting = both, totalSlots = 4L) == Rational.ONE)
+// With web's queue empty, mobile is owed all four.
+check(heddle.entitlement(mobile, waiting = setOf(mobile), totalSlots = 4L) == Rational.of(4L))
 ```
 
 It is shared over the lanes in `waiting`, so it is a share of the work that is
-really there. When web's queue empties, mobile is owed all four. The answer is
+really there, and a team with nothing queued leaves its part to the rest. The answer is
 an exact fraction, a `Rational`, so one agent split three ways is a third, not
 0.333.
 
@@ -192,10 +194,11 @@ as the engine that took the snapshot would have. That is no coincidence: the
 engine answers its own questions through a view of its live state. Pass the
 policy the engine ran with, since a snapshot does not keep one.
 
-Do not restore a throwaway engine for each question. A view is cheaper, and it
-issues no lease ids. It is also safe to share. The engine itself takes one call
-at a time, its reads included, while any number of threads may ask one view at
-once. [When the engine restarts too](heddle-local.md#when-the-engine-restarts-too)
+Do not restore a throwaway engine for each question: `restore` wants a raised
+epoch every time, and a view needs none. A view is also safe to share. The
+engine is not thread-safe, so call it from one place at a time, its reads
+included. A view of a snapshot shares nothing with the engine, and any number
+of threads may ask it at once. [When the engine restarts too](heddle-local.md#when-the-engine-restarts-too)
 covers taking and storing snapshots.
 
 ## Logging why work waits
@@ -214,9 +217,11 @@ else happens in between. Several ordinary things break that premise.
   shifts its team's place, and so the line behind it.
 - **New work arrives.** A lane that queues work, or empties, changes who is
   waiting.
-- **Builds finish.** A preview finishes none of its own picks. With no
-  ceilings that only matters for timing. Under a ceiling it changes the line,
-  because a capped lane shows up no more often than its ceiling allows:
+- **Builds finish.** A preview finishes none of its own picks, and counts
+  each at its estimate. With no ceilings, a build that ends on its estimate
+  changes nothing, which is why the farm's real builds match their preview.
+  Under a ceiling the line is different, because a capped lane shows up no
+  more often than its ceiling allows:
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleQueueStatus -->
 
@@ -242,10 +247,11 @@ Three more things to know before you wire a screen up:
   negative count or a reservation outside `1..MAX_RESERVATION`. `explain` takes
   the same checks as `acquire`, so its `eligible` set must sit inside `waiting`.
 - **Exact fractions can overflow.** `explain` and `entitlement` throw
-  `ArithmeticException` when an exact fraction no longer fits. That is rare,
-  but a status screen should catch it and show something plainer.
-- **The reloads.** A reload changes the tree itself, so ask again after an
-  `apply`.
+  `ArithmeticException` when an exact fraction no longer fits. That can happen
+  well before any ceiling, so a status screen should catch it and show
+  something plainer.
+- **The tree can change.** A reload or an attach changes the tree itself, so
+  ask again after an `apply` or an `attach`.
 
 ## Reading the numbers behind "behind"
 
@@ -259,9 +265,9 @@ virtual service.
   this agent can run. Above it by more than a sixteenth of a unit of the
   lane's own service, the lane was not in the running for this pick. At or
   below it, the lane was in the running and lost on timing, because
-  `nextChild`'s build ends sooner on that scale.
+  `nextChild`'s build ends sooner on that scale (or, on a tie, by id).
 - **`front`** is the same average over everyone waiting: the share line.
-  Above it, this side has had more than its share lately. Below it, less.
+  Above it, this side has had more than its share. At or below it, less.
 
 The two lines differ when the agent cannot run everything. A lane below
 `front` can still be above `eligibleFront`, when the lanes this agent cannot

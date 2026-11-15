@@ -643,6 +643,8 @@ internal fun sampleQueueStatus() {
     check(why(mobile, waiting = both, eligible = both) == "Web goes first at the farm.")
     // Of the four agents, mobile is owed one while both teams have builds queued.
     check(heddle.entitlement(mobile, waiting = both, totalSlots = 4L) == Rational.ONE)
+    // With web's queue empty, mobile is owed all four.
+    check(heddle.entitlement(mobile, waiting = setOf(mobile), totalSlots = 4L) == Rational.of(4L))
     // The answers change only when something real happens. Web takes the next agent:
     check((heddle.acquire(both, both, startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf == web)
     check(why(mobile, waiting = both, eligible = both) == "Next up.")
