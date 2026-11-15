@@ -73,7 +73,9 @@ at startup. A clock mints and persists **only after that read has landed**: unti
 rather than guess at `seq`. `recover()` says what it found: `Recovered`, `Undecodable` (the
 clock starts fresh) or `Refused`. While the read is refused, the span exporter saves spans
 unstamped and retries the read on each export and clear, and the first read that lands arms
-the clock. A clock whose read has landed keeps going through a later refusal, since this
+the clock. Those retries back off on the same doubling window as the exporter's span read
+(#3436): after `k` refused reads in a row the next `2^k − 1` turns skip the clock's read, with
+`k` capped at 6. `recover()` always reads. A clock whose read has landed keeps going through a later refusal, since this
 device wrote every `seq` its store can hold.
 
 Starting fresh is not starting unused: the stored spans still carry this device's old dots.

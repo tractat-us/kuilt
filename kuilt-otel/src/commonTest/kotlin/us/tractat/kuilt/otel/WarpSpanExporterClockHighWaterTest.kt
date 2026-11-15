@@ -230,7 +230,8 @@ class WarpSpanExporterClockHighWaterTest {
 
         assertAll(
             { assertIs<ClockRecovery.Refused>(previous.clockRecovery, "the rig: the clock read was not refused") },
-            { assertEquals(3, store.refusals, "the rig: recover and both exports did not all meet a refused clock read") },
+            // recover refused, the first export skipped inside its window (#3436), the second was refused.
+            { assertEquals(2, store.refusals, "the rig: recover and the second export did not meet a refused clock read") },
             { assertEquals(ExportResult.Success, stored, "the rig: the explicit stamp was not saved") },
             { assertEquals(ExportResult.Success, evicting, "the rig: the evicting span was not saved") },
             { assertIs<ClockRecovery.Undecodable>(corrupt, "the rig: the clock entry decoded as $corrupt") },
@@ -263,7 +264,8 @@ class WarpSpanExporterClockHighWaterTest {
 
         assertAll(
             { assertIs<ClockRecovery.Refused>(previous.clockRecovery, "the rig: the clock read was not refused") },
-            { assertEquals(2, store.refusals, "the rig: recover and the export did not both meet a refused clock read") },
+            // recover refused, and the export skipped the read inside that refusal's window (#3436).
+            { assertEquals(1, store.refusals, "the rig: recover did not meet a refused clock read, or the export read past its window") },
             { assertEquals(ExportResult.Success, merged, "the rig: the merge was not saved") },
             { assertEquals(setOf(1_000L), ownAfterMerge, "the rig: the merge did not bring this replica's dot") },
             { assertEquals(ExportResult.Success, evicting, "the rig: the evicting span was not saved") },

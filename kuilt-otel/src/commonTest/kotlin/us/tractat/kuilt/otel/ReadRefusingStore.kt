@@ -35,3 +35,38 @@ internal class ReadRefusingStore(
 
     override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
 }
+
+/**
+ * Spend [turns] turns of this exporter's refused-read backoff window (#3436) with exports of
+ * [filler], a span the calling arm never asserts on, each checked to skip. A turn that read instead
+ * would succeed on a healed store, or add to [refusals] on a refusing one, so both are checked.
+ *
+ * This is the step an arm takes where it means a turn that **reads**: after `k` refused reads in a
+ * row the next `2^k − 1` turns skip, so the turn it measures must come after them.
+ */
+internal suspend fun WarpSpanExporter.skipReadWindow(turns: Int, filler: SpanRecord, refusals: () -> Int = { 0 }) {
+    repeat(turns) { turn ->
+        val before = refusals()
+        val skipped = export(filler)
+        check(skipped is ExportResult.Failure) { "the rig: turn $turn of the read window ran: $skipped" }
+        check(refusals() == before) { "the rig: turn $turn of the read window read the spans" }
+    }
+}
+
+/**
+ * Spend [turns] turns of the causal clock's backoff window (#3436) with exports of [filler], each
+ * checked to have skipped the clock's read: the span is saved, and saved unstamped, so no read landed
+ * and armed the clock, and [refusals] did not move, so none was refused either. Unlike a skipped span
+ * read, a skipped clock read still saves the span, so [filler] is durable afterwards.
+ */
+internal suspend fun WarpSpanExporter.skipClockWindow(turns: Int, filler: SpanRecord, refusals: () -> Int = { 0 }) {
+    repeat(turns) { turn ->
+        val before = refusals()
+        val saved = export(filler)
+        check(saved == ExportResult.Success) { "the rig: turn $turn of the clock's window did not save its span: $saved" }
+        check(snapshot().elements.none { it.spanId == filler.spanId && it.causalStamp != null }) {
+            "the rig: turn $turn of the clock's window read the clock and stamped"
+        }
+        check(refusals() == before) { "the rig: turn $turn of the clock's window read the clock" }
+    }
+}

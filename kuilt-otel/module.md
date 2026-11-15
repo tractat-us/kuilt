@@ -90,8 +90,10 @@ Bad bytes start the log and span buffers fresh. A store that refuses the read in
 makes every log or span turn fail, and write nothing, until a later read succeeds. That
 keeps the records and spans on disk the read would have found. Log turns retry the read
 on a window that doubles up to 63 turns, so a long outage costs one store read per 64 log
-turns; `recover()` always reads. A span turn that read
-stops counts in `failed`, and the first span write that lands resolves it. Metrics do the
+turns; `recover()` always reads. Span turns (`export`, `merge` and `clear`) retry on the
+same window, so a long outage reads the whole span blob once per 64 turns. A span turn that
+read stops, or that skips the read inside the window, counts in `failed`, and the first span
+write that lands resolves it. Metrics do the
 same for each metric kind on its own: a refused read of the histograms fails the
 histogram turns, and a batch's sums still write. Each kind retries its read on the same
 doubling window as the logs, counted in that kind's own turns, so a refused histogram read
@@ -100,7 +102,9 @@ skipped turn fails exactly as a refused read does. A metric exporter nobody reco
 each kind before its first write.
 
 The span clock is counted as its own work. While the store refuses the clock's read, a span
-turn still saves its span, without a causal stamp, and skips the clock. That turn counts
+turn still saves its span, without a causal stamp, and skips the clock. Its turns retry
+the clock's read on the same doubling window, and a turn inside the window skips the read
+and counts as a refused one would. That turn counts
 twice: `acknowledged` for the span and `failed` for the clock. A clock refused forever
 therefore keeps `outstandingFailures` above zero however many spans land. The first turn
 that writes the clock clears those failures, unless that turn wanted a stamp the clock
