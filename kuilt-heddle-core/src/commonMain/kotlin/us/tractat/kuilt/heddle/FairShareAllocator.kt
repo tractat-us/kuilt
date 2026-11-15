@@ -310,7 +310,10 @@ public class FairShareAllocator(
      * move: no child is past its [rebaseThreshold], one is at its ceiling (the pick refused first),
      * the step leaves `Long`, or a demanding child is below one step.
      */
-    private fun originStep(edges: List<PolicyEdge>): Int128? {
+    private fun originStep(
+        edges: List<PolicyEdge>,
+        boundBy: List<PolicyEdge> = edges.filter { it.gauge != null && HeddlePolicy.isDemanding(it) },
+    ): Int128? {
         if (edges.isEmpty()) return null
         // The front on every child's grid too: a light runner holding the front up would otherwise
         // put a heavy child joining it past its own ceiling (#3353 review, item A).
@@ -322,9 +325,42 @@ public class FairShareAllocator(
         if (!past) return null
         if (edges.any { HeddlePolicy.isAtCeiling(it) }) return null
         val step = gridStep(edges) ?: return null
-        val demanding = edges.filter { it.gauge != null && HeddlePolicy.isDemanding(it) }
-        if (demanding.isEmpty()) return null
-        return wholeSteps(demanding.minOf { unitsOf(it) ?: return null }, step)
+        if (boundBy.isEmpty()) return null
+        return wholeSteps(boundBy.minOf { unitsOf(it) ?: return null }, step)
+    }
+
+    /**
+     * The origin step after a **charging** call lands at [parent] in [ledger]: `admit`, `extend` or a
+     * `complete` that overran (#3353 review, item I). A parent a consumer drives only through those
+     * is never picked at, so without this it never rebases. The rule is the pick's, with `Δ` bounded
+     * by the demanding children [waiting] names. A call with no waiting set bounds it by [charged],
+     * the child it charged, and by every child this allocator last saw demanding: a child it saw
+     * idle, or never saw, may go below zero, and is clamped as a waker when it next competes. An
+     * origin raise moves every child alike, so it changes no pick.
+     *
+     * A charging call never refuses, so this never throws: `null` when no step is possible, or when
+     * the arithmetic would leave 128 bits.
+     */
+    internal fun chargeRebase(
+        parent: GroupId,
+        ledger: EntitlementLedger,
+        waiting: ((AttachmentId) -> Demand)?,
+        charged: AttachmentId,
+    ): Rebase? {
+        if (!rebaseEnabled) return null
+        return try {
+            val edges = policyEdges(ledger, parent, waiting ?: { Demand.NONE })
+            val bound = if (waiting != null) {
+                edges.filter { it.gauge != null && HeddlePolicy.isDemanding(it) }
+            } else {
+                edges.filter { it.gauge != null && (it.record.id == charged || demandingObserved[it.record.id] == true) }
+            }
+            val delta = originStep(edges, bound) ?: return null
+            val patch = ledger.raiseOrigin(parent, ledger.origin(parent) + delta) ?: return null
+            Rebase(ledger.piece(patch.delta))
+        } catch (_: ArithmeticException) {
+            null
+        }
     }
 
     /**

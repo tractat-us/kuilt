@@ -71,7 +71,7 @@ internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADR
  * is rare. Each child is measured against its own threshold, and the front too, read on every
  * child's grid, so a heavy child joining a light runner's front is never seated past its ceiling
  * (#3353 review, item A). What still reaches the ceiling is a demanding child that is never served,
- * which holds `Δ` at zero, and a `LocalHeddle` parent that is only charged and never picked at.
+ * which holds `Δ` at zero, and a weight set so fine-grained that no whole step fits.
  */
 internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16
 

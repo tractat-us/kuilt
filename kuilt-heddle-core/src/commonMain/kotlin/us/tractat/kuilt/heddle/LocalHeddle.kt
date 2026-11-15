@@ -397,10 +397,10 @@ public sealed interface LeaseOutcome {
  * a heavy one joining a light runner is not seated past its own ceiling, and after the grant. Every
  * child reads that much lower, an idle one included, so no pick changes, and no gauge or wake clamp
  * is rewritten. The ceiling is measured net of returns, so returned service never reaches it
- * (#3360). It is still reachable two ways:
- * - a demanding child sits at zero and is never served, which holds the rebase at nothing;
- * - a parent is only ever charged through [admit], [extend] or an overrun at [complete], and never
- *   picked at, so it is never rebased.
+ * (#3360). A charging call, [admit], [extend] or an overrun at [complete], runs the same step at
+ * every parent on its path, so a parent driven only that way is rebased too. It is still reachable
+ * where no whole step fits: a demanding child sits at zero and is never served, which holds the
+ * rebase at nothing, or a weight set is so fine-grained that one step spans a child's threshold.
  *
  * Nothing is narrowed before the effective position a pick orders, so a seat or a wake clamp
  * taken against a front that includes a position at its ceiling is taken against the exact front,
@@ -565,6 +565,29 @@ public class LocalHeddle private constructor(
     }
 
     /**
+     * [ledger], a charging call's result down [path], with the origin step run at every parent on
+     * the path, top down (#3353 review, item I): the same rule a pick runs, so a parent driven only
+     * through [admit], [extend] and overruns at [complete] is rebased too. [waiting] is the call's
+     * waiting set, when it has one. Every raise is counted ([FairShareAllocator.adopt]), and the
+     * call keeps the result in its one swap. Never throws: a parent with no step is left as it is.
+     */
+    private fun rebasedAfterCharge(
+        ledger: EntitlementLedger,
+        path: List<AttachmentId>,
+        waiting: ((AttachmentId) -> Demand)?,
+    ): EntitlementLedger {
+        if (!rebaseForTest) return ledger
+        var local = ledger
+        for (edge in path) {
+            val parent = local.record(edge)?.parent ?: continue
+            val rebase = allocator.chargeRebase(parent, local, waiting, charged = edge) ?: continue
+            allocator.adopt(rebase)
+            local = rebase.ledger
+        }
+        return local
+    }
+
+    /**
      * The pick [acquire] makes, on [base] and this engine's allocator: from [root], one
      * [FairShareAllocator.pickChild] per level and a delegation of [reservation] down the edge it
      * picked, until it reaches an eligible leaf. Every step lands on a local value; [base] is not
@@ -670,7 +693,7 @@ public class LocalHeddle private constructor(
         val (funded, minted) = fund(base, reservation)
         val local = seatThenDelegate(funded, path, reservation, observedDemand(reservation))
             ?: return@atomically AcquireOutcome.NoLiveLineage(leaf)
-        ledger = local
+        ledger = rebasedAfterCharge(local, path, waiting = null)
         forcedMints += minted
         AcquireOutcome.Acquired(open(leaf, path, reservation, startedAt))
     }
@@ -733,7 +756,7 @@ public class LocalHeddle private constructor(
                 "the delegation of $reservation down ${edge.value}, admitted down a live lineage, was refused"
             }
         }
-        ledger = local
+        ledger = rebasedAfterCharge(local, path, seen)
         forcedMints += minted
         AcquireOutcome.Acquired(open(leaf, path, reservation, startedAt))
     }
@@ -755,7 +778,7 @@ public class LocalHeddle private constructor(
         val base = ledger
         base.firstNotActive(current.path)?.let { return@atomically LeaseOutcome.PathDraining(it) }
         val funded = supplied(base, amount) ?: return@atomically LeaseOutcome.SupplyExhausted
-        val delegated = delegateOrFail(funded, current.path, amount)
+        val delegated = rebasedAfterCharge(delegateOrFail(funded, current.path, amount), current.path, waiting = null)
         current.path.firstOrNull { delegated.isAtPositionCeiling(it) }?.let { edge ->
             return@atomically LeaseOutcome.PositionCeiling(checkNotNull(delegated.record(edge)) { "path edge ${edge.value} has no record" }.parent)
         }
@@ -792,7 +815,7 @@ public class LocalHeddle private constructor(
         if (overrun > 0L && reach.isNotEmpty()) {
             val (funded, forced) = fund(local, overrun)
             minted = forced
-            local = delegateOrFail(funded, reach, overrun)
+            local = rebasedAfterCharge(delegateOrFail(funded, reach, overrun), reach, waiting = null)
         }
         // What the leaf holds for this lease, and what of it is charged there; the rest goes back up.
         val atLeafHeld = if (toLeaf) checkedAdd(reserved, overrun) else reserved
@@ -1252,9 +1275,8 @@ public class LocalHeddle private constructor(
      * gauge at its own origin (#1752). `null` when an edge cannot be seated or cannot take the
      * delegation; [start] is not changed either way.
      *
-     * It never rebases (#3329): only a pick does. So a parent that is only ever charged through
-     * [admit], [extend] or an overrun at [complete], and never picked at, is not rebased, and its
-     * positions climb toward their ceiling as they did before the rebase existed.
+     * It does not rebase itself; the charging call that called it does, once its charge has landed
+     * ([rebasedAfterCharge], #3353 review, item I).
      */
     private fun seatThenDelegate(
         start: EntitlementLedger,

@@ -856,7 +856,10 @@ peer must not share a cluster.
 On the seven-lane `LocalHeddle` run of #3329, a twin with no rebase makes the
 same picks and then refuses; the rebasing engine runs 100,000 picks. A
 delegation that is not a pick (`admit`, `extend`, an overrun at `complete`)
-never rebases, so a parent only ever charged that way is never rebased.
+runs the same step at every parent on its path once its charge lands, bounded by
+the call's waiting set, or, when it has none, by the child it charged and the
+children last seen demanding; one last seen idle is clamped when it next wakes. A charging
+call never refuses, so a parent with no step is simply left as it is.
 
 **Where the ceiling is still reached.** These ways, and `PositionCeiling` answers
 each:
@@ -870,9 +873,6 @@ each:
   only makes a rebase late. Past `16R`, its ceiling, it wedges the parent while that
   child demands. That takes a spread near 10¹², `2⁴²/1023` beside `1/1021` say, and
   about 2⁴⁹ units of service, and no test reaches it.
-- A `LocalHeddle` parent only ever charged through `admit`, `extend` or an
-  overrun, and never picked at, is never rebased. Every `HeddleNode` delegation
-  is a pick, so this one is `LocalHeddle`'s alone.
 
 A child that is not demanding can sit as far below zero as the origin has
 risen, past `Long`. A pick never orders it: if it comes back demanding to an
