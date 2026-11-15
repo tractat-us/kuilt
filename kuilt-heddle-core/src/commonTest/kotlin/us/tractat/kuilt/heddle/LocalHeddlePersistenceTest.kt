@@ -737,6 +737,19 @@ class LocalHeddlePersistenceTest {
         assertTrue(out is RestoreResult.Corrupt && "wake clamp" in out.reason, "expected Corrupt naming the clamp, got $out")
     }
 
+    /**
+     * A shift remainder is on its edge's own grid, since a reweight is a new edge (#3416 review), so a
+     * snapshot holding one at another denominator is corrupt, refused at decode rather than at the
+     * pick that would read it.
+     */
+    @Test
+    fun aShiftRemainderOffItsEdgesGridIsCorrupt() {
+        val honest = "\"shiftRemainders\":{\"root/tenants@1:1#0\":{\"numerator\":{\"low\":144144},\"denominator\":1}}"
+        check(honest in GOLDEN_FORMAT_2_RICH) { "the rig: the remainder is where this test expects it" }
+        val out = LocalHeddle.decode(GOLDEN_FORMAT_2_RICH.replace(honest, honest.replace("\"denominator\":1", "\"denominator\":2")), Json)
+        assertTrue(out is RestoreResult.Corrupt && "at denominator 2" in out.reason, "expected Corrupt naming the remainder, got $out")
+    }
+
     /** An honest fold is never negative, so a snapshot whose fold is, in either of its two maps, is corrupt. */
     @Test
     fun aNegativeFoldIsCorrupt() {

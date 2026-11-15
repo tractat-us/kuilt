@@ -6,6 +6,7 @@ import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -240,6 +241,32 @@ class FairShareAllocatorTest {
             { assertEquals(30L to 10L, issued(cell, e1) to issued(cell, e2), "the rig: e1 ran on alone after e2 left") },
             { assertEquals(Rational.of(30L), allocator.effectiveVirtualService(cell, e2), "the rig: e2 came back moved by the clock's 20") },
             { assertEquals(Rational.of(40L), allocator.effectiveVirtualService(cell, e3), "e3 seated level with both, at 30, then ran its 10") },
+        )
+    }
+
+    /**
+     * A shift remainder is always on its edge's own grid, since a reweight is a new edge (#3416
+     * review), so one at another denominator is a memory no allocator wrote, and the returner it
+     * belongs to is refused at its pick rather than moved by a remainder dropped quietly. e2 returns
+     * at once, its parent's clock still, carrying a remainder at denominator 2 on a weight of 1. The
+     * control carries the same numerator at denominator 1 and returns.
+     */
+    @Test
+    fun aShiftRemainderOffItsEdgesGridIsRefused() {
+        fun returning(denominator: Long): AllocatorMemory = AllocatorMemory(
+            wakeOffsets = emptyMap(),
+            demandingObserved = mapOf(e2 to false),
+            departures = mapOf(e2 to Int128.ZERO),
+            shiftRemainders = mapOf(e2 to ShiftRemainder(Int128.of(1L), denominator)),
+        )
+        fun schedule(memory: AllocatorMemory) =
+            FairShareAllocator(self, policy, memory).schedule(root, flatLedger(mapOf(self to 20L)), earmarked = 0L, demandOf(e1 to hungry, e2 to hungry))
+        assertAll(
+            { assertEquals(AllocationOutcome.Delegated(2), schedule(returning(denominator = 1L)), "the control: on its grid, e2 returns") },
+            {
+                val refused = assertFailsWith<IllegalStateException> { schedule(returning(denominator = 2L)) }
+                assertTrue("denominator 2" in (refused.message ?: ""), "the check names the denominator: $refused")
+            },
         )
     }
 
