@@ -1383,8 +1383,9 @@ class HeddleNodeTest {
      * A grant whose delegation carries its child past its ceiling is made, as `LocalHeddle` makes
      * one: a pick orders the full 128-bit position. One lease of [MAX_GRANT] puts a `1/30,719` child
      * 93.75% of the way up its own grid, so the second passes it. Rebasing is off, which stands in for
-     * a demanding child that is never served holding the origin where it is. The second call used to
-     * answer [ScheduleOutcome.PositionCeiling] and write nothing.
+     * a demanding child that is never served holding the origin where it is. The call used to stop
+     * after the first lease, and the next one to answer [ScheduleOutcome.PositionCeiling] and write
+     * nothing.
      */
     @Test
     fun aGrantThatCarriesAChildPastItsCeilingIsMade() = runTest(
@@ -1397,19 +1398,13 @@ class HeddleNodeTest {
         val node = h.peers[0].node
         node.rebaseForTest = false
         node.advertise(fine.id, Demand(4L * MAX_GRANT, MAX_GRANT))
-        val first = node.schedule(root)
-        val afterFirst = node.ledger.value
+        val outcome = node.schedule(root)
         val peak = node.boundMetrics(root).peakPositionFraction
-        val second = node.schedule(root)
-        val afterSecond = node.ledger.value
-        val peakAfter = node.boundMetrics(root).peakPositionFraction
         assertAll(
-            { assertEquals(ScheduleOutcome.Delegated(1), first, "one lease on the first call") },
-            { assertEquals(MAX_GRANT, afterFirst.edge(fine.id)?.issued, "exactly one lease went down the edge") },
-            { assertTrue(peak > 0.9 && peak < 1.0, "the rig: the child sits one lease up, below its ceiling: $peak") },
-            { assertIs<ScheduleOutcome.Delegated>(second, "the next call grants too: $second") },
-            { assertTrue((afterSecond.edge(fine.id)?.issued ?: 0L) > MAX_GRANT, "a second lease went down the edge") },
-            { assertTrue(peakAfter > 1.0, "and carried the child past its ceiling: $peakAfter") },
+            { assertEquals(ScheduleOutcome.Delegated(4), outcome, "all four leases the child asked for, in one call") },
+            { assertEquals(4L * MAX_GRANT, node.ledger.value.edge(fine.id)?.issued, "every one went down the edge") },
+            // One lease is 93.75% of the way up, so the second crossed the ceiling and the rest ran on past it.
+            { assertTrue(peak > 3.0, "the rig: the child ended well past its ceiling: $peak") },
         )
     }
 
