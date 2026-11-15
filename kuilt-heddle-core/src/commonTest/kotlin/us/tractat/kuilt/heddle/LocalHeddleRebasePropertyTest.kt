@@ -76,7 +76,7 @@ class LocalHeddleRebasePropertyTest {
                 }
                 if (outcome is AcquireOutcome.Acquired) {
                     val cost = if (partial) LocalHeddle.MAX_RESERVATION / 2 else LocalHeddle.MAX_RESERVATION
-                    e.complete(outcome.lease.id, actualCost = cost)
+                    e.complete(outcome.lease.id, actualCost = cost, waiting = emptySet())
                 }
                 unreachableOutcome to outcome
             }
@@ -166,7 +166,7 @@ class LocalHeddleRebasePropertyTest {
             val outcomes = running.map { e ->
                 val outcome = e.acquire(waiting, waiting, startedAt = step.toLong(), reservation = RETURN_RESERVATION)
                 if (outcome is AcquireOutcome.Acquired) {
-                    if (cancel) e.cancel(outcome.lease.id) else e.complete(outcome.lease.id, actualCost = RETURN_RESERVATION / 2)
+                    if (cancel) e.cancel(outcome.lease.id) else e.complete(outcome.lease.id, actualCost = RETURN_RESERVATION / 2, waiting = emptySet())
                 }
                 outcome
             }
@@ -214,7 +214,7 @@ class LocalHeddleRebasePropertyTest {
         repeat(RETURNED_LANE_PICKS) { step ->
             val outcome = engine.acquire(setOf(a), setOf(a), startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
             check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
-            engine.complete(outcome.lease.id, actualCost = 1L)
+            engine.complete(outcome.lease.id, actualCost = 1L, waiting = emptySet())
             picks++
             if (step % SAMPLE_EVERY == 0) peak = maxOf(peak, peakShare(engine))
         }
@@ -253,7 +253,7 @@ class LocalHeddleRebasePropertyTest {
             val waiting = if (step < WIDE_ALONE) setOf(lanes[3]) else lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }.toSet()
             val outcome = engine.acquire(waiting, waiting, startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
             check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
-            if (step % 4 == 0) engine.cancel(outcome.lease.id) else engine.complete(outcome.lease.id, actualCost = LocalHeddle.MAX_RESERVATION / 2)
+            if (step % 4 == 0) engine.cancel(outcome.lease.id) else engine.complete(outcome.lease.id, actualCost = LocalHeddle.MAX_RESERVATION / 2, waiting = emptySet())
             picks++
             peak = maxOf(peak, peakShare(engine))
         }
@@ -283,14 +283,14 @@ class LocalHeddleRebasePropertyTest {
         var extended = 0
         var peak = 0.0
         repeat(CHARGED_LEASES) { step ->
-            val admitted = engine.admit(a, startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
+            val admitted = engine.admit(a, waiting = setOf(a), startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
             check(admitted is AcquireOutcome.Acquired) { "lease ${step + 1}: expected a lease, got $admitted" }
             if (step % 3 == 0) {
-                val out = engine.extend(admitted.lease.id, LocalHeddle.MAX_RESERVATION)
+                val out = engine.extend(admitted.lease.id, LocalHeddle.MAX_RESERVATION, waiting = emptySet())
                 check(out is LeaseOutcome.Done) { "lease ${step + 1}: extend answered $out" }
                 extended++
             }
-            engine.complete(admitted.lease.id, actualCost = LocalHeddle.MAX_RESERVATION)
+            engine.complete(admitted.lease.id, actualCost = LocalHeddle.MAX_RESERVATION, waiting = emptySet())
             leases++
             peak = maxOf(peak, peakShare(engine))
         }

@@ -82,8 +82,8 @@ internal class WindowRuleRig(
                     leaves += names.first { topology.groupId(it) == out.lease.leaf }
                     when (step % 4) {
                         0 -> engine.cancel(out.lease.id)
-                        1 -> engine.complete(out.lease.id, actualCost = LocalHeddle.MAX_RESERVATION / 2)
-                        else -> engine.complete(out.lease.id, actualCost = LocalHeddle.MAX_RESERVATION)
+                        1 -> engine.complete(out.lease.id, actualCost = LocalHeddle.MAX_RESERVATION / 2, waiting = emptySet())
+                        else -> engine.complete(out.lease.id, actualCost = LocalHeddle.MAX_RESERVATION, waiting = emptySet())
                     }
                 }
                 is AcquireOutcome.PositionCeiling -> {

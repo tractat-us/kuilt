@@ -82,7 +82,7 @@ class LocalHeddlePersistenceTest {
         h.reconcileCapacity(totalSlots = 2L)
         repeat(50) {
             val lease = h.lease(setOf(a), startedAt = it.toLong())
-            h.complete(lease.id, 1L)
+            h.complete(lease.id, 1L, waiting = emptySet())
         }
         val open = listOf(h.lease(setOf(a, b), startedAt = 100L), h.lease(setOf(a, b), startedAt = 101L))
         return h to open
@@ -91,12 +91,12 @@ class LocalHeddlePersistenceTest {
     /** The same calls after the scenario, on whichever engine: settle both open leases, then 20 slots with both waiting. */
     private fun continuation(h: LocalHeddle, open: List<Lease>): List<Any> {
         val outcomes = ArrayList<Any>()
-        outcomes += h.complete(open[0].id, 1L)
-        outcomes += h.complete(open[1].id, 3L)
+        outcomes += h.complete(open[0].id, 1L, waiting = emptySet())
+        outcomes += h.complete(open[1].id, 3L, waiting = emptySet())
         repeat(20) {
             val lease = h.lease(setOf(a, b), startedAt = 200L + it)
             outcomes += lease.leaf
-            outcomes += h.complete(lease.id, 1L)
+            outcomes += h.complete(lease.id, 1L, waiting = emptySet())
         }
         return outcomes
     }
@@ -241,7 +241,7 @@ class LocalHeddlePersistenceTest {
         val first = h.apply(after, generation = 1L)
         val persisted = h.persist()
         val restored = throughJson(h)
-        val done = restored.complete(leftover.id, 1L)
+        val done = restored.complete(leftover.id, 1L, waiting = emptySet())
         val second = restored.apply(after, generation = 1L)
         assertAll(
             { assertIs<StepRefusal.Draining>(first.refusals.single(), "the rig: the removal is draining") },
@@ -283,8 +283,8 @@ class LocalHeddlePersistenceTest {
         val (reference, open) = wakerScenario()
         val restored = throughJson(wakerScenario().first)
         val before = restored.snapshot().leases
-        val viaReference = open.map { reference.complete(it.id, 2L) }
-        val viaRestored = open.map { restored.complete(it.id, 2L) }
+        val viaReference = open.map { reference.complete(it.id, 2L, waiting = emptySet()) }
+        val viaRestored = open.map { restored.complete(it.id, 2L, waiting = emptySet()) }
         assertAll(
             { assertEquals(open, before, "every lease is open again under its own id") },
             { assertEquals(setOf(a, b), open.map { it.leaf }.toSet(), "the rig: one lease under each leaf") },
@@ -345,7 +345,7 @@ class LocalHeddlePersistenceTest {
         )
         val pool = draft.groupId("pool")
         val original = LocalHeddle.bootWhole(draft, policy, epoch = 0L)
-        val before = original.admit(pool, startedAt = 0L)
+        val before = original.admit(pool, waiting = setOf(pool), startedAt = 0L)
         val restored = throughJson(original)
         assertAll(
             { assertEquals(draft, original.persist().lastApplied, "the rig: the snapshot holds the draft") },
@@ -353,11 +353,11 @@ class LocalHeddlePersistenceTest {
             {
                 assertEquals(
                     listOf<Any>(AcquireOutcome.NoLiveLineage(pool), AcquireOutcome.NoLiveLineage(pool)),
-                    listOf(before, restored.admit(pool, startedAt = 1L)),
+                    listOf(before, restored.admit(pool, waiting = setOf(pool), startedAt = 1L)),
                     "a group with a template with nothing attached is refused before the restore and after it",
                 )
             },
-            { assertIs<AcquireOutcome.Acquired>(restored.admit(draft.groupId("lane"), startedAt = 2L), "the control: the lane still leases") },
+            { assertIs<AcquireOutcome.Acquired>(restored.admit(draft.groupId("lane"), waiting = setOf(draft.groupId("lane")), startedAt = 2L), "the control: the lane still leases") },
         )
     }
 
@@ -422,7 +422,7 @@ class LocalHeddlePersistenceTest {
         }
         fun picks(h: LocalHeddle): List<GroupId> = List(6) {
             val lease = assertIs<AcquireOutcome.Acquired>(h.acquire(both, both, startedAt = 1L)).lease
-            check(h.complete(lease.id, actualCost = 1L) is LeaseOutcome.Done)
+            check(h.complete(lease.id, actualCost = 1L, waiting = emptySet()) is LeaseOutcome.Done)
             lease.leaf
         }
         val persisted = away().persist()
@@ -558,12 +558,12 @@ class LocalHeddlePersistenceTest {
     /** The same calls after the rich scenario, on whichever engine: settle every lease, reload again so `spare` retires, then 12 slots. */
     private fun richContinuation(h: LocalHeddle, open: List<Lease>): List<Any> {
         val outcomes = ArrayList<Any>()
-        open.forEachIndexed { i, lease -> outcomes += h.complete(lease.id, 1L + i) }
+        open.forEachIndexed { i, lease -> outcomes += h.complete(lease.id, 1L + i, waiting = emptySet()) }
         outcomes += shape(h.apply(richAfter, generation = 3L))
         repeat(12) {
             val out = h.acquire(richLeaves, richLeaves, startedAt = 100L + it)
             outcomes += shape(out)
-            if (out is AcquireOutcome.Acquired) outcomes += h.complete(out.lease.id, 2L)
+            if (out is AcquireOutcome.Acquired) outcomes += h.complete(out.lease.id, 2L, waiting = emptySet())
         }
         outcomes.add(books(h).dropLast(2))
         return outcomes
@@ -582,7 +582,7 @@ class LocalHeddlePersistenceTest {
         val (h, open) = richScenario(forgets)
         check(h.attach(listOf("tenants"), "t2", generation = 4L).refusals.isEmpty())
         val lease = h.lease(setOf(departed), reservation = 2L, startedAt = 30L)
-        check(h.complete(lease.id, 3L) is LeaseOutcome.Done)
+        check(h.complete(lease.id, 3L, waiting = emptySet()) is LeaseOutcome.Done)
         check(h.detach(listOf("tenants"), "t2").refusals.isEmpty())
         val ceilingsOnly = h.apply(richCapped, generation = 5L)
         check(ceilingsOnly.applied.isEmpty() && ceilingsOnly.refusals.all { it is StepRefusal.Draining }) { "a change of ceiling alone is no step: $ceilingsOnly" }
@@ -661,7 +661,7 @@ class LocalHeddlePersistenceTest {
         val second = only(interactive)
         val bothFull = why(interactive)
         // Completing y's lease frees acme and leaves interactive full: the lane's own ceiling.
-        check(restored.complete(snapshot.leases.single { it.leaf == y }.id, 1L) is LeaseOutcome.Done)
+        check(restored.complete(snapshot.leases.single { it.leaf == y }.id, 1L, waiting = emptySet()) is LeaseOutcome.Done)
         val laneFull = only(interactive)
         val laneWhy = why(interactive)
         // x is uncapped, so only acme's ceiling stops it after its first lease.
@@ -932,19 +932,19 @@ class LocalHeddlePersistenceTest {
     fun staleLeaseAfterResetIsNamed() {
         val (h, open) = wakerScenario()
         val settled = h.lease(setOf(a, b))
-        h.complete(settled.id, 1L)
+        h.complete(settled.id, 1L, waiting = emptySet())
         val reset = LocalHeddle.bootWhole(pair, policy, epoch = 1L)
         val resetBefore = reset.snapshot().ledger
         val restored = throughJson(h)
         val restoredBefore = restored.snapshot().ledger
         assertAll(
-            { assertEquals(LeaseOutcome.Stale(1L), reset.complete(open[0].id, 1L)) },
-            { assertEquals(LeaseOutcome.Stale(1L), reset.extend(open[1].id, 1L)) },
+            { assertEquals(LeaseOutcome.Stale(1L), reset.complete(open[0].id, 1L, waiting = emptySet())) },
+            { assertEquals(LeaseOutcome.Stale(1L), reset.extend(open[1].id, 1L, waiting = emptySet())) },
             { assertEquals(LeaseOutcome.Stale(1L), reset.cancel(open[1].id)) },
             { assertSame(resetBefore, reset.snapshot().ledger, "the reset engine charged nothing") },
-            { assertEquals(LeaseOutcome.Stale(1L), restored.complete(settled.id, 1L), "a lease settled before the persist") },
+            { assertEquals(LeaseOutcome.Stale(1L), restored.complete(settled.id, 1L, waiting = emptySet()), "a lease settled before the persist") },
             { assertSame(restoredBefore, restored.snapshot().ledger, "and that charged nothing either") },
-            { assertEquals(LeaseOutcome.Done(1L, 0L), restored.complete(open[0].id, 1L), "a lease the snapshot holds is still valid") },
+            { assertEquals(LeaseOutcome.Done(1L, 0L), restored.complete(open[0].id, 1L, waiting = emptySet()), "a lease the snapshot holds is still valid") },
         )
     }
 
@@ -1037,8 +1037,8 @@ class LocalHeddlePersistenceTest {
                         val theirs = open[i].id
                         val amount = rng.nextInt(9).toLong()
                         when (kind) {
-                            1 -> reference.extend(theirs, amount + 1) to subject.extend(mine, amount + 1)
-                            2 -> reference.complete(theirs, amount) to subject.complete(mine, amount)
+                            1 -> reference.extend(theirs, amount + 1, waiting = emptySet()) to subject.extend(mine, amount + 1, waiting = emptySet())
+                            2 -> reference.complete(theirs, amount, waiting = emptySet()) to subject.complete(mine, amount, waiting = emptySet())
                             else -> reference.cancel(theirs) to subject.cancel(mine)
                         }
                     }

@@ -78,14 +78,14 @@ class LocalHeddleAdmitWaitingTest {
                     kind == 1 -> {
                         val lease = open[rng.nextInt(open.size)].id
                         val amount = 1L + rng.nextInt(4)
-                        admits.extend(lease, amount)
-                        acquires.extend(lease, amount)
+                        admits.extend(lease, amount, waiting = emptySet())
+                        acquires.extend(lease, amount, waiting = emptySet())
                     }
                     kind == 2 -> {
                         val lease = open[rng.nextInt(open.size)].id
                         val cost = rng.nextInt(9).toLong()
-                        admits.complete(lease, cost)
-                        acquires.complete(lease, cost)
+                        admits.complete(lease, cost, waiting = emptySet())
+                        acquires.complete(lease, cost, waiting = emptySet())
                     }
                     kind == 3 -> {
                         val lease = open[rng.nextInt(open.size)].id
@@ -154,7 +154,7 @@ class LocalHeddleAdmitWaitingTest {
         val h = engineOver(shapedLedger(root, listOf(edgeOf(root, a), edgeOf(root, s))), root, supply = 1_000)
         repeat(3) { step ->
             val lease = assertIs<AcquireOutcome.Acquired>(h.admit(a, setOf(a), startedAt = step.toLong(), reservation = 2L)).lease
-            h.complete(lease.id, actualCost = 2L)
+            h.complete(lease.id, actualCost = 2L, waiting = emptySet())
         }
         val before = h.snapshot().allocatorMemory
         val returned = h.admit(a, setOf(a, s), startedAt = 3L, reservation = 2L)

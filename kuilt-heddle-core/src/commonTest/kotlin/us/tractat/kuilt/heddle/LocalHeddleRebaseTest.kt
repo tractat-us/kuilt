@@ -49,7 +49,7 @@ class LocalHeddleRebaseTest {
     /** One acquire and its completion at cost 1 on each engine, returning the leaves they picked. */
     private fun pickOnEach(engines: List<LocalHeddle>, waiting: Set<GroupId>, at: Long): List<GroupId> = engines.map { e ->
         val lease = (e.acquire(waiting, waiting, startedAt = at) as AcquireOutcome.Acquired).lease
-        e.complete(lease.id, actualCost = 1L)
+        e.complete(lease.id, actualCost = 1L, waiting = emptySet())
         lease.leaf
     }
 
@@ -282,9 +282,9 @@ class LocalHeddleRebaseTest {
         }
         check(engine.apply(withHeavy, generation = 1L).refusals.isEmpty()) { "the rig: n landed" }
         val n = withHeavy.groupId("n")
-        val admitted = engine.admit(n, startedAt = 1L)
+        val admitted = engine.admit(n, waiting = setOf(n), startedAt = 1L)
         check(admitted is AcquireOutcome.Acquired) { "the rig: n was admitted, $admitted" }
-        engine.complete(admitted.lease.id, actualCost = 1L)
+        engine.complete(admitted.lease.id, actualCost = 1L, waiting = emptySet())
         val outcome = engine.acquire(setOf(a, b, c, n), setOf(a, b, c, n), startedAt = 2L)
         assertAll(
             { assertTrue(outcome is AcquireOutcome.Acquired, "the parent is not wedged: $outcome") },
@@ -315,9 +315,9 @@ class LocalHeddleRebaseTest {
         check(engine.apply(withHeavy, generation = 1L).refusals.isEmpty()) { "the rig: n landed" }
         val n = withHeavy.groupId("n")
         val rebasesBefore = engine.rebasesForTest
-        val admitted = engine.admit(n, startedAt = 1L)
+        val admitted = engine.admit(n, waiting = setOf(n), startedAt = 1L)
         check(admitted is AcquireOutcome.Acquired) { "the rig: n was admitted, $admitted" }
-        engine.complete(admitted.lease.id, actualCost = 1L)
+        engine.complete(admitted.lease.id, actualCost = 1L, waiting = emptySet())
         val outcome = engine.acquire(setOf(a, b, n), setOf(a, b, n), startedAt = 2L)
         assertAll(
             { assertTrue(outcome is AcquireOutcome.Acquired, "the parent is not wedged: $outcome") },
@@ -354,7 +354,7 @@ class LocalHeddleRebaseTest {
             val waiting = if (i % 3 == 0) setOf(a, b, c) else setOf(a, c)
             listOf(engine, twin).map { e ->
                 val lease = (e.acquire(waiting, waiting, startedAt = 2L + i) as AcquireOutcome.Acquired).lease
-                e.complete(lease.id, actualCost = 1L)
+                e.complete(lease.id, actualCost = 1L, waiting = emptySet())
                 lease.leaf
             }
         }

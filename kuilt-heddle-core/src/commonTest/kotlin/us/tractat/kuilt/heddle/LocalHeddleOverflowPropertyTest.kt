@@ -75,7 +75,7 @@ class LocalHeddleOverflowPropertyTest {
             }
             check(outcome is AcquireOutcome.Acquired) { "cycle ${cycle + 1}: expected a lease, got $outcome" }
             picked[lanes.indexOf(outcome.lease.leaf)]++
-            engine.complete(outcome.lease.id, actualCost = LocalHeddle.MAX_RESERVATION)
+            engine.complete(outcome.lease.id, actualCost = LocalHeddle.MAX_RESERVATION, waiting = emptySet())
         }
         val picks = picked.sum()
         assertAll(
@@ -135,7 +135,7 @@ class LocalHeddleOverflowPropertyTest {
                 val gauge = ledger.gauge(edge) ?: continue
                 if (gauge.ticks > gauge.folded.timesWide(GRID)) seatedAtAFront += child
             }
-            engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST))
+            engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST), waiting = emptySet())
             picks++
             if (attached.size > CHURN_WIDTH) {
                 check(engine.detach(rt, attached.removeFirst()).refusals.isEmpty()) { "detach at seat $seats" }
@@ -184,7 +184,7 @@ class LocalHeddleOverflowPropertyTest {
                 throw AssertionError("seed $seed, start path $startPath: pick ${step + 1} threw $e", e)
             }
             check(outcome is AcquireOutcome.Acquired) { "seed $seed, pick ${step + 1}: expected a lease, got $outcome" }
-            engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST))
+            engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST), waiting = emptySet())
             picks++
             if (step % SAMPLE_EVERY == 0) {
                 val snapshot = engine.snapshot()

@@ -122,7 +122,7 @@ class LeaseScaleProbe {
         }
         val completeTimes = heddle.snapshot().leases.map { lease ->
             val mark = clock.markNow()
-            heddle.complete(lease.id, actualCost = 2L)
+            heddle.complete(lease.id, actualCost = 2L, waiting = emptySet())
             mark.elapsedNow()
         }
 

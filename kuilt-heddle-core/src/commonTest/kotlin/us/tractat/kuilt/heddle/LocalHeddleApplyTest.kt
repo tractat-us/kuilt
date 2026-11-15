@@ -86,7 +86,7 @@ class LocalHeddleApplyTest {
         val stillOpen = h.snapshot().leases
         val paths = leases.map { assertNotNull(h.capturedPath(it.id)) }
         val dones = leases.map { lease ->
-            val done = h.complete(lease.id, 3L)
+            val done = h.complete(lease.id, 3L, waiting = emptySet())
             val now = h.snapshot().ledger
             Triple(done, now.validate(), now.holdings(acme, LOCAL))
         }
@@ -121,7 +121,7 @@ class LocalHeddleApplyTest {
             { assertEquals(l.lineageOf(batch), h.capturedPath(lease.id), "the lease charges the new lineage") },
             { assertEquals(listOf("root/acme@4:1#1", "root/acme/batch@2:1#1"), h.capturedPath(lease.id)?.map { it.value }) },
             { assertEquals(emptyList(), l.validate()) },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L)) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
             { assertEquals(emptyList(), h.snapshot().ledger.validate()) },
         )
     }
@@ -152,7 +152,7 @@ class LocalHeddleApplyTest {
             { assertEquals(4L, gauge.folded, "folded at the four re-homed units") },
             { assertEquals(front, gauge.assertedAt(Weight.of(4L)) - Rational.of(4L, 4L), "seated at the front, then advanced 4 units at weight 4") },
             { assertEquals(front + Rational.ONE, l.virtualService(h.edgeInto(acme))) },
-            { assertEquals(emptyList(), leases.map { h.complete(it.id, 2L) }.filter { it != LeaseOutcome.Done(2L, 0L) }) },
+            { assertEquals(emptyList(), leases.map { h.complete(it.id, 2L, waiting = emptySet()) }.filter { it != LeaseOutcome.Done(2L, 0L) }) },
         )
     }
 
@@ -200,7 +200,7 @@ class LocalHeddleApplyTest {
             { assertEquals(spent, assertNotNull(l.edge(newAcme)).spent, "onto the new edge") },
             { assertEquals(0L, l.holdings(acme, LOCAL)) },
             { assertEquals(emptyList(), l.validate()) },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(next.id, 2L)) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(next.id, 2L, waiting = emptySet())) },
             { assertEquals(emptyList(), h.snapshot().ledger.validate()) },
         )
     }
@@ -238,9 +238,9 @@ class LocalHeddleApplyTest {
         val hobbyEdge = h.edgeInto(hobby)
         val removed = tree(hobby = false)
         val first = h.apply(removed, generation = 1L)
-        val extend = h.extend(lease.id, 1L)
+        val extend = h.extend(lease.id, 1L, waiting = emptySet())
         val acquire = h.acquire(setOf(default), setOf(default), startedAt = 0L)
-        val done = h.complete(lease.id, 2L)
+        val done = h.complete(lease.id, 2L, waiting = emptySet())
         val second = h.apply(removed, generation = 1L)
         val l = h.snapshot().ledger
         assertAll(
@@ -263,7 +263,7 @@ class LocalHeddleApplyTest {
         val target = tree(hobby = false, acmeW = 5)
         val first = h.apply(target, generation = 1L)
         val found = h.reconcileLeases(live = emptySet(), now = 13L).orphaned.single()
-        val settled = h.complete(found.lease.id, found.defaultSettlement)
+        val settled = h.complete(found.lease.id, found.defaultSettlement, waiting = emptySet())
         val second = h.apply(target, generation = 1L)
         val l = h.snapshot().ledger
         assertAll(
@@ -288,7 +288,7 @@ class LocalHeddleApplyTest {
             { assertEquals(ApplyResult(emptyList(), emptyList()), result) },
             { assertSame(before.ledger, h.snapshot().ledger) },
             { assertEquals(before, h.snapshot()) },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L)) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
         )
     }
 
@@ -322,7 +322,7 @@ class LocalHeddleApplyTest {
         val child = h.lease(setOf(x), reservation = 2L)
         val mid = h.snapshot().ledger
         val path = h.capturedPath(open.id)
-        val done = h.complete(open.id, 5L)
+        val done = h.complete(open.id, 5L, waiting = emptySet())
         val after = h.snapshot().ledger
         assertAll(
             { assertEquals(emptyList(), grown.refusals) },
@@ -352,7 +352,7 @@ class LocalHeddleApplyTest {
             { assertEquals(listOf(h.edgeInto(t.groupId("tenants")), runtimeEdge), h.capturedPath(lease.id), "moved onto tenants' new edge") },
             { assertEquals("root/tenants@2:1#2", h.edgeInto(t.groupId("tenants")).value) },
             { assertEquals(emptyList(), l.validate()) },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L)) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
         )
     }
 
@@ -369,7 +369,7 @@ class LocalHeddleApplyTest {
         val lease = h.lease(setOf(c), reservation = 2L)
         val oldEdge = h.edgeInto(c)
         val detached = h.detach(listOf("tenants"), "c-7f3a")
-        val draining = h.extend(lease.id, 1L)
+        val draining = h.extend(lease.id, 1L, waiting = emptySet())
         val again = h.attach(listOf("tenants"), "c-7f3a", generation = 0L)
         val l = h.snapshot().ledger
         val newEdge = h.edgeInto(c)
@@ -387,9 +387,9 @@ class LocalHeddleApplyTest {
             { assertEquals(Lifecycle.RETIRED, l.lifecycle(oldEdge)) },
             { assertEquals(l.lineageOf(c), h.capturedPath(lease.id)) },
             { assertEquals(newEdge, h.capturedPath(lease.id)?.last()) },
-            { assertEquals(LeaseOutcome.Done(0L, 0L), h.extend(lease.id, 1L), "it can grow again") },
+            { assertEquals(LeaseOutcome.Done(0L, 0L), h.extend(lease.id, 1L, waiting = emptySet()), "it can grow again") },
             { assertEquals(emptyList(), l.validate()) },
-            { assertEquals(LeaseOutcome.Done(3L, 0L), h.complete(lease.id, 3L)) },
+            { assertEquals(LeaseOutcome.Done(3L, 0L), h.complete(lease.id, 3L, waiting = emptySet())) },
         )
     }
 
@@ -407,7 +407,7 @@ class LocalHeddleApplyTest {
             { assertEquals(listOf("root/hobby@1:1#2", "root/hobby/default@1:1#2"), h.capturedPath(lease.id)?.map { it.value }) },
             { assertEquals(emptyList(), l.allEdges().filter { l.lifecycle(it) == Lifecycle.CLOSING }) },
             { assertEquals(emptyList(), l.validate()) },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L)) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
         )
     }
 
@@ -428,8 +428,8 @@ class LocalHeddleApplyTest {
         val l = h.snapshot().ledger
         val beside = h.lease(setOf(interactive), reservation = 2L)
         val pathKept = h.capturedPath(lease.id)
-        h.complete(lease.id, 2L)
-        h.complete(beside.id, 2L)
+        h.complete(lease.id, 2L, waiting = emptySet())
+        h.complete(beside.id, 2L, waiting = emptySet())
         val second = h.apply(target, generation = 1L)
         assertAll(
             {
@@ -464,7 +464,7 @@ class LocalHeddleApplyTest {
         val removing = h.apply(target, generation = 1L)
         val before = h.snapshot().ledger
         // An overrun far above what the root holds: were it delegated anywhere, the shortfall would be minted.
-        val done = h.complete(lease.id, 1_000L)
+        val done = h.complete(lease.id, 1_000L, waiting = emptySet())
         val after = h.snapshot().ledger
         val retired = h.apply(target, generation = 1L)
         assertAll(

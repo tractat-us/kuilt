@@ -91,8 +91,8 @@ class LocalHeddlePropertyTest {
                         onOp(h, seed, h.acquire(waiting.toSet(), eligible.toSet(), startedAt = step.toLong(), reservation = 1L + rng.nextInt(5)))
                         kinds[0]++
                     }
-                    kind == 1 -> { onOp(h, seed, h.extend(open[rng.nextInt(open.size)].id, 1L + rng.nextInt(4))); kinds[1]++ }
-                    kind == 2 -> { h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(9).toLong()); kinds[2]++ }
+                    kind == 1 -> { onOp(h, seed, h.extend(open[rng.nextInt(open.size)].id, 1L + rng.nextInt(4), waiting = emptySet())); kinds[1]++ }
+                    kind == 2 -> { h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(9).toLong(), waiting = emptySet()); kinds[2]++ }
                     kind == 3 -> { h.cancel(open[rng.nextInt(open.size)].id); kinds[3]++ }
                     else -> { h.admit(leaves[rng.nextInt(leaves.size)], startedAt = step.toLong(), reservation = 1L + rng.nextInt(5)); kinds[4]++ }
                 }
@@ -137,7 +137,7 @@ class LocalHeddlePropertyTest {
                     val waiting = subset(rng, leaves)
                     h.acquire(waiting.toSet(), waiting.filter { rng.nextBoolean() }.toSet(), step.toLong(), 1L + rng.nextInt(4))
                 } else {
-                    h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(6).toLong())
+                    h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(6).toLong(), waiting = emptySet())
                 }
             }
             val queued = leaves.associateWith { rng.nextInt(4) }
@@ -205,7 +205,7 @@ class LocalHeddlePropertyTest {
                     val waiting = subset(rng, leaves)
                     h.acquire(waiting.toSet(), waiting.filter { rng.nextBoolean() }.toSet(), step.toLong(), 1L + rng.nextInt(4))
                 } else {
-                    h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(6).toLong())
+                    h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(6).toLong(), waiting = emptySet())
                 }
             }
             val queues = leaves.associateWith { List(rng.nextInt(5)) { 1L + rng.nextInt(7) } }
@@ -227,7 +227,7 @@ class LocalHeddlePropertyTest {
                 if (out !is AcquireOutcome.Acquired) break
                 val head = remaining.getValue(out.lease.leaf).removeFirst()
                 if (head > r) {
-                    if (h.extend(out.lease.id, head - r) !is LeaseOutcome.Done) {
+                    if (h.extend(out.lease.id, head - r, waiting = emptySet()) !is LeaseOutcome.Done) {
                         endedOnExtend++
                         break
                     }
@@ -331,7 +331,7 @@ class LocalHeddlePropertyTest {
                     open.isEmpty() -> reshape(h, rng, seen)
                     draw == 4 -> {
                         val lease = open[rng.nextInt(open.size)]
-                        val out = h.extend(lease.id, 1L + rng.nextInt(4))
+                        val out = h.extend(lease.id, 1L + rng.nextInt(4), waiting = emptySet())
                         if (out is LeaseOutcome.PathDraining) {
                             seen[DRAINING_EXTEND]++
                             if (h.snapshot().ledger !== l) fail("a draining extend changed the ledger, seed $seed step $step")
@@ -346,7 +346,7 @@ class LocalHeddlePropertyTest {
                         val overrunDraining = reach >= 0 && actual > lease.reserved
                         if (overrunDraining) seen[OVERRUN_DRAINING]++
                         if (overrunDraining && reach >= 2) seen[OVERRUN_DEEP_REACH]++
-                        val out = h.complete(lease.id, actual)
+                        val out = h.complete(lease.id, actual, waiting = emptySet())
                         if (out != LeaseOutcome.Done(actual, maxOf(0L, actual - lease.reserved))) fail("complete gave $out, seed $seed step $step")
                         if (overrunDraining) {
                             val after = h.snapshot().ledger

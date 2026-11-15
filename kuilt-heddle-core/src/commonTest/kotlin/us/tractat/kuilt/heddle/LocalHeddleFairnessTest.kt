@@ -258,7 +258,7 @@ class LocalHeddleFairnessTest {
                 val plan = checkNotNull(plans[lease.id]) { "lease ${lease.id} untracked" }
                 if (plan.renews && plan.actual > lease.reserved) {
                     if (harness.topUp(plan.reservation, force = false)) {
-                        assertEquals(LeaseOutcome.Done(0L, 0L), heddle.extend(lease.id, plan.reservation))
+                        assertEquals(LeaseOutcome.Done(0L, 0L), heddle.extend(lease.id, plan.reservation, waiting = emptySet()))
                         run.extends++
                     } else {
                         // The work runs on unrenewed and `complete` covers it: a lease that kept
@@ -269,7 +269,7 @@ class LocalHeddleFairnessTest {
                 } else {
                     val overrun = maxOf(0L, plan.actual - lease.reserved)
                     if (overrun > 0L) harness.topUp(overrun, force = true)
-                    assertEquals(LeaseOutcome.Done(plan.actual, overrun), heddle.complete(lease.id, plan.actual))
+                    assertEquals(LeaseOutcome.Done(plan.actual, overrun), heddle.complete(lease.id, plan.actual, waiting = emptySet()))
                     if (overrun > 0L) run.inlineOverruns++
                     run.completes++
                     plans.remove(lease.id)

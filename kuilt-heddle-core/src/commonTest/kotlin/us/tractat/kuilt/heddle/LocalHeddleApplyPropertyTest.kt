@@ -159,9 +159,9 @@ class LocalHeddleApplyPropertyTest {
             val open = h.snapshot().leases
             when {
                 open.isEmpty() || r.nextInt(3) == 0 -> explainThenAcquire(r)
-                r.nextInt(4) == 0 -> h.extend(open[r.nextInt(open.size)].id, 1L + r.nextInt(3))
+                r.nextInt(4) == 0 -> h.extend(open[r.nextInt(open.size)].id, 1L + r.nextInt(3), waiting = emptySet())
                 r.nextInt(3) == 0 -> h.cancel(open[r.nextInt(open.size)].id)
-                else -> h.complete(open[r.nextInt(open.size)].id, r.nextInt(6).toLong())
+                else -> h.complete(open[r.nextInt(open.size)].id, r.nextInt(6).toLong(), waiting = emptySet())
             }
             checkInvariants("traffic")
         }
@@ -178,13 +178,13 @@ class LocalHeddleApplyPropertyTest {
         }
 
         fun settleSome(r: Random) {
-            for (lease in h.snapshot().leases) if (r.nextBoolean()) check(h.complete(lease.id, r.nextInt(6).toLong()) is LeaseOutcome.Done)
+            for (lease in h.snapshot().leases) if (r.nextBoolean()) check(h.complete(lease.id, r.nextInt(6).toLong(), waiting = emptySet()) is LeaseOutcome.Done)
             checkInvariants("settle")
         }
 
         fun settleAll(r: Random) {
             for (lease in h.snapshot().leases) {
-                val out = h.complete(lease.id, r.nextInt(6).toLong())
+                val out = h.complete(lease.id, r.nextInt(6).toLong(), waiting = emptySet())
                 if (out !is LeaseOutcome.Done) fail("an open lease did not complete: $out")
             }
             checkInvariants("settled")

@@ -70,8 +70,8 @@ class LocalHeddleSupplyTest {
         h.lease(setOf(a), reservation = 5L).also { record() } // 20 − 5 = 15: none
         h.lease(setOf(a), reservation = 5L).also { record() } // 15 − 5 = 10, at the watermark: none
         h.lease(setOf(a), reservation = 5L).also { record() } // 10 − 5 < 10: mint 15
-        val extended = h.extend(first.id, 15L).also { record() } // 20 − 15 < 10: mint 15
-        h.extend(first.id, 5L).also { record() } // 20 − 5 = 15: none
+        val extended = h.extend(first.id, 15L, waiting = emptySet()).also { record() } // 20 − 15 < 10: mint 15
+        h.extend(first.id, 5L, waiting = emptySet()).also { record() } // 20 − 5 = 15: none
         assertAll(
             { assertEquals(LeaseOutcome.Done(0L, 0L), extended) },
             { assertEquals(listOf(25L, 25L, 25L, 40L, 55L, 55L), minted, "minted after each operation") },
@@ -89,7 +89,7 @@ class LocalHeddleSupplyTest {
         val out = h.acquire(setOf(a), setOf(a), startedAt = 0L, reservation = 100L)
         val lease = assertNotNull((out as? AcquireOutcome.Acquired)?.lease, "leased: $out")
         val afterAcquire = h.atRoot()
-        val extended = h.extend(lease.id, 50L)
+        val extended = h.extend(lease.id, 50L, waiting = emptySet())
         assertAll(
             { assertEquals(2L, afterAcquire, "the target, 1 slot × 1 × 2 rounds, is left after the 100") },
             { assertEquals(LeaseOutcome.Done(0L, 0L), extended) },
@@ -135,10 +135,10 @@ class LocalHeddleSupplyTest {
         val held = h.atRoot()
         h.reshapeForTest { it.piece(assertNotNull(it.close(AttachmentId("root>a/b"))).delta) }
         val before = h.snapshot().ledger
-        val draining = h.extend(lease.id, 1L)
+        val draining = h.extend(lease.id, 1L, waiting = emptySet())
         val (open, control) = atTheWatermark()
         val mintedBefore = open.minted()
-        val extended = open.extend(control.id, 1L)
+        val extended = open.extend(control.id, 1L, waiting = emptySet())
         assertAll(
             { assertEquals(10L, held, "the rig: the root holds exactly the low watermark, 2 slots × 5") },
             { assertEquals(LeaseOutcome.PathDraining(AttachmentId("root>a/b")), draining) },
@@ -166,7 +166,7 @@ class LocalHeddleSupplyTest {
         val aheadAfter = listOf(ahead.minted() to ahead.atRoot())
         repeat(3) { ahead.lease(setOf(a), reservation = 4L) }
         val drained = ahead.minted() to ahead.atRoot()
-        ahead.extend(first.id, 2L)
+        ahead.extend(first.id, 2L, waiting = emptySet())
         assertAll(
             { assertEquals(listOf(4L to 0L, 7L to 0L), exactAfter, "each lease minted exactly what it took") },
             { assertEquals(listOf(16L to 12L), aheadAfter, "short, so it minted the target of 3 × 4 plus the 4 it took") },
@@ -222,7 +222,7 @@ class LocalHeddleSupplyTest {
         val second = h.lease(setOf(a), reservation = 2L)
         assertAll(
             { assertEquals(listOf(a), preview) },
-            { assertEquals(LeaseOutcome.SupplyExhausted, h.extend(second.id, 4L), "the second pick's extend ran out") },
+            { assertEquals(LeaseOutcome.SupplyExhausted, h.extend(second.id, 4L, waiting = emptySet()), "the second pick's extend ran out") },
         )
     }
 
@@ -245,7 +245,7 @@ class LocalHeddleSupplyTest {
             { assertEquals(listOf(first.leaf, second.leaf), preview, "the two picks before the refused extend, and nothing after") },
             { assertEquals(setOf(a, b), setOf(first.leaf, second.leaf), "the rig: b's first job and a's first job went first") },
             { assertEquals(b, third.leaf, "the rig: the third pick is b, whose head is now 6") },
-            { assertEquals(LeaseOutcome.SupplyExhausted, h.extend(third.id, 4L), "the rig: its extend by 4 is refused") },
+            { assertEquals(LeaseOutcome.SupplyExhausted, h.extend(third.id, 4L, waiting = emptySet()), "the rig: its extend by 4 is refused") },
             { assertEquals(3L, h.atRoot(), "the rig: the root still holds 3") },
             { assertEquals(a, h.lease(setOf(a), reservation = 2L).leaf, "the rig: and a's next job could still be acquired") },
         )
@@ -322,10 +322,10 @@ class LocalHeddleSupplyTest {
                 val out = h.acquire(leaves, leaves, startedAt = leased.toLong(), reservation = 1L + rng.nextInt(30))
                 if (out is AcquireOutcome.Acquired) leased++ else refusals += "acquire $leased: $out"
             } else if (rng.nextInt(4) == 0) {
-                val out = h.extend(open[rng.nextInt(open.size)].id, 1L + rng.nextInt(20))
+                val out = h.extend(open[rng.nextInt(open.size)].id, 1L + rng.nextInt(20), waiting = emptySet())
                 if (out == LeaseOutcome.Done(0L, 0L)) extended++ else refusals += "extend at $leased: $out"
             } else {
-                h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(40).toLong())
+                h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(40).toLong(), waiting = emptySet())
                 completed++
             }
         }
@@ -365,10 +365,10 @@ class LocalHeddleSupplyTest {
             repeat(4) { acquire() }
             repeat(CYCLES) { i ->
                 // One slot frees: the oldest lease completes with an overrun of up to 25.
-                h.complete(h.snapshot().leases.first().id, 10L + i % 26)
+                h.complete(h.snapshot().leases.first().id, 10L + i % 26, waiting = emptySet())
                 if (i % 10 == 0) {
-                    val admitted = assertNotNull((h.admit(a, startedAt = i.toLong(), reservation = 10L) as? AcquireOutcome.Acquired)?.lease)
-                    h.complete(admitted.id, 10L)
+                    val admitted = assertNotNull((h.admit(a, waiting = setOf(a), startedAt = i.toLong(), reservation = 10L) as? AcquireOutcome.Acquired)?.lease)
+                    h.complete(admitted.id, 10L, waiting = emptySet())
                 }
                 acquire()
             }
@@ -431,7 +431,7 @@ class LocalHeddleSupplyTest {
         val h = engineOver(oneLeaf, root, supply = 100L)
         val early = h.lease(setOf(a), reservation = 3L, startedAt = 100L)
         val late = h.lease(setOf(a), reservation = 3L, startedAt = 250L)
-        h.extend(late.id, 4L)
+        h.extend(late.id, 4L, waiting = emptySet())
         val orphans = h.reconcileLeases(emptySet(), now = 400L).orphaned
         assertAll(
             { assertEquals(listOf(300L, 150L), orphans.map { it.elapsed }) },
@@ -468,8 +468,8 @@ class LocalHeddleSupplyTest {
         val long = h.lease(setOf(a), reservation = 10L, startedAt = 0L)
         val short = h.lease(setOf(a), reservation = 10L, startedAt = 47L)
         val (overran, under) = h.reconcileLeases(emptySet(), now = 50L).orphaned
-        val doneLong = h.complete(long.id, overran.defaultSettlement)
-        val doneShort = h.complete(short.id, under.defaultSettlement)
+        val doneLong = h.complete(long.id, overran.defaultSettlement, waiting = emptySet())
+        val doneShort = h.complete(short.id, under.defaultSettlement, waiting = emptySet())
         val l = h.snapshot().ledger
         assertAll(
             { assertEquals(50L to 10L, overran.elapsed to overran.granted, "the rig: it ran past its grant") },
@@ -488,7 +488,7 @@ class LocalHeddleSupplyTest {
         val h = engineOver(oneLeaf, root, supply = 100L)
         val lease = h.lease(setOf(a), reservation = 10L, startedAt = 20L)
         val orphan = h.reconcileLeases(emptySet(), now = 45L).orphaned.single()
-        val done = h.complete(orphan.lease.id, orphan.elapsed)
+        val done = h.complete(orphan.lease.id, orphan.elapsed, waiting = emptySet())
         val l = h.snapshot().ledger
         assertAll(
             { assertEquals(lease, orphan.lease) },

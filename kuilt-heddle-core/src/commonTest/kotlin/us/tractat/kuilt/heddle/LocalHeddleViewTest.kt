@@ -123,9 +123,9 @@ class LocalHeddleViewTest {
                     val waiting = names.filter { rng.nextBoolean() }.toSet()
                     h.acquire(waiting, waiting.filter { rng.nextInt(3) != 0 }.toSet(), step.toLong(), 1L + rng.nextInt(4))
                 }
-                rng.nextInt(5) == 0 -> h.extend(open[rng.nextInt(open.size)].id, 1L + rng.nextInt(3))
+                rng.nextInt(5) == 0 -> h.extend(open[rng.nextInt(open.size)].id, 1L + rng.nextInt(3), waiting = emptySet())
                 rng.nextInt(6) == 0 -> h.cancel(open[rng.nextInt(open.size)].id)
-                else -> h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(6).toLong())
+                else -> h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(6).toLong(), waiting = emptySet())
             }
         }
         return h
