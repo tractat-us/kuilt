@@ -193,22 +193,16 @@ whole ledger inherits the three merge laws for free.
 Arithmetic that would exceed `Long` throws rather than wrapping: a fair-share
 tally that silently overflowed would be worse than one that stopped. A child's
 position is 128-bit everywhere, and a pick compares the full value, so no position
-refuses a pick: the gauge stores it exactly, and a parent's origin, the raw
-position, the front, a wake clamp and the deadline a pick orders are wide too
-(#3353). What a long-lived engine reaches first is the ledger's `Long` counters,
+refuses a pick: the gauge stores it exactly, and the raw position, the front, a
+wake clamp and the deadline a pick orders are wide too (#3353). What a long-lived engine reaches first is the ledger's `Long` counters,
 an edge's issuance and an epoch's mint, which throw. The `PositionCeiling` outcomes
 are kept for that limit and are not returned today. A position does still have a
-ceiling, past which the public virtual-time reads saturate, the penalty side. A
-busy parent is rebased long before its ceiling: both `HeddleNode`
-and `LocalHeddle` raise the parent's origin, and neither changes a pick or
-rewrites a gauge: a rebase moves every child alike, and no joiner landing under
-it is held at its floor. The origin goes to where the demanding children stand on
-average, held short of any child's floor, the mirror of its ceiling. So a child
-behind the average reads below zero, and a heavy child joining lighter ones does
-not land past its ceiling. A busy parent beside a demanding child that is never
-served still climbs past it: that child drags the demanding children's average down
-with it until no whole step of the rebase fits. So can several schedulers granting
-one child at once on `HeddleNode` (design §7.1). The picks are unaffected either way.
+ceiling, past which the public virtual-time reads saturate, the penalty side.
+Nothing rebases a busy parent (#3472): a position only counts up from its edge's
+start, so a long-running parent passes its ceiling, and only those reads
+saturate. A newborn is seated at the front, a clamped waker at the front less its
+sleeper credit, and a returner where its parent's net-service clock puts it, each
+exactly, wherever that is, and the picks order them all exactly (design §7.1).
 Every `LocalHeddle` call that charges, `admit`, `extend` and `complete`, takes the
 waiting set and observes it before its charge lands (#3471).
 
