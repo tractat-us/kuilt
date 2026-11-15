@@ -507,16 +507,18 @@ internal class JoinerResumeMachine(
             }
             // Clear reconnectJob FIRST (this coroutine IS it) so onReconnectFailed → leave()
             // doesn't cancel its own coroutine mid-teardown. See the failure branch below.
-            lock.withLock { reconnectJob = null }
-            host.onReconnectFailed(at, FailureReason.Unrecoverable)
+            if (lock.withLock { reconnectJob = null; host.claimHostLost() }) {
+                host.onReconnectFailed(at, FailureReason.Unrecoverable)
+            }
             return
         }
 
         // Fresh episode: forget any reject recorded by a prior reconnect on this machine, and the
-        // refusal record that described it (attempt numbers are per-episode).
+        // refusal record that described it (attempt numbers are per-episode), and any earlier ack.
         lock.withLock {
             refusal = null
             lastRefusal = null
+            ackResumed = false
         }
 
         // Silence the host-liveness detector: for the reconnect's duration WE decide
