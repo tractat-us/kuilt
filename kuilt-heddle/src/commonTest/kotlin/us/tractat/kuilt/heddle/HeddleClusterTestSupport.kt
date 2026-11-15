@@ -24,7 +24,11 @@ import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.HeartbeatConfig
 import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.quilter.QuilterConfig
+import us.tractat.kuilt.raft.ClusterConfig
 import us.tractat.kuilt.raft.NodeId
+import us.tractat.kuilt.raft.raftNode
+import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_BASE_CONFIG
+import us.tractat.kuilt.raft.test.MULTI_NODE_SIM_SEED
 import us.tractat.kuilt.raft.test.MultiNodeRaftSim
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -73,15 +77,17 @@ internal fun GovernedHeddleNode.asSchedulingPeer(): SchedulingPeer =
  * every waiting lane a demand of one [grant] more and every other lane none, schedules, then
  * reserves whatever each lane holds here and completes it charged below the reservation.
  *
- * The draw walks [lanes], a [List] the caller built, so a seed takes the same trajectory on every
- * target (AGENTS.md, *A seeded generator must impose its own total order*).
+ * The waiting set is drawn from [drawFrom], every lane by default: a lane left out of it idles for
+ * the whole run. The draw walks a [List] the caller built, so a seed takes the same trajectory on
+ * every target (AGENTS.md, *A seeded generator must impose its own total order*).
  */
 internal class MixedWeightRun(
     private val root: GroupId,
     private val lanes: List<AttachmentRecord>,
     private val grant: Long,
     private val random: Random,
-    /** The waiting set of call number `call`, counted from one, or `null` for a fresh random draw. */
+    private val drawFrom: List<AttachmentRecord> = lanes,
+    /** The waiting set of call number `call`, counted from one, or `null` for a fresh draw from [drawFrom]. */
     private val phase: (call: Int) -> List<AttachmentRecord>? = { null },
 ) {
     var calls: Int = 0
@@ -92,7 +98,8 @@ internal class MixedWeightRun(
         private set
 
     /** The next waiting set: each lane with even odds, and never empty. */
-    fun drawWaiting(): List<AttachmentRecord> = phase(calls + 1) ?: lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }
+    fun drawWaiting(): List<AttachmentRecord> = phase(calls + 1)
+        ?: drawFrom.filter { random.nextBoolean() }.ifEmpty { listOf(drawFrom[random.nextInt(drawFrom.size)]) }
 
     /** Give every lane in [waiting] one [grant] more than it has outstanding, and every other lane nothing. */
     fun advertise(peer: SchedulingPeer, waiting: List<AttachmentRecord>) {
@@ -342,7 +349,15 @@ internal class GovernedCluster(
 /** [size] governed peers on a fresh [MultiNodeRaftSim], with a leader elected. Bootstrap them with [GovernedCluster.bootstrap]. */
 internal suspend fun TestScope.governedCluster(size: Int, quantum: Long, cap: Long): GovernedCluster {
     val ids = (1..size).map { NodeId("g$it") }
-    val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope)
+    val clusterConfig = ClusterConfig(voters = ids.toSet())
+    // The sim's default factory reseeds a restarted node exactly as it seeded the first, so its
+    // `ClientIdentity.Auto` id comes back the same and its first forward collides with the old
+    // incarnation's at the leader. A real process draws a fresh id; one seed per start models that.
+    var starts = 0L
+    val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope) { id, transport, storage, child ->
+        val seed = MULTI_NODE_SIM_SEED + ids.indexOf(id) + 1_000L * starts++
+        child.raftNode(clusterConfig, transport, storage, MULTI_NODE_SIM_BASE_CONFIG.copy(random = Random(seed)))
+    }
     val loom = InMemoryLoom()
     val peers = ids.mapIndexed { i, id -> GovernedCluster.boot(this, sim, loom, id, joinAt = i, quantum = quantum, cap = cap) }
     sim.awaitLeader()
