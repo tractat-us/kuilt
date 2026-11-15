@@ -99,7 +99,7 @@ ninth build ran nine minutes against an estimate of three:
 // The ninth build is web's, and it runs 9 minutes against its 3-minute estimate.
 val ninth = heddle.acquire(both, both, startedAt = 24L)
 check(ninth is AcquireOutcome.Acquired && ninth.lease.leaf == web)
-check(heddle.complete(ninth.lease.id, actualCost = 9L) == LeaseOutcome.Done(charged = 9L, overrun = 6L))
+check(heddle.complete(ninth.lease.id, actualCost = 9L, waiting = both) == LeaseOutcome.Done(charged = 9L, overrun = 6L))
 // All nine minutes count: web is now past the line, so mobile goes next.
 check(
     heddle.explain(web, waiting = both, eligible = both) ==
@@ -216,7 +216,7 @@ fun reason(answer: WaitExplanation): Pair<WaitExplanation.Kind, List<GroupId>> =
 fun build() {
     val out = heddle.acquire(both, both, startedAt = 0L)
     check(out is AcquireOutcome.Acquired)
-    heddle.complete(out.lease.id, actualCost = 3L)
+    heddle.complete(out.lease.id, actualCost = 3L, waiting = both)
 }
 repeat(2) { build() } // web, then mobile
 val before = heddle.explain(mobile, waiting = both, eligible = both)

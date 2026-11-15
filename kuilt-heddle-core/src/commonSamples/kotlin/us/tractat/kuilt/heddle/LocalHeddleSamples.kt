@@ -753,7 +753,7 @@ internal fun sampleWaitReason() {
     fun build() {
         val out = heddle.acquire(both, both, startedAt = 0L)
         check(out is AcquireOutcome.Acquired)
-        heddle.complete(out.lease.id, actualCost = 3L, waiting = emptySet())
+        heddle.complete(out.lease.id, actualCost = 3L, waiting = both)
     }
     repeat(2) { build() } // web, then mobile
     val before = heddle.explain(mobile, waiting = both, eligible = both)

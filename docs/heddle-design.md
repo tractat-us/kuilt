@@ -887,9 +887,9 @@ On the seven-lane `LocalHeddle` run of #3329, a twin with no rebase passes its
 ceiling and makes the same picks for all 100,000. A
 delegation that is not a pick (`admit`, `extend`, an overrun at `complete`)
 runs the same step at every parent on its path once its charge lands, bounded by
-the call's waiting set, or, when it has none, by the child it charged and the
-children last seen demanding; one last seen idle is clamped when it next wakes. A charging
-call never refuses, so a parent with no step is simply left as it is.
+the call's waiting set, which every charging call is required to pass and observes
+before its charge lands (#3471): demand is observed, never inferred from who was last
+seen demanding. A charging call never refuses, so a parent with no step is simply left as it is.
 
 On a governed cluster of three peers under `MultiNodeRaftSim`, the same holds for
 `HeddleNode` (`HeddleAcceptanceTest`). A twin with no rebase passes its ceiling within
@@ -916,10 +916,6 @@ exactly in each; only the public reads saturate:
 - With `k` schedulers granting one child concurrently before their writes merge,
   the margin a child needs is `C − R ≥ k · H`. That is huge for coarse weights and
   slim near the edge of the weight budget below (#3458).
-- In a `LocalHeddle` parent driven by both picks and plain `admit`s, a child a
-  pick last saw demanding, and idle since, still bounds a charging call's `Δ`
-  inside its own window until a pick sees it again: a never-served child in
-  another guise, which drags the mean down and holds the step there.
 
 A child that is not demanding can sit as far below zero as the origin has
 risen, past `Long`. A pick never orders it: if it comes back demanding to an
