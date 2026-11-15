@@ -32,7 +32,8 @@ the first that holds is the one you get:
 | Another team is ahead, and it is their turn. | Usually nothing: this is fair share at work. The answer names the team, and a preview says when your turn comes. |
 | It is next. | Wait a moment. |
 
-Only the last two are normal. The rest point at something you can change.
+The last two are fair share working as it should. Each of the others has a
+cause outside the turn order, and most are something you can change.
 
 ## Turn the answer into words
 
@@ -115,7 +116,7 @@ check(
 So if web asks why mobile went first, the answer is "mobile goes first at the
 farm", and the numbers say why: web's progress, 9, is past the line, 33/4. Its
 long build spent its turns ahead of time.
-[Reading the numbers](#reading-the-numbers-behind-behind) below says what each
+[Reading the numbers](#reading-the-numbers) below says what each
 one means.
 
 ## Is it fair?
@@ -276,7 +277,7 @@ with, since a snapshot does not keep one.
 [On a screen with no engine](heddle-local-preview.md#on-a-screen-with-no-engine)
 says why a view beats restoring an engine for each question.
 
-## Reading the numbers behind "behind"
+## Reading the numbers
 
 `BehindAtLevel` carries three numbers, all on one scale: the time a child has
 been given, divided by its weight. Heddle calls that its progress, or its
