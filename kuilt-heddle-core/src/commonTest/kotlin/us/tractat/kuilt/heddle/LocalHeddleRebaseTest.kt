@@ -123,16 +123,18 @@ class LocalHeddleRebaseTest {
     }
 
     /**
-     * A heavy newborn seated through `admit` beside a busy runner (#3353 round 2). The runner `a`
-     * sits just under its own threshold `R`, and the front over the three lanes last seen waiting is
-     * about `R / 3`. A fresh lane `n` at weight 60 is admitted before any pick, so it is seated by
-     * the delegation, not by a pick: at that front, about `20 · R` on its own grid, past its ceiling.
+     * A heavy newborn seated through `admit` beside a busy runner (#3353 round 2). The runner `a`,
+     * the one lane last seen waiting, sits just under its own threshold `R`. A fresh lane `n` at
+     * weight 60 is admitted before any pick, so it is seated by the delegation, not by a pick: at
+     * `a`'s front, about `60 · R` on its own grid, past its ceiling.
      * The repair used to bail at that child's ceiling, the charge rebase and the next pick's alike,
      * so the parent refused every acquire after.
      */
     @Test
     fun aHeavyNewbornSeatedByAdmitDoesNotWedgeTheParent() {
         val engine = engine()
+        // b and c are seen idle, so a is the one runner, the front n is seated at.
+        pickOnEach(listOf(engine), setOf(a), at = 1L)
         engine.pushTo(a, threshold - TICKS_PER_UNIT)
         val withHeavy = draft("rebase") {
             lane("a", Weight.ONE)
