@@ -31,8 +31,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AppleDevice
  * permission, a file protected while the phone is locked, an I/O error). That throw reaches the
  * caller of [grants] or [keepGrant] with nothing written, so a record that could not be read is never
  * rewritten with only the new grant. Until #3327 the store answered `null` for both, and a
- * [keepGrant] made while the phone was locked did exactly that rewrite. No test in this module pins
- * it; the store's own conformance suite does.
+ * [keepGrant] made while the phone was locked did exactly that rewrite. The device-key conformance
+ * suite pins it on both platforms (`unreadableGrantsAreRefusedNotRewritten`), over a grants record
+ * the process may not open.
  *
  * A signing fault during the self-test is the provider failing, not the key: [SoftwareDeviceKey.readBack]
  * throws [IllegalStateException] for it, and so does this store, keeping the key.
