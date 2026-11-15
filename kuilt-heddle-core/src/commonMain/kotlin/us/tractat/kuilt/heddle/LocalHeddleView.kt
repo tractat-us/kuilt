@@ -103,7 +103,7 @@ public class LocalHeddleView internal constructor(
      *
      * @throws IllegalArgumentException when [reservation] or any queued reservation, not only a
      *   head, is not in `1..`[MAX_RESERVATION].
-     * @sample us.tractat.kuilt.heddle.samplePreviewQueues
+     * @sample us.tractat.kuilt.heddle.sampleSnapshotPreviewQueues
      */
     public fun previewPicks(
         queues: Map<GroupId, List<Long>>,
