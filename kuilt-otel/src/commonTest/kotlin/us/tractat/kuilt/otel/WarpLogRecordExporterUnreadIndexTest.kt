@@ -359,9 +359,17 @@ class WarpLogRecordExporterUnreadIndexTest {
         assertAll(*checks.toTypedArray())
     }
 
-    /** Delegates to [backing], but refuses every delete of the legacy key, as `IndexedDbDurableStore` does (#3143). */
-    private class KeepsLegacyStore(private val backing: DurableStore, private val legacy: StoreKey) : DurableStore {
+    /**
+     * Delegates to [backing], but refuses the next [times] deletes of the legacy key, every one by
+     * default: a store whose delete keeps failing.
+     */
+    private class KeepsLegacyStore(
+        private val backing: DurableStore,
+        private val legacy: StoreKey,
+        times: Int = Int.MAX_VALUE,
+    ) : DurableStore {
         private val lock = reentrantLock()
+        private var remaining = times
         private var refusedCount = 0
 
         val refusedDeletes: Int get() = lock.withLock { refusedCount }
@@ -371,12 +379,31 @@ class WarpLogRecordExporterUnreadIndexTest {
         override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = backing.write(key, bytes)
 
         override suspend fun delete(key: StoreKey) {
-            if (key == legacy) {
-                lock.withLock { refusedCount++ }
-                throw IllegalStateException("store refused delete of ${key.name}")
+            val refuse = lock.withLock {
+                val refuse = key == legacy && remaining > 0
+                if (refuse) {
+                    remaining--
+                    refusedCount++
+                }
+                refuse
             }
+            if (refuse) throw IllegalStateException("store refused delete of ${key.name}")
             backing.delete(key)
         }
+    }
+
+    /**
+     * A store whose migration copied a 12-record legacy blob and wrote an index but could not
+     * delete the blob, and whose index has since stopped decoding. Returns the store and the
+     * legacy records' bodies.
+     */
+    private suspend fun storeWithAKeptLegacyBlobBehindAnUndecodableIndex(): Pair<RecordingStore, List<String?>> {
+        val (backing, legacy) = storeWithALegacyBlob(0 until 12)
+        exporterFor(KeepsLegacyStore(backing, legacyKey)).recover()
+        check(legacyKey.name in backing.keys()) { "precondition: the migration deleted the legacy key" }
+        check(INDEX_KEY_FOR_TEST.name in backing.keys()) { "precondition: the migration wrote no index" }
+        backing.putRaw(INDEX_KEY_FOR_TEST, byteArrayOf(0x7f, 0x00, 0x13))
+        return backing to legacy
     }
 
     @Test
@@ -404,6 +431,90 @@ class WarpLogRecordExporterUnreadIndexTest {
             { assertTrue(exporter.health.value.recoveryFailed, "the undecodable index was not reported") },
             { assertEquals(ExportResult.Success, exported) },
             { assertEquals(legacy + "body-100", afterRestart, "the legacy records were lost behind an undecodable index") },
+        )
+    }
+
+    @Test
+    fun anUndecodableIndexOverARefusedLegacyReadFailsClosed() = runTest {
+        // Starting fresh here wrote segment 0 and a decodable index, and the next start, finding
+        // that index, swept a legacy blob no run had read. So a refused legacy read behind an
+        // undecodable index fails closed, as it does behind no index at all.
+        val checks = Refusal.entries.flatMap { how ->
+            val (backing, legacy) = storeWithAKeptLegacyBlobBehindAnUndecodableIndex()
+            val store = RefusingStore(backing, Call.READ, isLegacy, times = 2, how = how)
+            val exporter = exporterFor(store)
+
+            val mutationsBefore = mutations(backing)
+            exporter.recover() // refused 1: the next turn skips the read (#3404)
+            // A skipped turn, then a turn whose read is refused again: a window of 3 more skips.
+            val whileUnread = listOf(exporter.export(record(100)), exporter.export(record(102))) +
+                List(3) { exporter.export(record(110 + it)) }
+            val mutationsWhileUnread = mutations(backing) - mutationsBefore
+            val legacyKeptWhileUnread = legacyKey.name in backing.keys()
+            val healed = exporter.export(record(101))
+            val afterRestart = bodiesAfterRestart(backing)
+
+            listOf<() -> Unit>(
+                { assertEquals(12, legacy.size, "precondition [$how]: the fixture holds no legacy records") },
+                { assertEquals(2, store.refused, "[$how] the legacy read was refused ${store.refused} times, not 2") },
+                { assertTrue(whileUnread.all { it is ExportResult.Failure }, "[$how] a turn ran over an unread legacy blob: $whileUnread") },
+                { assertEquals(0, mutationsWhileUnread, "[$how] a turn wrote or deleted over an unread legacy blob") },
+                { assertTrue(legacyKeptWhileUnread, "[$how] the unread legacy blob was deleted") },
+                { assertEquals(ExportResult.Success, healed, "[$how] the turn after the read healed failed") },
+                { assertEquals(legacy + "body-101", afterRestart, "[$how] the legacy records were lost to the unread blob") },
+            )
+        }
+        assertAll(*checks.toTypedArray())
+    }
+
+    @Test
+    fun anUndecodableIndexOverAnUndecodableLegacyBlobStartsFresh() = runTest {
+        // The control: bad bytes in both keys are bad data, not a refusal, so the exporter starts
+        // fresh at once rather than failing closed on them forever.
+        val (backing, _) = storeWithAKeptLegacyBlobBehindAnUndecodableIndex()
+        backing.putRaw(legacyKey, byteArrayOf(0x7f, 0x00, 0x13))
+        val exporter = exporterFor(backing)
+
+        exporter.recover()
+        val exported = exporter.export(record(100))
+        val afterRestart = bodiesAfterRestart(backing)
+
+        assertAll(
+            { assertTrue(exporter.health.value.recoveryFailed, "the undecodable index was not reported") },
+            { assertEquals(ExportResult.Success, exported, "an undecodable legacy blob left the exporter dead") },
+            { assertEquals(listOf("body-100"), afterRestart) },
+        )
+    }
+
+    @Test
+    fun aClearDeletesTheLegacyBlobSoAnUndecodableIndexCannotResurrectIt() = runTest {
+        // The fallback loads the legacy blob verbatim, so a blob that outlived its migration would
+        // bring back, behind a later undecodable index, records this replica was told to forget.
+        // So a clear deletes it too, and fails while the store refuses that delete.
+        val (backing, legacy) = storeWithALegacyBlob(0 until 12)
+        // One refused delete for the migration's sweep, one for the first clear.
+        val store = KeepsLegacyStore(backing, legacyKey, times = 2)
+        val exporter = exporterFor(store)
+        exporter.recover()
+        val legacyOutlivedMigration = legacyKey.name in backing.keys()
+        val recovered = exporter.snapshot().toList().map { it.body }
+
+        val refusedClear = exporter.clear()
+        val legacyKeptByRefusedClear = legacyKey.name in backing.keys()
+        val retriedClear = exporter.clear()
+        val legacyAfterClear = legacyKey.name in backing.keys()
+        backing.putRaw(INDEX_KEY_FOR_TEST, byteArrayOf(0x7f, 0x00, 0x13))
+        val afterRestart = bodiesAfterRestart(backing)
+
+        assertAll(
+            { assertEquals(legacy, recovered, "precondition: the migration did not recover the legacy records") },
+            { assertTrue(legacyOutlivedMigration, "precondition: the migration deleted the legacy key") },
+            { assertEquals(2, store.refusedDeletes, "the legacy delete was refused ${store.refusedDeletes} times, not 2") },
+            { assertTrue(refusedClear is ExportResult.Failure, "a clear whose legacy delete was refused reported $refusedClear") },
+            { assertTrue(legacyKeptByRefusedClear, "precondition: the refused clear deleted the legacy key") },
+            { assertEquals(ExportResult.Success, retriedClear, "the retried clear failed") },
+            { assertTrue(!legacyAfterClear, "the clear left the legacy blob in the store") },
+            { assertEquals(emptyList(), afterRestart, "cleared records came back behind an undecodable index") },
         )
     }
 
