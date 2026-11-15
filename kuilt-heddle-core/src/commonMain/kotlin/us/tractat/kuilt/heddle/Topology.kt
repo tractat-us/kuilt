@@ -40,7 +40,7 @@ import kotlinx.serialization.encoding.Encoder
  * children.
  *
  * Its encoded shape, [Node] and [ChildTemplate] included, is part of [LocalHeddleSnapshot]'s
- * format 1, which stores the topology an engine last applied: a field added here takes a default,
+ * format 2, which stores the topology an engine last applied: a field added here takes a default,
  * and any other change needs a frozen surrogate there first. A rename keeps the old serial name:
  * [Group.template] is still written as `runtimeChildren`, the name v0.7.4 stored.
  *
@@ -127,7 +127,7 @@ public data class Topology(public val root: String, public val children: List<No
     @Serializable
     public data class ChildTemplate(
         // No default on weight: `encodeDefaults = false` would then drop `"weight":"1"`, and the
-        // snapshot goldens stored with v0.7.4 always carry it.
+        // snapshot goldens always carry it.
         @Serializable(with = TopologyWeightSerializer::class) public val weight: Weight,
         public val maxConcurrent: Long? = null,
     )

@@ -448,28 +448,6 @@ class TopologyTest {
         )
     }
 
-    /**
-     * Format 1 of [LocalHeddleSnapshot] stores the topology last applied and predates the ceiling:
-     * the snapshot v0.7.4 wrote decodes with no ceiling on any node, the group's template included.
-     */
-    @Test
-    fun aFormatOneSnapshotDecodesWithNoCeiling() {
-        val restored = assertIs<RestoreResult.Restored>(LocalHeddle.decode(GOLDEN_FORMAT_1_RICH, Json))
-        val lastApplied = restored.snapshot.lastApplied
-        fun Topology.Node.ceilings(): List<Long?> = when (this) {
-            is Topology.Lane -> listOf(maxConcurrent)
-            is Topology.Group ->
-                listOf(maxConcurrent) + listOfNotNull(template).map { it.maxConcurrent } + children.flatMap { it.ceilings() }
-        }
-        val ceilings = lastApplied.children.flatMap { it.ceilings() }
-
-        assertAll(
-            { assertTrue(lastApplied.children.any { it is Topology.Group && it.template != null }, "the rig: a group with a template") },
-            { assertEquals(7, ceilings.size, "the rig: three groups, three lanes and a template were walked: $ceilings") },
-            { ceilings.forEach { assertNull(it) } },
-        )
-    }
-
     @Test
     fun aProblemAddressIsWellFormed() {
         assertAll(
