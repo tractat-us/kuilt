@@ -1178,8 +1178,13 @@ while it was away.
   their weight alone.
 - **Returning.** When the child asks again, its wake offset grows by how far the
   clock ran since then, read on the child's own grid, and never by less than
-  zero. The record is cleared. A returner is still a joiner, so it is left out
-  of the front any newborn beside it is seated at.
+  zero. The record is cleared. A returner counts in the front that a newborn
+  or a clamped waker beside it is seated at or clamped to, at where it lands
+  (#3446). It competes from there, as far ahead or behind its siblings as it
+  left, so that position is not stale the way a waker's is. Leaving it out
+  seated the others against a set without a child they were about to compete
+  with: a waker joining beside a returner at 200 and a starved sibling at 0
+  was clamped to 0, not to their mean of 100, and kept the difference.
 - **A child this peer saw idle but never saw stop asking** is clamped to the
   front, as above: one first seen idle, or one restored from a snapshot in
   format 1, which predates the clock.
@@ -1242,23 +1247,41 @@ against this peer's own record of a departure, and that record is one peer's
 sighting of a transition, with no lattice to join under. Two peers that saw
 different departures compute different offsets, which reorders their grants and
 never creates entitlement, as wake offsets already do. `LocalHeddle` persists it
-in its snapshot, format 2, as `AllocatorMemory`'s `clocks`, `served` and
-`departures`; `HeddleNode` keeps it in memory, so a restart forgets it and
+in its snapshot, format 2, as `AllocatorMemory`'s `clocks`, `served`,
+`departures` and `shiftRemainders`; `HeddleNode` keeps it in memory, so a restart forgets it and
 every child it sees asking afterwards is a first sighting.
 
 The clock is kept wide, on a grid of `16 · 720,720` ticks to a unit of virtual
 time. `720,720` is the least common multiple of 1 to 16, so a parent whose
-asking children's total weight, over their common denominator, has only prime
-factors that divide it advances exactly; every total up to 16 does. Any other
-total rounds each step up, by under one clock tick. A shift is read on the
-returner's own grid as the difference of two rounded-up readings, so it is off
-by under one of that child's ticks, either way. One rounded-up run would never
-fall short, but it rounds every return the same way, and on `BurstLagTest`'s
-3:1 rigs that cost the light child 9 of its fair 75 over 300 bursts. An origin
-rebase moves every child and no clock, and changes no shift. A returner does not
-land at the front, though, so the rebase taken before the seat-and-wake step
-also triggers on where each returner will land (`returnerLandings`). Without
-that, a child that left near its ceiling came back past it and the pick refused.
+asking children's total weight, over their common denominator, divides the grid
+advances exactly; every total up to 16 does. A total with a prime factor above
+13, or a prime power past the grid's own (27, say), rounds each step up,
+by under one clock tick.
+
+A shift is a whole number of the returner's own ticks, and the clock's run
+since it left is in general a fraction of one, so each shift rounds. The
+rounding is carried (`shiftOf`): the child keeps what its last shift ran past
+the clock, under one tick, and its next shift takes that off before rounding
+up. So its shifts add up to the clock's runs plus that last remainder: never
+credit, and nothing builds up. `LocalHeddle` persists the remainders in its
+snapshot beside the clock; `HeddleNode` keeps them in memory.
+
+Two simpler rules drift. The difference of the run's two ends, each read on
+the grid rounded up, errs by where those ends fall between ticks, and that does
+not telescope: a repeating pattern of bursts locks the ends into one phase, and
+the same error comes back every return. On `BurstLagTest`'s off-grid rigs, where
+the clock runs `16/13` and `32/10` of the returner's ticks while it is back, it
+drifted the returner from +3.9 units over fair after 300 bursts to +4.8 after
+600, credit that §10.5 forbids, and on a second pattern from −16 to −33. One
+rounded-up run would never fall short, but it rounds every return the same way,
+and on the 3:1 rigs that cost the light child 9 of its fair 75 over 300 bursts.
+
+An origin rebase moves every child and no clock, and changes no shift. A
+returner does not land at the front, though, so the rebase taken before the
+seat-and-wake step also triggers on where each returner will land
+(`previewShifts`), and reads the front with each returner at its landing.
+Without that, a child that left near its ceiling came back past it and the pick
+refused.
 A returner that left owed can land below zero by what it is owed. It is served
 first, and the next rebase waits until it climbs.
 
