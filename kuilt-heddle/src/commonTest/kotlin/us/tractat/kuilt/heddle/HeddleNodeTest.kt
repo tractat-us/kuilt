@@ -1047,8 +1047,8 @@ class HeddleNodeTest {
         h.pump()
         val node = h.peers[0].node
 
-        // A third child that competes from its first observation — so it is never a waker and
-        // never carries a clamp — but can never absorb a grant, so it stays parked at 0.
+        // A third child that competes from its first observation, unseated, so it is seated as a
+        // newborn and never carries a clamp, but can never absorb a grant, so it stays parked at 0.
         val starved = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
         assertTrue(node.prepare(starved) && node.activate(starved.id))
         val competingUnservable = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 0L)

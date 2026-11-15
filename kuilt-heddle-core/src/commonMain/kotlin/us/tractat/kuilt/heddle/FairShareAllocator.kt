@@ -48,9 +48,10 @@ public interface LedgerCell {
  *
  * The demanding state is what makes the clamp an *edge* detector rather than a level one: `false`
  * means this peer has seen the child not competing, so the next round in which it competes is a
- * wake. An id that is *absent* has never been observed and is therefore never treated as a wake: a
- * first observation carries no evidence the child was ever idle, and forfeiting a deficit accrued
- * under some other peer's scheduling would be a penalty this peer has no standing to impose.
+ * wake. An id that is *absent* has never been observed, and a seated one found competing is a wake
+ * too, the restart rule (design §7.2, #3472): a first sighting says nothing about how long the
+ * child idled, so this peer gives it no credit for a gap it did not watch, at the cost of its lag,
+ * once. That is every child of a restarted `HeddleNode`, and a child another peer seated and ran.
  * Seating a genuinely new generation is the seat bump's job ([schedule]), not the clamp's.
  *
  * That memory is a value too: [memory] exports it as an [AllocatorMemory] and the secondary
@@ -611,12 +612,11 @@ public class FairShareAllocator(
 
     /**
      * Whether [edge] wakes: demanding now, and last observed not demanding. Or, never observed at
-     * all, seated, demanding and below zero (#3353 review, item B). The threshold stays at zero
-     * under the window rule, whose rebase leaves a watched demanding child anywhere in `[−C, 0)`:
-     * one this allocator never saw there may be such a child, a restarted `HeddleNode`'s say, and
-     * clamping it costs it at most its lag, once, the penalty side. A threshold at the floor would
-     * leave a child idle while nobody watched below zero with up to a window of credit, which is the
-     * side §10.5 forbids. Clamping costs turns, never credit (§10.6).
+     * all, seated and demanding: the restart rule (design §7.2, #3472). This allocator did not
+     * watch the gap before it first saw the child, so it gives it no credit for it, wherever the
+     * child stands. Clamping it costs it at most its lag, once, the penalty side: clamping costs
+     * turns, never credit (§10.6). The rule took in the arm it replaced, which clamped a
+     * never-observed child only below zero, where only a rebase could put it.
      */
     private fun isWaker(edge: PolicyEdge): Boolean {
         if (!HeddlePolicy.isDemanding(edge)) return false
