@@ -1236,7 +1236,12 @@ The clock is kept wide, on a grid of `16 · 720,720` ticks to a unit of virtual
 time. `720,720` is the least common multiple of 1 to 16, so a parent whose
 asking children's weights sum to 16 or less, over their common denominator,
 advances exactly; past that each round rounds up, under one grid tick. An origin
-rebase moves every child and no clock, and changes no shift.
+rebase moves every child and no clock, and changes no shift. A returner does not
+land at the front, though, so the rebase taken before the seat-and-wake step
+also triggers on where each returner will land (`returnerLandings`). Without
+that, a child that left near its ceiling came back past it and the pick refused.
+A returner that left owed can land below zero by what it is owed. It is served
+first, and the next rebase waits until it climbs.
 
 **Bounds.** A returning child is moved by what the others kept, so it takes at
 most what it would hold had it kept asking, and the gap adds nothing to §8.2's
