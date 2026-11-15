@@ -166,7 +166,8 @@ private class ScriptedSeam(
     override val state: StateFlow<SeamState> = _state.asStateFlow()
     override val peers: StateFlow<Set<PeerId>> = MutableStateFlow(setOf(selfId, hostId)).asStateFlow()
 
-    private val frames = Channel<Swatch>(Channel.UNLIMITED)
+    // Bounded, like every delivery buffer here: the test queues one frame.
+    private val frames = Channel<Swatch>(capacity = 8)
     private var collector: FlowCollector<Swatch>? = null
 
     override val incoming: Flow<Swatch> = object : Flow<Swatch> {
@@ -180,7 +181,7 @@ private class ScriptedSeam(
         private set
 
     fun deliver(message: AdmitMessage) {
-        frames.trySend(Swatch(AdmitMessage.encode(message), sender = hostId))
+        frames.trySend(Swatch(AdmitMessage.encode(message), sender = hostId)).getOrThrow()
     }
 
     suspend fun deliverNow(message: AdmitMessage) {
