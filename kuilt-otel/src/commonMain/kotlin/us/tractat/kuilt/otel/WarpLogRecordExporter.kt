@@ -721,7 +721,7 @@ public class WarpLogRecordExporter(
          * - **Permanently pinned phantom segments.** Under sustained segment-write refusal the
          *   small index write keeps succeeding while every segment write fails, so each
          *   [segmentOps] operations sealed a number whose key was never written. On the next start
-         *   [readSegment] returns `null`, the segment is recorded [SegmentContent.Pinned], and it
+         *   [readSegment] finds no key, the segment is recorded [SegmentContent.Pinned], and it
          *   is never retirable — **forever, on every subsequent start**. A transient condition
          *   made the bounded-key-count claim permanently false.
          */
@@ -1020,10 +1020,20 @@ public class WarpLogRecordExporter(
      * matter and absorbing one twice is harmless — which is what makes a partition
      * of the op-log across keys an exact, order-independent reconstruction.
      *
-     * A refused index read is [Load.Refused], and a refused segment read is not: the index
-     * names a segment it could not read, so the segment stays named and the next start reads it.
-     * Nothing names the index. **The active segment is the exception, and it is not closed:** an
-     * unread one is installed as empty under its own number, so the next export writes over it.
+     * A refused index read is [Load.Refused], and a refused **sealed** segment read is not: the
+     * index names a segment it could not read, so the segment stays named and the next start
+     * reads it. Nothing names the index.
+     *
+     * A refused **active** segment read is [Load.Refused] too. The active segment is the key the
+     * next export writes, so installing it as empty wrote over its records. Sealing it and opening
+     * a new one does not help either: the ids minted next come from the loaded log, and the active
+     * segment holds this replica's newest, so they would reuse its ids and the next start's union
+     * would keep one record of each pair. The cost is the index's: a key the store refuses forever
+     * stops log writes. An **undecodable** active segment is written over, since nothing in it was
+     * readable.
+     *
+     * Every retry re-runs this whole function: the deletes of [LogSegmentIndex.retired] keys and of
+     * the legacy key run again, and are safe to, since the index that names them was read.
      *
      * Every store call here must classify its own failure where it is made. Anything that
      * reaches [readPersistedState]'s outer catch is treated as [Load.Undecodable] and starts fresh.
@@ -1052,7 +1062,15 @@ public class WarpLogRecordExporter(
         var merged = Rga.empty<LogRecord>()
         val contents = mutableMapOf<Long, SegmentContent>()
         for (number in index.sealedSegments) {
-            val segment = readSegment(number)
+            val read = readSegment(number)
+            when (read) {
+                is SegmentRead.Refused ->
+                    logger.warn(read.cause) { "otel.logs: segment $number is unreadable; its records are not loaded this run" }
+                is SegmentRead.Undecodable ->
+                    logger.warn(read.cause) { "otel.logs: segment $number does not decode, dropping its records" }
+                SegmentRead.Absent, is SegmentRead.Read -> Unit
+            }
+            val segment = (read as? SegmentRead.Read)?.segment
             val absorbed = if (segment == null) null else absorb(merged, segment, number)
             // Unknown content must mean KEEP, so this records Pinned rather than leaving a
             // lookup miss behind: a segment that could not be read must not be retirable, and
@@ -1067,7 +1085,18 @@ public class WarpLogRecordExporter(
             }
             if (absorbed != null) merged = absorbed
         }
-        val active = readSegment(index.active) ?: Rga.empty()
+        val active = when (val read = readSegment(index.active)) {
+            is SegmentRead.Read -> read.segment
+            SegmentRead.Absent -> Rga.empty()
+            // Written over by the next export, which loses nothing: no record in it was readable.
+            is SegmentRead.Undecodable -> {
+                logger.warn(read.cause) { "otel.logs: active segment ${index.active} does not decode; writing over it" }
+                Rga.empty()
+            }
+            // The next export would write over it, and a fresh active segment beside it would
+            // mint the very ids it holds. So the turns wait for it, as they do for the index.
+            is SegmentRead.Refused -> return Load.Refused(read.cause)
+        }
         return Load.Found(
             RecoveredState(
                 log = absorb(merged, active, index.active) ?: merged,
@@ -1117,7 +1146,24 @@ public class WarpLogRecordExporter(
         }
 
     /**
-     * Read one segment, or `null` if the store cannot supply or decode it.
+     * What one segment read found. [Refused] and [Undecodable] are apart for the active segment,
+     * where they cost different things; see [loadPersistedState].
+     */
+    private sealed interface SegmentRead {
+        /** No key. Expected, not corruption: see [readSegment]. */
+        data object Absent : SegmentRead
+
+        class Read(val segment: Rga<LogRecord>) : SegmentRead
+
+        /** The bytes came back and did not decode. Nothing in them is readable. */
+        class Undecodable(val cause: Throwable) : SegmentRead
+
+        /** The store refused the read, a store-minted cancellation included. The key may hold records. */
+        class Refused(val cause: Throwable) : SegmentRead
+    }
+
+    /**
+     * Read one segment. Logs nothing on failure: what a failure costs is the caller's to say.
      *
      * Absence is **expected**, not corruption: the index is written before the
      * segment it allocates, so a crash in that window leaves the index naming a
@@ -1129,28 +1175,27 @@ public class WarpLogRecordExporter(
      * recovery leaves the numbering at its construction defaults, so the next export
      * would write an index naming only segment 0 and overwrite it, orphaning every
      * other segment permanently in a format with no key-enumeration API to sweep them.
-     * One bad read must cost one segment's records, which is what this KDoc has always
-     * promised. For a sealed segment that cost is for this run only; for the active segment it
-     * is not yet (see [loadPersistedState]).
+     * One bad read of a sealed segment must cost that segment's records for this run, which is
+     * what this KDoc has always promised.
      *
      * The same holds for a `CancellationException` the store mints at this live caller: the
      * remaining segments follow, so `ensureActive` lets only this coroutine's own cancellation
      * through (#3384).
      */
-    private suspend fun readSegment(number: Long): Rga<LogRecord>? =
-        try {
-            val bytes = store.read(segmentKey(number))
-            if (bytes == null) {
-                logger.debug { "otel.logs: segment $number is named by the index but absent" }
-                null
-            } else {
-                cbor.decodeFromByteArray(logSerializer, bytes)
-            }
+    private suspend fun readSegment(number: Long): SegmentRead {
+        val bytes = try {
+            store.read(segmentKey(number))
         } catch (cause: Throwable) {
             currentCoroutineContext().ensureActive()
-            logger.warn(cause) { "otel.logs: segment $number is unreadable, dropping its records" }
-            null
+            return SegmentRead.Refused(cause)
         }
+        if (bytes == null) {
+            logger.debug { "otel.logs: segment $number is named by the index but absent" }
+            return SegmentRead.Absent
+        }
+        return runCatchingCancellable { cbor.decodeFromByteArray(logSerializer, bytes) }
+            .fold(onSuccess = { SegmentRead.Read(it) }, onFailure = { SegmentRead.Undecodable(it) })
+    }
 
     /**
      * One-time migration off the pre-#1860 single-blob `otel.logs` key.
