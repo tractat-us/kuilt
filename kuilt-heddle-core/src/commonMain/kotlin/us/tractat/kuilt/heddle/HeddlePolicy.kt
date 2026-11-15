@@ -75,7 +75,10 @@ public data class PolicyEdge(
  *   [wakeOffset][HeddlePolicy.wakeOffset] clamp: a child this peer saw idle but never saw stop
  *   asking. A child it saw stop comes back moved by its parent's net-service clock, and this
  *   credit does not apply to it, since it would only add credit (#3376). Defaults to `0` — the
- *   design default, "no unlimited idle credit" (§10.6). Non-negative.
+ *   design default, "no unlimited idle credit" (§10.6). Non-negative, and
+ *   at most [LocalHeddle.MAX_RESERVATION]: every window is at least `R` plus one lease
+ *   wide (the weight budget's P1′), so a waker's credit never takes its clamp below its floor
+ *   under a raise, and the raise moves every child alike (#3353).
  */
 public data class PolicyConfig(
     public val quantum: Long,
@@ -85,7 +88,9 @@ public data class PolicyConfig(
     init {
         require(quantum > 0L) { "quantum must be positive, was $quantum" }
         require(perChildOutstandingCap >= 0L) { "perChildOutstandingCap must be non-negative, was $perChildOutstandingCap" }
-        require(sleeperCredit >= 0L) { "sleeperCredit must be non-negative, was $sleeperCredit" }
+        require(sleeperCredit in 0L..LocalHeddle.MAX_RESERVATION) {
+            "sleeperCredit must be in 0..${LocalHeddle.MAX_RESERVATION}, was $sleeperCredit"
+        }
     }
 }
 
@@ -217,10 +222,10 @@ public object HeddlePolicy {
      * `delegate` writes, so the value the writer asserted and the value the scheduler reads are
      * one expression.
      *
-     * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12).
+     * Held inside the edge's window (#3353): past its ceiling it reads the ceiling, below its floor
+     * the floor, so it never throws on a position.
      */
-    public fun virtualService(edge: PolicyEdge): Rational =
-        ticksToVirtual(saturated(rawTicks(edge), edge.record.weight), edge.record.weight)
+    public fun virtualService(edge: PolicyEdge): Rational = readVirtual(rawTicks(edge), edge.record.weight)
 
     /**
      * [virtualService] as a position: whole ticks of the edge's own service, relative to the
@@ -238,13 +243,14 @@ public object HeddlePolicy {
      * gauge to a pick (#3353).
      *
      * The low end saturates on the **penalty** side, raising the position, and never refuses. A
-     * demanding child a pick saw is below zero by no more than the lag it was owed when it stopped
-     * asking: no pick's rebase takes a demanding child there, a clamped waker lands at the front, and
-     * one that comes back by its parent's clock (#3376) lands as far behind its siblings as it left.
-     * One the allocator never saw, seated and below zero, whether idle or carried down by a
-     * `LocalHeddle` charging call's rebase, is clamped as a waker ([FairShareAllocator]). So only a
-     * child that is not demanding, which no pick orders, can be far down there, and a position raised
-     * for a child that cannot win costs nothing.
+     * demanding child a pick saw sits no lower than its [positionFloor], less the leases it had out
+     * when a rebase took it there and has since cancelled (#3353, the window rule): no rebase carries
+     * a demanding child below its floor, and a newborn, a clamped waker and a child that comes back
+     * by its parent's clock (#3376) each land no lower than theirs. One the allocator never saw,
+     * seated and below zero, whether idle or carried down by a `LocalHeddle` charging call's rebase,
+     * is clamped as a waker ([FairShareAllocator]). So only a child that is not demanding, which no
+     * pick orders, can be anywhere near `Long.MIN_VALUE`, and a position raised for a child that
+     * cannot win costs nothing.
      */
     internal fun effectiveTicks(edge: PolicyEdge): Long {
         val wide = effectiveTicksWide(edge)

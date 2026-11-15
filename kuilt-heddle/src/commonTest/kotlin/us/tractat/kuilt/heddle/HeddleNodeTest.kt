@@ -11,6 +11,7 @@ import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.PartitionEvent
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
@@ -1107,9 +1108,50 @@ class HeddleNodeTest {
     // ─────────────────────────────────────────────────────────────────────────────
 
     /**
+     * Hold [root]'s rebase at nothing with `e1` at its ceiling (#3353, the window rule). One call in
+     * which the node sees both children asking and grants them its supply; then a merged write that
+     * raises the origin until `e2` sits below its floor, `−C`, puts `e1` at its ceiling above that
+     * origin, and mints [topUp] more at the root, so the next pick has something to grant. `e2` is
+     * demanding, seen demanding, and has no room to come down: where a demanding child that is never
+     * served ends up. A child at zero no longer holds the rebase, since the origin aims at the front.
+     */
+    private suspend fun TestScope.holdAtTheCeiling(h: StaticCluster, topUp: Long = 100L) {
+        val peer = h.peers[0]
+        val node = peer.node
+        node.advertise(e1, hungry)
+        node.advertise(e2, hungry)
+        check(node.schedule(root) is ScheduleOutcome.Delegated) { "the rig: the node granted, and saw both asking" }
+        h.pump()
+        val seen = node.ledger.value
+        val e2At = checkNotNull(seen.virtualService(e2)) { "the rig: e2 is active" }
+        // In whole units, one more than e2 reads plus its room: e2 then reads a tick below its floor.
+        val origin = (e2At.numerator + e2At.denominator - 1L) / e2At.denominator + CEILING_AT_WEIGHT_ONE / 16L + 1L
+        val e1Ticks = Int128.of(origin * 16L) + Int128.of(CEILING_AT_WEIGHT_ONE)
+        val e1Issued = checkNotNull(seen.edge(e1)) { "the rig: e1 is active" }.issued
+        node.asControlSink().publish(
+            Patch(
+                EntitlementLedger.of(
+                    origins = mapOf(root to Int128.of(origin)),
+                    gauges = mapOf(e1 to Gauge(folded = e1Issued, ticksHigh = e1Ticks.high, ticksLow = e1Ticks.low)),
+                    minted = mapOf(MintId("top-up") to MintRecord(root, peer.id, topUp)),
+                ),
+            ),
+        )
+        h.pump()
+        val held = node.ledger.value
+        check(held.virtualService(e1) == Rational.of(CEILING_AT_WEIGHT_ONE, 16L)) { "the rig: e1 sits at its ceiling" }
+        check(held.virtualService(e2) == Rational.of(-CEILING_AT_WEIGHT_ONE, 16L)) { "the rig: e2 reads its floor" }
+    }
+
+    /** What the node has delegated down `e1` and `e2` together. */
+    private fun HeddleNode.issuedToBoth(): Long =
+        listOf(e1, e2).sumOf { checkNotNull(ledger.value.edge(it)) { "${it.value} is active" }.issued }
+
+    /**
      * A child whose position reached its ceiling stops every pick at the parent (#3313), and the
      * node used to answer that as "nothing to delegate", the same as an idle tree. The ceiling here
-     * arrives the way any gauge does, merged into the replicated ledger.
+     * arrives the way any gauge does, merged into the replicated ledger, beside a sibling at its
+     * floor that holds the rebase at nothing ([holdAtTheCeiling]).
      */
     @Test
     fun aParentWithAChildAtItsCeilingAnswersPositionCeiling() = runTest(
@@ -1119,20 +1161,46 @@ class HeddleNodeTest {
         val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
         h.pump()
         val node = h.peers[0].node
+        holdAtTheCeiling(h)
+        val issuedBefore = node.issuedToBoth()
+        val outcome = node.schedule(root)
+        h.pump()
+        assertAll(
+            { assertEquals(ScheduleOutcome.PositionCeiling(root), outcome, "the node says why it stopped") },
+            { assertEquals(issuedBefore, node.issuedToBoth(), "and delegated nothing") },
+        )
+    }
+
+    /**
+     * A child that a merge carried to its ceiling is rebased before the pick, not after it (#3353).
+     * `e2`, demanding at `2R`, is far enough above zero for a step, so nothing holds the rebase back.
+     * The raise used to run only once a pick had granted, and the pick over `e1` refuses first, so the
+     * parent refused for good. Both calls are asserted: the repair is the first, and it lasts.
+     */
+    @Test
+    fun aChildAtItsCeilingIsRebasedBeforeThePick() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
         val atCeiling = Gauge(Rational.of(CEILING_AT_WEIGHT_ONE, 16L), folded = 0L)
-        // e2 seated at zero and demanding holds the rebase at nothing, the never-served limit (#3353).
-        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling, e2 to Gauge(folded = 0L)))))
+        val twoR = CEILING_AT_WEIGHT_ONE / 16L * 2L
+        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling, e2 to Gauge(Rational.of(twoR, 16L), folded = 0L)))))
         node.advertise(e1, hungry)
         node.advertise(e2, hungry)
         h.pump()
         val gauge = node.ledger.value.gauge(e1)
-        val outcome = node.schedule(root)
+        val rebasesBefore = node.rebasesForTest
+        val first = node.schedule(root)
+        val second = node.schedule(root)
         h.pump()
-        val ledger = node.ledger.value
         assertAll(
             { assertEquals(atCeiling, gauge, "the rig: e1 sits at its ceiling") },
-            { assertEquals(ScheduleOutcome.PositionCeiling(root), outcome, "the node says why it stopped") },
-            { assertEquals(0L, ledger.edge(e1)!!.issued + ledger.edge(e2)!!.issued, "and delegated nothing") },
+            { assertTrue(first is ScheduleOutcome.Delegated, "the parent is repaired on the first call: $first") },
+            { assertTrue(second !is ScheduleOutcome.PositionCeiling, "and stays repaired: $second") },
+            { assertTrue(node.rebasesForTest > rebasesBefore, "the rig: the repair is a rebase") },
         )
     }
 
@@ -1148,12 +1216,7 @@ class HeddleNodeTest {
         val idle = node.sampleScheduleOutcomes(root)
         node.advertise(e2, Demand(targetOutstanding = 10L, maximumUsefulGrant = 10L))
         val delegated = node.sampleScheduleOutcomes(root)
-        node.asControlSink().publish(
-            Patch(EntitlementLedger.of(gauges = mapOf(e1 to Gauge(Rational.of(CEILING_AT_WEIGHT_ONE, 16L), folded = 0L)))),
-        )
-        node.advertise(e1, hungry)
-        node.advertise(e2, hungry)
-        h.pump()
+        holdAtTheCeiling(h)
         val stuck = node.sampleScheduleOutcomes(root)
         assertAll(
             { assertEquals("idle", idle) },
@@ -1174,12 +1237,10 @@ class HeddleNodeTest {
         val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
         h.pump()
         val node = h.peers[0].node
-        val atCeiling = Gauge(Rational.of(CEILING_AT_WEIGHT_ONE, 16L), folded = 0L)
-        // e2 seated at zero and demanding holds the rebase at nothing, the never-served limit (#3353).
-        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling, e2 to Gauge(folded = 0L)))))
+        holdAtTheCeiling(h)
         val newborn = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
         assertTrue(node.prepare(newborn) && node.activate(newborn.id))
-        for (edge in listOf(e1, e2, newborn.id)) node.advertise(edge, hungry)
+        node.advertise(newborn.id, hungry)
         h.pump()
         val before = node.ledger.value
         val outcome = node.schedule(root)

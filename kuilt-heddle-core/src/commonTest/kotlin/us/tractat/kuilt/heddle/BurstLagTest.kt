@@ -351,11 +351,15 @@ class BurstLagTest {
         val allocator = FairShareAllocator(LOCAL, PolicyConfig(quantum = 1L), memory)
         val outcome = allocator.schedule(root, cell, 0L) { want() }
         val landed = allocator.effectiveVirtualService(cell.current, root, b.id)
+        val aAt = allocator.effectiveVirtualService(cell.current, root, a.id)
+        // Read as a lead over a: the window rule lowers the origin to the pair's front, so b lands
+        // half way down and a below zero, as far apart as before (#3353).
+        val lead = if (landed != null && aAt != null) landed - aAt else null
         assertAll(
             { assertEquals(AllocationOutcome.Delegated(10), outcome, "the pick is made, not refused at b's ceiling") },
             { assertTrue(allocator.rebases > 0, "the rig: the parent rebased") },
             { assertEquals(10L, cell.granted.getValue("p/a"), "a, far behind b, takes every unit") },
-            { assertTrue(landed != null && landed > Rational.of(14L * (r / 16L)), "the rig: b came back far ahead, at $landed") },
+            { assertTrue(lead != null && lead > Rational.of(14L * (r / 16L)), "the rig: b came back far ahead of a, by $lead") },
         )
     }
 

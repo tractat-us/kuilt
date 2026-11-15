@@ -815,16 +815,19 @@ now runs the same rule, inside its pick.
 
 **The rule.** After a pick has a grant, and after the seat
 and wake step, `schedule` checks whether any child's effective position has
-passed `R = ceiling / 16` on its own grid, or the front has, read on any child's
-grid. If one has, it raises the parent's origin by `Δ`, in the same patch as the
-grant. The front matters on its own: a light runner holds the front up to `R` on
+passed `R = ceiling / 16` on its own grid, or the front has, read on the grid
+of any child that is demanding or joining. If one has, it raises the parent's
+origin by `Δ`, in the same patch as the grant. `HeddleNode` takes that raise
+before its pick when no child joins, so a child that a merge carried to its
+ceiling is brought back under it instead of being refused. The front matters on its own: a light runner holds the front up to `R` on
 *its* grid, and a child `k` times heavier, seated or clamped there, would land
 about `k · R` up its own, past its ceiling for `k > 16`. The same check runs
 before the seat and wake step too, when there are joiners: the front they are
-about to join, on any child's grid, or a child that is not joining, past its
-`R`. There `Δ` is bounded by the demanding children that are not joining, or by
-the front itself when none is, and every seat and clamp then lands at the
-absolute position it would have taken without the raise. `HeddleNode` lands the raise in the
+about to join, on the grid of a joiner or a demanding child, or a seated child,
+past its `R`. There `Δ` aims at the front the joiners are about to join, held
+inside the windows of the demanding children that are not joining, and every
+seat and clamp then lands at the absolute position it would have taken without
+the raise, or at its floor. `HeddleNode` lands the raise in the
 same patch as the grant, `LocalHeddle` in the same ledger value, which it keeps only when it keeps
 the pick:
 
@@ -832,21 +835,42 @@ the pick:
   the children this peer sees, for each child's weight `n / d`. Then
   `Δ · w · G` is whole ticks on every one of their grids, and each child comes
   down by exactly that.
-- `Δ` is the largest such multiple at or below the smallest effective virtual
-  time among the seated children this peer sees demanding, so none of them goes
-  below zero.
+- **The window rule.** Every child has a window `[−C, C)` on its own grid, its
+  floor the mirror of its ceiling. `Δ` is the largest such multiple at or below
+  `min(⌊A⌋, min over i of ⌊(p_i + C_i) / (w_i · G)⌋)` over the seated children
+  this peer sees demanding, with `A` their weighted mean, or the joiners' front
+  before a seat. So the origin goes to where they stand on average, and no
+  further than keeps each of them at or above its floor. A child behind the
+  average goes below zero, inside its window.
+- The rule before it stopped at the least-served demanding child. Two light
+  children a lease apart then held the front half a lease above the origin, and
+  a child `k` times heavier joining there landed `k` times as far up its own
+  grid, past its ceiling for `k` near `2¹⁶`. The window rule seats it near zero.
+- A newborn, a clamped waker and a returner each land at the front on their own
+  grid, or at their floor when the front is below it. That costs the joiner a
+  turn, never gives it one: how far the front stood below its floor. No raise
+  the joiner lands under causes one, since that raise is bounded by the room of
+  every demanding child, returners included, and a sleeper credit is at most one
+  lease. It comes from siblings standing below the origin when the joiner
+  arrives, which in a parent driven by picks is within about a lease of it, the
+  spread a fair pick leaves between them. Charging calls can leave siblings
+  about `R` apart.
 - It rewrites no gauge and no wake clamp. Every child reads `Δ · w · G` lower, so
   every front comes down `Δ`, every `⌈V · w · G⌉` by exactly `Δ · w · G`, and
-  every clamp `front − raw` is unchanged. The pick is checked unchanged on the
-  raised state before the raise is kept.
-- An idle child goes below zero, as far as it has to. Its next wake clamp, taken
-  wide, carries it back to the front, so it keeps none of that as credit (the
-  review's F1 case).
+  every clamp `front − raw` is unchanged. No joiner landing under the raise is
+  held at its floor, so it changes no pick, and the pick is checked unchanged on
+  the raised state before the raise is kept.
+- An idle child goes below zero, as far as it has to, past its floor too. Its
+  next wake clamp, taken wide, carries it back to the front, so it keeps none of
+  that as credit (the review's F1 case).
 
 **The two hazards of a replicated rebase are closed.** A seat is written absolute,
 `⌊O · w · G⌋ + ⌈V · w · G⌉` for the origin `O` and front `V` the seating peer
 read, so two peers that seat one newborn against different origins write the
-same position, give or take a tick, and the join's `max` adds no `Δ` to it. And
+same position, give or take a tick, and the join's `max` adds no `Δ` to it. A
+seat held at the newborn's floor is the one exception: each peer's floor sits
+under its own origin, so two such seats can differ by up to the gap between the
+origins, and the join keeps the higher, always the penalty side. And
 nothing raises a fold, so a concurrent checkpoint has no raised fold to pair
 with. Two peers that raise the origin at once keep the higher; a child the winning
 peer had not seen keeps a residue below one tick, on the penalty side. Neither
@@ -878,22 +902,29 @@ accounted for.
 **Where the ceiling is still reached.** These ways, and `PositionCeiling` answers
 each:
 
-- A demanding child that is never served holds `Δ` at zero: it sits less than
-  one step ahead of the origin, so no whole step fits below it.
-  `LocalHeddlePositionCeilingTest` rigs it.
+- A demanding child that is never served: each rebase carries it further below
+  zero until it sits at its floor, and there it holds `Δ` at zero, since no
+  whole step fits inside its window. `LocalHeddlePositionCeilingTest` rigs it.
+  A heavy child joining lighter ones no longer gets there (the window rule).
 - With `k` schedulers granting one child concurrently before their writes merge,
   the margin a child needs is `C − R ≥ k · H`. That is huge for coarse weights and
-  slim near the edge of the weight budget below. It is documented, not enforced.
+  slim near the edge of the weight budget below. It is documented, not enforced:
+  keep denominator × schedulers under about 30,000 (#3458).
 - In a `LocalHeddle` parent driven by both picks and plain `admit`s, a child a
   pick last saw demanding, and idle since, still bounds a charging call's `Δ`
-  near its own position until a pick sees it again. Until then it holds the
-  step back as a never-served child does.
+  inside its own window until a pick sees it again: a never-served child in
+  another guise, which reaches its floor and holds the step there.
 
 A child that is not demanding can sit as far below zero as the origin has
 risen, past `Long`. A pick never orders it: if it comes back demanding to an
 allocator that never saw it idle, a restarted `HeddleNode` say, it is clamped as
-a waker, since no rebase takes a child that kept demanding below zero. And the
-narrowing a pick reads saturates there on the penalty side rather than refusing.
+a waker, since anything below zero and demanding that the allocator never
+watched may have idled there. That threshold stays at zero, not at the floor: a
+watched demanding child can now sit in `[−C, 0)`, and clamping one costs it at
+most its lag, once, while a threshold at the floor would leave an unwatched idle
+child up to a window of credit. The narrowing a pick reads saturates there on
+the penalty side rather than refusing, and so do the public reads, which hold a
+child a `cancel` walked back past its floor at the floor rather than throwing.
 
 **Returns no longer reach it** (#3360). The ceiling is measured on the raw
 position, net of returns and relative to the origin, and the gross position
@@ -1135,7 +1166,7 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   review). When some non-joiner *is* demanding, the front is that set's mean,
   and it can sit below zero, at a runner a rebase brought there. The seat is
   absolute, the parent's origin added back, so the newborn is seated level with
-  that runner, not behind it (#3353).
+  that runner, not behind it (#3353), and no lower than its own floor.
 
 #### A returning child keeps its place, by the parent's clock (#3376)
 
@@ -1541,7 +1572,9 @@ Carried over from the source intact; each is a named property test (§13).
    written absolute, the origin the seating peer saw added back on the edge's
    grid, so it means the same under any later origin, and it is stored exactly and
    uncapped. The front it is taken from is wide too, so no seat is taken against
-   an understated front (#3353, §7.1).
+   an understated front (#3353, §7.1). A seat where that front is below the
+   edge's floor, the mirror of its ceiling, lands at the floor: above the front,
+   so penalty, never credit (§7.1, the window rule).
 6. **No unlimited idle credit.** A child that stops competing comes back moved
    by how far its parent's net-service clock ran while it was away, and gains
    nothing for the time it was idle. A child seen idle but never seen to stop
@@ -1559,7 +1592,9 @@ Carried over from the source intact; each is a named property test (§13).
    unit of the edge's own service (§7.1). A parent's origin adds under one tick
    more, on the penalty side, for a child whose grid it is off: one the rebasing
    peer had not seen. A rebase changes no pick (§7.1), so it adds nothing else.
-   At the position ceiling every pick there refuses.
+   A joiner that arrives with no raise where the front is below its floor waits
+   by how far the front stood there, the penalty side, within about a lease in a
+   parent driven by picks. At the position ceiling every pick there refuses.
 10. **Closure dominance.** A replica that observed CLOSING never again
     delegates across that generation, regardless of merge order.
 11. **Conflicts surface.** Integrity violations converge to the same explicit
@@ -1568,7 +1603,10 @@ Carried over from the source intact; each is a named property test (§13).
 12. **Overflow rejection.** Arithmetic that would exceed `Long` fails
     deterministically, never wraps. The one exception is the effective position
     narrowed for a pick, which saturates at its ceiling; a pick that would order it
-    refuses with a typed outcome instead (§7.1). Everything before it is 128-bit:
+    refuses with a typed outcome instead (§7.1). The public reads of a position
+    saturate too, at its ceiling and at its floor, so none of them throws on how
+    far a child is from its origin; a front over many children can still throw
+    on the least common multiple of their denominators. Everything before it is 128-bit:
     a gauge's stored position, a parent's origin, the raw position, the front and
     a wake clamp, and arithmetic that would leave 128 bits throws (#3353).
 13. **Consensus only at the embroidery.** Mint, overlapping reshape, and

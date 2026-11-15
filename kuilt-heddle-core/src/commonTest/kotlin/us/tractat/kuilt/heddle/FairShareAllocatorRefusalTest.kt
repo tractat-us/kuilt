@@ -66,12 +66,35 @@ class FairShareAllocatorRefusalTest {
     private fun seatedAt(ledger: EntitlementLedger, edge: AttachmentId, ticks: Long): EntitlementLedger =
         ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to Gauge(ticksToVirtual(ticks, Weight.ONE), folded = 0L))))
 
+    /**
+     * The root's origin at [FLOOR_ORIGIN], so a gauge at zero reads one tick below its floor, `−C`, and
+     * [edge] seated [relative] ticks above that origin on weight 1's grid (#3353, the window rule).
+     */
+    private fun seatedAbove(ledger: EntitlementLedger, edge: AttachmentId, relative: Long): EntitlementLedger =
+        ledger.piece(
+            EntitlementLedger.of(
+                origins = mapOf(root to FLOOR_ORIGIN),
+                gauges = mapOf(edge to gaugeAt(originTicks(FLOOR_ORIGIN, Weight.ONE) + Int128.of(relative), folded = 0L)),
+            ),
+        )
+
+    /** [edge]'s raw position in [ledger], relative to the root's origin, in ticks. */
+    private fun relative(ledger: EntitlementLedger, edge: AttachmentId): Int128 =
+        ledger.gauge(edge).rawTicksAt(ledger.baseIssuance(edge), ledger.edge(edge)?.returned ?: 0L, Weight.ONE, ledger.origin(root))
+
+    /**
+     * `e2` demanding at its floor, seen demanding, has no room to come down, so the rebase is held at
+     * nothing (#3353, the window rule). A child at zero no longer holds it: the origin aims at the
+     * front, and `e2` goes below zero inside its window. Seen demanding, since a child this allocator
+     * has never seen, below zero and demanding, is clamped up to the front as a waker.
+     */
     @Test
     fun aParentWithAChildAtItsCeilingAnswersPositionCeiling() {
-        // e2 is seated at zero and demanding, so the rebase is held at nothing: the never-served limit.
-        val cell = CountingCell(seatedAt(seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE)), e2, 0L))
+        val cell = CountingCell(seatedAbove(seatedAt(flat(mint = 100L), e2, 0L), e1, positionCeiling(Weight.ONE)))
         check(cell.current.isAtPositionCeiling(e1)) { "the rig: e1 sits at its ceiling" }
-        val outcome = FairShareAllocator(self, policy).schedule(root, cell, earmarked = 0L) { hungry }
+        check(relative(cell.current, e2) <= Int128.of(positionFloor(Weight.ONE))) { "the rig: e2 sits at its floor" }
+        val seen = AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = mapOf(e1 to true, e2 to true))
+        val outcome = FairShareAllocator(self, policy, seen).schedule(root, cell, earmarked = 0L) { hungry }
         assertAll(
             { assertEquals(AllocationOutcome.PositionCeiling(root), outcome, "the parent says why it stopped") },
             { assertEquals(0L, cell.current.edge(e2)?.issued, "and granted nothing") },
@@ -204,11 +227,13 @@ class FairShareAllocatorRefusalTest {
      * step to write: `e3` a seat, `e2` a clamp up to `e1`.
      */
     /**
-     * [blocker] adds `e4`, seated at zero and seen demanding: it holds the rebase at nothing, the
-     * never-served limit, so a child at its ceiling still refuses the pick (#3353 round 2).
+     * [blocker] adds `e4`, at its floor and seen demanding: it holds the rebase at nothing, so a
+     * child at its ceiling still refuses the pick (#3353, the window rule). The root's origin is
+     * raised to put it there, and [e1Ticks] is then read above that origin ([seatedAbove]).
      */
     private fun joining(mint: Long, e1Ticks: Long, blocker: Boolean = false): Pair<CountingCell, FairShareAllocator> {
-        var s = withChildren(seatedAt(seatedAt(flat(mint), e1, e1Ticks), e2, 0L), AttachmentRecord(e3, root, GroupId("g3"), Weight.ONE))
+        val unseated = withChildren(seatedAt(flat(mint), e2, 0L), AttachmentRecord(e3, root, GroupId("g3"), Weight.ONE))
+        var s = if (blocker) seatedAbove(unseated, e1, e1Ticks) else seatedAt(unseated, e1, e1Ticks)
         val observed = HashMap(mapOf(e1 to true, e2 to false))
         if (blocker) {
             s = seatedAt(withChildren(s, AttachmentRecord(e4, root, GroupId("g4"), Weight.ONE)), e4, 0L)
@@ -225,6 +250,7 @@ class FairShareAllocatorRefusalTest {
         val memoryBefore = allocator.memory
         val outcome = allocator.schedule(root, cell, earmarked = 0L) { hungry }
         assertAll(
+            { assertTrue(relative(before, e4) <= Int128.of(positionFloor(Weight.ONE)), "the rig: e4 sits at its floor") },
             { assertTrue(before.gauge(e3) == null, "the rig: e3 is unseated") },
             { assertEquals(false, memoryBefore.demandingObserved[e2], "the rig: e2 was seen idle, so it is waking") },
             { assertEquals(AllocationOutcome.PositionCeiling(root), outcome, "the rig: the first pick refused") },
@@ -266,5 +292,10 @@ class FairShareAllocatorRefusalTest {
             { assertTrue(cell.current.gauge(e3) != null, "and so did the newborn's seat") },
             { assertEquals(1, cell.writes, "in a single patch") },
         )
+    }
+
+    private companion object {
+        /** An origin at which a gauge at zero reads `−C − 1` on weight 1's grid: `16 · O = C + 1`. */
+        val FLOOR_ORIGIN: Int128 = Int128.of(positionCeiling(Weight.ONE) / TICKS_PER_UNIT + 1L)
     }
 }

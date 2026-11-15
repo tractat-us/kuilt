@@ -202,13 +202,11 @@ internal fun originTicks(origin: Int128, w: Weight): Int128 {
  * receiver is `null` and the edge therefore reads from its own start.
  *
  * Narrowed only here, at the end, for the public read ([EntitlementLedger.grossVirtualService]):
- * a position past the edge's [positionCeiling] reads as the ceiling (#3313).
- *
- * @throws ArithmeticException if the relative position is below `Long`, which only a child idle
- *   since long before a great many rebases reaches.
+ * held inside the edge's window ([readVirtual]), so a position past its [positionCeiling] reads as
+ * the ceiling (#3313) and one below its [positionFloor] as the floor (#3353). Never throws.
  */
 internal fun Gauge?.grossVirtualServiceAt(baseIssued: Long, weight: Weight, origin: Int128): Rational =
-    ticksToVirtual(saturated(exactGrossTicksAt(baseIssued, weight) - originTicks(origin, weight), weight), weight)
+    readVirtual(exactGrossTicksAt(baseIssued, weight) - originTicks(origin, weight), weight)
 
 /**
  * The gross position at [baseIssued], exact and absolute: `max(⌈floor · w · G⌉, ticks) +

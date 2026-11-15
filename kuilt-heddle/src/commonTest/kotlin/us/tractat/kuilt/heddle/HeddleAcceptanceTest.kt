@@ -292,6 +292,60 @@ class HeddleAcceptanceTest {
     }
 
     /**
+     * A heavy newborn, weight 65,534, joins two light runners that drifted leases apart (#3353, the
+     * window rule), on the governed node, whose first round raises before its seat step
+     * (`preSeatRaise ?: prePickRaise`, not `LocalHeddle`'s path). A guard, not a red: `schedule` fills
+     * each runner's demand every call, so when the newborn joins they ask again as returners, and
+     * both rules aim that raise at the front the returners land at. What this pins is that the raise,
+     * now bounded by each returner's room, still seats the newborn short of its ceiling and every
+     * call after grants. `LocalHeddleWindowRuleTest` holds the red rows, where the runners stay asking.
+     */
+    @Test
+    fun aHeavyNewbornJoiningTwoLightsALeaseApartNeverMeetsTheCeiling() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val lights = draft("root") {
+            lane("l1", Weight.ONE)
+            lane("l2", Weight.ONE)
+        }.lower()
+        val heavy = AttachmentRecord(AttachmentId("root/h"), root, GroupId("root/h"), Weight.of(65_534L))
+        val cluster = bootedCluster(mint = mapOf(0 to SUPPLY), lanes = lights)
+        val peer = cluster.peers[0]
+        val node = peer.node.asSchedulingPeer()
+        val apart = MixedWeightRun(root, lights, MAX_GRANT, Random(3353))
+        // Nothing charged: a lease held is service, so the runners stand whole leases apart.
+        repeat(LIGHT_CALLS) {
+            apart.advertise(node, apart.drawWaiting())
+            apart.schedule(node)
+            if (apart.calls % PUMP_EVERY == 0) cluster.pump(1L)
+        }
+        cluster.pump()
+        val (l1At, l2At) = lights.map { checkNotNull(node.ledger.value.virtualService(it.id)) }
+        val spread = if (l1At > l2At) l1At - l2At else l2At - l1At
+        cluster.applied("prepare the heavy newborn") { peer.node.prepare(heavy) }
+        cluster.applied("activate the heavy newborn") { peer.node.activate(heavy.id) }
+        val rebasesBefore = node.rebases()
+        val all = lights + heavy
+        val joined = MixedWeightRun(root, all, MAX_GRANT, Random(3354))
+        val refusals = ArrayList<String>()
+        repeat(JOINED_LIGHT_CALLS) {
+            joined.advertise(node, if (joined.calls == 0) all else joined.drawWaiting())
+            if (joined.schedule(node) is ScheduleOutcome.PositionCeiling) refusals += "call ${joined.calls}"
+            joined.chargeBelowReservation(node)
+            if (joined.calls % PUMP_EVERY == 0) cluster.pump(1L)
+        }
+        cluster.pump()
+        assertAll(
+            { assertTrue(spread >= Rational.of(MAX_GRANT), "the rig: the runners stood a lease apart or more, $spread") },
+            { assertTrue(node.rebases() > rebasesBefore, "the rig: the newborn's arrival rebased the parent") },
+            { assertEquals(emptyList<String>(), refusals.take(MAX_REPORTED), "no call met the ceiling (${refusals.size} did)") },
+            { assertTrue((node.ledger.value.edge(heavy.id)?.issued ?: 0L) > 0L, "the newborn was granted") },
+            { assertConverged(cluster) },
+        )
+    }
+
+    /**
      * Two schedulers at once, cut off from each other for a stretch, then healed. Their picks may
      * differ from any one engine's, so this run checks what replication promises instead: the §8.2
      * bound pieces stay ordered on both sides while they are apart, the three peers converge after,
@@ -519,6 +573,10 @@ class HeddleAcceptanceTest {
         const val RUNNER_CALLS: Int = 400
         const val RUNNER_GRANTS: Int = 4
         const val JOINED_CALLS: Int = 400
+
+        /** The two light runners' calls before the heavy newborn joins, and the calls after. */
+        const val LIGHT_CALLS: Int = 64
+        const val JOINED_LIGHT_CALLS: Int = 64
 
         /**
          * The spread run's rounds: a burst of [BURST_CALLS] calls of [BURST_GRANTS] grants each to

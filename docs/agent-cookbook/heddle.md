@@ -302,9 +302,13 @@ settles. A bad argument throws `IllegalArgumentException`, such as a reservation
 `LocalHeddle.MAX_RESERVATION` (2^44 cost units). Each child's progress is a count of
 sixteenths of a unit, stored exactly in 128 bits and read for a pick, net of what it returned, as
 a `Long` with a ceiling. A pick rebases a busy parent's children long before it, all by the same
-virtual time, so no pick changes, and so does a charging call, `admit`, `extend` or an overrun. A
-parent still reaches the ceiling only where no whole step fits: a demanding child sits at zero and
-is never served. A weight set so fine that one step or one full lease could carry a child past its
+virtual time, so no pick changes, and so does a charging call, `admit`, `extend` or an overrun.
+The rebase aims at the demanding children's average and stops at each one's floor, the mirror of
+its ceiling, so a heavy child joining lighter ones a lease apart lands near zero, not past its
+ceiling. A parent still reaches the ceiling where no whole step fits, in two ways: a demanding
+child that is never served is carried down to its floor, and there holds the rebase at nothing;
+and a child a pick last saw demanding, idle since, counts as demanding for a plain `admit`'s
+rebase until a pick sees it again. A weight set so fine that one step or one full lease could carry a child past its
 ceiling is refused when it is applied, the weight budget's second half (#3353). Returned
 service no longer counts toward it (#3360). At the ceiling, `acquire` and `extend` return
 `PositionCeiling(parent)` and change nothing, while `admit` and `complete` still charge. `IllegalStateException` is left only for a conflicted ledger, such as two live edges into
@@ -605,7 +609,7 @@ internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
         // Nothing to move toward any advertised demand: an idle tree, or no holdings at the root.
         ScheduleOutcome.NothingToDelegate -> "idle"
         // A child's position is at its ceiling, so no pick orders exactly. A busy parent rebases long
-        // before this. A demanding child that is never served still reaches it, as do weights so fine that one step spans a ceiling.
+        // before this. A demanding child that is never served still reaches it, and so can several schedulers granting one child at once.
         is ScheduleOutcome.PositionCeiling -> "stuck at ${outcome.parent.value}: serve or close the child that waits"
         // The active children's weights put a pick's sums out of Long, as gossip can merge. Close one of them.
         is ScheduleOutcome.WeightBudget -> "stuck at ${outcome.parent.value}: close a child, its weights cannot be summed"
@@ -651,9 +655,11 @@ quantifies over (`enrolledReplicas()` reads it back); only a peer may depart its
 `ReserveOutcome.NoHoldings` and `ScheduleOutcome.NothingToDelegate`, so a node that never
 enrolled can no longer pass for an idle one. Nor can a parent whose children cannot be ordered:
 `schedule` rebases a busy parent by raising its replicated origin long before a child's position
-nears its ceiling, so no pick changes (#3353); it answers `PositionCeiling(parent)` only where no
-whole step fits, a demanding child that is never served holding the rebase at zero, and it makes
-no grant whose own delegation would reach the ceiling. It answers
+nears its ceiling, so no pick changes (#3353). It answers `PositionCeiling(parent)` where no
+whole step fits, a demanding child that is never served holding the rebase at its floor, and where
+several schedulers granting one child at once pass the margin a rebase keeps: keep denominator
+× schedulers under about 30,000 (#3458).
+It makes no grant whose own delegation would reach the ceiling. It answers
 `WeightBudget(parent)` when gossip merged an active set whose weights a pick cannot sum in `Long`
 or that is too fine for one full lease, both on a static node too. Keep every weight's denominator
 at or below 30,719; a finer weight set is refused when it is applied, at `prepare`/`activate` with

@@ -363,18 +363,24 @@ public class HeddleNode internal constructor(
      * **A busy parent rebases by raising its origin, long before the position ceiling** (#3353).
      * Each child's position is stored wide, and a pick orders it relative to the parent's origin,
      * narrowed to a `Long` with a ceiling. Once any child's effective position passes a sixteenth
-     * of that ceiling, or the front does, read on any child's grid, a round that grants also raises
-     * the origin, in the same patch as its grant, by the largest whole step no demanding child
-     * would fall below zero for. The same raise can land before the seat and wake step, so a heavy
-     * newborn or waker joining a light runner is never seated past its own ceiling.
+     * of that ceiling, or the front does, read on the grid of a child that is demanding or joining,
+     * a round raises the origin, in the same patch as its grant, aimed at where the demanding
+     * children stand on average and held short of carrying any of them below its floor, the mirror
+     * of its ceiling (the window rule). The raise lands before the pick, at the seat and wake step
+     * when there are joiners, so a heavy newborn or waker joining light runners is never seated past
+     * its own ceiling, and a child that a merge carried to its ceiling is brought back under it
+     * rather than refused.
      *
-     * Every child reads the same virtual time lower, so no pick changes, and nothing else is
-     * rewritten: a peer that has not seen the raise still seats and checkpoints correctly, since
-     * both write absolute positions.
+     * Every child reads the same virtual time lower, and no joiner landing under the raise is held
+     * at its floor, since the raise is bounded by every demanding child's room, so no pick changes.
+     * Nothing else is rewritten: a peer that has not seen the raise still seats and checkpoints
+     * correctly, since both write absolute positions.
      * [boundMetrics] reports the peak effective position as a fraction of its ceiling.
      *
-     * The ceiling can still be met where a demanding child that is never served holds the step at
-     * zero. A weight set so fine that one step or one full lease could carry a child past its
+     * The ceiling can still be met two ways. A demanding child that is never served is carried down
+     * to its floor, and there holds the step at nothing. And several schedulers granting one child at
+     * once, before their writes merge, can each add a lease past the margin a rebase keeps: keep
+     * denominator × schedulers under about 30,000 (#3458). A weight set so fine that one step or one full lease could carry a child past its
      * ceiling is refused before it is active ([prepare], [activate]), and no grant is larger than
      * [LocalHeddle.MAX_RESERVATION], the lease that limit is sized for (#3353).
      *
