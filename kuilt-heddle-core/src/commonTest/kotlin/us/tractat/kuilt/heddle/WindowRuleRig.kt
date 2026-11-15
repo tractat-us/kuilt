@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import kotlin.random.Random
 
 /**
@@ -12,6 +13,8 @@ import kotlin.random.Random
  */
 internal class WindowRuleRig(
     lanes: List<Pair<String, Weight>>,
+    /** Off for a twin on the rule before the window rule ([LocalHeddle.windowRuleForTest]). */
+    windowRule: Boolean = true,
 ) {
     private var topology = topologyOf(lanes)
     private var generation = 1L
@@ -19,6 +22,7 @@ internal class WindowRuleRig(
         private set
 
     val engine: LocalHeddle = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply {
+        windowRuleForTest = windowRule
         reconcileCapacity(1L)
     }
 
@@ -31,12 +35,15 @@ internal class WindowRuleRig(
         val picksAfterRefusal: Int,
         val reloads: Int,
         val rebases: Int,
+        val floorLandings: Int,
+        /** The root's origin at the end, in whole units. */
+        val origin: Int128,
         /** The lane each lease went to, by name. */
         val leaves: List<String>,
     ) {
         override fun toString(): String =
             "steps=$steps picks=$picks refusals=$refusals firstRefusal=$firstRefusal picksAfterRefusal=$picksAfterRefusal " +
-                "reloads=$reloads rebases=$rebases"
+                "reloads=$reloads rebases=$rebases floorLandings=$floorLandings origin=$origin"
     }
 
     /** Replace the lanes with [lanes]: a lane left out is retired, a new name is a newborn. */
@@ -83,7 +90,7 @@ internal class WindowRuleRig(
                 else -> error("the rig: step $step answered $out")
             }
         }
-        return Result(steps, picks, refusals, firstRefusal, picksAfterRefusal, reloads, engine.rebasesForTest, leaves)
+        return Result(steps, picks, refusals, firstRefusal, picksAfterRefusal, reloads, engine.rebasesForTest, engine.floorLandingsForTest, engine.snapshot().ledger.origin(engine.root), leaves)
     }
 
     companion object {
@@ -115,8 +122,9 @@ internal class WindowRuleRig(
             every: Int,
             burst: Int,
             steps: Int,
+            windowRule: Boolean = true,
         ): Result {
-            val rig = WindowRuleRig(stayers + ("h0" to k))
+            val rig = WindowRuleRig(stayers + ("h0" to k), windowRule)
             var born = 0
             var bornAt = 0
             return rig.run(
