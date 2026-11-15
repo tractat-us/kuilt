@@ -38,12 +38,11 @@ import us.tractat.kuilt.math.timesWide
  * unreachable *by default*: a type that wants to replicate a `Rational` cannot simply
  * inherit wire-legality, it has to name a normalizing serializer at the property.
  *
- * **Replication is opt-in, per site, through [RationalSerializer]** — the normalizing
- * serializer routed through [of] that this stance always prescribed, and the same shape as
- * [WeightSerializer]. No replicated property holds a `Rational` today: a gauge's position is in
- * ticks (#3353), and [Gauge]'s serializer names the retired `floor` only to refuse it. A property
- * that does replicate one carries `@Serializable(with = RationalSerializer::class)`. Annotate the
- * property, never this class — that is what keeps the default closed.
+ * **No replicated property holds a `Rational`**: a gauge's position is in ticks (#3353), and
+ * [Gauge]'s serializer names the retired `floor` only to refuse it. The normalizing serializer
+ * that reads that retired field is `internal` to this module, so a consumer cannot put a
+ * `Rational` on the wire either. If kuilt ever replicates one, annotate that property with
+ * the module's normalizing serializer, never this class: that keeps the default closed.
  *
  * @property numerator the reduced numerator; may be negative, zero, or positive.
  * @property denominator the reduced denominator; always `> 0` and coprime with [numerator].
@@ -255,7 +254,7 @@ public class Rational private constructor(
  * [SerializationException] at the decode boundary, before any lattice state is touched; the
  * frame is dropped and the merge loop survives.
  */
-public object RationalSerializer : KSerializer<Rational> {
+internal object RationalSerializer : KSerializer<Rational> {
 
     /**
      * Field-for-field what the generated form would have been, including the serial name, so
