@@ -127,13 +127,13 @@ public class OtlpHttpEdge(
     // - The key's length is **bounded and independent of the endpoint**. That is not
     //   cosmetic. A file-backed store percent-encodes the key onto a filename, so an
     //   endpoint-shaped key is endpoint-length, and past the filesystem's limit the
-    //   failure is not loud: `File.exists()` answers *false* for a too-long name rather
-    //   than throwing, so the read degrades to an empty digest while the write throws.
-    //   Every drain would then re-POST the whole buffer forever. Worse, the three prefixes
-    //   differ in length, so there is a band where the span key fits and the metric key
-    //   does not — spans persist, metrics do not, and every drain is a
-    //   `DrainResult.Partial` whose metric failure reads like a routine offline one. A
-    //   fixed-width tag removes the whole class by construction.
+    //   failure is not loud: both the read and the write throw (`ENAMETOOLONG`), so every
+    //   digest for that signal fails, and `WarpOtlpBridge.drain` reports it as that
+    //   signal's failure on every call — which reads like a routine offline collector.
+    //   Worse, the three prefixes differ in length, so there is a band where the span key
+    //   fits and the metric key does not — spans persist, metrics never do, and every
+    //   drain is a `DrainResult.Partial` whose metric failure reads like a routine offline
+    //   one. A fixed-width tag removes the whole class by construction.
     //
     // The tag is also why a credential-bearing endpoint (`https://user:pass@host`, or a
     // token in the path) never reaches a filename, where directory listings, backup

@@ -25,11 +25,11 @@ import kotlin.test.assertTrue
  * outside `[a-z0-9-]` costing three rather than one — and the encoder deliberately
  * promises no length bound. Past that bound the failure is **not** loud:
  *
- * - `FileChannelDurableStore.read` guards on `File.exists()`, which answers `false` for
- *   a too-long name rather than throwing, so the read degrades to an empty digest;
- * - the matching `write` *does* throw, but `WarpOtlpBridge.drain` catches it, logs at
- *   debug, and reports it as that signal's failure — which reads like a routine offline
- *   collector.
+ * - `FileChannelDurableStore.read` throws on a too-long name (`ENAMETOOLONG`), and so
+ *   does the matching `write`. When #2513 was fixed the read guarded on `File.exists()`,
+ *   which answered `false` and degraded to an empty digest; #3327 made it throw;
+ * - but `WarpOtlpBridge.drain` catches either, logs at debug, and reports it as that
+ *   signal's failure — which reads like a routine offline collector.
  *
  * Steady state is every drain re-POSTing the whole buffer, forever — and in the band where
  * one key fits and another does not, `drain` returns `DrainResult.Partial` on every call

@@ -181,15 +181,19 @@ public abstract class us/tractat/kuilt/conformance/DiscoverySourceConformanceSui
 
 public abstract class us/tractat/kuilt/conformance/DurableStoreConformanceSuite {
 	public fun <init> ()V
+	public final fun aDeleteThatFailsThrowsAnException ()V
 	public final fun aKeyThatLooksLikeAPathIsJustAKey ()V
 	public final fun aLargeValueRoundTripsWhole ()V
 	public final fun aLongKeyIsStillAKey ()V
+	public final fun aReadThatFailsIsNotAnAbsence ()V
 	public final fun aSecondWriteReplacesTheFirstWhole ()V
+	public final fun aWriteThatFailsThrowsAnException ()V
 	public final fun anEmptyValueIsAValueAndNotAnAbsence ()V
 	public final fun deleteMakesTheKeyAbsentAndWritableAgain ()V
 	public final fun deleteOfAnAbsentKeyIsANoOp ()V
 	public final fun distinctKeysAddressDistinctEntries ()V
 	public final fun everyByteValueSurvivesTheRoundTrip ()V
+	protected abstract fun faultMedium (Lus/tractat/kuilt/store/DurableStore;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	protected abstract fun newStore (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun readOfANeverWrittenKeyIsNull ()V
 	protected abstract fun restart (Lus/tractat/kuilt/store/DurableStore;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -323,6 +327,21 @@ public final class us/tractat/kuilt/conformance/MatrixEntry {
 	public final fun getFabric ()Ljava/lang/String;
 	public final fun getGaps ()Ljava/util/Map;
 	public final fun getMeshEvidence ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/conformance/MediumFault {
+}
+
+public final class us/tractat/kuilt/conformance/MediumFault$Broken : us/tractat/kuilt/conformance/MediumFault {
+	public fun <init> (Lkotlin/jvm/functions/Function1;)V
+	public final fun heal (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/conformance/MediumFault$NoMediumToBreak : us/tractat/kuilt/conformance/MediumFault {
+	public static final field INSTANCE Lus/tractat/kuilt/conformance/MediumFault$NoMediumToBreak;
+	public fun equals (Ljava/lang/Object;)Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

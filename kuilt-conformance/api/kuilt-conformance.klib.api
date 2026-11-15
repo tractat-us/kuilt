@@ -225,6 +225,20 @@ sealed interface us.tractat.kuilt.conformance/JoinerRosterOrigin { // us.tractat
     }
 }
 
+sealed interface us.tractat.kuilt.conformance/MediumFault { // us.tractat.kuilt.conformance/MediumFault|null[0]
+    final class Broken : us.tractat.kuilt.conformance/MediumFault { // us.tractat.kuilt.conformance/MediumFault.Broken|null[0]
+        constructor <init>(kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.store/DurableStore>) // us.tractat.kuilt.conformance/MediumFault.Broken.<init>|<init>(kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.store.DurableStore>){}[0]
+
+        final suspend fun heal(): us.tractat.kuilt.store/DurableStore // us.tractat.kuilt.conformance/MediumFault.Broken.heal|heal(){}[0]
+    }
+
+    final object NoMediumToBreak : us.tractat.kuilt.conformance/MediumFault { // us.tractat.kuilt.conformance/MediumFault.NoMediumToBreak|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.conformance/MediumFault.NoMediumToBreak.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.conformance/MediumFault.NoMediumToBreak.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.conformance/MediumFault.NoMediumToBreak.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.conformance/ObligationDeclaration { // us.tractat.kuilt.conformance/ObligationDeclaration|null[0]
     sealed interface NotApplicable : us.tractat.kuilt.conformance/ObligationDeclaration { // us.tractat.kuilt.conformance/ObligationDeclaration.NotApplicable|null[0]
         abstract val reason // us.tractat.kuilt.conformance/ObligationDeclaration.NotApplicable.reason|{}reason[0]
@@ -564,8 +578,12 @@ abstract class us.tractat.kuilt.conformance/DiscoverySourceConformanceSuite { //
 abstract class us.tractat.kuilt.conformance/DurableStoreConformanceSuite { // us.tractat.kuilt.conformance/DurableStoreConformanceSuite|null[0]
     constructor <init>() // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.<init>|<init>(){}[0]
 
+    abstract suspend fun faultMedium(us.tractat.kuilt.store/DurableStore): us.tractat.kuilt.conformance/MediumFault // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.faultMedium|faultMedium(us.tractat.kuilt.store.DurableStore){}[0]
     abstract suspend fun newStore(): us.tractat.kuilt.store/DurableStore // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.newStore|newStore(){}[0]
     abstract suspend fun restart(us.tractat.kuilt.store/DurableStore): us.tractat.kuilt.conformance/RestartFixture // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.restart|restart(us.tractat.kuilt.store.DurableStore){}[0]
+
+    // Targets: [apple]
+    final fun aDeleteThatFailsThrowsAnException() // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aDeleteThatFailsThrowsAnException|aDeleteThatFailsThrowsAnException(){}[0]
 
     // Targets: [apple]
     final fun aKeyThatLooksLikeAPathIsJustAKey() // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aKeyThatLooksLikeAPathIsJustAKey|aKeyThatLooksLikeAPathIsJustAKey(){}[0]
@@ -577,7 +595,13 @@ abstract class us.tractat.kuilt.conformance/DurableStoreConformanceSuite { // us
     final fun aLongKeyIsStillAKey() // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aLongKeyIsStillAKey|aLongKeyIsStillAKey(){}[0]
 
     // Targets: [apple]
+    final fun aReadThatFailsIsNotAnAbsence() // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aReadThatFailsIsNotAnAbsence|aReadThatFailsIsNotAnAbsence(){}[0]
+
+    // Targets: [apple]
     final fun aSecondWriteReplacesTheFirstWhole() // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aSecondWriteReplacesTheFirstWhole|aSecondWriteReplacesTheFirstWhole(){}[0]
+
+    // Targets: [apple]
+    final fun aWriteThatFailsThrowsAnException() // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aWriteThatFailsThrowsAnException|aWriteThatFailsThrowsAnException(){}[0]
 
     // Targets: [apple]
     final fun anEmptyValueIsAValueAndNotAnAbsence() // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.anEmptyValueIsAValueAndNotAnAbsence|anEmptyValueIsAValueAndNotAnAbsence(){}[0]
@@ -616,6 +640,9 @@ abstract class us.tractat.kuilt.conformance/DurableStoreConformanceSuite { // us
     final fun writtenBytesComeBackExactly() // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.writtenBytesComeBackExactly|writtenBytesComeBackExactly(){}[0]
 
     // Targets: [wasmJs]
+    final fun aDeleteThatFailsThrowsAnException(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aDeleteThatFailsThrowsAnException|aDeleteThatFailsThrowsAnException(){}[0]
+
+    // Targets: [wasmJs]
     final fun aKeyThatLooksLikeAPathIsJustAKey(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aKeyThatLooksLikeAPathIsJustAKey|aKeyThatLooksLikeAPathIsJustAKey(){}[0]
 
     // Targets: [wasmJs]
@@ -625,7 +652,13 @@ abstract class us.tractat.kuilt.conformance/DurableStoreConformanceSuite { // us
     final fun aLongKeyIsStillAKey(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aLongKeyIsStillAKey|aLongKeyIsStillAKey(){}[0]
 
     // Targets: [wasmJs]
+    final fun aReadThatFailsIsNotAnAbsence(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aReadThatFailsIsNotAnAbsence|aReadThatFailsIsNotAnAbsence(){}[0]
+
+    // Targets: [wasmJs]
     final fun aSecondWriteReplacesTheFirstWhole(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aSecondWriteReplacesTheFirstWhole|aSecondWriteReplacesTheFirstWhole(){}[0]
+
+    // Targets: [wasmJs]
+    final fun aWriteThatFailsThrowsAnException(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.aWriteThatFailsThrowsAnException|aWriteThatFailsThrowsAnException(){}[0]
 
     // Targets: [wasmJs]
     final fun anEmptyValueIsAValueAndNotAnAbsence(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DurableStoreConformanceSuite.anEmptyValueIsAValueAndNotAnAbsence|anEmptyValueIsAValueAndNotAnAbsence(){}[0]

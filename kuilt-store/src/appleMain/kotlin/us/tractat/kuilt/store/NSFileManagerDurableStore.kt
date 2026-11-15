@@ -14,13 +14,15 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
-import platform.Foundation.NSData
 import platform.Foundation.NSError
 import platform.Foundation.NSFileManager
-import platform.Foundation.create
+import platform.posix.EFBIG
 import platform.posix.EINTR
+import platform.posix.ENOENT
 import platform.posix.F_FULLFSYNC
+import platform.posix.O_CLOEXEC
 import platform.posix.O_CREAT
+import platform.posix.O_RDONLY
 import platform.posix.O_TRUNC
 import platform.posix.O_WRONLY
 import platform.posix.S_IRUSR
@@ -28,10 +30,12 @@ import platform.posix.S_IWUSR
 import platform.posix.close
 import platform.posix.errno
 import platform.posix.fcntl
+import platform.posix.fstat
 import platform.posix.fsync
-import platform.posix.memcpy
 import platform.posix.open
+import platform.posix.read
 import platform.posix.rename
+import platform.posix.stat
 import platform.posix.strerror_r
 import platform.posix.unlink
 
@@ -106,6 +110,12 @@ import platform.posix.unlink
  * POSIX errno only nested inside `NSUnderlyingError`, which [describe] does not
  * unwrap — so the actual reason a write failed never reached the message at all.
  *
+ * Reads and deletes follow the same rule, and for them it is about more than
+ * diagnosis (#3327). [read] answers `null` only for `ENOENT` and [delete] treats only
+ * `ENOENT` as its no-op; every other `errno` throws [IllegalStateException]. A read
+ * error reported as absence invites the caller to write a fresh value over the one
+ * it could not read.
+ *
  * ## Directory
  *
  * Pass the path to a directory that your application owns (e.g. a subdirectory
@@ -136,10 +146,10 @@ import platform.posix.unlink
  *
  * ## Thread safety
  *
- * `NSFileManager.defaultManager` operations and `NSData.create(contentsOfFile:)`
- * are documented thread-safe on Apple platforms, and the write path holds nothing
- * outside its own call — its descriptor is local and `errno` is per-thread. No
- * additional locking is needed.
+ * `NSFileManager.defaultManager` operations are documented thread-safe on Apple
+ * platforms, and every other path holds nothing outside its own call — each read
+ * and write opens its own descriptor, and `errno` is per-thread. No additional
+ * locking is needed.
  *
  * Every method **throws [IllegalArgumentException] if the key's name is not
  * well-formed text** — an unpaired surrogate has no UTF-8 encoding and so no
@@ -154,9 +164,33 @@ import platform.posix.unlink
  */
 public class NSFileManagerDurableStore(private val directory: String) : DurableStore {
 
+    /**
+     * The bytes under [key], or `null` when **its file does not exist** — `open(2)` failing with
+     * `ENOENT`, and nothing else.
+     *
+     * Any other failure throws [IllegalStateException] naming the `errno`: a file this process may
+     * not open, a directory it may not search, an I/O error. This used to be
+     * `NSData.create(contentsOfFile:) ?: return null`, which answers `nil` for every one of those, so
+     * a file under Data Protection read while the phone was locked came back as "nothing stored" and
+     * a caller wrote over it (#3327).
+     *
+     * One `open(2)` decides absence, so there is no window between asking and reading. Checking
+     * `fileExistsAtPath` first would not only race a concurrent write; it is wrong on its own,
+     * because it too answers `false` for a file it is not allowed to see.
+     */
     override suspend fun read(key: StoreKey): ByteArray? {
-        val data = NSData.create(contentsOfFile = filePath(key)) ?: return null
-        return data.toByteArray()
+        val path = filePath(key)
+        return when (val outcome = readFile(path)) {
+            is FileRead.Bytes -> outcome.bytes
+            FileRead.Absent -> null
+            is FileRead.Failed -> memScoped {
+                error(
+                    "NSFileManagerDurableStore: read failed for key=${key.name} path=$path " +
+                        "cause=errno=${outcome.failure.errno} (${describeErrno(outcome.failure.errno)}) " +
+                        "step=${outcome.failure.step}",
+                )
+            }
+        }
     }
 
     override suspend fun write(key: StoreKey, bytes: ByteArray) {
@@ -199,9 +233,27 @@ public class NSFileManagerDurableStore(private val directory: String) : DurableS
         }
     }
 
+    /**
+     * Unlink [key]'s file. A file that is not there (`ENOENT`) is the contract's no-op; any other
+     * failure throws [IllegalStateException] naming the `errno`.
+     *
+     * This used to be `removeItemAtPath(…, error = null)`, which threw nothing away but the reason:
+     * a delete the file system refused returned exactly as an absent key's does, the caller believed
+     * the entry gone, and it came back with the medium. `unlink(2)` rather than `removeItemAtPath`
+     * also stops a delete from removing a whole directory tree squatting on the entry's name — the
+     * store never puts one there, so it is not the store's to remove.
+     */
     override suspend fun delete(key: StoreKey) {
-        // removeItemAtPath returns false when the file is absent — that is fine; it's a no-op.
-        NSFileManager.defaultManager.removeItemAtPath(filePath(key), error = null)
+        val path = filePath(key)
+        if (unlink(path) == 0) return
+        val code = errno
+        if (code == ENOENT) return
+        memScoped {
+            error(
+                "NSFileManagerDurableStore: delete failed for key=${key.name} path=$path " +
+                    "cause=errno=$code (${describeErrno(code)})",
+            )
+        }
     }
 
     // ---- helpers ----
@@ -319,14 +371,75 @@ private fun MemScope.describeErrno(code: Int): String {
     return if (filled) buffer.toKString() else "unknown"
 }
 
-// ---- NSData → ByteArray (apple-only; private to this file) ----
+// ---- POSIX read (apple-only; private to this file) ----
 
-private fun NSData.toByteArray(): ByteArray {
-    val len = length.toInt()
-    if (len == 0) return ByteArray(0)
-    val out = ByteArray(len)
-    out.usePinned { pinned ->
-        memcpy(pinned.addressOf(0), bytes, length)
-    }
-    return out
+/** What reading one entry's file found. Only [Absent] reads as `null`. */
+private sealed interface FileRead {
+    class Bytes(val bytes: ByteArray) : FileRead
+
+    /** `open(2)` said `ENOENT`: there is no file, so there is no entry. */
+    data object Absent : FileRead
+
+    class Failed(val failure: PosixFailure) : FileRead
 }
+
+/**
+ * Every byte of the file at [path], [FileRead.Absent] when it does not exist, or the step that
+ * failed. The descriptor is closed on every path; a failure to close a descriptor opened read-only
+ * is not reported, because the bytes are already in hand.
+ */
+private fun readFile(path: String): FileRead {
+    val fd = open(path, O_RDONLY or O_CLOEXEC)
+    if (fd < 0) {
+        val code = errno
+        return if (code == ENOENT) FileRead.Absent else FileRead.Failed(PosixFailure("open", code))
+    }
+    try {
+        val size = memScoped {
+            val info = alloc<stat>()
+            if (fstat(fd, info.ptr) != 0) return FileRead.Failed(PosixFailure("fstat", errno))
+            info.st_size
+        }
+        if (size > Int.MAX_VALUE) return FileRead.Failed(PosixFailure("fstat", EFBIG))
+        return readToEnd(fd, size.toInt())
+    } finally {
+        close(fd)
+    }
+}
+
+/**
+ * `read(2)` until end of file, retrying an `EINTR`, into a buffer sized from `fstat`.
+ *
+ * The size is a hint, not a promise: once the buffer is full a one-byte probe confirms end of file,
+ * so a file that grew is still read whole and one that shrank is returned at the length it had. In
+ * this store's own protocol neither happens — a write replaces the file by `rename(2)`, and an open
+ * descriptor keeps the file it opened — but the file is not only this store's to touch.
+ */
+private fun readToEnd(fd: Int, sizeHint: Int): FileRead {
+    var buffer = ByteArray(sizeHint)
+    var filled = 0
+    val probe = ByteArray(1)
+    while (true) {
+        val probing = filled == buffer.size
+        val count = if (probing) {
+            probe.usePinned { read(fd, it.addressOf(0), 1.convert()) }
+        } else {
+            buffer.usePinned { read(fd, it.addressOf(filled), (buffer.size - filled).convert()) }
+        }
+        when {
+            count == 0L -> return FileRead.Bytes(if (filled == buffer.size) buffer else buffer.copyOf(filled))
+            count > 0 && probing -> {
+                buffer = buffer.copyOf(maxOf(buffer.size * 2, GROWTH_FLOOR_BYTES))
+                buffer[filled++] = probe[0]
+            }
+            count > 0 -> filled += count.toInt()
+            else -> {
+                val code = errno
+                if (code != EINTR) return FileRead.Failed(PosixFailure("read", code))
+            }
+        }
+    }
+}
+
+/** The smallest buffer [readToEnd] grows to when a file turns out longer than `fstat` said. */
+private const val GROWTH_FLOOR_BYTES = 4096

@@ -1,6 +1,8 @@
 package us.tractat.kuilt.store
 
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 
 /**
  * A crash-safe [DurableStore] for JVM and Android.
@@ -83,10 +85,23 @@ public class FileChannelDurableStore internal constructor(
         require(dir.isDirectory) { "$dir exists and is not a directory" }
     }
 
+    /**
+     * The bytes under [key], or `null` when **its file does not exist** — `NoSuchFileException`,
+     * and nothing else. Every other failure to read throws its `IOException`.
+     *
+     * This used to ask `File.exists()` first, which answers `false` for any file it cannot `stat`:
+     * in a directory this process may not search, an entry that is there read as absent, and a
+     * caller seeing `null` writes over it (#3327). One `open` now decides, so there is also no
+     * window between asking and reading.
+     */
     override suspend fun read(key: StoreKey): ByteArray? {
         val file = fileFor(key)
         return synchronized(lockFor(key)) {
-            if (!file.exists()) null else file.readBytes()
+            try {
+                Files.readAllBytes(file.toPath())
+            } catch (_: NoSuchFileException) {
+                null
+            }
         }
     }
 

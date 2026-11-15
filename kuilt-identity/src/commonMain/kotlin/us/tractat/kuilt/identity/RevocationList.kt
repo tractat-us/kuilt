@@ -147,8 +147,8 @@ public class RevocationList private constructor(
          * @throws IllegalStateException naming [key] when the bytes there are not a revocation list.
          *   Opening a damaged list as empty would forget every revocation without a word, so it does
          *   not; the bytes are left as they are.
-         * @throws Throwable whatever [DurableStore.read] throws, unchanged. A store that cannot be
-         *   read is not an empty one.
+         * @throws Exception whatever [DurableStore.read] throws, unchanged — an [Exception], as that
+         *   contract requires of every store. A store that cannot be read is not an empty one.
          */
         public suspend fun open(store: DurableStore, key: StoreKey = DEFAULT_STORE_KEY): RevocationList {
             val bytes = store.read(key)

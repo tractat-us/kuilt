@@ -1,6 +1,7 @@
 package us.tractat.kuilt.store
 
 import us.tractat.kuilt.conformance.DurableStoreConformanceSuite
+import us.tractat.kuilt.conformance.MediumFault
 import us.tractat.kuilt.conformance.RestartFixture
 
 /**
@@ -29,4 +30,11 @@ class InMemoryDurableStoreConformanceTest : DurableStoreConformanceSuite() {
      */
     override suspend fun restart(store: DurableStore): RestartFixture =
         RestartFixture.KeepsNothing(InMemoryDurableStore())
+
+    /**
+     * A map lookup cannot fail, so there is no medium here to break — and the suite checks that claim
+     * against [restart]'s [RestartFixture.KeepsNothing], so this arm is not available to a durable
+     * backend. The three failure properties are the file- and browser-backed stores' obligation.
+     */
+    override suspend fun faultMedium(store: DurableStore): MediumFault = MediumFault.NoMediumToBreak
 }
