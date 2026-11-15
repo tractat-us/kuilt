@@ -2,10 +2,13 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.timesWide
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -85,6 +88,130 @@ class FairShareAllocatorWindowRuleTest {
                     { assertTrue(r.rebases > 0, "the rig: the parent rebased") },
                 )
             }.toTypedArray(),
+        )
+    }
+
+    // ── One parent, set by hand ──────────────────────────────────────────────────
+
+    private val e1 = AttachmentId("e1")
+    private val e2 = AttachmentId("e2")
+    private val self = ReplicaId("self")
+    private val hungry = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
+
+    /** `root → {e1, e2}` at [weight], [mint] at the root, each child's gauge at the absolute [ticks] it names. */
+    private fun pair(weight: Weight, mint: Long, ticks: Map<AttachmentId, Int128>, origin: Int128 = Int128.ZERO): Cell {
+        var s = EntitlementLedger.bootstrap(root, mapOf(self to mint), nonce = "genesis")
+        for (id in listOf(e1, e2)) {
+            val record = AttachmentRecord(id, root, GroupId("g-${id.value}"), weight)
+            s = s.piece(checkNotNull(s.prepare(record)).delta)
+            s = s.piece(checkNotNull(s.activate(id)).delta)
+        }
+        val gauges = ticks.mapValues { (_, t) -> gaugeAt(t, folded = 0L) }
+        return Cell(s.piece(EntitlementLedger.of(gauges = gauges, origins = if (origin == Int128.ZERO) emptyMap() else mapOf(root to origin))))
+    }
+
+    private fun seen(vararg demanding: Pair<AttachmentId, Boolean>): AllocatorMemory =
+        AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = mapOf(*demanding))
+
+    /**
+     * A child a merge carried to its ceiling is rebased **before** the pick (#3353), so the call
+     * repairs it instead of refusing. Both children were seen asking, so nobody joins, and `e2` at
+     * `2R` is far above its floor. The raise after the pick could never run: the pick refuses first.
+     */
+    @Test
+    fun aChildAtItsCeilingIsRebasedBeforeThePick() {
+        val c = positionCeiling(Weight.ONE)
+        val cell = pair(Weight.ONE, mint = 100L, ticks = mapOf(e1 to Int128.of(c), e2 to Int128.of(2 * rebaseThreshold(Weight.ONE))))
+        check(cell.current.isAtPositionCeiling(e1)) { "the rig: e1 sits at its ceiling" }
+        val allocator = FairShareAllocator(self, PolicyConfig(quantum = 10L), seen(e1 to true, e2 to true))
+        val outcome = allocator.schedule(root, cell, earmarked = 0L) { hungry }
+        assertAll(
+            { assertEquals(AllocationOutcome.Delegated(10), outcome, "repaired, and the supply granted") },
+            { assertTrue(allocator.rebases > 0, "the rig: the repair is a rebase") },
+            { assertTrue(!cell.current.isAtPositionCeiling(e1), "e1 is below its ceiling now") },
+        )
+    }
+
+    /**
+     * The same child at its ceiling, waking: seen idle, asking now. A waker's own position past `R`
+     * triggers the raise before the seat and wake step (#3353), as any seated child's does; the
+     * clamp only ever raises a waker, so one past `R` before it stays past `R` after.
+     */
+    @Test
+    fun aWakerAtItsCeilingIsRebasedBeforeItIsClamped() {
+        val c = positionCeiling(Weight.ONE)
+        val cell = pair(Weight.ONE, mint = 100L, ticks = mapOf(e1 to Int128.of(c), e2 to Int128.of(2 * rebaseThreshold(Weight.ONE))))
+        val allocator = FairShareAllocator(self, PolicyConfig(quantum = 10L), seen(e1 to false, e2 to true))
+        val outcome = allocator.schedule(root, cell, earmarked = 0L) { hungry }
+        assertAll(
+            { assertTrue(outcome is AllocationOutcome.Delegated, "repaired, not refused: $outcome") },
+            { assertTrue(allocator.rebases > 0, "the rig: the repair is a rebase") },
+        )
+    }
+
+    /**
+     * An idle heavy child's grid does not trigger a rebase (#3353, the window rule): the front is read
+     * on the grid of a child that is demanding or joining, and an idle one is read again when it wakes.
+     * The two light children stand `4 · 10¹⁰` units up, far below their own `R`, which on the idle
+     * weight-2²⁰ child's grid is past its `R`. Read on every grid, as before, that rebased the parent
+     * on every pick for a child that was not asking.
+     */
+    @Test
+    fun anIdleHeavyChildsGridTriggersNoRebase() {
+        val heavy = Weight.of(1L shl 20)
+        val lights = 40_000_000_000L * TICKS_PER_UNIT
+        var s = EntitlementLedger.bootstrap(root, mapOf(self to 100L), nonce = "genesis")
+        val records = listOf(
+            AttachmentRecord(AttachmentId("l1"), root, GroupId("l1"), Weight.ONE),
+            AttachmentRecord(AttachmentId("l2"), root, GroupId("l2"), Weight.ONE),
+            AttachmentRecord(AttachmentId("heavy"), root, GroupId("heavy"), heavy),
+        )
+        for (r in records) {
+            s = s.piece(checkNotNull(s.prepare(r)).delta)
+            s = s.piece(checkNotNull(s.activate(r.id)).delta)
+        }
+        s = s.piece(
+            EntitlementLedger.of(
+                gauges = mapOf(
+                    AttachmentId("l1") to gaugeAt(Int128.of(lights), 0L),
+                    AttachmentId("l2") to gaugeAt(Int128.of(lights), 0L),
+                    AttachmentId("heavy") to gaugeAt(Int128.ZERO, 0L),
+                ),
+            ),
+        )
+        val wantsLights = { id: AttachmentId -> if (id.value.startsWith("l")) hungry else Demand.NONE }
+        val allocator = FairShareAllocator(self, PolicyConfig(quantum = 10L))
+        val front = lights.timesWide(1L shl 20)
+        assertAll(
+            { assertTrue(front >= Int128.of(rebaseThreshold(heavy)), "the rig: the front on heavy's grid is past its R") },
+            { assertTrue(lights < rebaseThreshold(Weight.ONE), "the rig: and on the lights' own, it is not") },
+            { assertNull(allocator.originRebase(root, s, wantsLights), "no rebase for a child that is not asking") },
+        )
+    }
+
+    /**
+     * The public reads hold a child below its floor at the floor (#3353), on the penalty side,
+     * rather than throwing. Under the window rule a demanding child can sit at `−C` with a lease out,
+     * and a `cancel` then walks it back further. At weight 1/2, `ticks · 2` leaves `Long` there.
+     * `e2` sits about one full lease below its floor; `e1` is near zero.
+     */
+    @Test
+    fun theReadsHoldAChildBelowItsFloorAtItsFloor() {
+        val half = Weight.of(1L, 2L)
+        val origin = Int128.of((1L shl 59) + (1L shl 40))
+        val atOrigin = originTicks(origin, half)
+        val cell = pair(half, mint = 100L, ticks = mapOf(e1 to atOrigin + Int128.of(16L), e2 to Int128.of(1L)), origin = origin)
+        val s = cell.current
+        val e2At = s.gauge(e2).rawTicksAt(s.baseIssuance(e2), 0L, half, s.origin(root))
+        val allocator = FairShareAllocator(self, PolicyConfig(quantum = 10L))
+        val floor = ticksToVirtual(positionFloor(half), half)
+        assertAll(
+            { assertTrue(e2At < Int128.of(positionFloor(half)), "the rig: e2 is below its floor, at $e2At") },
+            { assertTrue(e2At > Int128.of(positionFloor(half)) - Int128.of(LocalHeddle.MAX_RESERVATION * 8L), "the rig: by under one full lease") },
+            { assertEquals(floor, s.virtualService(e2), "the ledger's net read holds it at its floor") },
+            { assertEquals(floor, s.grossVirtualService(e2), "and its gross read") },
+            { assertEquals(floor, allocator.effectiveVirtualService(s, root, e2), "and the allocator's effective read") },
+            { assertTrue(allocator.virtualTime(s, root) { hungry } != null, "and the front over it is read, not thrown") },
         )
     }
 
