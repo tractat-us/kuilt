@@ -241,6 +241,95 @@ class CountMinSketchTest {
         )
     }
 
+    // ── Wire shape (#3414) ────────────────────────────────────────────────────
+
+    private fun decode(json: String): CountMinSketch = Json.decodeFromString(CountMinSketch.serializer(), json)
+
+    /**
+     * A negative cell is refused. The sketch's one guarantee is that it never underestimates, and
+     * a negative cell breaks it: it wins the row minimum and reports less than was counted. The
+     * first assertion is the rig: the same matrix with the cell positive decodes.
+     */
+    @Test
+    fun decoderRefusesANegativeCell() {
+        assertAll(
+            { assertEquals(1L, decode("""{"width":2,"depth":1,"cells":[[1,1]]}""").estimate("x"), "the rig's valid matrix decodes") },
+            { assertFailsWith<IllegalArgumentException> { decode("""{"width":2,"depth":1,"cells":[[1,-1]]}""") } },
+        )
+    }
+
+    /** A negative value in a sparse delta is refused too: it is a cell, only carried differently. */
+    @Test
+    fun decoderRefusesANegativeSparseCell() {
+        val sparse = """{"width":2,"depth":1,"cells":[[0]],"sparseCells":[{"row":0,"col":1,"value":%d}]}"""
+        assertAll(
+            { assertEquals(listOf(CellDelta(0, 1, 1L)), decode(sparse.replace("%d", "1")).sparseCells, "the rig's valid delta decodes") },
+            { assertFailsWith<IllegalArgumentException> { decode(sparse.replace("%d", "-1")) } },
+        )
+    }
+
+    /**
+     * A full-state matrix must have exactly [CountMinSketch.depth] rows of exactly
+     * [CountMinSketch.width] cells. Before the fix a mis-shaped one decoded, and `estimate` or
+     * `piece` failed later with an index error, far from the bad input. The first arm is the rig.
+     */
+    @Test
+    fun decoderRefusesAMatrixOfTheWrongShape() {
+        assertAll(
+            { assertEquals(2, decode("""{"width":2,"depth":2,"cells":[[0,0],[0,0]]}""").depth, "the rig's 2×2 matrix decodes") },
+            { assertFailsWith<IllegalArgumentException>("too few rows") { decode("""{"width":2,"depth":2,"cells":[[0,0]]}""") } },
+            { assertFailsWith<IllegalArgumentException>("too many rows") { decode("""{"width":2,"depth":2,"cells":[[0,0],[0,0],[0,0]]}""") } },
+            { assertFailsWith<IllegalArgumentException>("a short row") { decode("""{"width":2,"depth":2,"cells":[[0,0],[0]]}""") } },
+            { assertFailsWith<IllegalArgumentException>("a long row") { decode("""{"width":2,"depth":2,"cells":[[0,0,0],[0,0]]}""") } },
+        )
+    }
+
+    /**
+     * A sparse cell must address the matrix: row in `[0, depth)`, column in `[0, width)`. Before the
+     * fix an out-of-range one decoded and `piece` threw an index error when it was applied.
+     */
+    @Test
+    fun decoderRefusesASparseCellOutsideTheMatrix() {
+        fun at(row: Int, col: Int) =
+            """{"width":2,"depth":2,"cells":[[0],[0]],"sparseCells":[{"row":$row,"col":$col,"value":1}]}"""
+        assertAll(
+            { assertEquals(listOf(CellDelta(1, 1, 1L)), decode(at(1, 1)).sparseCells, "the rig's last in-range cell decodes") },
+            { assertFailsWith<IllegalArgumentException>("row = depth") { decode(at(2, 0)) } },
+            { assertFailsWith<IllegalArgumentException>("negative row") { decode(at(-1, 0)) } },
+            { assertFailsWith<IllegalArgumentException>("col = width") { decode(at(0, 2)) } },
+            { assertFailsWith<IllegalArgumentException>("negative col") { decode(at(0, -1)) } },
+        )
+    }
+
+    /**
+     * `estimate` on a sparse delta is refused rather than answered. A delta's matrix is a one-wide
+     * stub of zeros, so before the fix it answered `0` for an item the delta had just counted. The
+     * sketch is one column wide so every column lands inside the stub: the old code answered
+     * instead of throwing an index error, which is the silent case. The first assertion is the rig:
+     * the delta really carries the occurrence.
+     */
+    @Test
+    fun estimateRefusesASparseDelta() {
+        val delta = CountMinSketch.empty(width = 1, depth = 2).add("x").delta
+        assertAll(
+            { assertEquals(listOf(CellDelta(0, 0, 1L), CellDelta(1, 0, 1L)), delta.sparseCells, "the rig's delta counts x once per row") },
+            { assertFailsWith<IllegalStateException> { delta.estimate("x") } },
+        )
+    }
+
+    /**
+     * `add` on a sparse delta is refused for the same reason: it reads the stub, so it would mint
+     * a delta of `1` whatever the delta already carried.
+     */
+    @Test
+    fun addRefusesASparseDelta() {
+        val delta = CountMinSketch.empty(width = 1, depth = 1).add("x").delta
+        assertAll(
+            { assertEquals(listOf(CellDelta(0, 0, 1L)), delta.sparseCells, "the rig's delta counts x once") },
+            { assertFailsWith<IllegalStateException> { delta.add("x") } },
+        )
+    }
+
     // ── ByteArray overloads (#727) ────────────────────────────────────────────
 
     @Test
