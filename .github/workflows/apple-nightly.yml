@@ -394,9 +394,17 @@ jobs:
   # only: a red workflow_dispatch on a topic branch is the dispatcher's
   # business, not a main-lane breakage. Its own job, so a red `apple`, a red
   # `abi` and a red `webkit` each raise it.
+  #
+  # A job that hits its `timeout-minutes` ends `cancelled`, not `failure`, and `failure()` is false
+  # for it — so under `if: failure()` the three timed-out `apple` runs of Nov 14-15 skipped this job
+  # and the lane went silent for two days (#3115). Hence the explicit `needs.*.result` test, behind
+  # `always()` so the implicit `success()` does not gate it. The cost: a human cancelling a scheduled
+  # run also raises the issue, which is cheap to close and far rarer than a timeout.
   alert:
     needs: [apple, abi, webkit]
-    if: ${{ failure() && github.event_name == 'schedule' }}
+    if: >-
+      ${{ always() && github.event_name == 'schedule'
+      && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: ubuntu-latest
     # Job-level override of the workflow default (contents: read). issues: write
     # lets this job open/refresh the "apple-nightly red" issue.
@@ -418,11 +426,13 @@ jobs:
           set -eu
           TITLE="apple-nightly failing on main"
           LABEL="apple-nightly-red"
-          BODY="A job in the macOS nightly workflow (\`apple-nightly.yml\`) failed. The job list below says which.
+          BODY="A job in the macOS nightly workflow (\`apple-nightly.yml\`) failed or was cancelled. The job list below says which.
 
           - Failing run: ${RUN_URL}
           - Commit: ${COMMIT_SHA}
           - Jobs: apple=${APPLE_RESULT}, abi=${ABI_RESULT}, webkit=${WEBKIT_RESULT}
+
+          A \`cancelled\` job on a scheduled run almost always hit its \`timeout-minutes\`, so its tests never finished: no verdict, not a pass.
 
           A red \`apple\` job means the Apple K/N tests failed. This is the ONLY lane that executes them (ci-required's ubuntu build skips them), so Apple-target regressions are invisible until this is green again. Its test reports are attached to the run as the \`test-reports-apple\` artifact.
 
