@@ -326,10 +326,13 @@ class HeddleWeightBudgetTest {
             val alone = listOf(AttachmentRecord(E1, ROOT, C1, TOO_FINE))
             val pair = listOf(AttachmentRecord(E2, ROOT, C2, HEAVY), AttachmentRecord(E4, ROOT, C4, THIRD))
             val fits = listOf(AttachmentRecord(E2, ROOT, C2, HEAVY), AttachmentRecord(E3, ROOT, C3, Weight.ONE))
+            val aloneSeam = InMemoryLoom().host(Pattern("fine-alone"))
+            val pairSeam = InMemoryLoom().host(Pattern("fine-pair"))
+            val fitsSeam = InMemoryLoom().host(Pattern("fine-fits"))
             assertAll(
-                { assertFailsWith<IllegalArgumentException>("alone") { staticOn(InMemoryLoom().host(Pattern("fine-alone")), alone) } },
-                { assertFailsWith<IllegalArgumentException>("the pair") { staticOn(InMemoryLoom().host(Pattern("fine-pair")), pair) } },
-                { assertEquals(SUPPLY, staticOn(InMemoryLoom().host(Pattern("fine-fits")), fits).ledger.value.mintedTotal(), "the control boots") },
+                { assertFailsWith<IllegalArgumentException>("alone") { staticOn(aloneSeam, alone) } },
+                { assertFailsWith<IllegalArgumentException>("the pair") { staticOn(pairSeam, pair) } },
+                { assertEquals(SUPPLY, staticOn(fitsSeam, fits).ledger.value.mintedTotal(), "the control boots") },
             )
         }
 

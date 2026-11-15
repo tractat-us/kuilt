@@ -24,22 +24,27 @@ class LocalHeddleFineWeightTest {
      */
     @Test
     fun aWeightSetTooFineForOneFullLeaseIsRefusedWhenItIsApplied() {
+        // Two parents, so the heavy lane's sums do not leave `Long` beside the fine lanes first.
         val base = draft("fine") {
-            lane("c", Weight.ONE)
-            lane("heavy", Weight.of(185_000_000_000_000_000L))
+            group("thin", Weight.ONE) { lane("c", Weight.ONE) }
+            group("thick", Weight.ONE) { lane("heavy", HEAVY) }
         }
         val finer = draft("fine") {
-            lane("c", Weight.ONE)
-            lane("heavy", Weight.of(185_000_000_000_000_000L))
-            lane("a", Weight.of(1, 30_721))
-            lane("b", Weight.of(1, 30_722))
-            lane("z", Weight.of(1, 32_767))
-            lane("third", Weight.of(1, 3))
+            group("thin", Weight.ONE) {
+                lane("c", Weight.ONE)
+                lane("a", Weight.of(1, 30_721))
+                lane("b", Weight.of(1, 30_722))
+                lane("z", Weight.of(1, 32_767))
+            }
+            group("thick", Weight.ONE) {
+                lane("heavy", HEAVY)
+                lane("third", Weight.of(1, 3))
+            }
         }
         val engine = LocalHeddle.fromTopology(base, policy, epoch = 1L)
         val result = engine.apply(finer, generation = 1L)
         val refused = result.refusals.associateBy { it.child }
-        val names = listOf("a", "b", "z", "third").map(finer::groupId)
+        val names = listOf(finer.groupId("thin", "a"), finer.groupId("thin", "b"), finer.groupId("thin", "z"), finer.groupId("thick", "third"))
         assertAll(
             { assertEquals(names.toSet(), refused.keys, "every finer lane, and only those: ${result.refusals}") },
             {
@@ -48,7 +53,11 @@ class LocalHeddleFineWeightTest {
                     assertTrue(why.reason.contains("lease"), "refused for one lease past its ceiling: $why")
                 }
             },
-            { assertEquals(2, engine.snapshot().ledger.activeChildren(engine.root).size, "c and heavy alone are active") },
+            {
+                val ledger = engine.snapshot().ledger
+                val active = listOf("thin", "thick").map { ledger.activeChildren(finer.groupId(it)).size }
+                assertEquals(listOf(1, 1), active, "c and heavy alone are active")
+            },
         )
     }
 
@@ -117,6 +126,9 @@ class LocalHeddleFineWeightTest {
     private companion object {
         /** The cost the review measured parking `1/30,721` in the band: `1.172 · 10¹²`. */
         const val BAND_COST: Long = 1_172_000_000_000L
+
+        /** A lane that fits alone, and whose grid step a `1/3` beside it triples past its window. */
+        val HEAVY: Weight = Weight.of(185_000_000_000_000_000L)
 
         /** A hair lower, `1.1715 · 10¹²`, which does not reach it. */
         const val BELOW_THE_BAND: Long = 1_171_500_000_000L
