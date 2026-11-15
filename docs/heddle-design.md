@@ -899,14 +899,14 @@ each:
 - A demanding child that is never served: each rebase carries it further below
   zero until it sits at its floor, and there it holds `Δ` at zero, since no
   whole step fits inside its window. `LocalHeddlePositionCeilingTest` rigs it.
-  Inside the weight budget this is the only way a demanding child that keeps
-  being served, or a heavy child joining lighter ones, still gets there.
+  A heavy child joining lighter ones no longer gets there (the window rule).
 - With `k` schedulers granting one child concurrently before their writes merge,
   the margin a child needs is `C − R ≥ k · H`. That is huge for coarse weights and
   slim near the edge of the weight budget below. It is documented, not enforced.
 - In a `LocalHeddle` parent driven by both picks and plain `admit`s, a child a
   pick last saw demanding, and idle since, still bounds a charging call's `Δ`
-  inside its own window until a pick sees it again.
+  inside its own window until a pick sees it again: a never-served child in
+  another guise, which reaches its floor and holds the step there.
 
 A child that is not demanding can sit as far below zero as the origin has
 risen, past `Long`. A pick never orders it: if it comes back demanding to an
