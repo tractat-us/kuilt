@@ -409,7 +409,7 @@ class LocalHeddleLifetimeTest {
         val cap = LocalHeddle.MAX_RECORDED_OVERRUN
         class Run(val done: LeaseOutcome, val h: LocalHeddle, val edgeBefore: Long, val mintedBefore: Long)
         fun completed(actualCost: Long): Run {
-            val h = engine()
+            val h = engine().apply { reconcileCapacity(1L) }
             val lease = h.lease(setOf(a), reservation = R)
             val edgeBefore = h.issued(h.path(a).single())
             val mintedBefore = h.minted()
