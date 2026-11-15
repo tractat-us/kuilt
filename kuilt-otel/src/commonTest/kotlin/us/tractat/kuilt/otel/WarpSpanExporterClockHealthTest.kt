@@ -2,6 +2,7 @@ package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
+import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.store.StoreKey
@@ -69,6 +70,48 @@ class WarpSpanExporterClockHealthTest {
             { assertNotNull(clockEntry, "the rig: the healed turn did not write the clock") },
             { assertEquals(0L, afterHeal.outstandingFailures, "the clock write that landed did not resolve its failures") },
             { assertEquals(turns.toLong(), afterHeal.failed, "failed is cumulative") },
+        )
+    }
+
+    /**
+     * A span with its own stamp needs no dot, but its turn still writes the configured clock, so it
+     * makes the clock's read too. Otherwise a run of explicitly stamped spans after a transient
+     * refusal at recovery would never arm the clock, and each turn would count a clock failure the
+     * store had already healed, with [PersistenceHealth.lastFailure] naming no real cause.
+     */
+    @Test
+    fun anExplicitlyStampedTurnRetriesTheClockReadAndResolvesItsFailure() = runTest {
+        val backing = InMemoryDurableStore()
+        val store = ReadRefusingStore(backing, clockKey)
+        val clock = WarpCausalClock(replica)
+        val exporter = WarpSpanExporter(replica, store, causalClock = clock)
+        val explicit = span(2).copy(causalStamp = CausalStamp(Dot(ReplicaId("z"), 5L), emptySet()))
+
+        val recovery = clock.recover(store).also(exporter::clockRecovered)
+        exporter.recover()
+        val autoStamped = exporter.export(span(1))
+        val outstandingWhileRefused = exporter.health.value.outstandingFailures
+        store.heal()
+        val healed = exporter.export(explicit)
+        val afterHeal = exporter.health.value
+        val clockEntry = backing.read(clockKey)
+
+        assertAll(
+            { assertIs<ClockRecovery.Refused>(recovery, "the rig: the clock's recovery read was not refused") },
+            { assertEquals(ExportResult.Success, autoStamped) },
+            { assertEquals(1L, outstandingWhileRefused, "the rig: the refused turn's clock work was not outstanding") },
+            { assertEquals(ExportResult.Success, healed) },
+            { assertTrue(clock.isArmed, "the explicitly stamped turn did not retry the clock's read") },
+            { assertNotNull(clockEntry, "the explicitly stamped turn did not write the clock") },
+            { assertEquals(0L, afterHeal.outstandingFailures, "the clock write that landed did not resolve its failure: $afterHeal") },
+            { assertEquals(1L, afterHeal.failed, "the healed turn counted a clock failure: $afterHeal") },
+            {
+                assertEquals(
+                    "simulated refused read of ${clockKey.name}",
+                    afterHeal.lastFailure?.message,
+                    "lastFailure lost the store's real cause",
+                )
+            },
         )
     }
 
