@@ -147,7 +147,34 @@ import kotlin.test.fail
  * rows cover. What stays unpinned is a [restart] that hands back a thin delegating wrapper, and the
  * page-cache residual above.
  *
- * And what the newest addition rests on: the case pair in [distinctKeysAddressDistinctEntries] has
+ * ### The failure properties (#3327, #3143)
+ *
+ * [aReadThatFailsIsNotAnAbsence], [aWriteThatFailsThrowsAnException] and
+ * [aDeleteThatFailsThrowsAnException] were measured on the targets their backends run on, not on
+ * `jvmTest` alone, since two of the three defects they exist for live in `appleMain` and
+ * `wasmJsMain`. Against the code before the fix, on `jvmTest`, `macosArm64Test`,
+ * `iosSimulatorArm64Test` and the wasmJs browser run: `FileChannelDurableStore` red on the read
+ * property only (a `null`, from `File.exists()` answering `false` in an unsearchable directory);
+ * `NSFileManagerDurableStore` red on read (a `null`) and delete (returned normally), write green;
+ * `IndexedDbDurableStore` red on all three with a `JsException`. Each read red is one assertion
+ * of two — the post-heal read stayed green every time, which is what shows the rig broke the medium
+ * rather than deleting the entry. After the fix, each mutation alone (Apple rows on `macosArm64Test`):
+ *
+ * | Mutation | Reds |
+ * |---|---|
+ * | Apple `read`: every `open(2)` failure reads as absent | [aReadThatFailsIsNotAnAbsence] a1, on Apple only |
+ * | Apple `delete`: every `unlink(2)` failure is the no-op | [aDeleteThatFailsThrowsAnException], on Apple only |
+ * | JVM `read`: catch `IOException`, not `NoSuchFileException` | [aReadThatFailsIsNotAnAbsence] a1, on JVM only |
+ * | wasm `idbGet`: drop the bridge's `try` | [aReadThatFailsIsNotAnAbsence] a1 (`JsException`), on wasm only |
+ * | wasm `idbOpen`: drop the bridge's `try` | `IndexedDbDurableStoreTest.openWhereIndexedDbIsMissingThrowsAnException` only — `open` is not on [DurableStore], so this suite cannot reach it |
+ * | **Fixture:** a durable backend declares [MediumFault.NoMediumToBreak] | all three, on the `restart` cross-check |
+ *
+ * What these rest on: each backend's **one** rig. A permission rig cannot model `EIO` or a full
+ * disk, so a backend that maps those to absence and permissions correctly passes. And the
+ * cross-check on [MediumFault.NoMediumToBreak] rests on [restart] answering honestly, which the
+ * two restart properties already pin.
+ *
+ * And what the case-pair addition rests on: the case pair in [distinctKeysAddressDistinctEntries] has
  * **one** of its two failure modes pinned unconditionally and the other pinned only by the filesystem
  * the run happens to sit on — the third row above is that dependency, measured rather than asserted.
  * So a green here on a case-sensitive runner is worth exactly the first mode and nothing more, and a

@@ -26,11 +26,13 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AppleDevice
  * [KeyMedium.read], and that throw reaches the caller with nothing made or written. A grants record
  * that cannot be decoded is dropped with one warning; a lost grant costs only an ordinary admission.
  *
- * The grants do not get the key's care yet. `NSFileManagerDurableStore.read` answers `null` both when
- * there is no record and when the record is there but cannot be read (no permission, a file protected
- * while the phone is locked, an I/O error), so today such a failure looks like "no grants": the
- * device returns as an ordinary admission, and a [keepGrant] made then rewrites the record with only
- * the new grant. That store-level behaviour is tracked by #3327.
+ * The grants get the same rule from the store beneath them. `NSFileManagerDurableStore.read` answers
+ * `null` only when there is no record, and throws when the record is there but cannot be read (no
+ * permission, a file protected while the phone is locked, an I/O error). That throw reaches the
+ * caller of [grants] or [keepGrant] with nothing written, so a record that could not be read is never
+ * rewritten with only the new grant. Until #3327 the store answered `null` for both, and a
+ * [keepGrant] made while the phone was locked did exactly that rewrite. No test in this module pins
+ * it; the store's own conformance suite does.
  *
  * A signing fault during the self-test is the provider failing, not the key: [SoftwareDeviceKey.readBack]
  * throws [IllegalStateException] for it, and so does this store, keeping the key.

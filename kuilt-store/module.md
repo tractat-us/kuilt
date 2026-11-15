@@ -67,6 +67,19 @@ throws instead of returning. On Windows the JVM cannot force a directory, and
 returns can bring back the *previous* record instead of the new one — old or new, never
 torn. The in-memory store, of course, keeps nothing at all across a process exit.
 
+## When the store cannot reach its data
+
+`read` returns `null` only when nothing is stored under the key. If the store cannot
+tell — a file it may not open, a folder it may not look into, a browser connection
+that is closing — it throws. That matters because of what you do with `null`: you start
+fresh and write, and a store that answered `null` for a file it could not open would
+have you write over the very data it failed to read (#3327). A `delete` the medium
+refuses throws too, rather than returning as if the key had been absent.
+
+Every failure is an `Exception`, so `catch (e: Exception)` catches all of them. That
+needed saying for the browser store: a JavaScript error crossing into Kotlin/Wasm used
+to arrive as a `JsException`, which is not an `Exception` at all (#3143).
+
 ## Key names
 
 A key is just a name you pick. Any name — with dots, spaces, a slash, an accent, an
