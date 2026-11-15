@@ -228,7 +228,8 @@ class KuiltMetricExporterBatchTest {
      * An export holding a saturated sum and a gauge whose kind the store will not read. The first
      * `record` is refused for the overflow and applies nothing; the bridge records the rest again,
      * and that retry is refused for the unread gauges. One export, so one failed turn of the gauges,
-     * and the export fails, because the gauge was not counted.
+     * and the export fails, because the gauge was not counted. The first record's read of the gauges
+     * is refused and opens a window of one turn, so the retry refuses them without a read (#3436).
      */
     @Test
     fun aSaturatedSumBesideAnUnreadKindFailsTheExportAsOneFailedTurn() = runTest {
@@ -248,7 +249,7 @@ class KuiltMetricExporterBatchTest {
         runCurrent()
 
         assertAll(
-            { assertEquals(2, store.refusedReads.get(), "the rig did not refuse both records' reads of the gauges") },
+            { assertEquals(1, store.refusedReads.get(), "the rig did not refuse the first record's read of the gauges, or the retry read them") },
             { assertTrue(code.isDone && !code.isSuccess, "an export whose gauge was not counted succeeded") },
             { assertEquals(failedBefore + 1, exp.health.value.failed, "one export counted ${exp.health.value.failed - failedBefore} failed turns") },
             { assertEquals(4L, exp.sumValue(sumKey("requests", "/b")), "the unsaturated sum did not land once") },
