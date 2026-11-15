@@ -109,7 +109,7 @@ class LearnerTest {
      * entry is handed over by hand, and the rig is that the node has applied it and holds it uncommitted.
      *
      * Leader stickiness against a removed node that does campaign, a voter on the old side of a
-     * committed joint, is pinned by `RemovedNodeCampaignTest.aNodeOnTheOldSideOfACommittedJointStillCampaigns`.
+     * committed joint, is pinned (every denial cites `LeaderAlive`, no term moves) by `RemovedNodeCampaignTest.aNodeOnTheOldSideOfACommittedJointStillCampaigns`.
      * A removed node campaigning while the leader is down is covered by the rest of
      * `RemovedNodeCampaignTest`.
      */
@@ -156,7 +156,7 @@ class LearnerTest {
         )
         assertIs<RaftRole.Follower>(removed.role.value, "rig: the removed learner resolved to Follower, so its election timer is armed")
 
-        // Many election timeouts of the removed node campaigning against a live leader.
+        // Many election timeouts of the removed node, any of which would start a campaign if it could.
         delay(200)
         val after = leader.propose(byteArrayOf(2))
         sim.awaitCommit(after.index, on = voterIds)
@@ -169,7 +169,7 @@ class LearnerTest {
                 assertEquals(
                     termsAfterRemoval,
                     termsAtEnd,
-                    "no voter's term moved: a pre-vote is hypothesis-only",
+                    "no voter's term moved",
                 )
             },
             { assertEquals(voterIds, leader.membership.value.voters, "the voter set, and so the quorum, is untouched") },

@@ -281,11 +281,27 @@ class RemovedNodeCampaignTest {
             v3Node.commitIndex.value >= jointIndex && v3 !in v3Node.membership.value.voters
         }
         val log = watch(sim, all)
+        val deniedToV3 = mutableListOf<RaftTraceEvent.PreVoteDenied>()
+        (all - v3).forEach { id ->
+            backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                sim.nodes.getValue(id).trace.collect { e -> if (e is RaftTraceEvent.PreVoteDenied && e.to == v3) deniedToV3 += e }
+            }
+        }
+        val termsBefore = all.associateWith { sim.storages.getValue(it).term() }
         delay(200)
+        val termsAfter = all.associateWith { sim.storages.getValue(it).term() }
 
         assertAll(
             { assertTrue(log.attemptsBy(v3) > 0, "v3 kept campaigning: ${log.attempts}") },
             { assertIs<RaftRole.Leader>(leader.role.value, "stickiness kept the live leader") },
+            { assertTrue(deniedToV3.isNotEmpty(), "rig: the voters answered v3's pre-votes") },
+            {
+                assertTrue(
+                    deniedToV3.all { DenyReason.LeaderAlive in it.reasons },
+                    "every denial cites stickiness: ${deniedToV3.map { it.reasons }}",
+                )
+            },
+            { assertEquals(termsBefore, termsAfter, "no term moved: a denied pre-vote is hypothesis-only") },
         )
     }
 

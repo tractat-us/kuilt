@@ -2126,7 +2126,7 @@ internal class RaftEngine(
      * When we become leader holding a committed Joint, append `Simple(C_new)` here — exactly what
      * [onConfigCommitted]'s Joint branch would have done — reusing [appendConfigEntry] so the behaviour
      * matches the normal path (the trailing `Simple(C_new)` commits, [onConfigCommitted]'s Simple branch
-     * then wakes any pending change and runs the removed-leader step-down).
+     * only completes any pending change, and [advanceCommit] steps a removed leader down afterwards).
      *
      * Two guards keep this from stepping on the normal path:
      *  - `membershipState is Joint` ⇒ no `Simple(C_new)` follows the Joint in the log yet (membership always
@@ -3451,7 +3451,8 @@ internal class RaftEngine(
         // Keeping only the last is safe even if a Joint and its trailing Simple(C_new) both commit in
         // one window: C_new is then already in the log, so onConfigCommitted's Joint branch would only
         // re-append an entry C_new identical to what already exists — skipping it is harmless, and we
-        // run the Simple(C_new) side-effects (complete the deferred, removed-leader step-down) directly.
+        // run the Simple(C_new) side-effect (complete the deferred) directly. The removed-leader step-down
+        // is not a config side-effect: it runs after them, below, from live state.
         var committedConfigEntry: LogEntry? = null
         for (idx in (state.currentCommitIndex + 1)..newCommit) {
             val entry = state.entryAt(idx) ?: continue
@@ -4128,9 +4129,9 @@ internal class RaftEngine(
      * majorities — append `Simple(new)` to drive the cluster onto C_new alone. The deferred is NOT
      * completed yet; it completes when that `Simple(new)` entry commits (the branch below).
      *
-     * Simple committed: the transition is complete — wake the [changeMembership] caller. §6.4.1: if
-     * this leader is not a voter in C_new (removed-leader / leader-replace), step down once C_new is
-     * durable, so the new cluster elects a leader from its own membershipState.
+     * Simple committed: the transition is complete — this branch only wakes the [changeMembership]
+     * caller. A leader that is not a voter in C_new (removed-leader / leader-replace, §6.4.1) is stepped
+     * down afterwards by [advanceCommit], from live state, once C_new is durable (#3123).
      */
     private suspend fun onConfigCommitted(entry: LogEntry) {
         val payload = entry.config ?: return
