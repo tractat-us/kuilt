@@ -800,7 +800,7 @@ internal class JoinerResumeMachine(
      * [AdmitMessage.Resume]. Joining (rather than re-sending) matters twice over: a second
      * Resume would consume nothing on the host (the token is single-use per window), and its
      * [AdmitMessage.Reject] could race the first attempt's ResumeAck into falsely resolving
-     * the shared reply as [ResumeResult.WindowClosed]. It also keeps the internal
+     * the shared reply as [ResumeResult.Refused] ([rejectFlight], #2364). It also keeps the internal
      * auto-reconnect ([runReconnect]) and an app-level retry from stealing each other's reply
      * slot — the pre-fix failure mode where the orphaned internal attempt timed out into
      * host-lost *after* a successful resume. Callers that want a retry after a non-Success
