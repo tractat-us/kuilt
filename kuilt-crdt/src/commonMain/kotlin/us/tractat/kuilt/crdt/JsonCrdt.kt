@@ -106,6 +106,8 @@ public class JsonCrdt internal constructor(
      *
      * @throws IllegalArgumentException if the document was not configured with a replica id
      *   (i.e. it was deserialized and [withReplica] was not called beforehand).
+     * @throws ArithmeticException if this replica's seq in the document's context is already at
+     *   [Long.MAX_VALUE], as a decoded document can leave it (#3417). The next tag would wrap.
      *
      * @sample us.tractat.kuilt.crdt.sampleJsonCrdt
      */
