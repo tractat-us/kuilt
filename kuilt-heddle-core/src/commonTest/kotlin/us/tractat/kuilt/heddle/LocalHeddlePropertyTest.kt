@@ -227,7 +227,7 @@ class LocalHeddlePropertyTest {
                 if (out !is AcquireOutcome.Acquired) break
                 val head = remaining.getValue(out.lease.leaf).removeFirst()
                 if (head > r) {
-                    if (h.extend(out.lease.id, head - r, waiting = emptySet()) !is LeaseOutcome.Done) {
+                    if (h.extend(out.lease.id, head - r, waiting = leaves.filterTo(HashSet()) { remaining.getValue(it).isNotEmpty() }) !is LeaseOutcome.Done) {
                         endedOnExtend++
                         break
                     }

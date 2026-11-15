@@ -205,6 +205,9 @@ class LocalHeddleFairnessTest {
         }
     }
 
+    /** The leaves [waiting] marks, as a charging call's waiting set. */
+    private fun waitingNow(waiting: BooleanArray): Set<GroupId> = LEAVES.filterIndexedTo(HashSet()) { i, _ -> waiting[i] }
+
     private fun runFairness(seed: Int, churn: Boolean, supply: Supply): FairnessRun {
         val rng = Random(seed)
         val heddle = LocalHeddle.over(smallTree(), ROOT, LocalPolicy(defaultReservation = 1L), epoch = 0L, Leasable.EveryGroup)
@@ -258,7 +261,7 @@ class LocalHeddleFairnessTest {
                 val plan = checkNotNull(plans[lease.id]) { "lease ${lease.id} untracked" }
                 if (plan.renews && plan.actual > lease.reserved) {
                     if (harness.topUp(plan.reservation, force = false)) {
-                        assertEquals(LeaseOutcome.Done(0L, 0L), heddle.extend(lease.id, plan.reservation, waiting = emptySet()))
+                        assertEquals(LeaseOutcome.Done(0L, 0L), heddle.extend(lease.id, plan.reservation, waiting = waitingNow(waiting)))
                         run.extends++
                     } else {
                         // The work runs on unrenewed and `complete` covers it: a lease that kept
@@ -269,7 +272,7 @@ class LocalHeddleFairnessTest {
                 } else {
                     val overrun = maxOf(0L, plan.actual - lease.reserved)
                     if (overrun > 0L) harness.topUp(overrun, force = true)
-                    assertEquals(LeaseOutcome.Done(plan.actual, overrun), heddle.complete(lease.id, plan.actual, waiting = emptySet()))
+                    assertEquals(LeaseOutcome.Done(plan.actual, overrun), heddle.complete(lease.id, plan.actual, waiting = waitingNow(waiting)))
                     if (overrun > 0L) run.inlineOverruns++
                     run.completes++
                     plans.remove(lease.id)

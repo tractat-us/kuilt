@@ -23,12 +23,12 @@ internal fun sampleLocalLease() {
     check(first is AcquireOutcome.Acquired)
 
     // The job overran its 3-unit estimate: all 5 units are charged, 2 of them as overrun.
-    check(heddle.complete(first.lease.id, actualCost = 5L, waiting = emptySet()) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+    check(heddle.complete(first.lease.id, actualCost = 5L, waiting = queued) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
 
     // Over many slots the shares follow the weights, 2 : 1.
     val picks = (0 until 30).map {
         val lease = (heddle.acquire(queued, queued, startedAt = it.toLong()) as AcquireOutcome.Acquired).lease
-        heddle.complete(lease.id, actualCost = 3L, waiting = emptySet())
+        heddle.complete(lease.id, actualCost = 3L, waiting = queued)
         lease.leaf
     }
     check(picks.count { it == heavy } in 19..21)
@@ -87,7 +87,7 @@ internal fun sampleConcurrencyCeiling() {
     check(heddle.entitlement(builds, waiting = queued, totalSlots = 4L) == Rational.of(4L))
     check((heddle.acquire(queued, queued, startedAt = 1L) as AcquireOutcome.Acquired).lease.leaf == builds)
 
-    heddle.complete(deploy.id, actualCost = 1L, waiting = emptySet())
+    heddle.complete(deploy.id, actualCost = 1L, waiting = queued)
     // Deploys compete again, a third of a build ahead, as they were when they reached the ceiling.
     val back = heddle.explain(deploys, waiting = queued, eligible = queued)
     check(back is WaitExplanation.BehindAtLevel && back.leafSideVirtualService == Rational.of(4L, 3L) && back.front == Rational.of(5L, 4L))
@@ -118,7 +118,7 @@ internal fun sampleReconcileLeases() {
     check(orphan.lease == lost && orphan.elapsed == 9L && orphan.granted == 3L)
 
     // It ran 9 units against the 3 it was granted, which a dead job cannot prove: charge 3.
-    check(heddle.complete(orphan.lease.id, orphan.defaultSettlement, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.complete(orphan.lease.id, orphan.defaultSettlement, waiting = queued) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
     check(heddle.reconcileLeases(live = setOf(kept.id), now = 110L).orphaned.isEmpty())
 }
 
@@ -147,7 +147,7 @@ internal fun sampleLocalPersistence() {
     val restarted = LocalHeddle.restore(decoded.snapshot, policy, epoch = decoded.snapshot.epoch + 1)
 
     // The lease that was running is still open, and settles as it would have.
-    check(restarted.complete(running.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(restarted.complete(running.id, actualCost = 3L, waiting = queued) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
     // New leases are named under the new epoch, so none can repeat an old id.
     check((restarted.acquire(queued, queued, startedAt = 120L) as AcquireOutcome.Acquired).lease.id.epoch == 1L)
 }
@@ -210,7 +210,7 @@ internal fun sampleBuildFarm() {
     fun build(waiting: Set<GroupId>, startedAt: Long, minutes: Long = 3L): GroupId {
         val out = heddle.acquire(waiting, eligible = waiting, startedAt = startedAt)
         check(out is AcquireOutcome.Acquired)
-        check(heddle.complete(out.lease.id, actualCost = minutes, waiting = emptySet()) is LeaseOutcome.Done)
+        check(heddle.complete(out.lease.id, actualCost = minutes, waiting = waiting) is LeaseOutcome.Done)
         return out.lease.leaf
     }
 
@@ -238,7 +238,7 @@ internal fun sampleBuildFarm() {
     // The ninth build is web's, and it runs 9 minutes against its 3-minute estimate.
     val ninth = heddle.acquire(both, both, startedAt = 24L)
     check(ninth is AcquireOutcome.Acquired && ninth.lease.leaf == web)
-    check(heddle.complete(ninth.lease.id, actualCost = 9L, waiting = emptySet()) == LeaseOutcome.Done(charged = 9L, overrun = 6L))
+    check(heddle.complete(ninth.lease.id, actualCost = 9L, waiting = both) == LeaseOutcome.Done(charged = 9L, overrun = 6L))
     // All nine minutes count: web is now past the line, so mobile goes next.
     check(
         heddle.explain(web, waiting = both, eligible = both) ==
@@ -266,8 +266,8 @@ internal fun sampleBuildFarm() {
     val estimated = heddle.acquire(waiting = both, eligible = setOf(mobile), startedAt = 90L, reservation = 7L)
     check(estimated is AcquireOutcome.Acquired && estimated.lease.reserved == 7L)
     // Still running at 7 minutes, it asks for 3 more, then finishes at 8.
-    check(heddle.extend(estimated.lease.id, amount = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 0L, overrun = 0L))
-    check(heddle.complete(estimated.lease.id, actualCost = 8L, waiting = emptySet()) == LeaseOutcome.Done(charged = 8L, overrun = 0L))
+    check(heddle.extend(estimated.lease.id, amount = 3L, waiting = both) == LeaseOutcome.Done(charged = 0L, overrun = 0L))
+    check(heddle.complete(estimated.lease.id, actualCost = 8L, waiting = both) == LeaseOutcome.Done(charged = 8L, overrun = 0L))
     // A build cancelled before it ran is charged nothing.
     val cancelled = heddle.acquire(both, both, startedAt = 98L)
     check(cancelled is AcquireOutcome.Acquired)
@@ -276,7 +276,7 @@ internal fun sampleBuildFarm() {
     // Naming who else is waiting keeps the scheduler's view of the queue as a pick would leave it.
     val byHand = heddle.admit(mobile, waiting = both, startedAt = 99L)
     check(byHand is AcquireOutcome.Acquired)
-    check(heddle.complete(byHand.lease.id, actualCost = 4L, waiting = emptySet()) == LeaseOutcome.Done(charged = 4L, overrun = 1L))
+    check(heddle.complete(byHand.lease.id, actualCost = 4L, waiting = both) == LeaseOutcome.Done(charged = 4L, overrun = 1L))
 
     // A web build is running when the admin saves a new tree: web drops to two parts, and a new
     // group shares one part among contributors' forks, which the program names as they open.
@@ -289,7 +289,7 @@ internal fun sampleBuildFarm() {
     }
     check(heddle.apply(grown, generation = 1L).refusals.isEmpty())
     // The running build moved onto web's new weight, and finishes as if nothing happened.
-    check(heddle.complete(running.lease.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.complete(running.lease.id, actualCost = 3L, waiting = setOf(web)) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
 
     // A contributor opens a fork. Attach it, and it can be leased like any lane.
     check(heddle.attach(listOf("forks"), "ana", generation = 2L).refusals.isEmpty())
@@ -300,7 +300,7 @@ internal fun sampleBuildFarm() {
     val closing = heddle.detach(listOf("forks"), "ana").refusals.single()
     check(closing is StepRefusal.Draining && closing.child == ana && closing.blockingLeases == listOf(forkBuild.lease))
     check(heddle.acquire(setOf(ana), setOf(ana), startedAt = 104L) is AcquireOutcome.NoLiveLineage)
-    check(heddle.complete(forkBuild.lease.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.complete(forkBuild.lease.id, actualCost = 3L, waiting = setOf(ana)) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
     // Its last build is done, so the same detach now finishes.
     check(heddle.detach(listOf("forks"), "ana").refusals.isEmpty())
 
@@ -314,9 +314,9 @@ internal fun sampleBuildFarm() {
     val orphan = found.orphaned.single()
     check(orphan.lease == lost && orphan.elapsed == 14L && orphan.granted == 3L)
     // It ran 14 minutes on a 3-minute lease, which a lost build cannot prove: charge the 3.
-    check(heddle.complete(orphan.lease.id, orphan.defaultSettlement, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.complete(orphan.lease.id, orphan.defaultSettlement, waiting = both) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
     // Settled once, it is gone: a second settlement changes nothing.
-    check(heddle.complete(orphan.lease.id, actualCost = 14L, waiting = emptySet()) == LeaseOutcome.Unknown)
+    check(heddle.complete(orphan.lease.id, actualCost = 14L, waiting = both) == LeaseOutcome.Unknown)
 
     // Now the engine's own program restarts, with `kept` still running. Under your scheduling
     // lock, take a snapshot, then encode it and store the text exactly as it comes.
@@ -330,9 +330,9 @@ internal fun sampleBuildFarm() {
     val ahead = mapOf(web to 8, mobile to 8)
     check(restored.previewPicks(ahead, both, List(8) { 3L }) == heddle.previewPicks(ahead, both, List(8) { 3L }))
     // The build that was running finishes on the new engine, charged as it would have been.
-    check(restored.complete(kept.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(restored.complete(kept.id, actualCost = 3L, waiting = both) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
     // A lease settled before the restart is named as one from an older epoch.
-    check(restored.complete(lost.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Stale(currentEpoch = 1L))
+    check(restored.complete(lost.id, actualCost = 3L, waiting = both) == LeaseOutcome.Stale(currentEpoch = 1L))
     // The agent count came back too, so it leases at once, and new ids carry the new epoch.
     val next = restored.acquire(both, both, startedAt = 130L)
     check(next is AcquireOutcome.Acquired && next.lease.id.epoch == 1L)
@@ -373,7 +373,7 @@ internal fun samplePreviewQueues() {
         val out = heddle.acquire(waiting, eligible = waiting, startedAt = it.toLong())
         check(out is AcquireOutcome.Acquired)
         val estimate = remaining.getValue(out.lease.leaf).removeFirst()
-        if (estimate > 3L) check(heddle.extend(out.lease.id, amount = estimate - 3L, waiting = emptySet()) is LeaseOutcome.Done)
+        if (estimate > 3L) check(heddle.extend(out.lease.id, amount = estimate - 3L, waiting = waiting) is LeaseOutcome.Done)
         out.lease.leaf
     }
     check(picked == preview)

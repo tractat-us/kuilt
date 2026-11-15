@@ -62,7 +62,7 @@ class LocalHeddlePositionCeilingTest {
         repeat(20) { i ->
             val waiting = sets[i % sets.size]
             val lease = (acquire(waiting, waiting, startedAt = i.toLong()) as AcquireOutcome.Acquired).lease
-            complete(lease.id, actualCost = 1L + i % 4, waiting = emptySet())
+            complete(lease.id, actualCost = 1L + i % 4, waiting = waiting)
         }
     }
 
@@ -188,7 +188,7 @@ class LocalHeddlePositionCeilingTest {
         // One pick with a and b both waiting seats b and wakes nobody. b then waits beside a below
         // its floor, which holds the rebase at nothing.
         val seating = (engine.acquire(setOf(a, b), setOf(a, b), startedAt = 99L) as AcquireOutcome.Acquired).lease
-        engine.complete(seating.id, actualCost = 1L, waiting = emptySet())
+        engine.complete(seating.id, actualCost = 1L, waiting = setOf(a, b))
         check(engine.snapshot().allocatorMemory.wakeOffsets.isEmpty()) { "nobody has woken, so there are no wake offsets" }
         engine.holdAtFloor(b)
         // One unit is 16 ticks: one tick under the ceiling, the delegation of one unit crosses it.
@@ -214,12 +214,12 @@ class LocalHeddlePositionCeilingTest {
         val lease = (engine.acquire(setOf(a, b), setOf(a), startedAt = 100L) as AcquireOutcome.Acquired).lease
         engine.holdAtFloor(b)
         engine.pushTowardCeiling(a, below = 1L)
-        val extended = engine.extend(lease.id, amount = 1L, waiting = emptySet())
+        val extended = engine.extend(lease.id, amount = 1L, waiting = setOf(a, b))
         assertAll(
             { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 0L), extended) },
             { assertEquals(lease.reserved + 1L, engine.snapshot().leases.single().reserved, "the lease holds the extension") },
             { assertEquals(Int128.of(engine.ceilingOf(a) - 1L + TICKS_PER_UNIT), engine.grossWide(a), "a went past its ceiling exactly") },
-            { assertIs<LeaseOutcome.Done>(engine.complete(lease.id, actualCost = 2L, waiting = emptySet())) },
+            { assertIs<LeaseOutcome.Done>(engine.complete(lease.id, actualCost = 2L, waiting = setOf(a, b))) },
         )
     }
 
@@ -235,10 +235,10 @@ class LocalHeddlePositionCeilingTest {
         engine.holdAtFloor(b)
         engine.pushTowardCeiling(a, below = 1L)
         val start = engine.grossWide(a)
-        val admitted = engine.admit(a, waiting = setOf(a), startedAt = 100L, reservation = LocalHeddle.MAX_RESERVATION)
+        val admitted = engine.admit(a, waiting = setOf(a, b), startedAt = 100L, reservation = LocalHeddle.MAX_RESERVATION)
         val lease = assertIs<AcquireOutcome.Acquired>(admitted).lease
         val afterAdmit = engine.grossWide(a)
-        val done = engine.complete(lease.id, actualCost = 3 * LocalHeddle.MAX_RESERVATION, waiting = emptySet())
+        val done = engine.complete(lease.id, actualCost = 3 * LocalHeddle.MAX_RESERVATION, waiting = setOf(a, b))
         val unit = Int128.of(LocalHeddle.MAX_RESERVATION * TICKS_PER_UNIT)
         assertAll(
             { assertEquals(Int128.of(engine.ceilingOf(a) - 1L), start, "the rig: a starts a tick under its ceiling") },
@@ -323,7 +323,7 @@ class LocalHeddlePositionCeilingTest {
         // (#3353), so a is not brought down. One pick with both waiting seats b first.
         val crossing = engine()
         val seating = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a, b), setOf(a), startedAt = 0L)).lease
-        crossing.complete(seating.id, actualCost = 1L, waiting = emptySet())
+        crossing.complete(seating.id, actualCost = 1L, waiting = setOf(a, b))
         crossing.holdAtFloor(b)
         crossing.pushTowardCeiling(a, below = 17L)
         val before = crossing.snapshot()
@@ -337,7 +337,7 @@ class LocalHeddlePositionCeilingTest {
             { assertEquals(listOf(a), withoutExtend, "the control: the acquire alone lands") },
             { assertEquals(listOf(a), withExtend, "and so does the acquire whose extend crosses") },
             { assertTrue(unchanged, "neither preview moved the engine") },
-            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 0L), crossing.extend(lease.id, 1L, waiting = emptySet()), "the rig: the extend lands") },
+            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 0L), crossing.extend(lease.id, 1L, waiting = setOf(a, b)), "the rig: the extend lands") },
             { assertTrue(crossing.grossWide(a) > Int128.of(crossing.ceilingOf(a)), "the rig: and it crossed the ceiling") },
         )
     }
@@ -516,7 +516,7 @@ class LocalHeddlePositionCeilingTest {
         engine.pushTowardCeiling(x, below = 0L)
         check(engine.attach(rt, "n", generation = 2L).refusals.isEmpty())
         val n = rtTopology.attachedChildId(rt, "n")
-        assertIs<AcquireOutcome.Acquired>(engine.admit(n, waiting = setOf(n), startedAt = 1L))
+        assertIs<AcquireOutcome.Acquired>(engine.admit(n, waiting = setOf(x, y, n), startedAt = 1L))
         // x, y and n share a weight, so the front on n's grid is ⌈(x + y) / 2⌉, and the admission charged one unit.
         val front = (engine.grossTicks(x) + engine.grossTicks(y) + 1L) / 2L
         assertAll(
