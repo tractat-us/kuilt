@@ -136,8 +136,9 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
     /**
      * Every index write, at the moment it lands, claims no seq past the run the segment keys then
      * on disk hold, and covers the ids of every segment it names sealed. Driven through two
-     * segment-write outages (one healed in place, one ended by a restart), rolls, window passes that
-     * retire segments, two merges and a clear.
+     * segment-write outages, one healed in place and one carried across a restart, so the first
+     * turns after recovery fail; a merge refused in that outage, so the next merge adopts the whole
+     * log with an unwritten record in it; rolls, window passes that retire segments, and a clear.
      *
      * The second half is [WarpLogRecordExporterUnreadSealedSegmentIdsTest]'s invariant, run here
      * through refused writes. The two pull against each other: a claim too low reuses an unread
@@ -160,11 +161,21 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
         val merged = writer.merge(peerLog)
         quota.refuseSegmentWrites()
         repeat(3) { writer.export(record(500 + it)) }
-        val refused = quota.refusedWrites()
 
-        val restarted = exporterFor(backing)
+        // Restarted with the outage still on, so the first turns after recovery fail: their index
+        // writes restate what recovery found, and nothing a segment write raised yet.
+        val restarted = exporterFor(quota)
         restarted.recover()
-        repeat(30) { restarted.export(record(600 + it)) }
+        val unwritten = restarted.export(record(600))
+        val (secondPeerLog, _) = Rga.empty<LogRecord>().insertAllAfter(ReplicaId("C"), RgaId.HEAD, listOf(record(901)))
+        val refusedAdopt = restarted.merge(secondPeerLog)
+        val refused = quota.refusedWrites()
+        quota.acceptSegmentWrites()
+        // The refused merge leaves its ops in memory alone, so this one adopts the whole log, and
+        // with it the record the first export after the restart could not write.
+        val (thirdPeerLog, _) = Rga.empty<LogRecord>().insertAllAfter(ReplicaId("D"), RgaId.HEAD, listOf(record(902)))
+        val wholeLogAdopt = restarted.merge(thirdPeerLog)
+        repeat(30) { restarted.export(record(610 + it)) }
         val mergedAgain = restarted.merge(restarted.snapshot().piece(peerLog))
         val cleared = restarted.clear()
         repeat(20) { restarted.export(record(700 + it)) }
@@ -186,7 +197,11 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
                         val index = decodeIndexForTest(bytes)
                         indexesChecked++
                         retiredSomething = retiredSomething || index.retired.isNotEmpty()
-                        val segmentsHere = disk.filterKeys { it.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }.values
+                        // What the store holds now, plus what a segment this index names sealed and
+                        // the store does not hold yet will hold: a merge's adopt names its segment
+                        // before writing it, so that write may claim the segment's seqs.
+                        val segmentsHere = disk.filterKeys { it.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }.values +
+                            index.sealedSegments.map { segmentKeyForTest(it) }.filter { it !in disk }.mapNotNull { lastWritten[it] }
                         val held = ownSeqsHeldWithoutAGap(segmentsHere)
                         if (index.seqHighWater > held) {
                             breaches += "operation $at: index claims seq ${index.seqHighWater}, the store holds 1..$held"
@@ -212,9 +227,12 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
         assertAll(
             // The rig: both outages refused segment writes while index writes landed, and the walk
             // checked enough of the run to mean something.
-            { assertTrue(refused >= 6, "only $refused segment writes refused") },
+            { assertTrue(refused >= 8, "only $refused segment writes refused") },
             { assertTrue(firstOutageIndexWrites > 0, "no index write landed during the first outage") },
             { assertEquals(ExportResult.Success, merged, "the first merge") },
+            { assertTrue(unwritten != ExportResult.Success, "the first export after the restart was written") },
+            { assertTrue(refusedAdopt != ExportResult.Success, "the adopt during the outage was written") },
+            { assertEquals(ExportResult.Success, wholeLogAdopt, "the whole-log adopt") },
             { assertEquals(ExportResult.Success, mergedAgain, "the second merge") },
             { assertEquals(ExportResult.Success, cleared, "the clear") },
             { assertTrue(indexesChecked > 20, "only $indexesChecked index writes checked") },

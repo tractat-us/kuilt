@@ -50,6 +50,14 @@ class WarpLogRecordExporterUnreadSealedSegmentIdsTest {
     private suspend fun bodiesAfterRestart(store: DurableStore): List<String?> =
         exporterFor(store).also { it.recover() }.snapshot().toList().map { it.body }
 
+    /**
+     * The seqs of this replica's ids a clean start holds. A raise that kept the lamport but lost
+     * the seq mints a fresh id on a used dot, so every record survives and the dot does not.
+     */
+    private suspend fun ownSeqsAfterRestart(store: DurableStore): List<Long> =
+        exporterFor(store).also { it.recover() }.snapshot().entries()
+            .map { it.first }.filter { it.replicaId == replica }.map { it.seq }
+
     private suspend fun indexOf(store: RecordingStore): LogSegmentIndex =
         decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)) { "no index written" })
 
@@ -116,6 +124,7 @@ class WarpLogRecordExporterUnreadSealedSegmentIdsTest {
         val repro = runRepro(count = 8, unread = 0L, after = listOf(1000), how = how)
         val expected = ((0..7) + 1000).map { "body-$it" }.toSet()
         val recovered = bodiesAfterRestart(repro.backing)
+        val seqs = ownSeqsAfterRestart(repro.backing)
         assertAll(
             // The rig: the eighth export rolled, so segment 0 is sealed and holds ids 1..8, and the
             // active key the roll opened was never written.
@@ -127,6 +136,7 @@ class WarpLogRecordExporterUnreadSealedSegmentIdsTest {
             // The property: nine records went in, nine come back.
             { assertEquals(expected, recovered.toSet(), "a clean start holds every record") },
             { assertEquals(9, recovered.size, "and holds each once") },
+            { assertEquals(seqs.distinct(), seqs, "no seq is minted twice") },
         )
     }
 
@@ -143,6 +153,7 @@ class WarpLogRecordExporterUnreadSealedSegmentIdsTest {
         val repro = runRepro(count = 16, unread = 1L, after = listOf(100, 101), how = how)
         val expected = ((0..15) + 100 + 101).map { "body-$it" }.toSet()
         val recovered = bodiesAfterRestart(repro.backing)
+        val seqs = ownSeqsAfterRestart(repro.backing)
         assertAll(
             { assertEquals(listOf(0L, 1L), repro.indexAtRestart.sealedSegments, "the index names segments 0 and 1 sealed") },
             { assertEquals(2L, repro.indexAtRestart.active, "the second roll opened segment 2") },
@@ -157,6 +168,7 @@ class WarpLogRecordExporterUnreadSealedSegmentIdsTest {
             },
             { assertEquals(expected, recovered.toSet(), "a clean start holds every record, body-8 and body-9 included") },
             { assertEquals(18, recovered.size, "and holds each once") },
+            { assertEquals(seqs.distinct(), seqs, "no seq is minted twice") },
         )
     }
 
