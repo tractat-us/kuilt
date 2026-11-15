@@ -48,6 +48,43 @@ import kotlinx.serialization.encoding.Encoder
  *   see `WarpLogRecordExporter`'s `StoreAction.CommitRetirement`.
  *
  *   Defaulted so an index written by a build that predates retirement still decodes.
+ * @property lamportHighWater The log's Lamport clock when this index was written: at least the
+ *   lamport of every id in every segment it names as sealed. With [seqHighWater], where minting
+ *   stands, so recovery mints past the ids of a sealed segment it could not read (#3410).
+ *
+ *   The **commit point** of a seal is an index write, and each one claims the ids of what it
+ *   seals, so the write that first names a segment sealed already covers them. A segment's own
+ *   write lands earlier, while the index on disk still names it active, and a refused read of the
+ *   active segment fails recovery closed rather than minting from what was read. So both fields
+ *   may lag only the active segment, which recovery always reads.
+ *
+ *   Lamports are not dense, so this one may run ahead: it is the clock as the write was built,
+ *   ids not yet on disk included, and claiming a lamport no id carries costs nothing.
+ * @property seqHighWater This replica's seq high-water, on the same terms, and only this replica's:
+ *   another author's seq is never minted here.
+ *
+ *   **Bounded on both sides, since seqs are dense.** It must reach every seq in a segment the
+ *   index names sealed, and it must not pass the seqs the keys hold except by ones a peer holds
+ *   too. A turn's leading index write lands before its segment write, so it claims only what
+ *   earlier segment writes put on disk; claiming the turn's own new seqs, with the segment write
+ *   then refused, left a restart's log holding a hole no drop could fold past (the cost below,
+ *   with nothing to heal it). The one write that may claim more is a merge's adopt, whose index
+ *   names its segment before writing it. It claims what the adopted log carries, and the turn
+ *   writes the active segment first, so if the adopt is then refused, the claim passes the keys
+ *   only by seqs of this replica's that a peer handed back and this store had lost. That peer can
+ *   hand them back again, so that hole can heal.
+ *
+ *   **The raise has a cost of its own whenever it passes seqs the loaded log lacks**: a sealed
+ *   segment that was not read (the case it exists for), records [WarpLogRecordExporter] could not
+ *   install, an active segment that does not decode. [us.tractat.kuilt.crdt.Rga.dropWindow] folds
+ *   this replica's drops into its floor only along an unbroken run of seqs, so until the missing
+ *   segment is read every drop past the hole is kept as an explicit `RgaOp.Compact`, and a
+ *   segment carrying one is never retired. Measured on #3410's repro, one unread segment and 300
+ *   exports at eight ops a segment: 35 segment keys where 3 is normal, 30 of them pinned, 50 KB
+ *   resident, and 299 compacted ids kept, all of it still there after a clean start has read the
+ *   segment and healed the floor. When the segment is gone for good the floor never moves again.
+ *
+ *   Both default to `0`, which is what an index written before them meant: mint from what was read.
  */
 @Serializable(with = LogSegmentIndexSerializer::class)
 internal data class LogSegmentIndex(
@@ -55,6 +92,8 @@ internal data class LogSegmentIndex(
     val active: Long,
     val next: Long,
     val retired: List<Long> = emptyList(),
+    val lamportHighWater: Long = 0L,
+    val seqHighWater: Long = 0L,
 ) {
     /**
      * A segment number names a key, so an index that could hand one out twice is an index that
@@ -75,6 +114,7 @@ internal data class LogSegmentIndex(
         require((sealedSegments + retired + active).all { it < next }) {
             "otel.logs: index would hand out $next again, but already names a segment at or past it: $this"
         }
+        require(lamportHighWater >= 0L && seqHighWater >= 0L) { "otel.logs: index carries a negative high-water: $this" }
     }
 }
 
@@ -92,6 +132,8 @@ private class StoredLogSegmentIndex(
     val active: Long,
     val next: Long,
     val retired: List<Long> = emptyList(),
+    val lamportHighWater: Long = 0L,
+    val seqHighWater: Long = 0L,
 )
 
 /**
@@ -107,7 +149,9 @@ private class StoredLogSegmentIndex(
  *
  * - each sealed number once, and not the active one, since that key is read as the active segment;
  * - `next` raised past every number the index names, as `maxOf(next, active + 1)` in recovery
- *   used to do for `active` alone.
+ *   used to do for `active` alone;
+ * - a negative high-water read as `0`, which mints from what was read, as every index before #3410
+ *   did.
  */
 internal object LogSegmentIndexSerializer : KSerializer<LogSegmentIndex> {
     override val descriptor: SerialDescriptor = StoredLogSegmentIndex.serializer().descriptor
@@ -115,7 +159,14 @@ internal object LogSegmentIndexSerializer : KSerializer<LogSegmentIndex> {
     override fun serialize(encoder: Encoder, value: LogSegmentIndex) {
         encoder.encodeSerializableValue(
             StoredLogSegmentIndex.serializer(),
-            StoredLogSegmentIndex(value.sealedSegments, value.active, value.next, value.retired),
+            StoredLogSegmentIndex(
+                value.sealedSegments,
+                value.active,
+                value.next,
+                value.retired,
+                value.lamportHighWater,
+                value.seqHighWater,
+            ),
         )
     }
 
@@ -128,6 +179,8 @@ internal object LogSegmentIndexSerializer : KSerializer<LogSegmentIndex> {
             active = stored.active,
             next = maxOf(stored.next, highest + 1),
             retired = stored.retired,
+            lamportHighWater = stored.lamportHighWater.coerceAtLeast(0L),
+            seqHighWater = stored.seqHighWater.coerceAtLeast(0L),
         )
     }
 }

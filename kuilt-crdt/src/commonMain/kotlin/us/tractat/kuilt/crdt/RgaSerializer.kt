@@ -125,9 +125,12 @@ internal class RgaSerializer<V>(vSerializer: KSerializer<V>) : KSerializer<Rga<V
          * structurally immune because they carry whole [RgaId]s; a floor deliberately discards the
          * lamport. Tracked as #2170, which needs a high-water carried beside the floor.
          *
-         * Unreachable through a fixed-size export window — it never drains, and the survivors carry
-         * the true high-water — but [Rga.dropWindow] is public API. `RgaFloorWireTest` pins both the
-         * safe case and the bounded form of the hazard.
+         * A fixed-size window that only drops a prefix never drains, and its survivors carry the true
+         * high-water. Any caller that empties the window reaches the hazard, though, and a clear is
+         * exactly that: `:kuilt-otel`'s log exporter reached it through `clear()` after a merge had
+         * lifted its clock, and now keeps its own lamport high-water in its segment index (#3410).
+         * [Rga.dropWindow] is public API, so every other caller is still exposed.
+         * `RgaFloorWireTest` pins both the safe case and the bounded form of the hazard.
          */
         internal fun <V> deriveLamport(ops: Set<RgaOp<V>>, compactedBelow: VersionVector): Long {
             val fromOps = ops.flatMap { op ->

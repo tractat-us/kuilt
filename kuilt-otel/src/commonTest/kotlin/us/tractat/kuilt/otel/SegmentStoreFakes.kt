@@ -250,6 +250,9 @@ internal class RefuseSegmentWritesStore(private val backing: DurableStore) : Dur
 
     fun refuseSegmentWrites(): Unit = lock.withLock { refusing = true }
 
+    /** End the outage: segment writes are accepted again. */
+    fun acceptSegmentWrites(): Unit = lock.withLock { refusing = false }
+
     /** How many segment writes have been refused — a precondition guard, never an assertion. */
     fun refusedWrites(): Int = lock.withLock { refused }
 

@@ -6,6 +6,10 @@
 // - Show declarations: true
 
 // Library unique name: <us.tractat.kuilt:kuilt-crdt>
+open annotation class us.tractat.kuilt.crdt/CrdtInternalApi : kotlin/Annotation { // us.tractat.kuilt.crdt/CrdtInternalApi|null[0]
+    constructor <init>() // us.tractat.kuilt.crdt/CrdtInternalApi.<init>|<init>(){}[0]
+}
+
 final enum class us.tractat.kuilt.crdt/FugueSide : kotlin/Enum<us.tractat.kuilt.crdt/FugueSide> { // us.tractat.kuilt.crdt/FugueSide|null[0]
     enum entry Left // us.tractat.kuilt.crdt/FugueSide.Left|null[0]
     enum entry Right // us.tractat.kuilt.crdt/FugueSide.Right|null[0]
@@ -898,6 +902,7 @@ final class <#A: kotlin/Any?> us.tractat.kuilt.crdt/Rga : us.tractat.kuilt.crdt/
     final val tombstones // us.tractat.kuilt.crdt/Rga.tombstones|{}tombstones[0]
         final fun <get-tombstones>(): kotlin.collections/Set<us.tractat.kuilt.crdt/RgaId> // us.tractat.kuilt.crdt/Rga.tombstones.<get-tombstones>|<get-tombstones>(){}[0]
 
+    final fun advanceClock(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long, kotlin/Long): us.tractat.kuilt.crdt/Rga<#A> // us.tractat.kuilt.crdt/Rga.advanceClock|advanceClock(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long;kotlin.Long){}[0]
     final fun apply(us.tractat.kuilt.crdt/RgaOp<#A>): us.tractat.kuilt.crdt/Rga<#A> // us.tractat.kuilt.crdt/Rga.apply|apply(us.tractat.kuilt.crdt.RgaOp<1:0>){}[0]
     final fun causalDots(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.crdt/Rga.causalDots|causalDots(){}[0]
     final fun causalFloor(): us.tractat.kuilt.crdt/VersionVector // us.tractat.kuilt.crdt/Rga.causalFloor|causalFloor(){}[0]
@@ -917,6 +922,7 @@ final class <#A: kotlin/Any?> us.tractat.kuilt.crdt/Rga : us.tractat.kuilt.crdt/
     final fun positionsFor(kotlin.collections/Set<us.tractat.kuilt.crdt/RgaId>): kotlin.collections/Map<us.tractat.kuilt.crdt/RgaId, us.tractat.kuilt.crdt/RgaId> // us.tractat.kuilt.crdt/Rga.positionsFor|positionsFor(kotlin.collections.Set<us.tractat.kuilt.crdt.RgaId>){}[0]
     final fun removeAt(kotlin/Int): kotlin/Pair<us.tractat.kuilt.crdt/Rga<#A>, us.tractat.kuilt.crdt/RgaOp.Remove<#A>>? // us.tractat.kuilt.crdt/Rga.removeAt|removeAt(kotlin.Int){}[0]
     final fun removeFirst(kotlin/Int): kotlin/Pair<us.tractat.kuilt.crdt/Rga<#A>, kotlin.collections/List<us.tractat.kuilt.crdt/RgaOp.Remove<#A>>> // us.tractat.kuilt.crdt/Rga.removeFirst|removeFirst(kotlin.Int){}[0]
+    final fun seqHighWater(us.tractat.kuilt.crdt/ReplicaId): kotlin/Long // us.tractat.kuilt.crdt/Rga.seqHighWater|seqHighWater(us.tractat.kuilt.crdt.ReplicaId){}[0]
     final fun toList(): kotlin.collections/List<#A> // us.tractat.kuilt.crdt/Rga.toList|toList(){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.crdt/Rga.toString|toString(){}[0]
     final fun valueAt(us.tractat.kuilt.crdt/RgaId): #A // us.tractat.kuilt.crdt/Rga.valueAt|valueAt(us.tractat.kuilt.crdt.RgaId){}[0]

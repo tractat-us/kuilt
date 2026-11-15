@@ -658,6 +658,78 @@ public class Rga<V> private constructor(
     }
 
     /**
+     * The highest seq this state knows [replica] has minted, and so the seq [insertAfter] and
+     * [insertAllAfter] mint past. `0` when it knows of none.
+     *
+     * It counts every op this state holds and its compaction floor, so it can be larger than any
+     * seq a held op carries, and after [advanceClock] it is larger than every one. Read it beside
+     * [lamport] to record where minting stands; see [advanceClock] for what raising it back costs.
+     *
+     * @sample us.tractat.kuilt.crdt.sampleRgaAdvanceClock
+     */
+    @CrdtInternalApi
+    public fun seqHighWater(replica: ReplicaId): Long = currentSeqFor(replica)
+
+    /**
+     * This state with its [lamport] clock raised to at least [lamport], and [replica]'s seq to at
+     * least [seq], so the next id minted as [replica] lies past both. Returns `this` when neither
+     * rises. No op is added, removed or changed, so the result [equals] this state.
+     *
+     * For a replica that has lost sight of ops it minted. A log kept across several keys can come
+     * back with one key unreadable, and the ids in that key are still taken: minting from what was
+     * read hands one of them out again, and a later union keeps one record of the pair. Record
+     * [lamport] and [seqHighWater] somewhere that is read with the rest, and raise the rebuilt state
+     * to them before minting.
+     *
+     * Neither counter is on the wire: a decode derives both from the ops and the floor it finds. So
+     * the raise does not outlive an encode, and the caller keeps the pair itself.
+     *
+     * Only [replica]'s seq moves. Another author's seq is that author's to mint, and nothing here
+     * reads it; [lamport] is the one clock all authors share.
+     *
+     * **A raised seq breaks [RgaId.seq]'s density, and this state cannot repair it.** [RgaId.seq] is
+     * dense per author; a raise past seqs this state does not hold leaves a hole at each of them.
+     * Two things key on density, and each stalls at the first hole:
+     *
+     * - [dropWindow] folds [replica]'s drops into its floor only along an unbroken run up from the
+     *   floor, so it stops below the first held-nowhere seq. Every later own drop above it is
+     *   recorded as an explicit [RgaOp.Compact] instead, one pair per id. They accumulate until the
+     *   missing ops are pieced back in, and the ones already recorded stay after that. If the ops
+     *   never come back, the floor never moves again.
+     * - [causalDots] reports no dot for a hole, so a frontier folded from it stops below the hole,
+     *   and [compact] never collects [replica]'s ops past it, on this replica or on any peer that
+     *   folds this frontier.
+     *
+     * **The raise lives in the derived caches alone**, which otherwise always match a rebuild from
+     * the ops and the floor. A decode of this state is equal to it and holds the lower counters, so
+     * a raise lost that way re-mints the ids it was meant to protect.
+     *
+     * So raise only past ops that exist somewhere a later [piece] can bring back, and only as far as
+     * they go. A caller that cannot promise that pays the first cost for as long as they are away.
+     *
+     * @throws IllegalArgumentException if [lamport] or [seq] is negative.
+     *
+     * @sample us.tractat.kuilt.crdt.sampleRgaAdvanceClock
+     */
+    @CrdtInternalApi
+    public fun advanceClock(replica: ReplicaId, lamport: Long, seq: Long): Rga<V> {
+        require(lamport >= 0L) { "lamport must not be negative; got $lamport" }
+        require(seq >= 0L) { "seq must not be negative; got $seq" }
+        val raisesSeq = seq > currentSeqFor(replica)
+        if (lamport <= this.lamport && !raisesSeq) return this
+        val newCache = RgaCache(
+            insertsById = insertsById,
+            maxSeqByReplica = if (raisesSeq) maxSeqByReplica + (replica to seq) else maxSeqByReplica,
+            tombstones = tombstones,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+            // The same ops under the same floor, so the same order: a held one stays exact.
+            sequence = materializedSequence,
+        )
+        return Rga(ops, maxOf(this.lamport, lamport), compactedBelow, newCache)
+    }
+
+    /**
      * Tombstone the first [count] **visible** elements, minting one [RgaOp.Remove] each.
      *
      * The bulk sibling of `removeAt(0)` repeated, and indistinguishable from it: the
