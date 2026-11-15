@@ -374,7 +374,9 @@ public class FairShareAllocator(
      * is never picked at, so without this it never rebases. The rule is the pick's, with `Δ` bounded
      * by the demanding children [waiting] names. A call with no waiting set bounds it by [charged],
      * the child it charged, and by every child this allocator last saw demanding: a child it saw
-     * idle, or never saw, may go below zero, and is clamped as a waker when it next competes. An
+     * idle, or never saw, may go below zero. When it next competes it comes back by its parent's
+     * clock, which reads no position, if this allocator saw it leave, and is clamped as a waker if
+     * not (#3376). An
      * origin raise moves every child alike, so it changes no pick.
      *
      * A charging call never refuses, so this never throws: `null` when no step is possible, or when
