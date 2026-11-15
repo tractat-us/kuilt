@@ -885,6 +885,27 @@ class LocalHeddlePersistenceTest {
         )
     }
 
+    /**
+     * Format 1, which v0.7.4 wrote, is refused by name, in JSON and in CBOR, with nothing past the
+     * version read (#3353): this release reads only snapshots it wrote itself, and a consumer coming
+     * from v0.7.4 starts from its topology again. The state is format 2's, under a 1, so the refusal
+     * cannot come from a state a format-1 reader would fail on.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun aFormatOneSnapshotIsRefusedByName() {
+        val json = GOLDEN_FORMAT_2.replaceFirst("[2,", "[1,")
+        val cbor = bytesOf(GOLDEN_FORMAT_2_CBOR).also { it[1] = 0x01 }
+        val refused = RestoreResult.UnsupportedVersion(1, listOf(2))
+        assertAll(
+            { assertTrue(json.startsWith("[1,") && json.length == GOLDEN_FORMAT_2.length, "the rig: only the version changed") },
+            { assertEquals(listOf(0x9f, 0x01), cbor.take(2).map { it.toInt() and 0xFF }, "the rig: CBOR's version is 1") },
+            { assertEquals(refused, LocalHeddle.decode(json, Json)) },
+            { assertEquals(refused, LocalHeddle.decode(cbor, Cbor)) },
+            { assertEquals(refused, LocalHeddle.decode("""[1,{}]""", Json), "nothing past the version is read") },
+        )
+    }
+
     @Test
     fun corruptBytesAreNamedNotThrown() {
         assertAll(*(corruptionChecks(GOLDEN_FORMAT_1, version = 1) + corruptionChecks(GOLDEN_FORMAT_2, version = 2)).toTypedArray())
