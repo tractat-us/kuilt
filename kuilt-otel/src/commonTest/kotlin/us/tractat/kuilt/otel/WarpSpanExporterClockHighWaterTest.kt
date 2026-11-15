@@ -209,6 +209,37 @@ class WarpSpanExporterClockHighWaterTest {
     }
 
     /**
+     * The same, exported while the clock's read is refused: an unarmed clock has no `seq` to carry,
+     * so the span write's own high-water mark is the only record of the explicit stamp.
+     */
+    @Test
+    fun anEvictedExplicitOwnStampExportedWhileTheClockIsUnrecoveredIsCovered() = runTest {
+        val backing = InMemoryDurableStore()
+        val store = ReadRefusingStore(backing, clockKey)
+        val previous = restart(store, maxSpans = 1)
+        val explicit = span(1).copy(causalStamp = CausalStamp(Dot(replica, 1_000L), emptySet()))
+        val stored = previous.exporter.export(explicit)
+        val evicting = previous.exporter.export(peerSpan(2))
+        store.heal()
+        val corrupt = corruptTheClock(backing)
+
+        val restarted = restart(backing, maxSpans = 1)
+        val heldAfterRestart = ownSeqs(restarted.exporter)
+        restarted.exporter.export(span(99))
+        val next = dotOf(restarted.exporter, 99)
+
+        assertAll(
+            { assertIs<ClockRecovery.Refused>(previous.clockRecovery, "the rig: the clock read was not refused") },
+            { assertEquals(3, store.refusals, "the rig: recover and both exports did not all meet a refused clock read") },
+            { assertEquals(ExportResult.Success, stored, "the rig: the explicit stamp was not saved") },
+            { assertEquals(ExportResult.Success, evicting, "the rig: the evicting span was not saved") },
+            { assertIs<ClockRecovery.Undecodable>(corrupt, "the rig: the clock entry decoded as $corrupt") },
+            { assertEquals(emptySet(), heldAfterRestart, "the rig: the explicit stamp's span was not evicted") },
+            { assertTrue(next.seq > 1_000L, "the corrupt clock minted $next under an explicit stamp an unarmed clock saw") },
+        )
+    }
+
+    /**
      * The format before #3435 stored the bare set. There are no users of it, so it is not migrated: it
      * reads as undecodable and the exporter starts fresh, as for any other corrupt entry.
      */
