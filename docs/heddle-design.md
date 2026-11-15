@@ -861,6 +861,20 @@ the call's waiting set, or, when it has none, by the child it charged and the
 children last seen demanding; one last seen idle is clamped when it next wakes. A charging
 call never refuses, so a parent with no step is simply left as it is.
 
+On a governed cluster of three peers under `MultiNodeRaftSim`, the same holds for
+`HeddleNode` (`HeddleAcceptanceTest`). A twin with no rebase makes the same picks and
+then answers `PositionCeiling`, and again on the next call, at grants of the largest
+reservation over four mixed weights. The rebasing cluster makes ten times as many,
+charging each lease below its reservation. One scheduling peer that gets exactly one
+grant per call picks as `LocalHeddle` does on every call of the run. A 60/30/10/1
+parent whose weight-1 child runs alone in bursts keeps granting. So does a weight-60
+newborn joining a busy weight-1 runner, seated level with it. And so does a restarted
+scheduler whose weight-60 child idled through the whole run before the crash: that
+child comes back level with the runner. Two schedulers
+across a partition, and a scheduler that restarts, cannot match a single engine.
+There the run checks instead that the peers converge and every minted unit is
+accounted for.
+
 **Where the ceiling is still reached.** These ways, and `PositionCeiling` answers
 each:
 

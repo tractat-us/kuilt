@@ -1,29 +1,16 @@
 package us.tractat.kuilt.heddle
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.InMemoryLoom
-import us.tractat.kuilt.core.InMemoryTag
-import us.tractat.kuilt.core.Pattern
-import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
-import us.tractat.kuilt.core.SeamState
-import us.tractat.kuilt.core.Swatch
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.liveness.PartitionEvent
-import us.tractat.kuilt.quilter.QuilterConfig
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
@@ -35,9 +22,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
-import kotlin.time.Instant
 
 /**
  * H4 acceptance suite (design §15 Phase 4): multi-peer convergence over [InMemoryLoom]
@@ -63,19 +48,6 @@ class HeddleNodeTest {
     private fun flatTopology(): List<AttachmentRecord> = listOf(
         AttachmentRecord(e1, root, g1, Weight.ONE),
         AttachmentRecord(e2, root, g2, Weight.ONE),
-    )
-
-    private fun config(seed: Int, quantum: Long = 10L, cap: Long = 1_000L) = HeddleConfig(
-        policy = PolicyConfig(quantum = quantum),
-        maxHoldingsPerPeer = cap,
-        demandTtl = 30.seconds,
-        quilter = QuilterConfig(
-            antiEntropyInterval = 100.milliseconds,
-            fullStateRetryLimit = 0,
-            expectVirtualTime = true,
-        ),
-        heartbeat = us.tractat.kuilt.liveness.HeartbeatConfig(),
-        random = Random(seed),
     )
 
     // A big demand so a demanding leaf keeps pulling entitlement.
@@ -220,7 +192,7 @@ class HeddleNodeTest {
             assertEquals(0L, h.peers[0].node.earmarked(g1), "earmark released after completion")
         }
 
-    private fun assertGlobalConservation(h: Harness, minted: Long) {
+    private fun assertGlobalConservation(h: StaticCluster, minted: Long) {
         val ledger = h.peers[0].node.ledger.value
         assertEquals(ledger, h.peers[1].node.ledger.value, "ledgers converged for the conservation check")
         // The Σ-identity balances THROUGH a negative-holdings overspend (−50 cancels +50), so it
@@ -1117,6 +1089,32 @@ class HeddleNodeTest {
         )
     }
 
+    /** The cookbook's reading of [ScheduleOutcome], run: idle, then a grant, then a child at its ceiling. */
+    @Test
+    fun theScheduleOutcomesSampleReadsIdleDelegatedAndTheCeiling() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
+        val idle = node.sampleScheduleOutcomes(root)
+        node.advertise(e2, Demand(targetOutstanding = 10L, maximumUsefulGrant = 10L))
+        val delegated = node.sampleScheduleOutcomes(root)
+        node.asControlSink().publish(
+            Patch(EntitlementLedger.of(gauges = mapOf(e1 to Gauge(Rational.of(CEILING_AT_WEIGHT_ONE, 16L), folded = 0L)))),
+        )
+        node.advertise(e1, hungry)
+        node.advertise(e2, hungry)
+        h.pump()
+        val stuck = node.sampleScheduleOutcomes(root)
+        assertAll(
+            { assertEquals("idle", idle) },
+            { assertEquals("delegated 1", delegated) },
+            { assertEquals("stuck at root: serve or close the child that waits", stuck) },
+        )
+    }
+
     /**
      * A refused schedule changes nothing (#3353): the newborns it would have seated before the pick
      * stay unseated, since the seat step and the first pick land as one patch or not at all.
@@ -1211,11 +1209,12 @@ class HeddleNodeTest {
         val h = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = mixedLanes, quantum = MAX_GRANT)
         h.pump()
         val peer = h.peers[0]
-        val run = LongRun(peer, Random(3353))
+        val run = MixedWeightRun(root, mixedLanes, MAX_GRANT, Random(3353))
+        val scheduling = peer.node.asSchedulingPeer()
         val target = 10 * GRANTS_BEFORE_THE_CEILING
         var peak = 0.0
-        while (run.grants < target) {
-            val outcome = run.step()
+        while (run.grants < target && run.calls < LONG_RUN_CALL_LIMIT) {
+            val outcome = run.step(scheduling)
             assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${run.grants} grants")
             if (run.calls % 64 == 0) {
                 h.pump(1L)
@@ -1252,9 +1251,10 @@ class HeddleNodeTest {
         val h = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = wideLanes, quantum = MAX_GRANT)
         h.pump()
         val peer = h.peers[0]
-        val run = LongRun(peer, Random(3313), wideLanes) { call -> if (call <= WIDE_RUN_ALONE) listOf(wideLanes[3]) else null }
-        while (run.grants < WIDE_RUN_GRANTS) {
-            val outcome = run.step()
+        val run = MixedWeightRun(root, wideLanes, MAX_GRANT, Random(3313)) { call -> if (call <= WIDE_RUN_ALONE) listOf(wideLanes[3]) else null }
+        val scheduling = peer.node.asSchedulingPeer()
+        while (run.grants < WIDE_RUN_GRANTS && run.calls < LONG_RUN_CALL_LIMIT) {
+            val outcome = run.step(scheduling)
             assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${run.grants} grants")
             if (run.calls % 64 == 0) h.pump(1L)
         }
@@ -1280,17 +1280,19 @@ class HeddleNodeTest {
         rebasing.pump()
         twin.pump()
         twin.peers[0].node.rebaseForTest = false
-        val a = LongRun(rebasing.peers[0], Random(7))
-        val b = LongRun(twin.peers[0], Random(7))
+        val a = MixedWeightRun(root, mixedLanes, MAX_GRANT, Random(7))
+        val b = MixedWeightRun(root, mixedLanes, MAX_GRANT, Random(7))
+        val aPeer = rebasing.peers[0].node.asSchedulingPeer()
+        val bPeer = twin.peers[0].node.asSchedulingPeer()
         var refusedAt = -1
         while (refusedAt < 0 && a.calls < 100_000) {
-            a.step()
-            if (b.step() is ScheduleOutcome.PositionCeiling) refusedAt = b.calls
-            if (refusedAt < 0) assertEquals(b.issuedByLane(), a.issuedByLane(), "call ${a.calls}: the two made different picks")
+            a.step(aPeer)
+            if (b.step(bPeer) is ScheduleOutcome.PositionCeiling) refusedAt = b.calls
+            if (refusedAt < 0) assertEquals(b.issuedByLane(bPeer), a.issuedByLane(aPeer), "call ${a.calls}: the two made different picks")
         }
         val beyond = a.grants
         println("twin: refused at call $refusedAt after ${b.grants} grants; the rebasing node rebased ${rebasing.peers[0].node.rebasesForTest} times")
-        repeat(64) { assertTrue(a.step() !is ScheduleOutcome.PositionCeiling, "the rebasing node refused after the twin did") }
+        repeat(64) { assertTrue(a.step(aPeer) !is ScheduleOutcome.PositionCeiling, "the rebasing node refused after the twin did") }
         assertAll(
             { assertTrue(refusedAt > 0, "the rig: the twin reached its ceiling, at call $refusedAt") },
             { assertTrue(rebasing.peers[0].node.rebasesForTest > 0, "the rig: the rebasing node rebased") },
@@ -1418,44 +1420,6 @@ class HeddleNodeTest {
         )
     }
 
-    /** One peer's long run: a fresh waiting set each call, and every lease charged below its reservation. */
-    private inner class LongRun(
-        private val peer: Peer,
-        private val random: Random,
-        private val lanes: List<AttachmentRecord> = mixedLanes,
-        /** The waiting set of call [calls], or `null` for a fresh random draw. */
-        private val phase: (calls: Int) -> List<AttachmentRecord>? = { null },
-    ) {
-        var calls = 0
-            private set
-        var grants = 0
-            private set
-        var chargedBelowReservation = 0
-            private set
-
-        fun step(): ScheduleOutcome {
-            calls++
-            val node = peer.node
-            val waiting = phase(calls) ?: lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }
-            for (lane in lanes) {
-                val outstanding = node.ledger.value.edge(lane.id)?.outstanding ?: 0L
-                node.advertise(lane.id, if (lane in waiting) Demand(outstanding + MAX_GRANT, MAX_GRANT) else Demand.NONE)
-            }
-            val outcome = node.schedule(root)
-            if (outcome is ScheduleOutcome.Delegated) grants += outcome.grants
-            for (lane in lanes) {
-                val held = node.ledger.value.holdings(lane.child, peer.id)
-                if (held < 2L) continue
-                val reserved = node.reserve(lane.child, held) as? ReserveOutcome.Reserved ?: continue
-                node.complete(reserved.id, held / 2L + 1L)
-                chargedBelowReservation++
-            }
-            return outcome
-        }
-
-        fun issuedByLane(): List<Long> = lanes.map { peer.node.ledger.value.edge(it.id)?.issued ?: 0L }
-    }
-
     /** What [lagScenario] leaves: the merged ledger, and the origin the lagging peer saw. */
     private class LagOutcome(
         val ledger: EntitlementLedger,
@@ -1544,89 +1508,14 @@ class HeddleNodeTest {
         return assertNotNull(parentVirtualTime(root), "root has active children, so it has a front")
     }
 
-    private class Peer(val id: ReplicaId, val node: HeddleNode, val gate: GatedSeam)
-
-    private inner class Harness(val peers: List<Peer>, val scheduler: TestScope)
-
+    /** The static multi-peer rig, lifted into `HeddleClusterTestSupport` and rooted at [root]. */
     private suspend fun TestScope.harness(
         peers: Int,
         mint: Map<Int, Long>,
         topology: List<AttachmentRecord>,
         wrap: (Seam) -> Seam = { it },
         quantum: Long = 10L,
-    ): Harness {
-        val loom = InMemoryLoom()
-        val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
-        val seams: List<Seam> = (0 until peers).map { i ->
-            if (i == 0) loom.host(Pattern("heddle-e2e")) else loom.join(InMemoryTag("peer-$i"))
-        }
-        val mintById: Map<ReplicaId, Long> = seams.mapIndexed { i, s ->
-            ReplicaId(s.selfId.value) to (mint[i] ?: 0L)
-        }.toMap()
-
-        val nodes = seams.mapIndexed { i, seam ->
-            val gate = GatedSeam(wrap(seam))
-            val self = ReplicaId(seam.selfId.value)
-            val node = backgroundScope.heddleStatic(
-                seam = gate,
-                self = self,
-                root = root,
-                mint = mintById,
-                topology = topology,
-                clock = clock,
-                config = config(seed = 1_000 + i, quantum = quantum),
-                epoch = 0L,
-            )
-            Peer(self, node, gate)
-        }
-        return Harness(nodes, this)
-    }
-
-    /** Partition peer [i] from everyone (drops its traffic both ways). */
-    private fun Harness.partition(i: Int) { peers[i].gate.connected.value = false }
-
-    /** Heal peer [i]'s link. */
-    private fun Harness.heal(i: Int) { peers[i].gate.connected.value = true }
-
-    /** Advance bounded virtual time and flush — never `advanceUntilIdle`. */
-    private fun Harness.pump(ms: Long = 400L) {
-        scheduler.advanceTimeBy(ms)
-        scheduler.runCurrent()
-    }
-
-    /** A togglable seam wrapper: when disconnected, incoming is filtered out and sends are dropped. */
-    private class GatedSeam(private val delegate: Seam) : Seam {
-        val connected = MutableStateFlow(true)
-        override val selfId: PeerId get() = delegate.selfId
-        override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
-        override val state: StateFlow<SeamState> get() = delegate.state
-        override val incoming: Flow<Swatch> get() = delegate.incoming.filter { connected.value }
-        override suspend fun broadcast(payload: ByteArray) {
-            if (connected.value) delegate.broadcast(payload)
-        }
-        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-            if (connected.value) delegate.sendTo(peer, payload)
-        }
-        override suspend fun close(reason: CloseReason): Unit = delegate.close(reason)
-    }
-
-    /** A seam wrapper that delivers every frame twice, in and out — a duplicating fabric (§10.7). */
-    private class DuplicatingSeam(private val delegate: Seam) : Seam {
-        override val selfId: PeerId get() = delegate.selfId
-        override val peers: StateFlow<Set<PeerId>> get() = delegate.peers
-        override val state: StateFlow<SeamState> get() = delegate.state
-        override val incoming: Flow<Swatch>
-            get() = delegate.incoming.transform { emit(it); emit(it) }
-        override suspend fun broadcast(payload: ByteArray) {
-            delegate.broadcast(payload)
-            delegate.broadcast(payload)
-        }
-        override suspend fun sendTo(peer: PeerId, payload: ByteArray) {
-            delegate.sendTo(peer, payload)
-            delegate.sendTo(peer, payload)
-        }
-        override suspend fun close(reason: CloseReason): Unit = delegate.close(reason)
-    }
+    ): StaticCluster = staticCluster(root, peers, mint, topology, wrap, quantum)
 
     private companion object {
         /** A weight-1 edge's position ceiling in 1/16-unit ticks: `Long.MAX_VALUE` less one largest deadline. */
@@ -1638,12 +1527,8 @@ class HeddleNodeTest {
         /** Enough root supply for every long run here, and two peers' fit a `Long`: 2⁶¹, about 130,000 grants of [MAX_GRANT]. */
         const val LONG_RUN_MINT: Long = 1L shl 61
 
-        /**
-         * Grants the mixed-weight long run made before it refused at the ceiling, before the origin
-         * rebase: 145, at call 70, measured on the slice 2–4 base with #3386 merged, JVM. The twin's
-         * seed refused there at 131 grants, call 66, exactly where its no-rebase twin here does.
-         */
-        const val GRANTS_BEFORE_THE_CEILING: Int = 145
+        /** The most calls a long run here makes: far past its grant target, so a run that stalls reds instead of hanging. */
+        const val LONG_RUN_CALL_LIMIT: Int = 20_000
 
         /** The lagging-peer scenario's grant, and how many a call makes: 12 calls of 256 pass a weight-1 lane's threshold. */
         const val LAG_GRANT: Long = LocalHeddle.MAX_RESERVATION
