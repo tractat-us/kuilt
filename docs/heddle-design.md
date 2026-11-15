@@ -1025,8 +1025,10 @@ peers of different releases never share a cluster. Snapshot format 1 may not:
 **In plain terms.** The origin, the rebase, the window and the floor all exist for
 one reason: a pick used to order positions in 64 bits, so a busy parent's positions
 had to be pulled back down before they ran out of room. Once a pick orders them in
-128 bits there is nothing to pull back. A position is then simply how much service
-an edge has had, counted from its start, and it only ever goes up.
+128 bits there is nothing to pull back. A position is then simply where an edge
+was seated plus the service it has had since, and no rebase moves it. What is
+left to guard is the seat itself: a late joiner is seated level with siblings
+that may have run a long way (the position limit, below).
 
 **What goes.**
 
@@ -1236,7 +1238,8 @@ Everything else a charge moves is bounded by one of those two, so it needs no
 check of its own: an edge's `returned`, `leafSpent` and `rollupSpent` never pass
 its issuance (§10.3), a gauge's fold is its issuance, a lease's `reserved` is
 part of its leaf edge's issuance, and the allocator's net-service clock reads
-issuance less returns. A gauge's position is 128-bit (W1). The lease sequence
+issuance less returns. A gauge's position is 128-bit, and the position limit
+bounds it. The lease sequence
 grows by one a lease.
 
 *The rule for a pick.* `LIFETIME_HEADROOM` is `2⁵⁸` units, and the watermark is
@@ -1449,6 +1452,71 @@ origins, which is a layout 0.7.5 already reads, so the format number and
   dropped, and a returner's shift removed.
 - **The pick goldens do not move.** `HeddlePolicyGoldenVectorTest` and
   `HeddlePolicyOracleTest` pass unchanged through every slice.
+- **The position limit (slice 5).** Every row asserts its rig before it acts:
+  each `apply` it makes returns no refusal, each weight set passes
+  `weightsFitTheBudget`, and a control one step short of the limit lands. On
+  JVM, `macosArm64` and `wasmJs`, read as a union.
+  - The bridge, by public calls only: `1/2¹⁴` leased 160 times at the largest
+    size, 4 joins and is leased, the fine lane leaves, `2⁵⁸` is applied.
+    `LocalHeddle.apply` refuses the heavy lane alone, the lane of weight 4 is
+    still leased, and no call throws. At 64 leases the heavy lane lands and is
+    picked. #3500's `W1BridgeProbeTest` is this row, retargeted from "no
+    throw" to the typed refusal.
+  - The same bridge on `FairShareAllocator` and on `HeddleNode`, where no
+    `apply` asks early: `schedule` answers `LifetimeExhausted(parent)`, the
+    ledger and the wake memory are equal before and after, and once the heavy
+    edge is closed the next `schedule` grants.
+  - The waker: the heavy lane is active and idle from the start, the fine lane
+    runs the front up, and the heavy lane then asks. `acquire` is refused and
+    changes nothing. With the heavy lane left out of `waiting`, it leases.
+  - No service kept: 1,024 rounds of two lanes leasing in turn and cancelling.
+    The row asserts each edge's issuance equals its returns, then the same
+    refusal. It is what shows the bound is not on service kept.
+  - Both sides of the limit, on stored extremes: a landing that leaves the load
+    at exactly `2¹²⁵` is kept, and one tick more is refused. A landing whose
+    own value leaves 128 bits is refused, not thrown.
+  - Many children: each lands under the limit on its own, and the one that
+    takes the load past it is refused. This is the row that tells a check on
+    the load from a check on the joiner's position.
+  - A returner whose shift would pass the limit, and a clock planted one step
+    under it: the pick is refused, and a planted clock at the limit refuses
+    every later pick at that parent.
+  - A charging call at each of those rigs: `admit`, `extend` and an overrunning
+    `complete` land, the charge is in the ledger, the wake memory at the
+    refused parent is equal before and after, and nothing throws. Across an
+    edge that could not be seated, `admit` opens at zero and `complete` charges
+    the group above it.
+  - `explain` answers `LifetimeExhausted(parent)` at each rig, `previewPicks`
+    stops, every wide read answers, and every deprecated read answers.
+  - Two peers that each land a different child high, then merge: `schedule`
+    refuses, typed, and every read answers.
+  - A seeded driver over weights at the budget's edges, with joins, leaves,
+    reweights, cancels and overruns: no call throws, `validate()` is empty
+    after each, and the load is below `2¹²⁷` after each. It asserts the refusal
+    fired at least once, and sorts what it walks (#2592).
+  - The budget did not move: `HeddleWeightBudgetTest` passes unchanged, with
+    `{1/30,718, 1/30,719}` accepted, `{1/30,719, 1/30,720}` refused and
+    `{1, k}` accepted up to the edge it has today.
+  - Mutations that must red: the check dropped at a seat, at a clamp, at a
+    returner's shift, and on the clock, each on its own; the load checked
+    before the landing and not after; the joiner's position checked in place
+    of the load; a landing's overflow thrown and not refused; a refusal that
+    writes the wake memory; a charging call that refuses; `apply` refusing the
+    siblings with the joiner.
+- **The format 1 reader (slice 4).** A golden snapshot written by the 0.7.5
+  tag, committed as bytes, with a parent whose origin is above zero, a child
+  the origin is whole on, a child it is not whole on, a child below the origin,
+  an unseated edge and a wake offset. The row asserts the origin it read is
+  above zero. Restored, the whole-grid children read their stored positions,
+  the other reads one tick more, and offsets and clock are equal. Over the
+  picks that follow, the restored engine and a 0.7.5 twin fed the same calls
+  pick the same leaves. A snapshot 0.7.6 writes holds no origin. Mutations
+  that must red: the origin dropped with no translation, on a rig where that
+  tick decides a pick; the share added a second time; the share rounded down.
+- **Nothing public breaks (slices 3 to 6).** The API dumps of
+  `:kuilt-heddle-core` and `:kuilt-heddle` gain lines and lose none in each
+  slice's diff, and each PR says so. A test compiled against the deprecated
+  reads still compiles and passes.
 - **The lifetime limit (slice 7).** Every row rigs a counter and asserts the
   value it rigged before it acts, so a rig that missed fails. On JVM,
   `macosArm64` and `wasmJs`, read as a union.
@@ -1495,24 +1563,27 @@ origins, which is a layout 0.7.5 already reads, so the format number and
    pin, retargeted from "does not wedge" to "comes back level". §7.2, §10.6.
 3. **Nothing rebases.** Delete the raise sites, the floor arms and the window
    in `FairShareAllocator` and `LocalHeddle`. The origin
-   field stays, read as zero. Retires `FairShareAllocatorOriginTest`,
+   field stays, read as zero. `rebaseEnabled` and `rebases` stay, deprecated
+   and inert. Retires `FairShareAllocatorOriginTest`,
    `FairShareAllocatorWindowRuleTest` but its sleeper-credit row,
    `LocalHeddleRebaseTest` and the twin rows of
    `LocalHeddleRebasePropertyTest`. Retargets `LocalHeddleWindowRuleTest` and
    the long-run rows to "never refused, and fair". Docs: this section, §10.9,
    `kuilt-heddle-core/module.md`, `kuilt-heddle/module.md`.
-4. **The origin leaves the ledger and the wire.** The snapshot format already
-   restarted at 1, ahead of the slices, so this changes format 1's layout before
-   0.7.5 ships it. `ParentRecord`, `PolicyEdge.origin`, the canonical-encoding
-   arm, the snapshot golden. Docs: §7.1, §10.5, both `module.md`s,
+4. **The origin leaves the ledger and the wire, and format 1 is read by
+   translating.** `ParentRecord`, the canonical-encoding arm, and the reader
+   above. `EntitlementLedger.origin` and `PolicyEdge.origin` stay, deprecated.
+   The format number does not change. Docs: §7.1, §10.5, both `module.md`s,
    `Writerside/topics/heddle-local.md`.
-5. **The weight budget: W1 for P1′.** `weightsFitTheBudget`, then the last of
-   `VirtualPosition.kt`'s ceiling constants. Retargets
-   `HeddleWeightBudgetTest`, `LocalHeddleFineWeightTest` and the budget rows of
-   `LocalHeddleApplyTest`. Docs: §7.1, §9, `docs/agent-cookbook/heddle.md`
-   (Refusals and limits), both `module.md`s. #3461's example weight changes.
-6. **`VirtualTime` is the public read.** Deletes `inWindow`, `readVirtual`,
-   `ticksToVirtual` and `peakPositionFraction`. Docs: §11,
+5. **The position limit.** `POSITION_LIMIT`, the sealed result of the
+   seat-and-wake step and of `VirtualTime.ticksForWide`, the refusal on
+   `acquire` and `schedule`, the path rule for a charging call, and the early
+   check in `LocalHeddle.apply`. `weightsFitTheBudget` does not change.
+   Retargets #3500's probe. Docs: §7.1, §9, §10, `docs/agent-cookbook/heddle.md`
+   (Refusals and limits), both `module.md`s.
+6. **`VirtualTime` is a public read, beside the `Rational` ones.** The wide
+   siblings in the table above, and `@Deprecated` on the reads they replace.
+   Nothing is deleted or retyped. Docs: §11,
    `docs/agent-cookbook/heddle.md`, `Writerside/topics/heddle-local-turns.md`.
 7. **The lifetime limit (#3475).** `LIFETIME_HEADROOM` and the watermark
    check on `acquire` and `schedule`; the whole-or-nothing rule on `admit`,
@@ -1527,23 +1598,62 @@ origins, which is a layout 0.7.5 already reads, so the format number and
    headroom, not a limit of its own.
 
 Slice 2 goes first so that slice 3 leaves the restarted scheduler's row green.
-Slice 4 follows 3. Slices 5, 6 and 7 follow 3 and do
-not depend on each other.
+Slices 1, 2 and 7 ship in 0.7.5. Slices 4, 5 and 6 follow 3 and do not depend
+on each other, and 0.7.6 is not cut without slice 5. Slice 3 does not open the
+gap slice 5 closes: the bridge overflows on `main` with the rebase in place,
+at the same absolute value.
 
 #### Settled — don't reopen
 
 - Keeping the origin as an optimisation that keeps numbers small: it buys
   nothing a pick reads, and it costs a replicated register, a rebase rule and a
   window (#3472).
-- Deleting P1′'s lease clause with no replacement: its denominator cap is what
-  keeps the net-service clock inside 128 bits (#3472).
-- A typed refusal at 128 bits in place of W1: a limit the budget can rule out
-  when a weight is applied should not be met at a pick (#3472).
+- Deleting P1′'s lease clause: its denominator cap keeps the net-service
+  clock's reach modest, and it is the set of weights 0.7.5 accepts (#3472,
+  #3501).
+- W1, and any clause on the weights in place of the position limit. #3472
+  settled the other way, against a typed refusal at 128 bits, because a limit
+  the budget can rule out when a weight is applied should not be met at a
+  pick. The budget cannot rule it out: a joiner inherits a departed sibling's
+  front, and the front climbs on cancelled reservations, across edges with
+  fresh counters. Both are measured (#3501).
+- A global clause over every weight ever active at a parent, `Σ⌈1/w⌉ ≤ 2ᵃ` and
+  `N · max⌈w⌉ ≤ 2ᵇ` with `a + b ≤ 56`. It is unsound: its bound on virtual
+  time, `2⁶³ · max⌈1/w⌉`, counts service kept, and the front climbs on
+  reservations. It is also dear. Keeping today's denominators leaves `{1, k}`
+  at about `2⁴⁰`, no split keeps `{1, k}` to `2⁵⁹`, and it needs a replicated
+  record of every weight a parent has held (#3501).
+- A rule at `apply` alone, refusing a weight whose seat at today's front
+  leaves less than a lifetime of headroom. It misses a child that is already
+  active and wakes at a high front. The headroom that matters is its
+  siblings' lifetimes, not its own. And it does not replicate: a front is one
+  allocator's reading, and an `Activate` is decided from the log. It is kept
+  as `LocalHeddle.apply`'s early answer, not as the guarantee (#3501).
+- A count of a parent's total reservations, to make a clause on the weights
+  sound: a second replicated register per parent, and the clause still costs
+  the spread above (#3501).
+- Seating a joiner at the limit when the front is past it: a seat below the
+  front is credit (§10.5, #3501).
+- Refusing only the joiner that cannot land and picking its siblings: the
+  joiner would starve with no answer anywhere, as a full lane would (#3475).
+  The parent's picks stall and say so. `LocalHeddle.apply` refuses the joiner
+  alone because there the caller is told (#3501).
+- Positions wider than 128 bits: format 1 is frozen with 128-bit ticks, and a
+  wider count moves the limit without removing it (#3501).
+- Widening the weight budget in 0.7.6, now that no window needs the lease
+  clause: a control log holds the entries a budget refused, and they would
+  land on replay (#3501).
 - Deleting `PositionCeiling` and letting the lifetime counters throw from
   `acquire`: measured at 524,287 largest leases, which a consumer can reach
   (#3472).
-- Keeping the public reads as `Rational` and saturating them: with no origin
-  they stick at the bound for good, and `explain` reports equal numbers (#3472).
+- Keeping the `Rational` reads as the only reads: with no origin they stick at
+  the bound for good, and `explain` reports equal numbers (#3472). They stay,
+  deprecated, beside the wide ones (#3501).
+- Retyping the `Rational` reads, or `BehindAtLevel`'s fields, in place: 0.7.6
+  breaks no public signature (@keddie, 2026-11-15, #3501).
+- Deleting `EntitlementLedger.origin`, `PolicyEdge.origin`, `rebaseEnabled` or
+  `rebases` with the origin: each is in 0.7.5's API dump. They stay,
+  deprecated, and read zero (#3501).
 - Reading the public virtual times relative to a front taken at read time: the
   ledger's own reads hold no demand, so they have no front to take (#3472).
 - Keeping the below-zero first-sighting arm: nothing is below zero (#3472).
@@ -1561,9 +1671,20 @@ not depend on each other.
   restart, and once per scheduler that first sees it, is bounded and
   predictable; unbounded credit is the starvation this entry exists to remove.
   Ruled by @keddie, 2026-11-15 (#3472).
-- W1 in place of P1′'s lease clause, `LifetimeExhausted` in place of
-  `PositionCeiling`, and `VirtualTime` as the public read type: each costs less
-  than the alternative it replaces. Ruled by @keddie, 2026-11-15 (#3472).
+- `LifetimeExhausted` in place of `PositionCeiling`, and `VirtualTime` as the
+  type of a wide read: each costs less than the alternative it replaces. Ruled
+  by @keddie, 2026-11-15 (#3472). That ruling also took W1 in place of P1′'s
+  lease clause, which #3501 found unsound, and made `VirtualTime` the only
+  read type, which 0.7.6 may not do.
+- Reading format 1 with its origins dropped: a child whose grid the origin is
+  not whole on comes back a fraction of a tick lower against its siblings,
+  which is credit (@keddie, 2026-11-15, #3501).
+- Translating format 1 by a whole grid step, so that every sibling moves by
+  exactly the same virtual time: the step can be near `2⁶³` units, which lifts
+  a heavy child by up to `2¹²⁶` ticks. Each share is rounded up on its own
+  grid instead, under a tick (#3501).
+- A new format number for the layout with no origin: it is format 1 with the
+  origins empty, which 0.7.5 reads (#3501).
 - A lifetime arm on `extend`, and a charging call that throws at the limit:
   a refusal is for work not yet started, where it means "leave it queued". At
   `complete` the time is spent, and a throw leaves the lease open and the
@@ -1594,16 +1715,24 @@ not depend on each other.
 
 #### Open
 
-- **The constants of W1.** The clause is reasoned from the counters' range, not
-  measured. Slice 5 owes the proof.
+- **Whether the position limit should also go onto the rebasing engine, in
+  0.7.5.** The bridge is reachable on `main` today, and the fix changes no
+  signature. There the check has one more value to cover: the origin's share
+  at each child's weight (#3501).
+- **Whether the weight budget should widen later.** With the limit in place a
+  finer denominator is safe. It needs an answer for a log that holds a refused
+  entry, and a bound on the clock's reach (#3501).
+- **Whether a parent stalled at the limit should be told apart from one at a
+  lifetime counter.** Both answer `LifetimeExhausted(parent)`, and the remedy
+  differs: a joiner can be removed, a counter cannot (#3501).
 - **Whether a pick should also refuse on the leases open under an edge.** The
   headroom covers 16,384 charges of the largest size after the last `acquire`.
   A caller with more open leases than that, each overrunning in full, passes
   it. None is known (#3475).
-- **Whether boot attribution should narrow** once W1 lands. Today
-  `LocalHeddle.Boot` (#3462) leaves out the whole subtree of a parent whose
-  children's weights do not fit together, even when one child fails on its
-  own. W1 removes most single-weight failures, so this may stop mattering.
+- **Whether boot attribution should narrow.** Today `LocalHeddle.Boot` (#3462)
+  leaves out the whole subtree of a parent whose children's weights do not fit
+  together, even when one child fails on its own. The budget is not changing,
+  so single-weight failures stay as common as they are.
 
 ### 7.2 Neutral creation and no idle credit
 
