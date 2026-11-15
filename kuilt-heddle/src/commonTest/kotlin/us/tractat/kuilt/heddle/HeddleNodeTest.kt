@@ -1089,6 +1089,32 @@ class HeddleNodeTest {
         )
     }
 
+    /** The cookbook's reading of [ScheduleOutcome], run: idle, then a grant, then a child at its ceiling. */
+    @Test
+    fun theScheduleOutcomesSampleReadsIdleDelegatedAndTheCeiling() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
+        val idle = node.sampleScheduleOutcomes(root)
+        node.advertise(e2, Demand(targetOutstanding = 10L, maximumUsefulGrant = 10L))
+        val delegated = node.sampleScheduleOutcomes(root)
+        node.asControlSink().publish(
+            Patch(EntitlementLedger.of(gauges = mapOf(e1 to Gauge(Rational.of(CEILING_AT_WEIGHT_ONE, 16L), folded = 0L)))),
+        )
+        node.advertise(e1, hungry)
+        node.advertise(e2, hungry)
+        h.pump()
+        val stuck = node.sampleScheduleOutcomes(root)
+        assertAll(
+            { assertEquals("idle", idle) },
+            { assertEquals("delegated 1", delegated) },
+            { assertEquals("stuck at root: serve or close the child that waits", stuck) },
+        )
+    }
+
     /**
      * A refused schedule changes nothing (#3353): the newborns it would have seated before the pick
      * stay unseated, since the seat step and the first pick land as one patch or not at all.
