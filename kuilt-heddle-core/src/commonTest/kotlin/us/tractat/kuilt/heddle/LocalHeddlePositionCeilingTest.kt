@@ -21,7 +21,7 @@ import kotlin.test.assertTrue
  * with a typed outcome and changes nothing, wake memory included; a call that **charges** lands, and
  * the position saturates at [positionCeiling] instead of throwing.
  *
- * The ceiling is reached by raising one lane's gauge floor to just under it ([pushTowardCeiling]),
+ * The ceiling is reached by raising one lane's gauge to just under it ([pushTowardCeiling]),
  * since a run that gets there by picks takes thousands of maximum-size leases. Every arm first
  * asserts that its lane is where the rig put it, so a refusal is the ceiling's doing and not a
  * fixture that never got there.
@@ -72,7 +72,7 @@ class LocalHeddlePositionCeilingTest {
         val ledger = snapshot().ledger
         val edge = edgeOf(lane)
         val record = checkNotNull(ledger.record(edge))
-        val gross = ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge), record.weight)
+        val gross = ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge))
         return saturated(gross - originTicks(ledger.origin(record.parent), record.weight), record.weight)
     }
 

@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
  * since #3353 the rebase raises the root's origin, so an idle child goes as far below zero as `Δ`
  * takes it. `R` is a sixteenth of a lane's ceiling.
  *
- * Positions are planted by raising a lane's gauge floor ([pushTo]), a write any peer could make.
+ * Positions are planted by raising a lane's gauge ([pushTo]), a write any peer could make.
  * Every lane weighs 1, so `Δ` in ticks is the same number on every lane. Each arm asserts first
  * that the rig put the lanes where it meant to.
  */
@@ -87,15 +87,15 @@ class LocalHeddleRebaseTest {
         check(wideTicks(lane) == ticks) { "the rig put ${lane.value} at ${wideTicks(lane)}, not $ticks" }
     }
 
-    /** Put [lane]'s position at exactly [ticks] by raising its gauge floor at its current fold. */
+    /** Put [lane]'s position at exactly [ticks] by raising its gauge at its current fold. */
     private fun LocalHeddle.pushTo(lane: GroupId, ticks: Long) {
         val edge = edgeOf(lane)
         reshapeForTest { ledger ->
             val gauge = checkNotNull(ledger.gauge(edge)) { "${lane.value} is seated" }
             val issued = ledger.baseIssuance(edge)
             val origin = checkNotNull(originTicks(ledger.origin(root), Weight.ONE).toLongOrNull())
-            val floorTicks = ticks + origin - (issued - gauge.folded) * TICKS_PER_UNIT
-            ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to Gauge(ticksToVirtual(floorTicks, Weight.ONE), gauge.folded))))
+            val positionTicks = ticks + origin - (issued - gauge.folded) * TICKS_PER_UNIT
+            ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to gaugeAt(Int128.of(positionTicks), gauge.folded))))
         }
         check(ticks(lane) == ticks) { "the rig put ${lane.value} at ${ticks(lane)}, not $ticks" }
     }

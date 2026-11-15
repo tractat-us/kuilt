@@ -113,8 +113,9 @@ class EntitlementLedgerLawsTest {
 
     private fun randomGauge(rnd: Random): Gauge =
         Gauge(
-            floor = Rational.of(rnd.nextLong(-1_000L, 1_000L), rnd.nextLong(1L, 8L)),
+            ticksLow = rnd.nextLong(),
             folded = rnd.nextLong(0L, 1_000L),
+            ticksHigh = rnd.nextLong(0L, 2L),
         )
 
     @Test

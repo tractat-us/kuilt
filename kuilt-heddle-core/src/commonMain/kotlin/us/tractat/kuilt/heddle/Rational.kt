@@ -40,9 +40,9 @@ import us.tractat.kuilt.math.timesWide
  *
  * **Replication is opt-in, per site, through [RationalSerializer]** — the normalizing
  * serializer routed through [of] that this stance always prescribed, and the same shape as
- * [WeightSerializer]. Two sites exist today: a wake clamp in [AllocatorMemory] is scheduler-local
- * and design §7.2 explicitly does *not* replicate it, while [Gauge.floor] **is** replicated
- * (issue #1752) and carries `@Serializable(with = RationalSerializer::class)`. Annotate the
+ * [WeightSerializer]. No replicated property holds a `Rational` today: a gauge's position is in
+ * ticks (#3353), and [Gauge]'s serializer names the retired `floor` only to refuse it. A property
+ * that does replicate one carries `@Serializable(with = RationalSerializer::class)`. Annotate the
  * property, never this class — that is what keeps the default closed.
  *
  * @property numerator the reduced numerator; may be negative, zero, or positive.
@@ -236,11 +236,11 @@ public class Rational private constructor(
  * [Rational.compareTo] — whose cross-multiplication assumes a positive denominator — so a
  * corrupt or hostile peer could **flip sibling ordering cluster-wide** by encoding `1/2` as
  * `-1/-2`. Where a `Rational` genuinely must be replicated the property names this
- * serializer explicitly; [Gauge.floor] is the one such site today.
+ * serializer explicitly.
  *
  * **Repair where a canonical form exists; refuse only where none does** — the same split
- * [WeightSerializer] makes, and for the same reason, which applies verbatim here because a
- * [Gauge] rides the wire inside the very same [EntitlementLedger] frames a [Weight] does.
+ * [WeightSerializer] makes, and for the same reason, which applies verbatim to a `Rational` riding
+ * the wire inside the very same [EntitlementLedger] frames a [Weight] does.
  * A decode failure is expensive at both boundaries that carry this state. `Quilter`'s delta
  * dispatch drops the **entire frame**, so rejecting a merely denormalized encoding would discard
  * every legitimate record travelling with it, and anti-entropy would re-send the same frame
@@ -251,7 +251,7 @@ public class Rational private constructor(
  *
  * A **zero denominator** names no rational at all. There is nothing to repair to, and
  * substituting a default would fabricate a virtual-time claim out of hostile input — a
- * fairness-relevant lie, since a gauge floor is what seats an edge. That throws
+ * fairness-relevant lie wherever the value orders a pick. That throws
  * [SerializationException] at the decode boundary, before any lattice state is touched; the
  * frame is dropped and the merge loop survives.
  */

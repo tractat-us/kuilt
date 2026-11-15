@@ -111,7 +111,7 @@ class EntitlementLedgerForgetTest {
                 ForgetRefusal.CHILD_HAS_CHILD_EDGES,
             Triple("a transfer row at its path", closed(transfers = mapOf(PathKey.of(e) to mapOf(r1 to counter(r2 to 1L)))), e) to ForgetRefusal.TRANSFER_ROWS,
             Triple("a prepared edge that was issued", closed(lifecycle = mapOf(e to Lifecycle.PREPARED)), e) to ForgetRefusal.PREPARED_CARRIES_HISTORY,
-            Triple("a prepared edge with a gauge", closed(issued = emptyMap(), leafSpent = emptyMap(), lifecycle = mapOf(e to Lifecycle.PREPARED), gauges = mapOf(e to Gauge(Rational.ZERO, 0L))), e) to
+            Triple("a prepared edge with a gauge", closed(issued = emptyMap(), leafSpent = emptyMap(), lifecycle = mapOf(e to Lifecycle.PREPARED), gauges = mapOf(e to Gauge(folded = 0L))), e) to
                 ForgetRefusal.PREPARED_CARRIES_HISTORY,
             Triple("more charged than issued", closed(leafSpent = mapOf(e to counter(r1 to 6L))), e) to ForgetRefusal.PER_EDGE_SAFETY,
             Triple("a negative effective spend", closed(issued = emptyMap(), leafSpent = emptyMap(), leafRelocOut = mapOf(e to counter(r1 to 1L))), e) to

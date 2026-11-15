@@ -818,6 +818,34 @@ class LocalHeddlePersistenceTest {
         )
     }
 
+    /**
+     * A format 2 snapshot whose gauge carries a v0.7.4 `floor` is refused as corrupt, for the floor,
+     * in JSON and in CBOR. The lenient JSON is the arm that matters: [LocalHeddle.decode] takes the
+     * consumer's own format, and one that ignores unknown keys would otherwise read the gauge at
+     * its ticks alone, lower than it was written. The untouched snapshot restoring under that same
+     * lenient format is the control.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @Test
+    fun aSnapshotWhoseGaugeCarriesAFloorIsCorrupt() {
+        val snapshot = wakerScenario().first.persist()
+        val json = encode(snapshot)
+        val cbor = Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), snapshot)
+        val lenient = Json { ignoreUnknownKeys = true }
+        fun assertRefusedForTheFloor(result: RestoreResult) {
+            val corrupt = assertIs<RestoreResult.Corrupt>(result)
+            assertTrue("floor" in corrupt.reason, "corrupt for the floor, not something else: ${corrupt.reason}")
+        }
+        assertAll(
+            { assertTrue(snapshot.ledger.gaugedEdges().isNotEmpty(), "the rig: the snapshot holds a gauge") },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(json, lenient), "the control: lenient JSON restores it") },
+            { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(cbor, Cbor), "the control: CBOR restores it") },
+            { assertRefusedForTheFloor(LocalHeddle.decode(withLegacyFloor(json), Json)) },
+            { assertRefusedForTheFloor(LocalHeddle.decode(withLegacyFloor(json), lenient)) },
+            { assertRefusedForTheFloor(LocalHeddle.decode(withLegacyFloor(cbor), Cbor)) },
+        )
+    }
+
     @Test
     fun corruptBytesAreNamedNotThrown() {
         assertAll(*corruptionChecks(GOLDEN_FORMAT_2, version = 2).toTypedArray())

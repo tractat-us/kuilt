@@ -209,7 +209,7 @@ public object HeddlePolicy {
      * ev      = grossEv − returned / w
      * ```
      *
-     * `P` is the gauge's position, `max(⌈floor · w · G⌉, ticks)`, carried with the issuance the
+     * `P` is the gauge's position in ticks, carried with the issuance the
      * writer had actually observed when it asserted it, so a stale seat is self-limiting rather than a permanent lie;
      * an edge nothing has seated yet reads from its own origin. The numerator stays *committed*
      * (not merely spent) service, so a grant advances the child the instant it is issued —

@@ -738,9 +738,11 @@ For active edge `e` with weight `w(e)`, the baseline `b(e)` is read off the edge
 replicated `Gauge` rather than off its record — a position paired with a fold: the base
 issuance the writer had observed when it asserted that position. No rebase moves a fold:
 both engines rebase by raising the parent's origin instead (below). The position is
-`P(e) = max(⌈floor(e) · w(e) · G⌉, ticks(e))`, on the edge's own grid of `G` ticks to a
-unit (below). Every seat and checkpoint writes `ticks`, a 128-bit count, exact and never
-capped (#3353). A `floor` written by an earlier build is still read, through the `max`:
+`P(e) = ticks(e)`, a 128-bit count on the edge's own grid of `G` ticks to a unit
+(below), which every seat and checkpoint writes exactly and never caps (#3353). v0.7.4
+kept the position in a `floor`, a fraction of virtual time; a gauge carrying a non-zero
+one is refused at decode on every path a gauge arrives by, never read as if it had none,
+which would put the edge lower than it was written:
 
 ```text
 gross(e) = P(e) + (baseIssued(e) − folded(e)) · G     (no gauge ⇒ baseIssued(e) · G)
@@ -1035,25 +1037,16 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   `Rational` and warned that a fixed-point floor would have to round **down**,
   because a `ceil` at every checkpoint would compound into real inflation. That
   premise does not hold here, because a checkpoint adds whole ticks. It writes
-  the position plus the issuance since the fold, which is whole units; reading an
-  on-grid floor back is exact; and only the seat and the wake clamp round, each
-  once per join. A floor written off the grid, by a peer older than #3313, is
-  rounded up once, by the first checkpoint that reads it, and every checkpoint
-  after that is exact. Peers that merge in any order still read the same
-  position, because the read is a function of the joined gauge and the join is
-  unchanged.
+  the position plus the issuance since the fold, which is whole units; reading a
+  position back is exact; and only the seat and the wake clamp round, each once
+  per join. Peers that merge in any order still read the same position, because
+  the read is a function of the joined gauge and the join is unchanged.
 
-  Two consequences of mixed versions, accepted rather than fenced. An old and a
-  new peer can read the same state up to one tick apart, because the new one rounds
-  an off-grid floor up and the old one does not. And an un-upgraded peer keeps
-  writing exact fronts into floors, so the denominators in its own state keep
-  growing toward the overflow this change fixes. A new peer that merges those
-  floors reads them on its grid, reducing each fraction before it multiplies, so
-  it saturates only where the position itself passes its ceiling (§7.1). Since
-  #3353 it is worse than a rounding difference. A peer from before `ticks`
-  cannot decode a frame whose gauge carries them, so it drops the frame. It
-  stays connected and silently stops converging, and nothing refuses it. So the
-  two must not share a cluster, and every peer is upgraded together.
+  Mixed versions do not converge, and nothing fences them. A v0.7.4 peer cannot
+  decode a frame whose gauge carries ticks, and this release refuses a frame whose
+  gauge carries a non-zero `floor`. Each drops the other's frames, stays connected
+  and silently stops converging. So the two must not share a cluster, and every
+  peer is upgraded together.
 - **No unlimited idle credit:** when a child goes from not-demanding to
   demanding and this peer never saw it stop, a local wake offset clamps it
   forward. A child this peer *did* see stop comes back by its parent's clock

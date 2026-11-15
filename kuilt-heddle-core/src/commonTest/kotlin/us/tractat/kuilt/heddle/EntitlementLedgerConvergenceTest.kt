@@ -86,7 +86,7 @@ internal class EntitlementLedgerConvergenceTest : LatticeLawSuite<EntitlementLed
                 state.piece(EntitlementLedger.of(lifecycle = mapOf(random.edge() to stage)))
             },
             LatticeOp<EntitlementLedger>("gauge", OpKind.ASSERT) { state, _, random ->
-                val gauge = Gauge(Rational.of(random.nextLong(1L, 1L shl 20)), random.nextLong(1L, 1L shl 20))
+                val gauge = gaugeOfUnits(random.nextLong(1L, 1L shl 20), random.nextLong(1L, 1L shl 20))
                 state.piece(EntitlementLedger.of(gauges = mapOf(random.edge() to gauge)))
             },
         ),

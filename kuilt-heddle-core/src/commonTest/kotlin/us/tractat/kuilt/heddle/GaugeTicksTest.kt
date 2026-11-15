@@ -15,8 +15,8 @@ import kotlin.test.assertTrue
 
 /**
  * [Gauge.ticks], the gauge's wide absolute position (#3353, slice 5): stored exactly and uncapped,
- * joined by `max` on the whole 128-bit value, and read as `max(⌈floor · w · G⌉, ticks)` advanced over
- * the issuance since the fold.
+ * joined by `max` on the whole 128-bit value, and read as the ticks advanced over the issuance since
+ * the fold.
  *
  * Every write assertion here reads the **stored** gauge, never a read through it: a read saturates
  * at the position ceiling, so a capped store and an exact one read alike and only the stored value
@@ -40,7 +40,6 @@ class GaugeTicksTest {
         assertAll(
             { assertTrue(stored.ticks > Int128.of(ceiling), "the rig: the stored seat is past the ceiling") },
             { assertEquals(Int128.of(ceiling + 1_000L), stored.ticks, "stored exactly, not at the ceiling") },
-            { assertEquals(Rational.ZERO, stored.floor, "the legacy floor is left at zero") },
             { assertEquals(0L, stored.folded) },
         )
     }
@@ -94,9 +93,9 @@ class GaugeTicksTest {
      */
     @Test
     fun theJoinTakesTheWiderPositionWholeNotAMaxPerHalf() {
-        val wide = Gauge(Rational.ZERO, 0L, ticksHigh = 1L, ticksLow = 5L)
-        val narrow = Gauge(Rational.ZERO, 0L, ticksHigh = 0L, ticksLow = 7L)
-        val unsignedLow = Gauge(Rational.ZERO, 0L, ticksHigh = 0L, ticksLow = -1L) // 2⁶⁴ − 1
+        val wide = Gauge(0L, ticksHigh = 1L, ticksLow = 5L)
+        val narrow = Gauge(0L, ticksHigh = 0L, ticksLow = 7L)
+        val unsignedLow = Gauge(0L, ticksHigh = 0L, ticksLow = -1L) // 2⁶⁴ − 1
         assertAll(
             { assertEquals(wide, wide.join(narrow), "2⁶⁴ + 5 ⊔ 7 = 2⁶⁴ + 5") },
             { assertEquals(wide, narrow.join(wide), "commutative on the same pair") },
@@ -111,10 +110,9 @@ class GaugeTicksTest {
      * no lower than either.
      */
     @Test
-    fun theJoinIsALatticeOnAllThreeComponents() {
+    fun theJoinIsALatticeOnBothComponents() {
         val rnd = Random(0x3353_5)
         fun gauge() = Gauge(
-            Rational.of(rnd.nextLong(0L, 500L), rnd.nextLong(1L, 9L)),
             rnd.nextLong(0L, 500L),
             ticksHigh = rnd.nextLong(0L, 3L),
             ticksLow = rnd.nextLong(),
@@ -134,39 +132,9 @@ class GaugeTicksTest {
         }
     }
 
-    // ── the read: max(⌈floor · w · G⌉, ticks) + (issued − folded) · G ───────────────────────
+    // ── the read: ticks + (issued − folded) · G ──────────────────────────────────────────────
 
-    /**
-     * A legacy floor-only gauge joined with a ticks-only one reads whichever asserts more, each
-     * paired with the joined fold. Ticks dominating: a seat at 50 (floor) and a checkpoint at 70
-     * after 20 units (ticks) read 70.
-     */
-    @Test
-    fun aLegacyFloorJoinedWithTicksReadsTheTicksWhereTheyDominate() {
-        val legacy = Gauge(Rational.of(50L), 0L)
-        val checkpoint = gaugeAt(Int128.of(70L * TICKS_PER_UNIT), 20L)
-        val read = ledgerWith(Weight.ONE, issued = 20L, gauge = legacy.join(checkpoint)).grossVirtualService(EDGE)
-        assertEquals(Rational.of(70L), read)
-    }
-
-    /**
-     * The class KDoc's stale-fold example with each side in a different component: a stale legacy
-     * floor `(70¼, 0)` joined with an honest ticks-only checkpoint at 70 after 20 units. The floor
-     * dominates the base and pairs with the honest fold, so it reads `70¼`, not the `90¼` the stale
-     * pair alone claims and not the `70` that dropping the legacy floor would read.
-     */
-    @Test
-    fun aStaleLegacyFloorJoinedWithAnHonestTicksCheckpointIsDeflatedNotDropped() {
-        val stale = Gauge(Rational.of(281L, 4L), 0L)
-        val honest = gaugeAt(Int128.of(70L * TICKS_PER_UNIT), 20L)
-        val merged = stale.join(honest)
-        assertAll(
-            { assertEquals(Rational.of(281L, 4L), ledgerWith(Weight.ONE, issued = 20L, gauge = merged).grossVirtualService(EDGE)) },
-            { assertEquals(Rational.of(361L, 4L), ledgerWith(Weight.ONE, issued = 20L, gauge = stale).grossVirtualService(EDGE), "the stale pair alone: 90¼") },
-        )
-    }
-
-    /** The same example with both sides in `ticks`: `(70¼, 0) ⊔ (70, 20)` reads `70¼`. */
+    /** The class KDoc's stale-fold example: `(70¼, 0) ⊔ (70, 20)` reads `70¼`, not the stale `90¼`. */
     @Test
     fun theStaleFoldExampleInTicksIsDeflatedByTheComponentwiseJoin() {
         val stale = gaugeAt(Int128.of(281L * TICKS_PER_UNIT / 4L), 0L)
@@ -185,7 +153,7 @@ class GaugeTicksTest {
      */
     @Test
     fun ticksPastLongAreNarrowedOnlyAfterTheOrigin() {
-        val pastLong = Gauge(Rational.ZERO, 0L, ticksHigh = 1L, ticksLow = 0L)
+        val pastLong = Gauge(0L, ticksHigh = 1L, ticksLow = 0L)
         // 2⁶⁴ ticks less an origin of 2⁶⁰ units (2⁶⁴ ticks at weight 1), plus 3 units issued.
         val origin = Int128.of(1L shl 60)
         assertAll(
@@ -220,37 +188,15 @@ class GaugeTicksTest {
         )
     }
 
-    /**
-     * A legacy floor is read exactly through the `max`, past `Long` too: the one place a floor
-     * used to be capped on the way in was [ticksAt], and the stored read no longer goes through it.
-     * Both quotient paths of [wideTicksAt] are reached: a denominator product that fits, and one
-     * that does not.
-     */
-    @Test
-    fun aLegacyFloorIsReadExactlyPastLong() {
-        val big = Gauge(Rational.of(Long.MAX_VALUE / 2L), 0L)
-        val fatDenominators = Gauge(Rational.of(Long.MAX_VALUE - 1L, 3_037_000_493L), 0L)
-        val fatWeight = Weight.of(1L, 3_037_000_507L)
-        assertAll(
-            { assertEquals((Long.MAX_VALUE / 2L).timesWide(TICKS_PER_UNIT), big.storedTicks(Weight.ONE)) },
-            {
-                // ⌈(2⁶³ − 2) · 16 / (3037000493 · 3037000507)⌉: the product of the denominators is past Long.
-                assertTrue(3_037_000_493L.timesWide(3_037_000_507L).toLongOrNull() == null, "the rig: the two-step path")
-                assertEquals(Int128.of(16L), fatDenominators.storedTicks(fatWeight))
-            },
-        )
-    }
-
     // ── the wire ─────────────────────────────────────────────────────────────────────────
 
-    /** `ticks` is elided at zero, so a floor-only gauge encodes as it did before #3353; a zero floor is elided too. */
+    /** Each tick word is elided at zero, and the ticks round-trip. */
     @Test
     fun zeroTicksAreElidedAndTicksRoundTrip() {
-        val legacy = Gauge(Rational.of(70L), 20L)
-        val wide = Gauge(Rational.ZERO, 20L, ticksHigh = 3L, ticksLow = -2L)
+        val wide = Gauge(20L, ticksHigh = 3L, ticksLow = -2L)
         assertAll(
-            { assertEquals("""{"floor":{"numerator":70,"denominator":1},"folded":20}""", Json.encodeToString(legacy)) },
-            { assertEquals("""{"folded":20,"ticksLow":16}""", Json.encodeToString(gaugeOfUnits(1L, 20L)), "a written gauge carries no floor") },
+            { assertEquals("""{"folded":20}""", Json.encodeToString(Gauge(folded = 20L))) },
+            { assertEquals("""{"folded":20,"ticksLow":16}""", Json.encodeToString(gaugeOfUnits(1L, 20L))) },
             { assertEquals(wide, Json.decodeFromString<Gauge>(Json.encodeToString(wide))) },
         )
     }
@@ -259,7 +205,7 @@ class GaugeTicksTest {
     @Test
     fun negativeTicksCannotArriveOffTheWire() {
         assertFailsWith<IllegalArgumentException> {
-            Json.decodeFromString<Gauge>("""{"floor":{"numerator":0,"denominator":1},"folded":0,"ticksHigh":-1}""")
+            Json.decodeFromString<Gauge>("""{"folded":0,"ticksHigh":-1}""")
         }
     }
 

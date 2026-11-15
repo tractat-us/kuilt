@@ -2,7 +2,11 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
 import kotlin.random.Random
 import kotlin.test.Test
@@ -19,28 +23,30 @@ import kotlin.test.assertTrue
  * the staleness-window scaling, and the patch-atomicity negative control — belong with the write
  * rules that make them expressible and land with those. What is pinned here is everything the
  * write rules will rest on: that the join deflates rather than preserves a stale pair, that a
- * hostile wire form cannot smuggle in a denormalized floor, that the read folds **base** issuance
- * only, and how far the floor's denominator can chain before exact arithmetic runs out of `Long`.
+ * hostile wire form cannot smuggle in a negative fold, that a v0.7.4 `floor` is refused rather
+ * than dropped, that the read folds **base** issuance only, and how far an exact `Rational`
+ * denominator can chain before it runs out of `Long`.
  */
+@OptIn(ExperimentalSerializationApi::class)
 class GaugeTest {
 
-    // ── the register laws: componentwise join, and why lexicographic-by-floor is wrong ──
+    // ── the register laws: componentwise join, and why lexicographic-by-position is wrong ──
 
     /**
      * Componentwise max is idempotent/commutative/associative (a product of two total orders),
-     * and — the load-bearing property — it can only *deflate* a stale floor, by pairing it with a
-     * better-informed fold.
+     * and — the load-bearing property — it can only *deflate* a stale position, by pairing it with
+     * a better-informed fold.
      *
-     * The lexicographic-by-floor alternative keeps the stale writer's pair **whole** and
+     * The lexicographic-by-position alternative keeps the stale writer's pair **whole** and
      * reintroduces the double count, so it is asserted here too: this is the one "simplification"
      * a later reader is most likely to reach for, and the difference is invisible from the join's
      * type alone.
      */
     @Test
     fun componentwiseJoinLawsHoldAndLexicographicWouldNot() {
-        val stale = Gauge(Rational.of(281L, 4L), 0L) // a stale bump: front 70¼, fold 0
-        val honest = Gauge(Rational.of(70L), 20L) // the honest checkpoint after 20 units
-        val seat = Gauge(Rational.of(50L), 0L) // the original seat
+        val stale = gaugeOfVirtual(Rational.of(281L, 4L), 0L, Weight.ONE) // a stale bump: front 70¼, fold 0
+        val honest = gaugeOfUnits(70L, 20L) // the honest checkpoint after 20 units
+        val seat = gaugeOfUnits(50L, 0L) // the original seat
 
         assertAll(
             { assertEquals(stale, stale.join(stale), "idempotent") },
@@ -54,19 +60,19 @@ class GaugeTest {
             },
         )
 
-        // Componentwise keeps (70¼, 20): the stale floor, paired with the honest fold.
+        // Componentwise keeps (70¼, 20): the stale position, paired with the honest fold.
         val merged = stale.join(honest)
-        assertEquals(Gauge(Rational.of(281L, 4L), 20L), merged)
-        val readAt20 = merged.floor + Rational.of(20L - merged.folded, 1L)
+        assertEquals(gaugeOfVirtual(Rational.of(281L, 4L), 20L, Weight.ONE), merged)
+        val readAt20 = merged.assertedAt(Weight.ONE) + Rational.of(20L - merged.folded, 1L)
         assertEquals(
             Rational.of(281L, 4L),
             readAt20,
             "read = 70¼ — overshoot ¼, the sibling ev-spread at the write, not the service re-counted",
         )
 
-        // Lexicographic-by-floor would keep `stale` whole: 70¼ + 20 = 90¼ — F1's double count.
-        val lexKept = if (stale.floor >= honest.floor) stale else honest
-        val lexRead = lexKept.floor + Rational.of(20L - lexKept.folded, 1L)
+        // Lexicographic-by-position would keep `stale` whole: 70¼ + 20 = 90¼ — F1's double count.
+        val lexKept = if (stale.ticks >= honest.ticks) stale else honest
+        val lexRead = lexKept.assertedAt(Weight.ONE) + Rational.of(20L - lexKept.folded, 1L)
         assertTrue(lexRead > Rational.of(90L), "a lexicographic join re-adds the service: $lexRead")
     }
 
@@ -75,24 +81,24 @@ class GaugeTest {
     fun joinNeverLowersEitherComponent() {
         val rnd = Random(0x6A063)
         repeat(500) {
-            val a = Gauge(Rational.of(rnd.nextLong(-500L, 500L), rnd.nextLong(1L, 9L)), rnd.nextLong(0L, 500L))
-            val b = Gauge(Rational.of(rnd.nextLong(-500L, 500L), rnd.nextLong(1L, 9L)), rnd.nextLong(0L, 500L))
+            val a = gaugeAt(Int128.of(rnd.nextLong(0L, 8_000L)), rnd.nextLong(0L, 500L))
+            val b = gaugeAt(Int128.of(rnd.nextLong(0L, 8_000L)), rnd.nextLong(0L, 500L))
             val merged = a.join(b)
             assertAll(
-                { assertTrue(merged.floor >= a.floor && merged.floor >= b.floor, "floor fell: $a ⊔ $b = $merged") },
+                { assertTrue(merged.ticks >= a.ticks && merged.ticks >= b.ticks, "position fell: $a ⊔ $b = $merged") },
                 { assertTrue(merged.folded >= a.folded && merged.folded >= b.folded, "fold fell: $a ⊔ $b = $merged") },
                 { assertEquals(merged, merged.join(a), "a ⊑ a ⊔ b") },
             )
         }
     }
 
-    // ── the wire form: the #1647 read-path guard, on both components ─────────────────────
+    // ── the wire form: the #1647 read-path guard, and the retired floor ──────────────────
 
     /**
-     * `folded` is an issuance count, so it is non-negative — and the generated deserializer calls
-     * the primary constructor, so the `init` check runs on the read path for free (the
-     * [MintRecord] shape). A negative fold would read as service the edge has *un*-received and
-     * inflate its virtual time without bound, so it must not decode.
+     * `folded` is an issuance count, so it is non-negative — and [GaugeSerializer] calls the
+     * primary constructor, so the `init` check runs on the read path (the [MintRecord] shape). A
+     * negative fold would read as service the edge has *un*-received and inflate its virtual time
+     * without bound, so it must not decode.
      *
      * This is why [Gauge] deliberately does **not** put its invariant in a private-constructor
      * factory the way [Weight]/[Rational] do: that shape is exactly what #1647 showed the plugin
@@ -100,55 +106,68 @@ class GaugeTest {
      */
     @Test
     fun aNegativeFoldCannotArriveOffTheWire() {
-        val malformed = """{"floor":{"numerator":70,"denominator":1},"folded":-20}"""
+        val malformed = """{"folded":-20,"ticksLow":16}"""
         assertFailsWith<IllegalArgumentException>("a negative fold must not decode") {
             Json.decodeFromString<Gauge>(malformed)
         }
     }
 
     /**
-     * The floor's guard, which cannot live in `init` — [Rational]'s invariant is enforced in its
-     * factory, and a generated serializer would write past it. [RationalSerializer] is what
-     * [Gauge.floor] routes through, and it **repairs** what has a unique canonical form.
+     * A gauge carrying a v0.7.4 `floor` is refused, by every decoder, `ignoreUnknownKeys` included:
+     * a position, wherever the key falls in the object, and a fraction naming no rational.
      *
-     * Repair rather than reject is [WeightSerializer]'s rule and it matters at least as much
-     * here: a `Gauge` rides the same [EntitlementLedger] frames a `Weight` does, and both decode
-     * boundaries drop the *entire frame* on a decode failure — so refusing `2/4` would discard
-     * every legitimate record travelling with it and anti-entropy would resend it forever.
+     * The lenient decoder is the arm that matters. A strict one would refuse an unknown key with no
+     * help from [GaugeSerializer]; a lenient one would skip it, and the gauge would read at the
+     * position its ticks alone assert, lower than it was written. Each payload is the honest one with
+     * a floor put in, and the honest one decoding to [honest] under every decoder is the control.
      */
     @Test
-    fun aDenormalizedFloorIsRepairedNotRejected() {
-        val unreduced = Json.decodeFromString<Gauge>(
-            """{"floor":{"numerator":140,"denominator":4},"folded":20}""",
+    fun aGaugeCarryingAFloorIsRefusedByEveryDecoder() {
+        val honest = gaugeOfUnits(1L, 20L)
+        val lenient = Json { ignoreUnknownKeys = true }
+        val json = Json.encodeToString(Gauge.serializer(), honest)
+        val cbor = Cbor.encodeToByteArray(Gauge.serializer(), honest)
+        val floors = listOf(
+            withLegacyFloor(json),
+            json.replace("}", ",\"floor\":{\"numerator\":281,\"denominator\":4}}"),
         )
-        val signFlipped = Json.decodeFromString<Gauge>(
-            """{"floor":{"numerator":-70,"denominator":-2},"folded":20}""",
-        )
-        val canonical = Gauge(Rational.of(35L), 20L)
+        val noRational = json.replace("\"folded\":", "\"floor\":{\"numerator\":70,\"denominator\":0},\"folded\":")
+        fun refusal(decode: () -> Gauge): String =
+            assertFailsWith<SerializationException> { decode() }.message.orEmpty()
         assertAll(
-            { assertEquals(canonical, unreduced, "140/4 must reduce to 35/1") },
-            { assertEquals(canonical, signFlipped, "-70/-2 is 35/1 — a repairable encoding") },
+            { assertEquals(honest, Json.decodeFromString(Gauge.serializer(), json), "the control: strict JSON reads it") },
+            { assertEquals(honest, lenient.decodeFromString(Gauge.serializer(), json), "the control: lenient JSON reads it") },
+            { assertEquals(honest, Cbor.decodeFromByteArray(Gauge.serializer(), cbor), "the control: CBOR reads it") },
+            *floors.flatMap { payload ->
+                listOf(
+                    { assertTrue("floor" in refusal { Json.decodeFromString(Gauge.serializer(), payload) }, "strict: $payload") },
+                    { assertTrue("floor" in refusal { lenient.decodeFromString(Gauge.serializer(), payload) }, "lenient: $payload") },
+                )
+            }.toTypedArray(),
             {
-                // The point of repairing: a denormalized floor that survived would compare wrong.
-                // Rational.compareTo cross-multiplies assuming a positive denominator, so a
-                // decoded -70/-2 would order below 0 and seat the edge with lifetime credit.
-                assertTrue(unreduced.floor > Rational.ZERO, "a repaired floor orders correctly")
-                assertTrue(signFlipped.floor > Rational.ZERO, "…and so does a sign-normalized one")
+                val refused = refusal { Cbor.decodeFromByteArray(Gauge.serializer(), withLegacyFloor(cbor)) }
+                assertTrue("floor" in refused, "CBOR: $refused")
             },
+            { refusal { lenient.decodeFromString(Gauge.serializer(), noRational) } },
         )
     }
 
     /**
-     * A zero denominator names no rational, so there is nothing to repair to. Substituting a
-     * default would fabricate a virtual-time claim out of hostile input — and a gauge floor is
-     * precisely what seats an edge, so that is a fairness lie, not a cosmetic one. It throws at
-     * the decode boundary, before any lattice state is touched.
+     * A zero floor asserts no position above the ticks, so it is read, and it is what a format that
+     * encodes defaults writes there, as the generated serializer did. Read as zero, the gauge is the
+     * one written: the ticks alone were always its position.
      */
     @Test
-    fun aFloorNamingNoRationalIsRefused() {
-        assertFailsWith<Exception>("a zero denominator must not decode") {
-            Json.decodeFromString<Gauge>("""{"floor":{"numerator":70,"denominator":0},"folded":20}""")
-        }
+    fun aZeroFloorIsReadAndOnlyAFormatThatEncodesDefaultsWritesOne() {
+        val gauge = gaugeOfUnits(1L, 20L)
+        val withDefaults = Json { encodeDefaults = true }
+        val written = withDefaults.encodeToString(Gauge.serializer(), gauge)
+        assertAll(
+            { assertEquals("""{"folded":20,"ticksLow":16}""", Json.encodeToString(Gauge.serializer(), gauge)) },
+            { assertEquals("""{"floor":{"numerator":0,"denominator":1},"folded":20,"ticksHigh":0,"ticksLow":16}""", written) },
+            { assertEquals(gauge, withDefaults.decodeFromString(Gauge.serializer(), written)) },
+            { assertEquals(gauge, Json.decodeFromString(Gauge.serializer(), withLegacyFloor(Json.encodeToString(Gauge.serializer(), gauge), floor = 0L))) },
+        )
     }
 
     /** Round-tripping a well-formed gauge is the identity — the guard costs nothing legitimate. */
@@ -156,8 +175,11 @@ class GaugeTest {
     fun wellFormedGaugesRoundTrip() {
         val rnd = Random(0x0A17E)
         repeat(200) {
-            val g = Gauge(Rational.of(rnd.nextLong(-999L, 999L), rnd.nextLong(1L, 17L)), rnd.nextLong(0L, 999L))
-            assertEquals(g, Json.decodeFromString<Gauge>(Json.encodeToString(g)))
+            val g = Gauge(rnd.nextLong(0L, 999L), ticksHigh = rnd.nextLong(0L, 3L), ticksLow = rnd.nextLong())
+            assertAll(
+                { assertEquals(g, Json.decodeFromString(Gauge.serializer(), Json.encodeToString(Gauge.serializer(), g))) },
+                { assertEquals(g, Cbor.decodeFromByteArray(Gauge.serializer(), Cbor.encodeToByteArray(Gauge.serializer(), g))) },
+            )
         }
     }
 
@@ -179,10 +201,10 @@ class GaugeTest {
         )
     }
 
-    /** With a gauge stored the read advances the floor over issuance **since the fold**. */
+    /** With a gauge stored the read advances its position over issuance **since the fold**. */
     @Test
-    fun aStoredGaugeAdvancesItsFloorOverIssuanceSinceTheFold() {
-        val s = ledgerWith(weight = Weight.ONE, issued = 20L, gauge = Gauge(Rational.of(50L), 5L))
+    fun aStoredGaugeAdvancesItsPositionOverIssuanceSinceTheFold() {
+        val s = ledgerWith(weight = Weight.ONE, issued = 20L, gauge = gaugeOfUnits(50L, 5L))
         // 50 + (20 − 5)/1 = 65
         assertEquals(Rational.of(65L), s.grossVirtualService(EDGE))
     }
@@ -194,7 +216,7 @@ class GaugeTest {
             weight = Weight.ONE,
             issued = 20L,
             returned = 4L,
-            gauge = Gauge(Rational.of(50L), 5L),
+            gauge = gaugeOfUnits(50L, 5L),
         )
         assertAll(
             { assertEquals(Rational.of(65L), s.grossVirtualService(EDGE)) },
@@ -215,7 +237,7 @@ class GaugeTest {
      */
     @Test
     fun aRelocatedMagnitudeNeverEntersTheVirtualTimeRead() {
-        val seated = Gauge(Rational.of(400L), 0L)
+        val seated = gaugeOfUnits(400L, 0L)
         val withoutReloc = ledgerWith(weight = Weight.ONE, issued = 2L, gauge = seated)
         val withReloc = ledgerWith(weight = Weight.ONE, issued = 2L, gauge = seated, issuedRelocIn = 300L)
         assertAll(
@@ -243,11 +265,11 @@ class GaugeTest {
     fun aDivergentRecordHasNoVirtualService() {
         val a = AttachmentRecord(EDGE, PARENT, CHILD, Weight.ONE)
         val b = AttachmentRecord(EDGE, PARENT, GroupId("other"), Weight.ONE)
-        val s = EntitlementLedger.of(records = mapOf(EDGE to setOf(a, b)), gauges = mapOf(EDGE to Gauge(Rational.ONE, 0L)))
+        val s = EntitlementLedger.of(records = mapOf(EDGE to setOf(a, b)), gauges = mapOf(EDGE to gaugeOfUnits(1L, 0L)))
         assertAll(
             { assertNull(s.grossVirtualService(EDGE)) },
             { assertNull(s.virtualService(EDGE)) },
-            { assertEquals(Gauge(Rational.ONE, 0L), s.gauge(EDGE), "the register itself is still readable") },
+            { assertEquals(gaugeOfUnits(1L, 0L), s.gauge(EDGE), "the register itself is still readable") },
         )
     }
 
@@ -322,16 +344,6 @@ class GaugeTest {
     }
 
     /**
-     * An off-grid floor is read **up** to the edge's grid instead of reaching a ceiling (#3313).
-     *
-     * Before the grid, a single extreme weight ratio was what overflowed: a floor's denominator and
-     * a weight numerator coprime to it multiplied in `Rational.plus` before anything could reduce,
-     * so two primes near `√Long.MAX_VALUE` threw on one addition. A position is now whole ticks of
-     * the edge's own service: the floor `1/3037000493` at weight `3037000507` reads
-     * `⌈16.0000000737…⌉ = 17` ticks, and one issued unit adds 16, so the gross read is
-     * `33 / (16 · 3037000507)`. The floor was written off the grid — only an older peer or a
-     * hand-built gauge can do that — and the read rounds it once, in the direction §10.5 allows.
-     *
      * A **position** past its ceiling, an issuance whose ticks do not fit, reads as the ceiling: a
      * deterministic value every replica reads alike, never a wrap and no longer a throw (#3313).
      *
@@ -339,37 +351,26 @@ class GaugeTest {
      * pinned where consumers actually stand.
      */
     @Test
-    fun anOffGridFloorIsReadUpToTheGridAndAPositionPastLongReadsAsTheCeiling() {
-        val offGrid = ledgerWith(
-            weight = Weight.of(3_037_000_507L, 1L),
-            issued = 1L,
-            gauge = Gauge(Rational.of(1L, 3_037_000_493L), 0L),
-        )
+    fun aPositionPastLongReadsAsTheCeiling() {
         val pastLong = ledgerWith(
             weight = Weight.ONE,
             issued = Long.MAX_VALUE / TICKS_PER_UNIT + 1L,
-            gauge = Gauge(Rational.ZERO, 0L),
+            gauge = Gauge(folded = 0L),
         )
-        assertAll(
-            { assertEquals(Rational.of(33L, 16L * 3_037_000_507L), offGrid.grossVirtualService(EDGE)) },
-            // Held at the ceiling rather than thrown or wrapped (#3313): the read never fails, and a
-            // pick that would order it refuses instead.
-            {
-                assertEquals(ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE), pastLong.grossVirtualService(EDGE))
-            },
-        )
+        // Held at the ceiling rather than thrown or wrapped (#3313): the read never fails, and a
+        // pick that would order it refuses instead.
+        assertEquals(ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE), pastLong.grossVirtualService(EDGE))
     }
 
     /**
-     * A floor at the ceiling reads exactly through its fold (#3353). The review of #3352 held it at
-     * the ceiling whatever the fold said, because a seat could store a narrowed front there. No
-     * build ever saturated a floor it wrote, so no legacy floor at the ceiling exists to preserve,
-     * and the hold on an absolute value would turn into credit once a parent's origin passed it.
+     * A position at the ceiling reads exactly through its fold (#3353). The review of #3352 held it
+     * at the ceiling whatever the fold said, because a seat could store a narrowed front there; the
+     * hold on an absolute value would turn into credit once a parent's origin passed it.
      */
     @Test
-    fun aFloorAtTheCeilingReadsExactlyThroughItsFold() {
+    fun aPositionAtTheCeilingReadsExactlyThroughItsFold() {
         val atCeiling = ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE)
-        val ledger = ledgerWith(weight = Weight.ONE, issued = 5L, gauge = Gauge(atCeiling, folded = 10L))
+        val ledger = ledgerWith(weight = Weight.ONE, issued = 5L, gauge = gaugeAt(Int128.of(positionCeiling(Weight.ONE)), folded = 10L))
         assertEquals(atCeiling - Rational.of(5L), ledger.grossVirtualService(EDGE))
     }
 

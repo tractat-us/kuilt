@@ -837,7 +837,7 @@ class HeddleNodeTest {
      * | `e3` seat | `mean(e1 200, e2 0)` = **100** | 200 |
      * | `e2` clamp | `mean(e1 200, e3 100)` = **150** | 200 |
      *
-     * `e3`'s share of that is permanent — a [Gauge.floor] the join only ratchets up — so the
+     * `e3`'s share of that is permanent — a [Gauge] position the join only ratchets up — so the
      * assertion that matters is its seat. The behavioural tell is that both joiners then take
      * grants ahead of the incumbent instead of level with it.
      *
@@ -981,7 +981,7 @@ class HeddleNodeTest {
             },
             {
                 assertEquals(
-                    Gauge(Rational.ZERO, folded = 0L),
+                    Gauge(folded = 0L),
                     assertNotNull(a.ledger.value.gauge(behind.id)),
                     "…and merged e3's seat at the origin, written when B's front was still there",
                 )
@@ -1185,9 +1185,9 @@ class HeddleNodeTest {
         val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
         h.pump()
         val node = h.peers[0].node
-        val atCeiling = Gauge(Rational.of(CEILING_AT_WEIGHT_ONE, 16L), folded = 0L)
+        val atCeiling = Gauge(folded = 0L, ticksLow = CEILING_AT_WEIGHT_ONE)
         val twoR = CEILING_AT_WEIGHT_ONE / 16L * 2L
-        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling, e2 to Gauge(Rational.of(twoR, 16L), folded = 0L)))))
+        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling, e2 to Gauge(folded = 0L, ticksLow = twoR)))))
         node.advertise(e1, hungry)
         node.advertise(e2, hungry)
         h.pump()

@@ -21,9 +21,9 @@ import kotlin.test.assertTrue
  * cannot reach the defect, so it is not an arm here.
  *
  * Every arm asserts its own loop count and that its rig fired: wakes clamped someone forward, or
- * seats landed under demanding siblings. And every arm checks the property that makes the fix a
- * fix rather than a postponement: each stored floor and wake offset sits **on its edge's grid**,
- * `value · w · G` a whole number of ticks. A denominator that compounds would break that first.
+ * seats landed under demanding siblings. What makes the fix a fix rather than a postponement is
+ * now a type: a gauge's position and a wake offset are both whole ticks of their edge's grid, so
+ * no stored value has a denominator to compound, and there is no off-grid value left to check for.
  *
  * The weights are mixed on purpose: whole numbers far apart (60 against 1), and fractions whose
  * denominators are coprime with each other (3/7, 2/5, 5/3), since a weight's denominator is what
@@ -82,13 +82,12 @@ class LocalHeddleOverflowPropertyTest {
             { assertEquals(CEILING_CYCLES, picks, "every cycle picked, past the old ceiling at cycle $OLD_SERVICE_CEILING and the position ceiling") },
             // 3/7 : 2/5 is 15 : 14.
             { assertTrue(picked.all { it > picks / 3 }, "both lanes are served near 15 : 14: ${picked.toList()}") },
-            { assertEquals(emptyList<String>(), offGrid(engine.snapshot())) },
         )
     }
 
     /**
      * The seat, the second way in, which needs no wake at all: an attached child attaches and is seated
-     * at its parent's front, the same weighted mean, written into its gauge floor in the ledger. While
+     * at its parent's front, the same weighted mean, written into its gauge in the ledger. While
      * its siblings are waiting each seat carried their `Σ w` into the floor's denominator, so churning
      * attached children — attach one, detach the oldest — under a waiting set of *every attached
      * child* overflowed after 19–39 seats, and the floor survived a persist and restore with it.
@@ -113,7 +112,6 @@ class LocalHeddleOverflowPropertyTest {
         var picks = 0
         var restored = 0
         val seatedAtAFront = HashSet<String>()
-        val offGridSamples = ArrayList<String>()
 
         for (step in 0 until CHURN_SEATS) {
             val name = "c$step"
@@ -135,15 +133,13 @@ class LocalHeddleOverflowPropertyTest {
             for (child in attached) {
                 val edge = ledger.lineageOf(topology.attachedChildId(rt, child))?.lastOrNull() ?: continue
                 val gauge = ledger.gauge(edge) ?: continue
-                val weight = ledger.record(edge)?.weight ?: continue
-                if (gauge.storedTicks(weight) > gauge.folded.timesWide(GRID)) seatedAtAFront += child
+                if (gauge.ticks > gauge.folded.timesWide(GRID)) seatedAtAFront += child
             }
             engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST))
             picks++
             if (attached.size > CHURN_WIDTH) {
                 check(engine.detach(rt, attached.removeFirst()).refusals.isEmpty()) { "detach at seat $seats" }
             }
-            if (step % SAMPLE_EVERY == 0) offGridSamples += offGrid(engine.snapshot())
             if (step == CHURN_SEATS / 2) {
                 val bytes = Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), engine.persist())
                 val decoded = LocalHeddle.decode(bytes, Cbor)
@@ -160,7 +156,6 @@ class LocalHeddleOverflowPropertyTest {
             // `rt`, and most are seated beside siblings that have not yet run. Seating every child at
             // its origin instead — the defect's absence — scores 0.
             { assertTrue(seatedAtAFront.size > 100, "the rig: children seated above their origin, ${seatedAtAFront.size}") },
-            { assertEquals(emptyList<String>(), offGridSamples) },
         )
     }
 
@@ -179,7 +174,6 @@ class LocalHeddleOverflowPropertyTest {
         var picks = 0
         var clamps = 0
         var offsetsBefore = emptyMap<AttachmentId, Int128>()
-        val offGridSamples = ArrayList<String>()
         repeat(PICKS) { step ->
             val size = 1 + random.nextInt(leaves.size)
             val waiting = leaves.shuffled(random).take(size)
@@ -200,7 +194,6 @@ class LocalHeddleOverflowPropertyTest {
                 val offsets = snapshot.allocatorMemory.wakeOffsets
                 clamps += offsets.count { (edge, offset) -> offset > (offsetsBefore[edge] ?: Int128.ZERO) }
                 offsetsBefore = offsets
-                offGridSamples += offGrid(snapshot)
             }
         }
         assertAll(
@@ -209,38 +202,8 @@ class LocalHeddleOverflowPropertyTest {
             // The rig: wakes clamped someone forward. Without one the run never reached the state
             // that overflowed, and its green would prove nothing.
             { assertTrue(clamps > PICKS / SAMPLE_EVERY, "stored offsets rose $clamps times across the samples") },
-            { assertEquals(emptyList<String>(), offGridSamples) },
         )
     }
-
-    /**
-     * Every stored wake offset in [memory], and any legacy gauge floor in [ledger], that is **not** on its
-     * edge's grid — whose `value · w · G` is not a whole number of ticks — named for the failure message.
-     * Empty is the fix: a compounding denominator would put a value off the grid before it overflowed
-     * anything. Since #3353 a seat and a checkpoint store the position in the gauge's ticks, whole by
-     * construction, and leave the floor at zero, so the floor arm sees only a floor an older build wrote;
-     * a wake clamp is whole ticks too, so nothing this run writes can be off the grid.
-     */
-    private fun offGrid(state: LocalHeddleState): List<String> = offGrid(state.ledger, state.allocatorMemory)
-
-    private fun offGrid(snapshot: LocalHeddleSnapshot): List<String> = offGrid(snapshot.ledger, snapshot.allocatorMemory)
-
-    private fun offGrid(ledger: EntitlementLedger, memory: AllocatorMemory): List<String> {
-        val floors = ledger.allEdges().mapNotNull { edge ->
-            val floor = ledger.gauge(edge)?.floor ?: return@mapNotNull null
-            val w = ledger.record(edge)?.weight ?: return@mapNotNull null
-            if (onGrid(floor, w)) null else "floor ${edge.value}=$floor"
-        }
-        // A wake clamp is whole ticks of its edge's grid by construction since #3353, so only floors can be off it.
-        return floors.sorted()
-    }
-
-    /**
-     * Whether `value · w · G` is a whole number: exact, in 128 bits. `G` is restated as [GRID]
-     * rather than read from production, so a change to the grid reds this test too.
-     */
-    private fun onGrid(value: Rational, w: Weight): Boolean =
-        value.numerator.timesWide(w.numerator * GRID) % (value.denominator * w.denominator) == 0L
 
     private companion object {
         /** Ticks per service unit, design §7.1 (#3313). */

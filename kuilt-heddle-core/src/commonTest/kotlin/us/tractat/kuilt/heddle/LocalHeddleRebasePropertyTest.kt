@@ -298,7 +298,7 @@ class LocalHeddleRebasePropertyTest {
         return ledger.allEdges().maxOf { edge ->
             val weight = checkNotNull(ledger.record(edge)).weight
             val origin = originTicks(ledger.origin(checkNotNull(ledger.record(edge)).parent), weight)
-            val wideGross = ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge), weight) - origin
+            val wideGross = ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge)) - origin
             // Wide: an idle lane sits as far below zero as the origin has risen past it (#3353).
             val raw = wideGross - (ledger.edge(edge)?.returned ?: 0L) * TICKS_PER_UNIT
             val effective = raw + (state.allocatorMemory.wakeOffsets[edge] ?: Int128.ZERO)

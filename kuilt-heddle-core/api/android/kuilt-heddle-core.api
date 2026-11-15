@@ -376,37 +376,20 @@ public final class us/tractat/kuilt/heddle/FairShareAllocator {
 
 public final class us/tractat/kuilt/heddle/Gauge {
 	public static final field Companion Lus/tractat/kuilt/heddle/Gauge$Companion;
-	public fun <init> (Lus/tractat/kuilt/heddle/Rational;J)V
-	public synthetic fun <init> (Lus/tractat/kuilt/heddle/Rational;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun <init> (Lus/tractat/kuilt/heddle/Rational;JJJ)V
-	public synthetic fun <init> (Lus/tractat/kuilt/heddle/Rational;JJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Lus/tractat/kuilt/heddle/Rational;
+	public fun <init> (JJJ)V
+	public synthetic fun <init> (JJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
 	public final fun component2 ()J
 	public final fun component3 ()J
-	public final fun component4 ()J
-	public final fun copy (Lus/tractat/kuilt/heddle/Rational;J)Lus/tractat/kuilt/heddle/Gauge;
-	public final fun copy (Lus/tractat/kuilt/heddle/Rational;JJJ)Lus/tractat/kuilt/heddle/Gauge;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Gauge;Lus/tractat/kuilt/heddle/Rational;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/Gauge;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Gauge;Lus/tractat/kuilt/heddle/Rational;JJJILjava/lang/Object;)Lus/tractat/kuilt/heddle/Gauge;
+	public final fun copy (JJJ)Lus/tractat/kuilt/heddle/Gauge;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/Gauge;JJJILjava/lang/Object;)Lus/tractat/kuilt/heddle/Gauge;
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getFloor ()Lus/tractat/kuilt/heddle/Rational;
 	public final fun getFolded ()J
 	public final fun getTicksHigh ()J
 	public final fun getTicksLow ()J
 	public fun hashCode ()I
 	public final fun join (Lus/tractat/kuilt/heddle/Gauge;)Lus/tractat/kuilt/heddle/Gauge;
 	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class us/tractat/kuilt/heddle/Gauge$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lus/tractat/kuilt/heddle/Gauge$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/heddle/Gauge;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/Gauge;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
 }
 
 public final class us/tractat/kuilt/heddle/Gauge$Companion {

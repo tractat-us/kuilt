@@ -64,7 +64,7 @@ class FairShareAllocatorRefusalTest {
 
     /** [ledger] with [edge] carrying a gauge whose floor is exactly [ticks] on weight 1's grid. */
     private fun seatedAt(ledger: EntitlementLedger, edge: AttachmentId, ticks: Long): EntitlementLedger =
-        ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to Gauge(ticksToVirtual(ticks, Weight.ONE), folded = 0L))))
+        ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to gaugeAt(Int128.of(ticks), folded = 0L))))
 
     /**
      * The root's origin at [FLOOR_ORIGIN], so a gauge at zero reads one tick below its floor, `−C`, and
