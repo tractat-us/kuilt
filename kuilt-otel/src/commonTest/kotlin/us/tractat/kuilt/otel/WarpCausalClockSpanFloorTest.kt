@@ -128,6 +128,26 @@ class WarpCausalClockSpanFloorTest {
     }
 
     @Test
+    fun aSpanTheRecoveryJoinEvictsStillRaisesTheFloor() = runTest {
+        val store = InMemoryDurableStore()
+        val durable = durableStampedSpans(store, 5)
+        corruptTheClock(store)
+
+        // DROP_NEWEST at a cap of 2 evicts the spans stamped 3, 4 and 5, so only 1 and 2 stay in memory.
+        val restarted = WarpTelemetry(replica, store, maxSpans = 2, bufferPolicy = BufferPolicy.DROP_NEWEST)
+            .also { it.recover() }
+        val keptAfterRecover = restarted.spans.snapshot().elements.mapNotNull { it.causalStamp?.dot?.seq }.toSet()
+        restarted.spans.export(span(99))
+        val next = restarted.dotOf(99)
+
+        assertAll(
+            { assertEquals(5, durable.size, "the rig: the durable spans are not stamped 1..5") },
+            { assertEquals(setOf(1L, 2L), keptAfterRecover, "the rig: the recovery join did not evict 3..5") },
+            { assertTrue(next.seq > 5, "the floor skipped the spans the join evicted: $next") },
+        )
+    }
+
+    @Test
     fun aCleanClockAheadOfTheSpansIsNotWoundBack() = runTest {
         val store = InMemoryDurableStore()
         val durable = durableStampedSpans(store, 3)

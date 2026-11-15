@@ -76,6 +76,13 @@ unstamped and retries the read on each export and clear, and the first read that
 the clock. A clock whose read has landed keeps going through a later refusal, since this
 device wrote every `seq` its store can hold.
 
+Starting fresh is not starting unused: the stored spans still carry this device's old dots.
+So when the span exporter's read of its stored spans lands, at startup or on the first export
+after the store heals, it raises the clock above the highest dot of this device's it found,
+before that export stamps anything. That covers only the spans the store still holds. A dot
+whose span left the store before the restart (evicted from the buffer, or cleared), or that
+only a peer or a collector still holds, can be minted again after a corrupt clock entry.
+
 ### The cross-boundary rule
 
 [`inferCausalLinks(spans)`](https://tractat-us.github.io/kuilt/api/) is a pure function

@@ -65,8 +65,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * So a [WarpSpanExporter] whose read of the stored spans lands raises the clock's floor to the
  * highest own-replica stamp that read found, before the turn mints anything, and a clock that has not
  * read yet keeps the floor until its read lands. This covers only the spans the store still holds:
- * a dot whose span was evicted past `maxSpans`, cleared, or only ever held elsewhere is not in that
- * read, and a corrupt entry can still re-mint it.
+ * a dot whose span left the stored set before the restart (evicted past `maxSpans`, or cleared),
+ * or that only a peer or a collector still holds, is not in that read, and a corrupt entry can
+ * still re-mint it.
  *
  * ## Thread-safety
  *
