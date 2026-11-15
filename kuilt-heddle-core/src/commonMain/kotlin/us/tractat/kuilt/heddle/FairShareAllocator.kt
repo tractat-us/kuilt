@@ -1429,6 +1429,12 @@ public sealed interface AllocationOutcome {
     public data object NothingToDelegate : AllocationOutcome
 
     /**
+     * Not returned today. A pick orders the full 128-bit position, so no position at [parent]
+     * stops a round. Kept for the ledger's `Long` lifetime counters, which throw there for now.
+     */
+    public data class PositionCeiling(public val parent: GroupId) : AllocationOutcome
+
+    /**
      * [parent]'s active children carry weights that fail [weightsFitTheBudget]: a product a pick
      * forms leaves `Long`, so no pick there can be computed, or the set is too fine for one full
      * lease (#3353). Nothing was written. A replicated ledger can hold such a set

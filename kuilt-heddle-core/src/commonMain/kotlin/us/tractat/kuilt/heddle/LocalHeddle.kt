@@ -140,6 +140,14 @@ public sealed interface AcquireOutcome {
      * [LocalHeddle.admit], [at] is the leaf that was named.
      */
     public data class NoLiveLineage(public val at: GroupId) : AcquireOutcome, AdmitOutcome
+
+    /**
+     * Not returned today. A pick orders the full 128-bit position, so no position at [parent]
+     * refuses it, however far a child stands from the parent's origin. The arm is kept for the one
+     * limit a choosing call still meets, the ledger's `Long` lifetime counters (see "Failure
+     * surface" on [LocalHeddle]), which throw there for now.
+     */
+    public data class PositionCeiling(public val parent: GroupId) : AcquireOutcome
 }
 
 /**
@@ -216,6 +224,14 @@ public sealed interface LeaseOutcome {
 
     /** No open lease has this id, and it is from another epoch than [currentEpoch]. Nothing changed. */
     public data class Stale(public val currentEpoch: Long) : LeaseOutcome
+
+    /**
+     * Not returned today: an extend's delegation lands however far it carries an edge of the
+     * lease's path, since a pick orders the full 128-bit position. Kept, as
+     * [AcquireOutcome.PositionCeiling] is, for the ledger's `Long` lifetime counters, which throw
+     * there for now. [parent] would name the group above the edge.
+     */
+    public data class PositionCeiling(public val parent: GroupId) : LeaseOutcome
 }
 
 /**

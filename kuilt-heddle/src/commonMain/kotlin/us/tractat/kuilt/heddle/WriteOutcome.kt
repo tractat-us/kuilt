@@ -53,6 +53,14 @@ public sealed interface ScheduleOutcome {
     public data object NothingToDelegate : ScheduleOutcome
 
     /**
+     * Not returned today. A pick orders the full 128-bit position, so no position at [parent]
+     * stops a round, however far a child stands from the parent's origin and however many
+     * schedulers granted it at once. Kept for the ledger's `Long` lifetime counters, which throw
+     * there for now.
+     */
+    public data class PositionCeiling(public val parent: GroupId) : ScheduleOutcome
+
+    /**
      * [parent]'s active children carry weights whose products a pick forms leave `Long`, so no pick
      * there can be computed, or that are too fine for one full lease, and nothing was written
      * (#3353). The control log refuses such a set act by act, but the replicated ledger can still hold one: two peers each activating a child
@@ -123,5 +131,6 @@ public data class GateClosed(
 internal fun AllocationOutcome.toScheduleOutcome(): ScheduleOutcome = when (this) {
     is AllocationOutcome.Delegated -> ScheduleOutcome.Delegated(grants)
     AllocationOutcome.NothingToDelegate -> ScheduleOutcome.NothingToDelegate
+    is AllocationOutcome.PositionCeiling -> ScheduleOutcome.PositionCeiling(parent)
     is AllocationOutcome.WeightBudget -> ScheduleOutcome.WeightBudget(parent)
 }

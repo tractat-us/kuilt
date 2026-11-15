@@ -20,7 +20,7 @@ public sealed interface WaitExplanation {
     public val kind: Kind
 
     /** The arms of a [WaitExplanation], in the order they are checked; their order is part of the API. */
-    public enum class Kind { NOT_WAITING, NOT_ELIGIBLE, NO_LIVE_LINEAGE, AT_CEILING, SUPPLY_EXHAUSTED, BEHIND_AT_LEVEL, WOULD_BE_PICKED_NEXT }
+    public enum class Kind { NOT_WAITING, NOT_ELIGIBLE, NO_LIVE_LINEAGE, AT_CEILING, SUPPLY_EXHAUSTED, POSITION_CEILING, BEHIND_AT_LEVEL, WOULD_BE_PICKED_NEXT }
 
     /** The leaf is not in the waiting set: it has no work queued. */
     public data object NotWaiting : WaitExplanation {
@@ -62,6 +62,15 @@ public sealed interface WaitExplanation {
     /** The root holds less than the reservation, so the next acquire is refused whoever is waiting. */
     public data object SupplyExhausted : WaitExplanation {
         override val kind: Kind get() = Kind.SUPPLY_EXHAUSTED
+    }
+
+    /**
+     * Not returned today, as [AcquireOutcome.PositionCeiling] is not: no position refuses the next
+     * acquire's pick, since it orders the full 128-bit position. The same arm as
+     * [AcquireOutcome.PositionCeiling], kept with it.
+     */
+    public data class PositionCeiling(public val parent: GroupId) : WaitExplanation {
+        override val kind: Kind get() = Kind.POSITION_CEILING
     }
 
     /**
