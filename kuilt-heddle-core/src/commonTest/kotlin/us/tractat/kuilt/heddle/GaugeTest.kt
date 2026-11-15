@@ -111,9 +111,8 @@ class GaugeTest {
     }
 
     /**
-     * A gauge carrying a v0.7.4 `floor` is refused, by every decoder, `ignoreUnknownKeys` included,
-     * and whatever the floor holds: zero, a position, or a fraction naming no rational. Its value is
-     * never read, so the refusal names the floor and nothing else.
+     * A gauge carrying a v0.7.4 `floor` is refused, by every decoder, `ignoreUnknownKeys` included:
+     * a position, wherever the key falls in the object, and a fraction naming no rational.
      *
      * The lenient decoder is the arm that matters. A strict one would refuse an unknown key with no
      * help from [GaugeSerializer]; a lenient one would skip it, and the gauge would read at the
@@ -128,10 +127,9 @@ class GaugeTest {
         val cbor = Cbor.encodeToByteArray(Gauge.serializer(), honest)
         val floors = listOf(
             withLegacyFloor(json),
-            withLegacyFloor(json, floor = 0L),
-            json.replace("\"folded\":", "\"floor\":{\"numerator\":70,\"denominator\":0},\"folded\":"),
-            json.replace("}", ",\"floor\":{\"numerator\":70,\"denominator\":1}}"),
+            json.replace("}", ",\"floor\":{\"numerator\":281,\"denominator\":4}}"),
         )
+        val noRational = json.replace("\"folded\":", "\"floor\":{\"numerator\":70,\"denominator\":0},\"folded\":")
         fun refusal(decode: () -> Gauge): String =
             assertFailsWith<SerializationException> { decode() }.message.orEmpty()
         assertAll(
@@ -148,24 +146,25 @@ class GaugeTest {
                 val refused = refusal { Cbor.decodeFromByteArray(Gauge.serializer(), withLegacyFloor(cbor)) }
                 assertTrue("floor" in refused, "CBOR: $refused")
             },
+            { refusal { lenient.decodeFromString(Gauge.serializer(), noRational) } },
         )
     }
 
     /**
-     * A gauge this build writes names no floor, under a format that encodes defaults too: the key
-     * is in the descriptor only to be refused.
+     * A zero floor asserts no position above the ticks, so it is read, and it is what a format that
+     * encodes defaults writes there, as the generated serializer did. Read as zero, the gauge is the
+     * one written: the ticks alone were always its position.
      */
     @Test
-    fun aWrittenGaugeNamesNoFloor() {
+    fun aZeroFloorIsReadAndOnlyAFormatThatEncodesDefaultsWritesOne() {
         val gauge = gaugeOfUnits(1L, 20L)
+        val withDefaults = Json { encodeDefaults = true }
+        val written = withDefaults.encodeToString(Gauge.serializer(), gauge)
         assertAll(
             { assertEquals("""{"folded":20,"ticksLow":16}""", Json.encodeToString(Gauge.serializer(), gauge)) },
-            {
-                assertEquals(
-                    """{"folded":20,"ticksHigh":0,"ticksLow":16}""",
-                    Json { encodeDefaults = true }.encodeToString(Gauge.serializer(), gauge),
-                )
-            },
+            { assertEquals("""{"floor":{"numerator":0,"denominator":1},"folded":20,"ticksHigh":0,"ticksLow":16}""", written) },
+            { assertEquals(gauge, withDefaults.decodeFromString(Gauge.serializer(), written)) },
+            { assertEquals(gauge, Json.decodeFromString(Gauge.serializer(), withLegacyFloor(Json.encodeToString(Gauge.serializer(), gauge), floor = 0L))) },
         )
     }
 

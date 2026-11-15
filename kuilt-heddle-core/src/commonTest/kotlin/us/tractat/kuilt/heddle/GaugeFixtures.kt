@@ -21,7 +21,7 @@ internal fun gaugeOfVirtual(v: Rational, folded: Long, w: Weight): Gauge =
 
 /**
  * [json] with a v0.7.4 `floor` of [floor] units put into every gauge in it, ahead of its
- * `folded`: the key [GaugeSerializer] refuses. A gauge is the only object with a `folded` key.
+ * `folded`: a non-zero one is what [GaugeSerializer] refuses. Only a gauge has a `folded` key.
  */
 internal fun withLegacyFloor(json: String, floor: Long = 70L): String {
     val folded = "\"folded\":"

@@ -1,16 +1,12 @@
 package us.tractat.kuilt.heddle
 
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.SerialDescriptor
-import kotlinx.serialization.descriptors.buildClassSerialDescriptor
-import kotlinx.serialization.descriptors.element
-import kotlinx.serialization.encoding.CompositeDecoder
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
-import kotlinx.serialization.encoding.decodeStructure
-import kotlinx.serialization.encoding.encodeStructure
 import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.math.Rounding
 import us.tractat.kuilt.math.mulDiv
@@ -99,10 +95,10 @@ import us.tractat.kuilt.math.timesWide
  * so an off-wire value cannot bypass it (the same shape as [MintRecord]). Each tick word is elided
  * at zero, so a position below `2⁶³` carries only [ticksLow].
  *
- * A gauge that names a `floor` is **refused**, under every decoder configuration,
+ * A gauge carrying a non-zero `floor` is **refused**, under every decoder configuration,
  * `ignoreUnknownKeys` included. v0.7.4 kept the position there, as a fraction of virtual time; this
  * release reads only the ticks, and a gauge read as if its floor were absent would read lower than
- * it was written. [GaugeSerializer] says why that takes a hand-written serializer.
+ * it was written. [GaugeSerializer] says why that takes a serializer of its own.
  *
  * @property folded the base issuance the writer observed when it asserted its position;
  *   non-negative.
@@ -138,66 +134,48 @@ public data class Gauge(
 }
 
 /**
- * [Gauge]'s wire form, written by hand for one reason: it names the retired `floor` key, so that a
- * gauge carrying one is refused rather than read without it.
+ * [Gauge]'s wire form, which keeps the retired `floor` element for one reason: so that a gauge
+ * carrying a non-zero one is refused rather than read without it.
  *
- * v0.7.4 stored a gauge's position in `floor`, a fraction of virtual time. Dropping the property
- * from a generated serializer would refuse such a gauge only where the decoder is strict.
- * [LocalHeddle.decode] takes the consumer's own format, and one built with `ignoreUnknownKeys` would
- * skip the key and read the gauge at the position its ticks alone assert: lower than it was
- * written, which seats the edge behind service it already had. Keeping the key in the descriptor
- * means every format hands it back, and the decode throws [SerializationException] at it, without
- * reading its value, on every path a gauge arrives by: a snapshot reads as [RestoreResult.Corrupt],
- * a replicated frame is dropped as undecodable, and a control-log entry reads as unreadable. The
- * key is never written.
+ * v0.7.4 stored a gauge's position in `floor`, a fraction of virtual time. Dropping the element
+ * would refuse such a gauge only where the decoder is strict. [LocalHeddle.decode] takes the
+ * consumer's own format, and one built with `ignoreUnknownKeys` would skip the key and read the
+ * gauge at the position its ticks alone assert: lower than it was written, which seats the edge
+ * behind service it already had. Keeping the element in the descriptor means every format hands it
+ * back, and a non-zero one throws [SerializationException] on every path a gauge arrives by: a
+ * snapshot reads as [RestoreResult.Corrupt], a replicated frame is dropped as undecodable, and a
+ * control-log entry reads as unreadable. A zero floor names no position above the ticks, so it is
+ * read, and it is all this build ever writes there: nothing, unless the format encodes defaults.
  *
- * Everything else is what the generated serializer wrote, byte for byte: [Gauge.folded] always,
- * and each tick word only when it is non-zero or the format encodes defaults.
+ * The surrogate is the class [Gauge] was, under its serial name, so every format, positional ones
+ * included, writes the bytes the generated serializer wrote.
  */
 internal object GaugeSerializer : KSerializer<Gauge> {
-    private const val FLOOR = 0
-    private const val FOLDED = 1
-    private const val TICKS_HIGH = 2
-    private const val TICKS_LOW = 3
+    @Serializable
+    @SerialName("us.tractat.kuilt.heddle.Gauge")
+    private class Surrogate(
+        @Serializable(with = RationalSerializer::class)
+        val floor: Rational = Rational.ZERO,
+        val folded: Long,
+        val ticksHigh: Long = 0L,
+        val ticksLow: Long = 0L,
+    )
 
-    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("us.tractat.kuilt.heddle.Gauge") {
-        element("floor", RationalSerializer.descriptor, isOptional = true)
-        element<Long>("folded")
-        element<Long>("ticksHigh", isOptional = true)
-        element<Long>("ticksLow", isOptional = true)
+    override val descriptor: SerialDescriptor = Surrogate.serializer().descriptor
+
+    override fun serialize(encoder: Encoder, value: Gauge): Unit =
+        encoder.encodeSerializableValue(Surrogate.serializer(), Surrogate(folded = value.folded, ticksHigh = value.ticksHigh, ticksLow = value.ticksLow))
+
+    override fun deserialize(decoder: Decoder): Gauge {
+        val wire = decoder.decodeSerializableValue(Surrogate.serializer())
+        if (wire.floor != Rational.ZERO) throw SerializationException(RETIRED_FLOOR + wire.floor)
+        return Gauge(wire.folded, wire.ticksHigh, wire.ticksLow)
     }
 
-    override fun serialize(encoder: Encoder, value: Gauge): Unit = encoder.encodeStructure(descriptor) {
-        encodeLongElement(descriptor, FOLDED, value.folded)
-        if (value.ticksHigh != 0L || shouldEncodeElementDefault(descriptor, TICKS_HIGH)) {
-            encodeLongElement(descriptor, TICKS_HIGH, value.ticksHigh)
-        }
-        if (value.ticksLow != 0L || shouldEncodeElementDefault(descriptor, TICKS_LOW)) {
-            encodeLongElement(descriptor, TICKS_LOW, value.ticksLow)
-        }
-    }
-
-    override fun deserialize(decoder: Decoder): Gauge = decoder.decodeStructure(descriptor) {
-        var folded: Long? = null
-        var ticksHigh = 0L
-        var ticksLow = 0L
-        while (true) {
-            when (val index = decodeElementIndex(descriptor)) {
-                CompositeDecoder.DECODE_DONE -> break
-                FLOOR -> throw SerializationException(RETIRED_FLOOR)
-                FOLDED -> folded = decodeLongElement(descriptor, FOLDED)
-                TICKS_HIGH -> ticksHigh = decodeLongElement(descriptor, TICKS_HIGH)
-                TICKS_LOW -> ticksLow = decodeLongElement(descriptor, TICKS_LOW)
-                else -> throw SerializationException("a gauge has no element at index $index")
-            }
-        }
-        Gauge(folded ?: throw SerializationException("a gauge has no folded"), ticksHigh, ticksLow)
-    }
-
-    /** Why a gauge naming a floor is refused; tests match on `floor` in it. */
+    /** Why a gauge carrying a floor is refused; tests match on `floor` in it. */
     const val RETIRED_FLOOR: String =
-        "a gauge carrying a floor was written by v0.7.4, which kept its position as a fraction; " +
-            "this release reads only ticks, and refuses the gauge rather than read it lower"
+        "a gauge carrying a floor was written by v0.7.4, which kept its position as a fraction; this " +
+            "release reads only ticks, and refuses the gauge rather than read it lower. The floor: "
 }
 
 /** A gauge asserting the position [ticks] at the fold [folded]. */
