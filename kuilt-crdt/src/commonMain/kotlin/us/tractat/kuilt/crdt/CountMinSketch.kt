@@ -88,13 +88,40 @@ public class CountMinSketch private constructor(
      *
      * Full-state sketches (produced by [empty] or [piece]) have `sparseCells = null`
      * and carry the complete `depth × width` count matrix in [cells].
+     *
+     * A delta is something to [piece] into a full-state sketch, not something to read: [estimate]
+     * and [add] refuse one.
      */
     public val sparseCells: List<CellDelta>? = null,
 ) : Quilted<CountMinSketch> {
 
+    // In `init`, not in a factory: the generated decoder runs it too, so a mis-shaped matrix or a
+    // negative cell cannot arrive over the wire either (#3414). A negative cell would win the row
+    // minimum and break the one guarantee, never underestimating; a mis-shaped matrix or an
+    // out-of-range sparse cell would fail later with an index error, far from the bad input.
     init {
         require(width >= 1) { "width must be ≥ 1, was $width" }
         require(depth >= 1) { "depth must be ≥ 1, was $depth" }
+        for ((row, values) in cells.withIndex()) {
+            for ((col, value) in values.withIndex()) {
+                require(value >= 0L) { "CountMinSketch cell ($row, $col) must not be negative, was $value" }
+            }
+        }
+        if (sparseCells == null) {
+            require(cells.size == depth) { "CountMinSketch matrix must have $depth rows, had ${cells.size}" }
+            for ((row, values) in cells.withIndex()) {
+                require(values.size == width) {
+                    "CountMinSketch row $row must have $width cells, had ${values.size}"
+                }
+            }
+        } else {
+            for ((row, col, value) in sparseCells) {
+                require(row in 0 until depth && col in 0 until width) {
+                    "CountMinSketch sparse cell ($row, $col) is outside the $depth × $width matrix"
+                }
+                require(value >= 0L) { "CountMinSketch sparse cell ($row, $col) must not be negative, was $value" }
+            }
+        }
     }
 
     /**
@@ -110,8 +137,11 @@ public class CountMinSketch private constructor(
      * @throws ArithmeticException if any of the item's cells is already at [Long.MAX_VALUE]. A
      *   wrapped cell would be negative, and [piece], a max, would discard it, so the occurrence
      *   would be lost on every replica with nothing to say so (#3397).
+     * @throws IllegalStateException if this sketch is a sparse delta (#3414). A delta's matrix is
+     *   a stub of zeros, so the add would count from zero whatever the delta carries.
      */
     public fun add(encodedItem: ByteArray): Patch<CountMinSketch> {
+        checkFullState("add to")
         val sparse = buildList(depth) {
             for (row in 0 until depth) {
                 val col = columnFor(encodedItem, row, width)
@@ -134,6 +164,7 @@ public class CountMinSketch private constructor(
      * prefer [add(ByteArray)][add] with a cached encoding to avoid per-call allocation.
      *
      * @throws ArithmeticException if any of the item's cells is already at [Long.MAX_VALUE] (#3397).
+     * @throws IllegalStateException if this sketch is a sparse delta (#3414).
      */
     public fun add(item: String): Patch<CountMinSketch> = add(item.encodeToByteArray())
 
@@ -148,11 +179,17 @@ public class CountMinSketch private constructor(
      * the replica that observed the item most — it is NOT the sum across
      * replicas. The estimate is always ≥ the true count seen by any single
      * merged replica, and within the Count-Min error bound with high probability.
+     *
+     * @throws IllegalStateException if this sketch is a sparse delta (#3414). A delta's matrix is
+     *   a stub of zeros, so the answer would be `0` for an item the delta had just counted. Piece
+     *   the delta into a full-state sketch and ask that.
      */
-    public fun estimate(encodedItem: ByteArray): Long =
+    public fun estimate(encodedItem: ByteArray): Long {
+        checkFullState("estimate from")
         // `depth` is at least 1, so there is always a row to take the minimum over. A sentinel of
         // Long.MAX_VALUE for "no row seen" answered 0 for an item whose every cell was full (#3397).
-        (0 until depth).minOf { row -> cells[row][columnFor(encodedItem, row, width)] }
+        return (0 until depth).minOf { row -> cells[row][columnFor(encodedItem, row, width)] }
+    }
 
     /**
      * Estimate the number of times [item] has been added. Because replicas merge
@@ -163,6 +200,8 @@ public class CountMinSketch private constructor(
      *
      * For high-frequency hot paths where the same key is estimated many times,
      * prefer [estimate(ByteArray)][estimate] with a cached encoding to avoid per-call allocation.
+     *
+     * @throws IllegalStateException if this sketch is a sparse delta (#3414).
      */
     public fun estimate(item: String): Long = estimate(item.encodeToByteArray())
 
@@ -212,6 +251,10 @@ public class CountMinSketch private constructor(
     override fun toString(): String = "CountMinSketch(width=$width, depth=$depth)"
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    private fun checkFullState(action: String) {
+        check(sparseCells == null) { "Cannot $action a sparse CountMinSketch delta; piece it into a full-state sketch first" }
+    }
 
     /** Apply a list of sparse cell updates (element-wise max) to produce a full-state result. */
     private fun applySparse(sparse: List<CellDelta>): CountMinSketch {
@@ -276,7 +319,8 @@ public class CountMinSketch private constructor(
 
         /**
          * A minimal stub cell array used for sparse deltas. The cells are all zeros
-         * and are not accessed for estimates; only [sparseCells] carries the data.
+         * and are never read: [estimate] and [add] refuse a delta, and [piece] reads only
+         * [sparseCells] from one.
          */
         private fun stubCells(depth: Int): Array<LongArray> = Array(depth) { LongArray(1) }
     }
