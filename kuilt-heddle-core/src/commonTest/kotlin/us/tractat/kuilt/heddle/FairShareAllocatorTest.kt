@@ -151,11 +151,13 @@ class FairShareAllocatorTest {
      * The restart rule (design §7.2): a seated child this allocator has never observed, and finds
      * demanding, is a waker, clamped to the front like any other.
      *
-     * Peer B seats e3 at the origin and runs e1 and e2 to 100 each on its own holdings; A merges
+     * Peer B seats e3 at the origin and runs e1 to 100 and e2 to 60 on its own holdings; A merges
      * that and meets all three for the first time, e3 already 100 behind. On A, e1 and e3 are both
      * first seen demanding, so both are joiners. No child outside them is demanding, so the front
-     * is the furthest-ahead child, 100, and e3 is clamped level with e1: A's 100 units split between
-     * them, where an unclamped e3 would have taken all 100. A first sighting carries no evidence of
+     * is the furthest-ahead child, e1 at 100, and e3 is clamped level with it: A's 100 units split
+     * between them, where an unclamped e3 would have taken all 100. e2 is filled at 60 so that the
+     * second-furthest-ahead child is a different place: a front taken one off the top would clamp
+     * e3 to 60 and give it 70 of A's units. A first sighting carries no evidence of
      * how long the child idled, and leaving it its raw position would let a child that idled under
      * another scheduler, or before a restart, keep the whole gap as credit. Losing its lag once per
      * allocator that first sees it is the bounded side (§10.6, #3472).
@@ -166,13 +168,14 @@ class FairShareAllocatorTest {
     fun aFirstObservationOfASeatedDemandingChildIsAWake() {
         val a = ReplicaId("a")
         val b = ReplicaId("b")
-        val onB = flatLedger(mapOf(a to 100L, b to 200L))
+        val onB = flatLedger(mapOf(a to 100L, b to 160L))
         val e3 = newborn(onB, "e3")
-        FairShareAllocator(b, policy).schedule(root, onB, earmarked = 0L, demandOf(e1 to hungry, e2 to hungry))
+        val filledAt60 = Demand(targetOutstanding = 60L, maximumUsefulGrant = 10L)
+        FairShareAllocator(b, policy).schedule(root, onB, earmarked = 0L, demandOf(e1 to hungry, e2 to filledAt60))
         val onA = InMemoryLedgerCell(onB.current)
         assertAll(
             { assertEquals(100L, issued(onA, e1), "A sees e1's run") },
-            { assertEquals(100L, issued(onA, e2), "and e2's") },
+            { assertEquals(60L, issued(onA, e2), "and e2's, filled at 60: the rig, a second-furthest-ahead child below e1") },
             { assertEquals(gaugeOfUnits(0L, 0L), onA.current.gauge(e3), "and e3 seated at the origin, 100 behind") },
         )
 

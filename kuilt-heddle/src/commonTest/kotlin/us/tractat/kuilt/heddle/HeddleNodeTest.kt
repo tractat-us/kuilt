@@ -936,13 +936,15 @@ class HeddleNodeTest {
      * the replicated [Gauge], a *locally* first-sighted edge is seated by this peer's own bump at
      * the front it is joining, so it can never be behind — the gap under test is only reachable
      * when the seat was written **elsewhere**, at a time when the front was lower. So peer B seats
-     * `e3` at the origin and then runs `e1` and `e2` up to 100 each on its own holdings; peer A
+     * `e3` at the origin and then runs `e1` to 100 and `e2` to 60 on its own holdings; peer A
      * merges that and meets all three for the first time, `e3` already 100 behind. On A, `e1` and
      * `e3` are both first seen demanding, so both are joiners; with no other child demanding, the
-     * front is the furthest-ahead child, at 100, and `e3` is clamped level with `e1`. A's 100
-     * units then split between them, where an unclamped `e3` would have taken all of them.
+     * front is the furthest-ahead child, `e1` at 100, and `e3` is clamped level with it. A's 100
+     * units then split between them, where an unclamped `e3` would have taken all of them. `e2`
+     * at 60 keeps the second-furthest-ahead child in a different place, so a front taken one off
+     * the top would clamp `e3` to 60 and give it 70.
      *
-     * Demand is replicated here, so B's advertisement of `e2` is live on A. `targetOutstanding = 100`
+     * Demand is replicated here, so B's advertisement of `e2` is live on A. `targetOutstanding = 60`
      * lets B fill it exactly, so on A it is active but not competing, and the front A reads before
      * its call is the two competing edges' mean (the rig). The core twin is
      * `FairShareAllocatorTest.aFirstObservationOfASeatedDemandingChildIsAWake`.
@@ -952,28 +954,28 @@ class HeddleNodeTest {
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
-        val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 200L), topology = flatTopology())
+        val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 160L), topology = flatTopology())
         h.pump()
         val a = h.peers[0].node
         val b = h.peers[1].node
         val hungrier = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
 
         // B introduces e3 and schedules: the bump seats e1, e2 and e3 together at the origin (no
-        // front yet), and B then spends its own 200 on e1 and e2, 100 each. e2's target is exactly
-        // the 100 it gets, so it stops competing. A never sees this round.
+        // front yet), and B then spends its own 160 on e1 and e2, 100 and 60. e2's target is exactly
+        // the 60 it gets, so it stops competing. A never sees this round.
         val behind = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
         assertTrue(b.prepare(behind) && b.activate(behind.id))
         b.advertise(e1, hungrier)
-        b.advertise(e2, Demand(targetOutstanding = 100L, maximumUsefulGrant = 10L))
+        b.advertise(e2, Demand(targetOutstanding = 60L, maximumUsefulGrant = 10L))
         b.schedule(root)
         h.pump()
         assertAll(
             { assertEquals(100L, a.ledger.value.edge(e1)!!.issued, "A merged e1's run") },
             {
                 assertEquals(
-                    100L,
+                    60L,
                     a.ledger.value.edge(e2)!!.issued,
-                    "…and e2's, the non-joiner that holds the front away from the origin (the rig)",
+                    "…and e2's, filled at 60: the rig, a second-furthest-ahead child below e1",
                 )
             },
             {

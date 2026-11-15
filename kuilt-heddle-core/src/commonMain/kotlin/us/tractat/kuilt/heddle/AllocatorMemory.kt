@@ -38,7 +38,8 @@ import us.tractat.kuilt.math.timesWide
  *
  * Each wake clamp is kept in ticks of its edge's own grid, wide (#3353): a waker idle since long
  * before its parent's origin was raised is clamped the whole way up, and that can be past `Long`.
- * It encodes as its two words, like a [Gauge]'s ticks ([WideTicksSerializer]).
+ * It encodes as its two words, like a [Gauge]'s ticks ([WideTicksSerializer]). A clamp of zero is
+ * absent, since an edge reads a missing one as zero, and a memory holding one is refused.
  *
  * The clock is the virtual time a parent's asking children have kept, issued less refunded, per
  * unit of their weight, in clock ticks, 720,720 to one tick of a weight-1 child (a step that does
@@ -70,6 +71,14 @@ public class AllocatorMemory internal constructor(
     @Serializable(with = CanonicalMapSerializer::class)
     internal val shiftRemainders: Map<AttachmentId, ShiftRemainder> = emptyMap(),
 ) {
+    init {
+        // An edge reads a missing offset as zero, so a stored zero would spell one state two ways.
+        // Decoding it is refused as corrupt, as a zero shift remainder is.
+        require(wakeOffsets.values.none { it == Int128.ZERO }) {
+            "a wake offset is positive, or absent, was zero on ${wakeOffsets.filterValues { it == Int128.ZERO }.keys.map { it.value }}"
+        }
+    }
+
     override fun equals(other: Any?): Boolean =
         other is AllocatorMemory &&
             wakeOffsets == other.wakeOffsets &&

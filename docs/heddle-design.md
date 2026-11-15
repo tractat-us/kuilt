@@ -1512,9 +1512,12 @@ not depend on each other.
   call observes its waiting set (#3471), so it meets the rule in two places
   only: a generation a reload seated to carry an open lease it moved, which
   no call has observed yet, and a restore from a snapshot whose memory was
-  dropped. The second clamps a waker back to the offset the memory held, so
-  for a clamped waker the memory no longer carries the match; for a returner
-  it still does (`LocalHeddlePersistenceTest`).
+  dropped. The second is a restart, and costs what a restart costs: every
+  seated child the engine finds demanding is clamped, and since all of them
+  are joining, each comes back level with the furthest-ahead one. A clamped
+  waker lands where the memory had it, but a child that was owed service loses
+  it, and a returner is clamped rather than moved by its parent's clock
+  (`LocalHeddlePersistenceTest`). So the snapshot still keeps the memory.
 
   The rule replaced an older one, under which a first sighting was recorded as
   it stood and clamped only when it sat below its parent's origin, where only
