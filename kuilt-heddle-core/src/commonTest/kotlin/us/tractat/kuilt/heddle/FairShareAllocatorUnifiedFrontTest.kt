@@ -110,7 +110,9 @@ class FairShareAllocatorUnifiedFrontTest {
      * S4b, flipped by origins (#3353, slice 7): a runner `b` at −100, a waker `a` at −100 and a
      * newborn `n`. `b` is a demanding non-joiner, so the front is its mean, −100. Positions now sit
      * below zero only relative to the parent's origin, here 100 over gauges at zero, and the seat is
-     * absolute, so the newborn is seated at the origin plus the front: level with both, at −100.
+     * absolute, so the newborn is seated at the origin plus the front: level with both, at −100. The
+ * gauges sit at 100 under an origin of 200, not at zero under 100, so that a seat which forgot the
+ * origin would land below the newborn's own start and be lifted there, 100 behind, and show it.
      * Under the fold rebase the runner was below its own absolute zero and the seat could not follow
      * it there, so the newborn waited 100 behind them: 75/75/0.
      */
@@ -118,12 +120,12 @@ class FairShareAllocatorUnifiedFrontTest {
     fun aNewbornBesideASubZeroRunnerAndAWakerStartsLevel() {
         val n = edgeOf(root, GroupId("p/n"))
         val run = schedule(
-            seats = mapOf(b to gaugeAt(Int128.ZERO, folded = 0L), a to gaugeAt(Int128.ZERO, folded = 0L)),
+            seats = mapOf(b to gaugeAt(Int128.of(1_600L), folded = 0L), a to gaugeAt(Int128.of(1_600L), folded = 0L)),
             newborns = listOf(n),
             observed = mapOf(b to true, a to false),
             idle = emptySet(),
             supply = 150L,
-            origin = 100L,
+            origin = 200L,
         )
         assertAll(
             { assertEquals(AllocationOutcome.Delegated(150), run.outcome, "the rig: all 150 units went out") },
@@ -144,12 +146,12 @@ class FairShareAllocatorUnifiedFrontTest {
     fun aNewbornBesideASubZeroRunnerStartsLevel() {
         val n = edgeOf(root, GroupId("p/n"))
         val run = schedule(
-            seats = mapOf(b to gaugeAt(Int128.ZERO, folded = 0L)),
+            seats = mapOf(b to gaugeAt(Int128.of(1_600L), folded = 0L)),
             newborns = listOf(n),
             observed = mapOf(b to true),
             idle = emptySet(),
             supply = 150L,
-            origin = 100L,
+            origin = 200L,
         )
         assertAll(
             { assertEquals(AllocationOutcome.Delegated(150), run.outcome, "the rig: all 150 units went out") },
