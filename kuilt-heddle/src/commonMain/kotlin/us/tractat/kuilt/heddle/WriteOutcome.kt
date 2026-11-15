@@ -54,17 +54,17 @@ public sealed interface ScheduleOutcome {
 
     /**
      * A child of [parent] holds an effective position at its ceiling, so no pick there orders
-     * exactly, and none was made (#3313). A busy parent is rebased by raising its origin long before
-     * that (#3353), so it is met only where no whole step of the rebase fits. A demanding child that
-     * is never served sits at zero, and no child may go below it. Or the weights are so
-     * fine-grained that one step, read on some child's grid, spans 16 times that child's threshold,
-     * its ceiling, which wedges the parent while that child demands.
+     * exactly, or the pick's own delegation would carry its child there, and none was made (#3313,
+     * #3353). A busy parent is rebased by raising its origin long before that, so it is met only
+     * where no whole step of the rebase fits: a demanding child that is never served sits at zero,
+     * and no child may go below it. A weight set so fine that one full lease from a child's rebase
+     * threshold passes its ceiling is refused when it is applied ([WeightBudget]).
      */
     public data class PositionCeiling(public val parent: GroupId) : ScheduleOutcome
 
     /**
      * [parent]'s active children carry weights whose products a pick forms leave `Long`, so no pick
-     * there can be computed, and nothing was written (#3353). The control log refuses such a set
+     * there can be computed, or that are too fine for one full lease, and nothing was written (#3353). The control log refuses such a set
      * act by act, but the replicated ledger can still hold one: two peers each activating a child
      * that fits beside what they see, or one peer receiving a later `Activate` before an earlier
      * `Close`. It clears once one of the children closes.

@@ -267,7 +267,10 @@ public sealed interface ControlConflict {
     /**
      * A [ControlCommand.Prepare] or [ControlCommand.Activate] that would leave [parent]'s children
      * with a weight set a pick cannot do arithmetic on: a product of their weights would leave
-     * `Long`, and every pick at [parent] would then throw (#3353). A `Prepare` is refused when
+     * `Long`, and every pick at [parent] would then throw, or the set is so fine that one full lease
+     * can carry a child past its ceiling, so one under-charged lease would wedge [parent] (#3353).
+     * With leases of [LocalHeddle.MAX_RESERVATION] that is any denominator above 30,719. A
+     * `Prepare` is refused when
      * [edge]'s own weight fails alone; an `Activate` when it fails beside the children already
      * active at [parent]. Every peer decides it on the same log-pure state, so every peer refuses.
      */

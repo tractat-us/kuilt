@@ -414,7 +414,9 @@ public sealed interface LeaseOutcome {
  *
  * [apply] keeps the weight arithmetic in range the same way: a reload whose weights would put one
  * parent's products of numerators and denominators out of `Long` refuses that child with a
- * [StepRefusal.Refused], and its siblings land.
+ * [StepRefusal.Refused], and its siblings land. So does one too fine for a full lease
+ * ([MAX_RESERVATION]): with leases that large, keep every weight's denominator at or below 30,719
+ * (#3353).
  *
  * A state the engine's own invariants rule out throws [IllegalStateException]: that is a bug in
  * the engine, or a ledger conflict the engine did not create, such as two live inbound edges into
@@ -1132,8 +1134,9 @@ public class LocalHeddle private constructor(
             // not land: one stopped in this attempt, or one left out of it.
             val below = (stopped.asSequence() + leftOut.asSequence()).filter { it.value.startsWith(child.value + "/") }.minOrNull()
             val stepped = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
-            // An activation whose weight would put its parent's weight products out of Long: the
-            // ledger would take it, and every pick at that parent would then throw (#3313).
+            // An activation whose weight would put its parent's weight products out of Long, or make
+            // the set too fine for one full lease: the ledger would take it, and every pick at that
+            // parent would then throw, or one under-charged lease would wedge it (#3313, #3353).
             val overBudget = stepped != null && step is TopologyStep.Activate && !stepped.activationFitsTheBudget(step.edge)
             val next = if (overBudget) null else stepped
             if (next != null) {
@@ -1143,7 +1146,7 @@ public class LocalHeddle private constructor(
             }
             val reason = when {
                 below != null -> "${below.value}, below it, did not retire"
-                overBudget -> "its weight would put its siblings' weight arithmetic out of Long"
+                overBudget -> "its weight would put its siblings' weight arithmetic out of Long, or let one full lease carry a child past its ceiling"
                 else -> "the ledger refused it"
             }
             if (child in replaced.values) {

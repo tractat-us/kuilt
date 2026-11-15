@@ -460,11 +460,10 @@ public class FairShareAllocator(
     /**
      * The largest whole multiple of [step] at or below [bound], or `null` when that is not above zero:
      * the furthest-behind demanding child is less than one step ahead of the origin. A child that is
-     * served climbs past it; one that is never served holds it there, the known limit (#3329). So does
-     * a weight set so fine-grained that one step, read on some child's grid, is large there. Past that
-     * child's [rebaseThreshold] but under 16 of them, it only makes a rebase late. Past 16, its
-     * ceiling, it wedges the parent for as long as that child demands. That needs a spread near
-     * 10¹², `2⁴²/1023` beside `1/1021` say, and about 2⁴⁹ units of service.
+     * served climbs past it; one that is never served holds it there, the known limit (#3329). A
+     * weight set so fine-grained that one step, read on some child's grid, would carry it from its
+     * [rebaseThreshold] past its ceiling (`2⁴²/1023` beside `1/1021`, say) is refused when it is
+     * applied ([weightsFitTheBudget], P1′), so a step that is merely large only makes a rebase late.
      */
     private fun wholeSteps(bound: Int128, step: Long): Int128? {
         val steps = mulDiv(bound, 1L, step, Rounding.FLOOR) ?: return null
@@ -1009,14 +1008,16 @@ public sealed interface AllocationOutcome {
     public data object NothingToDelegate : AllocationOutcome
 
     /**
-     * A child of [parent] holds a position at its ceiling, so no pick there orders exactly, and none
-     * was made (#3313). Nothing was written for the refused pick.
+     * A child of [parent] holds a position at its ceiling, so no pick there orders exactly, or the
+     * pick's own delegation would carry its child there, and none was made (#3313, #3353). Nothing
+     * was written for the refused pick.
      */
     public data class PositionCeiling(public val parent: GroupId) : AllocationOutcome
 
     /**
-     * [parent]'s active children carry weights whose products a pick forms leave `Long`, so no pick
-     * there can be computed (#3353). Nothing was written. A replicated ledger can hold such a set
+     * [parent]'s active children carry weights that fail [weightsFitTheBudget]: a product a pick
+     * forms leaves `Long`, so no pick there can be computed, or the set is too fine for one full
+     * lease (#3353). Nothing was written. A replicated ledger can hold such a set
      * however carefully each write was checked: two peers can each activate a child that fits on its
      * own view, and the merge of the two does not fit.
      */

@@ -111,7 +111,7 @@ internal fun buildInitialLedger(
         ledger = ledger.piece(prepared)
         require(ledger.activationFitsTheBudget(record.id)) {
             "heddleStatic topology puts ${record.parent}'s weights out of the budget at $record: " +
-                "a pick there would overflow Long"
+                "a pick there would overflow Long, or one full lease would carry a child past its ceiling"
         }
         val activated = requireNotNull(ledger.activate(record.id)) {
             "heddleStatic could not activate $record after preparing it"
