@@ -73,17 +73,22 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * the updated CRDT is **durably written to [DurableStore]**, never when it is delivered to any
  * backend. Delivery is asynchronous and eventually consistent.
  *
- * A [MetricExportResult.Failure] means "not yet durable", not "not counted": the in-memory
- * CRDT keeps the change, and the next successful write of that kind persists it. Retrying a
- * failed [incrementSum] therefore adds it twice.
+ * A [MetricExportResult.Failure] whose causes are the store's own refusals means "not yet
+ * durable", not "not counted": the in-memory CRDT keeps the change, and the next successful write
+ * of that kind persists it. Retrying a failed [incrementSum] therefore adds it twice.
  *
- * Two Failures mean "not counted". One is a refusal, before anything is applied, of a sum
- * increment or histogram update that would carry one of this replica's counts past
- * [Long.MAX_VALUE]: its cause is a [MetricOverflowException] (#3318, #3354), and nothing was
- * applied or written. The other is a kind whose persisted series no read has joined yet: its
- * updates are not applied and its key is not written until one does, and the cause is the store's
- * refusal of the read (#3390). A kind is read by [recover], or by its own first turn on an
- * exporter that skipped [recover], and again by every turn while the store refuses. See [recover].
+ * A cause that is a [MetricNotCountedException] means the opposite, and a Failure lists those
+ * first, so a refused write of one kind never hides one. There are two:
+ *
+ * - A [MetricOverflowException]: a sum increment or histogram update would carry one of this
+ *   replica's counts past [Long.MAX_VALUE] (#3318, #3354). The whole call was refused before
+ *   anything was applied, and it is its Failure's only cause.
+ * - A [MetricKindUnreadException]: a kind whose persisted series no read has joined yet, because
+ *   the store refused the read (#3390). The call's updates of that kind, the ones
+ *   [MetricKindUnreadException.carries] names, were not applied and its key was not written; the
+ *   call's other kinds went ahead. A kind is read by [recover], or by its own first turn on an
+ *   exporter that skipped [recover], and again by every turn while the store refuses. See
+ *   [recover].
  *
  * ## Batches
  *
@@ -375,9 +380,13 @@ public class WarpMetricExporter(
      * kind would replace every series a previous process made durable (#3390). Its first turn of
      * each kind reads first instead, and joins what it finds, exactly as after a refused read.
      *
-     * Guarded by [lock] and changed only under [writeMutex], by [settle], in the same [lock]
-     * section that installs what the read found, and by a [clear] that deleted every key. So no
-     * turn can see a kind settled whose series are not yet in memory.
+     * Changed only by [settle] and by [clear], and read only by [refusedReads] and [settle]. All
+     * of them hold [writeMutex], as every write turn does, and that is what keeps a turn from
+     * seeing a kind settled whose series are not yet in memory: no turn runs between a read and
+     * the [settle] that installs it. [lock] only makes the field itself safe to touch.
+     *
+     * A [clear] empties it whether or not its deletes land: once memory is empty, what is on disk
+     * is unwanted, not unseen, and a read would bring back the series the clear dropped.
      *
      * **Why a turn of an owed kind admits nothing, rather than applying in memory and skipping only
      * the write.** Three of the five kinds count per replica — [GCounter], [GCounterDouble] and
@@ -405,10 +414,13 @@ public class WarpMetricExporter(
      * own `withTimeout` included, costs its kind alone and **fails closed** (#3390): every later
      * call that would write that kind, [record] and the `merge*` methods, reads it again first, and
      * while the read is still refused admits **nothing** of that kind, writes nothing of it, and
-     * returns [MetricExportResult.Failure] with the read's cause. Updates of the other kinds in the
-     * same batch go ahead. The read that lands joins the persisted series into memory and that turn
-     * runs. Until then the kind reads as empty. Starting fresh here instead wrote a map naming only
-     * this run's series over the persisted one: a durable sum of `5` read back as `1`.
+     * returns a [MetricExportResult.Failure] led by a [MetricKindUnreadException] for the kind.
+     * Updates of the other kinds in the same batch go ahead. The read that lands joins the
+     * persisted series into memory and that turn runs. Until then the readers see what memory
+     * already held of the kind: nothing, unless an earlier read of it in this process landed, in
+     * which case memory keeps that read's series and the refusal changes none of them. Starting
+     * fresh here instead wrote a map naming only this run's series over the persisted one: a
+     * durable sum of `5` read back as `1`.
      *
      * Serialized with every write turn by the same mutex, so it may run concurrently with them.
      * A cancellation of the caller's own job still propagates (#3388).
@@ -470,10 +482,12 @@ public class WarpMetricExporter(
     /**
      * Join a [KindRead.Found] into [series] and settle [kind], or mark it owed on a refusal.
      *
-     * The join and the change to [owedReads] are **one** [lock] section, so a kind is never settled
-     * with its persisted series not yet joined, nor joined while still marked owed. It is a join
-     * rather than a replace so that a second [recover] keeps what memory holds ahead of the store,
-     * and the series it adds are held to [maxMetrics] like any other.
+     * Must hold [writeMutex], and that is what orders the join before any turn of [kind]: every
+     * turn holds it too, so none can see the kind settled before its series are joined. The join
+     * and the change to [owedReads] share one [lock] section, but nothing that holds only [lock]
+     * reads [owedReads], so the shared section is tidiness, not the guarantee. It is a join rather
+     * than a replace so that a second [recover] keeps what memory holds ahead of the store, and the
+     * series it adds are held to [maxMetrics] like any other.
      */
     private fun <V : Quilted<V>> settle(
         kind: StoredKind,
@@ -657,22 +671,24 @@ public class WarpMetricExporter(
      * - Returns [MetricExportResult.Success] only once **every** kind the batch touched is durably
      *   written. Nothing is held back waiting for more updates; the batch is whatever the caller
      *   had in hand, and it is on disk before this returns.
-     * - Every touched kind's write is **attempted**, even after one is refused, and the **first**
-     *   [MetricExportResult.Failure] (in the fixed kind order sums, double sums, gauges,
-     *   cardinalities, histograms) is returned. Stopping at the first refusal would leave the later
-     *   kinds off disk, which applying the updates one by one never does.
+     * - Every touched kind's write is **attempted**, even after one is refused. Stopping at the first
+     *   refusal would leave the later kinds off disk, which applying the updates one by one never
+     *   does. The [MetricExportResult.Failure] carries every kind's verdict: first a
+     *   [MetricKindUnreadException] per unread kind, then each refused write's cause, each group in
+     *   the fixed kind order sums, double sums, gauges, cardinalities, histograms.
      * - A kind whose persisted series no read has joined yet — [recover] was refused, or never
-     *   called — is read first. While that read is refused, the batch's updates **of that kind** are not applied and
-     *   the kind is not written, and its Failure is the read's cause; the other kinds go ahead.
-     * - A [MetricExportResult.Failure] from a write means "not yet durable", not "not counted"
-     *   (an unread kind, above, and a refused batch, below, are the Failures that mean "not
-     *   counted"): every update in
-     *   the batch stays in memory, and the next successful write of a refused kind persists it. So
-     *   the batch is **not atomic** on disk — a kind the store took is durable even when another
-     *   kind was refused — and retrying a failed batch counts its increments twice, exactly as
-     *   retrying a failed [incrementSum] does.
+     *   called — is read first. While that read is refused, the batch's updates **of that kind**
+     *   are not counted: not applied, and the kind is not written. Its verdict is a
+     *   [MetricKindUnreadException], whose `carries` names those updates; the other kinds go ahead.
+     *   Recording exactly those updates again counts each once.
+     * - A refused write means "not yet durable", not "not counted": every admitted update stays in
+     *   memory, and the next successful write of a refused kind persists it. So the batch is **not
+     *   atomic** on disk — a kind the store took is durable even when another kind was refused —
+     *   and retrying an update of a refused write counts it twice, exactly as retrying a failed
+     *   [incrementSum] does. A refused batch, below, is the other Failure that means "not counted".
      * - On [health] each kind's write is its own turn: a batch counts one turn per kind it
-     *   touched, and a partial refusal moves both `acknowledged` and `failed`.
+     *   touched, and a partial refusal moves both `acknowledged` and `failed`. An unread kind's
+     *   turn counts as failed. A refused batch is no turn of any kind and moves nothing.
      *
      * In memory the exporter ends where applying [updates] one by one through [incrementSum],
      * [incrementSumDouble], [setGauge], [addCardinality] and [recordHistogram] — or, for a
@@ -698,7 +714,7 @@ public class WarpMetricExporter(
      *    [MetricUpdate.AddExponentialHistogram] it is this replica's slot in each bucket the update
      *    touches, and in the sketch's zero and overflow counters, and also the sum of counts that
      *    fold onto one bucket (#3354). A weighted count can get there on its own. Such a batch is
-     *    **refused**: it returns a [MetricExportResult.Failure] whose cause is a
+     *    **refused**: it returns a [MetricExportResult.Failure] whose only cause is a
      *    [MetricOverflowException] naming the series, a [MetricSumOverflowException] or a
      *    [MetricHistogramOverflowException], and nothing from it is applied or written. The refusal
      *    is logged at WARN the first time a series causes one and at DEBUG after that.
@@ -1349,13 +1365,17 @@ public sealed interface MetricExportResult {
     public data object Success : MetricExportResult
 
     /**
-     * The durable write failed; whether the metric was persisted is indeterminate.
+     * The call did not end durable. [causes] holds every kind's verdict, never empty, and the
+     * verdicts that mean "not counted" come first, so [cause] names one whenever there is one.
      *
-     * Two exceptions mean nothing was counted. A [cause] that is a [MetricOverflowException]: the
-     * call was refused before anything was applied, and retrying it is refused the same way. And
-     * a call to a kind whose persisted series no read has joined yet, because the store refused the
-     * read: its updates of that kind were not applied, and [cause] is the store's refusal of the read; see
-     * [WarpMetricExporter.recover].
+     * - A store's refusal of a write: that kind's updates were counted, in memory, and are not yet
+     *   on disk. Whether the bytes landed is indeterminate, and retrying the updates counts them
+     *   twice.
+     * - A [MetricNotCountedException]: updates that were never applied. A
+     *   [MetricOverflowException] refused the whole call before anything was applied, and is then
+     *   the only cause; retrying it is refused the same way. A [MetricKindUnreadException] names
+     *   one kind whose updates were not applied, because the store refused its read; see
+     *   [WarpMetricExporter.recover]. Recording those updates again counts each once.
      */
     public data class Failure(public val causes: List<Throwable>) : MetricExportResult {
         public constructor(cause: Throwable) : this(listOf(cause))
@@ -1364,7 +1384,7 @@ public sealed interface MetricExportResult {
             require(causes.isNotEmpty()) { "a Failure needs a cause" }
         }
 
-        /** The first of [causes]. */
+        /** The first of [causes]: a [MetricNotCountedException] whenever any cause is one. */
         public val cause: Throwable get() = causes.first()
     }
 }
@@ -1397,7 +1417,7 @@ public class MetricKindUnreadException internal constructor(
  * Why a [WarpMetricExporter.record] was refused: an update would carry one of this replica's
  * counts for the series [key] past [Long.MAX_VALUE]. A wrapped count would be negative, and a
  * counter's merge, a max, would drop it, so the update would be lost everywhere with nothing to
- * say so. It arrives as the cause of a [MetricExportResult.Failure], and the batch that carried it
+ * say so. It arrives as the only cause of a [MetricExportResult.Failure], and the batch that carried it
  * applied nothing.
  *
  * Which kind of series [key] names is the subclass: [MetricSumOverflowException] for a sum,

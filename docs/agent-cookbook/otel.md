@@ -33,7 +33,7 @@ when (val result = exporter.export(pending)) {
 **Intent:** record many metric points at once — a batch from an SDK export, a flush of counters a server tallied — without a loop of `incrementSum`/`setGauge` calls, each of which re-encodes and rewrites every series of its kind.
 **Primitive:** `WarpMetricExporter.record(updates)` (`:kuilt-otel`), a list of `MetricUpdate`s. `KuiltMetricExporter` (`:kuilt-otel-sdk`) already records each SDK export this way.
 
-One encode and one durable write per metric kind the list touches, instead of one per update — under the same contract: `Success` once every touched kind is on disk; on a refusal every kind is still attempted, the first `Failure` returns, and every update stays in memory, so a retried batch counts twice.
+One encode and one durable write per metric kind the list touches, instead of one per update — under the same contract: `Success` once every touched kind is on disk; on a refusal every kind is still attempted and the `Failure` carries every kind's verdict in `causes`. A refused write's updates stay in memory, so retrying them counts twice. A `MetricNotCountedException` cause comes first and means the opposite: a `MetricKindUnreadException` (the store refused that kind's read; `carries(update)` names the updates it did not apply) or a `MetricOverflowException` (the whole batch applied nothing).
 
 <!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpMetricExporterBatch -->
 ```kotlin
