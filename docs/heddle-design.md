@@ -1186,10 +1186,13 @@ while it was away.
   with: a waker joining beside a returner at 200 and a starved sibling at 0
   was clamped to 0, not to their mean of 100, and kept the difference.
 - **A child this peer saw idle but never saw stop asking** is clamped to the
-  front, as above: one first seen idle. It holds no wake offset yet, since a
-  child clamped once is seen asking and then seen leaving, so its next wake is
-  a return. So the clamp is written, not joined with a stored offset (#3416
-  review).
+  front, as above: one first seen idle, and seated. An unseated one is a
+  newborn, and its seat is what puts it at the front, so it is not clamped as
+  well (#3454 review). A clamped child holds no wake offset yet. An offset is
+  only written on a seated child, a seated child keeps its gauge, and the call
+  that writes the offset sees it asking. So its next stop is recorded as a
+  leaving and its next wake is a return. The clamp is therefore written, not
+  joined with a stored offset (#3416 review).
 - **A child first seen already asking** is neither moved nor clamped. That
   covers every child of a restarted `HeddleNode`, which keeps no clock. It
   keeps its raw position, and is clamped only if that is below zero. This
