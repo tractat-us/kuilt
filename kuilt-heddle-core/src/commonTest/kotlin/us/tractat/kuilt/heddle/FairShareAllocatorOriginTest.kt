@@ -190,7 +190,7 @@ class FairShareAllocatorOriginTest {
         assertAll(
             { assertTrue(below.toLongOrNull() == null, "the rig: b sits past Long below the origin, $below ticks") },
             { assertTrue(outcome is AllocationOutcome.Delegated, "the parent is scheduled, not refused: $outcome") },
-            { assertTrue((allocator.memory.wakeOffsets[idler.id] ?: Rational.ZERO) > Rational.ZERO, "b was clamped as a waker") },
+            { assertTrue((allocator.memory.wakeOffsets[idler.id] ?: Int128.ZERO) > Int128.ZERO, "b was clamped as a waker") },
         )
     }
 

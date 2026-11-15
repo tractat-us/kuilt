@@ -294,12 +294,13 @@ public class FairShareAllocator(
         earmarked: Long,
         demand: (AttachmentId) -> Demand,
         grant: Grant,
+        eligible: (AttachmentId) -> Demand = demand,
     ): Boolean {
         if (!rebaseEnabled) return false
         val s = cell.current
         val delta = originStep(policyEdges(s, parent, demand)) ?: return false
         val patch = s.raiseOrigin(parent, s.origin(parent) + delta) ?: return false
-        val again = pickOne(s.piece(patch.delta), parent, earmarked, demand)
+        val again = pickOne(s.piece(patch.delta), parent, earmarked, eligible)
         check(again == grant) { "the origin rebase at ${parent.value} changed the pick from $grant to $again" }
         return cell.mutateOrSkip { patch }
     }
@@ -357,10 +358,11 @@ public class FairShareAllocator(
     }
 
     /**
-     * That a pre-seat raise changed no pick (#3353 review, item A): the same first round without it,
-     * on a fork of this allocator, either picks [grant] too or refuses at the ceiling, which is what
-     * the raise is for. A bug detector, not a proof: in the regime the raise exists for, the twin
-     * refuses, so the check is vacuous there and constrains only a raise that did not need to land.
+     * That a pre-seat raise changed no pick (#3353 review, item A): the same seat-and-wake step and
+     * pick without it, on this allocator, which the caller forked before the raised step ran, either
+     * picks [grant] too or refuses at the ceiling, which is what the raise is for. A bug detector, not
+     * a proof: in the regime the raise exists for, the twin refuses, so the check is vacuous there
+     * and constrains only a raise that did not need to land.
      *
      * @throws IllegalStateException if it picks anything else, a bug in the rule.
      */
@@ -368,14 +370,14 @@ public class FairShareAllocator(
         s: EntitlementLedger,
         parent: GroupId,
         earmarked: Long,
-        demand: (AttachmentId) -> Demand,
+        waiting: (AttachmentId) -> Demand,
+        eligible: (AttachmentId) -> Demand,
         grant: Grant,
     ) {
-        val twin = fork()
         val cell = ValueCell(s)
-        twin.settleJoiners(parent, cell, demand, raise = null)
+        settleJoiners(parent, cell, waiting, raise = null)
         val unraised = try {
-            twin.pickOne(cell.current, parent, earmarked, demand)
+            pickOne(cell.current, parent, earmarked, eligible)
         } catch (_: PositionCeilingException) {
             return
         }
@@ -460,7 +462,7 @@ public class FairShareAllocator(
         fork.settleJoiners(parent, cell, demand, preSeat)
         val delegated = try {
             fork.pickOne(cell.current, parent, earmarked, demand)?.let { grant ->
-                if (preSeat != null) checkPreSeatRaiseChangedNoPick(s, parent, earmarked, demand, grant)
+                if (preSeat != null) fork().checkPreSeatRaiseChangedNoPick(s, parent, earmarked, demand, demand, grant)
                 // The rebase after the seat and wake step, before the grant, in the same patch (#3353).
                 val raised = fork.raiseOriginBeneath(parent, cell, earmarked, demand, grant)
                 cell.mutateOrSkip { it.delegate(fork.self, grant.attachment, grant.amount) }
@@ -565,14 +567,18 @@ public class FairShareAllocator(
         waiting: (AttachmentId) -> Demand,
         eligible: (AttachmentId) -> Demand,
     ): RebasingPick? {
-        val pick = pickChild(parent, ledger, waiting, eligible) ?: return null
-        val unchanged = RebasingPick(settled = pick.ledger, pick = pick, rebase = null)
-        val delta = originStep(policyEdges(pick.ledger, parent, waiting)) ?: return unchanged
-        val patch = pick.ledger.raiseOrigin(parent, pick.ledger.origin(parent) + delta) ?: return unchanged
-        val rebased = pick.ledger.piece(patch.delta)
-        val again = pickOne(rebased, parent, earmarked = 0L, eligible)
-        check(again == pick.grant) { "the rebase at ${parent.value} changed the pick from ${pick.grant} to $again" }
-        return RebasingPick(settled = pick.ledger, pick = ChildPick(rebased, pick.grant), rebase = Rebase(rebased))
+        if (!rebaseEnabled) return pickChild(parent, ledger, waiting, eligible)?.let { RebasingPick(it.ledger, it, rebase = null) }
+        // [schedule]'s two raises, before the seat and wake step and after the pick (#3353).
+        val preSeat = preSeatRaise(ledger, parent, waiting)
+        val unraised = if (preSeat != null) fork() else null
+        val cell = ValueCell(ledger)
+        settleJoiners(parent, cell, waiting, preSeat)
+        val grant = pickOne(cell.current, parent, earmarked = 0L, eligible) ?: return null
+        unraised?.checkPreSeatRaiseChangedNoPick(ledger, parent, earmarked = 0L, waiting, eligible, grant)
+        val settled = cell.current
+        val raised = raiseOriginBeneath(parent, cell, earmarked = 0L, waiting, grant, eligible)
+        val rebase = if (raised || preSeat != null) Rebase(cell.current) else null
+        return RebasingPick(settled = settled, pick = ChildPick(cell.current, grant), rebase = rebase)
     }
 
     /**

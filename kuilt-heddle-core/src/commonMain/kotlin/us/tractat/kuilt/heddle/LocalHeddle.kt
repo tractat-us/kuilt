@@ -391,8 +391,10 @@ public sealed interface LeaseOutcome {
  *   position is held at the ceiling.
  *
  * A running engine rarely gets there, because a pick **rebases** its parent first (#3329,
- * #3353). Once a child's effective position passes a sixteenth of its ceiling, the pick raises the
- * parent's origin by one virtual time, as far as the demanding child furthest behind allows. Every
+ * #3353). Once a child's effective position passes a sixteenth of its ceiling, or the front does,
+ * read on any child's grid, the pick raises the parent's origin by one virtual time, as far as the
+ * demanding child furthest behind allows: before the seat and wake step when there are joiners, so
+ * a heavy one joining a light runner is not seated past its own ceiling, and after the grant. Every
  * child reads that much lower, an idle one included, so no pick changes, and no gauge or wake clamp
  * is rewritten. The ceiling is measured net of returns, so returned service never reaches it
  * (#3360). It is still reachable two ways:

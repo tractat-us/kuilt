@@ -320,15 +320,14 @@ class LocalHeddlePositionCeilingTest {
     }
 
     /**
-     * A waker clamped to a front past its own ceiling stores the ceiling itself, so it reads as
-     * saturated and the pick refuses (review of #3352). The front on a heavy waker's grid passes
-     * the waker's ceiling long before any sibling reaches its own: with `a` at 1/1000 and `b` at
-     * 1000, `b`'s front is `10⁶` times `a`'s position. An offset of `ceiling − raw − credit`, the
-     * old clamp, reads `16 · credit` ticks under the ceiling as if it were exact, so with any
-     * sleeper credit the pick went ahead on a position that stands for more.
+     * A waker about to be clamped to a front past its own ceiling is rebased first (#3353 review,
+     * item A). The front on a heavy waker's grid passes the waker's ceiling long before any sibling
+     * reaches its own: with `a` at 1/1000 and `b` at 1000, `b`'s front is `10⁶` times `a`'s position.
+     * Since review of #3352 that pick refused. The front, read on `b`'s grid, is past `b`'s threshold,
+     * so the origin is raised before the wake step, `b` is clamped near zero, and the pick goes ahead.
      */
     @Test
-    fun aWakerClampedPastItsCeilingSaturatesWhole() {
+    fun aWakerAboutToBeClampedPastItsCeilingIsRebasedFirst() {
         val clampTopology = draft("clamp") {
             lane("a", Weight.of(1, 1000))
             lane("b", Weight.of(1000))
@@ -348,7 +347,12 @@ class LocalHeddlePositionCeilingTest {
         // The rig: a is far below its own ceiling, and b's front, a's position times 10⁶, is past b's.
         check(engine.grossTicks(a) < positionCeiling(aWeight) / 100) { "a sits well below its ceiling" }
         check(engine.grossTicks(a).timesWide(1_000_000L) > Int128.of(positionCeiling(bWeight))) { "b's front is past b's ceiling" }
-        assertEquals(AcquireOutcome.PositionCeiling(engine.root), engine.acquire(setOf(a, b), setOf(a, b), startedAt = 1L))
+        val rebasesBefore = engine.rebasesForTest
+        val outcome = engine.acquire(setOf(a, b), setOf(a, b), startedAt = 1L)
+        assertAll(
+            { assertIs<AcquireOutcome.Acquired>(outcome, "the pick goes ahead: $outcome") },
+            { assertTrue(engine.rebasesForTest > rebasesBefore, "the rig: it rebased first") },
+        )
     }
 
     /**

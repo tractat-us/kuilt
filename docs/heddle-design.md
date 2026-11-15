@@ -873,9 +873,6 @@ each:
 - A `LocalHeddle` parent only ever charged through `admit`, `extend` or an
   overrun, and never picked at, is never rebased. Every `HeddleNode` delegation
   is a pick, so this one is `LocalHeddle`'s alone.
-- Until `LocalHeddle` moves onto origins (slice 7 of #3353), its fold rebase is
-  measured on each child's own grid only, so a `LocalHeddle` parent with a
-  weight spread past 16 can still put a heavy waker or newborn past its ceiling.
 
 A child that is not demanding can sit as far below zero as the origin has
 risen, past `Long`. A pick never orders it: if it comes back demanding to an
