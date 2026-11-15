@@ -269,6 +269,57 @@ class BurstLagTest {
     }
 
     /**
+     * a and b equal, a asking for everything and b for [bTarget] outstanding. One call hands out
+     * [first], so b fills partway through it beside a and a runs on alone. Then, when [idleCall], a
+     * call hands a 30 more while b still holds its target, so b is seen idle at that call's entry.
+     * Then both ask for everything and 40 more are handed out: the two takes of that last 40, a's
+     * first, and the demanding state this allocator last saw b in before that last call.
+     */
+    private fun filledPartway(bTarget: Long, first: Long, idleCall: Boolean): Triple<Long, Long, Boolean?> {
+        val rig = rig(listOf(1, 1), names = listOf("a", "b"))
+        val (a, b) = rig.kids
+        val capped = Demand(targetOutstanding = bTarget, maximumUsefulGrant = 1L)
+        rig.cell.mint("first", first)
+        rig.round { id -> if (id == a.id) want() else capped }
+        check(rig.granted() == mapOf("p/a" to first - bTarget, "p/b" to bTarget)) { "the rig: b filled partway, ${rig.granted()}" }
+        if (idleCall) {
+            rig.cell.mint("idle", 30L)
+            rig.round { id -> if (id == a.id) want() else capped }
+            check(rig.granted().getValue("p/b") == bTarget) { "the rig: b took nothing while it held its target" }
+        }
+        val seen = rig.allocator.lastObservedDemanding(b.id)
+        val before = HashMap(rig.granted())
+        rig.cell.mint("last", 40L)
+        rig.round { want() }
+        val (aTake, bTake) = listOf("p/a", "p/b").map { rig.granted().getValue(it) - before.getValue(it) }
+        return Triple(aTake, bTake, seen)
+    }
+
+    /**
+     * A child that stops asking partway through a `schedule` call, because it reached its target,
+     * stopped at the grant that filled it, and a's grants after that are a's alone (#3416 review).
+     * So b comes back level with a and the last 40 split evenly, however the stop was seen. A
+     * once-per-call sample charged a's solo grants at both children's weight, so b came back behind
+     * by them and was owed a's solo stretch: 15/25 after an idle call. Without an idle call it was
+     * never seen to stop at all and kept its raw position, 15/25 again, under the clamp as well.
+     *
+     * The control is a b that fills on the call's last grant: it stopped where the clock already
+     * stood, so it moves by exactly nothing and the split is even either way.
+     */
+    @Test
+    fun aChildFilledPartwayThroughACallIsOwedNothingForItsSiblingsLaterGrants() {
+        val (idleA, idleB, idleSeen) = filledPartway(bTarget = 10L, first = 30L, idleCall = true)
+        val (nextA, nextB, _) = filledPartway(bTarget = 10L, first = 30L, idleCall = false)
+        val (lastA, lastB, _) = filledPartway(bTarget = 10L, first = 20L, idleCall = false)
+        assertAll(
+            { assertEquals(false, idleSeen, "the rig: b was seen not asking before the last call") },
+            { assertEquals(20L to 20L, idleA to idleB, "seen idle at the next entry: b returns level") },
+            { assertEquals(20L to 20L, nextA to nextB, "asking again at the next entry: b returns level") },
+            { assertEquals(20L to 20L, lastA to lastB, "control: b filled on the call's last grant") },
+        )
+    }
+
+    /**
      * a and b equal. A burst of [first] units both want, then b sits out [idle] rounds in which a
      * takes 2 units alone, then a burst of [last] both want: b's take of that last burst.
      */
