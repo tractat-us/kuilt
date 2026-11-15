@@ -181,6 +181,39 @@ class WarpCausalClockSpanFloorTest {
         )
     }
 
+    /**
+     * The floor trusts what the stored spans say, and a peer's span is stored once merged. One that
+     * claims this replica's last possible dot, from a buggy or hostile peer, raises the floor to
+     * `Long.MAX_VALUE`. The next stamp has no dot left to take. Before the fix `seq + 1` wrapped and
+     * [Dot]'s `init` threw out of [WarpSpanExporter.export] on every turn. Now the clock mints nothing
+     * and the span is saved unstamped. Whether a merge should refuse such a dot is #3432's question.
+     */
+    @Test
+    fun aFloorAtTheLastDotSavesSpansUnstampedInsteadOfThrowing() = runTest {
+        val store = InMemoryDurableStore()
+        val peer = ReplicaId("b")
+        val last = Dot(replica, Long.MAX_VALUE)
+        val remote = WarpSpanExporter(peer, InMemoryDurableStore()).apply {
+            export(span(42).copy(causalStamp = CausalStamp(last, emptySet())))
+        }.snapshot()
+        val previous = WarpTelemetry(replica, store).also { it.recover() }
+        val merged = previous.spans.merge(remote)
+
+        val restarted = WarpTelemetry(replica, store).also { it.recover() }
+        val stored = restarted.spans.snapshot().elements.mapNotNull { it.causalStamp?.dot }.toSet()
+        val first = restarted.spans.export(span(98))
+        val second = restarted.spans.export(span(99))
+        val saved = restarted.spans.snapshot().elements.filter { it.spanId in setOf(span(98).spanId, span(99).spanId) }
+
+        assertAll(
+            { assertEquals(ExportResult.Success, merged, "the rig: the remote span was not stored") },
+            { assertEquals(setOf(last), stored, "the rig: the recovered set does not hold the last dot") },
+            { assertEquals(ExportResult.Success, first) },
+            { assertEquals(ExportResult.Success, second) },
+            { assertEquals(listOf(null, null), saved.map { it.causalStamp }, "a span was not saved unstamped: $saved") },
+        )
+    }
+
     @Test
     fun aCleanClockAheadOfTheSpansIsNotWoundBack() = runTest {
         val store = InMemoryDurableStore()
