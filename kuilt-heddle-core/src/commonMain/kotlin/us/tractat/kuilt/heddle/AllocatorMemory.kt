@@ -51,8 +51,8 @@ import us.tractat.kuilt.math.timesWide
  * encodes as before.
  *
  * Its encoded shape is part of [LocalHeddleSnapshot]'s format 2, which changed it in place for
- * the wide clamps; format 1 reads through a frozen surrogate of the virtual-time form it wrote. A
- * field added here takes a default, and any other change needs a frozen surrogate first.
+ * the wide clamps. A field added here takes a default, and any other change needs a frozen
+ * surrogate first.
  */
 @Serializable
 public class AllocatorMemory internal constructor(
