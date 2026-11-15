@@ -22,11 +22,13 @@ import kotlinx.coroutines.flow.asStateFlow
  * **For spans a turn's verdict is per work key too, once the causal clock's work fails.** A
  * [WarpSpanExporter.export] or [WarpSpanExporter.clear] whose writes all run is one turn over the span
  * buffer and its clock together. One that skips the clock's write, because the clock's read has not
- * landed, or writes a clock that can mint no more ([ClockTick.Exhausted]), counts its span work by the
- * span write and its clock work as one [failed] turn under the clock's key (#3426). So a clock refused
- * forever stays in [outstandingFailures] however many spans land, until a turn lands the clock's write;
- * an exhausted clock never leaves it. A refused clock *write* fails the whole turn, since the span
- * write after it is never made.
+ * landed, or an export that wanted a dot from a clock with none left ([ClockTick.Exhausted]) and saved
+ * its span unstamped, counts its span work by the span write and its clock work as one [failed] turn
+ * under the clock's key (#3426). So a clock refused forever stays in [outstandingFailures] however
+ * many spans land, until a turn lands the clock's write. An exhausted clock counts once per export
+ * that wanted a dot; a turn that wanted none (a clear, a span with its own stamp) is not counted, and
+ * its clock write resolves those failures. A refused clock *write* fails the whole turn, since the
+ * span write after it is never made.
  * Metric [WarpMetricExporter.clear] counts its entire delete sequence as a separate turn.
  * Reads, validation failures before persistence, and success without store IO do not count.
  * These counters live only for this exporter instance; they do not measure backend delivery.
