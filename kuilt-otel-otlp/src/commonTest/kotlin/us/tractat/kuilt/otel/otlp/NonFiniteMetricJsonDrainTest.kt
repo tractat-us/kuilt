@@ -11,14 +11,14 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
- * REPRODUCTION for #3309 — **red on purpose; do not merge as is.**
+ * #3309: a non-finite metric value no longer costs the whole OTLP/JSON metric batch.
  *
  * Each test leaves a non-finite value as one metric series' latest through the public recording
- * API, beside one span, one log and one finite gauge, then drains twice over OTLP/JSON. The
- * property asserted is the one every candidate fix has to meet, whichever is chosen: the metric
- * leg succeeds, on the first drain and the next, and the finite series in the same batch reaches
- * the collector. What happens to the bad point itself (dropped, skipped, spelled specially) is
- * the fix's decision and deliberately not asserted.
+ * API, beside one span, one log and one finite gauge, then drains twice over OTLP/JSON. Before the
+ * fix every one of them red: `json.encodeToString` threw before the POST, on every drain. The
+ * metric leg must now succeed, on the first drain and the next, the finite series in the same
+ * batch must reach the collector, and the bad point itself must go out as the proto3 JSON
+ * mapping's string (`"NaN"`, `"Infinity"`, `"-Infinity"`) rather than be dropped.
  *
  * The span and log arms are expected green: they show the failure stays inside the metric leg.
  *
@@ -63,7 +63,22 @@ class NonFiniteMetricJsonDrainTest {
                 val bare = metricBodies.flatMap { body -> bareNonFiniteNumber.findAll(body).map { it.value }.toList() }
                 assertTrue(bare.isEmpty(), "$route: a metric body carries a bare non-JSON number: $bare")
             },
+            {
+                val spelled = "\"asDouble\":\"${route.expected.proto3JsonSpelling()}\""
+                assertTrue(
+                    metricBodies.any { "\"name\":\"${route.series.name}\"" in it && spelled in it },
+                    "$route: the bad point must reach the collector as $spelled; bodies = $metricBodies",
+                )
+            },
         )
+    }
+
+    /** Spelled out here rather than read off the serializer, so the arm is not the fix asserting itself. */
+    private fun Double.proto3JsonSpelling(): String = when {
+        isNaN() -> "NaN"
+        this == Double.POSITIVE_INFINITY -> "Infinity"
+        this == Double.NEGATIVE_INFINITY -> "-Infinity"
+        else -> error("rig: $this is finite")
     }
 
     @Test
