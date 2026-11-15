@@ -302,11 +302,11 @@ public class WarpMetricExporter(
     private companion object {
         // Bookkeeping identity only; never passed to the store.
         private val CLEAR_WORK = setOf(StoreKey("otel.metrics.clear"))
-        private val SUM_STORE_KEY = StoreKey("otel.metrics.sums")
-        private val SUM_DOUBLE_STORE_KEY = StoreKey("otel.metrics.sums.double")
-        private val GAUGE_STORE_KEY = StoreKey("otel.metrics.gauges")
-        private val CARDINALITY_STORE_KEY = StoreKey("otel.metrics.cardinalities")
-        private val HISTOGRAM_STORE_KEY = StoreKey("otel.metrics.histograms")
+        private val SUM_STORE_KEY = StoredKind.SUMS.storeKey
+        private val SUM_DOUBLE_STORE_KEY = StoredKind.SUMS_DOUBLE.storeKey
+        private val GAUGE_STORE_KEY = StoredKind.GAUGES.storeKey
+        private val CARDINALITY_STORE_KEY = StoredKind.CARDINALITIES.storeKey
+        private val HISTOGRAM_STORE_KEY = StoredKind.HISTOGRAMS.storeKey
 
         private val cbor = Cbor { alwaysUseByteString = true }
 
@@ -743,25 +743,6 @@ public class WarpMetricExporter(
 
     /** One kind's encoded map, ready to write outside [lock]. */
     private class PendingWrite(val kind: StoredKind, val encoded: ByteArray, val lastKey: MetricKey)
-
-    /** The persisted map [this] update changes. */
-    private val MetricUpdate.storedKind: StoredKind
-        get() = when (this) {
-            is MetricUpdate.IncrementSum -> StoredKind.SUMS
-            is MetricUpdate.IncrementSumDouble -> StoredKind.SUMS_DOUBLE
-            is MetricUpdate.SetGauge -> StoredKind.GAUGES
-            is MetricUpdate.AddCardinality -> StoredKind.CARDINALITIES
-            is MetricUpdate.RecordHistogram, is MetricUpdate.AddExponentialHistogram -> StoredKind.HISTOGRAMS
-        }
-
-    /** The five persisted maps, in the fixed order a batch writes them. */
-    private enum class StoredKind(val storeKey: StoreKey) {
-        SUMS(SUM_STORE_KEY),
-        SUMS_DOUBLE(SUM_DOUBLE_STORE_KEY),
-        GAUGES(GAUGE_STORE_KEY),
-        CARDINALITIES(CARDINALITY_STORE_KEY),
-        HISTOGRAMS(HISTOGRAM_STORE_KEY),
-    }
 
     /**
      * Refuse an update this exporter cannot apply, before [record] applies any of the batch. Every
@@ -1331,6 +1312,25 @@ public class WarpMetricExporter(
     }
 }
 
+/** The five maps a [WarpMetricExporter] persists, one store key each, in the fixed order a batch writes them. */
+internal enum class StoredKind(val storeKey: StoreKey) {
+    SUMS(StoreKey("otel.metrics.sums")),
+    SUMS_DOUBLE(StoreKey("otel.metrics.sums.double")),
+    GAUGES(StoreKey("otel.metrics.gauges")),
+    CARDINALITIES(StoreKey("otel.metrics.cardinalities")),
+    HISTOGRAMS(StoreKey("otel.metrics.histograms")),
+}
+
+/** The persisted map [this] update changes. */
+internal val MetricUpdate.storedKind: StoredKind
+    get() = when (this) {
+        is MetricUpdate.IncrementSum -> StoredKind.SUMS
+        is MetricUpdate.IncrementSumDouble -> StoredKind.SUMS_DOUBLE
+        is MetricUpdate.SetGauge -> StoredKind.GAUGES
+        is MetricUpdate.AddCardinality -> StoredKind.CARDINALITIES
+        is MetricUpdate.RecordHistogram, is MetricUpdate.AddExponentialHistogram -> StoredKind.HISTOGRAMS
+    }
+
 /** The result of a [WarpMetricExporter] mutating call. */
 public sealed interface MetricExportResult {
     /** The metric was durably written to the local store. */
@@ -1345,7 +1345,40 @@ public sealed interface MetricExportResult {
      * read: its updates of that kind were not applied, and [cause] is the store's refusal of the read; see
      * [WarpMetricExporter.recover].
      */
-    public data class Failure(public val cause: Throwable) : MetricExportResult
+    public data class Failure(public val causes: List<Throwable>) : MetricExportResult {
+        public constructor(cause: Throwable) : this(listOf(cause))
+
+        init {
+            require(causes.isNotEmpty()) { "a Failure needs a cause" }
+        }
+
+        /** The first of [causes]. */
+        public val cause: Throwable get() = causes.first()
+    }
+}
+
+/**
+ * Why some or all of a [WarpMetricExporter] call's updates were **not counted**: nothing of them
+ * reached memory or the store. Only the exporter constructs one; it arrives in a
+ * [MetricExportResult.Failure]'s causes.
+ */
+public sealed class MetricNotCountedException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/**
+ * A kind of metric whose persisted series no read has joined into memory yet, because the store
+ * refused the read (#3390). The call's updates of that kind, the ones [carries] names, were not
+ * applied, and its store key [storeKey] was not written. The store's refusal is [cause].
+ *
+ * @property storeKey the persisted map of the kind that could not be read.
+ */
+public class MetricKindUnreadException internal constructor(
+    private val kind: StoredKind,
+    cause: Throwable,
+) : MetricNotCountedException("${kind.storeKey.name}: the store refused the read of this kind, so none of its updates were counted", cause) {
+    public val storeKey: StoreKey get() = kind.storeKey
+
+    /** Whether [update] is of the kind that could not be read, and so was not counted. */
+    public fun carries(update: MetricUpdate): Boolean = update.storedKind == kind
 }
 
 /**
@@ -1360,7 +1393,7 @@ public sealed interface MetricExportResult {
  * [MetricKey], so a caller leaving the series out of a retry needs both. Only the exporter
  * constructs one; a consumer only receives it.
  */
-public sealed class MetricOverflowException(message: String) : ArithmeticException(message) {
+public sealed class MetricOverflowException(message: String) : MetricNotCountedException(message) {
     /** The series whose count cannot take the update. */
     public abstract val key: MetricKey
 }

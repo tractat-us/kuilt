@@ -43,15 +43,22 @@ import kotlin.test.assertTrue
  */
 class KuiltMetricExporterBatchTest {
 
-    /** Counts writes per store key; optionally refuses one key. */
-    private class CountingStore(private val refuse: String? = null) : DurableStore {
+    /** Counts writes per store key; optionally refuses one key's writes, or another's reads. */
+    private class CountingStore(private val refuse: String? = null, private val refuseReadOf: String? = null) : DurableStore {
         private val backing = InMemoryDurableStore()
         private val counts = ConcurrentHashMap<String, Int>()
         val refused = java.util.concurrent.atomic.AtomicInteger()
+        val refusedReads = java.util.concurrent.atomic.AtomicInteger()
 
         fun writes(): Map<String, Int> = counts.toMap()
 
-        override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+        override suspend fun read(key: StoreKey): ByteArray? {
+            if (key.name == refuseReadOf) {
+                refusedReads.incrementAndGet()
+                throw IllegalStateException("store refused the read of ${key.name}")
+            }
+            return backing.read(key)
+        }
 
         override suspend fun write(key: StoreKey, bytes: ByteArray) {
             counts.merge(key.name, 1, Int::plus)
@@ -212,6 +219,38 @@ class KuiltMetricExporterBatchTest {
             { assertEquals(4L, exp.sumValue(sumKey("requests", "/b")), "one copy of the delta, not two") },
             { assertEquals(Long.MAX_VALUE - 1L, exp.sumValue(saturated)) },
             { assertEquals(4L, recovered.sumValue(sumKey("requests", "/b")), "and it is on disk") },
+        )
+    }
+
+    /**
+     * An export holding a saturated sum and a gauge whose kind the store will not read. The first
+     * `record` is refused for the overflow and applies nothing; the bridge records the rest again,
+     * and that retry is refused for the unread gauges. One export, so one failed turn of the gauges,
+     * and the export fails, because the gauge was not counted.
+     */
+    @Test
+    fun aSaturatedSumBesideAnUnreadKindFailsTheExportAsOneFailedTurn() = runTest {
+        val store = CountingStore(refuseReadOf = "otel.metrics.gauges")
+        val exp = WarpMetricExporter(replica = ReplicaId("dev"), store = store)
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val saturated = sumKey("requests", "/a")
+        assertEquals(MetricExportResult.Success, exp.incrementSum(saturated, Long.MAX_VALUE - 1L))
+        val failedBefore = exp.health.value.failed
+
+        val code = bridge.export(
+            listOf(
+                metric("requests", MetricDataType.LONG_SUM, deltaCounter(listOf(longPoint(3L, "/a"), longPoint(4L, "/b")))),
+                metric("temp", MetricDataType.DOUBLE_GAUGE, ImmutableGaugeData.create(listOf(doublePoint(21.5, "/a")))),
+            ),
+        )
+        runCurrent()
+
+        assertAll(
+            { assertEquals(2, store.refusedReads.get(), "the rig did not refuse both records' reads of the gauges") },
+            { assertTrue(code.isDone && !code.isSuccess, "an export whose gauge was not counted succeeded") },
+            { assertEquals(failedBefore + 1, exp.health.value.failed, "one export counted ${exp.health.value.failed - failedBefore} failed turns") },
+            { assertEquals(4L, exp.sumValue(sumKey("requests", "/b")), "the unsaturated sum did not land once") },
+            { assertEquals(null, exp.gaugeValue(gaugeKey("temp", "/a")), "the unread kind's gauge was counted") },
         )
     }
 

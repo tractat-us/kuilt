@@ -176,6 +176,10 @@ class WarpMetricExporterRefusedRecoveryTest {
                 { assertEquals(refusals, o.refusals, "${o.name}: the rig refused ${o.refusals} reads, not $refusals") },
                 { assertEquals(1, o.seeded.size, "${o.name}: the fixture did not seed one durable series") },
                 { assertIs<MetricExportResult.Failure>(o.result, "${o.name}: $path over an unread kind reported ${o.result}") },
+                {
+                    val unread = (o.result as? MetricExportResult.Failure)?.cause as? MetricKindUnreadException
+                    assertEquals(o.name, unread?.storeKey?.name, "${o.name}: $path did not say the kind went uncounted: ${o.result}")
+                },
                 { assertEquals(0, o.writesOfTheKind, "${o.name}: $path wrote the kind while its read was refused") },
                 { assertEquals(o.seeded, o.afterRestart, "${o.name}: $path overwrote the durable series it never read") },
             )
@@ -393,6 +397,74 @@ class WarpMetricExporterRefusedRecoveryTest {
             { assertEquals(2.0, afterRestart.gaugeValue(otherGauge), "the gauge write was blocked by the sums' read") },
             { assertEquals(4.0, afterRestart.gaugeValue(gauge), "the seeded gauge did not survive its own kind's write") },
             { assertEquals(4L, afterRestart.histogramSnapshot(histogram).count, "the histogram write was blocked by the sums' read") },
+        )
+    }
+
+    // ---- Not counted, beside not durable ----
+
+    /**
+     * The histograms' read is refused and the sums' write is refused, in one batch. The sum was
+     * counted, and is only not yet durable, so retrying it counts it twice; the histogram was not
+     * counted, so retrying it counts it once. A Failure that led with the sums' write refusal, as the
+     * kind order would, told the caller every update was counted and lost the histogram's.
+     */
+    @Test
+    fun aBatchWithAnUnreadKindAndARefusedWriteLeadsWithTheUpdatesItDidNotCount() = runTest {
+        val backing = RecordingStore()
+        seed(backing)
+        val reads = KindReadRefusingStore(backing)
+        val store = WriteRefusingStore(reads) { it == sumsKey }
+        reads.refuse(histogramsKey)
+        val exporter = WarpMetricExporter(replica, store).also { it.recover() }
+        store.refuseWrites()
+        val increment = MetricUpdate.IncrementSum(sum, 1L)
+        val measurement = MetricUpdate.RecordHistogram(histogram, 4.0)
+
+        val result = exporter.record(listOf(increment, measurement))
+        val failure = assertIs<MetricExportResult.Failure>(result, "the batch reported $result")
+        val unread = failure.cause as? MetricKindUnreadException
+
+        assertAll(
+            { assertEquals(2, reads.refusalsOf(histogramsKey), "the rig did not refuse recover's and the turn's read of the histograms") },
+            { assertEquals(1, store.refusedWrites(), "the rig refused ${store.refusedWrites()} writes, not the sums' one") },
+            { assertEquals(histogramsKey, unread?.storeKey, "the Failure led with ${failure.cause}, not the unread histograms") },
+            { assertTrue(unread?.carries(measurement) == true, "the unread verdict does not name the histogram update") },
+            { assertTrue(unread?.carries(increment) == false, "the unread verdict names the sum update, which was counted") },
+            { assertEquals("simulated refused read of otel.metrics.histograms", unread?.cause?.message) },
+            { assertEquals(2, failure.causes.size, "the Failure carries ${failure.causes}, not both kinds' verdicts") },
+            { assertTrue(failure.causes.last() !is MetricNotCountedException, "the sums' write refusal reads as not counted") },
+            { assertEquals("store refused otel.metrics.sums", failure.causes.last().message) },
+            { assertEquals(6L, exporter.sumValue(sum), "the sum was counted: seeded 5 + 1") },
+            { assertEquals(0L, exporter.histogramSnapshot(histogram).count, "the histogram was counted into the unread kind") },
+        )
+    }
+
+    /**
+     * A batch refused for an overflow applies nothing and is no turn of any kind, the kind it could
+     * not read included: a caller that leaves the saturated series out and records the rest again
+     * has made one turn of the unread kind, not two.
+     */
+    @Test
+    fun anOverflowRefusedBatchIsNoFailedTurnOfTheKindItCouldNotRead() = runTest {
+        val backing = RecordingStore()
+        seed(backing)
+        val store = KindReadRefusingStore(backing)
+        store.refuse(histogramsKey)
+        val exporter = WarpMetricExporter(replica, store).also { it.recover() }
+        val failedBefore = exporter.health.value.failed
+
+        val overflowed = exporter.record(listOf(MetricUpdate.IncrementSum(sum, Long.MAX_VALUE), MetricUpdate.RecordHistogram(histogram, 4.0)))
+        val failedAfterOverflow = exporter.health.value.failed
+        val retried = exporter.record(listOf(MetricUpdate.RecordHistogram(histogram, 4.0)))
+        val failedAfterRetry = exporter.health.value.failed
+
+        assertAll(
+            { assertEquals(3, store.refusalsOf(histogramsKey), "the rig did not refuse recover's and both turns' reads") },
+            { assertIs<MetricSumOverflowException>((overflowed as? MetricExportResult.Failure)?.cause, "the rig: the sum did not overflow: $overflowed") },
+            { assertEquals(1, (overflowed as? MetricExportResult.Failure)?.causes?.size, "an overflow refusal carried more than itself") },
+            { assertEquals(failedBefore, failedAfterOverflow, "the overflow-refused batch counted as a failed turn") },
+            { assertIs<MetricKindUnreadException>((retried as? MetricExportResult.Failure)?.cause, "the retry reported $retried") },
+            { assertEquals(failedBefore + 1, failedAfterRetry, "the retry did not count one failed turn") },
         )
     }
 
