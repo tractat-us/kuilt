@@ -560,7 +560,8 @@ public class FairShareAllocator(
         // A returner lands where its parent's clock puts it, not at the front (#3376), and counts in
         // the front there (#3446).
         val shifts = previewShifts(parent, edges)
-        val front = joinFront(landed(edges, shifts), joiners - shifts.keys)
+        val landedEdges = landed(edges, shifts)
+        val front = joinFront(landedEdges, joiners - shifts.keys)
         val demanding = stayers.filter { it.gauge != null && HeddlePolicy.isDemanding(it) }
         // The front is read on the grid of each child it will seat, clamp or order: the joiners and
         // the demanding stayers (window rule). An idle stayer's grid is read again when it wakes.
@@ -579,9 +580,13 @@ public class FairShareAllocator(
             }
         if (!past) return null
         val step = gridStep(edges) ?: return null
+        // A returner is demanding and counts in the front where it lands (#3446), so its room bounds
+        // `Δ` as a demanding stayer's does: no landing is then held at its floor under this raise,
+        // which is what keeps the raise a pure translation (#3353 review).
+        val bounded = if (windowRuleForTest) demanding + landedEdges.filter { it.record.id in shifts } else demanding
         val bound = when {
-            demanding.isEmpty() -> front.unitsFloor()
-            windowRuleForTest -> windowBound(front, demanding) ?: return null
+            bounded.isEmpty() -> front.unitsFloor()
+            windowRuleForTest -> windowBound(front, bounded) ?: return null
             else -> demanding.minOf { unitsOf(it) ?: return null }
         }
         return wholeSteps(bound, step)
@@ -592,9 +597,11 @@ public class FairShareAllocator(
      * pick without it, on this allocator, which the caller forked before the raised step ran, either
      * picks [grant] too or refuses at the ceiling, which is what the raise is for. A bug detector, not
      * a proof: in the regime the raise exists for, the twin refuses, so the check is vacuous there
-     * and constrains only a raise that did not need to land. A caller skips it when the raised step
-     * held a joiner at its floor ([landing]): that joiner then stands higher than without the raise,
-     * by its penalty, so the twin may rightly pick it where the raised step does not.
+     * and constrains only a raise that did not need to land. It runs whatever the raise: [preSeatRaise]
+     * bounds `Δ` by the room of every demanding child that is not a newborn or a clamped waker,
+     * returners included, so no landing under the raise is held at its floor, and the raise moves
+     * every child alike. A twin without it holds no landing at its floor either, since its floor sits
+     * lower beneath the same front.
      *
      * @throws IllegalStateException if it picks anything else, a bug in the rule.
      */
@@ -682,14 +689,10 @@ public class FairShareAllocator(
         // ceiling at a front a light runner holds up (#3353 review, item A).
         // With none, the raise still runs before the pick, so a child at its ceiling is repaired (#3353).
         val preSeat = fork.preSeatRaise(s, parent, demand) ?: fork.prePickRaise(s, parent, demand)
-        val floorsBefore = fork.floorLandingsForTest
         fork.settleJoiners(parent, cell, demand, preSeat)
-        // A joiner held at its floor by the raise lands higher than it would have without it, so
-        // the unraised twin may pick it where the raised step does not: that is the floor's penalty.
-        val floored = fork.floorLandingsForTest > floorsBefore
         val delegated = try {
             fork.pickOne(cell.current, parent, earmarked, demand)?.let { grant ->
-                if (preSeat != null && !floored) fork().checkPreSeatRaiseChangedNoPick(s, parent, earmarked, demand, demand, grant)
+                if (preSeat != null) fork().checkPreSeatRaiseChangedNoPick(s, parent, earmarked, demand, demand, grant)
                 // The rebase after the seat and wake step, before the grant, in the same patch (#3353).
                 val raised = fork.raiseOriginBeneath(parent, cell, earmarked, demand, grant)
                 val landed = cell.mutateOrSkip { it.delegate(fork.self, grant.attachment, grant.amount) }
@@ -802,11 +805,9 @@ public class FairShareAllocator(
         val preSeat = preSeatRaise(ledger, parent, waiting)
         val unraised = if (preSeat != null) fork() else null
         val cell = ValueCell(ledger)
-        val floorsBefore = floorLandingsForTest
         settleJoiners(parent, cell, waiting, preSeat)
         val grant = pickOne(cell.current, parent, earmarked = 0L, eligible) ?: return null
-        // Not when a joiner was held at its floor: see [schedule]'s first round.
-        if (floorLandingsForTest == floorsBefore) unraised?.checkPreSeatRaiseChangedNoPick(ledger, parent, earmarked = 0L, waiting, eligible, grant)
+        unraised?.checkPreSeatRaiseChangedNoPick(ledger, parent, earmarked = 0L, waiting, eligible, grant)
         val settled = cell.current
         val raised = raiseOriginBeneath(parent, cell, earmarked = 0L, waiting, grant, eligible)
         val rebase = if (raised || preSeat != null) Rebase(cell.current) else null
@@ -876,15 +877,18 @@ public class FairShareAllocator(
         parent: GroupId,
         demand: (AttachmentId) -> Demand,
     ): Rational? =
-        if (childWeightsFit(ledger, parent)) HeddlePolicy.front(policyEdges(ledger, parent, demand).map(::heldAtFloor)) else null
+        if (childWeightsFit(ledger, parent)) HeddlePolicy.front(policyEdges(ledger, parent, demand).map(::heldInWindow)) else null
 
     /**
-     * [edge] read no lower than its [positionFloor], for a diagnostic (#3353): a child a `cancel`
-     * walked back past its floor reads at it, the penalty side, so the read cannot throw on it.
+     * [edge] read inside its window, for a diagnostic (#3353), as the public reads hold it
+     * ([inWindow]): a child a `cancel` walked back past its floor reads at the floor, the penalty
+     * side, and one past its ceiling at the ceiling, so the front over them cannot throw on how far
+     * a child is from its origin.
      */
-    private fun heldAtFloor(edge: PolicyEdge): PolicyEdge {
-        val below = Int128.of(positionFloor(edge.record.weight)) - HeddlePolicy.effectiveTicksWide(edge)
-        return if (below > Int128.ZERO) edge.copy(offsetTicks = edge.offsetTicks + below) else edge
+    private fun heldInWindow(edge: PolicyEdge): PolicyEdge {
+        val effective = HeddlePolicy.effectiveTicksWide(edge)
+        val held = Int128.of(inWindow(effective, edge.record.weight))
+        return if (held == effective) edge else edge.copy(offsetTicks = edge.offsetTicks + (held - effective))
     }
 
     /**
@@ -1191,7 +1195,7 @@ public class FairShareAllocator(
      * [remainder] those ticks ran past its parent's clock, for its next return to take off; `null`
      * when the shift landed exactly.
      */
-    private class Shift(val ticks: Int128, val remainder: ShiftRemainder?, val floored: Boolean = false)
+    private class Shift(val ticks: Int128, val remainder: ShiftRemainder?)
 
     /**
      * How far each child at [parent] that would come back by the clock this round would move
@@ -1267,7 +1271,7 @@ public class FairShareAllocator(
         // The remainder is the clock's alone: what the floor added is penalty, and is not carried.
         if (windowRuleForTest) {
             val toFloor = Int128.of(positionFloor(w)) - HeddlePolicy.effectiveTicksWide(edge)
-            if (toFloor > clocked) return Shift(toFloor, remainder, floored = true)
+            if (toFloor > clocked) return Shift(toFloor, remainder)
         }
         return Shift(clocked, remainder)
     }
@@ -1285,7 +1289,6 @@ public class FairShareAllocator(
         for (edge in edges) {
             val id = edge.record.id
             val shift = shifts[id] ?: continue
-            if (shift.floored) floorLandingsForTest++
             wakeOffsets[id] = edge.offsetTicks + shift.ticks
             departures.remove(id)
             val remainder = shift.remainder
@@ -1368,12 +1371,12 @@ public class FairShareAllocator(
             val weight = edge.record.weight
             // Wide, both sides (#3353): a waker idle since long before the origin was raised sits far
             // below its siblings, and a clamp narrowed before it is taken would leave it there.
-            val computed = HeddlePolicy.clampTicks(
-                // Held at the waker's floor ([landing], #3353): never below the front.
-                frontTicks = landing(front, weight),
-                rawTicks = HeddlePolicy.rawTicks(edge),
-                sleeperCredit = policy.sleeperCredit,
-            )
+            val raw = HeddlePolicy.rawTicks(edge)
+            val credited = HeddlePolicy.clampTicks(frontTicks = front.ticksForWide(weight), rawTicks = raw, sleeperCredit = policy.sleeperCredit)
+            // Held at the waker's floor after its sleeper credit, not before (#3353, the window rule):
+            // the credit is kept down to the floor and no further.
+            val toFloor = Int128.of(positionFloor(weight)) - raw
+            val computed = if (windowRuleForTest && toFloor > credited) toFloor.also { floorLandingsForTest++ } else credited
             // Written, not joined: a seated waker with no departure holds no offset (see above).
             // Both sides are on the waker's grid, and the result is stored on it, so a stored offset
             // never carries a front's denominator into the next one (#3313).

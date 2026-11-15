@@ -76,8 +76,10 @@ internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADR
  * ceiling, so a position in the window reads as a virtual time exactly ([inWindow]).
  *
  * A child can still go below it by its own returns: a lease cancelled from the floor walks its
- * holder back by the lease. Nothing orders on that: such a child is not demanding, and the public
- * reads hold it at the floor.
+ * holder back by the lease, and a child still waiting is still demanding there. A pick orders it
+ * all the same, exactly, since the narrowing it reads holds down to `Long.MIN_VALUE`, and the public
+ * reads hold it at the floor ([inWindow]). More than one full lease below, `ticks · d` leaves
+ * `Long`, which is why the reads saturate rather than convert.
  */
 internal fun positionFloor(w: Weight): Long = -positionCeiling(w)
 
