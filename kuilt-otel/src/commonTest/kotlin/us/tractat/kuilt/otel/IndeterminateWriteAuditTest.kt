@@ -243,7 +243,7 @@ class IndeterminateWriteAuditTest {
                     )
                 } else {
                     // A cancellation the store mints at a live caller is a refused write (#3388).
-                    assertIs<MetricExportResult.Failure>(write())
+                    assertIs<MetricExportResult.Partial>(write())
                 }
             }
             val recovered = WarpMetricExporter(replica, store).also { it.recover() }

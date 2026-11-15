@@ -134,7 +134,18 @@ class PersistenceHealthTest {
         }
     }
 
-    private fun metricTurns(exporter: WarpMetricExporter): List<suspend () -> MetricExportResult> {
+    /** A metric turn's result: a [MetricExportResult] from a mutator, or a [MetricWriteResult] from a `merge*`. */
+    private fun Any.succeeded(): Boolean = this == MetricExportResult.Success || this == MetricWriteResult.Success
+
+    /** A refused write: a mutator's [MetricExportResult.Partial] that counted every update, or a merge's Failure. */
+    private fun assertNotDurable(result: Any) {
+        when (result) {
+            is MetricExportResult -> assertEquals(emptyList(), assertIs<MetricExportResult.Partial>(result).uncounted)
+            else -> assertIs<MetricWriteResult.Failure>(result)
+        }
+    }
+
+    private fun metricTurns(exporter: WarpMetricExporter): List<suspend () -> Any> {
         val sum = MetricKey("sum", MetricKind.SUM)
         val gauge = MetricKey("gauge", MetricKind.GAUGE)
         val cardinality = MetricKey("cardinality", MetricKind.CARDINALITY)
@@ -159,7 +170,7 @@ class PersistenceHealthTest {
         val exporter = WarpMetricExporter(replica, store)
         val turns = metricTurns(exporter)
         store.refusedWrites = metricKeys.toSet()
-        turns.forEach { assertIs<MetricExportResult.Failure>(it()) }
+        turns.forEach { assertNotDurable(it()) }
         assertAll(
             { assertEquals(turns.size, store.writeFailures, "all write paths reached the rig") },
             { assertEquals(turns.size.toLong(), exporter.health.value.failed) },
@@ -170,10 +181,10 @@ class PersistenceHealthTest {
         // Both the mutation and merge failed for each stored kind. In particular, success on
         // integer SUM must not clear DOUBLE_SUM even when both were called with the same MetricKey.
         turns.take(metricKeys.size).forEachIndexed { index, turn ->
-            assertEquals(MetricExportResult.Success, turn())
+            assertTrue(turn().succeeded())
             assertEquals((turns.size - (index + 1) * 2).toLong(), exporter.health.value.outstandingFailures)
         }
-        turns.drop(metricKeys.size).forEach { assertEquals(MetricExportResult.Success, it()) }
+        turns.drop(metricKeys.size).forEach { assertTrue(it().succeeded()) }
         assertAll(
             { assertEquals(turns.size.toLong(), exporter.health.value.acknowledged) },
             { assertEquals(turns.size.toLong(), exporter.health.value.failed) },
@@ -204,7 +215,7 @@ class PersistenceHealthTest {
 
         val gaugeKey = metricKeys[2]
         store.refusedWrites = setOf(gaugeKey)
-        assertIs<MetricExportResult.Failure>(exporter.record(batch))
+        assertIs<MetricExportResult.Partial>(exporter.record(batch))
         val afterPartial = exporter.health.value
         val writesAfterPartial = store.writes
 
@@ -228,9 +239,9 @@ class PersistenceHealthTest {
         val exporter = WarpMetricExporter(replica, store)
         val turn = metricTurns(exporter).first()
         store.refusedWrites = setOf(metricKeys.first())
-        assertIs<MetricExportResult.Failure>(turn())
+        assertNotDurable(turn())
         store.refusedDelete = metricKeys.last()
-        assertIs<MetricExportResult.Failure>(exporter.clear())
+        assertIs<MetricWriteResult.Failure>(exporter.clear())
         assertAll(
             { assertEquals(metricKeys.size, store.deletes, "the partial clear reached its last delete") },
             { assertEquals(1, store.deleteFailures) },
@@ -238,7 +249,7 @@ class PersistenceHealthTest {
             { assertEquals(0L, exporter.health.value.acknowledged) },
         )
         store.refusedDelete = null
-        assertEquals(MetricExportResult.Success, exporter.clear())
+        assertEquals(MetricWriteResult.Success, exporter.clear())
         assertAll(
             { assertEquals(1L, exporter.health.value.acknowledged) },
             { assertEquals(1L, exporter.health.value.outstandingFailures, "deletes do not prove writes work") },

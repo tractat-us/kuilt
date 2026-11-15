@@ -179,7 +179,8 @@ public class KuiltMetricExporter @JvmOverloads constructor(
      * as saturated.
      *
      * `record` refuses a whole batch, applying nothing, when one update would carry one of this
-     * replica's counts for its series past [Long.MAX_VALUE] (a [MetricOverflowException]). A delta
+     * replica's counts for its series past [Long.MAX_VALUE]: a [MetricExportResult.Refused] whose
+     * `overflow` is a [MetricOverflowException]. A delta
      * counter or histogram that has reached that point sends more in every export, so passing the
      * refusal on would drop every other point of every export from then on. Instead the refused
      * series' updates are taken out and the rest recorded again. A refused attempt applied
@@ -190,8 +191,14 @@ public class KuiltMetricExporter @JvmOverloads constructor(
      * counter and is not refused; for a [MetricHistogramOverflowException] its histogram updates.
      * The loop ends: every refusal names a series with such an update still in the batch, and they
      * leave with the retry, so there is at most one retry per distinct series; a `check` pins that a
-     * refusal never names anything else. Any other result, a store refusal included, is returned as
-     * it is.
+     * refusal never names anything else. A refused batch was no turn of any kind, so the retry
+     * also retries every kind that refusal stopped before.
+     *
+     * A [MetricExportResult.Partial] is returned as it is, and the export fails. Its refused writes'
+     * updates were counted and are only not yet on disk, so retrying them would count them twice.
+     * Its `uncounted` updates, of a kind the store would not read, are not retried here either:
+     * `record` has just tried to read the kind and been refused, and the SDK hands a delta interval
+     * over once.
      *
      * A saturated series is dropped from every export from then on, so the line saying so is at
      * WARN only the first time; see [firstDrop].
@@ -199,8 +206,10 @@ public class KuiltMetricExporter @JvmOverloads constructor(
     private suspend fun recordWithoutSaturatedSeries(updates: List<MetricUpdate>): MetricExportResult {
         var remaining = updates
         while (true) {
-            val result = exporter.record(remaining)
-            val refused = (result as? MetricExportResult.Failure)?.cause as? MetricOverflowException ?: return result
+            val refused = when (val result = exporter.record(remaining)) {
+                MetricExportResult.Success, is MetricExportResult.Partial -> return result
+                is MetricExportResult.Refused -> result.overflow
+            }
             val saturated = Saturated.of(refused)
             // The refusal names an update of the batch it was given, and that update leaves below,
             // so every pass shrinks `remaining`. Were that untrue the loop would spin; fail loudly instead.

@@ -43,7 +43,7 @@ class WarpMetricExporterClearTest {
         exporter.populateEveryKind()
         assertEquals(5, exporter.metricCount(), "the fixture must populate all five kinds")
 
-        assertEquals(MetricExportResult.Success, exporter.clear())
+        assertEquals(MetricWriteResult.Success, exporter.clear())
 
         val recovered = WarpMetricExporter(replica = replicaA, store = store)
         recovered.recover()
@@ -84,7 +84,7 @@ class WarpMetricExporterClearTest {
 
     /**
      * The "never throws" half of the KDoc, which nothing else here pins: a store that refuses
-     * every delete must surface as a [MetricExportResult.Failure] rather than propagating out of
+     * every delete must surface as a [MetricWriteResult.Failure] rather than propagating out of
      * a public exporter method. The in-memory maps are cleared either way — the same divergence
      * [WarpLogRecordExporter.clear] documents, so a caller must read a non-Success as
      * "count unknown" rather than as zero.
@@ -100,7 +100,7 @@ class WarpMetricExporterClearTest {
         val result = exporter.clear()
 
         assertAll(
-            { assertTrue(result is MetricExportResult.Failure, "a refused delete fails the clear") },
+            { assertTrue(result is MetricWriteResult.Failure, "a refused delete fails the clear") },
             { assertEquals(0, exporter.metricCount(), "the in-memory drop is not undone on failure") },
         )
     }

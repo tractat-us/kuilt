@@ -91,7 +91,10 @@ makes every log or span turn fail, and write nothing, until a later read succeed
 keeps the records and spans on disk the read would have found. Log turns retry the read
 on a window that doubles up to 63 turns, so a long outage costs one store read per 64 log
 turns; `recover()` always reads. A span turn that read
-stops counts in `failed`, and the first span write that lands resolves it.
+stops counts in `failed`, and the first span write that lands resolves it. Metrics do the
+same for each metric kind on its own: a refused read of the histograms fails the
+histogram turns, and a batch's sums still write. A metric exporter nobody recovered reads
+each kind before its first write.
 A failed turn may still have saved its data, and a cancelled turn counts as neither
 acknowledged nor failed; a cancelled metric batch keeps the turns of the kinds it had
 already written. "Cancelled" means the caller was cancelled. When the store cancels
@@ -142,9 +145,18 @@ hands over. `KuiltMetricExporter`, in `kuilt-otel-sdk`, is the bridge between th
 **durably written** to its `DurableStore`. That is the whole contract. It says
 nothing about the collector, which hears about the update on a later drain.
 
-A `Failure` means "not yet on disk", not "not counted". The change stays in memory
-and the next successful write of that metric kind carries it, so retrying a failed
-increment counts it twice.
+The result says what a retry may send. A `Refused` is an overflow: the whole call
+was refused before anything was applied, and the same call may be refused again until
+that series is cleared or evicted. A
+`Partial` lists in `uncounted` exactly the updates of a metric kind the store would
+not let it read. Those were not applied, so recording just that list again counts
+each once. Every other update of a `Partial` was counted. A refused write means
+"not yet on disk", not "not counted": the change stays in memory and the next
+successful write of that kind carries it, so retrying it counts it twice.
+
+A `merge*` call or `clear()` returns a plain `MetricWriteResult`, `Success` or
+`Failure(cause)`. A merge is a join and a clear a delete, so calling either again is
+always safe.
 
 The promise has a price. Each write re-encodes every series of its kind. A single
 call such as `incrementSum` is one write. Hand many changes over at once with
@@ -219,7 +231,8 @@ so send them as cumulative.
 | `MetricKey` | Identity of one metric time series (name + kind + label set). |
 | `MetricKind` | SUM / GAUGE / CARDINALITY / EXPONENTIAL_HISTOGRAM. |
 | `ExportResult` | Typed result of span/log `export()` / `merge()`. |
-| `MetricExportResult` | Typed result of metric mutations. |
+| `MetricExportResult` | Typed result of `record` and the single-point metric mutators: `Success`, `Refused` (an overflow; nothing applied), or `Partial`, whose `uncounted` is exactly the updates a retry may send again. |
+| `MetricWriteResult` | Typed result of the idempotent `merge*` calls and metric `clear()`: `Success` or `Failure(cause)`. |
 | `BufferPolicy` | Span/log bounded-buffer eviction strategy (spans log each drop; log records count them on `ExporterHealth`). |
 | `MetricBufferPolicy` | Metric bounded-buffer eviction strategy (always logs what it drops). |
 

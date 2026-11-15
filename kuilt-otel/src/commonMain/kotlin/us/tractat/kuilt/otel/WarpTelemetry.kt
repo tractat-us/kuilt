@@ -46,7 +46,7 @@ import us.tractat.kuilt.store.InMemoryDurableStore
  *   a platform-specific WAL in production.
  * @param maxSpans Maximum number of spans buffered in memory.
  * @param maxLogRecords Maximum number of log records buffered in memory.
- * @param maxMetrics Maximum number of distinct metric series buffered in memory.
+ * @param maxMetrics Maximum number of distinct metric series buffered in memory; at least 1.
  * @param bufferPolicy Eviction strategy when [maxSpans] or [maxLogRecords] is exceeded.
  * @param metricBufferPolicy Eviction strategy when [maxMetrics] is exceeded.
  *
@@ -179,9 +179,9 @@ public class WarpTelemetry(
     }
 
     /** Bridge the metric exporter's own result type into the one this facade reports. */
-    private fun MetricExportResult.asExportResult(): ExportResult = when (this) {
-        is MetricExportResult.Success -> ExportResult.Success
-        is MetricExportResult.Failure -> ExportResult.Failure(cause)
+    private fun MetricWriteResult.asExportResult(): ExportResult = when (this) {
+        is MetricWriteResult.Success -> ExportResult.Success
+        is MetricWriteResult.Failure -> ExportResult.Failure(cause)
     }
 }
 
