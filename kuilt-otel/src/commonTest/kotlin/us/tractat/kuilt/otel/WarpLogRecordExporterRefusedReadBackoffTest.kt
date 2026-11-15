@@ -252,7 +252,7 @@ class WarpLogRecordExporterRefusedReadBackoffTest {
             { assertNull(readReturned, "a read turn returned into a cancelled caller: $readReturned") },
             { assertEquals(1, callsInCancelledRead, "precondition: the cancelled read turn did not attempt its read") },
             { assertTrue(stillReads, "a cancelled read counted as a refusal and opened a window") },
-            { assertEquals(2L, exporter.health.value.failed, "a cancelled turn was counted as failed") },
+            { assertEquals(2L, exporter.health.value.failed, "failed is not the two turns that ran uncancelled") },
         )
     }
 }
