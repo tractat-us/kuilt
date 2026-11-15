@@ -62,6 +62,8 @@ import kotlin.test.assertTrue
  *   returns a two-armed answer — [DeviceKeyStoreFixture.UnreadableKey] and
  *   [DeviceKeyStoreFixture.KeyWriteInterruption] — and the arm that claims the state was reached
  *   carries a probe the property checks, so a hook that does nothing reds instead of passing.
+ *   [DeviceKeyStoreFixture.UnreadableGrants] has one arm, since every durable medium can fail a
+ *   read, and its probe must throw for the property to pass.
  *
  * ## Replace damage, refuse a medium that cannot answer
  *
