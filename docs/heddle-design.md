@@ -1516,8 +1516,10 @@ Carried over from the source intact; each is a named property test (§13).
    an understated front (#3353, §7.1).
 6. **No unlimited idle credit.** A child that stops competing comes back moved
    by how far its parent's net-service clock ran while it was away, and gains
-   nothing for the time it was idle. A child never seen to stop is clamped to
-   the front. Default sleeper credit is zero (§7.2, #3376).
+   nothing for the time it was idle. A child seen idle but never seen to stop
+   is clamped to the front, and one first seen asking keeps its position
+   unless that is below zero. Default sleeper credit is zero, and applies only
+   to a clamped waker (§7.2, #3376).
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
    post-heal convergence restores a single agreed ledger.
 8. **Projection homomorphism.**
