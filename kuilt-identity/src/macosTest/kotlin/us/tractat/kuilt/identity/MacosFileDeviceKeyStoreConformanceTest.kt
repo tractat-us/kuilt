@@ -27,7 +27,9 @@ import us.tractat.kuilt.store.NSFileManagerDurableStore
  * - **corrupt grants:** three bytes that are not a grants record, written through the grant store
  *   itself;
  * - **unreadable key:** the key file a symbolic link to itself, so opening it fails with `ELOOP`
- *   while the key itself waits aside, untouched (`Rigged`).
+ *   while the key itself waits aside, untouched (`Rigged`);
+ * - **unreadable grants:** every permission taken off the grants record, so opening it fails with
+ *   `EACCES` while the directory still takes a new file ([unreadableGrantsRecord]).
  */
 class MacosFileDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() {
     override suspend fun newFixture(): DeviceKeyStoreFixture {
@@ -54,6 +56,7 @@ class MacosFileDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() 
             },
             corruptGrants = { NSFileManagerDurableStore(directory).write(AppleDeviceKeyStore.GRANTS, byteArrayOf(9, 9, 9)) },
             makeKeyUnreadable = { loopKeyFile(keyFile) },
+            makeGrantsUnreadable = { unreadableGrantsRecord(directory) },
         )
     }
 

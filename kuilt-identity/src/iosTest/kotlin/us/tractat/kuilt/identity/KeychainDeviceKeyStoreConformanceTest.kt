@@ -29,7 +29,10 @@ import us.tractat.kuilt.store.NSFileManagerDurableStore
  * - **unreadable key:** every call answers `errSecInteractionNotAllowed`, what an item kept
  *   `AfterFirstUnlock` answers before the phone's first unlock after a restart, with the item itself
  *   untouched (`Rigged`);
- * - **interrupted write:** `AtomicMedium`, for the reason the hook gives below.
+ * - **interrupted write:** `AtomicMedium`, for the reason the hook gives below;
+ * - **unreadable grants:** every permission taken off the grants record, so opening it fails with
+ *   `EACCES` — what Data Protection does to the file on a locked phone — while the directory still
+ *   takes a new file ([unreadableGrantsRecord]).
  */
 class KeychainDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() {
     override suspend fun newFixture(): DeviceKeyStoreFixture {
@@ -64,6 +67,7 @@ class KeychainDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() {
                 keychain.refusing = errSecInteractionNotAllowed
                 UnreadableKey.Rigged { keychain.refusing = null }
             },
+            makeGrantsUnreadable = { unreadableGrantsRecord(identityDirectory(applicationSupport, appId)) },
         )
     }
 }
