@@ -1233,14 +1233,15 @@ unambiguous would guard state that nobody holds (@keddie, 2026-11-15).
    `HeddleAcceptanceTest`: one with the rebase off, where only the rule can
    level the idle child, and one with it on, which slice 3 retires. It inverted
    the two first-observation tests, which pinned the old rule. §7.2, §10.6.
-3. **Nothing rebases.** Delete the raise sites, the floor arms and the window
-   in `FairShareAllocator` and `LocalHeddle`. The origin
-   field stays, read as zero. Retires `FairShareAllocatorOriginTest`,
+3. **Nothing rebases.** Built (#3495). The raise sites, the floor arms and the
+   window are gone from `FairShareAllocator` and `LocalHeddle`; the origin
+   field stays, read as zero. It retired `FairShareAllocatorOriginTest`,
    `FairShareAllocatorWindowRuleTest` but its sleeper-credit row,
-   `LocalHeddleRebaseTest` and the twin rows of
-   `LocalHeddleRebasePropertyTest`. Retargets `LocalHeddleWindowRuleTest` and
-   the long-run rows to "never refused, and fair". Docs: this section, §10.9,
-   `kuilt-heddle-core/module.md`, `kuilt-heddle/module.md`.
+   `LocalHeddleRebaseTest` and the twin rows of `LocalHeddleRebasePropertyTest`,
+   which is now `LocalHeddleLongRunTest`. `LocalHeddleWindowRuleTest` and the
+   long-run rows are retargeted to "never refused, and fair". A front read over
+   a child past its ceiling threw once nothing rebased; it reads the ceiling.
+   Docs: this section, §7.2, §10.5, §10.9, both `module.md`s, the cookbook.
 4. **The origin leaves the ledger and the wire.** The snapshot format already
    restarted at 1, ahead of the slices, so this changes format 1's layout before
    0.7.5 ships it. `ParentRecord`, `PolicyEdge.origin`, the canonical-encoding
