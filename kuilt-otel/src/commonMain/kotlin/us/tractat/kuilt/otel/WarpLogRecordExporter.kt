@@ -1724,7 +1724,8 @@ public class WarpLogRecordExporter(
                 // usually the retry of a turn whose write never landed, and its record is then in
                 // `activeSegment` alone; returning Success without writing it is #3350.
                 when {
-                    // The adopt's leading index write stands in for pendingWrites()' own.
+                    // The adopt's leading writes stand in for pendingWrites()' index write, and for
+                    // its active-segment write unless the pass has moved the segment since.
                     adopting != null -> adopting.actions + flushActiveSegment(retire = windowed, adopting = adopting)
                     admitted.isEmpty() && evictions == 0 && !windowed && !activeSegmentUnwritten() -> emptyList()
                     else -> pendingWrites(retire = windowed)
@@ -2515,12 +2516,15 @@ public class WarpLogRecordExporter(
      *
      * [adopting] describes the segment an adopt earlier in this same turn has staged but not yet
      * sealed ([StoreAction.CommitAdopt]); every index write emitted here projects it as sealed.
-     * Null on an export turn that adopts nothing, which is almost every one.
+     * Null on an export turn that adopts nothing, which is almost every one. When the adopt led
+     * with the active-segment write and no window pass has moved the segment since, that write is
+     * this one, already queued ahead of the adopt, so it is not queued twice.
      */
     private fun flushActiveSegment(retire: Boolean, adopting: PendingAdopt?): List<StoreAction> {
         val actions = mutableListOf<StoreAction>()
-        val activeWrite = activeSegmentWrite()
-        actions += activeWrite
+        val leading = adopting?.activeWrite?.takeIf { it.segment === activeSegment }
+        val activeWrite = leading ?: activeSegmentWrite()
+        if (leading == null) actions += activeWrite
         val adoptedNumbers = adopting?.let { listOf(it.number) } ?: emptyList()
         // Projections, not durable-state updates. Every write supplying this coverage, and this
         // seq, precedes the retirement and the roll; storeTurn stops if any of them is
@@ -2688,14 +2692,30 @@ public class WarpLogRecordExporter(
      *
      * **The leading write claims [remote]'s seq before any key holds it.** It names the segment
      * sealed, so it has to cover the ids in it (see [LogSegmentIndex.seqHighWater]), and the
-     * segment is written after it. Usually [remote] carries no seq of this replica's past
-     * [durableSeqHighWater] and the claim is exact. It passes it when [remote] is this replica's
-     * own whole log carrying a turn not yet written, or a peer holds ids of this replica's that
-     * this replica's store has lost. Then a refused adopt followed by a restart before the next
-     * index write is the over-claim [durableSeqHighWater] exists to prevent, in the same window
-     * as the "sealed" claim above.
+     * segment is written after it. The adopt is the turn's largest write, so it is the one a
+     * quota-bound store refuses, and a refused adopt followed by a restart before the next index
+     * write leaves that claim on disk, in the same window as the "sealed" claim above. Whatever it
+     * claims past the seqs the keys hold is then a hole the restarted floor cannot fold past.
+     *
+     * **So when [activeSegment] holds ops no key carries, the turn writes it first**, behind the
+     * index write it owes. Every seq of this replica's that is in memory alone is in that segment,
+     * as an op or under its floor: a turn mints into it, a window pass pieces its floor into it,
+     * and only a roll, whose index lands after the segment's own write, empties it. A
+     * refused active write then stops the turn before the claim lands, and a landed one puts
+     * those seqs on disk. What the claim can still pass is a seq of this replica's that [remote]
+     * alone carries: an id a peer holds and this store has lost, which that peer can hand back, so
+     * the hole can heal.
      */
     private fun adoptRemoteSegment(remote: Rga<LogRecord>): PendingAdopt {
+        // Built before the number is reserved, so the index it owes describes the layout as it
+        // stands; the adopt's own index write follows and names the reservation.
+        val activeWrite = if (activeSegmentUnwritten()) activeSegmentWrite() else null
+        val leading = buildList {
+            if (activeWrite != null) {
+                if (!indexPersisted) add(StoreAction.Put(INDEX_KEY, encodeIndex()))
+                add(activeWrite)
+            }
+        }
         val number = nextSegmentNumber++
         val suppression = Suppression.of(remote)
         val seqHighWater = remote.seqHighWater(replica)
@@ -2703,7 +2723,8 @@ public class WarpLogRecordExporter(
             number = number,
             suppression = suppression,
             seqHighWater = seqHighWater,
-            actions = listOf(
+            activeWrite = activeWrite,
+            actions = leading + listOf(
                 StoreAction.Put(
                     INDEX_KEY,
                     encodeIndex(sealed = sealedSegments + number, seqHighWater = maxOf(durableSeqHighWater, seqHighWater)),
@@ -2723,13 +2744,15 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * A merge's adopted segment: the number it reserved, the seq it carries for this replica, and
-     * the actions that carry it to disk.
+     * A merge's adopted segment: the number it reserved, the seq it carries for this replica, the
+     * active-segment write it leads with when one is owed ([activeWrite], see
+     * [adoptRemoteSegment]), and the actions that carry it all to disk.
      */
     private class PendingAdopt(
         val number: Long,
         val suppression: Suppression,
         val seqHighWater: Long,
+        val activeWrite: StoreAction.CommitActive?,
         val actions: List<StoreAction>,
     )
 
@@ -2809,7 +2832,9 @@ public class WarpLogRecordExporter(
      *   has already put on disk. Seqs are dense, and a claimed seq no key holds is a hole the floor
      *   cannot fold past. Two writes may claim more, each only what it names sealed: a roll's and a
      *   retirement's, which land after this turn's segment writes and project them
-     *   ([flushActiveSegment]), and an adopt's leading write ([adoptRemoteSegment]).
+     *   ([flushActiveSegment]), and an adopt's leading write ([adoptRemoteSegment]), which lands
+     *   ahead of its segment but behind any active-segment write the turn owes, so if the adopt is
+     *   refused it passes the keys only by seqs a peer handed back.
      *
      * A segment becomes sealed on disk only through a roll's index, an adopt's leading one or the
      * migration's, and each claims the seqs of what it seals, so the write that first names a

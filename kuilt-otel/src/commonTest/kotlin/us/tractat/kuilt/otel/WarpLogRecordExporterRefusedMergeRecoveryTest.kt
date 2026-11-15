@@ -220,9 +220,17 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
             { assertEquals(1, refusals, "the rig refused $refusals writes, not exactly the adopted segment's") },
             { assertTrue(refused is ExportResult.Failure, "the refused merge reported $refused") },
             { assertTrue("foreign1" !in durableBefore, "the refused merge's record was durable already: $durableBefore") },
-            // One turn: the adopt's index and segment, then the active segment. Two turns would
-            // write the active segment twice.
-            { assertEquals(3, turnWrites.size, "the batch wrote ${turnWrites.map { it.key.name }}, not one adopting turn") },
+            // One turn: the index the refused merge left dirty and the active segment, then the
+            // adopt's index and segment. The active segment goes first so the adopt's index cannot
+            // claim an own seq no key holds. Two turns would write the active segment twice.
+            { assertEquals(4, turnWrites.size, "the batch wrote ${turnWrites.map { it.key.name }}, not one adopting turn") },
+            {
+                assertEquals(
+                    1,
+                    turnWrites.count { it.key.name == segmentKeyForTest(0) },
+                    "the batch wrote ${turnWrites.map { it.key.name }}, not the active segment once",
+                )
+            },
             { assertEquals(1, adopted.size, "the turn adopted $adopted, not exactly one segment") },
             { assertEquals(ExportResult.Success, exported) },
             { assertTrue("local9" in durable, "the admitted record was lost: $durable") },

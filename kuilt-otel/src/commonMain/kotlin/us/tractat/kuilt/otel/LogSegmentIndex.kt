@@ -64,10 +64,15 @@ import kotlinx.serialization.encoding.Encoder
  *   another author's seq is never minted here.
  *
  *   **Bounded on both sides, since seqs are dense.** It must reach every seq in a segment the
- *   index names sealed, and it must not pass a seq no key holds. A turn's leading index write
- *   lands before its segment write, so it claims only what earlier segment writes put on disk;
- *   claiming the turn's own new seqs, with the segment write then refused, left a restart's log
- *   holding a hole no drop could fold past (the cost below, with nothing to heal it).
+ *   index names sealed, and it must not pass the seqs the keys hold except by ones a peer holds
+ *   too. A turn's leading index write lands before its segment write, so it claims only what
+ *   earlier segment writes put on disk; claiming the turn's own new seqs, with the segment write
+ *   then refused, left a restart's log holding a hole no drop could fold past (the cost below,
+ *   with nothing to heal it). The one write that may claim more is a merge's adopt, whose index
+ *   names its segment before writing it. It claims what the adopted log carries, and the turn
+ *   writes the active segment first, so if the adopt is then refused, the claim passes the keys
+ *   only by seqs of this replica's that a peer handed back and this store had lost. That peer can
+ *   hand them back again, so that hole can heal.
  *
  *   **The raise has a cost of its own whenever it passes seqs the loaded log lacks**: a sealed
  *   segment that was not read (the case it exists for), records [WarpLogRecordExporter] could not
