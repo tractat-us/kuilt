@@ -149,6 +149,10 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
         val durableAfter = bodiesAfterRestart(backing)
         val writesAfterExport = backing.writes().size
         val gossip = exporter.merge(remote)
+        // Re-admitting the record, as dropping its id from `seenIds` would, keeps two copies.
+        val copiesInMemory = exporter.snapshot().toList().count { it.recordId == recordId(500) }
+        val copiesAfterRestart = exporterFor(backing).also { it.recover() }
+            .snapshot().toList().count { it.recordId == recordId(500) }
 
         assertAll(
             { assertEquals(1, refusals, "the rig refused $refusals writes, not exactly the adopted segment's") },
@@ -160,6 +164,8 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
             { assertTrue((0 until 6).all { "foreign$it" in durableAfter }, "the refused merge's records were lost: $durableAfter") },
             { assertEquals(ExportResult.Success, gossip) },
             { assertEquals(writesAfterExport, backing.writes().size, "the export's adopt left the merge flag set") },
+            { assertEquals(1, copiesInMemory, "the log holds $copiesInMemory records with one id") },
+            { assertEquals(1, copiesAfterRestart, "the store holds $copiesAfterRestart records with one id") },
         )
     }
 
