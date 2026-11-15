@@ -160,6 +160,66 @@ class WarpLogRecordExporterUnreadSealedSegmentIdsTest {
         )
     }
 
+    // ── The invariant both repros rest on ──────────────────────────────────────────────────
+
+    /**
+     * Every index the exporter writes covers this replica's ids in every segment it names as
+     * sealed, **from the write that first names it**: a merge's adopt names its segment before
+     * writing it, and a roll names the segment it seals after writing it. A sealed key is never
+     * written again and a number is never reused, so the last bytes written under a key are that
+     * segment's sealed content.
+     *
+     * Driven through rolls, evictions, window passes that retire segments, two merges, and a clear.
+     */
+    @Test
+    fun everyIndexWrittenCoversTheIdsOfEverySegmentItNamesSealed() = runTest {
+        val backing = RecordingStore()
+        val writer = WarpLogRecordExporter(replica, backing, maxRecords = 10, segmentOps = 8)
+        repeat(30) { writer.export(record(it)) }
+        val (peerLog, _) = Rga.empty<LogRecord>().insertAllAfter(ReplicaId("B"), RgaId.HEAD, listOf(record(900)))
+        assertEquals(ExportResult.Success, writer.merge(peerLog))
+        repeat(30) { writer.export(record(100 + it)) }
+        assertEquals(ExportResult.Success, writer.merge(writer.snapshot().piece(peerLog)))
+        assertEquals(ExportResult.Success, writer.clear())
+        repeat(20) { writer.export(record(200 + it)) }
+
+        val writes = backing.operations().filter { it.kind == StoreOpKind.WRITE }
+        val sealedContent = writes.associate { it.key.name to requireNotNull(it.bytes) }
+        var segmentsChecked = 0
+        var idsChecked = 0
+        val breaches = mutableListOf<String>()
+        writes.filter { it.key == INDEX_KEY_FOR_TEST }.forEachIndexed { at, write ->
+            val index = decodeIndexForTest(requireNotNull(write.bytes))
+            for (number in index.sealedSegments) {
+                val bytes = sealedContent[segmentKeyForTest(number)] ?: continue
+                val segment = decodeSegmentForTest(bytes)
+                val own = segment.operations().flatMap { op ->
+                    when (op) {
+                        is RgaOp.Insert -> sequenceOf(op.id)
+                        is RgaOp.Remove -> emptySequence()
+                        is RgaOp.Compact -> op.positions.keys.asSequence()
+                    }
+                }.filter { it.replicaId == replica }.toList()
+                segmentsChecked++
+                idsChecked += own.size
+                own.filter { it.lamport > index.lamportHighWater || it.seq > index.seqHighWater }.forEach { id ->
+                    breaches += "index write $at ($index) does not cover $id in segment $number"
+                }
+                if (segment.compactedBelow[replica] > index.seqHighWater) {
+                    breaches += "index write $at ($index) is below segment $number's floor ${segment.compactedBelow}"
+                }
+            }
+        }
+        val retiredSomething = writes.any { it.key == INDEX_KEY_FOR_TEST && decodeIndexForTest(requireNotNull(it.bytes)).retired.isNotEmpty() }
+        assertAll(
+            // The rig: the run sealed and retired segments, and the walk read ids out of them.
+            { assertTrue(segmentsChecked > 20, "only $segmentsChecked sealed segments checked") },
+            { assertTrue(idsChecked > 50, "only $idsChecked ids checked") },
+            { assertTrue(retiredSomething, "no window pass retired a segment") },
+            { assertEquals(emptyList(), breaches) },
+        )
+    }
+
     // ── A clear keeps the high-water ────────────────────────────────────────────────────────
 
     /**
