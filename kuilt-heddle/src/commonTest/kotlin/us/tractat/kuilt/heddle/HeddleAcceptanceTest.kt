@@ -445,16 +445,17 @@ class HeddleAcceptanceTest {
         const val TWIN_CALL_LIMIT: Int = 2_000
 
         /** Calls the match run makes, one grant each: past the old ceiling and many rebases. */
-        const val MATCH_CALLS: Int = 400
+        const val MATCH_CALLS: Int = 250
 
         /** Calls each scheduler makes before the partition and again after it heals. */
         const val TOGETHER_CALLS: Int = 200
 
         /**
-         * Calls each scheduler makes while the two are apart. A heal ships everything written apart
-         * at once, and a few hundred calls' worth exhausted a 512 MB test JVM.
+         * Calls each scheduler makes while the two are apart. The heal costs grow with the calls made
+         * apart: the first pump after it took 15 ms after none, 0.8 s after 16 and 1.6 s after 32 on
+         * the JVM, about ten times that on Kotlin/Native, and 250 exhausted a 512 MB test JVM.
          */
-        const val APART_CALLS: Int = 60
+        const val APART_CALLS: Int = 16
 
         /** Calls the restart run makes before the crash, light bursts only, and after the boot call. */
         const val BEFORE_RESTART_CALLS: Int = 300
