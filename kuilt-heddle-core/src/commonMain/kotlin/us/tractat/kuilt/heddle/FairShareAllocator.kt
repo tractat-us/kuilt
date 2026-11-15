@@ -97,6 +97,9 @@ public class FairShareAllocator(
     /** Where its parent's clock stood when this peer saw a child stop asking, until it asks again. */
     private val departures = HashMap<AttachmentId, Int128>()
 
+    /** How far each child's shifts so far have run past its parent's clock, under one tick ([shiftOf]). */
+    private val shiftRemainders = HashMap<AttachmentId, ShiftRemainder>()
+
     /**
      * Whether [schedule] rebases a busy parent by raising its origin (#3353). On by default. **Test
      * only:** a test switches it off to run a twin that never rebases and compare the picks; a parent
@@ -124,6 +127,7 @@ public class FairShareAllocator(
         clocks.putAll(memory.clocks)
         served.putAll(memory.served)
         departures.putAll(memory.departures)
+        shiftRemainders.putAll(memory.shiftRemainders)
     }
 
     /**
@@ -138,6 +142,7 @@ public class FairShareAllocator(
             clocks = clocks.entries.sortedBy { it.key }.associate { it.key to it.value },
             served = served.entries.sortedBy { it.key }.associate { it.key to it.value },
             departures = departures.entries.sortedBy { it.key }.associate { it.key to it.value },
+            shiftRemainders = shiftRemainders.entries.sortedBy { it.key }.associate { it.key to it.value },
         )
 
     /**
@@ -150,6 +155,7 @@ public class FairShareAllocator(
         it.clocks.putAll(clocks)
         it.served.putAll(served)
         it.departures.putAll(departures)
+        it.shiftRemainders.putAll(shiftRemainders)
         it.rebasesForTest = rebasesForTest
         it.rebaseEnabled = rebaseEnabled
     }
@@ -172,6 +178,7 @@ public class FairShareAllocator(
         demandingObserved.keys.removeAll(edges)
         served.keys.removeAll(edges)
         departures.keys.removeAll(edges)
+        shiftRemainders.keys.removeAll(edges)
     }
 
     /** The demanding state [edge] was last observed in, or `null` when it has never been observed. */
@@ -302,6 +309,8 @@ public class FairShareAllocator(
         served.putAll(fork.served)
         departures.clear()
         departures.putAll(fork.departures)
+        shiftRemainders.clear()
+        shiftRemainders.putAll(fork.shiftRemainders)
         rebasesForTest = fork.rebasesForTest
     }
 
@@ -433,12 +442,15 @@ public class FairShareAllocator(
         val joiners = joinersOf(edges)
         if (joiners.isEmpty()) return null
         val stayers = edges.filter { it.record.id !in joiners }
-        val front = joinFront(edges, joiners)
-        // A returner lands where its parent's clock puts it, not at the front (#3376).
-        val landings = returnerLandings(parent, edges)
+        // A returner lands where its parent's clock puts it, not at the front (#3376), and counts in
+        // the front there (#3446).
+        val shifts = previewShifts(parent, edges)
+        val front = joinFront(landed(edges, shifts), joiners - shifts.keys)
         val past = edges.any { front.ticksForWide(it.record.weight) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
             stayers.any { HeddlePolicy.effectiveTicksWide(it) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
-            edges.any { edge -> landings[edge.record.id]?.let { it >= Int128.of(rebaseThreshold(edge.record.weight)) } == true }
+            edges.any { edge ->
+                shifts[edge.record.id]?.let { HeddlePolicy.effectiveTicksWide(edge) + it.ticks >= Int128.of(rebaseThreshold(edge.record.weight)) } == true
+            }
         if (!past) return null
         val step = gridStep(edges) ?: return null
         val demanding = stayers.filter { it.gauge != null && HeddlePolicy.isDemanding(it) }
@@ -857,12 +869,14 @@ public class FairShareAllocator(
         if (raise != null) ledger.mutateOrSkip { it.raiseOrigin(parent, it.origin(parent) + raise) }
         val edges = if (raise != null) policyEdges(ledger.current, parent, demand) else first
         if (joiners.isNotEmpty()) {
-            val front = joinFront(edges, joiners)
+            val shifts = edges.filter { it.record.id in returners }.associate { it.record.id to shiftOf(it, clock) }
+            // A returner is counted in the front where it lands, not left out as a joiner (#3446).
+            val front = joinFront(landed(edges, shifts), joiners - returners)
             if (unseated.isNotEmpty()) {
                 ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
             }
             clampWakers(edges, wakers - returners, front)
-            moveReturners(edges, returners, clock)
+            moveReturners(edges, shifts)
         }
         for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
     }
@@ -944,6 +958,7 @@ public class FairShareAllocator(
         wakeOffsets.keys.removeAll(departed)
         served.keys.removeAll(departed)
         departures.keys.removeAll(departed)
+        shiftRemainders.keys.removeAll(departed)
     }
 
     /** Whether this peer last saw [edge] asking, and it is seated: a child its parent's clock counts. */
@@ -1000,58 +1015,95 @@ public class FairShareAllocator(
     }
 
     /**
-     * Where each child at [parent] that would come back by the clock this round lands, as an
-     * effective position in ticks of its own grid: its position now plus the shift [moveReturners]
-     * would add. Changes nothing; [preSeatRaise] reads it, because a returner does not land at the
-     * front the other joiners are seated at or clamped to.
+     * A returner's shift ([shiftOf]): the [ticks] it moves forward on its own grid, and the
+     * [remainder] those ticks ran past its parent's clock, for its next return to take off; `null`
+     * when the shift landed exactly.
      */
-    private fun returnerLandings(parent: GroupId, edges: List<PolicyEdge>): Map<AttachmentId, Int128> {
+    private class Shift(val ticks: Int128, val remainder: ShiftRemainder?)
+
+    /**
+     * How far each child at [parent] that would come back by the clock this round would move
+     * ([shiftOf]), at the clock [markDepartures] would run it to. Changes nothing; [preSeatRaise]
+     * reads it, because a returner lands where its shift puts it, not at the front.
+     */
+    private fun previewShifts(parent: GroupId, edges: List<PolicyEdge>): Map<AttachmentId, Shift> {
         val returners = edges.filter { isReturner(it) }
         if (returners.isEmpty()) return emptyMap()
         val clock = (clocks[parent] ?: Int128.ZERO) + clockStep(parent, edges.filter(::wasAsking), served)
-        return returners.associate { edge -> edge.record.id to HeddlePolicy.effectiveTicksWide(edge) + shiftOf(edge, clock) }
+        return returners.associate { it.record.id to shiftOf(it, clock) }
     }
 
     /**
-     * How far [edge] comes back moved: the clock's run from its departure to [clock], on its own
-     * grid, never below zero. Each end is read on that grid rounded up ([clockOnGrid]) and the shift
-     * is their difference, so where the run does not land on the grid it is off by under one of the
-     * child's ticks, either way.
+     * [edges] with each child that [shifts] names moved by its shift: where every returner will
+     * stand once [moveReturners] lands, for [joinFront] to count it there (#3446). A shifted
+     * position is not stale in the sense of #1752, which is about a joiner reading from further back
+     * than it will compete: a returner competes from exactly here, as far ahead of or behind its
+     * siblings as it left, so leaving it out of the front seated a newborn or clamped a waker
+     * against a set that did not include a child it was about to compete with.
+     */
+    private fun landed(edges: List<PolicyEdge>, shifts: Map<AttachmentId, Shift>): List<PolicyEdge> =
+        if (shifts.isEmpty()) {
+            edges
+        } else {
+            edges.map { edge -> shifts[edge.record.id]?.let { edge.copy(offsetTicks = edge.offsetTicks + it.ticks) } ?: edge }
+        }
+
+    /**
+     * How far [edge] comes back moved (#3376, #3416 review): the clock's run from its departure to
+     * [clock] on its own grid, less what its earlier shifts already ran past the clock, rounded up
+     * to a whole tick and never below zero.
      *
-     * Not one ceiling of the run, `⌈(clock − left) / tick⌉`, which can never fall short but rounds
-     * every return up. That error has a sign, so it adds up: about half a tick a return, measured
-     * on `BurstLagTest`'s 3:1 rigs as 66 units of a fair 75 to the light child over 300 bursts. The
-     * difference of two readings errs both ways, and those rigs land on their fair split exactly.
+     * On a grid of weight `n / d` the run is `(clock − left) · n / (CLOCK_GRID · d)` ticks, which is
+     * a fraction in general. The carried remainder `r` comes off it, the result rounds up, and what
+     * the rounding added, `⌈run − r⌉ − (run − r)`, is carried to the next return. So a child's
+     * shifts add up to its runs plus its last remainder, which is in `[0, 1)` tick: never credit, and
+     * nothing builds up however often it returns.
+     *
+     * Two simpler rules each drift. The difference of the two ends, each read on the grid rounded
+     * up, errs by where those ends fall between ticks, and that does not telescope: a repeating
+     * pattern of bursts locks the ends into one phase, so the error comes back the same every
+     * return and adds up, toward credit as readily as penalty. Up to a seventh of a tick a return
+     * was found toward credit, which §10.5 forbids. One ceiling of each run never credits, but it
+     * rounds every return up, about half a tick a return, measured on `BurstLagTest`'s 3:1 rigs as
+     * 66 units of a fair 75 to the light child over 300 bursts.
+     *
+     * A run that went backward, refunds outweighing grants while the child was away, moves it by
+     * nothing, since a shift only ever gives a turn up. Its remainder is still carried, so what that
+     * drops is the backward run alone, the penalty side. A remainder taken at another weight
+     * denominator is dropped, by under one tick a reweighting, also the penalty side.
      */
-    private fun shiftOf(edge: PolicyEdge, clock: Int128): Int128 {
-        val left = checkNotNull(departures[edge.record.id]) { "a returner with no departure: ${edge.record.id.value}" }
+    private fun shiftOf(edge: PolicyEdge, clock: Int128): Shift {
+        val id = edge.record.id
+        val left = checkNotNull(departures[id]) { "a returner with no departure: ${id.value}" }
         val w = edge.record.weight
-        return maxOf(Int128.ZERO, clockOnGrid(clock, w) - clockOnGrid(left, w))
+        val d = w.denominator
+        val carried = shiftRemainders[id]?.takeIf { it.denominator == d }?.numerator ?: Int128.ZERO
+        // The run less the carry, in units of 1 / (CLOCK_GRID · d) of a tick, so it is a whole number.
+        val owed = wide(mulDiv(clock - left, w.numerator, 1L, Rounding.FLOOR), clock, w) - carried
+        // ⌈owed / (CLOCK_GRID · d)⌉ in two exact steps, since CLOCK_GRID · d can pass a Long.
+        val ticks = wide(mulDiv(wide(mulDiv(owed, 1L, CLOCK_GRID, Rounding.CEILING), clock, w), 1L, d, Rounding.CEILING), clock, w)
+        val past = wide(mulDiv(wide(mulDiv(ticks, CLOCK_GRID, 1L, Rounding.FLOOR), clock, w), d, 1L, Rounding.FLOOR), clock, w) - owed
+        return Shift(maxOf(Int128.ZERO, ticks), if (past == Int128.ZERO) null else ShiftRemainder(past, d))
     }
 
+    /** [value], or an [ArithmeticException] naming the clock read when it overflowed 128 bits. */
+    private fun wide(value: Int128?, clock: Int128, w: Weight): Int128 =
+        value ?: throw ArithmeticException("Int128 overflow: a clock of $clock read at weight $w")
+
     /**
-     * Move each of [returners] forward by how far [clock] ran since this peer saw it leave, read on
-     * its own grid and never by less than zero, and clear its departure (#3376). The shift adds to
-     * the wake offset it already carries, so it only ever gives a turn up.
+     * Move each returner [shifts] names forward by its shift, carry its remainder, and clear its
+     * departure (#3376). The shift adds to the wake offset it already carries, so it only ever gives
+     * a turn up.
      */
-    private fun moveReturners(edges: List<PolicyEdge>, returners: Set<AttachmentId>, clock: Int128) {
+    private fun moveReturners(edges: List<PolicyEdge>, shifts: Map<AttachmentId, Shift>) {
         for (edge in edges) {
             val id = edge.record.id
-            if (id !in returners) continue
-            wakeOffsets[id] = edge.offsetTicks + shiftOf(edge, clock)
+            val shift = shifts[id] ?: continue
+            wakeOffsets[id] = edge.offsetTicks + shift.ticks
             departures.remove(id)
+            val remainder = shift.remainder
+            if (remainder == null) shiftRemainders.remove(id) else shiftRemainders[id] = remainder
         }
-    }
-
-    /**
-     * [clock] on the grid of a child of weight [w] = `n / d`, rounded up: `⌈clock · n / (CLOCK_GRID · d)⌉`
-     * ticks, since a clock tick is `1 / CLOCK_GRID` of a weight-1 child's, taken in two exact steps.
-     */
-    private fun clockOnGrid(clock: Int128, w: Weight): Int128 {
-        val scaled = mulDiv(clock, w.numerator, CLOCK_GRID, Rounding.CEILING)
-            ?: throw ArithmeticException("Int128 overflow: a clock of $clock read at weight $w")
-        return mulDiv(scaled, 1L, w.denominator, Rounding.CEILING)
-            ?: throw ArithmeticException("Int128 overflow: a clock of $clock read at weight $w")
     }
 
     /**
@@ -1129,6 +1181,8 @@ public class FairShareAllocator(
             // sides are on the waker's grid, and the result is stored on it, so a stored offset
             // never carries a front's denominator into the next one (#3313).
             wakeOffsets[edge.record.id] = maxOf(edge.offsetTicks, computed)
+            // A clamp puts it at the front, so its shifts' rounding starts over from there.
+            shiftRemainders.remove(edge.record.id)
         }
     }
 
@@ -1152,16 +1206,6 @@ public class FairShareAllocator(
     private companion object {
         /** A backstop against a policy that never runs dry; one call never applies more grants. */
         const val MAX_ROUNDS_PER_CALL: Int = 100_000
-
-        /**
-         * Clock ticks to one tick of a weight-1 child's grid: the least common multiple of 1 to 16.
-         * A clock step divides by the asking children's total weight, so this makes a step exact for
-         * every total whose factors divide it. Not every total: one with a prime factor above 13, or
-         * a prime power past this one's, rounds each step up by under one clock tick, the penalty
-         * side. A shift read on a child's grid is off by under one of that child's ticks, either way
-         * ([shiftOf]).
-         */
-        const val CLOCK_GRID: Long = 720_720L
 
         /** Clock ticks to a unit of virtual time: a child's [TICKS_PER_UNIT], times [CLOCK_GRID]. */
         const val CLOCK_TICKS_PER_UNIT: Long = TICKS_PER_UNIT * CLOCK_GRID
@@ -1258,3 +1302,13 @@ internal class Rebase(val ledger: EntitlementLedger)
  * allocator's wake offsets until [rebase] is adopted.
  */
 internal class RebasingPick(val settled: EntitlementLedger, val pick: ChildPick, val rebase: Rebase?)
+
+/**
+ * Clock ticks to one tick of a weight-1 child's grid: the least common multiple of 1 to 16. A clock
+ * step divides by the asking children's total weight, so this makes a step exact for every total
+ * whose factors divide it. Not every total: one with a prime factor above 13, or a prime power past
+ * this one's, rounds each step up by under one clock tick, the penalty side. A shift read on a
+ * child's grid is a whole number of its ticks, and the fraction it rounds up by is carried to its
+ * next return ([ShiftRemainder]), so a child's shifts never run more than one tick past the clock.
+ */
+internal const val CLOCK_GRID: Long = 720_720L
