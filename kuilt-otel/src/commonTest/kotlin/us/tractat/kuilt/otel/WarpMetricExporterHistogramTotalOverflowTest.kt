@@ -164,6 +164,9 @@ class WarpMetricExporterHistogramTotalOverflowTest {
         assertNull(exporter.renderedCount(), "the rig: the series is empty")
 
         assertRefusedWhole(store, exporter, listOf(positive(scale, offset = 10, Long.MAX_VALUE, 1L)))
+        // Three full buckets: a total summed in a Long wraps twice, to Long.MAX_VALUE - 2, which a
+        // sign check would wave through.
+        assertRefusedWhole(store, exporter, listOf(positive(scale, offset = 10, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE)))
 
         val control = exporter.record(listOf(positive(scale, offset = 10, Long.MAX_VALUE - 1L, 1L)))
         assertAll(
