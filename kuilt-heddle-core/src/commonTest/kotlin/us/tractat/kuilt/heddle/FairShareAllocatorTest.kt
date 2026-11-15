@@ -183,14 +183,21 @@ class FairShareAllocatorTest {
 
     @Test
     fun aRewakeCannotLowerAnEffectiveVirtualService() {
-        // 220 = e1's 200 plus e2's 20: holdings run out from the second round on, so no later grant
-        // can move a raw virtual service and mask the clamp.
-        val cell = flatLedger(mapOf(self to 220L))
+        // e1's 200, then e2's 20 minted after it: holdings run out from the second round on, so no
+        // later grant can move a raw virtual service and mask the clamp.
+        val cell = flatLedger(mapOf(self to 200L))
         val allocator = FairShareAllocator(self, policy)
         val starved = newborn(cell, "e3")
 
-        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to Demand(200L, 10L), starved to competingUnservable))
-        assertEquals(200L, issued(cell, e1), "e1 runs alone to its target")
+        // e1 runs out of holdings, not appetite, so it is still asking when the call ends. One that
+        // reached its target would be seen leaving at that grant, a joiner when it asks again, and
+        // so out of the front e2 wakes into (#3416 review).
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to hungry, starved to competingUnservable))
+        assertAll(
+            { assertEquals(200L, issued(cell, e1), "e1 runs alone through the holdings") },
+            { assertEquals(true, allocator.lastObservedDemanding(e1), "the rig: e1 is still asking, so it holds the front") },
+        )
+        cell.apply(cell.current.mint(MintId("e2"), root, self, 20L))
 
         // e2 wakes into a front of mean(e1 at 200, e3 at 0) = 100, then runs its 20.
         allocator.schedule(
