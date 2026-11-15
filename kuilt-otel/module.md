@@ -88,7 +88,9 @@ clear cannot prove writes work. A failed read or decode of saved state sets
 later turn retried a refused read; `lastFailure` retains the latest cause after recovery.
 Bad bytes start the log and span buffers fresh. A store that refuses the read instead
 makes every log or span turn fail, and write nothing, until a later read succeeds. That
-keeps the records and spans on disk the read would have found. A span turn that read
+keeps the records and spans on disk the read would have found. Log turns retry the read
+on a window that doubles up to 63 turns, so a long outage costs one store read per 64 log
+turns; `recover()` always reads. A span turn that read
 stops counts in `failed`, and the first span write that lands resolves it.
 A failed turn may still have saved its data, and a cancelled turn counts as neither
 acknowledged nor failed; a cancelled metric batch keeps the turns of the kinds it had

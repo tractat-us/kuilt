@@ -798,6 +798,19 @@ public class WarpLogRecordExporter(
          * because that number was never sealed: no record under it was ever acknowledged durable.
          */
         class Sweep(val number: Long) : StoreAction
+
+        /**
+         * Delete [LEGACY_KEY], and fail the turn if the store refuses. Only [clearTurn] emits it,
+         * last, after the writes and sweeps that forget the records in the segments.
+         *
+         * Unlike [Sweep], this is not best-effort. A legacy blob can outlive its migration, and
+         * an index that later stops decoding falls back to it ([migrateBehindUndecodableIndex]),
+         * which loads it verbatim. The floor and the deletes that made this replica forget lived
+         * in segments the lost index named, so a blob still there would bring back records the
+         * app cleared. A clear that returns [ExportResult.Failure] here is retried by its caller,
+         * as any failed clear is, until the key is gone.
+         */
+        data object ForgetLegacy : StoreAction
     }
 
     /**
@@ -893,8 +906,39 @@ public class WarpLogRecordExporter(
         /** Read, absent, or undecodable and started fresh. Turns write. */
         data object Settled : PersistedRead
 
-        /** The last read was [Load.Refused]. Every turn reads again first, and fails while it is refused. */
-        class Owed(val cause: Throwable) : PersistedRead
+        /**
+         * The last read was [Load.Refused], the [refusals]-th in a row. A turn reads again first,
+         * and fails while it is refused, unless it falls in the next [skipTurns] turns: those fail
+         * with [cause] without touching the store (#3404).
+         */
+        class Owed(val cause: Throwable, val refusals: Int, val skipTurns: Int) : PersistedRead {
+            /** This window with one skipped turn spent. */
+            fun skipped(): Owed = Owed(cause, refusals, skipTurns - 1)
+
+            companion object {
+                /**
+                 * The state after a refused read whose predecessor was [prior]: one more refusal in
+                 * a row, `k`, and a window of `2^k − 1` turns. `k` stops at [SATURATED_REFUSALS],
+                 * which is the window's one cap.
+                 */
+                fun after(prior: PersistedRead, cause: Throwable): Owed {
+                    val refusals = minOf(((prior as? Owed)?.refusals ?: 0) + 1, SATURATED_REFUSALS)
+                    return Owed(cause, refusals, (1 shl refusals) - 1)
+                }
+
+                /**
+                 * Where `k` stops, so the longest run of turns that refuse without reading is
+                 * `2^6 − 1 = 63`, reached on the sixth refusal in a row. A long outage pays one read
+                 * per 64 turns, so under 2% of drained batches wait out the store's timeout. The
+                 * price is on the far side of the outage: a store that heals inside a window is
+                 * seen up to 63 turns late, and each of those turns drops its batch. The drain is
+                 * opportunistic and one turn is about one batch, so the worst case is 63 dropped
+                 * batches after the heal. It is not bounded in time: how long those 63 turns take
+                 * is however often the app logs.
+                 */
+                private const val SATURATED_REFUSALS = 6
+            }
+        }
     }
 
     /**
@@ -929,11 +973,20 @@ public class WarpLogRecordExporter(
      * - **An undecodable entry** is bad data. The exporter starts fresh.
      * - **A refused store call** — a throw, or a `CancellationException` the [store] mints at this
      *   live caller from its own `withTimeout` — leaves what is on disk unknown. The exporter
-     *   **fails closed**: every [export], [merge] and [clear] reads again first, and returns
-     *   [ExportResult.Failure] and writes nothing while the read is refused. The first read that
+     *   **fails closed**: an [export], [merge] or [clear] reads again first, or, inside the backoff
+     *   window below, refuses without reading, and returns [ExportResult.Failure] and writes nothing
+     *   while the read is refused. The first read that
      *   succeeds installs the persisted log and that turn runs. Starting fresh here instead wrote
      *   an index naming only segment 0 over an index this run never read, and the store cannot
      *   list keys, so every other segment was lost (#3384).
+     *
+     *   The re-reads back off, counted in turns: after `k` refused reads in a row the next
+     *   `min(2^k − 1, 63)` turns fail the same way without touching the store, so a long outage
+     *   costs one store read per 64 turns rather than one per drained batch (#3404). This call is
+     *   an explicit request, so it **always reads**, window or not. A read that lands, here or in a
+     *   turn, closes the window and resets `k`. One refused here counts toward `k` like any other.
+     *   Always reading is not an invitation to call it again to retry: the contract above stands,
+     *   once and never beside a turn, and the turns do the retrying.
      *
      * Each guard asks `currentCoroutineContext().ensureActive()` before treating a throw as a
      * refusal, so a cancellation of the caller's own job still propagates (#3384).
@@ -961,27 +1014,28 @@ public class WarpLogRecordExporter(
             currentCoroutineContext().ensureActive()
             Load.Undecodable(cause)
         }
-        val read = when (load) {
-            Load.Absent -> PersistedRead.Settled
-            is Load.Found -> {
-                installRecovered(load.state)
-                PersistedRead.Settled
-            }
+        when (load) {
+            Load.Absent -> Unit
+            is Load.Found -> installRecovered(load.state)
             is Load.Undecodable -> {
                 logger.error(load.cause) { "otel.logs: persisted state could not be decoded, starting fresh" }
                 recordRecoveryFailure(load.cause)
-                PersistedRead.Settled
             }
-            is Load.Refused -> PersistedRead.Owed(load.cause)
+            // One more refusal in a row, so a longer window; see PersistedRead.Owed.after.
+            is Load.Refused -> return lock.withLock {
+                PersistedRead.Owed.after(persistedRead, load.cause).also { persistedRead = it }
+            }
         }
-        lock.withLock { persistedRead = read }
-        return read
+        // Any read that lands closes the window and resets the count of refusals.
+        lock.withLock { persistedRead = PersistedRead.Settled }
+        return PersistedRead.Settled
     }
 
     /**
      * Run [turn], unless the last read of the persisted state was refused: then read again first,
-     * and while that read is still refused return [refused] of the turn's [ExportResult.Failure]
-     * without running the turn. Must hold [writeMutex].
+     * or, inside the backoff window, refuse without reading, and while that read is still refused
+     * return [refused] of the turn's [ExportResult.Failure] without running the turn. Must hold
+     * [writeMutex].
      *
      * The turn never starts, and a refused read returns before recovery deletes anything, so a
      * refused read writes, deletes and mutates nothing. (A refused *migration* write is the one
@@ -989,9 +1043,24 @@ public class WarpLogRecordExporter(
      * lets the read that heals install the persisted log wholesale: nothing in memory is newer.
      * The refusal is logged once, by [recover]; each refused turn counts on [health] and logs at
      * debug, as a store that stays unreadable would otherwise log once per export.
+     *
+     * A turn inside a refusal's window ([PersistedRead.Owed.skipTurns]) skips the read and refuses
+     * as a refused read does: a [ExportResult.Failure] of the last refusal's cause, counted the same
+     * way, with no store call at all (#3404). With no store call it would not notice the caller's
+     * own cancellation, so it asks: a cancelled caller is cancelled here as a read's `ensureActive`
+     * cancels it, and spends no turn of the window.
      */
     private suspend inline fun <T> afterPersistedRead(refused: (ExportResult) -> T, turn: () -> T): T {
-        if (lock.withLock { persistedRead } is PersistedRead.Owed) {
+        val owed = lock.withLock { persistedRead } as? PersistedRead.Owed
+        if (owed != null && owed.skipTurns > 0) {
+            currentCoroutineContext().ensureActive()
+            // A compare, not a blind store: if anything replaced the window between the read above
+            // and here, this turn spends nothing of the new one.
+            lock.withLock { if (persistedRead === owed) persistedRead = owed.skipped() }
+            logger.debug { "otel.logs: persisted state was refused; this turn skips the read and writes nothing: ${owed.cause}" }
+            return refused(failure(owed.cause))
+        }
+        if (owed != null) {
             val read = readPersistedState()
             if (read is PersistedRead.Owed) {
                 logger.debug { "otel.logs: persisted state is still unreadable, so this turn writes nothing: ${read.cause}" }
@@ -1070,7 +1139,7 @@ public class WarpLogRecordExporter(
         }
         if (indexBytes == null) return migrateLegacyBlob()
         val index = runCatchingCancellable { cbor.decodeFromByteArray(indexSerializer, indexBytes) }
-            .getOrElse { cause -> return Load.Undecodable(cause) }
+            .getOrElse { cause -> return migrateBehindUndecodableIndex(cause) }
         // The active segment before anything else, so a refusal returns having deleted nothing
         // and costs a refused turn two reads, not one per segment.
         val active = when (val read = readSegment(index.active)) {
@@ -1137,6 +1206,39 @@ public class WarpLogRecordExporter(
             ),
         )
     }
+
+    /**
+     * What an index that does not decode ([cause]) leaves to load: the legacy blob, if one is still
+     * there, and otherwise nothing.
+     *
+     * A legacy key can outlive its migration, because the delete that follows the index write is
+     * best-effort, and a store whose delete keeps failing leaves the blob in place start after
+     * start. Starting fresh over that key wrote a segment 0 and an index over the migration's copy,
+     * and the next start, finding an index, swept the blob it never read (#3404). So the migration
+     * runs again: it copies the blob to segment 0 and writes a fresh index naming it, and what it
+     * finds is what this returns. A refused legacy read fails closed, as it does with no index at
+     * all; a blob that does not decode starts fresh.
+     *
+     * The records a later index named are not recovered either way; nothing names their segments
+     * any more. So the undecodable index is reported even when the blob loads.
+     *
+     * **The blob loads verbatim, and that is a trade.** What made this replica forget its records
+     * since the migration — the floor, the deletes, the `Compact`s — lived in segments the lost
+     * index named. A [clear] deletes the blob for that reason, so cleared records do not come back.
+     * Eviction does not: under [BufferPolicy.DROP_OLDEST] the blob's records may have been evicted
+     * long ago, and this brings them back. That is accepted. Old logs the app never cleared coming
+     * back is a smaller harm than losing logs nothing ever evicted.
+     */
+    private suspend fun migrateBehindUndecodableIndex(cause: Throwable): Load =
+        when (val legacy = migrateLegacyBlob()) {
+            Load.Absent -> Load.Undecodable(cause)
+            is Load.Found -> {
+                logger.error(cause) { "otel.logs: index does not decode; recovered the legacy entry it superseded" }
+                recordRecoveryFailure(cause)
+                legacy
+            }
+            is Load.Undecodable, is Load.Refused -> legacy
+        }
 
     /**
      * Delete the legacy key once an index is present. An index means one of two things: the
@@ -1411,8 +1513,9 @@ public class WarpLogRecordExporter(
      * **first** [ExportResult.Failure] is returned once it does.
      *
      * **The exception is a persisted state still unread.** After a refused read in [recover],
-     * a turn reads again before it admits anything. While the read is still refused, the turn
-     * admits nothing, and the rest of the batch returns that [ExportResult.Failure] unadmitted.
+     * a turn reads again before it admits anything, or, inside the backoff window, refuses without
+     * reading. While the read is still refused or skipped, the turn admits nothing, and the rest
+     * of the batch returns that [ExportResult.Failure] unadmitted.
      * Those records are **not** held anywhere: a caller that drops a failed batch, as
      * `CapturingAppender.drain` does, loses them. Re-exporting them is safe, because a record
      * whose id was already taken is skipped.
@@ -1437,7 +1540,8 @@ public class WarpLogRecordExporter(
         var firstFailure: ExportResult.Failure? = null
         while (from < records.size) {
             val outcome = writeMutex.withLock {
-                // A refused read refuses the rest of the batch: the next call reads again.
+                // A refused or skipped read refuses the rest of the batch: the next call reads
+                // again, or skips again inside the window.
                 afterPersistedRead(refused = { TurnOutcome(consumed = records.size - from, result = it) }) {
                     exportTurn(records, from)
                 }
@@ -1908,6 +2012,11 @@ public class WarpLogRecordExporter(
      * sealed segments — which is where the bytes are — are deleted through the ordinary
      * retirement ledger, so a refused delete is retried at the next start rather than leaked.
      *
+     * **The legacy single-blob key is deleted too, and that delete is not best-effort.** A blob can
+     * outlive its migration, and an index that later stops decoding falls back to it verbatim, so
+     * a blob left behind would bring back records this call forgot. A refused delete of it returns
+     * [ExportResult.Failure], and the retry deletes it again.
+     *
      * **Reclamation is total only on the export path.** A segment carrying an
      * [RgaOp.Compact] is never retired and a [merge]-adopted segment is pinned entire, so a
      * gossip-fed replica keeps residue after a clear. A replica fed only by [export] mints
@@ -1959,7 +2068,10 @@ public class WarpLogRecordExporter(
                 // the pass is a no-op but `activeSegment` still carries the suppression (floor
                 // and Compact ids) from the first attempt, so the write is still covering and the
                 // sealed segments are still retirable against the suppression that write carries.
-                pendingWrites(retire = true)
+                //
+                // The legacy delete goes last, and unconditionally for the same reason: a retry
+                // after a refused one must delete again. See StoreAction.ForgetLegacy.
+                pendingWrites(retire = true) + StoreAction.ForgetLegacy
             }
         }.getOrElse { cause ->
             logger.error(cause) { "WarpLogRecordExporter: buffer update failed during clear" }
@@ -2116,6 +2228,7 @@ public class WarpLogRecordExporter(
                     throw failure
                 }
                 is StoreAction.Sweep -> if (sweep(action.number)) swept += action.number
+                StoreAction.ForgetLegacy -> store.delete(LEGACY_KEY)
             }
         }
     }

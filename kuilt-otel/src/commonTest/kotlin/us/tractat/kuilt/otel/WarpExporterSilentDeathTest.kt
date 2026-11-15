@@ -80,8 +80,8 @@ class WarpExporterSilentDeathTest {
     }
 
     /**
-     * An unread index fails closed, and the exporter is not dead: it reads again on every turn and
-     * works the moment a read succeeds (#3384).
+     * An unread index fails closed, and the exporter is not dead: it reads again on the first turn
+     * past the refusal's backoff window (#3404) and works the moment a read succeeds (#3384).
      *
      * This arm used to pin the opposite, a start fresh on the refused read. The index names every
      * segment and the store cannot list keys, so a start fresh over an unread index wrote an index
@@ -101,7 +101,7 @@ class WarpExporterSilentDeathTest {
         val healed = exporter.export(record(2))
 
         assertAll(
-            { assertEquals(2, refusedWhileUnreadable, "the turn did not read the index again") },
+            { assertEquals(1, refusedWhileUnreadable, "the turn inside the backoff window read the index") },
             { assertTrue(whileUnreadable is ExportResult.Failure, "a turn ran over an unread index: $whileUnreadable") },
             { assertEquals(emptySet(), writtenWhileUnreadable, "a turn wrote over an unread index") },
             { assertEquals(ExportResult.Success, healed) },
