@@ -18,6 +18,7 @@ import platform.posix.errno
 import platform.posix.memcpy
 import us.tractat.kuilt.conformance.DeviceKeyStoreFixture
 import us.tractat.kuilt.store.NSFileManagerDurableStore
+import us.tractat.kuilt.store.StoreKey
 
 /** A new, empty directory under the temporary directory, named [prefix] plus a fresh UUID. */
 internal fun freshDirectory(prefix: String): String {
@@ -51,13 +52,16 @@ private fun NSData.toBytes(): ByteArray {
 }
 
 /**
- * Every permission taken off the grants record in [directory], so opening it fails with `EACCES` — what
- * an app with the Data Protection entitlement meets on a file it touches while the phone is locked —
- * while the directory still takes a new file, so a store that read the failure as "no grants" could
- * still write a new record over it.
+ * Every permission taken off the grants record in [directory], so opening it fails with `EACCES`, while
+ * the directory still takes a new file, so a store that read the failure as "no grants" could still
+ * write a new record over it. On an iPhone it stands in for the grants file's protection class keeping
+ * it closed after a restart until the first unlock; the store throws on any failed read but a missing
+ * file, so the errno is not what the property turns on.
  *
  * The rig checks that it took: run as root, a mode of `000` is not enforced. Its probe reads the record
- * through [NSFileManagerDurableStore] directly, the medium the store keeps it in. Restoring answers
+ * through [NSFileManagerDurableStore] directly, the medium the store keeps it in, and its write probe
+ * keeps a sibling record in [directory] the same way, the witness that the directory is still
+ * writable. Restoring answers
  * whether the record was written while it was unreadable: a write renames a new, readable file into
  * place, and a delete leaves none, while the faulted file stays unreadable until the restore.
  */
@@ -69,6 +73,7 @@ internal fun unreadableGrantsRecord(directory: String): DeviceKeyStoreFixture.Un
     check(access(record, R_OK) != 0) { "rig: $record is still readable after chmod 000 — running as root? The fault did not take" }
     return DeviceKeyStoreFixture.UnreadableGrants(
         probe = { NSFileManagerDurableStore(directory).read(AppleDeviceKeyStore.GRANTS) },
+        probeWrite = { NSFileManagerDurableStore(directory).write(PROBE_WRITE, byteArrayOf(1)) },
         restore = {
             val present = access(record, F_OK) == 0
             val rewritten = !present || access(record, R_OK) == 0
@@ -77,6 +82,9 @@ internal fun unreadableGrantsRecord(directory: String): DeviceKeyStoreFixture.Un
         },
     )
 }
+
+/** A record beside the grants, written only by [unreadableGrantsRecord]'s write probe. */
+private val PROBE_WRITE = StoreKey("probe-write")
 
 /** `---------`: the grants record may not be opened at all — [unreadableGrantsRecord]'s rig. */
 private const val NO_PERMISSIONS = 0
