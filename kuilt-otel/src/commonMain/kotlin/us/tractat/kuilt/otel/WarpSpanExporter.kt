@@ -297,9 +297,18 @@ public class WarpSpanExporter(
     }
 
     /**
-     * Join what the read found with memory, evict the join's excess over the cap, and allow writes.
-     * Memory holds no local export yet, only remote sets merged meanwhile, so the join is one
-     * `piece` and the excess one batch.
+     * Join what the read found with memory, raise the clock's floor, evict the join's excess over the
+     * cap, and allow writes. Memory holds no local export yet, only remote sets merged meanwhile, so
+     * the join is one `piece` and the excess one batch.
+     *
+     * The floor is the highest dot of this replica's in the join, taken **before** the eviction so
+     * an evicted span's dot still counts (#3407). It counts a span's own stamp and every predecessor
+     * it names: once this replica's span is evicted, a remote span that observed it may be the only
+     * evidence its dot was minted, and re-minting it would resolve that predecessor to a new span. It
+     * is raised before the state turns [SpanReadState.Recovered], in the same hold of [lock], and
+     * [export] mints before its write section only from a recovered exporter under that lock, so no
+     * stamp is minted below it. A clock whose own entry was corrupt starts at `seq=0` and would
+     * otherwise re-mint the dots these spans carry.
      */
     private fun spanReadLanded(read: SpanRead.Landed) {
         if (read is SpanRead.Undecodable) {
@@ -308,10 +317,20 @@ public class WarpSpanExporter(
         }
         lock.withLock {
             if (read is SpanRead.Found) spans = read.spans.piece(spans)
+            causalClock?.let { clock -> highestOwnDot()?.let(clock::raiseFloor) }
             evictExcess()
             readState = SpanReadState.Recovered
         }
     }
+
+    /**
+     * The highest `seq` among this replica's dots in [set], stamps and predecessors both. Must be
+     * called with [lock] held when [set] is [spans].
+     */
+    private fun highestOwnDot(set: ORSet<SpanRecord> = spans): Long? = set.elements
+        .flatMap { span -> span.causalStamp?.let { it.predecessors + it.dot }.orEmpty() }
+        .filter { it.replica == replica }
+        .maxOfOrNull { it.seq }
 
     /**
      * Export one span: insert it into the CRDT and durably flush to [store].
@@ -357,12 +376,12 @@ public class WarpSpanExporter(
      * that window recovers it, and retrying the original unstamped span mints another dot and
      * creates a second stamped copy.
      *
-     * Until a read of the stored spans has landed, the export adds nothing before the write
-     * section, and inside it makes that read first (#3390). While the store refuses the read, the
-     * export returns [ExportResult.Failure] having changed nothing: its span is in neither memory
-     * nor the store, so the caller's retry is its only copy. A minted stamp is simply dropped; the
-     * clock is not rolled back, as above. The read that lands joins the stored set, and the export
-     * then adds and writes its span exactly as a recovered one does.
+     * Until a read of the stored spans has landed, the export stamps and adds nothing before the
+     * write section, and inside it makes that read first (#3390). While the store refuses the read,
+     * the export returns [ExportResult.Failure] having changed nothing, the clock included: its span
+     * is in neither memory nor the store, so the caller's retry is its only copy. The read that lands
+     * joins the stored set and raises the clock above every dot of this replica's it found (#3407),
+     * and the export then stamps, adds and writes its span exactly as a recovered one does.
      *
      * Returns [ExportResult.Success] after the durable write returns. A failure in that section
      * returns [ExportResult.Failure], and so does a `CancellationException` the [store] mints at
@@ -377,31 +396,27 @@ public class WarpSpanExporter(
     public suspend fun export(span: SpanRecord): ExportResult {
         // Auto-stamp causal context (#846): a configured clock fills an unstamped
         // span so causal links form with no caller change; an explicit stamp wins.
-        val stamped = when {
-            causalClock == null -> span
-            span.causalStamp != null -> span
-            // An unrecovered clock mints nothing (#3390): the span is saved unstamped.
-            else -> when (val tick = tickFrom(causalClock)) {
-                is ClockTick.Minted -> span.copy(causalStamp = tick.stamp)
-                ClockTick.Unrecovered -> span
-            }
+        val clock = causalClock?.takeIf { span.causalStamp == null }
+        // A clock whose recovery read has not landed (refused, or never made) makes it first (#3390).
+        // The read holds ioMutex, the section every clock persist runs in, so it never reads past a
+        // write this exporter is making.
+        if (clock != null && !clock.isArmed) ioMutex.withLock { clockRecovered(clock.retryRecovery(store)) }
+        // A recovered exporter stamps and adds before the write section, as it always has, in one hold
+        // of `lock`: the read that made it recovered raised the clock's floor under that lock first, so
+        // the stamp is above every stamp the stored spans carry (#3407). One whose read has not landed
+        // stamps and adds nothing yet: the add would reuse a dot a stored span holds (#3390), and the
+        // stamp could re-mint one a stored span carries, so both wait for the read inside the section.
+        // `null` until this export has stamped.
+        var stamped: SpanRecord? = lock.withLock {
+            if (readState == SpanReadState.Recovered) stampOf(span, clock).also(::insert) else null
         }
-        // A fresh dot was minted only when copy() produced a new instance; an explicit
-        // or absent stamp returns `span` itself. Only a minted stamp needs rollback —
-        // without a newly minted stamp, re-adding the same full value is idempotent.
-        val minted = stamped !== span
-        // A recovered exporter adds before the write section, as it always has. One whose read has not
-        // landed adds nothing yet: the add would reuse a dot a stored span holds (#3390), so it waits
-        // for the join inside the section.
-        val addedEarly = lock.withLock {
-            (readState == SpanReadState.Recovered).also { recovered -> if (recovered) insert(stamped) }
-        }
+        val addedEarly = stamped != null
         // Serialize the durable-write section across concurrent export()/merge() so the
         // clock persist and the span write are one ordered unit (#1053).
         return try {
             ioMutex.withLock {
                 // Never write over spans a refused read missed (#3390). A refusal leaves nothing to
-                // undo: the span was not added.
+                // undo: the span was neither stamped nor added.
                 readBeforeWrite()?.let { return@withLock it }
                 var work = clockAndSpanWork
                 val written = try {
@@ -409,13 +424,14 @@ public class WarpSpanExporter(
                     // dropped by a stale snapshot; encoding before the persist keeps the
                     // persisted seq ≥ every dot in this snapshot (seq is monotonic).
                     val encoded = lock.withLock {
-                        // The read has landed and joined the stored set, so this add mints above it
-                        // and evicts from it as the live path does. It shares one hold of `lock` with
-                        // the encode: the read made the exporter recovered, so a concurrent export can
-                        // already add before the section, and at the cap that add could evict this
-                        // span between a separate add and encode, leaving a Success for a span the
-                        // snapshot never carried.
-                        if (!addedEarly) insert(stamped)
+                        // The read has landed, joined the stored set and raised the clock's floor, so
+                        // this stamp mints above every stored dot (#3407), and this add mints above the
+                        // set's dots and evicts from it as the live path does. It shares one hold of
+                        // `lock` with the encode: the read made the exporter recovered, so a concurrent
+                        // export can already add before the section, and at the cap that add could
+                        // evict this span between a separate add and encode, leaving a Success for a
+                        // span the snapshot never carried.
+                        if (!addedEarly) stamped = stampOf(span, clock).also(::insert)
                         cbor.encodeToByteArray(spanSerializer, spans)
                     }
                     // Persist the clock BEFORE the span so the durable clock seq is always ≥
@@ -439,36 +455,45 @@ public class WarpSpanExporter(
                     },
                     onFailure = { cause ->
                         persistence.failed(work, cause)
-                        if (minted) removeFromMemory(stamped)
+                        stamped?.let { rollBackMinted(span, it) }
                         // Roll back before the outage report; the health count above records the turn
                         // either way. The caller's own cancellation propagates past this fold, so it is
                         // counted as neither acknowledged nor failed; reporting only opens an outage once.
                         durableWriteFailed(cause) {
-                            logger.error(it) { "WarpSpanExporter: durable write failed for span ${stamped.spanId}" }
+                            logger.error(it) { "WarpSpanExporter: durable write failed for span ${span.spanId}" }
                         }
                     },
                 )
             }
         } catch (cancelled: CancellationException) {
             // Around the whole section, not the write: a recovered waiter on ioMutex has its stamp in
-            // memory too, and a healing turn adds its stamp inside the section. Removing a stamp that
-            // was never added is an empty patch, since a minted value is unique, so no flag says
-            // whether the add happened. The removal takes no suspension point, so it completes while
-            // this coroutine is cancelled.
-            if (minted) removeFromMemory(stamped)
+            // memory too, and a healing turn stamps and adds inside the section. A turn cancelled before
+            // it stamped holds `null` and has nothing to remove; stamping and adding share one hold of
+            // `lock`, so a stamped value was added. The removal takes no suspension point, so it
+            // completes while this coroutine is cancelled.
+            stamped?.let { rollBackMinted(span, it) }
             throw cancelled
         }
     }
 
     /**
-     * Mint a stamp from [clock], first making its recovery read if none has landed: refused, or
-     * never made (#3390). The read holds [ioMutex], the section every clock persist runs in, so it
-     * never reads past a write this exporter is making. [ClockTick.Unrecovered] while the read is
-     * still refused: the span goes out unstamped.
+     * [span] stamped by [clock], or [span] itself when there is no clock to stamp it (none
+     * configured, or the span's explicit stamp wins), or when [clock] is unrecovered or exhausted and mints
+     * nothing, so the span is saved unstamped (#3390). Called with [lock] held, so a recovered
+     * exporter mints only above the floor its landing read raised (#3407).
      */
-    private suspend fun tickFrom(clock: WarpCausalClock): ClockTick {
-        if (!clock.isArmed) ioMutex.withLock { clockRecovered(clock.retryRecovery(store)) }
-        return clock.tick()
+    private fun stampOf(span: SpanRecord, clock: WarpCausalClock?): SpanRecord = when (val tick = clock?.tick()) {
+        is ClockTick.Minted -> span.copy(causalStamp = tick.stamp)
+        ClockTick.Unrecovered, ClockTick.Exhausted, null -> span
+    }
+
+    /**
+     * Remove [stamped] from memory if this export minted its stamp. A fresh dot was minted only when
+     * `copy()` produced a new instance; an explicit or absent stamp is [span] itself, and re-adding
+     * the same full value is idempotent, so it needs no rollback.
+     */
+    private fun rollBackMinted(span: SpanRecord, stamped: SpanRecord) {
+        if (stamped !== span) removeFromMemory(stamped)
     }
 
     /**
@@ -497,6 +522,14 @@ public class WarpSpanExporter(
      * folded into the local clock first, so the next auto-stamped span records those
      * remote dots as predecessors — the cross-replica happens-before path (#846).
      *
+     * The clock's floor is raised too, to the highest dot of this replica's the remote set carries
+     * or names, in the same hold of `lock` as the join (#3407). A peer can hand back spans this
+     * replica minted and then lost (evicted, cleared, or behind a corrupt clock entry), and a stamp
+     * minted after they land must not collide with one. A stamp minted before the merge still can.
+     * The raise takes the peer's `seq` as given: a dot at `Long.MAX_VALUE` leaves the clock
+     * [ClockTick.Exhausted], so later spans are saved unstamped. Whether a merge should refuse such
+     * a dot is #3432.
+     *
      * Idempotent: merging the same set twice produces the same result.
      *
      * Until a read of the stored spans has landed, the merge makes that read first, and while the
@@ -507,7 +540,10 @@ public class WarpSpanExporter(
         // Fold the remote replica's causal frontier so the next local tick records
         // those dots as predecessors — the cross-replica happens-before path (#846).
         causalClock?.observe(remote.elements.mapNotNull { it.causalStamp?.dot }.toSet())
-        lock.withLock { spans = spans.piece(remote) }
+        lock.withLock {
+            spans = spans.piece(remote)
+            causalClock?.let { clock -> highestOwnDot(remote)?.let(clock::raiseFloor) }
+        }
         // Share the durable-write section with export() so a concurrent export()+merge()
         // cannot lost-update the STORE_KEY snapshot (#1053).
         return ioMutex.withLock {

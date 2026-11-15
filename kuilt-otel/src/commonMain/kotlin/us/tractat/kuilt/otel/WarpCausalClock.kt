@@ -12,6 +12,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.StoreKey
 
@@ -58,8 +59,18 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * persisted yet.
  *
  * An **undecodable** entry is different: the bytes were read and cannot be decoded, so no later
- * read can do better. The clock starts fresh at `seq=0` and the next [persist] replaces the entry,
- * so bad data never leaves it dead.
+ * read can do better. The clock starts fresh, at `seq=0` or at the floor below, and the next
+ * [persist] replaces the entry, so bad data never leaves it dead.
+ *
+ * Fresh does not mean unused, because durable spans still carry this replica's old dots (#3407).
+ * So a [WarpSpanExporter] whose read of the stored spans lands raises the clock's floor to the
+ * highest own-replica dot that read found, a span's stamp or a predecessor a span names, before the
+ * turn mints anything, and a clock that has not read yet keeps the floor until its read lands. A
+ * merge raises it the same way from the remote set. Still uncovered: a dot no stored span carries
+ * or names (its span evicted past `maxSpans` or cleared before the restart) can be re-minted after
+ * a corrupt entry until a peer hands it back, and a stamp minted before that merge keeps the
+ * collision (#3435). The floor takes every stored or merged dot's `seq` as given, so one claiming
+ * `Long.MAX_VALUE` leaves the clock [ClockTick.Exhausted] (#3432).
  *
  * ## Thread-safety
  *
@@ -88,13 +99,16 @@ public class WarpCausalClock(private val replica: ReplicaId) {
      * new dot.
      *
      * Answers [ClockTick.Unrecovered], minting nothing, until a [recover] read has landed: the
-     * clock does not know which dots are already used.
+     * clock does not know which dots are already used. Answers [ClockTick.Exhausted], minting
+     * nothing and leaving the clock as it was, once `seq` is `Long.MAX_VALUE`: there is no dot left,
+     * and wrapping would re-mint one.
      */
     public fun tick(): ClockTick = lock.withLock {
         when (val current = state) {
             is ClockState.Unread, is ClockState.Unrecovered -> ClockTick.Unrecovered
             is ClockState.Armed -> {
-                val newDot = Dot(replica, current.seq + 1)
+                val next = current.seq.plusOrNull(1L) ?: return@withLock ClockTick.Exhausted
+                val newDot = Dot(replica, next)
                 state = ClockState.Armed(newDot.seq, setOf(newDot))
                 ClockTick.Minted(CausalStamp(dot = newDot, predecessors = current.frontier))
             }
@@ -135,9 +149,18 @@ public class WarpCausalClock(private val replica: ReplicaId) {
     internal fun clearFrontier(): Unit = lock.withLock { state = state.cleared() }
 
     /**
+     * Record that every dot up to [usedSeq] is already used, so the next [tick] mints above it
+     * (#3407). It only ever raises `seq`: a clock already past [usedSeq] is left alone. A clock whose
+     * read has not landed keeps the floor and mints nothing yet; the read that lands, a corrupt or
+     * missing entry included, arms it at no less than the floor.
+     */
+    internal fun raiseFloor(usedSeq: Long): Unit = lock.withLock { state = state.floored(usedSeq) }
+
+    /**
      * Reload `(seq, frontier)` from [store], arming the clock. Call once at startup: until a read
      * lands, [tick] and [persist] refuse. A missing entry answers [ClockRecovery.Recovered] and an
-     * undecodable one [ClockRecovery.Undecodable], and both arm the clock fresh (seq 0). A read
+     * undecodable one [ClockRecovery.Undecodable], and both arm the clock at `seq=0`, or at the floor
+     * a landed span read already raised ([WarpSpanExporter], #3407). A read
      * never moves `seq` backwards: an entry older than what this clock already minted is ignored.
      *
      * A refused read, including a cancellation the store minted, answers
@@ -231,10 +254,16 @@ public class WarpCausalClock(private val replica: ReplicaId) {
 
 /** What [WarpCausalClock.recover] found. */
 public sealed interface ClockRecovery {
-    /** The read landed: the clock resumed from the store's entry, or found none and starts at `seq=0`. */
+    /**
+     * The read landed: the clock resumed from the store's entry, or found none and starts at `seq=0`,
+     * or at the floor a landed span read already raised.
+     */
     public data object Recovered : ClockRecovery
 
-    /** The entry would not decode. The clock starts fresh, and its next persist replaces the entry. */
+    /**
+     * The entry would not decode. The clock starts at `seq=0`, or at the floor a landed span read
+     * already raised, and its next persist replaces the entry.
+     */
     public data class Undecodable(public val cause: Throwable) : ClockRecovery
 
     /**
@@ -252,6 +281,13 @@ public sealed interface ClockTick {
 
     /** No recovery read has landed, because it was refused or never made, so it minted nothing. */
     public data object Unrecovered : ClockTick
+
+    /**
+     * Every dot is used: `seq` is `Long.MAX_VALUE`, so it minted nothing. An honest clock never gets
+     * here. A floor raised from a stored span that claims this replica's last dot does (#3407), and
+     * the clock then stays exhausted, so a [WarpSpanExporter] saves every later span unstamped.
+     */
+    public data object Exhausted : ClockTick
 }
 
 /** What [WarpCausalClock.persist] did. */
@@ -284,13 +320,20 @@ private sealed interface ClockState {
 
     /** The frontier is dropped, and so is the durable one a first read would bring back. */
     fun cleared(): ClockState = when (this) {
-        is Unread -> Unread(emptySet(), frontierCleared = true)
-        is Unrecovered -> Unrecovered(emptySet(), frontierCleared = true)
+        is Unread -> copy(frontier = emptySet(), frontierCleared = true)
+        is Unrecovered -> copy(frontier = emptySet(), frontierCleared = true)
         is Armed -> copy(frontier = emptySet())
     }
 
     /** A refused read moves [Unread] to [Unrecovered] and leaves an [Armed] clock alone. */
-    fun refused(): ClockState = if (this is Unread) Unrecovered(frontier, frontierCleared) else this
+    fun refused(): ClockState = if (this is Unread) Unrecovered(frontier, frontierCleared, floor) else this
+
+    /** Every dot up to [usedSeq] is used. Raises, never lowers: `max`, on every arm. */
+    fun floored(usedSeq: Long): ClockState = when (this) {
+        is Unread -> copy(floor = maxOf(floor, usedSeq))
+        is Unrecovered -> copy(floor = maxOf(floor, usedSeq))
+        is Armed -> copy(seq = maxOf(seq, usedSeq))
+    }
 
     /**
      * Fold in the store's [entry]. An [Armed] clock never moves backwards, so a stale or racing read
@@ -299,31 +342,35 @@ private sealed interface ClockState {
      */
     fun joinedWith(entry: PersistedClock): Armed = when (this) {
         is Armed -> if (entry.seq <= seq) this else Armed(entry.seq, entry.frontier + frontier)
-        is Unread -> Armed(entry.seq, if (frontierCleared) frontier else entry.frontier + frontier)
-        is Unrecovered -> Armed(entry.seq, if (frontierCleared) frontier else entry.frontier + frontier)
+        is Unread -> Armed(maxOf(entry.seq, floor), if (frontierCleared) frontier else entry.frontier + frontier)
+        is Unrecovered -> Armed(maxOf(entry.seq, floor), if (frontierCleared) frontier else entry.frontier + frontier)
     }
 
-    /** A read that found no usable entry: a clock that has not read yet starts at `seq=0`. */
+    /** A read that found no usable entry: a clock that has not read yet starts at its floor, `seq=0` without one. */
     fun withoutEntry(): Armed = when (this) {
         is Armed -> this
-        is Unread -> Armed(0L, frontier)
-        is Unrecovered -> Armed(0L, frontier)
+        is Unread -> Armed(floor, frontier)
+        is Unrecovered -> Armed(floor, frontier)
     }
 
-    /** No read has landed or been refused yet: the state a clock is constructed in. */
-    data class Unread(override val frontier: Set<Dot>, val frontierCleared: Boolean) : ClockState
+    /**
+     * No read has landed or been refused yet: the state a clock is constructed in. [floor] is the
+     * highest dot a read of the stored spans found used, kept for the read that arms the clock.
+     */
+    data class Unread(override val frontier: Set<Dot>, val frontierCleared: Boolean, val floor: Long) : ClockState
 
     /**
      * A read was refused before any landed, so the durable high-water mark is unknown and nothing may
-     * be minted or persisted. [frontier] collects what [WarpCausalClock.observe] saw meanwhile.
+     * be minted or persisted. [frontier] collects what [WarpCausalClock.observe] saw meanwhile, and
+     * [floor] what a read of the stored spans found used.
      */
-    data class Unrecovered(override val frontier: Set<Dot>, val frontierCleared: Boolean) : ClockState
+    data class Unrecovered(override val frontier: Set<Dot>, val frontierCleared: Boolean, val floor: Long) : ClockState
 
     /** Every dot up to [seq] is used and nothing above it is: the next one minted is `seq + 1`. */
     data class Armed(val seq: Long, override val frontier: Set<Dot>) : ClockState
 
     companion object {
-        val initial: ClockState = Unread(emptySet(), frontierCleared = false)
+        val initial: ClockState = Unread(emptySet(), frontierCleared = false, floor = 0L)
     }
 }
 

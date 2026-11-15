@@ -325,6 +325,7 @@ internal suspend fun sampleInferCausalLinks() {
     fun mint(): CausalStamp = when (val tick = clock.tick()) {
         is ClockTick.Minted -> tick.stamp
         ClockTick.Unrecovered -> error("recover the clock before minting")
+        ClockTick.Exhausted -> error("every dot is used")
     }
     val checkout = mint()   // root span of one trace
     val charge = mint()     // caused by checkout, but in a *different* trace
