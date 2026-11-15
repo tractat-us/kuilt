@@ -5,9 +5,10 @@ runs. "Second in line. Web goes first: it pays for three parts of the farm to
 your one." A line like that saves a support question, and Heddle can supply
 every part of it.
 
-It answers three questions: who goes next, why it is not you, and what share
-you are owed. None of them changes anything, so a screen can ask on every
-refresh. Only a real build moves the line.
+This page covers the first half: who goes next, and when your turn comes.
+Asking changes nothing, so a screen can ask on every refresh. Only a real build
+moves the line. The second half, why it is not you yet, has a page of its own:
+[Explaining a wait](heddle-local-explain.md).
 
 > **Playground.** This engine works today, and its API can change.
 
@@ -71,110 +72,15 @@ share. The snapshot taken before and after the preview is equal, which is the
 proof that asking moved nothing.
 
 Each pick here does what a typical loop does. It leases an agent at the
-default estimate, then stretches it with `extend` to the winner's own estimate. So
-the default decides who wins each pick, and the twelve minutes count against
-web from then on.
-
-## Why not me?
-
-`explain` names the reason a lane is not next. It runs the very pick the next
-`acquire` would make, on a throwaway copy, so its answer always agrees with
-what happens next.
-
-The answer is one of a fixed set, so a status screen can write one sentence
-for each. Give each part of the tree the name people know it by, then turn
-every answer into words:
-
-<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleQueueStatus -->
-
-```kotlin
-// The names a person knows each part of the tree by.
-val names = mapOf(
-    farm.groupId() to "the farm",
-    farm.groupId("web") to "Web",
-    web to "Web",
-    farm.groupId("mobile") to "Mobile",
-    mobile to "Mobile",
-)
-
-// One sentence for each answer explain can give. The compiler checks that none is missing.
-fun why(lane: GroupId, waiting: Set<GroupId>, eligible: Set<GroupId>): String =
-    when (val answer = heddle.explain(lane, waiting, eligible)) {
-        WaitExplanation.WouldBePickedNext -> "Next up."
-        WaitExplanation.NotWaiting -> "Nothing queued."
-        WaitExplanation.NotEligible -> "This agent cannot run it."
-        WaitExplanation.SupplyExhausted -> "No agent time is free yet."
-        is WaitExplanation.NoLiveLineage -> "Its part of the tree is being changed."
-        is WaitExplanation.AtCeiling -> "${names.getValue(answer.group)} already runs ${answer.limit} at once, its limit."
-        is WaitExplanation.PositionCeiling -> "Scheduling is stuck at ${names.getValue(answer.parent)}."
-        is WaitExplanation.BehindAtLevel -> "${names.getValue(answer.nextChild)} goes first at ${names.getValue(answer.parent)}."
-    }
-```
-
-`WaitExplanation` is a sealed type, so the `when` must cover every answer. If a
-later release adds one, your screen fails to compile instead of showing a
-blank. Ask it about mobile, and watch the answer change only when something
-real happens:
-
-<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleQueueStatus -->
-
-```kotlin
-check(why(mobile, waiting = both, eligible = both) == "Web goes first at the farm.")
-// …
-// The answers change only when something real happens. Web takes the next agent:
-check((heddle.acquire(both, both, startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf == web)
-check(why(mobile, waiting = both, eligible = both) == "Next up.")
-check(why(mobile, waiting = setOf(web), eligible = setOf(web)) == "Nothing queued.")
-check(why(mobile, waiting = both, eligible = setOf(web)) == "This agent cannot run it.")
-```
-
-What each answer means, in the order the engine checks them:
-
-- **`NotWaiting`**: the lane has nothing queued.
-- **`NotEligible`**: it has work, but this agent cannot run it, such as an iOS
-  build offered a Linux agent.
-- **`NoLiveLineage`**: no pick can end there right now, for example because a
-  reload is removing or reshaping its part of the tree. `at` names the lane.
-- **`AtCeiling`**: a group on its path already runs as many builds as its
-  ceiling allows. `group` is the one nearest the top, and `limit` the ceiling.
-  A limit of `0` is a pause.
-- **`SupplyExhausted`**: the engine has no time to hand out, so nobody goes
-  next. Most often `reconcileCapacity` has not been called yet.
-- **`PositionCeiling`**: the pick reaches a group with a child that has hit
-  the ceiling on how far ahead its record of service can go. Nobody below that
-  group goes next. A short run never meets this.
-- **`BehindAtLevel`**: another child goes first at `parent`, the first group
-  where the pick leaves this lane's path. `nextChild` is the one it picks.
-- **`WouldBePickedNext`**: this lane is next.
-
-The first group named in `BehindAtLevel` matters in a deeper tree. If web split
-its share between pull requests and nightly builds, a nightly build could wait
-behind mobile at the farm, or behind pull requests inside web. The answer says
-which.
-
-## What am I owed?
-
-`entitlement` is the fair share, as a number of agents:
-
-<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleQueueStatus -->
-
-```kotlin
-// Of the four agents, mobile is owed one while both teams have builds queued.
-check(heddle.entitlement(mobile, waiting = both, totalSlots = 4L) == Rational.ONE)
-// With web's queue empty, mobile is owed all four.
-check(heddle.entitlement(mobile, waiting = setOf(mobile), totalSlots = 4L) == Rational.of(4L))
-```
-
-It is shared over the lanes in `waiting`, so it is a share of the work that is
-really there, and a team with nothing queued leaves its part to the rest. The answer is
-an exact fraction, a `Rational`, so one agent split three ways is a third, not
-0.333.
+default estimate, then stretches it with `extend` to the winner's own
+estimate. So the default decides who wins each pick, and the twelve minutes
+count against web from then on.
 
 ## On a screen with no engine
 
 An admin screen often runs in another process, holding only the engine's last
 saved state. It needs no engine of its own. Decode the saved snapshot, and
-`view` gives it the same three questions:
+`view` answers just as the engine would:
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleSnapshotPreviewQueues -->
 
@@ -200,13 +106,6 @@ engine is not thread-safe, so call it from one place at a time, its reads
 included. A view of a snapshot shares nothing with the engine, and any number
 of threads may ask it at once. [When the engine restarts too](heddle-local.md#when-the-engine-restarts-too)
 covers taking and storing snapshots.
-
-## Logging why work waits
-
-The same answers make a good hold reason in a log line or a metric. Use the
-answer's `kind`, a stable name for each arm such as `BEHIND_AT_LEVEL`, and its
-group ids. Leave out the numbers `BehindAtLevel` carries: they move on every
-pick, so a reader comparing them would see a new reason every time.
 
 ## What a preview cannot see
 
@@ -244,36 +143,10 @@ nothing more can start until something finishes.
 Three more things to know before you wire a screen up:
 
 - **Bad input throws.** `previewPicks` throws `IllegalArgumentException` for a
-  negative count or a reservation outside `1..MAX_RESERVATION`. `explain` takes
-  the same checks as `acquire`, so its `eligible` set must sit inside `waiting`.
-- **Exact fractions can overflow.** `explain` and `entitlement` throw
-  `ArithmeticException` when an exact fraction no longer fits. That can happen
-  well before any ceiling, so a status screen should catch it and show
-  something plainer.
+  negative count or a reservation outside `1..MAX_RESERVATION`, and the queue
+  form checks every queued estimate, not only the next.
+- **The reasons are a separate call.** `explain` says why a lane is not next.
+  Its answers carry exact fractions, which can overflow where the pick itself
+  does not. [Explaining a wait](heddle-local-explain.md) covers both.
 - **The tree can change.** A reload or an attach changes the tree itself, so
   ask again after an `apply` or an `attach`.
-
-## Reading the numbers behind "behind"
-
-`BehindAtLevel` carries three numbers, all on one scale: the time a child has
-been given, divided by its weight. Heddle calls that its progress, or its
-virtual service.
-
-- **`leafSideVirtualService`** is the progress of this lane's own child of
-  `parent`.
-- **`eligibleFront`** is the line the pick drew, an average over the children
-  this agent can run. Above it by more than a sixteenth of a unit of the
-  lane's own service, the lane was not in the running for this pick. At or
-  below it, the lane was in the running and lost on timing, because
-  `nextChild`'s build ends sooner on that scale (or, on a tie, by id).
-- **`front`** is the same average over everyone waiting: the share line.
-  Above it, this side has had more than its share. At or below it, no more.
-
-The two lines differ when the agent cannot run everything. A lane below
-`front` can still be above `eligibleFront`, when the lanes this agent cannot
-run are the ones holding `front` up.
-
-[Ask why a team is waiting](heddle-local.md#ask-why-a-team-is-waiting) shows
-the numbers for a real moment in the farm.
-[How the next turn is chosen](heddle-local-turns.md) gives the rule they come
-from and works the first eight builds out by hand.
