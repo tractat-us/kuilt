@@ -33,12 +33,30 @@ package us.tractat.kuilt.store
  *
  * The in-memory store satisfies the read/write/delete behaviour but keeps nothing across a
  * process exit — it is the right choice in a test and the wrong one anywhere a restart matters.
+ *
+ * ## Failures
+ *
+ * Every method reports a failure by **throwing an [Exception]** — never by returning normally, and
+ * never as a [Throwable] that is not an [Exception], so a caller's `catch (e: Exception)` sees every
+ * failure a store reports. The type is the backend's own (an `IOException` on JVM and Android, an
+ * [IllegalStateException] naming the `errno` on Apple, an IndexedDB error on wasmJs); what the
+ * contract fixes is that it is an [Exception], and that a failure is never dressed as an answer.
+ *
+ * The answer it is most easily dressed as is **absence**. [read] returns `null` for a key with no
+ * entry and for nothing else: a store that cannot tell whether an entry exists — the file is there
+ * but may not be opened, the directory may not be searched, the connection is closing — throws.
+ * A caller treats `null` as "nothing was ever stored here" and writes a fresh value, so a read error
+ * reported as `null` is not a lost read but a destroyed value.
  */
 public interface DurableStore {
     /**
-     * Read the bytes stored under [key], or `null` if the key has never been written.
+     * Read the bytes stored under [key], or `null` if the key has no entry — never written, or
+     * deleted.
      *
      * Called on startup to recover state written by the previous session.
+     *
+     * `null` means absence and nothing else. A read that **fails** throws an [Exception] instead —
+     * see *Failures* above for why answering `null` there would destroy the value.
      */
     public suspend fun read(key: StoreKey): ByteArray?
 
@@ -61,6 +79,9 @@ public interface DurableStore {
 
     /**
      * Remove the entry for [key]. No-op if the key is absent.
+     *
+     * A delete the medium refuses throws an [Exception]; it does not return as the absent case
+     * does, or the caller would believe the entry gone while it is still there.
      *
      * Intended for tests and cleanup; production code rarely needs this.
      */

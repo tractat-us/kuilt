@@ -21,6 +21,16 @@ import kotlin.js.JsAny
  * Cancelling [write] abandons the await; it does not abort the IndexedDB transaction.
  * The transaction may complete after the caller observes cancellation.
  *
+ * **Failures are `Exception`s.** Every failure — an IndexedDB request error, a
+ * transaction abort, and a JavaScript exception thrown *synchronously* by
+ * `indexedDB.open` or `db.transaction` (a `SecurityError`, a `TypeError` where
+ * the page has no IndexedDB, an `InvalidStateError` on a closing connection) —
+ * surfaces as an [Exception] whose message starts with the DOM error's name.
+ * The synchronous ones are caught inside each bridge function, because one that
+ * crossed the bridge would arrive as a Kotlin/Wasm `JsException`, which extends
+ * [Throwable] and not [Exception], and so passes straight through a caller's
+ * `catch (e: Exception)` (#3143).
+ *
  * **Usage:** call [IndexedDbDurableStore.open] to obtain a ready-to-use
  * instance.  The returned store has already opened the underlying IDB
  * database and is ready for reads and writes.  Call [close] when done.
@@ -98,6 +108,11 @@ internal class IndexedDbException(message: String) : Exception(message)
 //
 // js() is used only inside top-level bridge functions (one expression per
 // function body), which is the only form supported by Kotlin/Wasm.
+//
+// Every call that can throw synchronously sits inside a try/catch that hands
+// the error to `onError`, and so to an IndexedDbException: a JS throw left to
+// cross the bridge would surface as a JsException, which is not an Exception
+// (#3143). A bridge added here needs the same.
 
 /**
  * Open (or upgrade) the IDB database at [dbName].
@@ -109,7 +124,14 @@ internal class IndexedDbException(message: String) : Exception(message)
 @JsFun(
     """
     (dbName, onSuccess, onError) => {
-        const req = indexedDB.open(dbName, 1);
+        const describe = (e) => (e && e.name ? e.name + ': ' + e.message : String(e));
+        let req;
+        try {
+            req = indexedDB.open(dbName, 1);
+        } catch (e) {
+            onError(describe(e));
+            return;
+        }
         req.onupgradeneeded = (e) => {
             const db = e.target.result;
             if (!db.objectStoreNames.contains('kv')) {
@@ -117,7 +139,7 @@ internal class IndexedDbException(message: String) : Exception(message)
             }
         };
         req.onsuccess = (e) => onSuccess(e.target.result);
-        req.onerror = (e) => onError(e.target.error ? e.target.error.message : 'open error');
+        req.onerror = (e) => onError(e.target.error ? describe(e.target.error) : 'open error');
     }
     """,
 )
@@ -136,10 +158,16 @@ private external fun idbOpen(
 @JsFun(
     """
     (db, key, onSuccess, onError) => {
-        const tx = db.transaction('kv', 'readonly');
-        const req = tx.objectStore('kv').get(key);
+        const describe = (e) => (e && e.name ? e.name + ': ' + e.message : String(e));
+        let req;
+        try {
+            req = db.transaction('kv', 'readonly').objectStore('kv').get(key);
+        } catch (e) {
+            onError(describe(e));
+            return;
+        }
         req.onsuccess = (e) => onSuccess(e.target.result !== undefined ? e.target.result : null);
-        req.onerror = (e) => onError(e.target.error ? e.target.error.message : 'get error');
+        req.onerror = (e) => onError(e.target.error ? describe(e.target.error) : 'get error');
     }
     """,
 )
@@ -159,11 +187,16 @@ private external fun idbGet(
 @JsFun(
     """
     (db, key, value, onComplete, onError) => {
-        const tx = db.transaction('kv', 'readwrite');
-        tx.oncomplete = () => onComplete();
-        tx.onerror = (e) => onError(e.target.error ? e.target.error.message : 'put error');
-        tx.onabort = (e) => onError(e.target.error ? e.target.error.message : 'put aborted');
-        tx.objectStore('kv').put(value, key);
+        const describe = (e) => (e && e.name ? e.name + ': ' + e.message : String(e));
+        try {
+            const tx = db.transaction('kv', 'readwrite');
+            tx.oncomplete = () => onComplete();
+            tx.onerror = (e) => onError(e.target.error ? describe(e.target.error) : 'put error');
+            tx.onabort = (e) => onError(e.target.error ? describe(e.target.error) : 'put aborted');
+            tx.objectStore('kv').put(value, key);
+        } catch (e) {
+            onError(describe(e));
+        }
     }
     """,
 )
@@ -184,11 +217,16 @@ private external fun idbPut(
 @JsFun(
     """
     (db, key, onComplete, onError) => {
-        const tx = db.transaction('kv', 'readwrite');
-        tx.oncomplete = () => onComplete();
-        tx.onerror = (e) => onError(e.target.error ? e.target.error.message : 'delete error');
-        tx.onabort = (e) => onError(e.target.error ? e.target.error.message : 'delete aborted');
-        tx.objectStore('kv').delete(key);
+        const describe = (e) => (e && e.name ? e.name + ': ' + e.message : String(e));
+        try {
+            const tx = db.transaction('kv', 'readwrite');
+            tx.oncomplete = () => onComplete();
+            tx.onerror = (e) => onError(e.target.error ? describe(e.target.error) : 'delete error');
+            tx.onabort = (e) => onError(e.target.error ? describe(e.target.error) : 'delete aborted');
+            tx.objectStore('kv').delete(key);
+        } catch (e) {
+            onError(describe(e));
+        }
     }
     """,
 )

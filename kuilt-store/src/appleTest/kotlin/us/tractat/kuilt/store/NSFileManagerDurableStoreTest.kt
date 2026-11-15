@@ -21,7 +21,6 @@ import kotlin.test.assertContains
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -109,6 +108,18 @@ class NSFileManagerDurableStoreTest : DurableStoreConformanceSuite() {
         }
 
     /**
+     * Run a [DurableStore.read] and hand back what it returned, or the [IllegalStateException] it
+     * threw — the same shape, and the same `ensureActive()` guard, as [writeFailure].
+     */
+    private suspend fun DurableStore.readOutcome(key: StoreKey): Any? =
+        try {
+            read(key)
+        } catch (failure: IllegalStateException) {
+            currentCoroutineContext().ensureActive()
+            failure
+        }
+
+    /**
      * A failing write must name its cause (#1860).
      *
      * Pointing the store at a subdirectory of a *regular file* makes the
@@ -179,14 +190,22 @@ class NSFileManagerDurableStoreTest : DurableStoreConformanceSuite() {
 
         val store = NSFileManagerDurableStore(dir)
         val failure = store.writeFailure(key, byteArrayOf(1, 2, 3))
-        val readBack = store.read(key)
+        // `dest` is still the directory it was, so a read of it FAILS — `read(2)` on a directory is
+        // `EISDIR` — and since #3327 that failure throws rather than reading as absent. Captured
+        // rather than asserted with `assertFailsWith`, for the reason [writeFailure] gives.
+        val readBack = store.readOutcome(key)
 
         assertAll(
             { assertTrue(fm.fileExistsAtPath(marker), "the destination's contents survived the failed write") },
-            // `dest` is still the directory it was, so there is nothing readable there.
             // The removed implementation left the never-committed payload sitting at
             // `dest` as a regular file, so this read returned it.
-            { assertNull(readBack, "the payload that could not commit never became readable") },
+            {
+                assertTrue(
+                    readBack is IllegalStateException,
+                    "the payload that could not commit never became readable: the read of the directory still " +
+                        "at its path must fail, and got $readBack",
+                )
+            },
             { assertNotNull(failure, "write reported the rename it could not commit instead of returning") },
             // The cause must survive the move off NSFileManager: errno is a better
             // cause than the NSError it replaces, not a worse one (#1860). Both
