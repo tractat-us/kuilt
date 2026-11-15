@@ -103,6 +103,15 @@ public class LocalHeddleSnapshot internal constructor(
                     "rebase from a development build, which this release does not restore"
             }
         }
+        // A shift remainder is on its edge's own grid (#3416 review): a reweight is a new edge, so an
+        // allocator never writes one at another denominator, and a restored one would throw at a pick.
+        for ((edge, remainder) in allocatorMemory.shiftRemainders) {
+            val weight = ledger.record(edge)?.weight ?: continue
+            require(remainder.denominator == weight.denominator) {
+                "the shift remainder on ${edge.value} is at denominator ${remainder.denominator}, not its " +
+                    "weight's ${weight.denominator}"
+            }
+        }
     }
 
     /**
