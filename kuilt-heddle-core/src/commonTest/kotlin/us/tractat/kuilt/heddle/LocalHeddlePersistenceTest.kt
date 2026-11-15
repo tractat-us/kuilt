@@ -665,6 +665,7 @@ class LocalHeddlePersistenceTest {
             { assertEquals(richCapped, golden().lastApplied, "the rig: the topology last applied is the reload's, with its ceilings") },
             { assertTrue(golden().ledger.hasForgotten() && edge !in golden().ledger.allEdges(), "the rig: t2's edge is forgotten") },
             { assertTrue("\"forgotten\":" in GOLDEN_FORMAT_2_RICH, "the rig: the fold is in the bytes") },
+            { assertTrue("\"shiftRemainders\":" in GOLDEN_FORMAT_2_RICH, "the rig: a returner's carried rounding is in the bytes") },
             { assertTrue(edge.value !in GOLDEN_FORMAT_2_RICH, "the allocator's memory of t2's edge went with it") },
             { assertTrue((reference.snapshot().ledger.edge(edge)?.spent ?: 0L) > 0L, "the rig: the forgotten edge had spent something") },
             {
