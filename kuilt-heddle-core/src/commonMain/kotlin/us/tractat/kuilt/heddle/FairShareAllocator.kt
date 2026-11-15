@@ -980,43 +980,23 @@ public class FairShareAllocator(
 
     /**
      * Run [parent]'s net-service clock over what its children kept since it last ran, and return
-     * where it stands now (design §7.2, #3376). Only the children this peer saw asking last round
-     * count: the sum of their `baseIssued − returned` since then, over their total weight. A child
-     * that was not asking adds nothing, its own refunds included: those already lower its own
-     * position, and counting them here too would credit it twice.
+     * where it stands now (design §7.2, #3376): [clockStep] over the children this peer last saw
+     * asking ([wasAsking]), and then each child's `baseIssued − returned` recorded in [served] as
+     * what the next run measures from. A child that was not asking adds nothing, its own refunds
+     * included: those already lower its own position, and counting them here too would credit it
+     * twice.
      *
-     * The step is rounded up, so the clock runs fast by under one of its ticks a round, and a
+     * Each step is rounded up, so the clock runs fast by under one of its ticks a run, and a
      * returner is moved that sliver further: the penalty side. An origin rebase changes no issuance,
      * so it moves no clock. A shift is a distance, and the origin moves a returner's raw position
      * and its siblings' alike.
      */
     private fun runClock(parent: GroupId, edges: List<PolicyEdge>): Int128 {
-        val step = clockStep(parent, edges)
+        val step = clockStep(parent, edges.filter(::wasAsking), served)
         for (edge in edges) served[edge.record.id] = checkedSub(edge.baseIssued, edge.summary.returned)
         val before = clocks[parent] ?: Int128.ZERO
         if (step == Int128.ZERO) return before
         return (before + step).also { clocks[parent] = it }
-    }
-
-    /**
-     * How far [runClock] would move [parent]'s clock over [edges] now, changing nothing: zero when
-     * no child was asking or none kept anything since the clock last ran.
-     */
-    private fun clockStep(parent: GroupId, edges: List<PolicyEdge>): Int128 {
-        var kept = 0L
-        val weights = ArrayList<Weight>()
-        for (edge in edges) {
-            if (!wasAsking(edge)) continue
-            weights += edge.record.weight
-            val last = served[edge.record.id] ?: continue
-            kept = checkedAdd(kept, checkedSub(checkedSub(edge.baseIssued, edge.summary.returned), last))
-        }
-        if (weights.isEmpty() || kept == 0L) return Int128.ZERO
-        // kept / Σw = kept · L / S, with Σw = S / L over the common denominator L.
-        val l = weights.fold(1L) { acc, w -> checkedMul(acc / gcdOf(acc, w.denominator), w.denominator) }
-        val sum = weights.fold(0L) { acc, w -> checkedAdd(acc, checkedMul(w.numerator, l / w.denominator)) }
-        return mulDiv(kept.timesWide(CLOCK_TICKS_PER_UNIT), l, sum, Rounding.CEILING)
-            ?: throw ArithmeticException("Int128 overflow: a clock step of $kept units at ${parent.value}")
     }
 
     /**
@@ -1028,15 +1008,14 @@ public class FairShareAllocator(
     private fun returnerLandings(parent: GroupId, edges: List<PolicyEdge>): Map<AttachmentId, Int128> {
         val returners = edges.filter { isReturner(it) }
         if (returners.isEmpty()) return emptyMap()
-        val clock = (clocks[parent] ?: Int128.ZERO) + clockStep(parent, edges)
+        val clock = (clocks[parent] ?: Int128.ZERO) + clockStep(parent, edges.filter(::wasAsking), served)
         return returners.associate { edge -> edge.record.id to HeddlePolicy.effectiveTicksWide(edge) + shiftOf(edge, clock) }
     }
 
-    /** How far [edge] comes back moved: the clock's run from its departure to [clock], on its own grid, never below zero. */
+    /** How far [edge] comes back moved: the clock's run from its departure to [clock], on its own grid ([runOnGrid]). */
     private fun shiftOf(edge: PolicyEdge, clock: Int128): Int128 {
         val left = checkNotNull(departures[edge.record.id]) { "a returner with no departure: ${edge.record.id.value}" }
-        val w = edge.record.weight
-        return maxOf(Int128.ZERO, clockOnGrid(clock, w) - clockOnGrid(left, w))
+        return runOnGrid(clock - left, edge.record.weight)
     }
 
     /**
@@ -1054,14 +1033,19 @@ public class FairShareAllocator(
     }
 
     /**
-     * [clock] on the grid of a child of weight [w], rounded up: `⌈clock · w / CLOCK_GRID⌉` ticks,
-     * since a clock tick is `1 / CLOCK_GRID` of a weight-1 child's.
+     * A clock [run] on the grid of a child of weight [w] = `n / d`, rounded up and never below zero:
+     * `⌈run · n / (CLOCK_GRID · d)⌉` ticks, since a clock tick is `1 / CLOCK_GRID` of a weight-1
+     * child's. One ceiling of the run, taken in two exact steps, `⌈⌈run · n / CLOCK_GRID⌉ / d⌉`,
+     * so no product leaves 128 bits for a denominator that would. A difference of two ceilings,
+     * one at each end of the run, comes out up to a tick short of this, which is credit
+     * (#3416 review).
      */
-    private fun clockOnGrid(clock: Int128, w: Weight): Int128 {
-        val scaled = mulDiv(clock, w.numerator, CLOCK_GRID, Rounding.CEILING)
-            ?: throw ArithmeticException("Int128 overflow: a clock of $clock read at weight $w")
+    private fun runOnGrid(run: Int128, w: Weight): Int128 {
+        if (run <= Int128.ZERO) return Int128.ZERO
+        val scaled = mulDiv(run, w.numerator, CLOCK_GRID, Rounding.CEILING)
+            ?: throw ArithmeticException("Int128 overflow: a clock run of $run read at weight $w")
         return mulDiv(scaled, 1L, w.denominator, Rounding.CEILING)
-            ?: throw ArithmeticException("Int128 overflow: a clock of $clock read at weight $w")
+            ?: throw ArithmeticException("Int128 overflow: a clock run of $run read at weight $w")
     }
 
     /**
@@ -1157,11 +1141,39 @@ public class FairShareAllocator(
         /** A backstop against a policy that never runs dry; one call never applies more grants. */
         const val MAX_ROUNDS_PER_CALL: Int = 100_000
 
-        /** The clock's grid above a child's own: the least common multiple of 1 to 16. */
+        /**
+         * Clock ticks to one tick of a weight-1 child's grid: the least common multiple of 1 to 16.
+         * A clock step divides by the asking children's total weight, so this makes a step exact for
+         * every total whose factors divide it. Not every total: one with a prime factor above 13, or
+         * a prime power past this one's, rounds each step up by under one clock tick. A shift read
+         * on a child's grid rounds up by under one of that child's ticks. Both are the penalty side.
+         */
         const val CLOCK_GRID: Long = 720_720L
 
         /** Clock ticks to a unit of virtual time: a child's [TICKS_PER_UNIT], times [CLOCK_GRID]. */
         const val CLOCK_TICKS_PER_UNIT: Long = TICKS_PER_UNIT * CLOCK_GRID
+
+        /**
+         * How far [parent]'s clock runs over what [asking] kept since [served] recorded it: the sum of
+         * their `baseIssued − returned` since then over their total weight, in clock ticks, rounded
+         * up. Zero when none was asking or none kept anything. A pure function of its inputs; the
+         * caller decides who was asking ([wasAsking]) and records the new [served].
+         */
+        fun clockStep(parent: GroupId, asking: List<PolicyEdge>, served: Map<AttachmentId, Long>): Int128 {
+            if (asking.isEmpty()) return Int128.ZERO
+            var kept = 0L
+            for (edge in asking) {
+                val last = served[edge.record.id] ?: continue
+                kept = checkedAdd(kept, checkedSub(checkedSub(edge.baseIssued, edge.summary.returned), last))
+            }
+            if (kept == 0L) return Int128.ZERO
+            // kept / Σw = kept · L / S, with Σw = S / L over the common denominator L.
+            val weights = asking.map { it.record.weight }
+            val l = weights.fold(1L) { acc, w -> checkedMul(acc / gcdOf(acc, w.denominator), w.denominator) }
+            val sum = weights.fold(0L) { acc, w -> checkedAdd(acc, checkedMul(w.numerator, l / w.denominator)) }
+            return mulDiv(kept.timesWide(CLOCK_TICKS_PER_UNIT), l, sum, Rounding.CEILING)
+                ?: throw ArithmeticException("Int128 overflow: a clock step of $kept units at ${parent.value}")
+        }
     }
 }
 
