@@ -200,6 +200,51 @@ class ResumeAckAfterHostLostTest {
             )
         }
 
+    /**
+     * An episode an ack resumed leaves nothing behind for the next one. Every resuming ack marks its
+     * episode resumed, and the verdict honours that mark even after the window's timer has fired. A
+     * mark carried into a later episode whose window is lost would resume that one too: no
+     * `HostLost`, its flight left pending, and a host detector restored on a dead link.
+     */
+    @Test
+    fun `an episode resumed by an ack does not resume a later episode whose window is lost`() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val seam = ScriptedSeam(joinerId, hostId)
+            val (room, _) = admittedJoiner(seam)
+            val events = recordEvents(room)
+
+            // Episode one: the host answers the Resume, and its ack resumes the room.
+            seam.tear()
+            runCurrent()
+            val firstResumeSent = seam.resumesSent == 1 && room.hasPendingResume()
+            seam.deliver(AdmitMessage.ResumeAck)
+            runCurrent()
+            val firstEnded = !room.hasReconnectInFlight()
+            val resumedByFirst = events.count { it is MembershipEvent.Resumed }
+
+            // Episode two: the host never answers, and the window expires.
+            seam.tear()
+            runCurrent()
+            val secondResumeSent = seam.resumesSent == 2 && room.hasPendingResume()
+            advanceTimeBy(config.reconnectWindow.inWholeMilliseconds + 1)
+            runCurrent()
+
+            assertAll(
+                { assertTrue(firstResumeSent, "precondition: episode one sent a Resume and awaited its verdict") },
+                { assertEquals(1, resumedByFirst, "precondition: the ack resumed episode one (events: $events)") },
+                { assertTrue(firstEnded, "precondition: episode one ended before the next tear") },
+                { assertTrue(secondResumeSent, "precondition: episode two sent a Resume and awaited its verdict") },
+                {
+                    assertTrue(
+                        events.any { (it as? MembershipEvent.HostLost)?.reason is FailureReason.WindowExpired },
+                        "episode two's window expired, so the room is host-lost (events: $events)",
+                    )
+                },
+                { assertEquals(1, events.count { it is MembershipEvent.Resumed }, "episode two resumed nothing (events: $events)") },
+                { assertFalse(room.hasPendingResume(), "the lost room's teardown took episode two's flight") },
+            )
+        }
+
     /** What a hand-played second thread saw: the flight before and after its ack, and whether `HostLost` was out. */
     private class AckRig(val pendingBefore: Boolean, val pendingAfter: Boolean, val hostLostAnnounced: Boolean)
 
