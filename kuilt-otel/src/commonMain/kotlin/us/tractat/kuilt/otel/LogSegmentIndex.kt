@@ -52,13 +52,32 @@ import kotlinx.serialization.encoding.Encoder
  *   lamport of every id in every segment it names as sealed. With [seqHighWater], where minting
  *   stands, so recovery mints past the ids of a sealed segment it could not read (#3410).
  *
- *   The **commit point** of a seal is an index write, and every index write carries the clock as it
- *   stands, so the write that first names a segment sealed already covers its ids. A segment's own
+ *   The **commit point** of a seal is an index write, and each one claims the ids of what it
+ *   seals, so the write that first names a segment sealed already covers them. A segment's own
  *   write lands earlier, while the index on disk still names it active, and a refused read of the
- *   active segment fails recovery closed rather than minting from what was read. So the field may
- *   lag only the active segment, which recovery always reads.
- * @property seqHighWater This replica's seq high-water when this index was written, on the same
- *   terms. Only this replica's: another author's seq is never minted here.
+ *   active segment fails recovery closed rather than minting from what was read. So both fields
+ *   may lag only the active segment, which recovery always reads.
+ *
+ *   Lamports are not dense, so this one may run ahead: it is the clock as the write was built,
+ *   ids not yet on disk included, and claiming a lamport no id carries costs nothing.
+ * @property seqHighWater This replica's seq high-water, on the same terms, and only this replica's:
+ *   another author's seq is never minted here.
+ *
+ *   **Bounded on both sides, since seqs are dense.** It must reach every seq in a segment the
+ *   index names sealed, and it must not pass a seq no key holds. A turn's leading index write
+ *   lands before its segment write, so it claims only what earlier segment writes put on disk;
+ *   claiming the turn's own new seqs, with the segment write then refused, left a restart's log
+ *   holding a hole no drop could fold past (the cost below, with nothing to heal it).
+ *
+ *   **The raise has a cost of its own whenever it passes seqs the loaded log lacks**: a sealed
+ *   segment that was not read (the case it exists for), records [WarpLogRecordExporter] could not
+ *   install, an active segment that does not decode. [us.tractat.kuilt.crdt.Rga.dropWindow] folds
+ *   this replica's drops into its floor only along an unbroken run of seqs, so until the missing
+ *   segment is read every drop past the hole is kept as an explicit `RgaOp.Compact`, and a
+ *   segment carrying one is never retired. Measured on #3410's repro, one unread segment and 300
+ *   exports at eight ops a segment: 35 segment keys where 3 is normal, 30 of them pinned, 50 KB
+ *   resident, and 299 compacted ids kept, all of it still there after a clean start has read the
+ *   segment and healed the floor. When the segment is gone for good the floor never moves again.
  *
  *   Both default to `0`, which is what an index written before them meant: mint from what was read.
  */

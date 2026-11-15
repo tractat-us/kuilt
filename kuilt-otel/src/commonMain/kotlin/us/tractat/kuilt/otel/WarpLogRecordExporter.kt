@@ -1109,6 +1109,8 @@ public class WarpLogRecordExporter(
         runCatchingCancellable {
             // Raised before anything can mint, so a sealed segment recovery could not read keeps
             // its ids: the next export mints past them rather than from what was read (#3410).
+            // Raising past seqs the loaded log lacks leaves a hole the floor cannot fold past
+            // until that segment is read; see LogSegmentIndex.seqHighWater for what it costs.
             val raised = recovered.log.advanceClock(replica, recovered.lamportHighWater, recovered.seqHighWater)
             val entries = raised.entries()
             val suppression = Suppression.of(raised)
