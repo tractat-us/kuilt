@@ -177,9 +177,11 @@ class HeddleAcceptanceTest {
     }
 
     /**
-     * A parent whose weights spread far wider than sixteen to one, 60/30/10/1, under the same long
-     * run. The rebase must still keep every child's position clear of its ceiling, on the heaviest
-     * child's grid as much as on the lightest's.
+     * A parent whose weights spread far wider than sixteen to one, 60/30/10/1, the consumer's shape
+     * from #3313. The light child runs alone in bursts while the heavy ones idle, then every child
+     * competes again. One unit of virtual time is sixty times as many ticks on the heaviest child's
+     * grid as on the lightest's, so a rebase timed by the light child alone lets the heavy children
+     * wake past their ceiling. The rebase must keep every child clear of its ceiling.
      */
     @Test
     fun aParentWeightedSixtyThirtyTenOneRunsPastTheOldCeiling() = runTest(
@@ -188,21 +190,29 @@ class HeddleAcceptanceTest {
     ) {
         val cluster = bootedCluster(mint = mapOf(0 to SUPPLY), lanes = spreadLanes)
         val node = cluster.peers[0].node.asSchedulingPeer()
-        val run = MixedWeightRun(root, spreadLanes, MAX_GRANT, Random(3313))
-        var refusedAt = -1
+        val light = spreadLanes.single { it.weight == Weight.ONE }
+        val burst = MixedWeightRun(root, spreadLanes, MAX_GRANT, Random(3313), drawFrom = listOf(light), grantsPerCall = BURST_GRANTS)
+        val mix = MixedWeightRun(root, spreadLanes, MAX_GRANT, Random(3314))
+        val refusals = ArrayList<String>()
         var peak = 0.0
-        while (run.grants < LONG_RUN_GRANTS && refusedAt < 0 && run.calls < SPREAD_CALL_LIMIT) {
-            if (run.step(node) is ScheduleOutcome.PositionCeiling) refusedAt = run.grants
-            if (run.calls % PUMP_EVERY == 0) {
-                cluster.pump(1L)
-                peak = maxOf(peak, node.boundMetrics(root).peakPositionFraction)
+        repeat(SPREAD_ROUNDS) { round ->
+            for ((run, calls) in listOf(burst to BURST_CALLS, mix to MIX_CALLS)) {
+                repeat(calls) {
+                    if (run.step(node) is ScheduleOutcome.PositionCeiling) refusals += "round ${round + 1}, call ${run.calls}"
+                    if (run.calls % PUMP_EVERY == 0) {
+                        cluster.pump(1L)
+                        peak = maxOf(peak, node.boundMetrics(root).peakPositionFraction)
+                    }
+                }
             }
         }
         cluster.pump()
-        println("spread: ${run.grants} grants in ${run.calls} calls, ${node.rebases()} rebases, peak $peak, refused at $refusedAt")
+        val grants = burst.grants + mix.grants
+        println("spread: $grants grants (${burst.grants} light alone), ${node.rebases()} rebases, peak $peak, ${refusals.size} refusals")
         assertAll(
-            { assertEquals(-1, refusedAt, "the parent never met the ceiling (it refused after $refusedAt grants)") },
-            { assertTrue(run.grants >= LONG_RUN_GRANTS, "the run made its own ${run.grants} grants") },
+            { assertEquals(SPREAD_ROUNDS * (BURST_CALLS + MIX_CALLS), burst.calls + mix.calls, "the run made every call") },
+            { assertEquals(emptyList<String>(), refusals.take(MAX_REPORTED), "no call met the ceiling (${refusals.size} did)") },
+            { assertTrue(grants >= LONG_RUN_GRANTS, "the run made its own $grants grants") },
             { assertTrue(node.rebases() > 0, "the rig: the parent rebased (${node.rebases()} times)") },
             { assertTrue(peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
             { assertConverged(cluster) },
@@ -212,8 +222,10 @@ class HeddleAcceptanceTest {
 
     /**
      * A heavy newborn, weight 60, joins a parent whose only other child, weight 1, has been running
-     * alone and busy for a long time. The newborn is seated level with the runner, and the two then
-     * share the parent at their weights without either meeting the ceiling.
+     * alone and busy for a long time: long enough that the runner's service, counted on the
+     * newborn's grid, is past a `Long`, but not so long that it passed a sixteenth of its own
+     * ceiling. The newborn is seated at the front and the two then both take a grant on every call,
+     * with neither meeting the ceiling.
      */
     @Test
     fun aHeavyNewbornJoiningABusyLightRunnerNeverMeetsTheCeiling() = runTest(
@@ -225,7 +237,7 @@ class HeddleAcceptanceTest {
         val cluster = bootedCluster(mint = mapOf(0 to SUPPLY), lanes = listOf(light))
         val peer = cluster.peers[0]
         val node = peer.node.asSchedulingPeer()
-        val runnerAlone = MixedWeightRun(root, listOf(light), MAX_GRANT, Random(1))
+        val runnerAlone = MixedWeightRun(root, listOf(light), MAX_GRANT, Random(1), grantsPerCall = RUNNER_GRANTS)
         repeat(RUNNER_CALLS) {
             runnerAlone.step(node)
             if (runnerAlone.calls % PUMP_EVERY == 0) cluster.pump(1L)
@@ -250,11 +262,14 @@ class HeddleAcceptanceTest {
         println("newborn: runner made ${runnerAlone.grants} grants alone, $rebasesAlone rebases; then heavy $heavyIssued, light $lightSince")
         assertAll(
             { assertEquals(RUNNER_CALLS, runnerAlone.calls, "the rig: the runner ran alone for every call") },
-            { assertTrue(rebasesAlone > 0, "the rig: the parent rebased while the runner ran alone ($rebasesAlone)") },
+            {
+                val onTheNewbornsGrid = runnerAlone.grants.toDouble() * MAX_GRANT * 60.0 * 16.0
+                assertTrue(onTheNewbornsGrid > Long.MAX_VALUE.toDouble(), "the rig: the runner's service on the newborn's grid is past a Long")
+            },
             { assertEquals(JOINED_CALLS, both.calls, "the two ran together for every call") },
             { assertEquals(emptyList<String>(), refusals.take(MAX_REPORTED), "no call met the ceiling (${refusals.size} did)") },
-            { assertTrue(heavyIssued > 0L, "the newborn was served") },
-            { assertTrue(heavyIssued > 10 * lightSince, "and served at its weight: heavy $heavyIssued against light $lightSince") },
+            { assertEquals(JOINED_CALLS * MAX_GRANT, heavyIssued, "the newborn was granted on every call") },
+            { assertEquals(JOINED_CALLS * MAX_GRANT, lightSince, "and so was the runner") },
             { assertConverged(cluster) },
         )
     }
@@ -324,9 +339,10 @@ class HeddleAcceptanceTest {
     }
 
     /**
-     * A scheduler crashes mid-run and restarts with no wake memory. Its heaviest child, weight 60,
-     * idled through the whole run before the crash, so it sits many rebases behind the origin, and
-     * it is demanding from the restarted scheduler's first call. A fresh allocator sees that as a
+     * A scheduler crashes mid-run and restarts with no wake memory. Before the crash only its
+     * lightest child, weight 1, ran, in bursts, past a rebase; the heaviest, weight 60, idled
+     * throughout, so it sits far behind the origin on its own grid, and it is demanding from the
+     * restarted scheduler's first call. A fresh allocator sees that as a
      * first observation, not a wake, so nothing clamps the child to the front: the parent must still
      * not wedge at the ceiling. The run then carries on past the old ceiling, and the cluster
      * converges and conserves across the restart.
@@ -338,7 +354,8 @@ class HeddleAcceptanceTest {
     ) {
         val cluster = bootedCluster(mint = mapOf(1 to SUPPLY), lanes = spreadLanes)
         val idle = spreadLanes.single { it.weight == Weight.of(60L) }
-        val before = MixedWeightRun(root, spreadLanes, MAX_GRANT, Random(21), drawFrom = spreadLanes - idle)
+        val light = spreadLanes.single { it.weight == Weight.ONE }
+        val before = MixedWeightRun(root, spreadLanes, MAX_GRANT, Random(21), drawFrom = listOf(light), grantsPerCall = BURST_GRANTS)
         val first = cluster.peers[1].node.asSchedulingPeer()
         val refusedBefore = ArrayList<String>()
         repeat(BEFORE_RESTART_CALLS) { call ->
@@ -427,9 +444,6 @@ class HeddleAcceptanceTest {
         /** The twin refuses well inside this many calls; the bound only stops a broken rig running forever. */
         const val TWIN_CALL_LIMIT: Int = 2_000
 
-        /** The spread run reaches [LONG_RUN_GRANTS] well inside this many calls; the bound only stops a broken rig. */
-        const val SPREAD_CALL_LIMIT: Int = 5_000
-
         /** Calls the match run makes, one grant each: past the old ceiling and many rebases. */
         const val MATCH_CALLS: Int = 400
 
@@ -442,13 +456,27 @@ class HeddleAcceptanceTest {
          */
         const val APART_CALLS: Int = 60
 
-        /** Calls the restart run makes before the crash, and after the boot call. */
-        const val BEFORE_RESTART_CALLS: Int = 250
+        /** Calls the restart run makes before the crash, light bursts only, and after the boot call. */
+        const val BEFORE_RESTART_CALLS: Int = 300
         const val AFTER_RESTART_CALLS: Int = 500
 
-        /** Calls the light runner makes alone, and then beside the heavy newborn. */
+        /**
+         * The light runner's calls alone, at [RUNNER_GRANTS] each: 1,600 grants, past a `Long` on the
+         * newborn's grid and short of a sixteenth of the runner's own ceiling. Then its calls beside
+         * the newborn.
+         */
         const val RUNNER_CALLS: Int = 400
+        const val RUNNER_GRANTS: Int = 4
         const val JOINED_CALLS: Int = 400
+
+        /**
+         * The spread run's rounds: a burst of [BURST_CALLS] calls of [BURST_GRANTS] grants each to
+         * the light child alone, then [MIX_CALLS] calls with every child drawn at random.
+         */
+        const val SPREAD_ROUNDS: Int = 3
+        const val BURST_CALLS: Int = 100
+        const val BURST_GRANTS: Int = 8
+        const val MIX_CALLS: Int = 100
 
         /** Every so many calls, a run lets gossip move. */
         const val PUMP_EVERY: Int = 16

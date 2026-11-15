@@ -87,6 +87,7 @@ internal class MixedWeightRun(
     private val grant: Long,
     private val random: Random,
     private val drawFrom: List<AttachmentRecord> = lanes,
+    private val grantsPerCall: Int = 1,
     /** The waiting set of call number `call`, counted from one, or `null` for a fresh draw from [drawFrom]. */
     private val phase: (call: Int) -> List<AttachmentRecord>? = { null },
 ) {
@@ -101,11 +102,11 @@ internal class MixedWeightRun(
     fun drawWaiting(): List<AttachmentRecord> = phase(calls + 1)
         ?: drawFrom.filter { random.nextBoolean() }.ifEmpty { listOf(drawFrom[random.nextInt(drawFrom.size)]) }
 
-    /** Give every lane in [waiting] one [grant] more than it has outstanding, and every other lane nothing. */
+    /** Give every lane in [waiting] [grantsPerCall] [grant]s more than it has outstanding, and every other lane nothing. */
     fun advertise(peer: SchedulingPeer, waiting: List<AttachmentRecord>) {
         for (lane in lanes) {
             val outstanding = peer.ledger.value.edge(lane.id)?.outstanding ?: 0L
-            peer.advertise(lane.id, if (lane in waiting) Demand(outstanding + grant, grant) else Demand.NONE)
+            peer.advertise(lane.id, if (lane in waiting) Demand(outstanding + grantsPerCall * grant, grant) else Demand.NONE)
         }
     }
 
