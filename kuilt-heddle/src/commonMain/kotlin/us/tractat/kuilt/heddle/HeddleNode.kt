@@ -385,15 +385,14 @@ public class HeddleNode internal constructor(
      * [LocalHeddle.MAX_RESERVATION], the lease that limit is sized for (#3353).
      *
      * A long-idle child that comes back demanding to a node that never saw it idle, after a restart,
-     * is clamped as a waker rather than read from far below the origin. A pick that would have to
-     * order a position at its ceiling is refused, and so is a grant whose own delegation would carry
-     * its child there (#3353); the rounds stop at that parent: a call that granted first answers [ScheduleOutcome.Delegated], and every call
-     * after it [ScheduleOutcome.PositionCeiling]. A refused call writes nothing and leaves the wake
-     * clamps as they were, and a call with nothing to grant writes nothing either
+     * is clamped as a waker rather than read from far below the origin. No position refuses a pick:
+     * a pick orders the full 128-bit position, however far a child stands from its parent's origin,
+     * and however many schedulers granted it at once. A refused call writes nothing and leaves the
+     * wake clamps as they were, and a call with nothing to grant writes nothing either
      * ([FairShareAllocator.schedule]).
      *
      * @return [ScheduleOutcome.Delegated] with the count of grants applied this call,
-     *   [ScheduleOutcome.NothingToDelegate] when none was, or [ScheduleOutcome.PositionCeiling] or
+     *   [ScheduleOutcome.NothingToDelegate] when none was, or
      *   [ScheduleOutcome.WeightBudget] when [parent]'s children cannot be ordered. Never
      *   [GateClosed]: a static node has no write gate.
      *
