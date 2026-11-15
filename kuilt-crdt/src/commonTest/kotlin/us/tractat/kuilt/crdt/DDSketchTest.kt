@@ -373,6 +373,7 @@ class DDSketchTest {
             { assertEquals(mapOf(index to Long.MAX_VALUE), sketch.positiveBuckets, "the rig: each bucket fits") },
             { assertEquals(mapOf(index to 1L), sketch.negativeBuckets, "the rig: each bucket fits") },
             { assertFailsWith<ArithmeticException> { sketch.count } },
+            { assertNull(sketch.countOrNull(), "countOrNull answers null where count throws (#3403)") },
             { assertFailsWith<ArithmeticException> { sketch.quantile(0.5) } },
             { assertTrue("count=9223372036854775808" in sketch.toString(), sketch.toString()) },
         )
@@ -389,6 +390,7 @@ class DDSketchTest {
         )
         assertAll(
             { assertEquals(Long.MAX_VALUE, sketch.count) },
+            { assertEquals(Long.MAX_VALUE, sketch.countOrNull(), "countOrNull answers what count does (#3403)") },
             { assertEquals(ten.quantile(1.0), sketch.quantile(1.0), "the top value is 10's bucket") },
         )
     }

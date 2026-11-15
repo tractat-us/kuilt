@@ -249,6 +249,7 @@ public final class us/tractat/kuilt/crdt/DDSketch : us/tractat/kuilt/crdt/Quilte
 	public final fun addOrNull-nudtHMw (Ljava/lang/String;D)Lus/tractat/kuilt/crdt/Quilted;
 	public fun causalDots ()Ljava/util/Set;
 	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun countOrNull ()Ljava/lang/Long;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getBucketCount ()I
 	public final fun getCount ()J
