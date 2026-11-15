@@ -250,13 +250,16 @@ sealed interface us.tractat.kuilt.otel/ExportResult { // us.tractat.kuilt.otel/E
 
 sealed interface us.tractat.kuilt.otel/MetricExportResult { // us.tractat.kuilt.otel/MetricExportResult|null[0]
     final class Failure : us.tractat.kuilt.otel/MetricExportResult { // us.tractat.kuilt.otel/MetricExportResult.Failure|null[0]
+        constructor <init>(kotlin.collections/List<kotlin/Throwable>) // us.tractat.kuilt.otel/MetricExportResult.Failure.<init>|<init>(kotlin.collections.List<kotlin.Throwable>){}[0]
         constructor <init>(kotlin/Throwable) // us.tractat.kuilt.otel/MetricExportResult.Failure.<init>|<init>(kotlin.Throwable){}[0]
 
         final val cause // us.tractat.kuilt.otel/MetricExportResult.Failure.cause|{}cause[0]
             final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.otel/MetricExportResult.Failure.cause.<get-cause>|<get-cause>(){}[0]
+        final val causes // us.tractat.kuilt.otel/MetricExportResult.Failure.causes|{}causes[0]
+            final fun <get-causes>(): kotlin.collections/List<kotlin/Throwable> // us.tractat.kuilt.otel/MetricExportResult.Failure.causes.<get-causes>|<get-causes>(){}[0]
 
-        final fun component1(): kotlin/Throwable // us.tractat.kuilt.otel/MetricExportResult.Failure.component1|component1(){}[0]
-        final fun copy(kotlin/Throwable = ...): us.tractat.kuilt.otel/MetricExportResult.Failure // us.tractat.kuilt.otel/MetricExportResult.Failure.copy|copy(kotlin.Throwable){}[0]
+        final fun component1(): kotlin.collections/List<kotlin/Throwable> // us.tractat.kuilt.otel/MetricExportResult.Failure.component1|component1(){}[0]
+        final fun copy(kotlin.collections/List<kotlin/Throwable> = ...): us.tractat.kuilt.otel/MetricExportResult.Failure // us.tractat.kuilt.otel/MetricExportResult.Failure.copy|copy(kotlin.collections.List<kotlin.Throwable>){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricExportResult.Failure.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricExportResult.Failure.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricExportResult.Failure.toString|toString(){}[0]
@@ -778,6 +781,13 @@ final class us.tractat.kuilt.otel/MetricKey { // us.tractat.kuilt.otel/MetricKey
     }
 }
 
+final class us.tractat.kuilt.otel/MetricKindUnreadException : us.tractat.kuilt.otel/MetricNotCountedException { // us.tractat.kuilt.otel/MetricKindUnreadException|null[0]
+    final val storeKey // us.tractat.kuilt.otel/MetricKindUnreadException.storeKey|{}storeKey[0]
+        final fun <get-storeKey>(): us.tractat.kuilt.store/StoreKey // us.tractat.kuilt.otel/MetricKindUnreadException.storeKey.<get-storeKey>|<get-storeKey>(){}[0]
+
+    final fun carries(us.tractat.kuilt.otel/MetricUpdate): kotlin/Boolean // us.tractat.kuilt.otel/MetricKindUnreadException.carries|carries(us.tractat.kuilt.otel.MetricUpdate){}[0]
+}
+
 final class us.tractat.kuilt.otel/MetricSumOverflowException : us.tractat.kuilt.otel/MetricOverflowException { // us.tractat.kuilt.otel/MetricSumOverflowException|null[0]
     final val by // us.tractat.kuilt.otel/MetricSumOverflowException.by|{}by[0]
         final fun <get-by>(): kotlin/Long // us.tractat.kuilt.otel/MetricSumOverflowException.by.<get-by>|<get-by>(){}[0]
@@ -1025,7 +1035,9 @@ final class us.tractat.kuilt.otel/WarpTelemetry { // us.tractat.kuilt.otel/WarpT
     final suspend fun recover() // us.tractat.kuilt.otel/WarpTelemetry.recover|recover(){}[0]
 }
 
-sealed class us.tractat.kuilt.otel/MetricOverflowException : kotlin/ArithmeticException { // us.tractat.kuilt.otel/MetricOverflowException|null[0]
+sealed class us.tractat.kuilt.otel/MetricNotCountedException : kotlin/Exception // us.tractat.kuilt.otel/MetricNotCountedException|null[0]
+
+sealed class us.tractat.kuilt.otel/MetricOverflowException : us.tractat.kuilt.otel/MetricNotCountedException { // us.tractat.kuilt.otel/MetricOverflowException|null[0]
     abstract val key // us.tractat.kuilt.otel/MetricOverflowException.key|{}key[0]
         abstract fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricOverflowException.key.<get-key>|<get-key>(){}[0]
 }

@@ -332,11 +332,13 @@ public abstract interface class us/tractat/kuilt/otel/MetricExportResult {
 
 public final class us/tractat/kuilt/otel/MetricExportResult$Failure : us/tractat/kuilt/otel/MetricExportResult {
 	public fun <init> (Ljava/lang/Throwable;)V
-	public final fun component1 ()Ljava/lang/Throwable;
-	public final fun copy (Ljava/lang/Throwable;)Lus/tractat/kuilt/otel/MetricExportResult$Failure;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricExportResult$Failure;Ljava/lang/Throwable;ILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricExportResult$Failure;
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lus/tractat/kuilt/otel/MetricExportResult$Failure;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricExportResult$Failure;Ljava/util/List;ILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricExportResult$Failure;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCause ()Ljava/lang/Throwable;
+	public final fun getCauses ()Ljava/util/List;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -399,7 +401,16 @@ public final class us/tractat/kuilt/otel/MetricKind$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public abstract class us/tractat/kuilt/otel/MetricOverflowException : java/lang/ArithmeticException {
+public final class us/tractat/kuilt/otel/MetricKindUnreadException : us/tractat/kuilt/otel/MetricNotCountedException {
+	public final fun carries (Lus/tractat/kuilt/otel/MetricUpdate;)Z
+	public final fun getStoreKey-V7ECK2g ()Ljava/lang/String;
+}
+
+public abstract class us/tractat/kuilt/otel/MetricNotCountedException : java/lang/Exception {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public abstract class us/tractat/kuilt/otel/MetricOverflowException : us/tractat/kuilt/otel/MetricNotCountedException {
 	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public abstract fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
 }

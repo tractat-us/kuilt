@@ -487,7 +487,9 @@ public class WarpMetricExporter(
         return lock.withLock {
             if (read is KindRead.Found) {
                 read.series.forEach { (key, persisted) -> series[key] = series[key]?.piece(persisted) ?: persisted }
-                while (totalCount() > maxMetrics && evictOne()) Unit
+                while (totalCount() > maxMetrics) {
+                    if (!evictOne()) break
+                }
             }
             if (read is KindRead.Refused) {
                 val first = owedReads[kind] != OwedRead.REFUSED
@@ -519,27 +521,33 @@ public class WarpMetricExporter(
 
     /**
      * Read again each of [kinds] whose read is owed, in the fixed kind order, and return the ones
-     * still refused with their causes. Must hold [writeMutex].
+     * still refused, in that order. Must hold [writeMutex].
      *
-     * A turn of a kind returned here admits nothing of it and writes nothing of it; it counts as a
-     * failed turn of that kind on [health]. Only the kind's first refusal is logged as an error,
-     * whether [recover] or a turn met it; see [logRefusal].
+     * A turn of a kind returned here admits nothing of it and writes nothing of it. The caller
+     * counts it as a failed turn of that kind on [health], through [countRefused], once it knows the
+     * turn is a turn: a [record] refused for an overflow applies nothing and is no turn of any kind.
+     * Only the kind's first refusal is logged as an error, whether [recover] or a turn met it; see
+     * [logRefusal].
      */
-    private suspend fun refusedReads(kinds: Set<StoredKind>): Map<StoredKind, Throwable> {
+    private suspend fun refusedReads(kinds: Set<StoredKind>): Map<StoredKind, MetricKindUnreadException> {
         val owed = lock.withLock { owedReads.keys }
         if (owed.none { it in kinds }) return emptyMap()
-        val refused = LinkedHashMap<StoredKind, Throwable>()
+        val refused = LinkedHashMap<StoredKind, MetricKindUnreadException>()
         StoredKind.entries.filter { it in kinds && it in owed }.forEach { kind ->
             when (val read = readKind(kind)) {
                 is PersistedRead.Owed -> {
-                    refused[kind] = read.cause
-                    persistence.failed(setOf(kind.storeKey), read.cause)
+                    refused[kind] = MetricKindUnreadException(kind, read.cause)
                     logRefusal(kind, read)
                 }
                 PersistedRead.Settled -> logger.debug { "${kind.storeKey.name}: persisted series read; writes of the kind go ahead" }
             }
         }
         return refused
+    }
+
+    /** Count each turn [refusedReads] refused as a failed turn of its kind, with the store's cause. */
+    private fun countRefused(refused: Map<StoredKind, MetricKindUnreadException>) {
+        refused.forEach { (kind, unread) -> persistence.failed(setOf(kind.storeKey), unread.cause ?: unread) }
     }
 
     /**
@@ -549,7 +557,9 @@ public class WarpMetricExporter(
      */
     private suspend inline fun writeTurn(kind: StoredKind, turn: () -> MetricExportResult): MetricExportResult =
         writeMutex.withLock {
-            refusedReads(setOf(kind))[kind]?.let { MetricExportResult.Failure(it) } ?: turn()
+            val refused = refusedReads(setOf(kind))
+            countRefused(refused)
+            refused[kind]?.let { MetricExportResult.Failure(it) } ?: turn()
         }
 
     /** Whether this sketch can live in [histograms]: [histogramPrototype]'s exact configuration. */
@@ -731,13 +741,15 @@ public class WarpMetricExporter(
                 if (firstRefusal) logger.warn(line) else logger.debug(line)
                 return@withLock MetricExportResult.Failure(refused)
             }
-            val failures = HashMap<StoredKind, MetricExportResult.Failure>()
-            unread.forEach { (kind, cause) -> failures[kind] = MetricExportResult.Failure(cause) }
-            writes.forEach { write ->
-                val result = persist(write.kind.storeKey, write.encoded, write.lastKey)
-                if (result is MetricExportResult.Failure) failures[write.kind] = result
+            // Past the overflow check, so this is a turn of every kind the batch touched.
+            countRefused(unread)
+            val notDurable = writes.mapNotNull { write ->
+                (persist(write.kind.storeKey, write.encoded, write.lastKey) as? MetricExportResult.Failure)?.cause
             }
-            StoredKind.entries.firstNotNullOfOrNull { failures[it] } ?: MetricExportResult.Success
+            // What was not counted leads, so a caller reading only `cause` never takes an uncounted
+            // update for a counted one that is merely not yet on disk.
+            val causes = unread.values + notDurable
+            if (causes.isEmpty()) MetricExportResult.Success else MetricExportResult.Failure(causes)
         }
     }
 
