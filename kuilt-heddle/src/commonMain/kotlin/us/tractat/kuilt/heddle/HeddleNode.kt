@@ -379,9 +379,8 @@ public class HeddleNode internal constructor(
      *
      * The ceiling can still be met two ways. A demanding child that is never served is carried down
      * to its floor, and there holds the step at nothing. And several schedulers granting one child at
-     * once, before their writes merge, can each add a lease past the margin a rebase keeps: with
-     * several schedulers granting one child at once, keep denominator × schedulers under about
-     * 30,000 (#3458). A weight set so fine that one step or one full lease could carry a child past its
+     * once, before their writes merge, can each add a lease past the margin a rebase keeps: keep
+     * denominator × schedulers under about 30,000 (#3458). A weight set so fine that one step or one full lease could carry a child past its
      * ceiling is refused before it is active ([prepare], [activate]), and no grant is larger than
      * [LocalHeddle.MAX_RESERVATION], the lease that limit is sized for (#3353).
      *

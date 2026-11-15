@@ -8,6 +8,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -352,6 +353,23 @@ class FairShareAllocatorWindowRuleTest {
             { assertTrue(e1 !in allocator.memory.departures, "the rig: e1 was never seen to stop, so it is clamped") },
             { assertEquals(deepOrigin, ledger.origin(root), "the rig: no raise moved it") },
             { assertEquals(Int128.of(-c), effective(allocator, ledger, e1), "e1 is clamped to its floor, not below it") },
+        )
+    }
+
+    /**
+     * A sleeper credit past one lease is refused by both configs (#3353 review). Every window is at
+     * least `R` plus one lease wide, so a credit of at most one lease never takes a clamped waker
+     * below its floor under a raise, and the raise moves every child alike. A larger credit could,
+     * and the pick check after the raise would then throw out of `schedule`.
+     */
+    @Test
+    fun aSleeperCreditPastOneLeaseIsRefused() {
+        val max = LocalHeddle.MAX_RESERVATION
+        assertAll(
+            { assertEquals(max, PolicyConfig(quantum = 1L, sleeperCredit = max).sleeperCredit, "one lease is kept") },
+            { assertEquals(max, LocalPolicy(defaultReservation = 1L, sleeperCredit = max).sleeperCredit, "by both configs") },
+            { assertFailsWith<IllegalArgumentException> { PolicyConfig(quantum = 1L, sleeperCredit = max + 1L) } },
+            { assertFailsWith<IllegalArgumentException> { LocalPolicy(defaultReservation = 1L, sleeperCredit = max + 1L) } },
         )
     }
 

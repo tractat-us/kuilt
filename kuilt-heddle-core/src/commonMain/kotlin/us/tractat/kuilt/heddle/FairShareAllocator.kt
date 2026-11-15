@@ -118,7 +118,7 @@ public class FairShareAllocator(
 
     /**
      * How many joiners this allocator has landed at their floor rather than at the front (#3353):
-     * seated, clamped or returned. The witness a test reads that its floor-landing rig fired. Not
+     * seated or clamped; a returner held at its floor is not counted. The witness a test reads that its floor-landing rig fired. Not
      * part of [memory].
      */
     internal var floorLandingsForTest: Int = 0
@@ -1085,10 +1085,12 @@ public class FairShareAllocator(
      * their front leaves behind once the one ahead stops asking; on a heavy child's grid the front
      * is then far below zero.
      * The penalty is how far the front stood below the joiner's floor, `max(0, −C/(w · G) − F)` in
-     * virtual time relative to the origin: a lost turn, never credit. No rebase causes one, since the
-     * raise before a seat is bounded by every demanding child's room, returners included. It comes
-     * from siblings that stood below the origin when the joiner arrived, which in a running parent is
-     * within about a lease of it, the spread a fair pick leaves between them.
+     * virtual time relative to the origin: a lost turn, never credit. No raise the joiner lands
+     * under causes one, since that raise is bounded by every demanding child's room, returners
+     * included, and a sleeper credit is at most one lease ([PolicyConfig.sleeperCredit]). It comes
+     * from siblings that stood below the origin when the joiner arrived, which in a parent driven by
+     * picks is within about a lease of it, the spread a fair pick leaves between them; charging calls
+     * can leave siblings about `R` apart.
      */
     private fun landing(front: VirtualTime, w: Weight): Int128 {
         val at = front.ticksForWide(w)

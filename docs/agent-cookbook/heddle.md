@@ -657,8 +657,8 @@ enrolled can no longer pass for an idle one. Nor can a parent whose children can
 `schedule` rebases a busy parent by raising its replicated origin long before a child's position
 nears its ceiling, so no pick changes (#3353). It answers `PositionCeiling(parent)` where no
 whole step fits, a demanding child that is never served holding the rebase at its floor, and where
-several schedulers granting one child at once pass the margin a rebase keeps: with several
-schedulers granting one child at once, keep denominator × schedulers under about 30,000 (#3458).
+several schedulers granting one child at once pass the margin a rebase keeps: keep denominator
+× schedulers under about 30,000 (#3458).
 It makes no grant whose own delegation would reach the ceiling. It answers
 `WeightBudget(parent)` when gossip merged an active set whose weights a pick cannot sum in `Long`
 or that is too fine for one full lease, both on a static node too. Keep every weight's denominator

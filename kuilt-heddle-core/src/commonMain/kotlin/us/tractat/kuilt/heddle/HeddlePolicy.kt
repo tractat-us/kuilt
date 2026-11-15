@@ -75,7 +75,10 @@ public data class PolicyEdge(
  *   [wakeOffset][HeddlePolicy.wakeOffset] clamp: a child this peer saw idle but never saw stop
  *   asking. A child it saw stop comes back moved by its parent's net-service clock, and this
  *   credit does not apply to it, since it would only add credit (#3376). Defaults to `0` — the
- *   design default, "no unlimited idle credit" (§10.6). Non-negative.
+ *   design default, "no unlimited idle credit" (§10.6). Non-negative, and
+ *   at most [LocalHeddle.MAX_RESERVATION]: every window is at least `R` plus one lease
+ *   wide (the weight budget's P1′), so a waker's credit never takes its clamp below its floor
+ *   under a raise, and the raise moves every child alike (#3353).
  */
 public data class PolicyConfig(
     public val quantum: Long,
@@ -85,7 +88,9 @@ public data class PolicyConfig(
     init {
         require(quantum > 0L) { "quantum must be positive, was $quantum" }
         require(perChildOutstandingCap >= 0L) { "perChildOutstandingCap must be non-negative, was $perChildOutstandingCap" }
-        require(sleeperCredit >= 0L) { "sleeperCredit must be non-negative, was $sleeperCredit" }
+        require(sleeperCredit in 0L..LocalHeddle.MAX_RESERVATION) {
+            "sleeperCredit must be in 0..${LocalHeddle.MAX_RESERVATION}, was $sleeperCredit"
+        }
     }
 }
 

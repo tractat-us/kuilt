@@ -58,8 +58,8 @@ public sealed interface ScheduleOutcome {
      * #3353). A busy parent is rebased by raising its origin long before that, so it is met in two
      * ways. A demanding child that is never served is carried down to its floor, the mirror of its
      * ceiling, where no whole step of the rebase fits. And several schedulers granting one child at
-     * once can together pass the margin a rebase keeps: with several schedulers granting one child
-     * at once, keep denominator × schedulers under about 30,000 (#3458). A weight set so fine that
+     * once can together pass the margin a rebase keeps: keep denominator × schedulers under about
+     * 30,000 (#3458). A weight set so fine that
      * one step or one full lease could carry a child past its ceiling is refused when it is applied
      * ([WeightBudget]), and no grant is larger than [LocalHeddle.MAX_RESERVATION], the lease that
      * refusal is sized for.

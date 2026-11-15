@@ -848,11 +848,13 @@ the pick:
   grid, past its ceiling for `k` near `2¹⁶`. The window rule seats it near zero.
 - A newborn, a clamped waker and a returner each land at the front on their own
   grid, or at their floor when the front is below it. That costs the joiner a
-  turn, never gives it one: how far the front stood below its floor. No rebase
-  causes one, since the raise before a seat is bounded by the room of every
-  demanding child, returners included. It comes from siblings standing below
-  the origin when the joiner arrives, which in a running parent is within about
-  a lease of it, the spread a fair pick leaves between them.
+  turn, never gives it one: how far the front stood below its floor. No raise
+  the joiner lands under causes one, since that raise is bounded by the room of
+  every demanding child, returners included, and a sleeper credit is at most one
+  lease. It comes from siblings standing below the origin when the joiner
+  arrives, which in a parent driven by picks is within about a lease of it, the
+  spread a fair pick leaves between them. Charging calls can leave siblings
+  about `R` apart.
 - It rewrites no gauge and no wake clamp. Every child reads `Δ · w · G` lower, so
   every front comes down `Δ`, every `⌈V · w · G⌉` by exactly `Δ · w · G`, and
   every clamp `front − raw` is unchanged. No joiner landing under the raise is
@@ -907,8 +909,7 @@ each:
 - With `k` schedulers granting one child concurrently before their writes merge,
   the margin a child needs is `C − R ≥ k · H`. That is huge for coarse weights and
   slim near the edge of the weight budget below. It is documented, not enforced:
-  with several schedulers granting one child at once, keep denominator ×
-  schedulers under about 30,000 (#3458).
+  keep denominator × schedulers under about 30,000 (#3458).
 - In a `LocalHeddle` parent driven by both picks and plain `admit`s, a child a
   pick last saw demanding, and idle since, still bounds a charging call's `Δ`
   inside its own window until a pick sees it again: a never-served child in
@@ -1593,7 +1594,7 @@ Carried over from the source intact; each is a named property test (§13).
    peer had not seen. A rebase changes no pick (§7.1), so it adds nothing else.
    A joiner that arrives with no raise where the front is below its floor waits
    by how far the front stood there, the penalty side, within about a lease in a
-   running parent. At the position ceiling every pick there refuses.
+   parent driven by picks. At the position ceiling every pick there refuses.
 10. **Closure dominance.** A replica that observed CLOSING never again
     delegates across that generation, regardless of merge order.
 11. **Conflicts surface.** Integrity violations converge to the same explicit

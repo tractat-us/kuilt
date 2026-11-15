@@ -40,7 +40,9 @@ public data class SupplyPolicy(
  *   group this engine saw idle but never saw stop asking, one it first saw idle say. A group it
  *   saw stop comes back moved by its parent's net-service clock, and this credit
  *   does not apply to it, since it would only add credit (#3376). `0`, the default, keeps none.
- *   Non-negative. It is not the whole bound: a lease still
+ *   Non-negative, and at most [LocalHeddle.MAX_RESERVATION]: every window is at least `R` plus one lease
+ *   wide (the weight budget's P1′), so a waker's credit never takes its clamp below its floor
+ *   under a raise, and the raise moves every child alike (#3353). It is not the whole bound: a lease still
  *   open when its group wakes can hand more back at [LocalHeddle.complete] or [LocalHeddle.cancel],
  *   up to its reservation over the edge's weight, tracked by #3238.
  * @property supply how far ahead of its leases the engine mints supply.
@@ -55,7 +57,9 @@ public data class LocalPolicy(
         require(defaultReservation in 1L..LocalHeddle.MAX_RESERVATION) {
             "defaultReservation must be in 1..${LocalHeddle.MAX_RESERVATION}, was $defaultReservation"
         }
-        require(sleeperCredit >= 0L) { "sleeperCredit must be non-negative, was $sleeperCredit" }
+        require(sleeperCredit in 0L..LocalHeddle.MAX_RESERVATION) {
+            "sleeperCredit must be in 0..${LocalHeddle.MAX_RESERVATION}, was $sleeperCredit"
+        }
     }
 }
 
