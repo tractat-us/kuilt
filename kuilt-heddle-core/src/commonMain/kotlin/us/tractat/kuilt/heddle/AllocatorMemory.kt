@@ -7,6 +7,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import us.tractat.kuilt.crdt.CanonicalMapSerializer
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.timesWide
 
 /**
  * What a [FairShareAllocator] remembers between calls, as a value: the wake clamps it has
@@ -44,7 +45,10 @@ import us.tractat.kuilt.math.Int128
  * `baseIssued − returned` stood when its parent's clock last ran; and `departures` is where the clock
  * stood when this peer saw a child stop asking. A clock can run backward on a round whose refunds
  * outweigh its grants, so it, and a departure read off it, are signed ([SignedWideTicksSerializer]).
- * Each of the three is elided when empty, so a memory that has run no clock encodes as before.
+ * `shiftRemainders` is how far each child's shifts so far have run past its parent's clock, under
+ * one of its ticks ([ShiftRemainder]): a returner's next shift takes it off, so the rounding never
+ * adds up (#3416 review). Each of the four is elided when empty, so a memory that has run no clock
+ * encodes as before.
  *
  * Its encoded shape is part of [LocalHeddleSnapshot]'s format 2, which changed it in place for
  * the wide clamps; format 1 reads through a frozen surrogate of the virtual-time form it wrote. A
@@ -62,6 +66,8 @@ public class AllocatorMemory internal constructor(
     internal val served: Map<AttachmentId, Long> = emptyMap(),
     @Serializable(with = CanonicalMapSerializer::class)
     internal val departures: Map<AttachmentId, @Serializable(with = SignedWideTicksSerializer::class) Int128> = emptyMap(),
+    @Serializable(with = CanonicalMapSerializer::class)
+    internal val shiftRemainders: Map<AttachmentId, ShiftRemainder> = emptyMap(),
 ) {
     override fun equals(other: Any?): Boolean =
         other is AllocatorMemory &&
@@ -69,19 +75,21 @@ public class AllocatorMemory internal constructor(
             demandingObserved == other.demandingObserved &&
             clocks == other.clocks &&
             served == other.served &&
-            departures == other.departures
+            departures == other.departures &&
+            shiftRemainders == other.shiftRemainders
 
     override fun hashCode(): Int {
         var h = wakeOffsets.hashCode()
         h = 31 * h + demandingObserved.hashCode()
         h = 31 * h + clocks.hashCode()
         h = 31 * h + served.hashCode()
-        return 31 * h + departures.hashCode()
+        h = 31 * h + departures.hashCode()
+        return 31 * h + shiftRemainders.hashCode()
     }
 
     override fun toString(): String =
         "AllocatorMemory(wakeOffsets=${wakeOffsets.size}, demandingObserved=${demandingObserved.size}, " +
-            "clocks=${clocks.size}, departures=${departures.size})"
+            "clocks=${clocks.size}, departures=${departures.size}, shiftRemainders=${shiftRemainders.size})"
 
     public companion object {
         /** A memory that has observed nothing: what a brand-new allocator starts from. */
@@ -109,6 +117,35 @@ internal object WideTicksSerializer : KSerializer<Int128> {
         val words = decoder.decodeSerializableValue(WideTicksWords.serializer())
         return nonNegativeWide(words.high, words.low, "a wake clamp")
     }
+}
+
+/**
+ * How far a child's shifts so far have run past its parent's net-service clock (#3416 review):
+ * [numerator] over `CLOCK_GRID · `[denominator] of one of the child's ticks, in `(0, 1)`, where
+ * [denominator] is its weight's denominator when the shift was taken. A shift is a whole number of
+ * ticks and the clock's run since the child left can be a fraction of one, so a shift rounds up by
+ * this much, and the next one takes it off before it rounds: the child's total over-shift stays
+ * under one tick, never credit, however many times it returns. A remainder of zero is absent.
+ */
+@Serializable
+internal class ShiftRemainder(
+    @Serializable(with = WideTicksSerializer::class) val numerator: Int128,
+    val denominator: Long,
+) {
+    init {
+        require(denominator > 0L) { "a shift remainder's denominator must be positive, was $denominator" }
+        require(numerator > Int128.ZERO) { "a shift remainder is positive, or absent, was $numerator" }
+        require(numerator < CLOCK_GRID.timesWide(denominator)) {
+            "a shift remainder is under one tick, was $numerator over ${CLOCK_GRID} · $denominator"
+        }
+    }
+
+    override fun equals(other: Any?): Boolean =
+        other is ShiftRemainder && numerator == other.numerator && denominator == other.denominator
+
+    override fun hashCode(): Int = 31 * numerator.hashCode() + denominator.hashCode()
+
+    override fun toString(): String = "ShiftRemainder($numerator / (${CLOCK_GRID} · $denominator))"
 }
 
 /** A signed wide count in its two words, each elided at zero: [SignedWideTicksSerializer]'s wire shape. */
