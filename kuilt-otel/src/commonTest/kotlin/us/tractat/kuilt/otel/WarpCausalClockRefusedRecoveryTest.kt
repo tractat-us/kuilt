@@ -205,11 +205,11 @@ class WarpCausalClockRefusedRecoveryTest {
     }
 
     /**
-     * An export that stamps nothing still persists the clock. A clock that was never recovered must be
-     * read first, or that turn writes `seq=0` over the durable mark.
+     * An export that stamps nothing still persists the clock. A clock that was never recovered must
+     * not write then, or that turn puts `seq=0` over the durable mark.
      */
     @Test
-    fun anExportThatDoesNotTickReadsTheClockBeforeWritingIt() = runTest {
+    fun anExportThatDoesNotTickNeverWritesANeverRecoveredClock() = runTest {
         val store = InMemoryDurableStore()
         durableClockAtTwo(store)
         val exporter = WarpSpanExporter(replica, store, causalClock = WarpCausalClock(replica))

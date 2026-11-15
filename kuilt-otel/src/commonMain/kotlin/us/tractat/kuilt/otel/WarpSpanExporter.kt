@@ -298,9 +298,6 @@ public class WarpSpanExporter(
         // clock persist and the span write are one ordered unit (#1053).
         return try {
             ioMutex.withLock {
-                // A turn that did not tick still persists the clock, so a clock whose read has not
-                // landed is read here first and never written blind (#3390).
-                causalClock?.let { clockRecovered(it.retryRecovery(store)) }
                 var work = clockAndSpanWork
                 val written = try {
                     // Re-encode the *latest* spans inside the section so no concurrent add is
