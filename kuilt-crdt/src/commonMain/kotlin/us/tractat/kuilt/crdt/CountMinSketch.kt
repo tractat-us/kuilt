@@ -64,6 +64,14 @@ public data class CellDelta(val row: Int, val col: Int, val value: Long)
  * Full-state anti-entropy still uses the complete `depth × width` matrix; only
  * incremental deltas are sparse.
  *
+ * The type enforces the wire shape, decoding included: every cell is non-negative, a full-state
+ * matrix is exactly `depth × width`, and every sparse cell lies inside it.
+ *
+ * A sparse delta is a readable state like any other: [estimate] and [add] read its cells, with
+ * every cell it does not carry at zero. That matters because a delta reaches readers: an [ORMap]
+ * key with one contribution hands that contribution back as its value, and a put of
+ * `add(…).delta` stores the delta itself (#3414).
+ *
  * ## Use
  *
  * Analytics, rate-limiting, adaptive routing over a P2P mesh. Works on all
@@ -92,9 +100,33 @@ public class CountMinSketch private constructor(
     public val sparseCells: List<CellDelta>? = null,
 ) : Quilted<CountMinSketch> {
 
+    // In `init`, not in a factory: the generated decoder runs it too, so a mis-shaped matrix or a
+    // negative cell cannot arrive over the wire either (#3414). A negative cell would win the row
+    // minimum and break the one guarantee, never underestimating; a mis-shaped matrix or an
+    // out-of-range sparse cell would fail later with an index error, far from the bad input.
     init {
         require(width >= 1) { "width must be ≥ 1, was $width" }
         require(depth >= 1) { "depth must be ≥ 1, was $depth" }
+        for ((row, values) in cells.withIndex()) {
+            for ((col, value) in values.withIndex()) {
+                require(value >= 0L) { "CountMinSketch cell ($row, $col) must not be negative, was $value" }
+            }
+        }
+        if (sparseCells == null) {
+            require(cells.size == depth) { "CountMinSketch matrix must have $depth rows, had ${cells.size}" }
+            for ((row, values) in cells.withIndex()) {
+                require(values.size == width) {
+                    "CountMinSketch row $row must have $width cells, had ${values.size}"
+                }
+            }
+        } else {
+            for ((row, col, value) in sparseCells) {
+                require(row in 0 until depth && col in 0 until width) {
+                    "CountMinSketch sparse cell ($row, $col) is outside the $depth × $width matrix"
+                }
+                require(value >= 0L) { "CountMinSketch sparse cell ($row, $col) must not be negative, was $value" }
+            }
+        }
     }
 
     /**
@@ -115,7 +147,7 @@ public class CountMinSketch private constructor(
         val sparse = buildList(depth) {
             for (row in 0 until depth) {
                 val col = columnFor(encodedItem, row, width)
-                val raised = cells[row][col].plusOrNull(1L)
+                val raised = cellAt(row, col).plusOrNull(1L)
                     ?: throw ArithmeticException(
                         "CountMinSketch cell ($row, $col) is at Long.MAX_VALUE and cannot count another occurrence",
                     )
@@ -148,11 +180,13 @@ public class CountMinSketch private constructor(
      * the replica that observed the item most — it is NOT the sum across
      * replicas. The estimate is always ≥ the true count seen by any single
      * merged replica, and within the Count-Min error bound with high probability.
+     *
+     * A sparse delta answers as the state it pieces into: the cells it carries, zero elsewhere.
      */
     public fun estimate(encodedItem: ByteArray): Long =
         // `depth` is at least 1, so there is always a row to take the minimum over. A sentinel of
         // Long.MAX_VALUE for "no row seen" answered 0 for an item whose every cell was full (#3397).
-        (0 until depth).minOf { row -> cells[row][columnFor(encodedItem, row, width)] }
+        (0 until depth).minOf { row -> cellAt(row, columnFor(encodedItem, row, width)) }
 
     /**
      * Estimate the number of times [item] has been added. Because replicas merge
@@ -212,6 +246,22 @@ public class CountMinSketch private constructor(
     override fun toString(): String = "CountMinSketch(width=$width, depth=$depth)"
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /**
+     * The count at ([row], [col]) of the state this sketch stands for. A full-state sketch reads its
+     * matrix. A sparse delta reads its own cells, at zero where it carries none: its matrix is a
+     * one-wide stub of zeros, which answered `0` for an item the delta had just counted (#3414).
+     * A max over the matching cells rather than the first, so a delta carrying one cell twice reads
+     * the way [piece] would apply it.
+     */
+    private fun cellAt(row: Int, col: Int): Long {
+        val sparse = sparseCells ?: return cells[row][col]
+        var value = 0L
+        for (cell in sparse) {
+            if (cell.row == row && cell.col == col) value = maxOf(value, cell.value)
+        }
+        return value
+    }
 
     /** Apply a list of sparse cell updates (element-wise max) to produce a full-state result. */
     private fun applySparse(sparse: List<CellDelta>): CountMinSketch {
@@ -276,7 +326,8 @@ public class CountMinSketch private constructor(
 
         /**
          * A minimal stub cell array used for sparse deltas. The cells are all zeros
-         * and are not accessed for estimates; only [sparseCells] carries the data.
+         * and are never read: [estimate], [add] and [piece] all read a delta through
+         * [sparseCells].
          */
         private fun stubCells(depth: Int): Array<LongArray> = Array(depth) { LongArray(1) }
     }

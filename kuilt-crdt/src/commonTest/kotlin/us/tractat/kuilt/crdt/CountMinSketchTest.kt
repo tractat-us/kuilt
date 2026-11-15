@@ -241,6 +241,127 @@ class CountMinSketchTest {
         )
     }
 
+    // ── Wire shape (#3414) ────────────────────────────────────────────────────
+
+    private fun decode(json: String): CountMinSketch = Json.decodeFromString(CountMinSketch.serializer(), json)
+
+    /**
+     * A negative cell is refused. The sketch's one guarantee is that it never underestimates, and
+     * a negative cell breaks it: it wins the row minimum and reports less than was counted. The
+     * first assertion is the rig: the same matrix with the cell positive decodes.
+     */
+    @Test
+    fun decoderRefusesANegativeCell() {
+        assertAll(
+            { assertEquals(1L, decode("""{"width":2,"depth":1,"cells":[[1,1]]}""").estimate("x"), "the rig's valid matrix decodes") },
+            { assertFailsWith<IllegalArgumentException> { decode("""{"width":2,"depth":1,"cells":[[1,-1]]}""") } },
+        )
+    }
+
+    /** A negative value in a sparse delta is refused too: it is a cell, only carried differently. */
+    @Test
+    fun decoderRefusesANegativeSparseCell() {
+        val sparse = """{"width":2,"depth":1,"cells":[[0]],"sparseCells":[{"row":0,"col":1,"value":%d}]}"""
+        assertAll(
+            { assertEquals(listOf(CellDelta(0, 1, 1L)), decode(sparse.replace("%d", "1")).sparseCells, "the rig's valid delta decodes") },
+            { assertFailsWith<IllegalArgumentException> { decode(sparse.replace("%d", "-1")) } },
+        )
+    }
+
+    /**
+     * A full-state matrix must have exactly [CountMinSketch.depth] rows of exactly
+     * [CountMinSketch.width] cells. Before the fix a mis-shaped one decoded, and `estimate` or
+     * `piece` failed later with an index error, far from the bad input. The first arm is the rig.
+     */
+    @Test
+    fun decoderRefusesAMatrixOfTheWrongShape() {
+        assertAll(
+            { assertEquals(2, decode("""{"width":2,"depth":2,"cells":[[0,0],[0,0]]}""").depth, "the rig's 2×2 matrix decodes") },
+            { assertFailsWith<IllegalArgumentException>("too few rows") { decode("""{"width":2,"depth":2,"cells":[[0,0]]}""") } },
+            { assertFailsWith<IllegalArgumentException>("too many rows") { decode("""{"width":2,"depth":2,"cells":[[0,0],[0,0],[0,0]]}""") } },
+            { assertFailsWith<IllegalArgumentException>("a short row") { decode("""{"width":2,"depth":2,"cells":[[0,0],[0]]}""") } },
+            { assertFailsWith<IllegalArgumentException>("a long row") { decode("""{"width":2,"depth":2,"cells":[[0,0,0],[0,0]]}""") } },
+        )
+    }
+
+    /**
+     * A sparse cell must address the matrix: row in `[0, depth)`, column in `[0, width)`. Before the
+     * fix an out-of-range one decoded and `piece` threw an index error when it was applied.
+     */
+    @Test
+    fun decoderRefusesASparseCellOutsideTheMatrix() {
+        fun at(row: Int, col: Int) =
+            """{"width":2,"depth":2,"cells":[[0],[0]],"sparseCells":[{"row":$row,"col":$col,"value":1}]}"""
+        assertAll(
+            { assertEquals(listOf(CellDelta(1, 1, 1L)), decode(at(1, 1)).sparseCells, "the rig's last in-range cell decodes") },
+            { assertFailsWith<IllegalArgumentException>("row = depth") { decode(at(2, 0)) } },
+            { assertFailsWith<IllegalArgumentException>("negative row") { decode(at(-1, 0)) } },
+            { assertFailsWith<IllegalArgumentException>("col = width") { decode(at(0, 2)) } },
+            { assertFailsWith<IllegalArgumentException>("negative col") { decode(at(0, -1)) } },
+        )
+    }
+
+    /**
+     * A sparse delta answers `estimate` as the state it is: its own cells, zero everywhere else.
+     * Every sibling sketch's delta is a readable state, and a delta reaches readers (see
+     * [anORMapValueThatIsADeltaAnswersItsCount]). Before the fix a delta read its one-wide stub of
+     * zeros: at width 1 it answered `0` for an item it had just counted, which is the silent case,
+     * and wider it threw an index error. The first assertion is the rig: the deltas really are
+     * sparse.
+     */
+    @Test
+    fun aDeltaAnswersItsOwnCount() {
+        val base = CountMinSketch.empty(width = 64, depth = 4)
+            .piece { it.add("x") }
+            .piece { it.add("x") }
+        val delta = base.add("x").delta
+        val narrow = CountMinSketch.empty(width = 1, depth = 2).add("x").delta
+        val items = listOf("x", "y", "z", "w", "")
+        assertAll(
+            { assertTrue(delta.sparseCells != null && narrow.sparseCells != null, "the rig's deltas are sparse") },
+            { assertEquals(3L, delta.estimate("x"), "a delta over two prior adds counts x three times") },
+            { assertEquals(1L, narrow.estimate("x"), "a one-wide delta counts x once") },
+            {
+                val asState = CountMinSketch.empty(width = 64, depth = 4).piece(delta)
+                assertEquals(items.map(asState::estimate), items.map(delta::estimate), "a delta reads as the state it pieces into")
+            },
+        )
+    }
+
+    /**
+     * `add` on a sparse delta counts from what the delta carries. Before the fix it read the stub,
+     * so it minted `1` whatever the delta held, or threw an index error when `width > 1`.
+     */
+    @Test
+    fun addOnADeltaCountsFromWhatItCarries() {
+        val base = CountMinSketch.empty(width = 64, depth = 4).piece { it.add("x") }
+        val delta = base.add("x").delta
+        val next = delta.add("x").delta
+        assertAll(
+            { assertTrue(delta.sparseCells != null, "the rig's delta is sparse") },
+            { assertEquals(List(4) { 3L }, next.sparseCells?.map { it.value }, "the next delta raises every row from 2 to 3") },
+            { assertEquals(3L, CountMinSketch.empty(width = 64, depth = 4).piece(next).estimate("x")) },
+        )
+    }
+
+    /**
+     * The path that puts a delta in front of a reader. An [ORMap] key holding one contribution
+     * returns that contribution as its value, and a put of `add(…).delta` stores the delta itself.
+     * Before the fix `estimate` on that value read the stub. The first assertion is the rig: the
+     * map really hands back the sparse delta.
+     */
+    @Test
+    fun anORMapValueThatIsADeltaAnswersItsCount() {
+        val replica = ReplicaId("a")
+        val map = ORMap.empty<String, CountMinSketch>()
+            .piece { it.put(replica, "k", CountMinSketch.empty(width = 64, depth = 4).add("x").delta) }
+        val value = map["k"]
+        assertAll(
+            { assertTrue(value?.sparseCells != null, "the rig's map value is the sparse delta") },
+            { assertEquals(1L, value?.estimate("x")) },
+        )
+    }
+
     // ── ByteArray overloads (#727) ────────────────────────────────────────────
 
     @Test

@@ -159,9 +159,16 @@ that share a sketch must use the same `width` and `depth`; `piece()` throws
 
 ## Hash family
 
-One multiply-shift hash per row, seeded with a Fibonacci-derived constant
-`(row + 1) × 2654435761`. Entirely self-contained — no external dependencies.
-Not cryptographically secure; suitable for frequency sketching only.
+Each row hashes with MurmurHash3 (the 32-bit x86 variant), seeded with the
+row's index: row 0 uses seed 0, row 1 uses seed 1, and so on. A different seed
+gives each row its own independent hash. The column is that hash, read as an
+unsigned number, modulo `width`.
+
+The hash is kuilt's own copy, shared with `HyperLogLog` and `BloomFilter`, so
+there are no external dependencies. It gives the same answer on every target,
+which matters because replicas on different platforms must put an item in the
+same cells. It is not cryptographically secure; use it for frequency sketching
+only.
 
 ## When to use
 
