@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -47,7 +48,7 @@ class FairShareAllocatorJoinersFrontTest {
         val newbornFloor = checkNotNull(pick.ledger.gauge(newborn.id)) { "the newborn is seated" }.assertedAt(Weight.ONE)
         assertAll(
             { assertEquals(ticksToVirtual(800L, Weight.ONE), newbornFloor, "the newborn is seated at w1's position") },
-            { assertEquals(ticksToVirtual(640L, Weight.ONE), allocator.memory.wakeOffsets[w2.id], "w2's offset is w1 less w2") },
+            { assertEquals(Int128.of(640L), allocator.memory.wakeOffsets[w2.id], "w2's offset is w1 less w2") },
         )
     }
 
@@ -58,8 +59,8 @@ class FairShareAllocatorJoinersFrontTest {
         val grants = allocator.schedule(root, cell, earmarked = 0L) { wants }
         assertAll(
             { assertEquals(AllocationOutcome.Delegated(3), grants) },
-            { assertEquals(ticksToVirtual(640L, Weight.ONE), allocator.memory.wakeOffsets[w2.id], "w2 clamped to w1") },
-            { assertEquals(ticksToVirtual(320L, Weight.ONE), allocator.memory.wakeOffsets[w3.id], "w3 clamped to w1") },
+            { assertEquals(Int128.of(640L), allocator.memory.wakeOffsets[w2.id], "w2 clamped to w1") },
+            { assertEquals(Int128.of(320L), allocator.memory.wakeOffsets[w3.id], "w3 clamped to w1") },
             // Level at 800, so the id breaks the tie: w1, then w2 and w3, each behind w1's grant.
             { assertEquals(listOf(w1.id, w2.id, w3.id), cell.granted, "one grant each, in id order") },
         )

@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
 import us.tractat.kuilt.math.timesWide
@@ -214,7 +215,7 @@ class LocalHeddleOverflowPropertyTest {
 
         var picks = 0
         var clamps = 0
-        var offsetsBefore = emptyMap<AttachmentId, Rational>()
+        var offsetsBefore = emptyMap<AttachmentId, Int128>()
         val offGridSamples = ArrayList<String>()
         repeat(PICKS) { step ->
             val size = 1 + random.nextInt(leaves.size)
@@ -234,7 +235,7 @@ class LocalHeddleOverflowPropertyTest {
                 // new front. Offsets are joined with max, so counting non-zero ones would let one
                 // early clamp satisfy every later sample.
                 val offsets = snapshot.allocatorMemory.wakeOffsets
-                clamps += offsets.count { (edge, offset) -> offset > (offsetsBefore[edge] ?: Rational.ZERO) }
+                clamps += offsets.count { (edge, offset) -> offset > (offsetsBefore[edge] ?: Int128.ZERO) }
                 offsetsBefore = offsets
                 offGridSamples += offGrid(snapshot)
             }
@@ -255,7 +256,7 @@ class LocalHeddleOverflowPropertyTest {
      * Empty is the fix: a compounding denominator would put a value off the grid before it overflowed
      * anything. Since #3353 a seat and a checkpoint store the position in the gauge's ticks, whole by
      * construction, and leave the floor at zero, so the floor arm sees only a floor an older build wrote;
-     * the offsets are what this run can still put off the grid.
+     * a wake clamp is whole ticks too, so nothing this run writes can be off the grid.
      */
     private fun offGrid(state: LocalHeddleState): List<String> = offGrid(state.ledger, state.allocatorMemory)
 
@@ -267,11 +268,8 @@ class LocalHeddleOverflowPropertyTest {
             val w = ledger.record(edge)?.weight ?: return@mapNotNull null
             if (onGrid(floor, w)) null else "floor ${edge.value}=$floor"
         }
-        val offsets = memory.wakeOffsets.mapNotNull { (edge, offset) ->
-            val w = ledger.record(edge)?.weight ?: return@mapNotNull null
-            if (onGrid(offset, w)) null else "offset ${edge.value}=$offset"
-        }
-        return (floors + offsets).sorted()
+        // A wake clamp is whole ticks of its edge's grid by construction since #3353, so only floors can be off it.
+        return floors.sorted()
     }
 
     /**

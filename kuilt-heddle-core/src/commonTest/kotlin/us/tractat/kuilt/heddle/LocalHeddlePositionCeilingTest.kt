@@ -379,7 +379,7 @@ class LocalHeddlePositionCeilingTest {
         val offset = engine.snapshot().allocatorMemory.wakeOffsets[bEdge]
         assertAll(
             { assertIs<AcquireOutcome.Acquired>(admitted) },
-            { assertEquals(positionCeiling(bWeight), offset?.let { ticksAt(it, bWeight) }, "b's clamp is held at its ceiling") },
+            { assertTrue(offset != null && offset > Int128.of(positionCeiling(bWeight)), "b's clamp is exact, past its ceiling: $offset") },
             { assertEquals(AcquireOutcome.PositionCeiling(engine.root), engine.acquire(setOf(a, b), setOf(b), startedAt = 2L)) },
         )
     }

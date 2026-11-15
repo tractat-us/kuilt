@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.test.assertAll
@@ -219,7 +220,7 @@ class FairShareAllocatorRefusalTest {
             { assertEquals(null, before.gauge(e3), "the rig: e3 is unseated") },
             { assertEquals(before, cell.current, "no seat landed for the newborn") },
             { assertEquals(0, cell.writes, "not one patch") },
-            { assertEquals(ticksToVirtual(1_600L, Weight.ONE), memory.wakeOffsets[e2], "the waker's clamp is kept") },
+            { assertEquals(Int128.of(1_600L), memory.wakeOffsets[e2], "the waker's clamp is kept") },
             { assertEquals(mapOf(e1 to true, e2 to true, e3 to true), memory.demandingObserved, "and so is what it saw") },
         )
     }

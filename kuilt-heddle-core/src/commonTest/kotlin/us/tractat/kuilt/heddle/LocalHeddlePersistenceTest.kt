@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import kotlinx.serialization.BinaryFormat
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.cbor.Cbor
@@ -100,8 +101,8 @@ class LocalHeddlePersistenceTest {
         return outcomes
     }
 
-    private fun wakeOffsetOf(memory: AllocatorMemory, leaf: GroupId): Rational =
-        memory.wakeOffsets[edgeTo(leaf)] ?: Rational.ZERO
+    private fun wakeOffsetOf(memory: AllocatorMemory, leaf: GroupId): Int128 =
+        memory.wakeOffsets[edgeTo(leaf)] ?: Int128.ZERO
 
     /** The edge `root → leaf` of [pair] as [LocalHeddle.fromTopology] boots it, at generation 0. */
     private fun edgeTo(leaf: GroupId): AttachmentId =
@@ -385,7 +386,7 @@ class LocalHeddlePersistenceTest {
         val control = continuation(forgetful, open)
         val bPicks = { picks: List<Any> -> picks.count { it == b } }
         assertAll(
-            { assertTrue(offset > Rational.ZERO, "the rig: b's wake offset is non-zero at persist time, $offset") },
+            { assertTrue(offset > Int128.ZERO, "the rig: b's wake offset is non-zero at persist time, $offset") },
             { assertEquals(true, persisted.allocatorMemory.demandingObserved[edgeTo(b)], "and b was last seen waiting") },
             { assertEquals(20, expected.count { it is GroupId }, "the rig: 20 picks ran after the restore") },
             { assertEquals(expected, actual, "the same picks and outcomes as the engine that never persisted") },
@@ -406,7 +407,7 @@ class LocalHeddlePersistenceTest {
         val (reference, open) = wakerScenario()
         assertAll(
             { assertEquals(open, snapshot.leases, "the golden holds the scenario's open leases") },
-            { assertTrue(wakeOffsetOf(snapshot.allocatorMemory, b) > Rational.ZERO, "and b's wake offset") },
+            { assertTrue(wakeOffsetOf(snapshot.allocatorMemory, b) > Int128.ZERO, "and b's wake offset") },
             { assertEquals(continuation(reference, open), continuation(restored, open)) },
             { assertEquals(books(reference), books(restored)) },
         )

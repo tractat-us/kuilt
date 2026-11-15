@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -191,7 +192,7 @@ class LocalHeddleRebaseTest {
         }
         val memoryBefore = engine.snapshot().allocatorMemory
         val cOffset = memoryBefore.wakeOffsets[engine.edgeOf(c)]
-        check(cOffset != null && cOffset > Rational.ZERO) { "the rig: c carries a wake offset, not $cOffset" }
+        check(cOffset != null && cOffset > Int128.ZERO) { "the rig: c carries a wake offset, not $cOffset" }
 
         val refused = (0 until 3).map { engine.acquire(setOf(a, b, c, g), setOf(g), startedAt = 3L) }
         repeat(3) { twin.acquire(setOf(a, b, c, g), setOf(g), startedAt = 3L) }
@@ -267,7 +268,7 @@ class LocalHeddleRebaseTest {
         engine.pushTo(c, 2 * threshold)
         val wants = Demand(targetOutstanding = Long.MAX_VALUE, maximumUsefulGrant = 1L)
         val allocator = FairShareAllocator(LocalHeddle.SELF, PolicyConfig(quantum = 1L))
-        val rebase = allocator.rebased(engine.root, engine.snapshot().ledger) { wants }
+        val rebase = allocator.originRebase(engine.root, engine.snapshot().ledger) { wants }
         assertNull(rebase, "no rebase at a parent with a child at its ceiling")
     }
 }
