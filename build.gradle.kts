@@ -8688,7 +8688,7 @@ allprojects {
 //
 // What it selects (`kuilt.stampProbe.family`): `linux` takes every JVM/Android compilation (main
 // and test), every metadata compilation, every wasm/js MAIN compilation and every JVM `Test` task;
-// `apple` takes every Kotlin/Native compilation, main and test. Each is meant to be a subset of what
+// `apple` takes every `macosArm64` and `iosSimulatorArm64` compilation, main and test. Each is meant to be a subset of what
 // the job's first pass already ran, because a task the first pass never ran has no history to be
 // up to date against. The script fails on such a task too ("unmeasured"), so the selection cannot
 // silently grow into a second build.
@@ -8758,7 +8758,9 @@ fun stampProbeSelection(p: Project, family: String): List<Any> {
     for (target in targets) {
         for (compilation in target.compilations) {
             val keep = when (family) {
-                "apple" -> target.platformType == org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.native
+                // The two targets apple-nightly's first pass runs tests on; their compile
+                // classpaths are the same klibs iosArm64's would be, so a leak shows on both.
+                "apple" -> target.name == "macosArm64" || target.name == "iosSimulatorArm64"
                 else -> when (target.platformType) {
                     org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.jvm, org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.androidJvm ->
                         !compilation.name.contains("AndroidTest", ignoreCase = true)
@@ -8770,7 +8772,7 @@ fun stampProbeSelection(p: Project, family: String): List<Any> {
             if (keep) selected += compilation.compileTaskProvider
         }
     }
-    if (family == "linux") selected += p.tasks.withType(Test::class.java)
+    if (family == "linux") selected.add(p.tasks.withType(Test::class.java))
     return selected
 }
 
