@@ -124,6 +124,28 @@ class FairShareAllocatorRefusalTest {
     }
 
     /**
+     * The parent's front reads past the ceiling too, held at it, and does not throw (#3472). The read
+     * used to hold a child by lowering its wake offset, which [PolicyEdge] refuses once that goes
+     * negative, so every front over a child past its ceiling threw `IllegalArgumentException`:
+     * `HeddleNode.parentVirtualTime` and `explain`'s `BehindAtLevel` among them. With no rebase,
+     * every busy parent gets there. Read with `e1` alone demanding, past its ceiling, and with
+     * nobody demanding, so both arms of the front are read.
+     */
+    @Test
+    fun aFrontOverAChildPastItsCeilingReadsTheCeiling() {
+        val cell = CountingCell(seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 100L))
+        val allocator = FairShareAllocator(self, policy)
+        val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
+        allocator.schedule(root, cell, earmarked = 0L, wantsE1)
+        val atCeiling = ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE)
+        assertAll(
+            { assertTrue(relative(cell.current, e1) > Int128.of(positionCeiling(Weight.ONE)), "the rig: e1 is past its ceiling") },
+            { assertEquals(atCeiling, allocator.virtualTime(cell.current, root, wantsE1), "the demanding front reads the ceiling") },
+            { assertEquals(atCeiling, allocator.virtualTime(cell.current, root) { Demand.NONE }, "and so does the idle one, the furthest ahead") },
+        )
+    }
+
+    /**
      * The same in a later round: `e1` sits 200 ticks below its ceiling, so the first grant lands 40
      * ticks under it and the second passes it. The call goes on granting, and the next call finds
      * the supply spent rather than a ceiling. This used to stop after one grant and name the ceiling.
