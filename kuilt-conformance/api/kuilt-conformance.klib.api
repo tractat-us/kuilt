@@ -136,10 +136,12 @@ sealed interface us.tractat.kuilt.conformance/DeviceKeyStoreFixture { // us.trac
     }
 
     final class UnreadableGrants { // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants|null[0]
-        constructor <init>(kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<kotlin/Boolean>) // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.<init>|<init>(kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<kotlin.Boolean>){}[0]
+        constructor <init>(kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<kotlin/Boolean>) // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.<init>|<init>(kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<kotlin.Boolean>){}[0]
 
         final val probe // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.probe|{}probe[0]
             final fun <get-probe>(): kotlin.coroutines/SuspendFunction0<kotlin/Unit> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.probe.<get-probe>|<get-probe>(){}[0]
+        final val probeWrite // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.probeWrite|{}probeWrite[0]
+            final fun <get-probeWrite>(): kotlin.coroutines/SuspendFunction0<kotlin/Unit> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.probeWrite.<get-probeWrite>|<get-probeWrite>(){}[0]
         final val restore // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.restore|{}restore[0]
             final fun <get-restore>(): kotlin.coroutines/SuspendFunction0<kotlin/Boolean> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.restore.<get-restore>|<get-restore>(){}[0]
     }
