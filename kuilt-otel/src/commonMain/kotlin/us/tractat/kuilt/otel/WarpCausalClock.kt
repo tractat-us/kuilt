@@ -58,15 +58,16 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * persisted yet.
  *
  * An **undecodable** entry is different: the bytes were read and cannot be decoded, so no later
- * read can do better. The clock starts fresh at `seq=0` and the next [persist] replaces the entry,
- * so bad data never leaves it dead.
+ * read can do better. The clock starts fresh, at `seq=0` or at the floor below, and the next
+ * [persist] replaces the entry, so bad data never leaves it dead.
  *
- * Fresh does not mean unused, because durable spans still carry this replica's old stamps (#3407).
+ * Fresh does not mean unused, because durable spans still carry this replica's old dots (#3407).
  * So a [WarpSpanExporter] whose read of the stored spans lands raises the clock's floor to the
- * highest own-replica stamp that read found, before the turn mints anything, and a clock that has not
- * read yet keeps the floor until its read lands. This covers only the spans the store still holds:
- * a dot whose span left the stored set before the restart (evicted past `maxSpans`, or cleared),
- * or that only a peer or a collector still holds, is not in that read, and a corrupt entry can
+ * highest own-replica dot that read found, a span's stamp or a predecessor a span names, before the
+ * turn mints anything, and a clock that has not read yet keeps the floor until its read lands. This
+ * covers only the spans the store still holds. A dot no stored span carries or names (its span
+ * evicted past `maxSpans` or cleared before the restart, with no stored span naming it as a
+ * predecessor, or held only by a peer or a collector) is not in that read, and a corrupt entry can
  * still re-mint it.
  *
  * ## Thread-safety
@@ -153,7 +154,8 @@ public class WarpCausalClock(private val replica: ReplicaId) {
     /**
      * Reload `(seq, frontier)` from [store], arming the clock. Call once at startup: until a read
      * lands, [tick] and [persist] refuse. A missing entry answers [ClockRecovery.Recovered] and an
-     * undecodable one [ClockRecovery.Undecodable], and both arm the clock fresh (seq 0). A read
+     * undecodable one [ClockRecovery.Undecodable], and both arm the clock at `seq=0`, or at the floor
+     * a landed span read already raised ([WarpSpanExporter], #3407). A read
      * never moves `seq` backwards: an entry older than what this clock already minted is ignored.
      *
      * A refused read, including a cancellation the store minted, answers
@@ -247,10 +249,16 @@ public class WarpCausalClock(private val replica: ReplicaId) {
 
 /** What [WarpCausalClock.recover] found. */
 public sealed interface ClockRecovery {
-    /** The read landed: the clock resumed from the store's entry, or found none and starts at `seq=0`. */
+    /**
+     * The read landed: the clock resumed from the store's entry, or found none and starts at `seq=0`,
+     * or at the floor a landed span read already raised.
+     */
     public data object Recovered : ClockRecovery
 
-    /** The entry would not decode. The clock starts fresh, and its next persist replaces the entry. */
+    /**
+     * The entry would not decode. The clock starts at `seq=0`, or at the floor a landed span read
+     * already raised, and its next persist replaces the entry.
+     */
     public data class Undecodable(public val cause: Throwable) : ClockRecovery
 
     /**

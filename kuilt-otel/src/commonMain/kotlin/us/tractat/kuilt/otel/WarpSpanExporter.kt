@@ -301,12 +301,14 @@ public class WarpSpanExporter(
      * cap, and allow writes. Memory holds no local export yet, only remote sets merged meanwhile, so
      * the join is one `piece` and the excess one batch.
      *
-     * The floor is the highest stamp of this replica's in the join, taken **before** the eviction so
-     * an evicted span's dot still counts (#3407). It is raised before the state turns
-     * [SpanReadState.Recovered], in the same hold of [lock], and [export] mints before its write
-     * section only from a recovered exporter under that lock, so no stamp is minted below it. A clock
-     * whose own entry was corrupt starts at `seq=0` and would otherwise re-mint the dots these spans
-     * carry.
+     * The floor is the highest dot of this replica's in the join, taken **before** the eviction so
+     * an evicted span's dot still counts (#3407). It counts a span's own stamp and every predecessor
+     * it names: once this replica's span is evicted, a remote span that observed it may be the only
+     * evidence its dot was minted, and re-minting it would resolve that predecessor to a new span. It
+     * is raised before the state turns [SpanReadState.Recovered], in the same hold of [lock], and
+     * [export] mints before its write section only from a recovered exporter under that lock, so no
+     * stamp is minted below it. A clock whose own entry was corrupt starts at `seq=0` and would
+     * otherwise re-mint the dots these spans carry.
      */
     private fun spanReadLanded(read: SpanRead.Landed) {
         if (read is SpanRead.Undecodable) {
@@ -315,15 +317,20 @@ public class WarpSpanExporter(
         }
         lock.withLock {
             if (read is SpanRead.Found) spans = read.spans.piece(spans)
-            causalClock?.let { clock -> highestOwnStamp()?.let(clock::raiseFloor) }
+            causalClock?.let { clock -> highestOwnDot()?.let(clock::raiseFloor) }
             evictExcess()
             readState = SpanReadState.Recovered
         }
     }
 
-    /** The highest `seq` among this replica's stamps in [spans]. Must be called with [lock] held. */
-    private fun highestOwnStamp(): Long? =
-        spans.elements.mapNotNull { span -> span.causalStamp?.dot?.takeIf { it.replica == replica }?.seq }.maxOrNull()
+    /**
+     * The highest `seq` among this replica's dots in [spans], stamps and predecessors both. Must be
+     * called with [lock] held.
+     */
+    private fun highestOwnDot(): Long? = spans.elements
+        .flatMap { span -> span.causalStamp?.let { it.predecessors + it.dot }.orEmpty() }
+        .filter { it.replica == replica }
+        .maxOfOrNull { it.seq }
 
     /**
      * Export one span: insert it into the CRDT and durably flush to [store].
