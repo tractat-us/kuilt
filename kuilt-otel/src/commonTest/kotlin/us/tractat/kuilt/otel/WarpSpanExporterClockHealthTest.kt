@@ -189,34 +189,93 @@ class WarpSpanExporterClockHealthTest {
         )
     }
 
+    /** A span stamped by hand, so its turn wants no dot from the clock. */
+    private fun explicitlyStamped(id: Byte) = span(id).copy(causalStamp = CausalStamp(Dot(ReplicaId("z"), id.toLong()), emptySet()))
+
     /**
-     * A clock at `Long.MAX_VALUE` can mint no more (#3432), so every later span is saved unstamped,
-     * and nothing the clock writes changes that: `seq` never moves down, a clear included, and a
-     * restart reads the same `seq` back. So every turn counts its clock work as failed, and a clear
-     * that writes the exhausted clock's entry resolves none of it.
+     * A clock at `Long.MAX_VALUE` can mint no more (#3432), so each export that wanted a dot saves its
+     * span unstamped and counts one failed clock turn. A turn that wanted none, a span with its own
+     * stamp, is not counted: its clock write lands, so it resolves the exhaustion failures outstanding
+     * before it, and the next attempt that wants a dot counts again.
      */
     @Test
-    fun anExhaustedClockStaysOutstandingWhateverItWrites() = runTest {
+    fun anExhaustedClockCountsEachAutoStampAttemptOnce() = runTest {
+        val clock = WarpCausalClock(replica).armed().also { it.raiseFloor(Long.MAX_VALUE) }
+        val exporter = WarpSpanExporter(replica, InMemoryDurableStore(), causalClock = clock)
+
+        val tick = clock.tick()
+        val attempts = listOf(exporter.export(span(1)), exporter.export(span(2)))
+        val afterAttempts = exporter.health.value
+        val explicit = exporter.export(explicitlyStamped(3))
+        val afterExplicit = exporter.health.value
+        val again = exporter.export(span(4))
+        val afterAgain = exporter.health.value
+        val unstamped = exporter.snapshot().elements.filter { it.spanId != span(3).spanId }
+
+        assertAll(
+            { assertEquals(ClockTick.Exhausted, tick, "the rig: the clock still mints") },
+            { assertEquals(List(4) { ExportResult.Success }, attempts + explicit + again) },
+            { assertTrue(unstamped.size == 3 && unstamped.all { it.causalStamp == null }, "the rig: an exhausted clock stamped") },
+            { assertEquals(2L, afterAttempts.failed, "each exhausted attempt was not counted exactly once: $afterAttempts") },
+            { assertEquals(2L, afterAttempts.outstandingFailures, "the exhausted attempts were not outstanding: $afterAttempts") },
+            { assertEquals(2L, afterAttempts.acknowledged, "the attempts' span work was not acknowledged: $afterAttempts") },
+            { assertEquals(2L, afterExplicit.failed, "a turn that wanted no dot counted an exhaustion: $afterExplicit") },
+            { assertEquals(0L, afterExplicit.outstandingFailures, "the explicit turn's clock write did not resolve them: $afterExplicit") },
+            { assertEquals(3L, afterAgain.failed, "the next attempt after it was not counted: $afterAgain") },
+            { assertEquals(1L, afterAgain.outstandingFailures, "the next attempt after it was not outstanding: $afterAgain") },
+            { assertTrue(afterAgain.lastFailure?.message.orEmpty().contains("Long.MAX_VALUE"), "lastFailure does not name the exhaustion: $afterAgain") },
+        )
+    }
+
+    /**
+     * The turn that mints the last dot, `Long.MAX_VALUE` itself, got its dot and saved a stamped span,
+     * so it is not counted. Only the attempt after it, which gets none, is.
+     */
+    @Test
+    fun theTurnThatMintsTheLastDotIsNotCounted() = runTest {
+        val clock = WarpCausalClock(replica).armed().also { it.raiseFloor(Long.MAX_VALUE - 1) }
+        val exporter = WarpSpanExporter(replica, InMemoryDurableStore(), causalClock = clock)
+
+        val last = exporter.export(span(1))
+        val lastStamp = exporter.snapshot().elements.single().causalStamp
+        val afterLast = exporter.health.value
+        val next = exporter.export(span(2))
+        val afterNext = exporter.health.value
+
+        assertAll(
+            { assertEquals(ExportResult.Success, last) },
+            { assertEquals(Long.MAX_VALUE, lastStamp?.dot?.seq, "the rig: the turn did not mint the last dot") },
+            { assertEquals(0L, afterLast.failed, "the turn that got the last dot was counted failed: $afterLast") },
+            { assertEquals(1L, afterLast.acknowledged, "the turn that got the last dot was not acknowledged: $afterLast") },
+            { assertEquals(ExportResult.Success, next) },
+            { assertEquals(1L, afterNext.failed, "the attempt after the last dot was not counted: $afterNext") },
+        )
+    }
+
+    /**
+     * A clear wants no dot, and its clock write lands, so on an exhausted clock it is not counted, and
+     * it resolves the exhaustion an earlier export counted.
+     */
+    @Test
+    fun aClearOnAnExhaustedClockIsNotCounted() = runTest {
         val backing = InMemoryDurableStore()
         val clock = WarpCausalClock(replica).armed().also { it.raiseFloor(Long.MAX_VALUE) }
         val exporter = WarpSpanExporter(replica, backing, causalClock = clock)
 
-        val tick = clock.tick()
         val exported = exporter.export(span(1))
-        val saved = exporter.snapshot().elements.single()
         val afterExport = exporter.health.value
         val cleared = exporter.clear()
+        val afterClear = exporter.health.value
         val clockEntry = backing.read(clockKey)
 
         assertAll(
-            { assertEquals(ClockTick.Exhausted, tick, "the rig: the clock still mints") },
             { assertEquals(ExportResult.Success, exported) },
-            { assertNull(saved.causalStamp, "the rig: an exhausted clock stamped") },
-            { assertEquals(1L, afterExport.acknowledged, "the export's span work was not acknowledged") },
-            { assertEquals(1L, afterExport.outstandingFailures, "an exhausted clock was not outstanding") },
+            { assertEquals(1L, afterExport.failed, "the rig: the exhausted export was not counted: $afterExport") },
             { assertEquals(ExportResult.Success, cleared) },
             { assertNotNull(clockEntry, "the rig: the clear did not write the clock") },
-            { assertEquals(2L, exporter.health.value.outstandingFailures, "writing an exhausted clock resolved it") },
+            { assertEquals(1L, afterClear.failed, "a clear on an exhausted clock was counted: $afterClear") },
+            { assertEquals(2L, afterClear.acknowledged, "the clear was not acknowledged: $afterClear") },
+            { assertEquals(0L, afterClear.outstandingFailures, "the clear's clock write did not resolve the exhaustion: $afterClear") },
         )
     }
 }
