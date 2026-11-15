@@ -65,6 +65,13 @@ class HeddleAcceptanceTest {
      * cluster then ran on alone to ten times its grants; now neither refuses, the twin's peak
      * effective position passes its ceiling while the rebasing cluster's stays far below, and the
      * other two peers converge on the rebasing cluster's ledger.
+     *
+     * The twin is the step B engine (design §7.1, *Future: positions with no origin*, slice 1): it
+     * never raises an origin. Its positions do not reach `2⁶³` ticks here: the whole supply is `2⁵⁶`
+     * units and the lanes' weights are within a factor of two, so every position stays near `2⁶⁰`
+     * ticks or below, though past each fine lane's ceiling of about `2⁶³ / d`. The two agree call for call, so there is no
+     * difference to put down to a floor landing or a below-zero clamp, neither of which this module
+     * can count.
      */
     @Test
     fun aNoRebaseTwinPassesItsCeilingAndPicksAsTheRebasingClusterCallForCall() = runTest(
@@ -108,6 +115,7 @@ class HeddleAcceptanceTest {
             { assertEquals(a.grants, b.grants, "the twin granted every grant the rebasing cluster did") },
             { assertEquals(SUPPLY / MAX_GRANT, a.grants.toLong(), "the rig: the whole supply was granted") },
             { assertEquals(0, twinNode.rebases(), "the rig: the twin never rebased") },
+            { assertEquals(Int128.ZERO, twinNode.ledger.value.origin(root), "the rig: the twin never raised an origin, so it is the step B engine") },
             { assertTrue(node.rebases() > 0, "the rig: the rebasing cluster rebased (${node.rebases()} times)") },
             { assertTrue(merged.origin(root) > Int128.ZERO, "the origin rose, to ${merged.origin(root)}") },
             { assertTrue(a.chargedBelowReservation > 0, "the rig: leases were charged below their reservation") },
