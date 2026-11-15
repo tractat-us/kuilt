@@ -1188,6 +1188,339 @@ class HeddleNodeTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
+    // A busy parent rebases by raising its origin (#3353)
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * A long run at one busy parent never reaches the position ceiling (#3353): mixed weights,
+     * grants of [LocalHeddle.MAX_RESERVATION], every lease charged below its reservation, and a
+     * waiting set drawn afresh each call.
+     *
+     * Before the origin rebase this exact run refused with [ScheduleOutcome.PositionCeiling] after
+     * [GRANTS_BEFORE_THE_CEILING] grants (measured on the slice 2–4 base, JVM). The run below goes
+     * ten times as far, counts its own grants and rebases, and checks that the peak effective
+     * position [HeddleNode.boundMetrics] reports stays below the ceiling.
+     */
+    @Test
+    fun aLongMixedWeightRunNeverReachesThePositionCeiling() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = mixedLanes, quantum = MAX_GRANT)
+        h.pump()
+        val peer = h.peers[0]
+        val run = LongRun(peer, Random(3353))
+        val target = 10 * GRANTS_BEFORE_THE_CEILING
+        var peak = 0.0
+        while (run.grants < target) {
+            val outcome = run.step()
+            assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${run.grants} grants")
+            if (run.calls % 64 == 0) {
+                h.pump(1L)
+                peak = maxOf(peak, peer.node.boundMetrics(root).peakPositionFraction)
+            }
+        }
+        val origin = peer.node.ledger.value.origin(root)
+        // In the results XML, so a run shows what it reached.
+        println("long run: calls=${run.calls} grants=${run.grants} rebases=${peer.node.rebasesForTest} peak=$peak origin=$origin")
+        assertAll(
+            { assertTrue(run.grants >= target, "the run made its own ${run.grants} grants") },
+            { assertTrue(peer.node.rebasesForTest > 0, "the rig: the parent rebased (${peer.node.rebasesForTest} times)") },
+            { assertTrue(origin > us.tractat.kuilt.math.Int128.ZERO, "the origin rose, to $origin") },
+            { assertTrue(run.chargedBelowReservation > 0, "the rig: leases were charged below their reservation") },
+            { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
+        )
+    }
+
+    /**
+     * A wide weight spread never reaches the ceiling either (#3353 review, item A): lanes at
+     * 60/30/10/1, the shape #3313 was reported with. The light lane runs alone for
+     * [WIDE_RUN_ALONE] calls, then a waiting set is drawn afresh each call. A lane was rebased only on
+     * its own grid, so the light lane alone could climb toward its threshold, and a heavy lane
+     * clamped to that front on its wake landed about 60 times as far up its own grid: past its
+     * ceiling, where every call after refused. The rebase now also triggers on the front read on
+     * every child's grid, and before the seat and wake step. The run counts its own grants and
+     * rebases.
+     */
+    @Test
+    fun aWideSpreadRunNeverReachesThePositionCeiling() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = wideLanes, quantum = MAX_GRANT)
+        h.pump()
+        val peer = h.peers[0]
+        val run = LongRun(peer, Random(3313), wideLanes) { call -> if (call <= WIDE_RUN_ALONE) listOf(wideLanes[3]) else null }
+        while (run.grants < WIDE_RUN_GRANTS) {
+            val outcome = run.step()
+            assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${run.grants} grants")
+            if (run.calls % 64 == 0) h.pump(1L)
+        }
+        println("wide run: calls=${run.calls} grants=${run.grants} rebases=${peer.node.rebasesForTest}")
+        assertAll(
+            { assertTrue(run.grants >= WIDE_RUN_GRANTS, "the run made its own ${run.grants} grants") },
+            { assertTrue(peer.node.rebasesForTest > 0, "the rig: the parent rebased (${peer.node.rebasesForTest} times)") },
+        )
+    }
+
+    /**
+     * The rebase changes no pick (#3353): a twin node with rebasing switched off, fed the same
+     * waiting sets, makes exactly the same grants call for call until it refuses at its ceiling,
+     * and the rebasing node carries on past that point.
+     */
+    @Test
+    fun aTwinThatNeverRebasesMakesTheSamePicksUntilItRefuses() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val rebasing = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = mixedLanes, quantum = MAX_GRANT)
+        val twin = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = mixedLanes, quantum = MAX_GRANT)
+        rebasing.pump()
+        twin.pump()
+        twin.peers[0].node.rebaseForTest = false
+        val a = LongRun(rebasing.peers[0], Random(7))
+        val b = LongRun(twin.peers[0], Random(7))
+        var refusedAt = -1
+        while (refusedAt < 0 && a.calls < 100_000) {
+            a.step()
+            if (b.step() is ScheduleOutcome.PositionCeiling) refusedAt = b.calls
+            if (refusedAt < 0) assertEquals(b.issuedByLane(), a.issuedByLane(), "call ${a.calls}: the two made different picks")
+        }
+        val beyond = a.grants
+        println("twin: refused at call $refusedAt after ${b.grants} grants; the rebasing node rebased ${rebasing.peers[0].node.rebasesForTest} times")
+        repeat(64) { assertTrue(a.step() !is ScheduleOutcome.PositionCeiling, "the rebasing node refused after the twin did") }
+        assertAll(
+            { assertTrue(refusedAt > 0, "the rig: the twin reached its ceiling, at call $refusedAt") },
+            { assertTrue(rebasing.peers[0].node.rebasesForTest > 0, "the rig: the rebasing node rebased") },
+            { assertEquals(0, twin.peers[0].node.rebasesForTest, "the rig: the twin never did") },
+            { assertTrue(a.grants > beyond, "and the rebasing node went on granting") },
+        )
+    }
+
+    /**
+     * **Hazard (a)** from #3329: a peer that has not seen the latest origin raise seats a newborn,
+     * and after the merge the newborn reads level with its siblings exactly as it does in a twin
+     * cluster that never rebased. The seat is absolute, `⌊O · w · G⌋ + ⌈V · w · G⌉` for the
+     * origin `O` the seater saw, so it means the same under any later origin.
+     *
+     * The lagging peer B has seen one raise and misses the second: an origin of zero would make an
+     * absolute seat and a relative one the same number, and the test would not tell them apart.
+     */
+    @Test
+    fun aNewbornSeatedByALaggingPeerReadsLevelWithANoRebaseTwin() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val rebasing = lagScenario(rebase = true)
+        val twin = lagScenario(rebase = false)
+        val newborn = LAG_NEWBORN.id
+        assertAll(
+            { assertTrue(rebasing.lagOrigin > us.tractat.kuilt.math.Int128.ZERO, "the rig: B had seen one raise when it seated") },
+            { assertTrue(rebasing.finalOrigin > rebasing.lagOrigin, "the rig: and missed a later one") },
+            { assertEquals(us.tractat.kuilt.math.Int128.ZERO, twin.finalOrigin, "the rig: the twin never rebased") },
+            { assertNotNull(rebasing.ledger.gauge(newborn), "the rig: B seated the newborn") },
+            {
+                assertEquals(
+                    twin.ledger.virtualService(newborn)!! - twin.ledger.virtualService(lagLanes[0].id)!!,
+                    rebasing.ledger.virtualService(newborn)!! - rebasing.ledger.virtualService(lagLanes[0].id)!!,
+                    "the newborn sits where the no-rebase twin puts it, relative to its sibling",
+                )
+            },
+        )
+    }
+
+    /**
+     * **Hazard (b)** from #3329: a peer that has not seen an origin raise writes a `delegate`
+     * checkpoint concurrently, and after the merge every position reads as in a twin cluster that
+     * never rebased, less the same origin. A rebase rewrites no gauge, so there is nothing for a
+     * concurrent checkpoint to pair with: the two clusters' gauges and counters are identical, and
+     * only the origin differs.
+     */
+    @Test
+    fun aConcurrentCheckpointOnALaggingPeerReadsAsTheNoRebaseTwin() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val rebasing = lagScenario(rebase = true)
+        val twin = lagScenario(rebase = false)
+        val edges = (lagLanes + LAG_NEWBORN).map { it.id }
+        assertAll(
+            { assertTrue(rebasing.finalOrigin > rebasing.lagOrigin, "the rig: B missed a raise while it delegated") },
+            { assertTrue(rebasing.lagGrants > 0, "the rig: B checkpointed while lagging") },
+            { assertEquals(edges.map { twin.ledger.gauge(it) }, edges.map { rebasing.ledger.gauge(it) }, "no gauge differs") },
+            { assertEquals(edges.map { twin.ledger.edge(it) }, edges.map { rebasing.ledger.edge(it) }, "no counter differs") },
+            {
+                // Every child reads its twin less the origin, on its own grid: weight 1, so O units exactly.
+                val shift = Rational.of(checkNotNull(rebasing.finalOrigin.toLongOrNull()))
+                assertEquals(
+                    edges.map { twin.ledger.virtualService(it)!! - shift },
+                    edges.map { rebasing.ledger.virtualService(it)!! },
+                )
+            },
+        )
+    }
+
+    /**
+     * The review's F1 case (#3353): a waker idle since long before the origin passed it gets no
+     * extra service. `b`, at weight 15, idles while `a`, at weight 1, runs on through rebases until
+     * `b`'s raw position, on its own grid, is below `Long`: about −2⁶⁴ ticks. When `b` wakes, its
+     * clamp is taken wide and it comes back level with `a`, where exact arithmetic would put it. A
+     * clamp taken after narrowing the raw position would leave it some 2⁶³ ticks behind, and it
+     * would take every pick until it caught up.
+     *
+     * The weights are chosen so that the front `b` wakes to, `a`'s position after a rebase, stays
+     * below `b`'s own ceiling on `b`'s grid: at a wider spread the wake itself refuses, the known
+     * limit of a parent whose weights are far apart.
+     */
+    @Test
+    fun aWakerFarBehindTheOriginComesBackLevel() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val lanes = listOf(
+            AttachmentRecord(AttachmentId("a"), root, GroupId("a"), Weight.ONE),
+            AttachmentRecord(AttachmentId("b"), root, GroupId("b"), Weight.of(15L)),
+        )
+        val (a, b) = lanes.map { it.id }
+        val h = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = lanes, quantum = MAX_GRANT)
+        h.pump()
+        val node = h.peers[0].node
+        // b is seen waiting once, then idles, so its next demand is a wake.
+        node.advertise(b, Demand(targetOutstanding = 1L, maximumUsefulGrant = 1L))
+        node.advertise(a, Demand.NONE)
+        node.schedule(root)
+        node.advertise(b, Demand.NONE)
+        repeat(F1_CALLS) {
+            val outstanding = node.ledger.value.edge(a)?.outstanding ?: 0L
+            node.advertise(a, Demand(targetOutstanding = outstanding + 64L * MAX_GRANT, maximumUsefulGrant = MAX_GRANT))
+            node.schedule(root)
+            if (it % 16 == 0) h.pump(1L)
+        }
+        h.pump()
+        val origin = node.ledger.value.origin(root)
+        // b's raw position on its own grid is its service less ⌊O · 15 · G⌋.
+        val bBehind = us.tractat.kuilt.math.mulDiv(origin, 15L * 16L, 1L, us.tractat.kuilt.math.Rounding.FLOOR)
+        // a stops asking, so the front b wakes to is the furthest-ahead child, a itself (§7.2).
+        node.advertise(a, Demand.NONE)
+        node.advertise(b, Demand(targetOutstanding = (node.ledger.value.edge(b)?.outstanding ?: 0L) + 4L, maximumUsefulGrant = 1L))
+        val woke = node.schedule(root)
+        h.pump()
+        val bLevel = node.probeEffectiveVirtualService(b, others = listOf(a))
+        val aLevel = node.probeEffectiveVirtualService(a, others = listOf(b))
+        assertAll(
+            { assertTrue(node.rebasesForTest > 0, "the rig: the parent rebased (${node.rebasesForTest} times)") },
+            { assertTrue(bBehind != null && bBehind.toLongOrNull() == null, "the rig: b sits past Long below the origin ($bBehind ticks)") },
+            { assertEquals(ScheduleOutcome.Delegated(4), woke, "the rig: b woke and was served") },
+            // Level within the four units b was granted at its wake, 4/15 of a unit of virtual time.
+            { assertTrue(bLevel - aLevel <= Rational.of(1L) && aLevel - bLevel <= Rational.of(1L), "b came back level with a: b=$bLevel a=$aLevel") },
+        )
+    }
+
+    /** One peer's long run: a fresh waiting set each call, and every lease charged below its reservation. */
+    private inner class LongRun(
+        private val peer: Peer,
+        private val random: Random,
+        private val lanes: List<AttachmentRecord> = mixedLanes,
+        /** The waiting set of call [calls], or `null` for a fresh random draw. */
+        private val phase: (calls: Int) -> List<AttachmentRecord>? = { null },
+    ) {
+        var calls = 0
+            private set
+        var grants = 0
+            private set
+        var chargedBelowReservation = 0
+            private set
+
+        fun step(): ScheduleOutcome {
+            calls++
+            val node = peer.node
+            val waiting = phase(calls) ?: lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }
+            for (lane in lanes) {
+                val outstanding = node.ledger.value.edge(lane.id)?.outstanding ?: 0L
+                node.advertise(lane.id, if (lane in waiting) Demand(outstanding + MAX_GRANT, MAX_GRANT) else Demand.NONE)
+            }
+            val outcome = node.schedule(root)
+            if (outcome is ScheduleOutcome.Delegated) grants += outcome.grants
+            for (lane in lanes) {
+                val held = node.ledger.value.holdings(lane.child, peer.id)
+                if (held < 2L) continue
+                val reserved = node.reserve(lane.child, held) as? ReserveOutcome.Reserved ?: continue
+                node.complete(reserved.id, held / 2L + 1L)
+                chargedBelowReservation++
+            }
+            return outcome
+        }
+
+        fun issuedByLane(): List<Long> = lanes.map { peer.node.ledger.value.edge(it.id)?.issued ?: 0L }
+    }
+
+    /** What [lagScenario] leaves: the merged ledger, and the origin the lagging peer saw. */
+    private class LagOutcome(
+        val ledger: EntitlementLedger,
+        val lagOrigin: us.tractat.kuilt.math.Int128,
+        val finalOrigin: us.tractat.kuilt.math.Int128,
+        val lagGrants: Int,
+    )
+
+    /**
+     * Two peers at one parent of weight-1 lanes. A runs a lane past its rebase threshold, both
+     * merge, B is cut off, A runs it past the threshold again, and B, lagging, activates a newborn
+     * and schedules: it seats the newborn and checkpoints a grant against the origin it last saw.
+     * Then the two heal. With [rebase] off, A never raises the origin and the run is the twin.
+     */
+    private suspend fun TestScope.lagScenario(rebase: Boolean): LagOutcome {
+        val h = harness(peers = 2, mint = mapOf(0 to LONG_RUN_MINT, 1 to LONG_RUN_MINT), topology = lagLanes, quantum = LAG_GRANT)
+        h.pump()
+        val a = h.peers[0].node
+        val b = h.peers[1].node
+        a.rebaseForTest = rebase
+        b.rebaseForTest = rebase
+        val busy = lagLanes[0].id
+        // Each schedule call grants until the busy lane's demand is met: keep it a fixed number of grants ahead.
+        fun runBusy(calls: Int) = repeat(calls) {
+            val outstanding = a.ledger.value.edge(busy)?.outstanding ?: 0L
+            a.advertise(busy, Demand(targetOutstanding = outstanding + LAG_GRANTS_PER_CALL * LAG_GRANT, maximumUsefulGrant = LAG_GRANT))
+            a.schedule(root)
+        }
+        runBusy(LAG_CALLS)
+        h.pump(600)
+        h.partition(1)
+        runBusy(LAG_CALLS)
+        h.pump()
+        val lagOrigin = b.ledger.value.origin(root)
+        check(b.prepare(LAG_NEWBORN) && b.activate(LAG_NEWBORN.id)) { "B admits the newborn" }
+        b.advertise(LAG_NEWBORN.id, Demand(targetOutstanding = LAG_GRANT, maximumUsefulGrant = LAG_GRANT))
+        b.advertise(busy, Demand(targetOutstanding = (b.ledger.value.edge(busy)?.outstanding ?: 0L) + LAG_GRANT, maximumUsefulGrant = LAG_GRANT))
+        val lagGrants = (b.schedule(root) as? ScheduleOutcome.Delegated)?.grants ?: 0
+        h.pump()
+        h.heal(1)
+        h.pump(600)
+        h.pump(600)
+        val merged = a.ledger.value
+        check(merged == b.ledger.value) { "the two peers converged" }
+        return LagOutcome(merged, lagOrigin, merged.origin(root), lagGrants)
+    }
+
+    private val mixedLanes = listOf(
+        AttachmentRecord(AttachmentId("m1"), root, GroupId("m1"), Weight.of(1L, 200L)),
+        AttachmentRecord(AttachmentId("m2"), root, GroupId("m2"), Weight.of(3L, 700L)),
+        AttachmentRecord(AttachmentId("m3"), root, GroupId("m3"), Weight.of(1L, 100L)),
+        AttachmentRecord(AttachmentId("m4"), root, GroupId("m4"), Weight.of(2L, 300L)),
+    )
+
+    private val wideLanes = listOf(
+        AttachmentRecord(AttachmentId("w60"), root, GroupId("w60"), Weight.of(60L)),
+        AttachmentRecord(AttachmentId("w30"), root, GroupId("w30"), Weight.of(30L)),
+        AttachmentRecord(AttachmentId("w10"), root, GroupId("w10"), Weight.of(10L)),
+        AttachmentRecord(AttachmentId("w1"), root, GroupId("w1"), Weight.ONE),
+    )
+
+    private val lagLanes = listOf(
+        AttachmentRecord(AttachmentId("l1"), root, GroupId("l1"), Weight.ONE),
+        AttachmentRecord(AttachmentId("l2"), root, GroupId("l2"), Weight.ONE),
+    )
+
+    // ─────────────────────────────────────────────────────────────────────────────
     // harness
     // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1218,6 +1551,7 @@ class HeddleNodeTest {
         mint: Map<Int, Long>,
         topology: List<AttachmentRecord>,
         wrap: (Seam) -> Seam = { it },
+        quantum: Long = 10L,
     ): Harness {
         val loom = InMemoryLoom()
         val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
@@ -1238,7 +1572,7 @@ class HeddleNodeTest {
                 mint = mintById,
                 topology = topology,
                 clock = clock,
-                config = config(seed = 1_000 + i),
+                config = config(seed = 1_000 + i, quantum = quantum),
                 epoch = 0L,
             )
             Peer(self, node, gate)
@@ -1295,5 +1629,33 @@ class HeddleNodeTest {
     private companion object {
         /** A weight-1 edge's position ceiling in 1/16-unit ticks: `Long.MAX_VALUE` less one largest deadline. */
         const val CEILING_AT_WEIGHT_ONE: Long = Long.MAX_VALUE - LocalHeddle.MAX_RESERVATION * 16L
+
+        /** The largest grant a long run makes: [LocalHeddle.MAX_RESERVATION], the deadline headroom a position keeps. */
+        const val MAX_GRANT: Long = LocalHeddle.MAX_RESERVATION
+
+        /** Enough root supply for every long run here, and two peers' fit a `Long`: 2⁶¹, about 130,000 grants of [MAX_GRANT]. */
+        const val LONG_RUN_MINT: Long = 1L shl 61
+
+        /**
+         * Grants the mixed-weight long run made before it refused at the ceiling, before the origin
+         * rebase: 145, at call 70, measured on the slice 2–4 base with #3386 merged, JVM. The twin's
+         * seed refused there at 131 grants, call 66, exactly where its no-rebase twin here does.
+         */
+        const val GRANTS_BEFORE_THE_CEILING: Int = 145
+
+        /** The lagging-peer scenario's grant, and how many a call makes: 12 calls of 256 pass a weight-1 lane's threshold. */
+        const val LAG_GRANT: Long = LocalHeddle.MAX_RESERVATION
+        const val LAG_GRANTS_PER_CALL: Long = 256L
+        const val LAG_CALLS: Int = 12
+
+        /** The grants the 60/30/10/1 run makes, and the calls its light lane runs alone first. */
+        const val WIDE_RUN_GRANTS: Int = 4_000
+        const val WIDE_RUN_ALONE: Int = 1_500
+
+        /** Calls of 64 grants the F1 waker's sibling makes: past two rebases of a weight-1 lane. */
+        const val F1_CALLS: Int = 72
+
+        /** The newborn the lagging peer seats. */
+        val LAG_NEWBORN = AttachmentRecord(AttachmentId("l3"), GroupId("root"), GroupId("l3"), Weight.ONE)
     }
 }

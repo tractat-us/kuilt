@@ -35,7 +35,7 @@ class GaugeTicksTest {
     fun aSeatPastTheCeilingIsStoredExactly() {
         val ceiling = positionCeiling(SMALL_CEILING)
         val ledger = ledgerWith(SMALL_CEILING)
-        val seat = assertNotNull(ledger.seatAt(EDGE, ceiling + 1_000L), "an unseated edge takes a seat")
+        val seat = assertNotNull(ledger.seatAtWide(EDGE, Int128.of(ceiling + 1_000L)), "an unseated edge takes a seat")
         val stored = assertNotNull(seat.delta.gauge(EDGE), "the seat patch carries the gauge")
         assertAll(
             { assertTrue(stored.ticks > Int128.of(ceiling), "the rig: the stored seat is past the ceiling") },
@@ -53,7 +53,7 @@ class GaugeTicksTest {
     fun aSeatBehindItsObservedIssuanceStoresTheIssuanceExactlyPastLong() {
         val issued = Long.MAX_VALUE / 4L
         val ledger = ledgerWith(Weight.ONE, issued = issued)
-        val stored = assertNotNull(assertNotNull(ledger.seatAt(EDGE, 0L)).delta.gauge(EDGE))
+        val stored = assertNotNull(assertNotNull(ledger.seatAtWide(EDGE, Int128.of(0L))).delta.gauge(EDGE))
         val expected = issued.timesWide(TICKS_PER_UNIT)
         assertAll(
             { assertTrue(expected.toLongOrNull() == null, "the rig: the issuance in ticks is past Long") },
@@ -72,7 +72,7 @@ class GaugeTicksTest {
         val ceiling = positionCeiling(w)
         var ledger = fundedLedgerWith(w)
         val seatedAt = ceiling - TICKS_PER_UNIT
-        ledger = ledger.piece(assertNotNull(ledger.seatAt(EDGE, seatedAt)).delta)
+        ledger = ledger.piece(assertNotNull(ledger.seatAtWide(EDGE, Int128.of(seatedAt))).delta)
         val patch = assertNotNull(ledger.delegate(GRANTOR, EDGE, 5L), "the grantor holds enough")
         val checkpoint = assertNotNull(patch.delta.gauge(EDGE))
         val merged = assertNotNull(ledger.piece(patch.delta).gauge(EDGE))
@@ -178,28 +178,44 @@ class GaugeTicksTest {
         )
     }
 
-    /** Ticks past `Long` read as the ceiling: the read narrows and saturates, and never throws. */
+    /**
+     * Ticks past `Long` are narrowed only after the parent's origin is subtracted (#3353): with no
+     * origin the public read saturates at the ceiling and never throws, and with an origin that
+     * brings the position back below it, the same stored ticks read exactly.
+     */
     @Test
-    fun ticksPastLongReadAsTheCeiling() {
+    fun ticksPastLongAreNarrowedOnlyAfterTheOrigin() {
         val pastLong = Gauge(Rational.ZERO, 0L, ticksHigh = 1L, ticksLow = 0L)
-        assertEquals(
-            ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE),
-            ledgerWith(Weight.ONE, issued = 3L, gauge = pastLong).grossVirtualService(EDGE),
+        // 2⁶⁴ ticks less an origin of 2⁶⁰ units (2⁶⁴ ticks at weight 1), plus 3 units issued.
+        val origin = Int128.of(1L shl 60)
+        assertAll(
+            {
+                assertEquals(
+                    ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE),
+                    ledgerWith(Weight.ONE, issued = 3L, gauge = pastLong).grossVirtualService(EDGE),
+                )
+            },
+            {
+                assertEquals(
+                    Rational.of(3L),
+                    ledgerWith(Weight.ONE, issued = 3L, gauge = pastLong, origin = origin).grossVirtualService(EDGE),
+                )
+            },
         )
     }
 
     /**
-     * A stored position at the ceiling reads the ceiling whatever the fold says. A seat taken from
-     * a front at its ceiling stores the ceiling ([VirtualTime.ticksFor] still narrows the front),
-     * and that position may stand for more: a view holding less issuance than the fold must not
-     * read it back below the ceiling as if it were exact.
+     * A stored position at the ceiling is exact, so it reads exactly through its fold (#3353). Before
+     * slice 6 the read held a stored position at the ceiling there whatever the fold said, since a
+     * seat could store a front narrowed to the ceiling. Nothing stores a narrowed position now, and
+     * the hold on an absolute value would turn into credit once an origin passed it.
      */
     @Test
-    fun ticksAtTheCeilingReadTheCeilingWhateverTheFold() {
+    fun ticksAtTheCeilingReadExactlyThroughTheirFold() {
         val ceiling = positionCeiling(Weight.ONE)
         val atCeiling = gaugeAt(Int128.of(ceiling), 10L)
         assertEquals(
-            ticksToVirtual(ceiling, Weight.ONE),
+            ticksToVirtual(ceiling - 5L * TICKS_PER_UNIT, Weight.ONE),
             ledgerWith(Weight.ONE, issued = 5L, gauge = atCeiling).grossVirtualService(EDGE),
         )
     }
@@ -249,11 +265,12 @@ class GaugeTicksTest {
 
     // ── fixtures ─────────────────────────────────────────────────────────────────────────
 
-    private fun ledgerWith(weight: Weight, issued: Long = 0L, gauge: Gauge? = null): EntitlementLedger =
+    private fun ledgerWith(weight: Weight, issued: Long = 0L, gauge: Gauge? = null, origin: Int128 = Int128.ZERO): EntitlementLedger =
         EntitlementLedger.of(
             records = mapOf(EDGE to setOf(AttachmentRecord(EDGE, PARENT, CHILD, weight))),
             issued = if (issued == 0L) emptyMap() else mapOf(EDGE to GCounter.of(GRANTOR to issued)),
             gauges = gauge?.let { mapOf(EDGE to it) } ?: emptyMap(),
+            origins = if (origin == Int128.ZERO) emptyMap() else mapOf(PARENT to origin),
         )
 
     private fun fundedLedgerWith(weight: Weight): EntitlementLedger {

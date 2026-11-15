@@ -358,16 +358,29 @@ public class HeddleNode internal constructor(
      * read once, under [lock], which [reserve] and [complete] also hold, so it cannot move during
      * the rounds.
      *
-     * **A busy parent reaches the position ceiling, and then this grants nothing there.** Each
-     * child's virtual position is a `Long` of 1/16-unit ticks, and it grows with the service handed
-     * down under the parent over its lifetime, so it is bounded. Past the bound it saturates instead
-     * of throwing (#3313). A pick that would have to order a saturated position is refused, and
-     * the rounds stop at that parent: a call that granted first answers [ScheduleOutcome.Delegated],
-     * and every call after it [ScheduleOutcome.PositionCeiling]. A refused call writes nothing and
-     * leaves the wake clamps as they were, and a call with nothing to grant writes nothing either
-     * ([FairShareAllocator.schedule]). This node has no rebase to bring the positions back down
-     * yet (#3353). At [LocalHeddle.MAX_RESERVATION]-size grants and a weight of
-     * `3/7`, the bound is about 9,000 grants, some 2⁵⁷ units of service.
+     * **A busy parent rebases by raising its origin, long before the position ceiling** (#3353).
+     * Each child's position is stored wide, and a pick orders it relative to the parent's origin,
+     * narrowed to a `Long` with a ceiling. Once any child's effective position passes a sixteenth
+     * of that ceiling, or the front does, read on any child's grid, a round that grants also raises
+     * the origin, in the same patch as its grant, by the largest whole step no demanding child
+     * would fall below zero for. The same raise can land before the seat and wake step, so a heavy
+     * newborn or waker joining a light runner is never seated past its own ceiling.
+     *
+     * Every child reads the same virtual time lower, so no pick changes, and nothing else is
+     * rewritten: a peer that has not seen the raise still seats and checkpoints correctly, since
+     * both write absolute positions.
+     * [boundMetrics] reports the peak effective position as a fraction of its ceiling.
+     *
+     * The ceiling can still be met. A demanding child that is never served holds the step at zero.
+     * And a weight set fine-grained enough that one step spans 16 times a child's threshold, its
+     * ceiling, cannot step while that child demands.
+     *
+     * A long-idle child that comes back demanding to a node that never saw it idle, after a restart,
+     * is clamped as a waker rather than read from far below the origin. A pick that would have to order a position at its ceiling is refused, and the rounds stop at
+     * that parent: a call that granted first answers [ScheduleOutcome.Delegated], and every call
+     * after it [ScheduleOutcome.PositionCeiling]. A refused call writes nothing and leaves the wake
+     * clamps as they were, and a call with nothing to grant writes nothing either
+     * ([FairShareAllocator.schedule]).
      *
      * @return [ScheduleOutcome.Delegated] with the count of grants applied this call,
      *   [ScheduleOutcome.NothingToDelegate] when none was, or [ScheduleOutcome.PositionCeiling] or
@@ -427,13 +440,27 @@ public class HeddleNode internal constructor(
      */
     public fun boundMetrics(parent: GroupId): BoundMetrics {
         val s = ledger.value
+        var peak = 0.0
         val demanding = lock.withLock {
             val live = demandTracker.live()
+            // Under the lock: the peak reads the allocator's wake clamps, which only the lock guards.
+            peak = allocator.peakPositionFraction(s, parent) { edge -> foldDemand(live, edge) }
             s.activeChildren(parent)
                 .mapNotNullTo(HashSet()) { c -> c.attachment.takeIf { foldDemand(live, it).targetOutstanding > 0L } }
         }
-        return BoundMetrics.at(s, parent, roster(), demanding, config)
+        return BoundMetrics.at(s, parent, roster(), demanding, config, peakPositionFraction = peak)
     }
+
+    /**
+     * Whether [schedule] rebases a busy parent by raising its origin (#3353). A test switches it off
+     * to run a twin that never rebases.
+     */
+    internal var rebaseForTest: Boolean
+        get() = lock.withLock { allocator.rebaseEnabled }
+        set(value) = lock.withLock { allocator.rebaseEnabled = value }
+
+    /** How many origin raises [schedule] has landed on this node: a test's witness that its rig fired. */
+    internal val rebasesForTest: Int get() = lock.withLock { allocator.rebases }
 
     // ─────────────────────────────────────────────────────────────────────────────
     // Reservations — leaf earmark → completion, with local single-writer idempotence.

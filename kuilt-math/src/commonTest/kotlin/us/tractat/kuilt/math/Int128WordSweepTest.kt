@@ -140,7 +140,7 @@ class Int128WordSweepTest {
         if (!agrees) fail("${what()} = $exact: expected ${if (arm == 0) "that value" else "a throw"}, got $result")
     }
 
-    private companion object {
+    internal companion object {
         /** The words each half of a value is drawn from. */
         val WORDS: List<Long> = listOf(
             Long.MIN_VALUE, Long.MIN_VALUE + 1L, Long.MAX_VALUE, Long.MAX_VALUE - 1L, 0L, 1L, -1L, 2L, -2L,

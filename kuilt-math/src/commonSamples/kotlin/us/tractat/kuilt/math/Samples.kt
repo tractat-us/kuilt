@@ -33,6 +33,15 @@ fun sampleMulDiv() {
     assertNull(mulDiv(Long.MAX_VALUE, 2L, 1L, Rounding.FLOOR))
 }
 
+/** Read a count past `Long` on a fractional scale, `a · n / d`, where only the answer has to fit. */
+fun sampleWideMulDiv() {
+    val big = Int128.fromTwosComplement(1L shl 62, 0L) // 2¹²⁶
+    // 2¹²⁶ · 4 is past 128 bits, but 2¹²⁶ · 4 / 8 = 2¹²⁵ is not.
+    assertEquals(Int128.fromTwosComplement(1L shl 61, 0L), mulDiv(big, 4L, 8L, Rounding.FLOOR))
+    assertEquals(Int128.of(26L), mulDiv(Int128.of(5L), 16L, 3L, Rounding.FLOOR))
+    assertNull(mulDiv(big, 4L, 1L, Rounding.FLOOR))
+}
+
 /** Keep a running total whose partial sums may leave `Long`, without allocating per term. */
 fun sampleWideSum() {
     val total = WideSum()

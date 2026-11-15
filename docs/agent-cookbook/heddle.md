@@ -297,12 +297,11 @@ from a sibling that can run. A refusal is a typed outcome (`NothingEligible`, `S
 `extend` on a lease whose path a reload is closing is `PathDraining`, and its `complete` still
 settles. A bad argument throws `IllegalArgumentException`, such as a reservation above
 `LocalHeddle.MAX_RESERVATION` (2^44 cost units). Each child's progress is a count of
-sixteenths of a unit, stored exactly in 128 bits and read for a pick as a `Long` with a ceiling. A pick rebases a busy parent's children long before it, all
-by the same virtual time, so no pick changes. A parent still reaches the ceiling while a demanding
-child sits at zero and is never served, when it is only ever charged through `admit`, `extend` or
-an overrun and never picked at, or once an edge's lifetime returned service (reserved but not
-charged) passes about `5.8 × 10¹⁷ / w.denominator` units (#3360). A workload that charges what it
-reserves never meets the last. At the ceiling, `acquire` and `extend` return
+sixteenths of a unit, stored exactly in 128 bits and read for a pick, net of what it returned, as
+a `Long` with a ceiling. A pick rebases a busy parent's children long before it, all by the same
+virtual time, so no pick changes. A parent still reaches the ceiling while a demanding child sits
+at zero and is never served, or when it is only ever charged through `admit`, `extend` or an
+overrun and never picked at. Returned service no longer counts toward it (#3360). At the ceiling, `acquire` and `extend` return
 `PositionCeiling(parent)` and change nothing, while `admit` and `complete` still charge. `IllegalStateException` is left only for a conflicted ledger, such as two live edges into
 one group, a split record or a cycle, which the public surface cannot reach today. The
 engine reads no clock and no random source, and it is not thread-safe: call every method under your
@@ -601,7 +600,9 @@ quantifies over (`enrolledReplicas()` reads it back); only a peer may depart its
 `schedule` answer `GateClosed` (with the replica and a `Reason`), which is a separate arm from
 `ReserveOutcome.NoHoldings` and `ScheduleOutcome.NothingToDelegate`, so a node that never
 enrolled can no longer pass for an idle one. Nor can a parent whose children cannot be ordered:
-`schedule` answers `PositionCeiling(parent)` once a child's position saturates, and
+`schedule` rebases a busy parent by raising its replicated origin long before a child's position
+nears its ceiling, so no pick changes (#3353); it answers `PositionCeiling(parent)` only where a
+demanding child that is never served holds the rebase at zero, and
 `WeightBudget(parent)` when gossip merged an active set whose weights a pick cannot sum in `Long`,
 both on a static node too. **A peer that cannot read a log entry stops there**:
 `GateClosed.Reason.UnreadableControlEntry` names the log index and format version, `enroll` is

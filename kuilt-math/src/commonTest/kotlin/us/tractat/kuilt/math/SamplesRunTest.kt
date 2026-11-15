@@ -15,5 +15,8 @@ class SamplesRunTest {
     fun mulDiv() = sampleMulDiv()
 
     @Test
+    fun wideMulDiv() = sampleWideMulDiv()
+
+    @Test
     fun wideSum() = sampleWideSum()
 }

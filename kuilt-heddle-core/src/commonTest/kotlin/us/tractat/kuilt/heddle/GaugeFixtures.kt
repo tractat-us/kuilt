@@ -1,6 +1,7 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.Rounding
 
 /**
  * The virtual time [this] gauge asserts at its fold for an edge of weight [w]:
@@ -29,3 +30,11 @@ internal fun EntitlementLedger.withGaugesAsTicks(): EntitlementLedger {
 /** [this] snapshot with its ledger's gauges rewritten as [EntitlementLedger.withGaugesAsTicks] does. */
 internal fun LocalHeddleSnapshot.withGaugesAsTicks(): LocalHeddleSnapshot =
     LocalHeddleSnapshot(epoch, ledger.withGaugesAsTicks(), allocatorMemory, totalSlots, open, lastApplied)
+
+/**
+ * The virtual time [v] on the grid of an edge of weight [w], narrowed: `⌈v · w · G⌉` ticks, or
+ * `⌊…⌋` when [rounding] says so, [wideTicksAt] held at [w]'s [positionCeiling]. Test support only:
+ * nothing in the engine narrows a value before the effective position a pick orders (#3353).
+ */
+internal fun ticksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILING): Long =
+    saturated(wideTicksAt(v, w, rounding), w)

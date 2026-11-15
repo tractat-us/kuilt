@@ -17,7 +17,8 @@ kotlin {
             // `:kuilt-base`. It depends on nothing, so the check below has nothing to object to.
             api(project(":kuilt-base"))
             api(project(":kuilt-crdt"))
-            implementation(project(":kuilt-math"))
+            // `api`: a policy input carries its wide positions and its parent's origin as `Int128` (#3353).
+            api(project(":kuilt-math"))
             implementation(libs.kotlinx.serialization.core)
             // The positive control for `verifyHeddleCoreDependencies` below: plant a forbidden
             // dependency and the check must go red. Run it as

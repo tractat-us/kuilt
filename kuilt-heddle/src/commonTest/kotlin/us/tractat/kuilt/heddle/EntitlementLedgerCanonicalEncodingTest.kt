@@ -16,6 +16,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.quilter.MonotonicMillis
 import us.tractat.kuilt.quilter.QuiltMessage
 import us.tractat.kuilt.quilter.Quilter
@@ -84,6 +85,7 @@ class EntitlementLedgerCanonicalEncodingTest {
         add(Arm("gauges", EDGES.map { EntitlementLedger.of(gauges = mapOf(it to GAUGE)) }))
         addAll(matrix("transferRelocIn") { EntitlementLedger.of(transferRelocIn = it) })
         addAll(matrix("transferRelocOut") { EntitlementLedger.of(transferRelocOut = it) })
+        add(Arm("origins", PARENTS.map { EntitlementLedger.of(origins = mapOf(it to ORIGIN)) }))
     }
 
     private fun edgeCounters(name: String, build: (Map<AttachmentId, GCounter>) -> EntitlementLedger): Arm =
@@ -99,7 +101,7 @@ class EntitlementLedgerCanonicalEncodingTest {
     /** Every arm, merged both ways round, so a field that escapes canonical ordering names itself. */
     @Test
     fun everyFieldEncodesTheSameWhicheverOrderItsOperandsMerged() {
-        assertEquals(20, arms.size, "the 16 joinable fields (forgotten has its own test), the records' inner set, and each of the 3 matrices' inner rows")
+        assertEquals(21, arms.size, "the 17 joinable fields (forgotten has its own test), the records' inner set, and each of the 3 matrices' inner rows")
         assertAll(
             *arms.map { arm ->
                 {
@@ -291,6 +293,7 @@ class EntitlementLedgerCanonicalEncodingTest {
             gauges = entries(EDGES[0] to GAUGE, EDGES[1] to GAUGE),
             transferRelocIn = matrix(),
             transferRelocOut = matrix(),
+            parents = entries(PARENTS[0] to PlainParent(originLow = 7L), PARENTS[1] to PlainParent(originLow = 7L)),
         )
     }
 
@@ -305,6 +308,7 @@ class EntitlementLedgerCanonicalEncodingTest {
         val COUNTER = GCounter.of(ReplicaId("r") to 1L)
         val MINT = MintRecord(GroupId("root"), ReplicaId("r"), 1L)
         val GAUGE = Gauge(folded = 1L, ticksHigh = 1L, ticksLow = 16L)
+        val ORIGIN: Int128 = Int128.of(7L)
 
         fun recordOf(edge: AttachmentId, child: String): AttachmentRecord =
             AttachmentRecord(edge, GroupId("root"), GroupId(child), Weight.of(1L))
@@ -339,7 +343,8 @@ class EntitlementLedgerCanonicalEncodingTest {
             "42bf66636f756e7473bf617201ffffff624161bf6172bf66636f756e7473bf617201ffffff624242bf6172bf66636f75" +
             "6e7473bf617201ffffffff707472616e7366657252656c6f634f7574bf60bf624161bf66636f756e7473bf617201ffff" +
             "624242bf66636f756e7473bf617201ffffff624161bf6172bf66636f756e7473bf617201ffffff624242bf6172bf6663" +
-            "6f756e7473bf617201ffffffffff"
+            "6f756e7473bf617201ffffffff67706172656e7473bf624161bf696f726967696e4c6f7707ff624242bf696f7269" +
+            "67696e4c6f7707ffffff"
     }
 }
 
@@ -362,9 +367,15 @@ private class PlainLedgerWire(
     val gauges: Map<AttachmentId, Gauge> = emptyMap(),
     val transferRelocIn: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
     val transferRelocOut: Map<PathKey, Map<ReplicaId, GCounter>> = emptyMap(),
+    val parents: Map<GroupId, PlainParent> = emptyMap(),
 ) {
     fun fields(): List<Any> = listOf(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle, issuedRelocIn,
         leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges, transferRelocIn, transferRelocOut,
+        parents,
     )
 }
+
+/** A parent's record as the wire carries it (#3353): its origin's two words, each elided at zero. */
+@Serializable
+private data class PlainParent(val originHigh: Long = 0L, val originLow: Long = 0L)

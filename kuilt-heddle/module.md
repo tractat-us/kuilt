@@ -35,7 +35,9 @@ and a snapshot to survive a restart, and no `Seam` or Raft underneath.
   either node.
 - `ReserveOutcome` / `ScheduleOutcome` / `GateClosed` — what a spend call did. `reserve` answers
   `Reserved` or `NoHoldings`; `schedule` answers `Delegated` or `NothingToDelegate`, or
-  `PositionCeiling` or `WeightBudget` when the parent's children cannot be ordered at all. Only a
+  `PositionCeiling` or `WeightBudget` when the parent's children cannot be ordered at all. A busy
+  parent rebases by raising its replicated origin in the same patch as a grant, long before the
+  ceiling, and `boundMetrics` reports how close its peak child is (#3353). Only a
   governed node adds `GateClosed`, with a `Reason`, when this peer may not author entitlement at
   all.
 - `HeddleNode` / `heddleStatic` — the node that runs the tally, demand board, reservations,

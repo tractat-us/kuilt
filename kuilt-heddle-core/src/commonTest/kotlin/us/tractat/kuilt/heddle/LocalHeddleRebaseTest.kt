@@ -55,8 +55,8 @@ class LocalHeddleRebaseTest {
     private fun LocalHeddle.ticks(lane: GroupId): Long {
         val ledger = snapshot().ledger
         val edge = edgeOf(lane)
-        val gross = ledger.gauge(edge).grossTicksAt(ledger.baseIssuance(edge), Weight.ONE)
-        return netTicks(gross, ledger.edge(edge)?.returned ?: 0L, Weight.ONE)
+        val gross = ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge), Weight.ONE)
+        return saturated(gross - (ledger.edge(edge)?.returned ?: 0L) * TICKS_PER_UNIT, Weight.ONE)
     }
 
     /** Put [lane]'s position at exactly [ticks] by raising its gauge floor at its current fold. */

@@ -189,10 +189,14 @@ whole ledger inherits the three merge laws for free.
 
 Arithmetic that would exceed `Long` throws rather than wrapping: a fair-share
 tally that silently overflowed would be worse than one that stopped. The one
-exception is a child's position as a pick reads it, which is held at a ceiling
-instead. A pick that would have to order a position there is refused with a typed
-`PositionCeiling` outcome, and a charge still lands. The gauge itself stores the
-position exactly, past the ceiling if it gets there; only the read is held.
+exception is a child's effective position as a pick reads it, which is held at a
+ceiling instead. A pick that would have to order a position there is refused with a
+typed `PositionCeiling` outcome, and a charge still lands. Everything before that
+read is 128-bit: the gauge stores the position exactly, past the ceiling if it gets
+there, and a parent's origin, the raw position, the front and a wake clamp are wide
+too (#3353). A busy parent is rebased long before its ceiling: `HeddleNode` raises
+the parent's replicated origin, and `LocalHeddle` raises its children's folds, and
+neither changes a pick.
 
 ## Deciding who runs next
 

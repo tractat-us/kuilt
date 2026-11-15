@@ -72,7 +72,7 @@ class VirtualPositionTest {
     fun aPublicWakeOffsetNeverLeavesTheWakerShortOfTheFront() {
         val front = Rational.ONE
         val vRaw = Rational.of(1L, 32L) // half a tick at weight 1
-        val offset = HeddlePolicy.wakeOffset(front, vRaw, Weight.ONE, sleeperCredit = 0L)
+        val offset = ticksToVirtual(checkNotNull(HeddlePolicy.wakeOffset(front, vRaw, Weight.ONE, sleeperCredit = 0L).toLongOrNull()), Weight.ONE)
         assertTrue(vRaw + offset >= front, "vRaw + offset = ${vRaw + offset} is short of the front $front")
     }
 
@@ -84,8 +84,8 @@ class VirtualPositionTest {
     @Test
     fun aCheckpointRoundsAnOffGridFloorOnceAndNeverAgain() {
         val offGrid = Gauge(Rational.of(1L, 3L), folded = 0L)
-        val first = offGrid.grossVirtualServiceAt(2L, Weight.ONE) // what `delegate` writes at issuance 2
-        val second = Gauge(first, folded = 2L).grossVirtualServiceAt(5L, Weight.ONE)
+        val first = offGrid.grossVirtualServiceAt(2L, Weight.ONE, Int128.ZERO) // what `delegate` writes at issuance 2
+        val second = Gauge(first, folded = 2L).grossVirtualServiceAt(5L, Weight.ONE, Int128.ZERO)
         assertAll(
             // The rig: the floor really is off the grid before the first checkpoint.
             { assertTrue(Rational.of(16L, 3L) != Rational.of(ticksAt(offGrid.floor, Weight.ONE))) },
@@ -97,8 +97,8 @@ class VirtualPositionTest {
                 val stale = Gauge(Rational.of(1L, 3L), 0L)
                 val fresh = Gauge(first, 2L)
                 assertEquals(
-                    stale.join(fresh).grossVirtualServiceAt(5L, Weight.ONE),
-                    fresh.join(stale).grossVirtualServiceAt(5L, Weight.ONE),
+                    stale.join(fresh).grossVirtualServiceAt(5L, Weight.ONE, Int128.ZERO),
+                    fresh.join(stale).grossVirtualServiceAt(5L, Weight.ONE, Int128.ZERO),
                 )
             },
         )

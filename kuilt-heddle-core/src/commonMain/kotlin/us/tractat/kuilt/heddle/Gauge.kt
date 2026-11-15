@@ -1,7 +1,11 @@
+@file:OptIn(ExperimentalVersionOverloading::class)
+
 package us.tractat.kuilt.heddle
 
 import kotlinx.serialization.Serializable
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.Rounding
+import us.tractat.kuilt.math.mulDiv
 import us.tractat.kuilt.math.timesWide
 
 /**
@@ -20,9 +24,12 @@ import us.tractat.kuilt.math.timesWide
  * ```
  * P(e)       = max(⌈floor · w · G⌉, ticks)
  * gross(e)   = P(e) + (baseIssued(e) − folded) · G      (no gauge ⇒ baseIssued(e) · G)
- * grossEv(e) = gross(e) / (G · w)
- * ev(e)      = grossEv(e) − returned(e) / w
+ * raw(e)     = gross(e) − returned(e) · G − ⌊O · w · G⌋
+ * ev(e)      = raw(e) / (G · w)
  * ```
+ *
+ * `O` is the parent's origin ([EntitlementLedger.origin]), whole units of virtual time every child
+ * of the parent reads less of, on its own grid. The gauge itself holds no trace of it.
  *
  * ## Why the pair, and not just the position (issue #1752, F1)
  *
@@ -60,15 +67,17 @@ import us.tractat.kuilt.math.timesWide
  *
  * The ticks are never rewritten in place and never capped in storage. A seat and a checkpoint
  * store the exact value, past the position ceiling, and past `Long` if the edge's history goes
- * there. Saturation happens only where a position is narrowed to the `Long` a pick orders
- * ([grossTicksAt]). A cap in storage would turn into credit once a per-parent origin, the next
- * step of #3353, rose past it.
+ * there. Every read is wide up to the effective position a pick orders, and only that is narrowed
+ * ([rawTicksAt], [HeddlePolicy.effectiveTicks]). A cap in storage would turn into credit once the
+ * parent's origin rose past it. A seat is written absolute too: the origin the seating peer saw,
+ * added back on the edge's grid, so a seat means the same under any later origin.
  *
  * They are not yet absolute in a `LocalHeddle` ledger. A rebase there raises the fold (below), and
  * the next checkpoint after issuance passes the raised fold reads through it: ticks of `1000 · G`
  * at fold 1000, the fold raised to 1500, and a checkpoint at issuance 1600 stores `1100 · G`, not
  * `1600 · G`. That holds until `LocalHeddle` moves its rebase onto per-parent origins (#3353,
- * slice 7). The replicated `HeddleNode` raises no fold, so its ticks are absolute already.
+ * slice 7). The replicated `HeddleNode` raises its parents' origins instead and no fold, so its
+ * ticks are absolute already.
  *
  * ## The read is deliberately not monotone in the view
  *
@@ -77,14 +86,15 @@ import us.tractat.kuilt.math.timesWide
  * monotonicity of the read but a sandwich over every reachable view: no view can read an edge
  * behind the service that view itself contains (the §10.5 no-lifetime-credit direction), and no
  * view can inflate it beyond the largest stale write's excess. Do not "fix" the
- * non-monotonicity. The one place the lower half gives is the position ceiling (#3313): a position
- * past it reads as the ceiling, behind what it stands for, and every pick that would order it is
- * refused, so the shortfall is never spent.
+ * non-monotonicity. The one place the lower half gives is the position ceiling (#3313): an
+ * effective position past it is narrowed to the ceiling, behind what it stands for, and every pick
+ * that would order it is refused, so the shortfall is never spent.
  *
- * In a `LocalHeddle` ledger the sandwich is **relative**, not absolute: a rebase lowers every
- * child of a parent by one virtual time together, so a position reads its service less every
- * rebase taken since, and can read below zero, down to `−R` for an idle child (#3329). Read the
- * bounds against the siblings, not against the origin.
+ * Under a rebase the sandwich is **relative**, not absolute: a rebase lowers every child of a
+ * parent by one virtual time together, so a position reads its service less every rebase taken
+ * since. In a `HeddleNode` ledger that is the parent's origin, and an idle child can read as far
+ * below zero as the origin has risen; in a `LocalHeddle` ledger it is a raised fold, down to `−R`
+ * for an idle child (#3329). Read the bounds against the siblings, not against zero.
  *
  * ## A fold above issuance: `LocalHeddle`'s rebase
  *
@@ -123,12 +133,12 @@ public data class Gauge(
     @Serializable(with = RationalSerializer::class)
     public val floor: Rational = Rational.ZERO,
     public val folded: Long,
-    public val ticksHigh: Long = 0L,
-    public val ticksLow: Long = 0L,
+    @IntroducedAt("0.7.5") public val ticksHigh: Long = 0L,
+    @IntroducedAt("0.7.5") public val ticksLow: Long = 0L,
 ) {
     init {
         require(folded >= 0L) { "Gauge folded must be non-negative, was $folded" }
-        require(ticksHigh >= 0L) { "Gauge ticks must be non-negative, was $ticks" }
+        nonNegativeWide(ticksHigh, ticksLow, "Gauge ticks")
     }
 
     /** The asserted position in ticks, as one 128-bit number. */
@@ -150,70 +160,97 @@ public data class Gauge(
 internal fun gaugeAt(ticks: Int128, folded: Long): Gauge = Gauge(folded = folded, ticksHigh = ticks.high, ticksLow = ticks.low)
 
 /**
- * The **gross** virtual service an edge of weight [weight] reads at base issuance [baseIssued] —
- * `(P + (baseIssued − folded) · G) / (G · w)` with `P = max(⌈floor · w · G⌉, ticks)`, or
- * `baseIssued / weight` when the receiver is `null` and the edge therefore reads from its own
- * origin.
- *
- * This is the gauge read, and it is shared on purpose across the layers that must agree on it:
- *  - [EntitlementLedger.grossVirtualService] evaluates it on stored state;
- *  - [HeddlePolicy.virtualService] evaluates it on a [PolicyEdge] the scheduler assembled;
- *  - `delegate`'s checkpoint is [exactGrossTicksAt], the same sum before it is narrowed, evaluated
- *    at a *hypothetical* issuance.
- *
- * A second copy of the expression could drift from the checkpoint that has to agree with it — the
- * checkpoint asserts a value the read has to reproduce — so both go through [storedTicks] and one
- * advance over the issuance since the fold.
- *
- * The read is on the edge's own grid ([TICKS_PER_UNIT]): the floor is read as `⌈floor · w · G⌉`
- * ticks, which is exact for every floor a build on the grid wrote, and the issuance since the fold
- * adds whole ticks. A floor an older peer wrote off the grid is rounded up once, here, on read;
- * nothing needs migrating.
- *
- * A position past the edge's [positionCeiling] reads as the ceiling (#3313): saturating is a
- * deterministic function of the view, so every replica reads the same value, and the pick that
- * would have to order it refuses instead (see [AcquireOutcome.PositionCeiling]).
- *
- * @throws ArithmeticException if the fold is past `Long` below the issuance, which no ledger reaches
- *   (§10.12 — a deterministic throw, never a silent wrap; see [CheckedMath]).
+ * A non-negative 128-bit count held as two words, `high · 2⁶⁴ + unsigned(low)`: the shape a
+ * [Gauge]'s ticks and a parent's origin are both stored in (#3353), so the two cannot drift apart.
+ * The high word carries the sign, and a negative one is refused, which is the read-path guard a
+ * generated deserializer cannot bypass.
  */
-internal fun Gauge?.grossVirtualServiceAt(baseIssued: Long, weight: Weight): Rational =
-    ticksToVirtual(grossTicksAt(baseIssued, weight), weight)
-
-/**
- * [grossVirtualServiceAt] as a position: whole ticks of the edge's own service, narrowed to a
- * `Long` and held at the edge's [positionCeiling] (#3313). The sum is formed in 128 bits, so a
- * position below the ceiling never saturates on the way to itself.
- *
- * A stored position **at or past** the ceiling reads as the ceiling whatever the fold says. A seat
- * taken from a front at its ceiling stores the ceiling, since the front is still narrowed to a
- * `Long` ([VirtualTime.ticksFor]); that position may stand for more, so issuance the reader has
- * not seen must not bring it back below the ceiling as if it were exact. For an exact stored
- * position past the ceiling the rule reads at or above the saturated exact sum, the penalty side,
- * and a pick over it refuses either way.
- *
- * **The hold is correct only while there is no origin.** It narrows the *absolute* stored
- * position. Once a parent's origin `O` is subtracted before a pick orders a position, a stored
- * `X ≥ C` held here would read `C − ⌊O · w · G⌋`, below the true `X − ⌊O · w · G⌋`: credit.
- * Slice 6 of #3353 replaces this hold with a wide raw read, narrowed only after the origin.
- */
-internal fun Gauge?.grossTicksAt(baseIssued: Long, weight: Weight): Long {
-    if (this == null) return saturatedTicksOf(baseIssued, weight)
-    val ceiling = positionCeiling(weight)
-    val stored = storedTicks(weight)
-    if (stored >= Int128.of(ceiling)) return ceiling
-    return saturated(advanced(stored, baseIssued), weight)
+internal fun nonNegativeWide(high: Long, low: Long, what: String): Int128 {
+    require(high >= 0L) { "$what must be non-negative, was ${Int128.fromTwosComplement(high, low)}" }
+    return Int128.fromTwosComplement(high, low)
 }
 
 /**
- * The gross position at [baseIssued], exact and unsaturated: `max(⌈floor · w · G⌉, ticks) +
- * (baseIssued − folded) · G`, or `baseIssued · G` with no gauge. What a checkpoint stores (#3353).
+ * What the ledger keeps per parent (#3353): today only the parent's **origin**, the virtual time,
+ * in whole units, that every pick at the parent subtracts from each child before it orders them.
+ * A record rather than a bare value, so a later per-parent value is an appended, defaulted field
+ * rather than a reshape of the map.
+ *
+ * The origin is a max-register: two peers that raised it concurrently keep the higher, so the join
+ * is a `max` on the full 128-bit value, never on each word. It is never negative, since a rebase
+ * only ever raises it, and it is stored in the same two-word shape as a [Gauge]'s ticks
+ * ([nonNegativeWide]), each word elided at zero.
+ */
+@Serializable
+internal data class ParentRecord(val originHigh: Long = 0L, val originLow: Long = 0L) {
+    init {
+        nonNegativeWide(originHigh, originLow, "an origin")
+    }
+
+    /** The origin in whole virtual-time units. */
+    val origin: Int128 get() = Int128.fromTwosComplement(originHigh, originLow)
+
+    /** The join, field by field: the higher origin, whole. */
+    fun join(other: ParentRecord): ParentRecord = if (origin >= other.origin) this else other
+
+    companion object {
+        fun withOrigin(units: Int128): ParentRecord = ParentRecord(units.high, units.low)
+    }
+}
+
+/**
+ * A parent origin [origin], in whole virtual-time units, on the grid of a child of weight [w]:
+ * `⌊O · w · G⌋` ticks, exact in 128 bits (#3353). Rounded down, so a child whose grid the origin
+ * is off reads under one tick high: a penalty, never credit, and it does not accumulate.
+ *
+ * @throws ArithmeticException if the result leaves 128 bits. A budget-legal weight can take it
+ *   to about 2¹³⁰ only for an origin no service reaches; the throw is deterministic, never a wrap.
+ */
+internal fun originTicks(origin: Int128, w: Weight): Int128 {
+    if (origin == Int128.ZERO) return Int128.ZERO
+    return mulDiv(origin, checkedMul(TICKS_PER_UNIT, w.numerator), w.denominator, Rounding.FLOOR)
+        ?: throw ArithmeticException("Int128 overflow: origin $origin read at weight $w")
+}
+
+/**
+ * The **gross** virtual service an edge of weight [weight] reads at base issuance [baseIssued],
+ * relative to its parent's [origin]: `(P + (baseIssued − folded) · G − ⌊O · w · G⌋) / (G · w)`
+ * with `P = max(⌈floor · w · G⌉, ticks)`, or `baseIssued / weight` less the origin when the
+ * receiver is `null` and the edge therefore reads from its own start.
+ *
+ * Narrowed only here, at the end, for the public read ([EntitlementLedger.grossVirtualService]):
+ * a position past the edge's [positionCeiling] reads as the ceiling (#3313).
+ *
+ * @throws ArithmeticException if the relative position is below `Long`, which only a child idle
+ *   since long before a great many rebases reaches.
+ */
+internal fun Gauge?.grossVirtualServiceAt(baseIssued: Long, weight: Weight, origin: Int128): Rational =
+    ticksToVirtual(saturated(exactGrossTicksAt(baseIssued, weight) - originTicks(origin, weight), weight), weight)
+
+/**
+ * The gross position at [baseIssued], exact and absolute: `max(⌈floor · w · G⌉, ticks) +
+ * (baseIssued − folded) · G`, or `baseIssued · G` with no gauge. What a checkpoint stores, and the
+ * absolute half of every read (#3353): nothing here is capped, since a cap on an absolute value
+ * turns into credit once an origin passes it.
  *
  * @throws ArithmeticException if the sum leaves 128 bits, which only a position no service reaches
  *   can do (§10.12).
  */
 internal fun Gauge?.exactGrossTicksAt(baseIssued: Long, weight: Weight): Int128 =
     if (this == null) baseIssued.timesWide(TICKS_PER_UNIT) else advanced(storedTicks(weight), baseIssued)
+
+/**
+ * The **raw** position a pick reads, wide: the gross position less [returned] units and less the
+ * parent's [origin], `gross − returned · G − ⌊O · w · G⌋` ticks, all in 128 bits (#3353). The one
+ * copy, shared by [HeddlePolicy] and [EntitlementLedger.virtualService], so the two reads cannot
+ * disagree.
+ *
+ * It is never narrowed here. A child idle under a busy parent falls further below its siblings
+ * with every rebase, and narrowing it before a wake clamp is taken would hand that child the
+ * difference as credit; only the effective position, raw plus the clamp, is narrowed, by the pick.
+ */
+internal fun Gauge?.rawTicksAt(baseIssued: Long, returned: Long, weight: Weight, origin: Int128): Int128 =
+    exactGrossTicksAt(baseIssued, weight) - returned.timesWide(TICKS_PER_UNIT) - originTicks(origin, weight)
 
 /**
  * The position this gauge asserts at its fold, exactly: `max(⌈floor · w · G⌉, ticks)`. A floor
@@ -224,12 +261,3 @@ internal fun Gauge.storedTicks(weight: Weight): Int128 = maxOf(wideTicksAt(floor
 /** [stored] advanced over the issuance since the fold: `stored + (baseIssued − folded) · G`. */
 private fun Gauge.advanced(stored: Int128, baseIssued: Long): Int128 =
     stored + checkedSub(baseIssued, folded).timesWide(TICKS_PER_UNIT)
-
-/**
- * A gross position less [returned] units, the raw position a pick reads: exact below the ceiling,
- * and the ceiling itself for a gross held there, since what is left after the returns of an amount
- * that may be larger is not known either. The one copy, shared by [HeddlePolicy] and
- * [EntitlementLedger.virtualService] so the two public reads cannot disagree at the ceiling.
- */
-internal fun netTicks(gross: Long, returned: Long, weight: Weight): Long =
-    if (atCeiling(gross, weight)) gross else checkedSub(gross, ticksOf(returned))

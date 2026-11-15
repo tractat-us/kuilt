@@ -67,7 +67,7 @@ class LocalHeddlePositionCeilingTest {
         val ledger = snapshot().ledger
         val edge = edgeOf(lane)
         val weight = checkNotNull(ledger.record(edge)).weight
-        return ledger.gauge(edge).grossTicksAt(ledger.baseIssuance(edge), weight)
+        return saturated(ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge), weight), weight)
     }
 
     private fun LocalHeddle.ceilingOf(lane: GroupId): Long =
@@ -385,14 +385,14 @@ class LocalHeddlePositionCeilingTest {
     }
 
     /**
-     * A newborn seated against a front that includes a saturated sibling lands at its own ceiling
-     * (review of #3352). The sibling's position reads lower than it stands for, so the front does too;
-     * a seat there would sit behind the true front, and once the saturated sibling left, the newborn
-     * would take the picks that gap is worth, the lifetime credit §10.5 forbids. `admit` must charge,
-     * so it seats, and the seat goes to the penalty end.
+     * A newborn seated against a front that includes a sibling at its ceiling lands at the exact
+     * front (#3353). The review of #3352 sent such a seat to the newborn's own ceiling, because the
+     * sibling's position read lower than it stood for and so did the front. Nothing is narrowed
+     * before the front is taken now, so the front is exact, the seat is stored exactly, and a pick
+     * over the saturated sibling still refuses. `admit` must charge, so it seats.
      */
     @Test
-    fun aSeatAgainstASaturatedFrontLandsAtTheCeiling() {
+    fun aSeatAgainstASaturatedFrontLandsAtTheExactFront() {
         val rtTopology = draft("seat") {
             lane("a", Weight.ONE)
             group("rt", Weight.of(2)) { template(Weight.of(3, 2)) }
@@ -412,6 +412,11 @@ class LocalHeddlePositionCeilingTest {
         check(engine.attach(rt, "n", generation = 2L).refusals.isEmpty())
         val n = rtTopology.attachedChildId(rt, "n")
         assertIs<AcquireOutcome.Acquired>(engine.admit(n, startedAt = 1L))
-        assertEquals(engine.ceilingOf(n), engine.grossTicks(n), "the newborn is seated at its own ceiling, not behind the true front")
+        // x, y and n share a weight, so the front on n's grid is ⌈(x + y) / 2⌉, and the admission charged one unit.
+        val front = (engine.grossTicks(x) + engine.grossTicks(y) + 1L) / 2L
+        assertAll(
+            { assertEquals(engine.ceilingOf(x), engine.grossTicks(x), "the rig: x is at its ceiling") },
+            { assertEquals(front + TICKS_PER_UNIT, engine.grossTicks(n), "the newborn is seated at the exact front") },
+        )
     }
 }
