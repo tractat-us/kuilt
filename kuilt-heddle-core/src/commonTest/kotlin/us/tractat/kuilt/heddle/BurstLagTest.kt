@@ -2,6 +2,7 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.timesWide
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -316,6 +317,45 @@ class BurstLagTest {
             { assertEquals(20L to 20L, idleA to idleB, "seen idle at the next entry: b returns level") },
             { assertEquals(20L to 20L, nextA to nextB, "asking again at the next entry: b returns level") },
             { assertEquals(20L to 20L, lastA to lastB, "control: b filled on the call's last grant") },
+        )
+    }
+
+    /**
+     * The pre-seat rebase triggers on where a returner will land, not only on the front and the
+     * stayers (#3376). a is a stayer just under its rebase threshold `R`, so neither the front nor
+     * any stayer calls for a raise. b left near the same threshold, and its parent's clock has run
+     * far enough since that it lands half an `R` past its ceiling. Only a raise taken before b is
+     * moved brings it back under, and a's position bounds that raise at nearly `R`, which is enough.
+     * Without the landing trigger b lands past its ceiling and the first pick refuses.
+     *
+     * The state is set directly: how a returner reaches it in a real run is the nested-group rig,
+     * `aSaturatedNestedGroupRefusesOnlyPicksThatOrderIt`, which exercises much more besides.
+     */
+    @Test
+    fun aReturnerLandingPastItsCeilingIsRebasedBeforeItLands() {
+        val r = rebaseThreshold(Weight.ONE)
+        val ceiling = positionCeiling(Weight.ONE)
+        val kids = listOf(edgeOf(root, GroupId("p/a")), edgeOf(root, GroupId("p/b")))
+        val (a, b) = kids
+        val seated = mapOf(a.id to gaugeAt(Int128.of(r - 16L), 0L), b.id to gaugeAt(Int128.of(r - 16L), 0L))
+        val shift = ceiling - (r - 16L) + r / 2
+        val memory = AllocatorMemory(
+            wakeOffsets = emptyMap(),
+            demandingObserved = mapOf(a.id to true, b.id to false),
+            clocks = mapOf(root to shift.timesWide(720_720L)),
+            served = mapOf(a.id to 0L),
+            departures = mapOf(b.id to Int128.ZERO),
+        )
+        val cell = Counting(shapedLedger(root, kids).piece(EntitlementLedger.of(gauges = seated)), kids)
+        cell.mint("m", 10L)
+        val allocator = FairShareAllocator(LOCAL, PolicyConfig(quantum = 1L), memory)
+        val outcome = allocator.schedule(root, cell, 0L) { want() }
+        val landed = allocator.effectiveVirtualService(cell.current, root, b.id)
+        assertAll(
+            { assertEquals(AllocationOutcome.Delegated(10), outcome, "the pick is made, not refused at b's ceiling") },
+            { assertTrue(allocator.rebases > 0, "the rig: the parent rebased") },
+            { assertEquals(10L, cell.granted.getValue("p/a"), "a, far behind b, takes every unit") },
+            { assertTrue(landed != null && landed > Rational.of(14L * (r / 16L)), "the rig: b came back far ahead, at $landed") },
         )
     }
 
