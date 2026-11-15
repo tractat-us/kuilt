@@ -194,9 +194,11 @@ class LocalHeddleRebasePropertyTest {
      * nothing brought down, so this lane met [AcquireOutcome.PositionCeiling] after 4,681 picks
      * (measured on the slice 2–4 base, JVM). The ceiling is now measured on the raw position,
      * net of returns and relative to the parent's origin, and the gross is stored wide (#3353), so
-     * the lane makes [RETURNED_LANE_PICKS] picks with no refusal. No pick refuses now, so what pins
-     * the net-of-returns read is the peak: the gross passes the ceiling, and the effective position a
-     * pick reads stays below it.
+     * the lane makes [RETURNED_LANE_PICKS] picks with no refusal. No pick refuses now, so the peak is
+     * the witness: the gross passes the ceiling, and the effective position a pick reads stays below
+     * it. Either the net-of-returns read or the rebase holds it there alone. With the rebase off the
+     * raw position climbs one unit a pick, and with returns left out of the read the rebase brings
+     * the lane back down, so the peak arm reds only with both removed (21× its ceiling, JVM).
      */
     @Test
     fun aLaneThatReturnsAlmostAllOfEachReservationNeverReachesTheCeiling() {
