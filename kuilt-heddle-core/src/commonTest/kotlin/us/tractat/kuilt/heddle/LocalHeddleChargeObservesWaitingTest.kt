@@ -16,6 +16,11 @@ import kotlin.test.assertTrue
  * charge inferred demand from history, `b` still counted as "last seen demanding". It was seen
  * leaving only after the overrun, so it banked the 100 and took all 40.
  *
+ * The overrun can also be `a`'s last job, so `a` is not in the waiting set either. The overrun is
+ * still the running work's own charge, so `a` counts as waiting for it, as in `extend`. Counted
+ * idle, `a` was seen leaving before its own overrun landed, the clock did not move for it, and `b`
+ * banked the 100 all the same.
+ *
  * **The burst rows.** These are [BurstLagTest]'s S7, S7b, S7c and 3:1 rows, played through
  * [LocalHeddle], each by [LocalHeddle.acquire] and by [LocalHeddle.previewPicks] then
  * [LocalHeddle.admit]. Each lands on the exact split the allocator's own rig lands on, and each
@@ -28,9 +33,12 @@ import kotlin.test.assertTrue
 class LocalHeddleChargeObservesWaitingTest {
     private val root = GroupId("p")
 
-    private enum class Overrun { EXTEND, COMPLETE }
+    private enum class Overrun { EXTEND, COMPLETE, LAST_JOB_EXTEND, LAST_JOB_COMPLETE }
 
-    /** The overrun window's `a / b` split of the next 40 slots, with the 100 arriving via [via]. */
+    /**
+     * The overrun window's `a / b` split of the next 40 slots, with the 100 arriving via [via]. In
+     * the `LAST_JOB` arms `a`'s overrunning lease is its last job, so no charge names a waiting leaf.
+     */
     private fun overrunWindow(via: Overrun): Pair<Int, Int> {
         val kids = listOf(edgeOf(root, GroupId("p/a")), edgeOf(root, GroupId("p/b")))
         val engine = engineOver(shapedLedger(root, kids), root, supply = 100_000L)
@@ -48,8 +56,14 @@ class LocalHeddleChargeObservesWaitingTest {
                 engine.complete(la.id, 101L, waiting = setOf(a))
             }
             Overrun.COMPLETE -> engine.complete(la.id, 101L, waiting = setOf(a))
+            Overrun.LAST_JOB_EXTEND -> {
+                engine.extend(la.id, 100L, waiting = emptySet())
+                engine.complete(la.id, 101L, waiting = emptySet())
+            }
+            Overrun.LAST_JOB_COMPLETE -> engine.complete(la.id, 101L, waiting = emptySet())
         }
-        engine.complete(lb.id, 1L, waiting = setOf(a))
+        val lastJob = via == Overrun.LAST_JOB_EXTEND || via == Overrun.LAST_JOB_COMPLETE
+        engine.complete(lb.id, 1L, waiting = if (lastJob) emptySet() else setOf(a))
         var aTake = 0
         var bTake = 0
         repeat(40) {
@@ -65,6 +79,8 @@ class LocalHeddleChargeObservesWaitingTest {
         assertAll(
             { assertEquals(20 to 20, overrunWindow(Overrun.EXTEND), "through extend") },
             { assertEquals(20 to 20, overrunWindow(Overrun.COMPLETE), "through an overrunning complete") },
+            { assertEquals(20 to 20, overrunWindow(Overrun.LAST_JOB_EXTEND), "through extend, on a's last job") },
+            { assertEquals(20 to 20, overrunWindow(Overrun.LAST_JOB_COMPLETE), "through an overrunning complete, on a's last job") },
         )
     }
 
