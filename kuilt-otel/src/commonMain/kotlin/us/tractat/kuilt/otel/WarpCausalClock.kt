@@ -119,6 +119,12 @@ public class WarpCausalClock(private val replica: ReplicaId) {
     internal val isArmed: Boolean get() = lock.withLock { state is ClockState.Armed }
 
     /**
+     * Whether every dot is used, so [tick] answers [ClockTick.Exhausted]. Permanent: `seq` only rises,
+     * and a restart reads the same `seq` back.
+     */
+    internal val isExhausted: Boolean get() = lock.withLock { (state as? ClockState.Armed)?.seq == Long.MAX_VALUE }
+
+    /**
      * Fold a [remote] frontier (received from another replica via anti-entropy) into
      * the local frontier, so the next [tick] records those remote dots as
      * predecessors — the cross-replica causal path.
@@ -285,7 +291,8 @@ public sealed interface ClockTick {
     /**
      * Every dot is used: `seq` is `Long.MAX_VALUE`, so it minted nothing. An honest clock never gets
      * here. A floor raised from a stored span that claims this replica's last dot does (#3407), and
-     * the clock then stays exhausted, so a [WarpSpanExporter] saves every later span unstamped.
+     * the clock then stays exhausted, so a [WarpSpanExporter] saves every later span unstamped, and
+     * counts each turn's clock work as failed in its [WarpSpanExporter.health], outstanding for good.
      */
     public data object Exhausted : ClockTick
 }

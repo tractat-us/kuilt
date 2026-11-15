@@ -148,18 +148,31 @@ public class WarpSpanExporter(
     }
 
     /**
+     * Persist [clock] ahead of the span write, and return why the turn's clock work failed though
+     * nothing threw: a skipped write, with [refusal] or [unrecoveredClock] as the cause, or an
+     * exhausted clock, whose write lands but which can mint no more (#3426). A refused write throws.
+     */
+    private suspend fun persistClock(clock: WarpCausalClock, refusal: Throwable?): Throwable? =
+        when (clock.persist(store)) {
+            ClockPersist.Unrecovered -> refusal ?: unrecoveredClock()
+            ClockPersist.Persisted -> if (clock.isExhausted) exhaustedClock() else null
+        }
+
+    /**
      * Count one write turn in [health], per work key (#3426). A turn whose writes all ran counts once,
      * over the span's key and a configured clock's together, as [writeFailure] says. A turn that
-     * skipped the clock's write ([clockSkipped] is why) counts its span work by [writeFailure] and its
-     * clock work as a failed turn under the clock's key alone, so a clock refused forever stays
-     * outstanding however many spans land, and the first clock write that lands resolves it. The span
-     * work is counted last, so [PersistenceHealth.lastFailure] names a refused write over a skip.
+     * skipped the clock's write, or wrote a clock that can mint no more ([clockFailure] is why), counts
+     * its span work by [writeFailure] and its clock work as a failed turn under the clock's key alone.
+     * So a clock refused forever stays outstanding however many spans land, and the first clock write
+     * that lands resolves it; an exhausted clock's writes land and resolve nothing, so it stays
+     * outstanding for good. The span work is counted last, so [PersistenceHealth.lastFailure] names a
+     * refused write over a clock failure.
      */
-    private fun countTurn(writeFailure: Throwable?, clockSkipped: Throwable?) {
-        val work = if (clockSkipped == null) {
+    private fun countTurn(writeFailure: Throwable?, clockFailure: Throwable?) {
+        val work = if (clockFailure == null) {
             clockAndSpanWork
         } else {
-            persistence.failed(clockWork, clockSkipped)
+            persistence.failed(clockWork, clockFailure)
             spanWork
         }
         if (writeFailure == null) persistence.acknowledged(work) else persistence.failed(work, writeFailure)
@@ -244,6 +257,11 @@ public class WarpSpanExporter(
          */
         private fun unrecoveredClock(): Throwable =
             IllegalStateException("otel.causal.clock: no read of its entry has landed, so the turn did not write it")
+
+        /** The cause an exhausted clock's work is counted with: it has no dot left to mint. */
+        private fun exhaustedClock(): Throwable =
+            IllegalStateException("otel.causal.clock: seq is Long.MAX_VALUE, so spans are saved unstamped")
+
         // alwaysUseByteString ensures traceId/spanId bytes are encoded as CBOR
         // major type 2 (byte string) rather than an array of integers, halving the
         // wire size vs. the default array encoding.
@@ -455,8 +473,8 @@ public class WarpSpanExporter(
                 // Never write over spans a refused read missed (#3390). A refusal leaves nothing to
                 // undo: the span was neither stamped nor added.
                 readBeforeWrite()?.let { return@withLock it }
-                // Why this turn skipped the clock's write, or `null` while the clock's work is in it.
-                var clockSkipped: Throwable? = null
+                // Why this turn's clock work failed though its writes ran, or `null` when it did not.
+                var clockFailure: Throwable? = null
                 val written = try {
                     // Re-encode the *latest* spans inside the section so no concurrent add is
                     // dropped by a stale snapshot; encoding before the persist keeps the
@@ -476,9 +494,7 @@ public class WarpSpanExporter(
                     // every durable span's dot — a crash between the two writes can only lose
                     // the span, never re-mint its dot on recover (#1053). An unrecovered clock
                     // writes nothing, and no dot in this snapshot came from it (#3390).
-                    if (causalClock?.persist(store) == ClockPersist.Unrecovered) {
-                        clockSkipped = clockRefusal ?: unrecoveredClock()
-                    }
+                    clockFailure = causalClock?.let { persistClock(it, clockRefusal) }
                     store.write(STORE_KEY, encoded)
                     Result.success(Unit)
                 } catch (cause: Throwable) {
@@ -489,12 +505,12 @@ public class WarpSpanExporter(
                 }
                 written.fold(
                     onSuccess = {
-                        countTurn(writeFailure = null, clockSkipped)
+                        countTurn(writeFailure = null, clockFailure)
                         durableWriteSucceeded()
                         ExportResult.Success
                     },
                     onFailure = { cause ->
-                        countTurn(writeFailure = cause, clockSkipped)
+                        countTurn(writeFailure = cause, clockFailure)
                         stamped?.let { rollBackMinted(span, it) }
                         // Roll back before the outage report; the health count above records the turn
                         // either way. The caller's own cancellation propagates past this fold, so it is
@@ -669,7 +685,7 @@ public class WarpSpanExporter(
         // clear is not the turn that writes a `seq` below the durable one (#3390). Still refused,
         // the clear writes the spans and leaves the clock's entry alone, a failed clock turn (#3426).
         val clockRefusal = causalClock?.let { retryClockRead(it) }
-        var clockSkipped: Throwable? = null
+        var clockFailure: Throwable? = null
         val written = try {
             val encoded = lock.withLock {
                 spans = spans.piece { it.removeAll(it.elements) }
@@ -682,9 +698,7 @@ public class WarpSpanExporter(
             // `seq` is deliberately untouched; see WarpCausalClock.clearFrontier.
             causalClock?.clearFrontier()
             // Clock before spans, the same order and for the same reason as export() (#1053).
-            if (causalClock?.persist(store) == ClockPersist.Unrecovered) {
-                clockSkipped = clockRefusal ?: unrecoveredClock()
-            }
+            clockFailure = causalClock?.let { persistClock(it, clockRefusal) }
             store.write(STORE_KEY, encoded)
             Result.success(Unit)
         } catch (cause: Throwable) {
@@ -694,12 +708,12 @@ public class WarpSpanExporter(
         }
         written.fold(
             onSuccess = {
-                countTurn(writeFailure = null, clockSkipped)
+                countTurn(writeFailure = null, clockFailure)
                 durableWriteSucceeded()
                 ExportResult.Success
             },
             onFailure = { cause ->
-                countTurn(writeFailure = cause, clockSkipped)
+                countTurn(writeFailure = cause, clockFailure)
                 durableWriteFailed(cause) {
                     logger.error(it) { "WarpSpanExporter: durable write failed during clear" }
                 }
