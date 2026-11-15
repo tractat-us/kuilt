@@ -1233,6 +1233,37 @@ class HeddleNodeTest {
     }
 
     /**
+     * A wide weight spread never reaches the ceiling either (#3353 review, item A): lanes at
+     * 60/30/10/1, the shape #3313 was reported with. The light lane runs alone for
+     * [WIDE_RUN_ALONE] calls, then a waiting set is drawn afresh each call. A lane was rebased only on
+     * its own grid, so the light lane alone could climb toward its threshold, and a heavy lane
+     * clamped to that front on its wake landed about 60 times as far up its own grid: past its
+     * ceiling, where every call after refused. The rebase now also triggers on the front read on
+     * every child's grid, and before the seat and wake step. The run counts its own grants and
+     * rebases.
+     */
+    @Test
+    fun aWideSpreadRunNeverReachesThePositionCeiling() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = wideLanes, quantum = MAX_GRANT)
+        h.pump()
+        val peer = h.peers[0]
+        val run = LongRun(peer, Random(3313), wideLanes) { call -> if (call <= WIDE_RUN_ALONE) listOf(wideLanes[3]) else null }
+        while (run.grants < WIDE_RUN_GRANTS) {
+            val outcome = run.step()
+            assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${run.grants} grants")
+            if (run.calls % 64 == 0) h.pump(1L)
+        }
+        println("wide run: calls=${run.calls} grants=${run.grants} rebases=${peer.node.rebasesForTest}")
+        assertAll(
+            { assertTrue(run.grants >= WIDE_RUN_GRANTS, "the run made its own ${run.grants} grants") },
+            { assertTrue(peer.node.rebasesForTest > 0, "the rig: the parent rebased (${peer.node.rebasesForTest} times)") },
+        )
+    }
+
+    /**
      * The rebase changes no pick (#3353): a twin node with rebasing switched off, fed the same
      * waiting sets, makes exactly the same grants call for call until it refuses at its ceiling,
      * and the rebasing node carries on past that point.
@@ -1386,7 +1417,13 @@ class HeddleNodeTest {
     }
 
     /** One peer's long run: a fresh waiting set each call, and every lease charged below its reservation. */
-    private inner class LongRun(private val peer: Peer, private val random: Random) {
+    private inner class LongRun(
+        private val peer: Peer,
+        private val random: Random,
+        private val lanes: List<AttachmentRecord> = mixedLanes,
+        /** The waiting set of call [calls], or `null` for a fresh random draw. */
+        private val phase: (calls: Int) -> List<AttachmentRecord>? = { null },
+    ) {
         var calls = 0
             private set
         var grants = 0
@@ -1397,14 +1434,14 @@ class HeddleNodeTest {
         fun step(): ScheduleOutcome {
             calls++
             val node = peer.node
-            val waiting = mixedLanes.filter { random.nextBoolean() }.ifEmpty { listOf(mixedLanes[random.nextInt(mixedLanes.size)]) }
-            for (lane in mixedLanes) {
+            val waiting = phase(calls) ?: lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }
+            for (lane in lanes) {
                 val outstanding = node.ledger.value.edge(lane.id)?.outstanding ?: 0L
                 node.advertise(lane.id, if (lane in waiting) Demand(outstanding + MAX_GRANT, MAX_GRANT) else Demand.NONE)
             }
             val outcome = node.schedule(root)
             if (outcome is ScheduleOutcome.Delegated) grants += outcome.grants
-            for (lane in mixedLanes) {
+            for (lane in lanes) {
                 val held = node.ledger.value.holdings(lane.child, peer.id)
                 if (held < 2L) continue
                 val reserved = node.reserve(lane.child, held) as? ReserveOutcome.Reserved ?: continue
@@ -1414,7 +1451,7 @@ class HeddleNodeTest {
             return outcome
         }
 
-        fun issuedByLane(): List<Long> = mixedLanes.map { peer.node.ledger.value.edge(it.id)?.issued ?: 0L }
+        fun issuedByLane(): List<Long> = lanes.map { peer.node.ledger.value.edge(it.id)?.issued ?: 0L }
     }
 
     /** What [lagScenario] leaves: the merged ledger, and the origin the lagging peer saw. */
@@ -1469,6 +1506,13 @@ class HeddleNodeTest {
         AttachmentRecord(AttachmentId("m2"), root, GroupId("m2"), Weight.of(3L, 700L)),
         AttachmentRecord(AttachmentId("m3"), root, GroupId("m3"), Weight.of(1L, 100L)),
         AttachmentRecord(AttachmentId("m4"), root, GroupId("m4"), Weight.of(2L, 300L)),
+    )
+
+    private val wideLanes = listOf(
+        AttachmentRecord(AttachmentId("w60"), root, GroupId("w60"), Weight.of(60L)),
+        AttachmentRecord(AttachmentId("w30"), root, GroupId("w30"), Weight.of(30L)),
+        AttachmentRecord(AttachmentId("w10"), root, GroupId("w10"), Weight.of(10L)),
+        AttachmentRecord(AttachmentId("w1"), root, GroupId("w1"), Weight.ONE),
     )
 
     private val lagLanes = listOf(
@@ -1603,6 +1647,10 @@ class HeddleNodeTest {
         const val LAG_GRANT: Long = LocalHeddle.MAX_RESERVATION
         const val LAG_GRANTS_PER_CALL: Long = 256L
         const val LAG_CALLS: Int = 12
+
+        /** The grants the 60/30/10/1 run makes, and the calls its light lane runs alone first. */
+        const val WIDE_RUN_GRANTS: Int = 4_000
+        const val WIDE_RUN_ALONE: Int = 1_500
 
         /** Calls of 64 grants the F1 waker's sibling makes: past two rebases of a weight-1 lane. */
         const val F1_CALLS: Int = 72

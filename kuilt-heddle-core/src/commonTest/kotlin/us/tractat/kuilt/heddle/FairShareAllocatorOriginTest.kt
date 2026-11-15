@@ -115,6 +115,45 @@ class FairShareAllocatorOriginTest {
     }
 
     /**
+     * A heavy newborn joining a busy light runner (#3353 review, item A). The runner, at weight 1,
+     * sits just below its own rebase threshold `R`, so nothing rebased it; the newborn, at weight
+     * [k], is seated at that front, about `k · R` on its own grid. Past 16 that is past its ceiling,
+     * and the pick that followed refused on every call. The origin is now raised before the seat.
+     */
+    private fun assertAHeavyNewbornJoinsABusyLightRunner(k: Long) {
+        val runner = AttachmentRecord(AttachmentId("r"), root, GroupId("r"), Weight.ONE)
+        val newborn = AttachmentRecord(AttachmentId("n"), root, GroupId("n"), Weight.of(k))
+        var ledger = withChildren(runner, newborn)
+        ledger = ledger.piece(ledger.mint(MintId("more"), root, self, 1L shl 50).delta)
+        val below = rebaseThreshold(Weight.ONE) - TICKS_PER_UNIT
+        ledger = ledger.piece(EntitlementLedger.of(gauges = mapOf(runner.id to gaugeAt(Int128.of(below), folded = 0L))))
+        val cell = object : LedgerCell {
+            override var current: EntitlementLedger = ledger
+            override fun mutateOrSkip(transform: (EntitlementLedger) -> us.tractat.kuilt.crdt.Patch<EntitlementLedger>?): Boolean {
+                val patch = transform(current) ?: return false
+                current = current.piece(patch.delta)
+                return true
+            }
+        }
+        val allocator = FairShareAllocator(self, PolicyConfig(quantum = 1L), AllocatorMemory(emptyMap(), mapOf(runner.id to true)))
+        val wants = Demand(targetOutstanding = 1_000_000L, maximumUsefulGrant = 1L)
+        val outcomes = (0 until 3).map { allocator.schedule(root, cell, earmarked = 0L, demand = { wants }) }
+        val nIssued = cell.current.edge(newborn.id)?.issued ?: 0L
+        assertAll(
+            { assertTrue(Int128.of(below).let { it < Int128.of(rebaseThreshold(Weight.ONE)) }, "the rig: the runner is below its own threshold") },
+            { assertTrue(outcomes.none { it is AllocationOutcome.PositionCeiling }, "1:$k: no call refused: $outcomes") },
+            { assertTrue(nIssued > 0L, "1:$k: the newborn was served ($nIssued)") },
+            { assertTrue(allocator.rebases > 0, "1:$k: the rig: the parent rebased") },
+        )
+    }
+
+    @Test
+    fun aOneToTwentyNewbornJoinsABusyLightRunner() = assertAHeavyNewbornJoinsABusyLightRunner(20L)
+
+    @Test
+    fun aOneToSixtyNewbornJoinsABusyLightRunner() = assertAHeavyNewbornJoinsABusyLightRunner(60L)
+
+    /**
      * The origin join is a `max` on the whole 128-bit value (#3353). `(1, 0)` is 2⁶⁴ and `(0, −1)` is
      * 2⁶⁴ − 1, the low word unsigned; a `max` on each word would assemble `(1, −1)`, which neither
      * side wrote.
