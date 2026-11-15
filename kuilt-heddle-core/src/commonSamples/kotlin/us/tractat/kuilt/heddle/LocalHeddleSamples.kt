@@ -499,9 +499,9 @@ internal fun sampleAdmitExternal() {
  * settled id is unknown, and after a restart stale; and a weight too fine for one full lease is
  * refused when it is applied, while its sibling lands.
  *
- * `PositionCeiling` is not shown. A busy parent is rebased long before any child nears its
- * ceiling, so no short run reaches it honestly: it takes a demanding child that is never served.
- * Branch on it like the others: serve or close the child that waits.
+ * `PositionCeiling` is not shown, because nothing returns it today: a pick compares the full
+ * 128-bit position, so no position refuses one. The arm is kept for the ledger's `Long` lifetime
+ * counters, which throw for now.
  */
 @Suppress("unused")
 internal fun sampleRefusals() {
