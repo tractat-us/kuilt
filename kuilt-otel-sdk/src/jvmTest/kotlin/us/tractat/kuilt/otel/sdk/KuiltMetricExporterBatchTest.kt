@@ -18,6 +18,7 @@ import io.opentelemetry.sdk.metrics.internal.data.ImmutableSumData
 import io.opentelemetry.sdk.resources.Resource
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricExportResult
@@ -25,6 +26,7 @@ import us.tractat.kuilt.otel.MetricHistogramOverflowException
 import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.MetricSumOverflowException
 import us.tractat.kuilt.otel.MetricUpdate
+import us.tractat.kuilt.otel.MetricWriteResult
 import us.tractat.kuilt.otel.WarpMetricExporter
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.InMemoryDurableStore
@@ -372,6 +374,48 @@ class KuiltMetricExporterBatchTest {
             },
             { assertEquals(Long.MAX_VALUE - 1L, recovered.histogramSnapshot(latency).count, "nor on disk") },
             { assertTrue(first.isSuccess, "a saturated histogram is not an export failure") },
+            { assertTrue(second.isSuccess, "nor on the next export") },
+            { assertEquals(8L, exp.sumValue(sumKey("requests", "/b")), "one copy of each export's delta") },
+            { assertEquals(21.5, exp.gaugeValue(gaugeKey("temp", "/a"))) },
+            { assertEquals(8L, recovered.sumValue(sumKey("requests", "/b")), "and it is on disk") },
+        )
+    }
+
+    /**
+     * A sum series whose **total** would pass [Long.MAX_VALUE] (#3445): a peer's counter merged in
+     * holds `Long.MAX_VALUE - 1`, this replica's slot is empty, and every export carries two more.
+     * `record` refuses it, so the series is left out and the rest of each export lands exactly once.
+     * Before the fix `record` checked only this replica's slot, accepted the series, and the OTLP
+     * bridge then skipped it.
+     */
+    @Test
+    fun aSumSeriesWhoseMergedTotalWouldOverflowIsLeftOutAndTheRestLandsOnce() = runTest {
+        val store = CountingStore()
+        val exp = WarpMetricExporter(replica = ReplicaId("dev"), store = store)
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val saturated = sumKey("requests", "/a")
+        val merged = exp.mergeSum(saturated, GCounter.of(ReplicaId("peer") to Long.MAX_VALUE - 1L))
+        val rigRefuses = exp.incrementSum(saturated, 2L)
+        val export = listOf(
+            metric("requests", MetricDataType.LONG_SUM, deltaCounter(listOf(longPoint(2L, "/a"), longPoint(4L, "/b")))),
+            metric("temp", MetricDataType.DOUBLE_GAUGE, ImmutableGaugeData.create(listOf(doublePoint(21.5, "/a")))),
+        )
+
+        val first = bridge.export(export)
+        runCurrent()
+        val second = bridge.export(export)
+        runCurrent()
+
+        val recovered = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
+        assertAll(
+            { assertEquals(MetricWriteResult.Success, merged, "the rig: the peer's counter was merged") },
+            { assertEquals(0L, exp.sumSnapshot(saturated).count(ReplicaId("dev")), "the rig: this replica's slot is empty, and its 2s never landed") },
+            {
+                val refusal = assertIs<MetricExportResult.Refused>(rigRefuses, "the rig: the total really is saturated")
+                assertEquals(saturated, assertIs<MetricSumOverflowException>(refusal.overflow).key)
+            },
+            { assertEquals(Long.MAX_VALUE - 1L, recovered.sumSnapshot(saturated).valueOrNull(), "nor on disk") },
+            { assertTrue(first.isSuccess, "a saturated sum is not an export failure") },
             { assertTrue(second.isSuccess, "nor on the next export") },
             { assertEquals(8L, exp.sumValue(sumKey("requests", "/b")), "one copy of each export's delta") },
             { assertEquals(21.5, exp.gaugeValue(gaugeKey("temp", "/a"))) },
