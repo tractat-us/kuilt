@@ -43,10 +43,19 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpSpanExporte
  *
  * ## Buffer cap
  *
- * When the in-memory CRDT exceeds [maxSpans], the oldest span (by
- * [SpanRecord.startEpochNanos]) is evicted according to the [bufferPolicy] before
- * the new span is inserted. **Every eviction is logged** with enough detail to
- * correlate against a backend's orphan-span index.
+ * When the in-memory CRDT already holds [maxSpans] spans, [export] evicts one before it
+ * inserts: the earliest by [SpanRecord.startEpochNanos] under [BufferPolicy.DROP_OLDEST], the
+ * latest under [BufferPolicy.DROP_NEWEST]. The victim is chosen from the spans already held,
+ * so an export's own eviction never takes the span it is adding. That is all the cap promises
+ * the incoming span. A recovered exporter adds before the durable-write section, so at the cap a
+ * concurrent export's eviction can take this export's span before this export encodes, and this
+ * export then returns [ExportResult.Success] for a snapshot that does not carry it. An export
+ * that makes the landing read adds and encodes in one step, so its own snapshot always carries its
+ * span. [merge] does not evict. The read of the stored spans
+ * that lands, in [recover] or in the first write turn after a refused one, evicts whatever its
+ * join brought in beyond [maxSpans] in one batch, by the same policy, before that turn's own
+ * insert. **Every eviction is logged** with enough detail to correlate against a backend's
+ * orphan-span index.
  *
  * ## Failure reporting
  *
@@ -91,6 +100,20 @@ public class WarpSpanExporter(
     private val lock = reentrantLock()
     private val ioMutex = Mutex()
     private var spans: ORSet<SpanRecord> = ORSet.empty()
+
+    /**
+     * Whether this exporter has read the stored spans, guarded by [lock] and landed only under
+     * [ioMutex]. A write turn writes the whole set over [STORE_KEY], so until a read has landed it
+     * would replace spans it never saw (#3390). Every write turn therefore reads first, and writes
+     * only once the state is [SpanReadState.Recovered], which nothing moves it out of.
+     *
+     * Until then a local export adds nothing to [spans]. An `ORSet` add mints the next dot from the
+     * set's own context, and before the read that context lacks every stored dot, so the add would
+     * reuse a dot a stored span already holds and the join would conflate the two. So [export] adds
+     * only inside [ioMutex], after the read has landed and joined the stored set, and then takes the
+     * live path exactly. A refused read leaves it nothing to undo.
+     */
+    private var readState: SpanReadState = SpanReadState.Unread
     private val persistence = PersistenceHealthTracker<StoreKey>()
     private val spanWork = setOf(STORE_KEY)
     private val clockAndSpanWork = if (causalClock == null) spanWork else spanWork + WarpCausalClock.STORE_KEY
@@ -196,29 +219,98 @@ public class WarpSpanExporter(
      * Recover persisted span state from [store]. Call once at startup before
      * any calls to [export].
      *
-     * If no persisted state exists, the exporter starts with an empty set.
+     * If no persisted state exists, the exporter starts with an empty set. The stored set is
+     * joined with whatever is already in memory, then evicted to [maxSpans], so a recovery never
+     * drops a live span, nor a stored one beyond what the cap requires.
      *
-     * A refused read is recorded as a recovery failure and the exporter starts fresh. That includes
-     * a `CancellationException` the [store] mints at this live caller, from its own `withTimeout`,
-     * say; a cancellation of the caller's own job still propagates (#3388).
+     * **A refused read fails closed** (#3390). A refused read includes a `CancellationException` the
+     * [store] mints at this live caller, from its own `withTimeout`, say; a cancellation of the
+     * caller's own job still propagates (#3388). It is recorded as a recovery failure, and until a
+     * read lands every write turn ([export], [merge], [clear]) makes the read first and, while it
+     * is still refused, returns [ExportResult.Failure] without writing, so it never replaces spans
+     * it could not see. Such a turn counts as a failed turn in [health], resolved by the first write
+     * that lands. A refused export adds its span nowhere; a remote set [merge]d meanwhile stays in
+     * memory, and the read that lands joins it with the stored set. An exporter nobody recovered
+     * reads on its first write turn the same way.
+     *
+     * An undecodable entry is recorded as a recovery failure and starts the exporter fresh: no later
+     * read could do better, and the next write replaces it.
      */
-    public suspend fun recover() {
+    public suspend fun recover(): Unit = ioMutex.withLock {
+        when (val read = readSpans()) {
+            is SpanRead.Refused -> spanReadRefused(read.cause)
+            is SpanRead.Landed -> spanReadLanded(read)
+        }
+    }
+
+    /**
+     * The read a write turn makes before it writes, if none has landed: `null` when the turn may
+     * write, or the refusal it must return. Call under [ioMutex].
+     */
+    private suspend fun readBeforeWrite(): ExportResult.Failure? {
+        if (lock.withLock { readState == SpanReadState.Recovered }) return null
+        return when (val read = readSpans()) {
+            is SpanRead.Refused -> {
+                spanReadRefused(read.cause)
+                // A refused turn is a failed turn of the span write, so the write that lands resolves
+                // it. It is not a refused write, so it opens no write outage (#3390).
+                persistence.failed(spanWork, read.cause)
+                ExportResult.Failure(read.cause)
+            }
+            is SpanRead.Landed -> {
+                spanReadLanded(read)
+                null
+            }
+        }
+    }
+
+    private suspend fun readSpans(): SpanRead {
         val bytes = try {
             store.read(STORE_KEY)
         } catch (cause: Throwable) {
+            // A cancellation the store minted is a refused read; only our own propagates (#3388).
             currentCoroutineContext().ensureActive()
-            persistence.recoveryFailed(cause)
-            logger.error(cause) { "otel.spans: store read failed, starting fresh" }
-            return
-        } ?: return
-        val recovered = runCatchingCancellable<ORSet<SpanRecord>> {
-            cbor.decodeFromByteArray(spanSerializer, bytes)
-        }.getOrElse { cause ->
-            persistence.recoveryFailed(cause)
-            logger.warn(cause) { "otel.spans: corrupt store entry, starting fresh" }
-            return
+            return SpanRead.Refused(cause)
+        } ?: return SpanRead.Absent
+        return runCatchingCancellable { cbor.decodeFromByteArray(spanSerializer, bytes) }
+            .fold(onSuccess = { SpanRead.Found(it) }, onFailure = { SpanRead.Undecodable(it) })
+    }
+
+    /**
+     * A refused read is reported at ERROR the first time and at debug after that, since a store that
+     * stays locked would otherwise log a stack trace per write turn. A [SpanReadState.Recovered]
+     * exporter stays recovered: it holds every span it has written, so a refusal teaches it nothing.
+     */
+    private fun spanReadRefused(cause: Throwable) {
+        persistence.recoveryFailed(cause)
+        val first = lock.withLock {
+            when (readState) {
+                SpanReadState.Unread -> true.also { readState = SpanReadState.Unrecovered }
+                SpanReadState.Unrecovered, SpanReadState.Recovered -> false
+            }
         }
-        lock.withLock { spans = recovered }
+        if (first) {
+            logger.error(cause) { "otel.spans: store read failed; writing nothing until a read lands" }
+        } else {
+            logger.debug { "otel.spans: store read still refused: $cause" }
+        }
+    }
+
+    /**
+     * Join what the read found with memory, evict the join's excess over the cap, and allow writes.
+     * Memory holds no local export yet, only remote sets merged meanwhile, so the join is one
+     * `piece` and the excess one batch.
+     */
+    private fun spanReadLanded(read: SpanRead.Landed) {
+        if (read is SpanRead.Undecodable) {
+            persistence.recoveryFailed(read.cause)
+            logger.warn(read.cause) { "otel.spans: corrupt store entry, starting fresh" }
+        }
+        lock.withLock {
+            if (read is SpanRead.Found) spans = read.spans.piece(spans)
+            evictExcess()
+            readState = SpanReadState.Recovered
+        }
     }
 
     /**
@@ -259,11 +351,18 @@ public class WarpSpanExporter(
      * path to earlier spans ran through the removed dot. The lost edge is tracked by #3028.
      *
      * This only undoes the live add. A failed or cancelled write may already have committed,
-     * or may commit later, and because the stamp enters memory before the write section, a
-     * concurrent export's successful write can carry it as well. The store then holds a copy
-     * memory has dropped, until the next write replaces the snapshot. A restart in that
-     * window recovers it, and retrying the original unstamped span mints another dot and
+     * or may commit later, and because a recovered exporter's stamp enters memory before the
+     * write section, a concurrent export's successful write can carry it as well. The store then
+     * holds a copy memory has dropped, until the next write replaces the snapshot. A restart in
+     * that window recovers it, and retrying the original unstamped span mints another dot and
      * creates a second stamped copy.
+     *
+     * Until a read of the stored spans has landed, the export adds nothing before the write
+     * section, and inside it makes that read first (#3390). While the store refuses the read, the
+     * export returns [ExportResult.Failure] having changed nothing: its span is in neither memory
+     * nor the store, so the caller's retry is its only copy. A minted stamp is simply dropped; the
+     * clock is not rolled back, as above. The read that lands joins the stored set, and the export
+     * then adds and writes its span exactly as a recovered one does.
      *
      * Returns [ExportResult.Success] after the durable write returns. A failure in that section
      * returns [ExportResult.Failure], and so does a `CancellationException` the [store] mints at
@@ -272,7 +371,8 @@ public class WarpSpanExporter(
      * for the indeterminate commit outcome.
      *
      * When the buffer is full, the eviction policy fires first, logging the
-     * dropped span, then the new span is inserted.
+     * dropped span, then the new span is inserted, so this export's own eviction never takes it.
+     * A concurrent export's eviction can; see the class's buffer cap section.
      */
     public suspend fun export(span: SpanRecord): ExportResult {
         // Auto-stamp causal context (#846): a configured clock fills an unstamped
@@ -290,20 +390,34 @@ public class WarpSpanExporter(
         // or absent stamp returns `span` itself. Only a minted stamp needs rollback —
         // without a newly minted stamp, re-adding the same full value is idempotent.
         val minted = stamped !== span
-        lock.withLock {
-            maybeEvict()
-            spans = spans.piece { it.add(replica, stamped) }
+        // A recovered exporter adds before the write section, as it always has. One whose read has not
+        // landed adds nothing yet: the add would reuse a dot a stored span holds (#3390), so it waits
+        // for the join inside the section.
+        val addedEarly = lock.withLock {
+            (readState == SpanReadState.Recovered).also { recovered -> if (recovered) insert(stamped) }
         }
         // Serialize the durable-write section across concurrent export()/merge() so the
         // clock persist and the span write are one ordered unit (#1053).
         return try {
             ioMutex.withLock {
+                // Never write over spans a refused read missed (#3390). A refusal leaves nothing to
+                // undo: the span was not added.
+                readBeforeWrite()?.let { return@withLock it }
                 var work = clockAndSpanWork
                 val written = try {
                     // Re-encode the *latest* spans inside the section so no concurrent add is
                     // dropped by a stale snapshot; encoding before the persist keeps the
                     // persisted seq ≥ every dot in this snapshot (seq is monotonic).
-                    val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
+                    val encoded = lock.withLock {
+                        // The read has landed and joined the stored set, so this add mints above it
+                        // and evicts from it as the live path does. It shares one hold of `lock` with
+                        // the encode: the read made the exporter recovered, so a concurrent export can
+                        // already add before the section, and at the cap that add could evict this
+                        // span between a separate add and encode, leaving a Success for a span the
+                        // snapshot never carried.
+                        if (!addedEarly) insert(stamped)
+                        cbor.encodeToByteArray(spanSerializer, spans)
+                    }
                     // Persist the clock BEFORE the span so the durable clock seq is always ≥
                     // every durable span's dot — a crash between the two writes can only lose
                     // the span, never re-mint its dot on recover (#1053). An unrecovered clock
@@ -336,8 +450,11 @@ public class WarpSpanExporter(
                 )
             }
         } catch (cancelled: CancellationException) {
-            // Around the whole section, not the write: a waiter on ioMutex has its stamp in memory too.
-            // The removal takes no suspension point, so it completes while this coroutine is cancelled.
+            // Around the whole section, not the write: a recovered waiter on ioMutex has its stamp in
+            // memory too, and a healing turn adds its stamp inside the section. Removing a stamp that
+            // was never added is an empty patch, since a minted value is unique, so no flag says
+            // whether the add happened. The removal takes no suspension point, so it completes while
+            // this coroutine is cancelled.
             if (minted) removeFromMemory(stamped)
             throw cancelled
         }
@@ -359,14 +476,16 @@ public class WarpSpanExporter(
      * a duplicate on retry after recovery. `remove` leaves concurrent adds of different spans alone.
      */
     private fun removeFromMemory(stamped: SpanRecord) {
-        lock.withLock { spans = spans.piece { current -> current.remove(stamped) } }
+        lock.withLock { spans = spans.piece { set -> set.remove(stamped) } }
     }
 
     /**
      * Read a snapshot of the current in-memory [ORSet] for gossip / anti-entropy.
      *
-     * The returned set reflects all spans exported since the last [recover] or
-     * process start, minus any that were evicted due to the buffer cap.
+     * Once a read of the stored spans has landed, the set holds what it found, joined with every
+     * remote set [merge]d and every span exported since, less the buffer cap's evictions and what
+     * [clear] dropped. Until then it holds only the remote sets merged meanwhile: neither the
+     * stored spans nor any local export, which waits for that read (#3390).
      */
     public fun snapshot(): ORSet<SpanRecord> = lock.withLock { spans }
 
@@ -379,6 +498,10 @@ public class WarpSpanExporter(
      * remote dots as predecessors — the cross-replica happens-before path (#846).
      *
      * Idempotent: merging the same set twice produces the same result.
+     *
+     * Until a read of the stored spans has landed, the merge makes that read first, and while the
+     * store refuses it returns [ExportResult.Failure] without writing (#3390). The remote set stays
+     * in memory and is written with the stored one once a read lands.
      */
     public suspend fun merge(remote: ORSet<SpanRecord>): ExportResult {
         // Fold the remote replica's causal frontier so the next local tick records
@@ -388,6 +511,8 @@ public class WarpSpanExporter(
         // Share the durable-write section with export() so a concurrent export()+merge()
         // cannot lost-update the STORE_KEY snapshot (#1053).
         return ioMutex.withLock {
+            // The remote spans stay in memory; the write waits for a read to land (#3390).
+            readBeforeWrite()?.let { return@withLock it }
             val written = try {
                 val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
                 store.write(STORE_KEY, encoded)
@@ -448,7 +573,11 @@ public class WarpSpanExporter(
      * a failed clear has already emptied memory, so a gated retry would find nothing to drop,
      * write nothing, and report [ExportResult.Success] over a store that still holds every span.
      *
-     * **On failure, [snapshot] already reads empty while the store still holds every span**, and
+     * A clear whose read of the stored spans is still refused changes nothing, in memory or in the
+     * store, and returns [ExportResult.Failure] (#3390). Dropping only what memory holds would let
+     * every unread stored span come back on the next join.
+     *
+     * **On a failed write, [snapshot] already reads empty while the store still holds every span**, and
      * a configured clock's [WarpCausalClock.frontier] likewise reads empty while the persisted
      * one still names the pre-clear dots. Both mutations precede the writes and — unlike
      * [export], which rolls a freshly-minted stamp back out — neither is undone. A caller that
@@ -457,6 +586,9 @@ public class WarpSpanExporter(
      * drop precedes the write.
      */
     public suspend fun clear(): ExportResult = ioMutex.withLock {
+        // A clear that cannot read the stored spans changes nothing: dropping memory and writing
+        // the empty set would leave every unread stored span to come back on the next join (#3390).
+        readBeforeWrite()?.let { return@withLock it }
         // A clock whose recovery read has not landed (refused, or never made) is read here too, so a
         // clear is not the turn that writes a `seq` below the durable one (#3390). Still refused,
         // the clear writes the spans and leaves the clock's entry alone.
@@ -523,20 +655,51 @@ public class WarpSpanExporter(
         return ExportResult.Failure(cause)
     }
 
-    /** Must be called with [lock] held. */
-    private fun maybeEvict() {
+    /**
+     * The live insert: evict one span if the set is at the cap, then add [stamped], so this insert
+     * never evicts the span it adds; a later insert may. Must be called with [lock] held, on a
+     * recovered exporter.
+     */
+    private fun insert(stamped: SpanRecord) {
+        if (spans.elements.size >= maxSpans) evictOne()
+        spans = spans.piece { it.add(replica, stamped) }
+    }
+
+    /** Evict the [bufferPolicy]'s victim. Must be called with [lock] held. */
+    private fun evictOne() {
         val current = spans.elements
-        if (current.size < maxSpans) return
         val victim = when (bufferPolicy) {
             BufferPolicy.DROP_OLDEST -> current.minByOrNull { it.startEpochNanos }
             BufferPolicy.DROP_NEWEST -> current.maxByOrNull { it.startEpochNanos }
         } ?: return
+        logEviction(victim)
+        spans = spans.piece { it.remove(victim) }
+    }
+
+    /**
+     * Evict everything beyond [maxSpans] in one batch: the victims are picked once, by the order
+     * repeated [evictOne] calls would pick them, and removed with one [ORSet.removeAll], since a
+     * removal per victim would pay a causal join each (#2245). Must be called with [lock] held.
+     */
+    private fun evictExcess() {
+        val current = spans.elements
+        val excess = current.size - maxSpans
+        if (excess <= 0) return
+        // Stable sorts, so ties go in iteration order, as minBy/maxBy break them in evictOne.
+        val victims = when (bufferPolicy) {
+            BufferPolicy.DROP_OLDEST -> current.sortedBy { it.startEpochNanos }
+            BufferPolicy.DROP_NEWEST -> current.sortedByDescending { it.startEpochNanos }
+        }.take(excess).toSet()
+        victims.forEach(::logEviction)
+        spans = spans.piece { it.removeAll(victims) }
+    }
+
+    private fun logEviction(victim: SpanRecord) {
         logger.warn {
             "WarpSpanExporter: buffer cap ($maxSpans) reached, evicting span " +
                 "traceId=${victim.traceId} spanId=${victim.spanId} name=${victim.name} " +
                 "policy=$bufferPolicy"
         }
-        spans = spans.piece { it.remove(victim) }
     }
 }
 
@@ -547,4 +710,30 @@ public sealed interface ExportResult {
 
     /** The durable write failed; whether the span was persisted is indeterminate. */
     public data class Failure(public val cause: Throwable) : ExportResult
+}
+
+/** Whether a [WarpSpanExporter] has read its stored spans. */
+private sealed interface SpanReadState {
+    /** No read has landed or been refused yet: an exporter starts here. */
+    data object Unread : SpanReadState
+
+    /** A read was refused before any landed, so a write would replace spans never seen. */
+    data object Unrecovered : SpanReadState
+
+    /** A read has landed and its spans are joined into memory, so a write carries them. */
+    data object Recovered : SpanReadState
+}
+
+/** One read of the stored spans: refused, so worth retrying, or [Landed] on what the store holds. */
+private sealed interface SpanRead {
+    data class Refused(val cause: Throwable) : SpanRead
+
+    /** The read reached the store. Only a refusal is worth retrying. */
+    sealed interface Landed : SpanRead
+
+    data object Absent : Landed
+
+    data class Undecodable(val cause: Throwable) : Landed
+
+    data class Found(val spans: ORSet<SpanRecord>) : Landed
 }

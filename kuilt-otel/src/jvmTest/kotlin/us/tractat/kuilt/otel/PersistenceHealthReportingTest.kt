@@ -18,6 +18,9 @@ class PersistenceHealthReportingTest {
         capturingLogsOf("us.tractat.kuilt.otel.WarpSpanExporter") { lines ->
             store.refusedReads = setOf(key)
             exporter.recover()
+            // The read heals, so the next export's retried read lands and its write is the refusal
+            // under test: a refused read alone writes nothing (#3390).
+            store.refusedReads = emptySet()
             store.refusedWrites = setOf(key)
             repeat(2) { assertIs<ExportResult.Failure>(exporter.export(healthSpan())) }
             assertAll(

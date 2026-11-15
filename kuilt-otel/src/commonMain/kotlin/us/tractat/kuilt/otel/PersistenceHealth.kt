@@ -23,14 +23,19 @@ import kotlinx.coroutines.flow.asStateFlow
  * These counters live only for this exporter instance; they do not measure backend delivery.
  *
  * @property acknowledged Successfully completed persistence turns, cumulative.
- * @property failed Failed persistence turns, cumulative.
+ * @property failed Failed persistence turns, cumulative. A span write turn that returns
+ *   [ExportResult.Failure] without writing, because the store still refuses the read of the stored
+ *   spans ([WarpSpanExporter.recover]), is a failed turn too, and the first span write that lands
+ *   resolves it.
  * @property outstandingFailures Failed turns whose persistence work has not subsequently
  *   succeeded. A metric write clears failures only for its own persisted kind (integer and
  *   double sums are separate); a metric clear clears only failed clears. A span-only merge
  *   cannot clear a failed turn that also required the causal clock. This is not a global
  *   consecutive-failure streak: unrelated success leaves these failures outstanding.
- * @property recoveryFailed Whether a startup read or decode failed. Sticky, even after writes
- *   succeed; a failed recovery does not increment [failed] or [outstandingFailures].
+ * @property recoveryFailed Whether a read or decode of persisted state failed: at `recover()`, or
+ *   on a later retry of a read that had been refused, which a span write turn or a causal clock's
+ *   stamp makes. Sticky, even after the read and writes succeed. The failed read does not itself
+ *   increment [failed] or [outstandingFailures]; a write turn it stops does, as [failed] says.
  * @property lastFailure Most recent persistence or recovery cause, retained after success.
  *
  * @sample us.tractat.kuilt.otel.samplePersistenceHealth

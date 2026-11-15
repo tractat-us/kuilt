@@ -6,6 +6,7 @@ import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
+import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -311,6 +312,42 @@ class WarpSpanExporterFailureReportingTest {
                         "unreported (expected 2 lines each, got $stuck)",
                 )
             },
+        )
+    }
+
+    /**
+     * A turn the refused *read* stops is not a refused *write*, so it must not open the write
+     * outage (#3390). If it did, the latch would already be open when the store heals its reads, and
+     * the first real write outage after that would be reported zero times: the #2237 shape, with the
+     * log naming the read while the store's write exception goes unmentioned.
+     */
+    @Test
+    fun aTurnARefusedReadStopsDoesNotSilenceTheNextWriteOutage() = runTest {
+        val reads = ReadRefusingStore(RecordingStore(), StoreKey("otel.spans"))
+        val store = WriteRefusingStore(reads)
+        var refusedTurns = 0
+        var readRefusals = 0
+        var writeLines = 0
+        var writeResult: ExportResult = ExportResult.Success
+
+        capturingLogsOf(SPAN_EXPORTER_LOGGER) { captured ->
+            val exporter = exporterFor(store)
+            exporter.recover()
+            repeat(3) { i -> if (exporter.export(span(i)) is ExportResult.Failure) refusedTurns++ }
+            readRefusals = reads.refusals
+
+            reads.heal()
+            store.refuseWrites()
+            writeResult = exporter.export(span(10))
+            writeLines = captured.naming(WRITE_FRAGMENT).size
+        }
+
+        assertAll(
+            { assertEquals(4, readRefusals, "precondition: the rig did not refuse the recovery read and each turn's") },
+            { assertEquals(3, refusedTurns, "precondition: not every turn over the refused read failed") },
+            { assertEquals(1, store.refusedWrites(), "precondition: the healed turn's write was not refused") },
+            { assertIs<ExportResult.Failure>(writeResult) },
+            { assertEquals(1, writeLines, "the write outage after the refused reads was reported $writeLines times") },
         )
     }
 
