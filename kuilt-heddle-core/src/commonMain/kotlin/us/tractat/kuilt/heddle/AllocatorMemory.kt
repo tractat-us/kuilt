@@ -136,7 +136,7 @@ internal class ShiftRemainder(
         require(denominator > 0L) { "a shift remainder's denominator must be positive, was $denominator" }
         require(numerator > Int128.ZERO) { "a shift remainder is positive, or absent, was $numerator" }
         require(numerator < CLOCK_GRID.timesWide(denominator)) {
-            "a shift remainder is under one tick, was $numerator over ${CLOCK_GRID} · $denominator"
+            "a shift remainder is under one tick, was $numerator over $CLOCK_GRID · $denominator"
         }
     }
 
@@ -145,7 +145,7 @@ internal class ShiftRemainder(
 
     override fun hashCode(): Int = 31 * numerator.hashCode() + denominator.hashCode()
 
-    override fun toString(): String = "ShiftRemainder($numerator / (${CLOCK_GRID} · $denominator))"
+    override fun toString(): String = "ShiftRemainder($numerator / ($CLOCK_GRID · $denominator))"
 }
 
 /** A signed wide count in its two words, each elided at zero: [SignedWideTicksSerializer]'s wire shape. */
