@@ -1,7 +1,8 @@
 package us.tractat.kuilt.otel
 
 import io.github.oshai.kotlinlogging.KotlinLogging
-import us.tractat.kuilt.core.runCatchingCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlin.time.Clock
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpOtlpBridge")
@@ -140,22 +141,29 @@ private val SignalOutcome.sent: Int
 /**
  * Run one signal's [leg] when it has anything [buffered], catching a failure as that
  * signal's outcome so it never aborts the others. [leg] returns the number of records sent.
+ *
+ * A `CancellationException` the edge mints at this live caller, from its own `withTimeout` say,
+ * is that leg's failure like any other: the legs after it still run, and the caller gets a
+ * [DrainResult]. Only a cancellation of the caller's own job propagates and ends the drain (#3392).
  */
 private suspend fun attempt(signal: OtlpSignal, buffered: Boolean, leg: suspend () -> Int): SignalOutcome {
     if (!buffered) return SignalOutcome.Idle
-    return runCatchingCancellable { leg() }.fold(
-        onSuccess = { SignalOutcome.Sent(it) },
-        onFailure = { cause ->
-            // Interpolated rather than attached: an unreachable collector is this bridge's NORMAL
-            // state, not an anomaly — the failure is a transport exception whose type and message
-            // ("Connection refused", "Unresolved address") carry the whole diagnosis, while the
-            // trace is the same HTTP-client frames every time. Attaching it also makes a routine
-            // offline drain a candidate for the process's first symbolication, which on an Apple
-            // target is a one-time cost that collapses under load (#1596; see docs/usage.md).
-            logger.debug { "WarpOtlpBridge: ${signal.noun} drain failed: $cause" }
-            SignalOutcome.Failed(SignalFailure(signal, cause))
-        },
-    )
+    return try {
+        SignalOutcome.Sent(leg())
+    } catch (cause: Throwable) {
+        // Work follows this guard (the other legs, then the result), so the discriminator is live:
+        // our own cancellation ends the drain here, one the edge minted falls through (#1834).
+        currentCoroutineContext().ensureActive()
+        // Interpolated rather than attached: an unreachable collector is this bridge's NORMAL
+        // state, not an anomaly — the failure is a transport exception whose type and message
+        // ("Connection refused", "Unresolved address") carry the whole diagnosis, while the
+        // trace is the same HTTP-client frames every time. Attaching it also makes a routine
+        // offline drain a candidate for the process's first symbolication, which on an Apple
+        // target is a one-time cost that collapses under load (#1596; see docs/usage.md). The
+        // throwable itself still reaches the caller, in SignalFailure.cause.
+        logger.debug { "WarpOtlpBridge: ${signal.noun} drain failed: $cause" }
+        SignalOutcome.Failed(SignalFailure(signal, cause))
+    }
 }
 
 private val OtlpSignal.noun: String
