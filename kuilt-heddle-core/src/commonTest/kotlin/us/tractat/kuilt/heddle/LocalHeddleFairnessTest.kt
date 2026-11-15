@@ -126,15 +126,18 @@ class LocalHeddleFairnessTest {
                     // Re-pinned for the 2⁻⁴ position grid (#3313): 4 picks moved from b to a. Exact
                     // rationals read a=6731 b=2899 and an overall error of 0.016677. Re-pinned again
                     // for the UNIFIED joiner front (§7.2, #3353): 16 picks moved off a, 4 to b and
-                    // 12 to c, and the overall error fell from 0.016990 to 0.015740.
-                    "a=6719 b=2899 c=3184 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
+                    // 12 to c, and the overall error fell from 0.016990 to 0.015740. Re-pinned for the
+                    // net-service clock (§7.2, #3376): a returning leaf keeps the lag it left with, so 61
+                    // picks moved off a, 64 to b and 3 off c, the overall error fell to 0.011151 and the
+                    // window error from 0.089246 to 0.073276.
+                    "a=6658 b=2963 c=3181 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
                         "exhaustedAcquires=0 exhaustedExtends=0 inlineOverruns=878 filtered=1489 seesExtended=1994 wakes=1030 " +
                         "mints=322 forcedMints=0 minUnspent=33",
                     run.fingerprint(),
                 )
             },
-            { assertEquals(0.015740, overall, PIN_TOLERANCE, "pinned overall error") },
-            { assertEquals(0.089246, window, PIN_TOLERANCE, "pinned window error") },
+            { assertEquals(0.011151, overall, PIN_TOLERANCE, "pinned overall error") },
+            { assertEquals(0.073276, window, PIN_TOLERANCE, "pinned window error") },
         )
     }
 
@@ -152,8 +155,9 @@ class LocalHeddleFairnessTest {
             {
                 assertEquals(
                     // Re-pinned for the 2⁻⁴ position grid (#3313): 5 picks moved from b to a. Re-pinned
-                    // again for the UNIFIED joiner front (§7.2, #3353): 3 picks moved from a to b.
-                    "a=4031 b=1835 c=1874 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
+                    // again for the UNIFIED joiner front (§7.2, #3353): 3 picks moved from a to b. Re-pinned
+                    // for the net-service clock (§7.2, #3376): 31 picks moved to a and 42 to c, off b.
+                    "a=4062 b=1762 c=1916 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
                         "exhaustedAcquires=2403 exhaustedExtends=40 inlineOverruns=737 filtered=914 seesExtended=1325 wakes=857 " +
                         "mints=3316 forcedMints=460 minUnspent=0",
                     run.fingerprint(),

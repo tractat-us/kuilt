@@ -65,8 +65,9 @@ class LocalHeddleCeilingTest {
 
     /**
      * `a` (cap 2) fills its ceiling, then sits out 20 picks that `b` and `c` share. While capped it
-     * is idle at the root, so it banks no credit: once a completion frees it, it rotates in with the
-     * other two rather than taking a burst of picks to catch up.
+     * is idle at the root, so it banks no credit: once a completion frees it, it takes no burst of
+     * picks to catch up. It comes back by its parent's clock, still the 2 picks ahead it was when it
+     * reached its ceiling (#3376), so `b` and `c` take two each before it rotates in with them.
      */
     @Test
     fun aGroupAtItsCeilingWakesClampedWithNoBurst() {
@@ -88,7 +89,8 @@ class LocalHeddleCeilingTest {
         }
         assertAll(
             { assertTrue(whileCapped.none { it == la } && whileCapped.count { it == lb } == 10, "the rig: b and c share the capped stretch: $whileCapped") },
-            { assertEquals(2, afterWake.count { it == la }, "a takes its third of the picks after waking, not a burst: $afterWake") },
+            { assertEquals(1, afterWake.count { it == la }, "a takes no burst after waking: $afterWake") },
+            { assertEquals(4, afterWake.indexOf(la), "a is still 2 ahead, so b and c catch up first: $afterWake") },
         )
     }
 

@@ -248,10 +248,10 @@ internal fun sampleBuildFarm() {
     check((0 until 12).map { build(setOf(web), startedAt = 30L + it * 3L) }.all { it == web })
     // Mobile comes back 3 behind web, as it left: still owed web's long build, not the twelve it sat out.
     check(heddle.explain(mobile, waiting = both, eligible = both) == WaitExplanation.WouldBePickedNext)
-    val ahead = heddle.explain(web, waiting = both, eligible = both)
-    check(ahead is WaitExplanation.BehindAtLevel && ahead.leafSideVirtualService == Rational.of(21L))
+    val webAhead = heddle.explain(web, waiting = both, eligible = both)
+    check(webAhead is WaitExplanation.BehindAtLevel && webAhead.leafSideVirtualService == Rational.of(21L))
     // The line is (3 · 21 + 18) / 4: mobile sits at 18.
-    check(ahead.front == Rational.of(81L, 4L))
+    check(webAhead.front == Rational.of(81L, 4L))
     check((0 until 8).map { build(both, startedAt = 66L + it * 3L) } == listOf(mobile, web, mobile, web, web, web, mobile, web))
 
     // The next free agent is a Mac, which only mobile builds use. Mobile's last build took
