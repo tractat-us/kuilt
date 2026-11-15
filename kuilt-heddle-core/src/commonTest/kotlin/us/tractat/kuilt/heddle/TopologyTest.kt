@@ -400,21 +400,25 @@ class TopologyTest {
     }
 
     /**
-     * [Topology.Group.template] keeps the serial name v0.7.4 stored, `runtimeChildren`, so the
-     * `lastApplied` a snapshot holds reads and writes the same bytes after the rename (#3368). The
-     * snapshot goldens pin the same thing end to end; this pins it on the topology alone.
+     * [Topology.Group.template] is stored as `template`, the key a config uses too (#3454 review),
+     * and a strict decode refuses `runtimeChildren`, the name v0.7.4 stored in the format 1 this
+     * release does not read. The snapshot goldens pin the same thing end to end; this pins it on the
+     * topology alone.
      */
     @Test
-    fun aTemplateKeepsItsStoredSerialName() {
+    fun aTemplateIsStoredUnderItsOwnName() {
         val topology = Topology(
             "root",
             listOf(Topology.Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.ONE, maxConcurrent = 2L))),
         )
-        val stored = """{"root":"root","children":[{"type":"group","name":"tenants","weight":"1","children":[],"runtimeChildren":{"weight":"1","maxConcurrent":2}}]}"""
+        val stored = """{"root":"root","children":[{"type":"group","name":"tenants","weight":"1","children":[],"template":{"weight":"1","maxConcurrent":2}}]}"""
+        val oldName = stored.replace("\"template\":", "\"runtimeChildren\":")
 
         assertAll(
             { assertEquals(stored, json.encodeToString(Topology.serializer(), topology)) },
             { assertEquals(topology, json.decodeFromString(Topology.serializer(), stored)) },
+            { assertTrue(oldName != stored, "the rig: the old name is in the text") },
+            { assertFailsWith<SerializationException> { json.decodeFromString(Topology.serializer(), oldName) } },
         )
     }
 
