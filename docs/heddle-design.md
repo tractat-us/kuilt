@@ -1165,8 +1165,8 @@ service its asking children *kept*, issued less refunded, per unit of their
 weight, and a child that comes back moves forward by how far the clock ran
 while it was away.
 
-- **The clock.** Each round at a parent, the allocator adds up how far each
-  child it saw asking last round moved, `issued − returned` since it last
+- **The clock.** Each time it runs at a parent, the allocator adds up how far
+  each child it last saw asking moved, `issued − returned` since it last
   looked, and divides by those children's total weight. A child that was not
   asking adds nothing, its own refunds included: they already lower its own
   position, and counting them in the clock too would credit it twice. The clock
