@@ -712,7 +712,8 @@ public class WarpMetricExporter(
      *    coarser than [histogramScale], or one whose count lists the caller has since made negative —
      *    is checked for **every** update and **thrown** as [IllegalArgumentException], since it is
      *    a caller's mistake. Nothing in memory or on disk changes.
-     * 2. Whether an update would carry one of this replica's counts past [Long.MAX_VALUE] is
+     * 2. Whether an update would carry this replica's count for a sum, or a histogram series'
+     *    total over every replica, past [Long.MAX_VALUE] is
      *    checked for the whole batch, counting its earlier updates to the same series, against the
      *    series as they stand. For a [MetricUpdate.IncrementSum] that is this replica's count for its
      *    sum series (#3318). For a [MetricUpdate.RecordHistogram] or
@@ -809,8 +810,8 @@ public class WarpMetricExporter(
     }
 
     /**
-     * The refusal for the first update in [updates] that would carry one of this replica's counts
-     * past [Long.MAX_VALUE], counting the batch's own earlier updates to the same series, or `null`
+     * The refusal for the first update in [updates] that would carry this replica's count for a sum,
+     * or a histogram series' total over every replica, past [Long.MAX_VALUE], counting the batch's own earlier updates to the same series, or `null`
      * when every one fits. Called inside [lock], before anything is applied.
      *
      * A [MetricUpdate.IncrementSum] is checked against this replica's count for its series (#3318).
@@ -822,7 +823,8 @@ public class WarpMetricExporter(
      * here too. The running copy's total is then read with [DDSketch.countOrNull] (#3403): the
      * exact sum over every replica — a peer's slots merged in included — of every bucket and the
      * zero counter, which is the `count` the OTLP bridge exports and the one it skips the series
-     * for when it does not fit. Every slot is part of that total, so a slot that cannot take an
+     * for when it does not fit. Every slot is part of that total, because slots are never negative,
+     * so a slot that cannot take an
      * update is one the total cannot take either, and a batch is refused exactly when the bridge
      * could not export the series it would leave.
      *
@@ -1400,8 +1402,8 @@ public sealed interface MetricExportResult {
     public data object Success : MetricExportResult
 
     /**
-     * Nothing was counted: an update would carry one of this replica's counts past
-     * [Long.MAX_VALUE], so the whole call was refused before anything was applied or written. The
+     * Nothing was counted: an update would carry this replica's count for a sum, or a histogram
+     * series' total over every replica, past [Long.MAX_VALUE], so the whole call was refused before anything was applied or written. The
      * same call may be refused again until that series is cleared or evicted; a retry has to leave
      * out the series [overflow] names.
      */
@@ -1460,10 +1462,11 @@ public class MetricKindUnreadException internal constructor(
 ) : Exception("${storeKey.name}: the store refused the read of this kind, so none of its updates were counted", cause)
 
 /**
- * Why a [WarpMetricExporter.record] was refused: an update would carry one of this replica's
- * counts for the series [key] past [Long.MAX_VALUE]. A wrapped count would be negative, and a
- * counter's merge, a max, would drop it, so the update would be lost everywhere with nothing to
- * say so. It arrives as a [MetricExportResult.Refused], and the batch that carried it applied nothing.
+ * Why a [WarpMetricExporter.record] was refused: an update would carry this replica's count for
+ * the sum [key], or the histogram [key]'s total over every replica, past [Long.MAX_VALUE]. For a
+ * sum, or a slot of a histogram, a wrapped count would be negative, and a counter's merge, a max,
+ * would drop it, so the update would be lost everywhere with nothing to say so. For a histogram's
+ * total the reason is that the OTLP bridge cannot export the series. It arrives as a [MetricExportResult.Refused], and the batch that carried it applied nothing.
  *
  * Which kind of series [key] names is the subclass: [MetricSumOverflowException] for a sum,
  * [MetricHistogramOverflowException] for a histogram. A sum and a histogram can share a
