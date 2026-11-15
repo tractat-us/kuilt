@@ -626,8 +626,9 @@ is the type's rule rather than a `validate()` arm: `ForgottenEdges` refuses a
 negative entry when it is built, so a hand-built or corrupt snapshot that
 carries one fails to decode.
 
-**The format.** `forgotten` is encoded under snapshot format 2, the only
-format 0.7.5 reads. v0.7.4 wrote format 1, which 0.7.5 refuses by name: a
+**The format.** `forgotten` is encoded under snapshot format 2 on `main`
+today. Step B's slice 4 restarts the format at 1, the one 0.7.5 ships
+(§7.1, "Snapshot"). v0.7.4 wrote format 1, which 0.7.5 refuses by name: a
 consumer coming from 0.7.4 starts from its topology again. Every encoded change
 for the next release goes under that one bump.
 
@@ -1128,13 +1129,16 @@ weight budget it applies does, so a log written under the old budget replays
 under the new one: the standing rule, that peers of different releases never
 share a cluster, covers it.
 
-**Snapshot.** `LocalHeddleSnapshot.FORMAT_VERSION` becomes 3, and 3 is the only
-format read. Formats 1 and 2 are refused by name, as
-`RestoreResult.UnsupportedVersion(found, [3])`, before anything else is read.
-Format 2 was written only by development builds of 0.7.5. Its ledger carries
-origins, and a reader that dropped them would read every child of a rebased
-parent higher by one virtual time. No pick would change, but a format number
-that means two layouts is how a snapshot gets misread, so it is refused.
+**Snapshot.** `LocalHeddleSnapshot.FORMAT_VERSION` restarts at 1, and 1 is the
+only format read. It is the first frozen format: no later release changes it
+without shipping a reader for it. Format 2, written only by development builds
+of 0.7.5, is refused by name, as `RestoreResult.UnsupportedVersion(found, [1])`,
+before anything else is read. A snapshot v0.7.4 wrote also says format 1, and
+this release does not tell it apart: it fails to decode or misreads, so state
+written by v0.7.4 is discarded and re-seeded from its topology, not restored.
+That reuse is deliberate. 0.7.5 is the first release with a heddle consumer,
+and that consumer re-seeds once at the upgrade, so keeping the number
+unambiguous would guard state that nobody holds (@keddie, 2026-11-15).
 
 **Proof the slices owe.**
 
@@ -1174,7 +1178,7 @@ that means two layouts is how a snapshot gets misread, so it is refused.
    `LocalHeddleRebasePropertyTest`. Retargets `LocalHeddleWindowRuleTest` and
    the long-run rows to "never refused, and fair". Docs: this section, §10.9,
    `kuilt-heddle-core/module.md`, `kuilt-heddle/module.md`.
-4. **The origin leaves the ledger and the wire; snapshot format 3.**
+4. **The origin leaves the ledger and the wire; the snapshot format restarts at 1.**
    `ParentRecord`, `PolicyEdge.origin`, the canonical-encoding arm, the
    snapshot golden. Docs: §7.1, §10.5, both `module.md`s,
    `Writerside/topics/heddle-local.md`.
@@ -1215,6 +1219,9 @@ not depend on each other.
 - Keeping the below-zero first-sighting arm: nothing is below zero (#3472).
 - Reading snapshot format 2 by dropping its origins: no pick would change, but
   one format number would then mean two layouts (#3472).
+- Numbering the step B format 3 so that it cannot collide with v0.7.4's format
+  1: no consumer holds v0.7.4 state, and the one consumer re-seeds at 0.7.5.
+  The format restarts at 1 and is frozen there (@keddie, 2026-11-15).
 - Persisting `HeddleNode`'s wake memory in place of the restart rule: it is
   scheduler-local by design, and a second store for it is a larger change than
   the gap it closes (#3472).
