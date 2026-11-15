@@ -395,6 +395,53 @@ class WarpMetricExporterRefusedRecoveryTest {
         )
     }
 
+    // ---- Health, and memory ----
+
+    private fun MetricCatalog.maps(): List<Map<MetricKey, Any>> = listOf(sums, doubleSums, gauges, cardinalities, histograms)
+
+    /**
+     * A turn refused for an unread kind is a failed turn on `health`, outstanding until a write of
+     * the kind lands, as the log exporter counts it; an exporter that refuses every write forever
+     * must not read `failed = 0`. And the refusal changes nothing in memory, even where memory
+     * already holds the kind: here a healthy [WarpMetricExporter.recover] loaded the sums, and a
+     * second one was refused.
+     */
+    @Test
+    fun aTurnRefusedForAnUnreadKindIsAFailedTurnUntilTheHealedWriteAndLeavesMemoryAlone() = runTest {
+        val backing = RecordingStore()
+        seed(backing)
+        val store = KindReadRefusingStore(backing)
+        val exporter = WarpMetricExporter(replica, store).also { it.recover() }
+        store.refuse(sumsKey)
+        exporter.recover()
+        val afterRecover = exporter.health.value
+        val memoryBefore = exporter.snapshotAll().maps()
+        val sumBefore = exporter.sumValue(sum)
+
+        val refused = exporter.record(listOf(MetricUpdate.IncrementSum(sum, 1L), MetricUpdate.IncrementSum(otherSum, 1L)))
+        val refusedMerge = exporter.mergeSum(otherSum, exporter.sumSnapshot(sum))
+        val afterRefused = exporter.health.value
+        val memoryAfter = exporter.snapshotAll().maps()
+        store.heal(sumsKey)
+        val healed = exporter.incrementSum(sum, 1L)
+        val afterHeal = exporter.health.value
+        val durable = restarted(backing).sumValue(sum)
+
+        assertAll(
+            { assertEquals(3, store.refusalsOf(sumsKey), "the rig refused ${store.refusalsOf(sumsKey)} reads, not the second recover's and two turns'") },
+            { assertTrue(afterRecover.recoveryFailed, "the refused second recover was not reported") },
+            { assertEquals(5L, sumBefore, "the fixture's first recover did not load the sums") },
+            { assertIs<MetricExportResult.Failure>(refused, "the refused record reported $refused") },
+            { assertIs<MetricExportResult.Failure>(refusedMerge, "the refused merge reported $refusedMerge") },
+            { assertEquals(afterRecover.failed + 2, afterRefused.failed, "two refused turns moved failed by ${afterRefused.failed - afterRecover.failed}") },
+            { assertEquals(2L, afterRefused.outstandingFailures, "the refused turns are not outstanding") },
+            { assertEquals(memoryBefore, memoryAfter, "a refused turn changed memory") },
+            { assertEquals(MetricExportResult.Success, healed) },
+            { assertEquals(0L, afterHeal.outstandingFailures, "the healed write did not resolve the refused turns") },
+            { assertEquals(6L, durable, "seeded 5 + the healed 1, the refused turns uncounted") },
+        )
+    }
+
     // ---- What does not change ----
 
     @Test
