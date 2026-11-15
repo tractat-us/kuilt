@@ -21,9 +21,9 @@ import kotlin.test.fail
 /**
  * Reusable contract test suite for [DurableStore] implementations.
  *
- * Subclass and implement [newStore] and [restart] to bind any store under test. Every [Test] in this
- * class encodes a required invariant of the [DurableStore] contract — a conforming implementation
- * must pass all of them.
+ * Subclass and implement [newStore], [restart] and [faultMedium] to bind any store under test. Every
+ * [Test] in this class encodes a required invariant of the [DurableStore] contract — a conforming
+ * implementation must pass all of them.
  *
  * Lives in `commonMain` of `:kuilt-conformance` (not a module's `commonTest`) so every backend can
  * subclass it from its own test source set, on whichever targets that backend exists for.
@@ -35,6 +35,16 @@ import kotlin.test.fail
  *         SqliteDurableStore(tempFile()).also { files[it] = it.file }
  *     override suspend fun restart(store: DurableStore): RestartFixture =
  *         RestartFixture.Durable(SqliteDurableStore(requireNotNull(files[store])))
+ *     // Break the medium, check the fault took, and say how to undo it.
+ *     override suspend fun faultMedium(store: DurableStore): MediumFault {
+ *         val file = requireNotNull(files[store]).toPath()
+ *         Files.setPosixFilePermissions(file, emptySet())
+ *         check(!Files.isReadable(file)) { "rig: $file is still readable — running as root?" }
+ *         return MediumFault.Broken {
+ *             Files.setPosixFilePermissions(file, setOf(OWNER_READ, OWNER_WRITE))
+ *             store
+ *         }
+ *     }
  * }
  * ```
  *
