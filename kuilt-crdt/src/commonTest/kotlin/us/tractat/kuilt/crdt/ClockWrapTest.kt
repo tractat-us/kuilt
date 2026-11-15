@@ -7,6 +7,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 
 /**
  * Every clock that mints a successor refuses at [Long.MAX_VALUE] instead of wrapping (#3417).
@@ -80,11 +82,11 @@ class ClockWrapTest {
 
     private val fugueSerializer = Fugue.wireSerializer(String.serializer())
 
-    /** One insert by [author], encoded, then its `field` rewritten to [Long.MAX_VALUE] and decoded. */
-    private fun fugueWith(author: ReplicaId, field: String): Fugue<String> {
+    /** One insert by [author], encoded, then its `field` rewritten to [value] and decoded. */
+    private fun fugueWith(author: ReplicaId, field: String, value: Long = max): Fugue<String> {
         val (one, _) = Fugue.empty<String>().insertAt(author, 0, "a")
         val valid = Json.encodeToString(fugueSerializer, one)
-        val rewritten = valid.replace("\"$field\":1", "\"$field\":$max")
+        val rewritten = valid.replace("\"$field\":1", "\"$field\":$value")
         assertNotEquals(valid, rewritten, "the rig found $field to rewrite in $valid")
         return Json.decodeFromString(fugueSerializer, rewritten)
     }
@@ -120,15 +122,27 @@ class ClockWrapTest {
     }
 
     /**
-     * A refused insert leaves the [Fugue] usable: it must hand back the sequence state it borrowed.
-     * Another replica's insert still goes through afterwards.
+     * A refused insert leaves the [Fugue]'s incremental sequence state in its slot. The clocks
+     * advance before the state is stolen, so a refusal has nothing to hand back.
+     *
+     * The rig matters: a freshly decoded [Fugue] has an empty slot, and an empty slot is rebuilt
+     * on the next read, so a refusal that dropped the state could not be told apart from one that
+     * kept it. So the fixture decodes one below the Lamport ceiling and makes one local insert,
+     * which reaches the ceiling and threads a state into the result. Only that result's slot can
+     * show a refusal losing it.
      */
     @Test
     fun aRefusedFugueInsertLeavesTheStateUsable() {
-        val full = fugueWith(local, "seq")
-        assertFailsWith<ArithmeticException> { full.insertAt(local, 0, "b") }
-        val (after, _) = full.insertAt(remote, 1, "c")
-        assertEquals(listOf("a", "c"), after.toList())
+        val nearlyFull = fugueWith(remote, "lamport", max - 1L)
+        val (atCeiling, _) = nearlyFull.insertAt(local, 1, "b")
+        val threaded = atCeiling.seqStateForTest()
+        assertAll(
+            { assertEquals(max, atCeiling.lamport, "the rig's local insert reached the ceiling") },
+            { assertNotNull(threaded, "the rig's local insert threaded a sequence state into its result") },
+            { assertFailsWith<ArithmeticException> { atCeiling.insertAt(local, 2, "c") } },
+            { assertSame(threaded, atCeiling.seqStateForTest(), "the refused insert left the state in its slot") },
+            { assertEquals(listOf("a", "b"), atCeiling.toList()) },
+        )
     }
 
     // ── Rga ───────────────────────────────────────────────────────────────────
