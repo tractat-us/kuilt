@@ -1083,7 +1083,7 @@ inside the counters for `d` above about `2⁴⁰`.
 
 **The lifetime limit.** Ruled by @keddie, 2026-11-15 (#3475): a new lease is
 refused a little before a counter runs out, and work that is already running
-has the room kept back for it and never throws.
+is never refused for it and never throws.
 
 *In plain terms.* A scheduler that has handed out nearly all the service its
 books can count stops opening new leases, and says so with a typed answer the
@@ -1135,8 +1135,7 @@ watermark:
 to return: `LeaseOutcome.PositionCeiling` is deleted, not renamed, and
 `AdmitOutcome` never had one. They use the headroom, up to `Long.MAX_VALUE`
 itself. A charge that still does not fit is **recorded whole or not at all**,
-level by level. `admit` and `complete` land all the same, and `extend` says
-it reserved nothing:
+level by level, and the call lands:
 
 - An overrun at `complete` goes down the path as far as it fits in whole and is
   charged at the deepest group it reaches. That is the rule a draining path
@@ -1148,17 +1147,11 @@ it reserved nothing:
   the root's own child edge is draining, which `Done` reports as charged today.
 - An admission that does not fit reserves nothing. `admit` opens the lease
   with `reserved` zero, so the cost arrives as an overrun when it completes.
-- An extension that does not fit answers the existing
-  `LeaseOutcome.SupplyExhausted`, and the lease and the ledger are unchanged.
-  The arm's meaning widens from "the root is short" to "nothing more can be
-  reserved for this lease": the root is short with no capacity to top it up,
-  or a lifetime counter on the path has no room. What the caller does is the
-  same in both, which is why one arm serves: the work carries on, and
-  `complete` charges the cost as an overrun. Only the remedy differs.
-  Reconciling capacity cures the first and never the second, and a caller
-  tells them apart by `explain`, which answers
-  `WaitExplanation.LifetimeExhausted` for a leaf behind a full counter. `Done`
-  for an `extend` keeps `unrecorded` at zero.
+- An extension that does not fit reserves nothing and changes nothing, the
+  wake memory included. `extend` answers `Done` with `unrecorded` the amount.
+  The work carries on, and `complete` charges the cost as an overrun. A
+  caller that wants the reason asks `explain`, which answers
+  `WaitExplanation.LifetimeExhausted` for a leaf behind a full counter.
 
 No counter is ever filled to its limit with part of a charge, and none
 saturates. A saturated counter would break conservation, since the edges of
@@ -1183,8 +1176,7 @@ conservation holds. Conditionally: every charge is recorded in full while the
 extensions, admissions and overruns that land on a counter after its last
 `acquire` add up to no more than the headroom. No fixed margin can promise
 more, because those calls are not refused there and an overrun is any `Long`.
-Past it, an `extend` answers `SupplyExhausted` and a `complete` reports
-`unrecorded`. A caller that only ever admits is never refused, and has only
+Past it, an `extend` or a `complete` reports `unrecorded`. A caller that only ever admits is never refused, and has only
 the report.
 
 *Why `2⁵⁸`.* The counters count reservations, so a margin is paid for in
@@ -1301,9 +1293,10 @@ that means two layouts is how a snapshot gets misread, so it is refused.
     the group above it, that edge's issuance does not move, and `validate()`
     is empty. `complete(lease, Long.MAX_VALUE)` on a fresh engine closes the
     lease, reports the overrun as `unrecorded`, and the next `acquire` leases.
-    An `extend` answers `SupplyExhausted` with capacity reconciled, and the
-    lease, the ledger and the wake memory are equal before and after. One
-    unit smaller, it lands. An `admit` opens at zero and completes.
+    An `extend` at a full counter answers `Done` with `unrecorded` equal to
+    the amount, and the lease, the ledger and the wake memory are equal
+    before and after. One unit smaller, it lands with `unrecorded` zero. An
+    `admit` opens at zero and completes.
   - A seeded driver near both limits, with overruns up to `Long.MAX_VALUE`:
     no call throws, `validate()` is empty after each, and what was recorded
     plus what was reported adds up to what was charged. It sorts what it
@@ -1320,8 +1313,7 @@ that means two layouts is how a snapshot gets misread, so it is refused.
     applied to a charging call; a charge tested against the watermark and not
     `Long.MAX_VALUE`; a charge recorded in part; the room test dropped for the
     edges above the leaf; `unrecorded` reported as zero; an `extend` that does
-    not fit answering `Done`; that `extend` refused only when the root is
-    short, so a full edge under a funded root throws.
+    not fit recording part of its amount; that `extend` throwing.
 
 **Slices,** in order, one behaviour move each. Each carries its own docs.
 
@@ -1351,14 +1343,13 @@ that means two layouts is how a snapshot gets misread, so it is refused.
    `ticksToVirtual` and `peakPositionFraction`. Docs: §11,
    `docs/agent-cookbook/heddle.md`, `Writerside/topics/heddle-local-turns.md`.
 7. **The lifetime limit (#3475).** `LIFETIME_HEADROOM` and the watermark
-   check on `acquire` and `schedule`; the whole-or-nothing rule on `admit`
-   and `complete`; `extend` answering `SupplyExhausted` where it does not
-   fit; `LeaseOutcome.Done.unrecorded`. Three
+   check on `acquire` and `schedule`; the whole-or-nothing rule on `admit`,
+   `extend` and `complete`; `LeaseOutcome.Done.unrecorded`. Three
    `PositionCeiling` arms are renamed `LifetimeExhausted` (`AcquireOutcome`,
    `WaitExplanation`, and `AllocationOutcome` with `ScheduleOutcome`), and
    `LeaseOutcome`'s is deleted. The types hold the ruling: with no lifetime arm
-   on `LeaseOutcome` or `AdmitOutcome`, no charging call gains one, `admit` and
-   `complete` have no refusal to give, and `unrecorded` has no default. Retires `LocalHeddlePositionCeilingTest`
+   on `LeaseOutcome` or `AdmitOutcome`, a charging call cannot refuse for it,
+   and `unrecorded` has no default. Retires `LocalHeddlePositionCeilingTest`
    for its lifetime twin. Docs: §7.1, §10.12, the cookbook, both `module.md`s,
    `Writerside/topics/heddle-local-turns.md`. #3458 is then a use of the
    headroom, not a limit of its own.
@@ -1411,10 +1402,12 @@ not depend on each other.
   brim lets `complete(lease, Long.MAX_VALUE)` end a healthy engine. A charge
   that does not fit is recorded whole or not at all, and reported in
   `unrecorded` (@keddie, 2026-11-15, #3475).
-- `Done(unrecorded = amount)` for an `extend` that does not fit: it reserved
-  nothing, so `Done` is a refusal under another name. It answers
-  `SupplyExhausted`, which already says nothing was reserved, and it changes
-  nothing (@keddie, 2026-11-15, #3475).
+- `SupplyExhausted` for an `extend` at a full counter: widening its meaning
+  breaks "reconcile capacity" as its remedy, a caller that retries until it
+  clears would never stop, and a caller that has reconciled capacity may
+  treat that arm on `extend` as unreachable. It answers
+  `Done(unrecorded = amount)` and changes nothing
+  (@keddie, 2026-11-15, #3475).
 - A headroom of `2⁶²`: it halves the leases a caller with large reservations
   gets, for room no caller needs. It is `2⁵⁸` (@keddie, 2026-11-15, #3475).
 - A headroom sized from the edge's outstanding: it moves with every
