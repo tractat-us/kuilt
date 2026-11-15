@@ -65,7 +65,10 @@ public data class PolicyEdge(
  * Tuning for one allocation round (design §7.3). Every field is a hard cap in
  * service units; the round grants the *smallest* of all the applicable caps.
  *
- * @property quantum the largest single grant per pick (`configuredQuantum`); must be `> 0`.
+ * @property quantum the largest single grant per pick (`configuredQuantum`); must be `> 0`. A
+ *   grant is never larger than [LocalHeddle.MAX_RESERVATION] whatever this says (#3353): the
+ *   weight budget is sized for one lease that large, so a larger grant could carry a child
+ *   whose weight fits the budget past its position ceiling.
  * @property perChildOutstandingCap ceiling on a child's outstanding entitlement; a
  *   grant is trimmed so `outstanding` never crosses it. Defaults to unbounded.
  * @property sleeperCredit bounded virtual-time credit a waking child may keep, in the
@@ -144,8 +147,9 @@ public object HeddlePolicy {
      *   input the caller can provoke (issue #1737).
      * @throws ArithmeticException if any of [edges] holds a position at its ceiling, which no longer
      *   orders exactly (#3313): [LocalHeddle] answers that with [AcquireOutcome.PositionCeiling], and
-     *   [FairShareAllocator.schedule] answers [AllocationOutcome.PositionCeiling]. Also, as before, if a deadline
-     *   `p + q · G` leaves `Long`, which a quantum above [LocalHeddle.MAX_RESERVATION] can reach.
+     *   [FairShareAllocator.schedule] answers [AllocationOutcome.PositionCeiling]. A deadline
+     *   `p + q · G` stays in `Long`: a grant is capped at [LocalHeddle.MAX_RESERVATION], which is
+     *   the headroom a position below its ceiling keeps.
      */
     public fun pick(edges: List<PolicyEdge>, config: PolicyConfig, localHoldings: Long): Grant? {
         require(localHoldings >= 0L) { "localHoldings must be non-negative, was $localHoldings" }
@@ -377,9 +381,9 @@ public object HeddlePolicy {
 
     /**
      * The trimmed quantum for [edge] this round: the smallest of the configured quantum,
-     * the child's additional need, its maximum useful grant, this peer's holdings, and
-     * the room left under the per-child outstanding cap. A non-positive result means the
-     * edge is not a candidate.
+     * the child's additional need, its maximum useful grant, this peer's holdings, the room
+     * left under the per-child outstanding cap, and [LocalHeddle.MAX_RESERVATION]. A
+     * non-positive result means the edge is not a candidate.
      */
     private fun quantumFor(edge: PolicyEdge, config: PolicyConfig, localHoldings: Long): Long {
         val outstanding = edge.summary.outstanding
@@ -398,6 +402,9 @@ public object HeddlePolicy {
             edge.demand.maximumUsefulGrant,
             localHoldings,
             capRoom,
+            // The largest lease (#3353): the weight budget's P1′ is sized for one grant this large,
+            // so no grant may be larger, whatever [PolicyConfig.quantum] says.
+            LocalHeddle.MAX_RESERVATION,
         )
     }
 
