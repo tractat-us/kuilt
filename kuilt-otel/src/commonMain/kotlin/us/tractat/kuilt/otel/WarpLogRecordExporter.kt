@@ -320,7 +320,7 @@ public class WarpLogRecordExporter(
      * correct, *because* it re-encodes the latest state inside that section — its bytes are
      * derived after the mutex is held, so no write it makes can be stale (#1053). This class
      * cannot borrow that argument: [commit] is handed bytes that were encoded before it was
-     * called, over field mutations ([appendToActiveSegment], [windowPass], the segment number
+     * called, over field mutations ([applyTurn], [windowPass], the segment number
      * [adoptRemoteSegment] reserves) that are already applied. Re-deriving inside [commit] is not on
      * offer either — a turn is an ordered sequence of writes across several keys, and an
      * interleaved turn has already moved the fields those writes describe. So: one write, a
@@ -1775,8 +1775,12 @@ public class WarpLogRecordExporter(
      * memory, counted them on [health], put their tombstones in [activeSegment] and freed their
      * [seenIds], then returned [ExportResult.Failure] without publishing any of it (#3431). The
      * order is the guarantee, rather than a ceiling check ahead of the eviction, because a check
-     * covers only the failure it names. Everything after the insert is field writes that cannot
-     * throw; keep it that way.
+     * covers only the failure it names.
+     *
+     * The active segment's next value is built on a local as well, since folding the turn's ops
+     * into it is [Rga.apply]. So everything after the three builds is assignment and counting, and
+     * a refused turn mutates nothing by construction: no call into [Rga] follows the first field
+     * write. Keep it that way. The counts go last, after every field the turn moves.
      *
      * Eviction always removes a prefix of what the buffer already held, so nothing this turn
      * inserts can be evicted by it ([fitsInTurn] caps the turn at [maxRecords]). Both halves go
@@ -1818,16 +1822,25 @@ public class WarpLogRecordExporter(
         val after = if (eviction != null && eviction.count == visibleCount) RgaId.HEAD else tail
         // The one call that can refuse, with nothing committed yet.
         val (newLog, inserts) = (eviction?.log ?: log).insertAllAfter(replica = replica, after = after, values = admitted)
-        if (eviction != null) commitEviction(eviction)
-        if (refusals > 0) recordRefusals(refusals)
-        val removes = eviction?.removes ?: emptyList()
-        if (inserts.isEmpty()) return removes
+        val applied = (eviction?.removes ?: emptyList()) + inserts
+        // The tombstones and inserts ride in the active segment, and folding them in is a CRDT
+        // mutation too, so it is built here, on a local, with the other two.
+        val newActiveSegment = withOps(activeSegment, applied)
+        // ── Commit: assignments and counts only. Nothing below calls into Rga or can refuse. ──
+        // With no eviction and no insert, newLog is `log` and newActiveSegment is `activeSegment`.
         log = newLog
-        tail = inserts.last().id
-        visibleCount += inserts.size
-        inserts.forEach { insert -> seenIds[insert.value.recordId] = insert.id }
-        appendToActiveSegment(inserts)
-        return removes + inserts
+        activeSegment = newActiveSegment
+        activeOpCount += applied.size
+        if (eviction != null) commitEviction(eviction)
+        if (inserts.isNotEmpty()) {
+            tail = inserts.last().id
+            visibleCount += inserts.size
+            inserts.forEach { insert -> seenIds[insert.value.recordId] = insert.id }
+        }
+        // Counted last, once every field the turn moves has moved.
+        if (eviction != null) recordDrops(eviction.count)
+        if (refusals > 0) recordRefusals(refusals)
+        return applied
     }
 
     /** The oldest visible records tombstoned on a copy of [log], with nothing committed. */
@@ -1870,8 +1883,9 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * Commit a [planEviction], counting each drop. Must hold [lock]. It writes fields and throws
-     * nothing, and [applyTurn] calls it only once the insert it pairs with has been built.
+     * Commit a [planEviction]'s bookkeeping. Must hold [lock]. It writes fields and throws nothing,
+     * and [applyTurn] calls it only once the insert it pairs with, and the active segment carrying
+     * both, have been built and assigned. [recordDrops] counts the drops after it.
      *
      * Every drop is **counted** on [ExporterHealth.dropped] — exactly, per record, with a
      * rate-limited summary line for a reader who never polls health ([reportDropsPeriodically]).
@@ -1887,19 +1901,22 @@ public class WarpLogRecordExporter(
      * something was *forgotten*.
      */
     private fun commitEviction(eviction: Eviction) {
+        // The log and the active segment are [applyTurn]'s to assign: the tombstones are ops like
+        // any other, so they ride in the active segment it built. They hide the records; they
+        // reclaim nothing by themselves. Each evicted record's own `Insert` — body and all — stays
+        // in whichever segment it landed in until a window pass suppresses it and that segment is
+        // retired.
         val count = eviction.count
-        healthState.update { it.copy(dropped = it.dropped + count) }
-        reportDropsPeriodically()
-        log = eviction.log
-        // The tombstones are ops like any other, so they ride in the active segment.
-        // They hide the records; they reclaim nothing by themselves. Each evicted
-        // record's own `Insert` — body and all — stays in whichever segment it landed
-        // in until a window pass suppresses it and that segment is retired.
-        appendToActiveSegment(eviction.removes)
         eviction.evicted.forEach { record -> seenIds.remove(record.recordId) }
         visibleCount -= count
         evictionsSincePass += count
         if (visibleCount == 0) tail = RgaId.HEAD
+    }
+
+    /** Count [count] [BufferPolicy.DROP_OLDEST] evictions. Must hold [lock]; see [commitEviction]. */
+    private fun recordDrops(count: Int) {
+        healthState.update { it.copy(dropped = it.dropped + count) }
+        reportDropsPeriodically()
     }
 
     /**
@@ -2509,7 +2526,7 @@ public class WarpLogRecordExporter(
      * A dedup hit on one of these needs no adopt: the insert is on disk already, or the turn owes
      * the active-segment write that carries it, which [activeSegmentUnwritten] decides. That holds
      * whoever authored the insert. In practice every one is this exporter's own, because an insert
-     * reaches the segment only through [appendToActiveSegment] from [applyTurn], or from the store
+     * reaches the segment only through [applyTurn], or from the store
      * on [recover]. A merge adds none, and a [windowPass] pieces in a floor and an
      * [RgaOp.Compact], neither an insert. So a merged record is always outside the segment, and a
      * hit on one is what [logHoldsUncarriedMerge] makes a turn adopt the whole log for.
@@ -2701,17 +2718,15 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * Absorb a run of ops into the active segment. Must hold [lock].
+     * [segment] with a run of ops absorbed, writing no field. [applyTurn] builds the active
+     * segment's next value with it, before it assigns anything.
      *
      * The per-op `apply` loop stays: the active segment is bounded at [segmentOps] ops,
      * so it is Θ(segmentOps) not Θ(N), and `apply` handles `Insert` and `Remove`
      * uniformly where [Rga]'s bulk mutators do not.
      */
-    private fun appendToActiveSegment(ops: List<RgaOp<LogRecord>>) {
-        if (ops.isEmpty()) return
-        ops.forEach { op -> activeSegment = activeSegment.apply(op) }
-        activeOpCount += ops.size
-    }
+    private fun withOps(segment: Rga<LogRecord>, ops: List<RgaOp<LogRecord>>): Rga<LogRecord> =
+        ops.fold(segment) { absorbed, op -> absorbed.apply(op) }
 
     /**
      * Encode the index over [sealed] and [retired], defaulting to the layout as it stands.
