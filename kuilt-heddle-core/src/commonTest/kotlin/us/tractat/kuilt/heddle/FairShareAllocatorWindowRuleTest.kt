@@ -192,8 +192,9 @@ class FairShareAllocatorWindowRuleTest {
     /**
      * The public reads hold a child below its floor at the floor (#3353), on the penalty side,
      * rather than throwing. Under the window rule a demanding child can sit at `−C` with a lease out,
-     * and a `cancel` then walks it back further. At weight 1/2, `ticks · 2` leaves `Long` there.
-     * `e2` sits about one full lease below its floor; `e1` is near zero.
+     * and a `cancel` then walks it back by the leases it had out. More than one full lease below,
+     * `ticks · d` leaves `Long`, since the floor is sized to leave exactly one lease of room: `e2`
+     * sits just over one below, as two leases cancelled from the floor leave it.
      */
     @Test
     fun theReadsHoldAChildBelowItsFloorAtItsFloor() {
@@ -207,7 +208,8 @@ class FairShareAllocatorWindowRuleTest {
         val floor = ticksToVirtual(positionFloor(half), half)
         assertAll(
             { assertTrue(e2At < Int128.of(positionFloor(half)), "the rig: e2 is below its floor, at $e2At") },
-            { assertTrue(e2At > Int128.of(positionFloor(half)) - Int128.of(LocalHeddle.MAX_RESERVATION * 8L), "the rig: by under one full lease") },
+            { assertTrue(e2At > Int128.of(positionFloor(half)) - Int128.of(LocalHeddle.MAX_RESERVATION * 16L), "the rig: by under two full leases") },
+            { assertTrue(e2At < Int128.of(positionFloor(half)) - Int128.of(LocalHeddle.MAX_RESERVATION * 8L), "the rig: and by over one, past which ticks · 2 leaves Long") },
             { assertEquals(floor, s.virtualService(e2), "the ledger's net read holds it at its floor") },
             { assertEquals(floor, s.grossVirtualService(e2), "and its gross read") },
             { assertEquals(floor, allocator.effectiveVirtualService(s, root, e2), "and the allocator's effective read") },
