@@ -1151,11 +1151,11 @@ stopped holding (`BurstLagTest`):
 
 | Rig | Fair | Clamp alone | Clock |
 |---|---|---|---|
-| S1c: weights 2:1, 2 units a burst, both asking | 400 / 200 | 300 / 300 | fair, ±2 |
-| S7: 2:1, the heavy child asks alone for 1, then both for 1 | 500 / 100 | 600 / 0 | fair, ±2 |
-| S7b: the same, light child first | 200 / 400 | 300 / 300 | fair, ±2 |
-| S8: S7 at 1:1, with an idle round between the two units | 450 / 150 | 600 / 0 | fair, ±2 |
-| S9: a ladder, 1:2:3 joining one at a time | 550 / 500 / 450 | 600 / 600 / 300 | fair, ±2 |
+| S1c: weights 2:1, 2 units a burst, both asking | 400 / 200 | 300 / 300 | fair, exactly |
+| S7: 2:1, the heavy child asks alone for 1, then both for 1 | 500 / 100 | 600 / 0 | fair, exactly |
+| S7b: the same, light child first | 200 / 400 | 300 / 300 | fair, exactly |
+| S8: S7 at 1:1, with an idle round between the two units | 450 / 150 | 600 / 0 | fair, exactly |
+| S9: a ladder, 1:2:3 joining one at a time | 550 / 500 / 450 | 600 / 600 / 300 | fair, exactly |
 
 S7's first unit is uncontested, so it is the heavy child's. Counting it as
 contested would pay the light child for a stretch it was not asking (§10.6).

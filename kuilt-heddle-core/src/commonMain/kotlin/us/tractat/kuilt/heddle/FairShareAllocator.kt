@@ -1021,7 +1021,7 @@ public class FairShareAllocator(
      * Not one ceiling of the run, `⌈(clock − left) / tick⌉`, which can never fall short but rounds
      * every return up. That error has a sign, so it adds up: about half a tick a return, measured
      * on `BurstLagTest`'s 3:1 rigs as 66 units of a fair 75 to the light child over 300 bursts. The
-     * difference of two readings errs both ways, and its sum stayed within the rigs' tolerance.
+     * difference of two readings errs both ways, and those rigs land on their fair split exactly.
      */
     private fun shiftOf(edge: PolicyEdge, clock: Int128): Int128 {
         val left = checkNotNull(departures[edge.record.id]) { "a returner with no departure: ${edge.record.id.value}" }
