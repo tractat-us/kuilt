@@ -8681,8 +8681,9 @@ allprojects {
 //
 // This measures the property itself rather than any one route to breaking it, so it is not a source
 // scan: after a normal build, `.github/scripts/stamp-invariance.sh` runs `stampProbeTargets` again
-// at a different `-Pversion`, records every task outcome, and fails unless every task that actually
-// executed is allowlisted in `.github/stamp-invariance-allowlist.txt`. A new `api`/`implementation`
+// at a different `-Pversion`, records every task outcome with Gradle's own reasons, and fails
+// unless every selected task that actually executed is allowlisted in
+// `.github/stamp-invariance-allowlist.txt` (`.github/scripts/stamp-invariance.py` has the rules). A new `api`/`implementation`
 // edge, a `const`, a test runtime classpath, a generated resource, or a build-logic change that puts
 // the version into a task input all show up the same way: a task that re-ran.
 //
@@ -8750,11 +8751,11 @@ check(stampProbeFamily in setOf("linux", "apple")) {
     "-Pkuilt.stampProbe.family=$stampProbeFamily: expected `linux` or `apple`."
 }
 
-fun stampProbeSelection(p: Project, family: String): List<Any> {
+fun stampProbeSelection(p: Project, family: String): List<Task> {
     val kmp = p.extensions.findByType(org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension::class.java)
     val targets = kmp?.targets?.toList()
         ?: listOfNotNull(p.extensions.findByType(org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension::class.java)?.target)
-    val selected = mutableListOf<Any>()
+    val selected = mutableListOf<Task>()
     for (target in targets) {
         for (compilation in target.compilations) {
             val keep = when (family) {
@@ -8769,18 +8770,30 @@ fun stampProbeSelection(p: Project, family: String): List<Any> {
                     else -> false
                 }
             }
-            if (keep) selected += compilation.compileTaskProvider
+            if (keep) selected += compilation.compileTaskProvider.get()
         }
     }
-    if (family == "linux") selected.add(p.tasks.withType(Test::class.java))
+    if (family == "linux") selected += p.tasks.withType(Test::class.java).toList()
     return selected
 }
 
+// Each project's `stampProbeTargets` writes the paths it selected, so the checker judges exactly the
+// selection: compile and test tasks. A helper that re-runs only because a file NAME carries the
+// version (every jar, KGP's metadata transforms) is an input to a selected task; if its content
+// changed, the selected task re-runs and is caught there, and if only its name changed, nothing
+// downstream notices, which is the correct verdict.
 allprojects {
     val owner = this
+    val selection = provider { stampProbeSelection(owner, stampProbeFamily) }
+    val selectedPaths = selection.map { tasks -> tasks.map { it.path }.sorted() }
+    val record = rootProject.layout.buildDirectory.file("stamp-probe/selected/${path.replace(':', '_')}.txt")
     tasks.register("stampProbeTargets") {
         group = "verification"
         description = "The tasks .github/scripts/stamp-invariance.sh re-runs at a changed version (#3464)."
-        dependsOn(provider { stampProbeSelection(owner, stampProbeFamily) })
+        dependsOn(selection)
+        doLast {
+            record.get().asFile.apply { parentFile.mkdirs() }
+                .writeText(selectedPaths.get().joinToString("\n", postfix = "\n"))
+        }
     }
 }

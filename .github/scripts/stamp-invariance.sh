@@ -15,7 +15,8 @@ shift
 
 line="$(sed -n 's/^kuiltVersionLine=//p' gradle.properties)"
 report="build/stamp-probe/report-${family}.tsv"
-rm -f "$report"
+selected="build/stamp-probe/selected"
+rm -rf "$report" "$selected"
 
 start="$(date +%s)"
 status=0
@@ -31,5 +32,5 @@ if [ ! -s "$report" ]; then
   echo "stamp-invariance: no report at ${report}; the probe pass recorded nothing." >&2
   exit 1
 fi
-python3 .github/scripts/stamp-invariance.py "$report" || status=1
+python3 .github/scripts/stamp-invariance.py "$report" "$selected" || status=1
 exit "$status"
