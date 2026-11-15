@@ -71,7 +71,6 @@ internal val LEDGER_COMPONENTS: List<LedgerComponent> = run {
         LedgerComponent("gauges", EntitlementLedger.of(gauges = mapOf(e to gaugeAt(Int128.of(8L), 12L)))),
         LedgerComponent("transferRelocIn", EntitlementLedger.of(transferRelocIn = rows(13L))),
         LedgerComponent("transferRelocOut", EntitlementLedger.of(transferRelocOut = rows(14L))),
-        LedgerComponent("parents", EntitlementLedger.of(origins = mapOf(GroupId("p") to Int128.of(16L)))),
         LedgerComponent("forgotten", EntitlementLedger.of(forgottenOutflow = mapOf(GroupId("p") to mapOf(r to 15L)))),
     )
 }

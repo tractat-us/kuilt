@@ -54,7 +54,7 @@ public sealed interface ScheduleOutcome {
 
     /**
      * Not returned today. A pick orders the full 128-bit position, so no position at [parent]
-     * stops a round, however far a child stands from the parent's origin and however many
+     * stops a round, however far a child has climbed and however many
      * schedulers granted it at once. Kept for the ledger's `Long` lifetime counters, which throw
      * there for now.
      */

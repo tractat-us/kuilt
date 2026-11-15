@@ -319,7 +319,6 @@ public final class us/tractat/kuilt/heddle/EntitlementLedger : us/tractat/kuilt/
 	public final fun mint-fTvDpCI (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
 	public final fun mintedRoots ()Ljava/util/List;
 	public final fun mintedTotal ()J
-	public final fun origin-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/math/Int128;
 	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
 	public fun piece (Lus/tractat/kuilt/heddle/EntitlementLedger;)Lus/tractat/kuilt/heddle/EntitlementLedger;
 	public final fun prepare-Vqsn8GQ (Lus/tractat/kuilt/heddle/AttachmentRecord;)Lus/tractat/kuilt/crdt/Quilted;
@@ -355,9 +354,9 @@ public final class us/tractat/kuilt/heddle/EntitlementLedger$Companion {
 	public final fun bootstrap-lUmtw0Q (Ljava/lang/String;Ljava/util/Map;Ljava/lang/String;)Lus/tractat/kuilt/heddle/EntitlementLedger;
 	public final fun getZERO ()Lus/tractat/kuilt/heddle/EntitlementLedger;
 	public final fun of (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;)Lus/tractat/kuilt/heddle/EntitlementLedger;
-	public final fun of (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;JLjava/util/Map;)Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public final fun of (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;J)Lus/tractat/kuilt/heddle/EntitlementLedger;
 	public static synthetic fun of$default (Lus/tractat/kuilt/heddle/EntitlementLedger$Companion;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/EntitlementLedger;
-	public static synthetic fun of$default (Lus/tractat/kuilt/heddle/EntitlementLedger$Companion;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;JLjava/util/Map;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/EntitlementLedger;
+	public static synthetic fun of$default (Lus/tractat/kuilt/heddle/EntitlementLedger$Companion;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/EntitlementLedger;
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
@@ -1027,23 +1026,21 @@ public final class us/tractat/kuilt/heddle/PolicyConfig {
 }
 
 public final class us/tractat/kuilt/heddle/PolicyEdge {
-	public fun <init> (Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/math/Int128;Lus/tractat/kuilt/math/Int128;)V
-	public synthetic fun <init> (Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/math/Int128;Lus/tractat/kuilt/math/Int128;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/math/Int128;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/math/Int128;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lus/tractat/kuilt/heddle/AttachmentRecord;
 	public final fun component2 ()Lus/tractat/kuilt/heddle/EdgeSummary;
 	public final fun component3 ()Lus/tractat/kuilt/heddle/Demand;
 	public final fun component4 ()Lus/tractat/kuilt/heddle/Gauge;
 	public final fun component5 ()J
 	public final fun component6 ()Lus/tractat/kuilt/math/Int128;
-	public final fun component7 ()Lus/tractat/kuilt/math/Int128;
-	public final fun copy (Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/math/Int128;Lus/tractat/kuilt/math/Int128;)Lus/tractat/kuilt/heddle/PolicyEdge;
-	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/PolicyEdge;Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/math/Int128;Lus/tractat/kuilt/math/Int128;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/PolicyEdge;
+	public final fun copy (Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/math/Int128;)Lus/tractat/kuilt/heddle/PolicyEdge;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/PolicyEdge;Lus/tractat/kuilt/heddle/AttachmentRecord;Lus/tractat/kuilt/heddle/EdgeSummary;Lus/tractat/kuilt/heddle/Demand;Lus/tractat/kuilt/heddle/Gauge;JLus/tractat/kuilt/math/Int128;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/PolicyEdge;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getBaseIssued ()J
 	public final fun getDemand ()Lus/tractat/kuilt/heddle/Demand;
 	public final fun getGauge ()Lus/tractat/kuilt/heddle/Gauge;
 	public final fun getOffsetTicks ()Lus/tractat/kuilt/math/Int128;
-	public final fun getOrigin ()Lus/tractat/kuilt/math/Int128;
 	public final fun getRecord ()Lus/tractat/kuilt/heddle/AttachmentRecord;
 	public final fun getSummary ()Lus/tractat/kuilt/heddle/EdgeSummary;
 	public fun hashCode ()I

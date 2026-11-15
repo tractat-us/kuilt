@@ -510,7 +510,6 @@ public class FairShareAllocator(
         parent: GroupId,
         demand: (AttachmentId) -> Demand,
     ): List<PolicyEdge> {
-        val origin = s.origin(parent)
         return s.activeChildren(parent).mapNotNull { summary ->
             val record = s.record(summary.attachment) ?: return@mapNotNull null
             PolicyEdge(
@@ -520,7 +519,6 @@ public class FairShareAllocator(
                 gauge = s.gauge(summary.attachment),
                 baseIssued = s.baseIssuance(summary.attachment),
                 offsetTicks = wakeOffsets[summary.attachment] ?: Int128.ZERO,
-                origin = origin,
             )
         }
     }
@@ -622,8 +620,8 @@ public class FairShareAllocator(
     }
 
     /**
-     * One patch seating each of [unseated] at [front], each on its own grid, `⌈V · w · G⌉`, written
-     * absolute: `⌊O · w · G⌋ + ⌈V · w · G⌉` for the parent's origin `O` in [s], wide and exact (#3353). [EntitlementLedger.seatAtWide] refuses an edge that already carries a
+     * One patch seating each of [unseated] at [front], each on its own grid, `⌈V · w · G⌉`, wide
+     * and exact (#3353). [EntitlementLedger.seatAtWide] refuses an edge that already carries a
      * gauge, so an id whose seat arrived between the front being read and this patch being built is
      * simply skipped rather than re-seated.
      *
@@ -639,10 +637,7 @@ public class FairShareAllocator(
         val gauges = LinkedHashMap<AttachmentId, Gauge>()
         for (id in unseated.sorted()) {
             val record = s.record(id) ?: continue
-            // Absolute: the origin this peer sees, plus the front, both on the newborn's own grid (#3353).
-            // Nothing raises an origin any more (#3472), so the first term reads zero.
-            val absolute = originTicks(s.origin(record.parent), record.weight) + front.ticksForWide(record.weight)
-            val seat = s.seatAtWide(id, absolute) ?: continue
+            val seat = s.seatAtWide(id, front.ticksForWide(record.weight)) ?: continue
             gauges[id] = checkNotNull(seat.delta.gauge(id)) { "a seat patch for ${id.value} carries no gauge" }
         }
         if (gauges.isEmpty()) return null

@@ -1106,12 +1106,10 @@ class HeddleNodeTest {
     // ─────────────────────────────────────────────────────────────────────────────
 
     /**
-     * Hold [root]'s rebase at nothing with `e1` at its ceiling (#3353, the window rule). One call in
-     * which the node sees both children asking and grants them its supply; then a merged write that
-     * raises the origin until `e2` sits below its floor, `−C`, puts `e1` at its ceiling above that
-     * origin, and mints [topUp] more at the root, so the next pick has something to grant. `e2` is
-     * demanding, seen demanding, and has no room to come down: where a demanding child that is never
-     * served ends up. A child at zero no longer holds the rebase, since the origin aims at the front.
+     * Put `e1` at its ceiling under [root] (#3353). One call in which the node sees both children
+     * asking and grants them its supply; then a merged write that puts `e1` at its ceiling and mints
+     * [topUp] more at the root, so the next pick has something to grant. `e2`, demanding and seen
+     * demanding, is far behind. Nothing rebases (#3472), so `e1` stays there.
      */
     private suspend fun TestScope.holdAtTheCeiling(h: StaticCluster, topUp: Long = 100L) {
         val peer = h.peers[0]
@@ -1121,15 +1119,11 @@ class HeddleNodeTest {
         check(node.schedule(root) is ScheduleOutcome.Delegated) { "the rig: the node granted, and saw both asking" }
         h.pump()
         val seen = node.ledger.value
-        val e2At = checkNotNull(seen.virtualService(e2)) { "the rig: e2 is active" }
-        // In whole units, one more than e2 reads plus its room: e2 then reads a tick below its floor.
-        val origin = (e2At.numerator + e2At.denominator - 1L) / e2At.denominator + CEILING_AT_WEIGHT_ONE / 16L + 1L
-        val e1Ticks = Int128.of(origin * 16L) + Int128.of(CEILING_AT_WEIGHT_ONE)
+        val e1Ticks = Int128.of(CEILING_AT_WEIGHT_ONE)
         val e1Issued = checkNotNull(seen.edge(e1)) { "the rig: e1 is active" }.issued
         node.asControlSink().publish(
             Patch(
                 EntitlementLedger.of(
-                    origins = mapOf(root to Int128.of(origin)),
                     gauges = mapOf(e1 to Gauge(folded = e1Issued, ticksHigh = e1Ticks.high, ticksLow = e1Ticks.low)),
                     minted = mapOf(MintId("top-up") to MintRecord(root, peer.id, topUp)),
                 ),
@@ -1138,7 +1132,7 @@ class HeddleNodeTest {
         h.pump()
         val held = node.ledger.value
         check(held.virtualService(e1) == Rational.of(CEILING_AT_WEIGHT_ONE, 16L)) { "the rig: e1 sits at its ceiling" }
-        check(held.virtualService(e2) == Rational.of(-CEILING_AT_WEIGHT_ONE, 16L)) { "the rig: e2 reads its floor" }
+        check(checkNotNull(held.virtualService(e2)) < Rational.of(CEILING_AT_WEIGHT_ONE, 32L)) { "the rig: e2 is far behind" }
     }
 
     /** What the node has delegated down `e1` and `e2` together. */
@@ -1149,8 +1143,7 @@ class HeddleNodeTest {
      * A child whose position reached its ceiling no longer stops the picks at its parent: a pick
      * orders the full 128-bit position, so the node delegates as it would anywhere. It used to answer
      * [ScheduleOutcome.PositionCeiling] and delegate nothing. The ceiling here arrives the way any
-     * gauge does, merged into the replicated ledger, beside a sibling at its floor that holds the
-     * rebase at nothing ([holdAtTheCeiling]).
+     * gauge does, merged into the replicated ledger ([holdAtTheCeiling]).
      */
     @Test
     fun aParentWithAChildAtItsCeilingDelegates() = runTest(

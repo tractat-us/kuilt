@@ -36,8 +36,8 @@ import us.tractat.kuilt.math.timesWide
  * allocator's own hash maps happen to hold them in. The contents are deliberately not public: the
  * only things a caller does with a memory are to keep it and to hand it back.
  *
- * Each wake clamp is kept in ticks of its edge's own grid, wide (#3353): a waker idle since long
- * before its parent's origin was raised is clamped the whole way up, and that can be past `Long`.
+ * Each wake clamp is kept in ticks of its edge's own grid, wide (#3353): a waker idle for long
+ * beside a busy sibling is clamped the whole way up, and that can be past `Long`.
  * It encodes as its two words, like a [Gauge]'s ticks ([WideTicksSerializer]). A clamp of zero is
  * absent, since an edge reads a missing one as zero, and a memory holding one is refused.
  *

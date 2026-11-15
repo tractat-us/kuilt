@@ -142,7 +142,7 @@ public sealed interface AcquireOutcome {
 
     /**
      * Not returned today. A pick orders the full 128-bit position, so no position at [parent]
-     * refuses it, however far a child stands from the parent's origin. The arm is kept for the one
+     * refuses it, however far a child has climbed. The arm is kept for the one
      * limit a choosing call still meets, the ledger's `Long` lifetime counters (see "Failure
      * surface" on [LocalHeddle]), which throw there for now.
      */
