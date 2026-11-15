@@ -95,6 +95,17 @@ stops counts in `failed`, and the first span write that lands resolves it. Metri
 same for each metric kind on its own: a refused read of the histograms fails the
 histogram turns, and a batch's sums still write. A metric exporter nobody recovered reads
 each kind before its first write.
+
+The span clock is counted as its own work. While the store refuses the clock's read, a span
+turn still saves its span, without a causal stamp, and skips the clock. That turn counts
+twice: `acknowledged` for the span and `failed` for the clock. A clock refused forever
+therefore keeps `outstandingFailures` above zero however many spans land. The first turn
+that writes the clock clears those failures, unless that turn wanted a stamp the clock
+could not give. A clock with no stamps left (`ClockTick.Exhausted`) is that case: each
+export that wanted a stamp saves its span without one and counts a clock failure, though
+the clock's write lands. A clear, or a span that carries its own stamp, wants no stamp, so
+it is not counted, and its clock write clears those failures. A refused clock write fails
+the whole turn, since the span write comes after it and is never made.
 A failed turn may still have saved its data, and a cancelled turn counts as neither
 acknowledged nor failed; a cancelled metric batch keeps the turns of the kinds it had
 already written. "Cancelled" means the caller was cancelled. When the store cancels

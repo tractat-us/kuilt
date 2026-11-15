@@ -372,19 +372,19 @@ class WarpCausalClockRefusedRecoveryTest {
         )
     }
 
-    // ---- What a turn with an unrecovered clock acknowledges ----
+    // ---- What a turn with an unrecovered clock counts ----
 
     /**
-     * A turn whose clock write was skipped needed only the span key, so when it fails, a later
-     * span-only write that lands resolves it. Counted against the clock key too, it would stay
-     * outstanding for good: an unrecovered clock writes nothing that could resolve it.
+     * A turn that skipped its clock write and then failed its span write is two failed turns, one
+     * per work key (#3426). A later span-only write that lands resolves the span's, and the clock's
+     * stays outstanding while its read is refused: only a clock write that lands resolves it.
      *
      * The converse the round-1 review asked for, a skipped turn resolving an earlier clock-plus-span
-     * failure, is now unreachable: a clock-plus-span turn needs an armed clock, and an armed clock is
+     * failure, is unreachable: a clock-plus-span turn needs an armed clock, and an armed clock is
      * never demoted, so no skipped turn can follow one.
      */
     @Test
-    fun aFailedTurnThatSkippedTheClockWriteIsResolvedByASpanOnlyWrite() = runTest {
+    fun aSpanOnlyWriteResolvesTheSpanHalfOfAFailedTurnThatSkippedTheClock() = runTest {
         val backing = InMemoryDurableStore()
         val store = CancellationScriptedStore(ReadRefusingStore(backing, clockKey))
         val clock = WarpCausalClock(replica)
@@ -400,9 +400,9 @@ class WarpCausalClockRefusedRecoveryTest {
             { assertEquals(1, store.minted, "the rig never refused the export's span write") },
             { assertIs<ExportResult.Failure>(failedTurn, "the rig: the export did not fail") },
             { assertTrue(clock.frontier().isEmpty() && exporter.snapshot().elements.none { it.causalStamp != null }, "the rig: the clock stamped") },
-            { assertEquals(1L, outstandingAfterFailure, "the rig: the failed turn was not outstanding") },
+            { assertEquals(2L, outstandingAfterFailure, "the failed turn was not outstanding under both keys") },
             { assertEquals(ExportResult.Success, merged) },
-            { assertEquals(0L, exporter.health.value.outstandingFailures, "a span-only write left a span-only failure outstanding") },
+            { assertEquals(1L, exporter.health.value.outstandingFailures, "a span-only write did not resolve exactly the span's failure") },
         )
     }
 }

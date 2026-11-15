@@ -116,12 +116,19 @@ public class WarpSpanExporter(
     private var readState: SpanReadState = SpanReadState.Unread
     private val persistence = PersistenceHealthTracker<StoreKey>()
     private val spanWork = setOf(STORE_KEY)
-    private val clockAndSpanWork = if (causalClock == null) spanWork else spanWork + WarpCausalClock.STORE_KEY
+    private val clockWork = setOf(WarpCausalClock.STORE_KEY)
+    private val clockAndSpanWork = if (causalClock == null) spanWork else spanWork + clockWork
 
     /**
      * Completed persistence turns and unresolved failures, independent of outage logging.
      * Includes a configured clock's write as part of export/clear, not a second acknowledgement.
-     * Recovery covers the span buffer; [WarpTelemetry.recover] also reports its clock's recovery.
+     * A turn that skips the clock's write, because its read has not landed, counts per work key
+     * instead: its span work as the span write went, and its clock work as one failed turn that only
+     * a later clock write resolves (#3426). So does an export that wanted a dot from an exhausted
+     * clock ([ClockTick.Exhausted]) and saved its span unstamped, though its clock write lands; the
+     * turn that mints the last dot, a clear, and a span with its own stamp want no dot they cannot
+     * get, so they are not counted, and their clock write resolves those failures. Recovery covers
+     * the span buffer; [WarpTelemetry.recover] also reports its clock's recovery.
      *
      * @sample us.tractat.kuilt.otel.samplePersistenceHealth
      */
@@ -134,6 +141,50 @@ public class WarpSpanExporter(
             is ClockRecovery.Undecodable -> persistence.recoveryFailed(outcome.cause)
             is ClockRecovery.Refused -> persistence.recoveryFailed(outcome.cause)
         }
+    }
+
+    /** Make the read [clock] still needs, and return its refusal, or `null` when it landed or was not needed. */
+    private suspend fun retryClockRead(clock: WarpCausalClock): Throwable? {
+        val outcome = clock.retryRecovery(store)
+        clockRecovered(outcome)
+        return (outcome as? ClockRecovery.Refused)?.cause
+    }
+
+    /**
+     * Persist [clock] ahead of the span write, and return why the turn's clock work failed though
+     * nothing threw: a skipped write, with [refusal] as the cause (#3426), or `null` once the write
+     * lands. A refused write throws.
+     *
+     * [refusal] is this turn's retry of the clock's read, which every turn makes while the clock is
+     * unarmed. So a skip always has one: a read that lands arms the clock, nothing disarms it, and a
+     * clock the retry found armed was armed already. A skip without one would be a bug here, and it
+     * throws, which fails the whole turn closed.
+     */
+    private suspend fun persistClock(clock: WarpCausalClock, refusal: Throwable?): Throwable? =
+        when (clock.persist(store)) {
+            ClockPersist.Unrecovered -> checkNotNull(refusal) { "otel.causal.clock: skipped its write with no refused read this turn" }
+            ClockPersist.Persisted -> null
+        }
+
+    /**
+     * Count one write turn in [health], per work key (#3426). A turn whose writes all ran counts once,
+     * over the span's key and a configured clock's together, as [writeFailure] says. A turn that
+     * skipped the clock's write, or that wanted a dot from an exhausted clock and saved its span
+     * unstamped ([clockFailure] is why), counts its span work by [writeFailure] and its clock work as a
+     * failed turn under the clock's key alone. So a clock refused forever stays outstanding however
+     * many spans land, and exhaustion counts once per span that wanted a dot. The first turn after
+     * either that lands the clock's write and wanted no dot it could not get resolves them: a span with
+     * its own stamp, or a clear. The span work is counted last, so [PersistenceHealth.lastFailure]
+     * names a refused write over a clock failure.
+     */
+    private fun countTurn(writeFailure: Throwable?, clockFailure: Throwable?) {
+        val work = if (clockFailure == null) {
+            clockAndSpanWork
+        } else {
+            persistence.failed(clockWork, clockFailure)
+            spanWork
+        }
+        if (writeFailure == null) persistence.acknowledged(work) else persistence.failed(work, writeFailure)
     }
 
     /**
@@ -208,6 +259,11 @@ public class WarpSpanExporter(
 
     private companion object {
         private val STORE_KEY = StoreKey("otel.spans")
+
+        /** The cause a turn that wanted a dot from an exhausted clock is counted with: it had none left. */
+        private fun exhaustedClock(): Throwable =
+            IllegalStateException("otel.causal.clock: seq is Long.MAX_VALUE, so spans are saved unstamped")
+
         // alwaysUseByteString ensures traceId/spanId bytes are encoded as CBOR
         // major type 2 (byte string) rather than an array of integers, halving the
         // wire size vs. the default array encoding.
@@ -340,7 +396,8 @@ public class WarpSpanExporter(
      * always wins. Until the clock's recovery read has landed (refused, or never made), each
      * export makes that read first; until it lands the span is saved **unstamped** and the
      * clock's entry is not written, so no dot already in the store is minted again (#3390). The
-     * turn then counts only the span's write in [health].
+     * turn then counts in [health] per work key: the span's write as it went, and the skipped clock
+     * write as a failed turn the first clock write that lands resolves (#3426).
      *
      * ## Crash-window invariant (#1053)
      *
@@ -397,18 +454,20 @@ public class WarpSpanExporter(
         // Auto-stamp causal context (#846): a configured clock fills an unstamped
         // span so causal links form with no caller change; an explicit stamp wins.
         val clock = causalClock?.takeIf { span.causalStamp == null }
-        // A clock whose recovery read has not landed (refused, or never made) makes it first (#3390).
+        // A configured clock whose recovery read has not landed (refused, or never made) makes it first
+        // (#3390), whatever the span's stamp: the turn writes the clock either way, so an explicitly
+        // stamped span that skipped the read would count a clock failure its turn never retried (#3426).
         // The read holds ioMutex, the section every clock persist runs in, so it never reads past a
         // write this exporter is making.
-        if (clock != null && !clock.isArmed) ioMutex.withLock { clockRecovered(clock.retryRecovery(store)) }
+        val clockRefusal = causalClock?.takeIf { !it.isArmed }?.let { ioMutex.withLock { retryClockRead(it) } }
         // A recovered exporter stamps and adds before the write section, as it always has, in one hold
         // of `lock`: the read that made it recovered raised the clock's floor under that lock first, so
         // the stamp is above every stamp the stored spans carry (#3407). One whose read has not landed
         // stamps and adds nothing yet: the add would reuse a dot a stored span holds (#3390), and the
         // stamp could re-mint one a stored span carries, so both wait for the read inside the section.
         // `null` until this export has stamped.
-        var stamped: SpanRecord? = lock.withLock {
-            if (readState == SpanReadState.Recovered) stampOf(span, clock).also(::insert) else null
+        var stamped: Stamping? = lock.withLock {
+            if (readState == SpanReadState.Recovered) stampOf(span, clock).also { insert(it.span) } else null
         }
         val addedEarly = stamped != null
         // Serialize the durable-write section across concurrent export()/merge() so the
@@ -418,7 +477,8 @@ public class WarpSpanExporter(
                 // Never write over spans a refused read missed (#3390). A refusal leaves nothing to
                 // undo: the span was neither stamped nor added.
                 readBeforeWrite()?.let { return@withLock it }
-                var work = clockAndSpanWork
+                // Why this turn's clock work failed though its writes ran, or `null` when it did not.
+                var clockFailure: Throwable? = null
                 val written = try {
                     // Re-encode the *latest* spans inside the section so no concurrent add is
                     // dropped by a stale snapshot; encoding before the persist keeps the
@@ -431,14 +491,17 @@ public class WarpSpanExporter(
                         // export can already add before the section, and at the cap that add could
                         // evict this span between a separate add and encode, leaving a Success for a
                         // span the snapshot never carried.
-                        if (!addedEarly) stamped = stampOf(span, clock).also(::insert)
+                        if (!addedEarly) stamped = stampOf(span, clock).also { insert(it.span) }
                         cbor.encodeToByteArray(spanSerializer, spans)
                     }
                     // Persist the clock BEFORE the span so the durable clock seq is always ≥
                     // every durable span's dot — a crash between the two writes can only lose
                     // the span, never re-mint its dot on recover (#1053). An unrecovered clock
-                    // writes nothing, and no dot in this snapshot came from it (#3390).
-                    if (causalClock?.persist(store) == ClockPersist.Unrecovered) work = spanWork
+                    // writes nothing, and no dot in this snapshot came from it (#3390). A turn that
+                    // wanted a dot from an exhausted clock writes the clock, and still failed its clock
+                    // work: its span is saved unstamped (#3426).
+                    clockFailure = causalClock?.let { persistClock(it, clockRefusal) }
+                        ?: if (stamped?.exhausted == true) exhaustedClock() else null
                     store.write(STORE_KEY, encoded)
                     Result.success(Unit)
                 } catch (cause: Throwable) {
@@ -449,13 +512,13 @@ public class WarpSpanExporter(
                 }
                 written.fold(
                     onSuccess = {
-                        persistence.acknowledged(work)
+                        countTurn(writeFailure = null, clockFailure)
                         durableWriteSucceeded()
                         ExportResult.Success
                     },
                     onFailure = { cause ->
-                        persistence.failed(work, cause)
-                        stamped?.let { rollBackMinted(span, it) }
+                        countTurn(writeFailure = cause, clockFailure)
+                        stamped?.let { rollBackMinted(span, it.span) }
                         // Roll back before the outage report; the health count above records the turn
                         // either way. The caller's own cancellation propagates past this fold, so it is
                         // counted as neither acknowledged nor failed; reporting only opens an outage once.
@@ -471,7 +534,7 @@ public class WarpSpanExporter(
             // it stamped holds `null` and has nothing to remove; stamping and adding share one hold of
             // `lock`, so a stamped value was added. The removal takes no suspension point, so it
             // completes while this coroutine is cancelled.
-            stamped?.let { rollBackMinted(span, it) }
+            stamped?.let { rollBackMinted(span, it.span) }
             throw cancelled
         }
     }
@@ -479,12 +542,14 @@ public class WarpSpanExporter(
     /**
      * [span] stamped by [clock], or [span] itself when there is no clock to stamp it (none
      * configured, or the span's explicit stamp wins), or when [clock] is unrecovered or exhausted and mints
-     * nothing, so the span is saved unstamped (#3390). Called with [lock] held, so a recovered
-     * exporter mints only above the floor its landing read raised (#3407).
+     * nothing, so the span is saved unstamped (#3390). Only an exhausted tick marks the [Stamping]
+     * exhausted: the turn that mints the last dot got one (#3426). Called with [lock] held, so a
+     * recovered exporter mints only above the floor its landing read raised (#3407).
      */
-    private fun stampOf(span: SpanRecord, clock: WarpCausalClock?): SpanRecord = when (val tick = clock?.tick()) {
-        is ClockTick.Minted -> span.copy(causalStamp = tick.stamp)
-        ClockTick.Unrecovered, ClockTick.Exhausted, null -> span
+    private fun stampOf(span: SpanRecord, clock: WarpCausalClock?): Stamping = when (val tick = clock?.tick()) {
+        is ClockTick.Minted -> Stamping(span.copy(causalStamp = tick.stamp), exhausted = false)
+        ClockTick.Exhausted -> Stamping(span, exhausted = true)
+        ClockTick.Unrecovered, null -> Stamping(span, exhausted = false)
     }
 
     /**
@@ -627,9 +692,9 @@ public class WarpSpanExporter(
         readBeforeWrite()?.let { return@withLock it }
         // A clock whose recovery read has not landed (refused, or never made) is read here too, so a
         // clear is not the turn that writes a `seq` below the durable one (#3390). Still refused,
-        // the clear writes the spans and leaves the clock's entry alone.
-        causalClock?.let { clockRecovered(it.retryRecovery(store)) }
-        var work = clockAndSpanWork
+        // the clear writes the spans and leaves the clock's entry alone, a failed clock turn (#3426).
+        val clockRefusal = causalClock?.let { retryClockRead(it) }
+        var clockFailure: Throwable? = null
         val written = try {
             val encoded = lock.withLock {
                 spans = spans.piece { it.removeAll(it.elements) }
@@ -642,7 +707,7 @@ public class WarpSpanExporter(
             // `seq` is deliberately untouched; see WarpCausalClock.clearFrontier.
             causalClock?.clearFrontier()
             // Clock before spans, the same order and for the same reason as export() (#1053).
-            if (causalClock?.persist(store) == ClockPersist.Unrecovered) work = spanWork
+            clockFailure = causalClock?.let { persistClock(it, clockRefusal) }
             store.write(STORE_KEY, encoded)
             Result.success(Unit)
         } catch (cause: Throwable) {
@@ -652,12 +717,12 @@ public class WarpSpanExporter(
         }
         written.fold(
             onSuccess = {
-                persistence.acknowledged(work)
+                countTurn(writeFailure = null, clockFailure)
                 durableWriteSucceeded()
                 ExportResult.Success
             },
             onFailure = { cause ->
-                persistence.failed(work, cause)
+                countTurn(writeFailure = cause, clockFailure)
                 durableWriteFailed(cause) {
                     logger.error(it) { "WarpSpanExporter: durable write failed during clear" }
                 }
@@ -747,6 +812,12 @@ public sealed interface ExportResult {
     /** The durable write failed; whether the span was persisted is indeterminate. */
     public data class Failure(public val cause: Throwable) : ExportResult
 }
+
+/**
+ * The span one export saves, and whether it wanted a dot from an exhausted clock and so saves it
+ * unstamped: the one case of a landed clock write whose clock work still failed (#3426).
+ */
+private class Stamping(val span: SpanRecord, val exhausted: Boolean)
 
 /** Whether a [WarpSpanExporter] has read its stored spans. */
 private sealed interface SpanReadState {

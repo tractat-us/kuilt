@@ -285,7 +285,8 @@ public sealed interface ClockTick {
     /**
      * Every dot is used: `seq` is `Long.MAX_VALUE`, so it minted nothing. An honest clock never gets
      * here. A floor raised from a stored span that claims this replica's last dot does (#3407), and
-     * the clock then stays exhausted, so a [WarpSpanExporter] saves every later span unstamped.
+     * the clock then stays exhausted, so a [WarpSpanExporter] saves every later span unstamped, and
+     * counts each export that wanted a dot as a failed clock turn in its [WarpSpanExporter.health].
      */
     public data object Exhausted : ClockTick
 }
