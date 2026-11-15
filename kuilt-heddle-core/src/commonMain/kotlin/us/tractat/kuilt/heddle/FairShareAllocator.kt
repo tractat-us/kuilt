@@ -412,10 +412,13 @@ public class FairShareAllocator(
      * lands about `k · R` up its own grid, `k` the weight ratio, which is past its ceiling for `k > 16`.
      *
      * `Δ` is bounded by the smallest effective virtual time among the demanding children that are
-     * not joining, or, with none, by the front itself: every joiner lands at the front, at or above
-     * that bound, so no demanding child goes below zero. It is a multiple of the same step as the
-     * post-grant raise, over every child, unseated ones included, so every seat and clamp lands at
-     * exactly the absolute position it would have without the raise.
+     * not joining, or, with none, by the front itself: every newborn and clamped waker lands at the
+     * front, at or above that bound, so none of them goes below zero. A returner moved by its
+     * parent's clock (#3376) lands as far behind its siblings as it left, so one that left owed can
+     * land below zero by that lag; it is served first, and the next raise waits until it climbs.
+     * It is a multiple of the same step as the post-grant raise, over every child, unseated ones
+     * included, so every seat, clamp and return lands at exactly the absolute position it would have
+     * without the raise.
      */
     private fun preSeatRaise(s: EntitlementLedger, parent: GroupId, demand: (AttachmentId) -> Demand): Int128? {
         if (!rebaseEnabled) return null
