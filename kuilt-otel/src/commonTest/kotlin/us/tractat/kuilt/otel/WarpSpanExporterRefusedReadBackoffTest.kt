@@ -546,6 +546,39 @@ class WarpSpanExporterRefusedReadBackoffTest {
             { assertTrue(stillSkips, "a cancelled export spent the clock's window") },
         )
     }
+
+    /**
+     * A recovered exporter tries its add before the write section, and at the span set's clock ceiling
+     * (#3441) that add is refused and the export returns there. The clock's skip was already decided,
+     * so the refused export must spend it too: otherwise every later export decides the same window
+     * again, and the clock is never read for as long as the set stays at the ceiling.
+     */
+    @Test
+    fun anExportRefusedAtTheSetsCeilingSpendsTheClocksSkip() = runTest {
+        val (store, clock, exporter) = clockOutage() // the clock refused 1: a window of 1
+        val merged = exporter.merge(spanSetAtTheCeiling(exporter.snapshot(), replica))
+        val clockReadsAfterMerge = store.readsOf(clockKey)
+
+        val turns = 100
+        val read = mutableListOf<Boolean>()
+        val results = (0 until turns).map { turn ->
+            val before = store.readsOf(clockKey)
+            exporter.export(span(10 + turn)).also { read += store.readsOf(clockKey) > before }
+        }
+
+        assertAll(
+            { assertEquals(ExportResult.Success, merged, "the rig's merge did not land") },
+            { assertEquals(1, clockReadsAfterMerge, "precondition: the clock was not read once, by its recover") },
+            {
+                assertTrue(
+                    results.all { it is ExportResult.Failure && it.cause is ArithmeticException },
+                    "precondition: an export was not refused at the set's ceiling: ${results.toSet()}",
+                )
+            },
+            { assertEquals(expectedReads(turns), read, "an export refused at the ceiling did not spend the clock's skip") },
+            { assertTrue(!clock.isArmed, "the clock armed without a read") },
+        )
+    }
 }
 
 /**
