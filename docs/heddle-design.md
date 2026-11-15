@@ -1058,14 +1058,9 @@ the second.
    full, run 524,287 leases, and the next `acquire` throws
    `ArithmeticException` from the mint. Charged one unit each they run
    1,048,574, and the edge's issuance throws. Step B does not create this
-   limit. It makes it the only one, so it gets the typed arm the ceiling had.
-   A choosing call (`acquire`, `extend`, `schedule`) whose delegation would
-   take a lifetime counter past `Long` answers `LifetimeExhausted(parent)` and
-   changes nothing. A charging call (`admit`, a `complete` that overran) may
-   not refuse and still throws there, never wraps (§10.12). The four
-   `PositionCeiling` arms (`AcquireOutcome`, `LeaseOutcome`, `WaitExplanation`,
-   and `AllocationOutcome` with `ScheduleOutcome`) are renamed to it, not
-   deleted.
+   limit. It makes it the only one, so it gets the typed arm the ceiling had,
+   on the calls that pick, and no call throws there any more. "The lifetime
+   limit" below is the whole rule.
 2. **128 bits, which the weight budget puts out of reach (W1).** With the
    counters in range, the virtual time under a parent never passes about
    `2⁶⁴ · Σ⌈1/wᵢ⌉`: each unit of an edge's service moves that edge by `1/wᵢ`
@@ -1085,6 +1080,127 @@ Why the lease clause cannot simply vanish: its cap on denominators is also what
 keeps the clock inside 128 bits today. The clock was never rebased. A lone
 child of weight `1/d` runs it `d · 2²⁴` ticks a unit, which leaves 128 bits
 inside the counters for `d` above about `2⁴⁰`.
+
+**The lifetime limit.** Ruled by @keddie, 2026-11-15 (#3475): a new lease is
+refused a little before a counter runs out, and work that is already running
+is never refused and never throws.
+
+*In plain terms.* A scheduler that has handed out nearly all the service its
+books can count stops opening new leases, and says so with a typed answer the
+caller can act on: leave the work queued. The leases already open go on
+extending and settling in the room that was kept back for them. A refusal at
+`complete` would be useless, since the time is already spent, so there is none.
+
+*Which counters.* Read from the source, not from the list above. A charge
+advances two `Long`s that nothing else bounds:
+
+- **An edge's effective issuance,** `issued + issuedRelocIn`, summed over
+  replicas. Every reservation, extension and overrun adds to it on every edge
+  of its path. It counts what was reserved, not what was used: a returned
+  remainder is counted again when it is next handed down.
+- **The root's minted supply,** the sum of every epoch's mint record. It grows
+  by what is charged, plus the float a top-up keeps. An epoch's own total is
+  not the limit: `holdings` at the root adds all of them, so a restore under
+  a new epoch carries the old total with it.
+
+Everything else a charge moves is bounded by one of those two, so it needs no
+check of its own: an edge's `returned`, `leafSpent` and `rollupSpent` never pass
+its issuance (§10.3), a gauge's fold is its issuance, a lease's `reserved` is
+part of its leaf edge's issuance, and the allocator's net-service clock reads
+issuance less returns. A gauge's position is 128-bit (W1). The lease sequence
+grows by one a lease.
+
+*The rule for a pick.* `LIFETIME_HEADROOM` is `2⁵⁸` units, and the watermark is
+`Long.MAX_VALUE` less that. A pick may not move a lifetime counter past the
+watermark:
+
+- `LocalHeddle.acquire` answers `AcquireOutcome.LifetimeExhausted(parent)` when
+  the reservation would carry an edge of the path it picked past the
+  watermark. `parent` is the group above that edge. It answers
+  `LifetimeExhausted(root)` when the root cannot fund the reservation without
+  minting past it; a top-up is trimmed to the watermark first, so the float is
+  never what refuses. Either way nothing changes but the wake memory, as for
+  `NoLiveLineage`.
+- The refusal belongs to the path, not the parent. A sibling whose own edge has
+  room is still picked when the full lane is not eligible. While the full lane
+  is eligible and next in line, each `acquire` there answers the same refusal:
+  a refusal changes nothing, so the pick does not move on. `explain` names the
+  group for each leaf behind it, as `WaitExplanation.LifetimeExhausted`.
+- `FairShareAllocator.schedule`, and so `HeddleNode.schedule`, answers
+  `LifetimeExhausted(parent)` the same way, on this peer's view, in place of
+  the throw. As with `WeightBudget`, a first round that refuses writes
+  nothing, and a refusal after grants answers `Delegated` and keeps them.
+
+*The rule for a charge.* `admit`, `extend` and `complete` have no lifetime arm
+to return: `LeaseOutcome.PositionCeiling` is deleted, not renamed, and
+`AdmitOutcome` never had one. They use the headroom, up to `Long.MAX_VALUE`
+itself. A charge that still does not fit is **recorded whole or not at all**,
+level by level, and the call lands:
+
+- An overrun at `complete` goes down the path as far as it fits in whole and is
+  charged at the deepest group it reaches. That is the rule a draining path
+  already follows, with "has no room" beside "is not ACTIVE". The groups above
+  a full edge still pay the true cost.
+- What the root cannot fund in whole is not recorded. `LeaseOutcome.Done` gains
+  a required `unrecorded: Long`, and `charged` is then the cost less that. The
+  lease closes either way. The same field reports an overrun dropped because
+  the root's own child edge is draining, which `Done` reports as charged today.
+- An extension or an admission that does not fit reserves nothing. `extend`
+  answers `Done` with `unrecorded` the amount. `admit` opens the lease with
+  `reserved` zero, so the cost arrives as an overrun when it completes.
+
+No counter is ever filled to its limit with part of a charge, and none
+saturates. A saturated counter would break conservation, since the edges of
+one path would no longer agree on what crossed them. Trimming the whole charge
+to the tightest edge would keep conservation and hand every group above that
+edge credit it could spend on its other children. And filling the root's
+supply to the brim lets one wrong argument end the engine:
+`complete(lease, Long.MAX_VALUE)` on a healthy scheduler would mint to the
+limit, and every later `acquire` would be refused. Whole-or-nothing records the
+reservation, reports the rest, and the scheduler carries on (§10.1, §10.12).
+
+Where a charge is not recorded, the lane it ran on has had service its
+position does not show. That is credit, the favour side, and it cannot be
+spent on a pick: the only way to spend it is an `acquire` across the full
+edge, which is refused. It reaches one place, the parent's net-service clock,
+which runs short by the overrun, so a sibling returning there comes back that
+much less moved. A draining path has the same effect today.
+
+*What the headroom promises.* Unconditionally: no call throws or wraps at a
+lifetime counter, an `acquire` never leaves one past the watermark, and
+conservation holds. Conditionally: every charge is recorded in full while the
+extensions, admissions and overruns that land on a counter after its last
+`acquire` add up to no more than the headroom. No fixed margin can promise
+more, because those calls are not refused and an overrun is any `Long`. Past
+it, a charge reports `unrecorded`. A caller that only ever admits is never
+refused, and has only the report.
+
+*Why `2⁵⁸`.* The counters count reservations, so a margin is paid for in
+leases, and a caller with large reservations feels it:
+
+| Headroom | Leases an edge takes at `MAX_RESERVATION` | At one hour in nanoseconds | Charges of `MAX_RESERVATION` it absorbs |
+|---|---|---|---|
+| none (today, then a throw) | 524,287 | 2.56 million | none |
+| `2⁵⁸` | about 507,900 | 2.48 million | 16,384 |
+| `2⁶¹` | about 393,200 | 1.92 million | 131,072 |
+| `2⁶²` | about 262,100 | 1.28 million | 262,144 |
+
+`2⁵⁸` costs one lease in 32 and absorbs 16,384 charges of the largest size,
+or about 80,000 hour-long ones in nanoseconds. `2⁶²`, the first figure
+discussed, costs half the run. A margin tied to what is outstanding under the
+edge would move with every completion, would refuse and then accept the same
+call, and would still promise nothing about an overrun. One constant is a
+rule two peers evaluate alike.
+
+*Replication.* Nothing new goes on the wire and no slot is ever written
+clamped. `HeddleNode` needs no charge rule: its `complete` charges at most what
+was reserved, so it only moves counters that issuance already bounds. An
+edge's issuance is a sum over replicas, so peers that grant one edge before
+their writes merge each check their own view, and the merged sum can pass the
+watermark. The headroom is what absorbs that: 16,384 grants of the largest
+size, unmerged, on one edge. Past `Long` the sum still throws when read,
+never wraps, as any state this module did not build does. A mint the control
+log applies is an act, not a charge, and this entry does not change it.
 
 **The public reads become wide.** `virtualService`, `grossVirtualService`,
 `HeddlePolicy.front`, `FairShareAllocator.virtualTime`,
