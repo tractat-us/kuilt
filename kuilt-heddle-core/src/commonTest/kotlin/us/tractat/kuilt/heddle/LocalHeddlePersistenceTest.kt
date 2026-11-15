@@ -27,8 +27,8 @@ import kotlin.test.fail
 
 /**
  * [LocalHeddle.persist], [LocalHeddle.restore] and [LocalHeddle.decode] (#3173, plan Task P with
- * Amendments 7–10). This release writes format 2, pinned by [GOLDEN_FORMAT_2], and still reads
- * format 1, which v0.7.4 wrote: [GOLDEN_FORMAT_1] and its siblings are decode-only.
+ * Amendments 7–10). This release writes format 2, pinned by [GOLDEN_FORMAT_2], and reads only
+ * format 2: format 1, which v0.7.4 wrote, is refused by name (#3353).
  */
 class LocalHeddlePersistenceTest {
 
@@ -403,9 +403,9 @@ class LocalHeddlePersistenceTest {
      * waiting. `light` left half a unit behind, so it comes back half a unit behind and takes the
      * next pick, exactly as the engine that never restarted does.
      *
-     * The control restores the same snapshot without the clock memory, as a format-1 snapshot
-     * restores: `light` is then a waker this peer never saw leave, clamped level with `heavy`, and
-     * `heavy` takes the next pick on its deadline.
+     * The control restores the same snapshot without the clock memory: `light` is then a waker
+     * this peer never saw leave, clamped level with `heavy`, and `heavy` takes the next pick on its
+     * deadline. So the clock the snapshot keeps is what puts `light` back where it was.
      */
     @Test
     fun aSnapshotTakenWhileAChildIsAwayKeepsItsPlace() {
@@ -439,41 +439,6 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
-     * Format 1, as checked in. A later release must still decode it ([SUPPORTED_FORMAT_VERSIONS]),
-     * and an engine restored from it carries on as the engine that wrote it would have, had that
-     * engine kept no net-service clock: format 1 predates the clock (#3376).
-     */
-    @Test
-    fun previousFormatRestores() {
-        val snapshot = decoded(GOLDEN_FORMAT_1)
-        val restored = LocalHeddle.restore(snapshot, policy, epoch = snapshot.epoch + 1)
-        val (reference, open) = wakerScenario()
-        val clockless = LocalHeddle.restore(reference.persist().withoutNetClocks(), policy, epoch = snapshot.epoch + 1)
-        assertAll(
-            { assertEquals(open, snapshot.leases, "the golden holds the scenario's open leases") },
-            { assertTrue(wakeOffsetOf(snapshot.allocatorMemory, b) > Int128.ZERO, "and b's wake offset") },
-            { assertEquals(continuation(clockless, open), continuation(restored, open)) },
-            { assertEquals(books(clockless), books(restored)) },
-        )
-    }
-
-    /**
-     * Format 1 and format 2 hold one snapshot of the waker scenario. Format 1 stores each position in
-     * a gauge's floor, as v0.7.4 wrote it; format 2 stores it in the gauge's ticks (#3353). Read
-     * as ticks, the two are equal: the change is in where a position is kept, not in what it is.
-     * Format 2 also keeps the net-service clock, which format 1 predates (#3376).
-     */
-    @Test
-    fun formatOneAndFormatTwoGoldensHoldTheSameSnapshot() {
-        assertAll(
-            { assertTrue(GOLDEN_FORMAT_2.startsWith("[2,") && GOLDEN_FORMAT_1.startsWith("[1,"), "the rig: one golden per format") },
-            { assertTrue(decoded(GOLDEN_FORMAT_1) != decoded(GOLDEN_FORMAT_2), "the rig: format 1 keeps floors, format 2 ticks") },
-            { assertTrue(decoded(GOLDEN_FORMAT_2).allocatorMemory.clocks.isNotEmpty(), "the rig: format 2 keeps a clock") },
-            { assertEquals(decoded(GOLDEN_FORMAT_1).withGaugesAsTicks(), decoded(GOLDEN_FORMAT_2).withoutNetClocks()) },
-        )
-    }
-
-    /**
      * The format this release writes is pinned: the scenario encodes to the golden, byte for byte.
      * A change to any serializer inside a snapshot, the ledger's, the allocator memory's and the
      * topology's included, reds here, and then the choice is deliberate. Before format 2 has
@@ -490,9 +455,8 @@ class LocalHeddlePersistenceTest {
 
     /**
      * The current format is pinned in CBOR too, both ways: the JSON golden's snapshot encodes to the
-     * CBOR golden byte for byte, and the CBOR golden decodes to that snapshot. Format 1's CBOR golden
-     * still decodes to the same snapshot. The same choice as [theCurrentFormatEncodesToItsGolden]
-     * applies when it reds.
+     * CBOR golden byte for byte, and the CBOR golden decodes to that snapshot. The same choice as
+     * [theCurrentFormatEncodesToItsGolden] applies when it reds.
      */
     @OptIn(ExperimentalSerializationApi::class)
     @Test
@@ -502,10 +466,6 @@ class LocalHeddlePersistenceTest {
         assertAll(
             { assertEquals(GOLDEN_FORMAT_2_CBOR, hex, "format 2 changed in CBOR; the encoding is now:\n$hex\n") },
             { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_2_CBOR), Cbor)) },
-            {
-                val formatOne = assertIs<RestoreResult.Restored>(LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_1_CBOR), Cbor)).snapshot
-                assertEquals(snapshot.withoutNetClocks(), formatOne.withGaugesAsTicks(), "format 1's CBOR still reads")
-            },
         )
     }
 
@@ -569,7 +529,7 @@ class LocalHeddlePersistenceTest {
     private val richLeaves = setOf(richBefore.groupId("acme", "interactive"), richBefore.groupId("acme", "batch", "x"), richBefore.groupId("acme", "batch", "y"), tenant)
 
     /**
-     * The shapes format 1's envelope and topology have to carry; the ledger's own maps are pinned
+     * The shapes the envelope and topology have to carry; the ledger's own maps are pinned
      * in `:kuilt-heddle`'s `EntitlementLedgerCanonicalEncodingTest`. `t1` is attached under `tenants`; leases open at
      * `acme/interactive`, `spare`, `t1` and `acme/batch/x`; a reload reweights `acme`, moving the two
      * leases under it onto its new edge, and removes `spare`, which drains with its lease open; the
@@ -615,8 +575,8 @@ class LocalHeddlePersistenceTest {
      * The rich scenario, then a second attached child `t2` attached under `tenants`, leased, settled
      * and detached, so its edge retires with its books closed, then a reload that changes only
      * ceilings ([richCapped]), which moves no edge. With [forgets], the detach's own swap forgets
-     * that edge, and prunes it from the allocator's memory. What format 2 adds over format 1: the
-     * fold (#3192) and the ceilings (#3324). Returns that engine and its open leases.
+     * that edge, and prunes it from the allocator's memory. So the snapshot carries the fold
+     * (#3192) and the ceilings (#3324) too. Returns that engine and its open leases.
      */
     private fun richFoldedScenario(forgets: Boolean): Pair<LocalHeddle, List<Lease>> {
         val (h, open) = richScenario(forgets)
@@ -724,26 +684,6 @@ class LocalHeddlePersistenceTest {
         )
     }
 
-    /** Format 1 predates the fold, so a format-1 snapshot that carries one is corrupt. */
-    @Test
-    fun aFormatOneSnapshotCannotCarryAFold() {
-        // Format 1 wrote each wake clamp as a virtual time, so the clamps go back to that shape too (#3353).
-        val wide = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{},\"root/acme/batch@1:1#0\":{\"low\":32},\"root/tenants@1:1#0\":{\"low\":83}}"
-        val virtual = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{\"numerator\":0,\"denominator\":1}," +
-            "\"root/acme/batch@1:1#0\":{\"numerator\":2,\"denominator\":1},\"root/tenants@1:1#0\":{\"numerator\":83,\"denominator\":16}}"
-        check(wide in GOLDEN_FORMAT_2_RICH) { "the rig: format 2's clamps are where this test expects them" }
-        // Format 1 predates the net-service clock (#3376) too: its maps, the memory's last three, go.
-        val clockStart = GOLDEN_FORMAT_2_RICH.indexOf(",\"clocks\":")
-        val memoryEnd = GOLDEN_FORMAT_2_RICH.indexOf("},\"leases\":")
-        check(clockStart in 0 until memoryEnd) { "the rig: format 2's clock is where this test expects it" }
-        val text = GOLDEN_FORMAT_2_RICH.removeRange(clockStart, memoryEnd).replaceFirst("[2,", "[1,").replace(wide, virtual)
-        val out = LocalHeddle.decode(text, Json)
-        assertAll(
-            { assertTrue(text.startsWith("[1,") && "\"forgotten\":" in text, "the rig: format 1 with a fold") },
-            { assertTrue(out is RestoreResult.Corrupt && "format 1 predates" in out.reason, "expected Corrupt naming format 1, got $out") },
-        )
-    }
-
     /**
      * A wake clamp past `Long` survives a persist, a decode and a restore exactly (#3353 review,
      * item F): one past 2⁶⁴ ticks, whose high word is set, and one whose low word has its top bit
@@ -820,56 +760,15 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
-     * The rich scenario as format 1, on the 1/16-unit grid (#3313): never written by a release, but
-     * the same snapshot the current format writes, less the net-service clock format 1 predates
-     * (#3376), and an engine restored from it carries on exactly as one restored from that.
-     */
-    @Test
-    fun richFormatOneOnTheGridStillRestoresAndCarriesOn() {
-        val (reference, open) = richScenario()
-        val snapshot = decoded(GOLDEN_FORMAT_1_RICH_GRID)
-        val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
-        val clockless = reference.persist().withoutNetClocks()
-        assertAll(
-            { assertTrue(GOLDEN_FORMAT_1_RICH_GRID.startsWith("[1,"), "the rig: format 1") },
-            { assertEquals(clockless, snapshot.withGaugesAsTicks(), "the same snapshot the current format writes, read as ticks") },
-            {
-                val expected = LocalHeddle.restore(clockless, richPolicy, epoch = snapshot.epoch + 1)
-                assertEquals(richContinuation(expected, open), richContinuation(restored, open))
-            },
-        )
-    }
-
-    /**
-     * The rich snapshot **v0.7.4 wrote**, byte for byte, still decodes and restores, and the engine
-     * carries on from it through the same drain and reload. Its seat and one wake offset sit off the
-     * 1/16-unit grid (#3313); this engine reads each up to the grid once, so the continuation is not
-     * byte-identical to one from [GOLDEN_FORMAT_1_RICH_GRID], but every call in it completes.
-     */
-    @Test
-    fun richFormatOneThatV074WroteStillRestoresAndCarriesOn() {
-        val (reference, open) = richScenario()
-        val shipped = decoded(GOLDEN_FORMAT_1_RICH)
-        val offGrid = shipped.ledger.gauge(AttachmentId("root/acme@5:2#2"))?.floor
-        val restored = LocalHeddle.restore(shipped, richPolicy, epoch = shipped.epoch + 1)
-        val carriedOn = richContinuation(restored, open)
-        assertAll(
-            // The rig: the shipped bytes really are the pre-grid values.
-            { assertEquals(Rational.of(116L, 15L), offGrid) },
-            { assertEquals(richContinuation(reference, open).size, carriedOn.size, "every call of the continuation ran") },
-        )
-    }
-
-    /**
-     * This release writes format 2 and reads formats 1 and 2 (#3192). Format 3 is a later
-     * release's, refused by name with nothing past the version read.
+     * This release writes and reads format 2 alone (#3353). Format 3 is a later release's, refused
+     * by name with nothing past the version read.
      */
     @Test
     fun unsupportedVersionIsNamed() {
-        val later = GOLDEN_FORMAT_1.replaceFirst("[1,", "[3,")
-        val supported = listOf(1, 2)
+        val later = GOLDEN_FORMAT_2.replaceFirst("[2,", "[3,")
+        val supported = listOf(2)
         assertAll(
-            { assertTrue(later != GOLDEN_FORMAT_1, "the rig: the version was rewritten") },
+            { assertTrue(later != GOLDEN_FORMAT_2, "the rig: the version was rewritten") },
             { assertEquals(RestoreResult.UnsupportedVersion(3, supported), LocalHeddle.decode(later, Json)) },
             { assertEquals(RestoreResult.UnsupportedVersion(0, supported), LocalHeddle.decode("""[0,{}]""", Json)) },
             {
@@ -888,8 +787,8 @@ class LocalHeddlePersistenceTest {
     /**
      * Format 1, which v0.7.4 wrote, is refused by name, in JSON and in CBOR, with nothing past the
      * version read (#3353): this release reads only snapshots it wrote itself, and a consumer coming
-     * from v0.7.4 starts from its topology again. The state is format 2's, under a 1, so the refusal
-     * cannot come from a state a format-1 reader would fail on.
+     * from v0.7.4 starts from its topology again. The state under the 1 is format 2's own, so only
+     * the version can refuse it.
      */
     @OptIn(ExperimentalSerializationApi::class)
     @Test
@@ -908,7 +807,7 @@ class LocalHeddlePersistenceTest {
 
     @Test
     fun corruptBytesAreNamedNotThrown() {
-        assertAll(*(corruptionChecks(GOLDEN_FORMAT_1, version = 1) + corruptionChecks(GOLDEN_FORMAT_2, version = 2)).toTypedArray())
+        assertAll(*corruptionChecks(GOLDEN_FORMAT_2, version = 2).toTypedArray())
     }
 
     /** One check per way [golden], a snapshot of format [version], can be corrupted. */
@@ -1074,7 +973,7 @@ class LocalHeddlePersistenceTest {
                 if (step == cut) {
                     val persisted = subject.persist()
                     if (persisted.leases.isNotEmpty()) withLeasesOpen++
-                    if (persisted.allocatorMemory.wakeOffsets.values.any { it != Rational.ZERO }) withAWakeOffset++
+                    if (persisted.allocatorMemory.wakeOffsets.values.any { it != Int128.ZERO }) withAWakeOffset++
                     if (persisted.ledger.allEdges().any { persisted.ledger.lifecycle(it) == Lifecycle.CLOSING }) midDrain++
                     if (persisted.lastApplied != base) afterAReload++
                     if (persisted.leases.any { it.leaf.value.startsWith("root/r/") }) withAnAttachedLease++
