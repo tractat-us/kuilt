@@ -51,7 +51,31 @@ class W3461BootProbeTest {
                 "${g.value}=$edges${if (leased) "+lease" else ""}"
             }
             val refused = result.refusals.joinToString { "${it.child.value}:${(it as? StepRefusal.Refused)?.step?.let { s -> s::class.simpleName }}" }
-            println("W3461 [$name] fromTopology=$threw refused=[$refused] groups: $states")
+            println("W3461 [$name] fromTopology=$threw refused=[$refused] conflicts=${ledger.validate()} groups: $states")
+        }
+    }
+
+    private val reloads: List<Triple<String, Topology, Topology>> = listOf(
+        Triple("R1 new q{z=heavy,a=1/3}", draft("p") { lane("o") }, draft("p") { lane("o"); group("q") { lane("z", heavy); lane("a", Weight.of(1, 3)) } }),
+        Triple("R2 new q{a=heavy,z=1/3}", draft("p") { lane("o") }, draft("p") { lane("o"); group("q") { lane("a", heavy); lane("z", Weight.of(1, 3)) } }),
+        Triple("R3 add z=1/3 beside running a=heavy", draft("p") { lane("o"); group("q") { lane("a", heavy) } }, draft("p") { lane("o"); group("q") { lane("a", heavy); lane("z", Weight.of(1, 3)) } }),
+        Triple("R4 add a=1/3 beside running z=heavy", draft("p") { lane("o"); group("q") { lane("z", heavy) } }, draft("p") { lane("o"); group("q") { lane("z", heavy); lane("a", Weight.of(1, 3)) } }),
+        Triple("R5 new g=fine{x,y}", draft("p") { lane("a") }, draft("p") { group("g", fine) { lane("x"); lane("y") }; lane("a") }),
+    )
+
+    @Test
+    fun reloadProbe() {
+        for ((name, before, after) in reloads) {
+            val engine = LocalHeddle.fromTopology(before, policy, epoch = 0L)
+            val result = engine.apply(after, generation = 1L)
+            val ledger = engine.snapshot().ledger
+            val states = groups(after).joinToString(" ") { g ->
+                val edges = ledger.inboundEdges(g).map { ledger.lifecycle(it) }
+                val leased = engine.admit(g, startedAt = 0L) is AcquireOutcome.Acquired
+                "${g.value}=$edges${if (leased) "+lease" else ""}"
+            }
+            val refused = result.refusals.joinToString { "${it.child.value}:${(it as? StepRefusal.Refused)?.step?.let { s -> s::class.simpleName }}" }
+            println("W3461 [$name] refused=[$refused] conflicts=${ledger.validate()} groups: $states")
         }
     }
 }
