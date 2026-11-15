@@ -216,11 +216,16 @@ public sealed interface LeaseOutcome {
      *
      * [unrecorded] is `0` but in two cases. At [LocalHeddle.complete], it is an overrun with nowhere
      * to be charged: the root's own child edge on the path is draining (see "A draining path" on
-     * [LocalHeddle]), or no edge of the path has room for the overrun in whole, or the root cannot
-     * fund it in whole, within `Long` (see "The lifetime limit"). At [LocalHeddle.extend], it is an
-     * extension that does not fit a lifetime counter: the whole amount, with nothing changed, the
-     * lease and the wake memory included. The work goes on, and [LocalHeddle.complete] charges its
-     * cost as an overrun.
+     * [LocalHeddle]), or the overrun is above [LocalHeddle.MAX_RECORDED_OVERRUN], or no edge of the
+     * path has room for it in whole, or the root cannot fund it in whole, within `Long` (see "The
+     * lifetime limit"). At [LocalHeddle.extend], it is an extension that does not fit a lifetime
+     * counter: the whole amount, with nothing changed, the lease and the wake memory included. The
+     * work goes on, and [LocalHeddle.complete] charges its cost as an overrun.
+     *
+     * So the two do not mean the same thing. At [LocalHeddle.complete] [unrecorded] is cost that was
+     * spent and is recorded nowhere; at [LocalHeddle.extend] it is a reservation that was not made,
+     * and no cost at all. That work's cost arrives at its [LocalHeddle.complete], so a caller summing
+     * [unrecorded] over both calls counts it twice. Sum it over completions only.
      *
      * All three are `0` for a cancel, and for an extend that landed.
      */
@@ -404,8 +409,9 @@ public sealed interface LeaseOutcome {
  * [complete] use the headroom, up to `Long.MAX_VALUE` itself, and a charge that still does not fit
  * is recorded whole or not at all, never in part:
  * - an overrun at [complete] goes down the path as far as every edge has room for it in whole,
- *   and is charged at the deepest group it reaches, as on a draining path. What the root cannot
- *   fund in whole, or what no edge has room for, is reported in [LeaseOutcome.Done.unrecorded];
+ *   and is charged at the deepest group it reaches, as on a draining path. An overrun above
+ *   [MAX_RECORDED_OVERRUN], what the root cannot fund in whole, and what no edge has room for are
+ *   reported in [LeaseOutcome.Done.unrecorded];
  * - an [admit] that does not fit reserves nothing, and changes nothing but the lease it opens,
  *   with [Lease.reserved] `0`, so the cost arrives as an overrun when it completes;
  * - an [extend] that does not fit changes nothing, the wake memory included, and answers
@@ -416,9 +422,10 @@ public sealed interface LeaseOutcome {
  * side, but credit that cannot be spent on a pick, since the only way to spend it is an [acquire]
  * across the full counter, which is refused. The headroom holds 16,384 charges of
  * [MAX_RESERVATION] after a counter's last [acquire]; past that a charge is reported rather than
- * recorded. A charge that does fit can still fill a counter past the watermark for good: on an
- * engine whose only service is one lease, `complete(lease, Long.MAX_VALUE)` fits exactly, and every
- * later [acquire] is refused at the root. Charge what the work really ran.
+ * recorded. One absurd cost cannot end an engine: an overrun above [MAX_RECORDED_OVERRUN], half the
+ * headroom, is recorded nowhere, so `complete(lease, Long.MAX_VALUE)` reports its overrun and the
+ * next [acquire] leases, on a young engine as on an old one. An overrun within the cap leaves a
+ * counter past the watermark only when that counter was already within the cap of it.
  *
  * ## What it does not do
  *
@@ -864,9 +871,10 @@ public class LocalHeddle private constructor(
      * it. The reservation is still charged at the leaf, and the overrun is charged at the deepest
      * group of the path that ACTIVE edges still reach from the root (see "A draining path" in the
      * class KDoc). An edge with no room for the whole overrun within `Long` stops it the same way
-     * (see "The lifetime limit"). Where no group below the root is reached, or the root cannot fund
-     * the overrun in whole, it is recorded nowhere and reported in [LeaseOutcome.Done.unrecorded],
-     * with [LeaseOutcome.Done.charged] the cost less that.
+     * (see "The lifetime limit"). Where no group below the root is reached, the overrun is above
+     * [MAX_RECORDED_OVERRUN], or the root cannot fund it in whole, it is recorded nowhere and
+     * reported in [LeaseOutcome.Done.unrecorded], with [LeaseOutcome.Done.charged] the cost less
+     * that. The reservation is charged at the leaf either way, and nothing else changes.
      *
      * @throws IllegalArgumentException when [actualCost] is negative.
      * @sample us.tractat.kuilt.heddle.sampleLocalLease
@@ -881,9 +889,10 @@ public class LocalHeddle private constructor(
         // it in whole, else the part above the first edge that is not or has not (#3475). Empty when
         // the root's own child edge is that edge.
         val reach = if (overrun == 0L) path else path.subList(0, ledger.firstClosedToIndex(path, overrun) ?: path.size)
-        val funding = if (overrun > 0L && reach.isNotEmpty()) fund(ledger, overrun) else null
-        // What the overrun is recorded down: [reach], unless the root cannot fund it in whole, when
-        // it is recorded nowhere. The lease still closes either way.
+        // An overrun above the cap is not funded, so it is recorded nowhere (#3475).
+        val funding = if (overrun in 1L..MAX_RECORDED_OVERRUN && reach.isNotEmpty()) fund(ledger, overrun) else null
+        // What the overrun is recorded down: [reach], unless it is above the cap or the root cannot
+        // fund it in whole, when it is recorded nowhere. The lease still closes either way.
         val recorded = if (overrun > 0L && funding == null) emptyList() else reach
         val unrecorded = if (overrun > 0L && recorded.isEmpty()) overrun else 0L
         val toLeaf = recorded.size == path.size

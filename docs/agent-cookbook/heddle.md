@@ -678,7 +678,8 @@ included; `Stale` is one from another epoch. On a draining path `extend` is refu
 `complete` still settles: the reservation is charged at the leaf, and an overrun at the deepest
 group still reached through live edges. **`Done.unrecorded`** is what the ledger recorded on no
 edge, so `charged + unrecorded` is the cost `complete` was given: an overrun under a draining
-top-level group (#3493), or one the lifetime limit leaves no room for. It is `0` everywhere else.
+top-level group (#3493), one above `MAX_RECORDED_OVERRUN`, or one the lifetime limit leaves no
+room for. It is `0` everywhere else.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleRefusals -->
 ```kotlin
@@ -783,10 +784,11 @@ its cost arrives as an overrun. An `extend` answers `Done` with the whole amount
 An overrun is charged at the deepest group every edge above has room for, or reported
 `unrecorded`.
 
-A charge between the watermark and `Long.MAX_VALUE` still fits, and a large one can fill the root's
-supply past the watermark for good: `complete(lease, Long.MAX_VALUE)` on an engine whose only
-service is that one lease fits exactly, and every later `acquire` is refused. Pass a cost the work
-really ran.
+One absurd cost cannot end an engine. An overrun above `LocalHeddle.MAX_RECORDED_OVERRUN` (2^57,
+half the headroom) is recorded nowhere and reported whole as `unrecorded`, so
+`complete(lease, Long.MAX_VALUE)` closes the lease and the next `acquire` leases, even on an engine
+that has served nothing else. An `extend`'s `unrecorded` is a reservation that was not made, not a
+cost: the work's cost arrives at its `complete`, so sum `unrecorded` over completions only.
 
 **The weight budget.** Keep every weight's denominator at or below 30,719. A weight set so fine
 that one step or one full lease could carry a child past its ceiling is refused when it is

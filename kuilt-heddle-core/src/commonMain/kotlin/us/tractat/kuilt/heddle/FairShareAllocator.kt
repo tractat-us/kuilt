@@ -229,8 +229,10 @@ public class FairShareAllocator(
      * far a child stands from its parent's origin.
      *
      * Peers that grant one edge before their writes merge each check their own view, so the merged
-     * issuance can pass the watermark: the headroom absorbs 16,384 unmerged grants of
-     * [LocalHeddle.MAX_RESERVATION] on one edge. Past `Long` the sum throws when read, never wraps.
+     * issuance can pass the watermark: the headroom absorbs unmerged grants on one edge totalling at
+     * most [LocalHeddle.LIFETIME_HEADROOM], 16,384 of [LocalHeddle.MAX_RESERVATION]. A grant is
+     * bounded by the quantum and holdings, not by that, so the bound is the total. Past `Long` the
+     * sum throws when read, never wraps.
      *
      * ## A refused or empty call writes nothing
      *

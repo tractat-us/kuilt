@@ -793,6 +793,7 @@ public final class us/tractat/kuilt/heddle/Lifecycle$Companion {
 public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public static final field Companion Lus/tractat/kuilt/heddle/LocalHeddle$Companion;
 	public static final field LIFETIME_HEADROOM J
+	public static final field MAX_RECORDED_OVERRUN J
 	public static final field MAX_RESERVATION J
 	public final fun acquire (Ljava/util/Set;Ljava/util/Set;JJ)Lus/tractat/kuilt/heddle/AcquireOutcome;
 	public static synthetic fun acquire$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/util/Set;Ljava/util/Set;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/AcquireOutcome;

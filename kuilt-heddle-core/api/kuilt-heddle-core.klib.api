@@ -1208,6 +1208,8 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
     final object Companion { // us.tractat.kuilt.heddle/LocalHeddle.Companion|null[0]
         final const val LIFETIME_HEADROOM // us.tractat.kuilt.heddle/LocalHeddle.Companion.LIFETIME_HEADROOM|{}LIFETIME_HEADROOM[0]
             final fun <get-LIFETIME_HEADROOM>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.Companion.LIFETIME_HEADROOM.<get-LIFETIME_HEADROOM>|<get-LIFETIME_HEADROOM>(){}[0]
+        final const val MAX_RECORDED_OVERRUN // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RECORDED_OVERRUN|{}MAX_RECORDED_OVERRUN[0]
+            final fun <get-MAX_RECORDED_OVERRUN>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RECORDED_OVERRUN.<get-MAX_RECORDED_OVERRUN>|<get-MAX_RECORDED_OVERRUN>(){}[0]
         final const val MAX_RESERVATION // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION|{}MAX_RESERVATION[0]
             final fun <get-MAX_RESERVATION>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION.<get-MAX_RESERVATION>|<get-MAX_RESERVATION>(){}[0]
 

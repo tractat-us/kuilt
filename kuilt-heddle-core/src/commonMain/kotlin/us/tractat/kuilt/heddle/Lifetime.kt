@@ -13,7 +13,8 @@ package us.tractat.kuilt.heddle
  * charges work already running, [LocalHeddle.admit], [LocalHeddle.extend] and
  * [LocalHeddle.complete], never refuses for it: it uses the headroom above the watermark, up to
  * `Long.MAX_VALUE` itself ([chargeFits]), and records a charge that still does not fit nowhere,
- * reporting it in [LeaseOutcome.Done.unrecorded].
+ * reporting it in [LeaseOutcome.Done.unrecorded]. So is an overrun above
+ * [LocalHeddle.MAX_RECORDED_OVERRUN], whether it fits or not.
  */
 internal const val LIFETIME_WATERMARK: Long = Long.MAX_VALUE - LocalHeddle.LIFETIME_HEADROOM
 

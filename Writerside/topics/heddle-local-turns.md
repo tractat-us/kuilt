@@ -322,6 +322,8 @@ million. So `acquire` stops a little early, with `LifetimeExhausted`, and keeps
 the rest for work already running: `admit`, `extend` and `complete` are never
 refused for it, and never throw. A charge that still does not fit is recorded
 whole or not at all, and `Done.unrecorded` says how much the books left out.
+One overrun too large to be real, above `MAX_RECORDED_OVERRUN`, is left out
+too, so a single wrong cost cannot stop the engine.
 
 **Exceptions mean a mistake.** An argument out of range throws
 `IllegalArgumentException`. Arithmetic past `Long` throws `ArithmeticException`

@@ -203,7 +203,9 @@ keeps `LocalHeddle.LIFETIME_HEADROOM` (2^58 units) in hand on each, and answers
 `LocalHeddle.acquire` and `FairShareAllocator.schedule` alike. Work already running
 is never refused for it: `admit`, `extend` and `complete` use the headroom, and a
 charge that still does not fit is recorded whole or not at all, never in part, and
-reported in `LeaseOutcome.Done.unrecorded`. No call throws at either counter (#3475).
+reported in `LeaseOutcome.Done.unrecorded`, and an overrun above
+`LocalHeddle.MAX_RECORDED_OVERRUN` is never recorded, so one wrong cost cannot end
+an engine. No call throws at either counter (#3475).
 A position does still have a
 ceiling, past which the public virtual-time reads saturate, the penalty side. A
 busy parent is rebased long before its ceiling: both `HeddleNode`

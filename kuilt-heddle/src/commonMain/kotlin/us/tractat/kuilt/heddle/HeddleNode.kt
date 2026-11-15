@@ -397,8 +397,14 @@ public class HeddleNode internal constructor(
      *   [ScheduleOutcome.LifetimeExhausted] when the first grant would carry its edge's effective
      *   issuance past the lifetime watermark on this peer's view (#3475): nothing is published, and
      *   a refusal met after grants answers `Delegated` and keeps them, so the next call answers it.
-     *   Never [GateClosed]: a static node has no write gate. Nothing here throws at the lifetime
-     *   counters: `complete` charges at most what was reserved, so only a grant moves them.
+     *   Never [GateClosed]: a static node has no write gate. `complete` charges at most what was
+     *   reserved, so only a grant moves the lifetime counters, and this node checks each grant on
+     *   its own view. Partitioned peers that grant one edge before their writes merge can carry
+     *   the merged issuance past the watermark: their unmerged grants are absorbed while those on
+     *   one edge total at most [LocalHeddle.LIFETIME_HEADROOM], and past `Long` the merged sum
+     *   throws when read, never wraps. A grant here is bounded by the quantum and the holdings it
+     *   is drawn from, not by [LocalHeddle.MAX_RESERVATION], so the headroom is a total, not a
+     *   count of grants.
      *
      * A parent that starts answering [ScheduleOutcome.WeightBudget] is also logged, once, at
      * `warn`, naming its active edges and their weights, so a caller that discards the outcome

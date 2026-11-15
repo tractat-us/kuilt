@@ -58,8 +58,10 @@ public sealed interface ScheduleOutcome {
      * lifetime watermark, `Long.MAX_VALUE` less `LocalHeddle.LIFETIME_HEADROOM`, on this peer's
      * view (#3475), and nothing was written. A full edge that is next in line stalls its parent
      * rather than being skipped, so this lasts while that edge is picked. Peers that each grant
-     * under their own view can merge past the watermark; the headroom absorbs that, and every read
-     * still answers.
+     * under their own view can merge past the watermark: their unmerged grants are absorbed while
+     * those on one edge total at most `LocalHeddle.LIFETIME_HEADROOM`, and past `Long` the merged
+     * sum throws when read, never wraps. A grant is bounded by the quantum and the holdings it is
+     * drawn from, not by `LocalHeddle.MAX_RESERVATION`.
      */
     public data class LifetimeExhausted(public val parent: GroupId) : ScheduleOutcome
 
