@@ -549,7 +549,8 @@ was really charged. Three limits come with that promise, stated plainly.
   web has a build running that reserved more than it will use when mobile goes quiet. If that
   build finishes early while mobile is away, its unused minutes come back to web
   after mobile's place was measured, and mobile returns owed a little more than
-  it is. A build of mobile's own that straddles its quiet spell is fine: its
+  it is. That one came with the clock, and was accepted as the price of fixing
+  short bursts. A build of mobile's own that straddles its quiet spell is fine: its
   refund lands on mobile, where it belongs.
 
 The last two shrink as estimates get closer to the truth, so:

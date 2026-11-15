@@ -90,8 +90,9 @@ far the clock ran since then:
 offset grows by  clockNow − clockWhenItLeft
 ```
 
-So a team comes back exactly as far ahead or behind as it was when it went
-quiet. Its own builds, and any of them handed back while it was away, still
+So a team comes back as far ahead or behind as it was when it went quiet,
+except across a sibling's refund while it was away ([below](#what-it-does-not-promise)).
+Its own builds, and any of them handed back while it was away, still
 count, and the time it sat out counts for nothing. A team the engine never saw
 go quiet, after a restart from a snapshot that predates the clock say, is
 clamped instead:
@@ -205,7 +206,9 @@ the one web's overrun owed it, and then the three-to-one pattern resumes.
   share. And a *sibling's* open lease counts in the clock at the weight of
   everyone competing, while its refund lands at the weight of whoever is still
   competing. A lane away across that refund comes back owed a little more than
-  it is. These are tracked by
+  it is. That one is new with the clock: the clamp it replaced brought the lane
+  back level, which got this case exactly right, and the regression was
+  accepted for the bursts the clock fixes. These are tracked by
   [#3238](https://github.com/tractat-us/kuilt/issues/3238) and
   [#3239](https://github.com/tractat-us/kuilt/issues/3239). The networked
   `HeddleNode` does not take either path: its `complete` keeps an unused

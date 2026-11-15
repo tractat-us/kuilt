@@ -283,7 +283,8 @@ keeps its claim, so it is not treated as returning from idle when a slot it can 
 no pick could reach counts as idle, even when you list it as waiting: a leaf behind an edge a
 reload is closing, or a group that has gained a child. Its subtree builds up no credit while it is
 cut off: when it can be reached again it comes back as far ahead of or behind its siblings as it was
-when it was cut off, moved by how far its parent's net-service clock ran meanwhile. A child this
+when it was cut off, moved by how far its parent's net-service clock ran meanwhile, give or take a
+sibling's refund in that time (see the known gaps below). A child this
 engine never saw stop is clamped level with its siblings instead. A new leaf starts level with its
 siblings, rather than owed their whole history. `extend` reserves
 more for a lease that runs long, `cancel` charges nothing, `admit(leaf, startedAt)` charges work
@@ -545,7 +546,9 @@ settles at its estimate:
   without a gap, and a lane that cancels the job ending each burst gains share (+0.015 to +0.044 on the slot
   probe). And a *sibling's* reservation counts in the clock at the weight of everyone asking, while
   its refund lands at the weight of whoever is still asking, so a lane away across a sibling's refund
-  comes back owed more than it is, and takes extra turns. The two are tracked by
+  comes back owed more than it is, and takes extra turns: 19 / 10 on a rig whose fair split is
+  15 / 14. That one is new with the clock, since the wake clamp it replaced split the same rig
+  exactly, and it was accepted as the cost of the bursts the clock fixes. The two are tracked by
   [#3238](https://github.com/tractat-us/kuilt/issues/3238) and
   [#3239](https://github.com/tractat-us/kuilt/issues/3239). `HeddleNode`'s `complete` keeps an unused
   earmark at the leaf, so `HeddleNode` does not take either path.
