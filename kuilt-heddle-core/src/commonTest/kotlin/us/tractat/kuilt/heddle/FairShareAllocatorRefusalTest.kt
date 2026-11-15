@@ -106,15 +106,15 @@ class FairShareAllocatorRefusalTest {
     /**
      * A first-round grant whose delegation carries its child past the ceiling is made, and the
      * position goes past it exactly. `e1` sits 100 ticks below its ceiling, and one grant of 10 units
-     * is 160 ticks, so the very first grant crosses. The rebase is off: it would bring `e1` back down
-     * first. This used to answer `PositionCeiling` and write nothing.
+     * is 160 ticks, so the very first grant crosses, and nothing brings `e1` back down (#3472). This
+     * used to answer `PositionCeiling` and write nothing.
      */
     @Test
     fun aGrantWhoseDelegationCrossesTheCeilingIsMadeExactly() {
         val start = seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 100L)
         val cell = CountingCell(start)
         check(relative(start, e1) == Int128.of(positionCeiling(Weight.ONE) - 100L)) { "the rig: e1 starts below its ceiling" }
-        val allocator = FairShareAllocator(self, policy).apply { rebaseEnabled = false }
+        val allocator = FairShareAllocator(self, policy)
         val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
         val outcome = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
         assertAll(
@@ -131,7 +131,7 @@ class FairShareAllocatorRefusalTest {
     @Test
     fun aLaterRoundWhoseDelegationCrossesTheCeilingKeepsGranting() {
         val cell = CountingCell(seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 200L))
-        val allocator = FairShareAllocator(self, policy).apply { rebaseEnabled = false }
+        val allocator = FairShareAllocator(self, policy)
         val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
         val first = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
         val second = allocator.schedule(root, cell, earmarked = 0L, wantsE1)

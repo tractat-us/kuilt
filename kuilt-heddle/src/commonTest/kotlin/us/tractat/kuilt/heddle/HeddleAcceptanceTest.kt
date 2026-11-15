@@ -3,7 +3,6 @@ package us.tractat.kuilt.heddle
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
-import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
@@ -15,8 +14,8 @@ import kotlin.test.assertTrue
 import kotlin.time.TimeSource
 
 /**
- * The acceptance run for #3353: a governed cluster under sustained load runs far past the point
- * where a scheduler without the origin rebase stops, and a scheduler that does stop says so.
+ * The acceptance run for #3353 and #3472: a governed cluster under sustained load runs far past the
+ * point where a scheduler used to stop at its position ceiling, with nothing rebasing it back down.
  *
  * Every run here is a governed cluster of three peers on `MultiNodeRaftSim`, each with a real data
  * plane, built by [governedCluster]. The workload is [MixedWeightRun]: four lanes of mixed weight
@@ -24,7 +23,7 @@ import kotlin.time.TimeSource
  * and every lease charged a little over half its reservation.
  *
  * - With one scheduling peer, a converged view, one level and one grant per call, the cluster
- *   picks exactly as [LocalHeddle] does, call for call, across rebases on both sides.
+ *   picks exactly as [LocalHeddle] does, call for call, past the old ceiling on both sides.
  * - A parent weighted 60/30/10/1, a heavy newborn joining a busy light runner, and a restarted
  *   scheduler whose heaviest child idled the whole run keep granting, and the newborn and the
  *   idle child come back level with the runner rather than behind it.
@@ -58,70 +57,10 @@ class HeddleAcceptanceTest {
     }.lower()
 
     /**
-     * A governed cluster with the rebase switched off passes its position ceiling and still makes
-     * the same picks as one with it on, call for call, through the whole supply: a pick orders the
-     * full 128-bit position, and a rebase moves every child alike, so neither changes the order. The
-     * twin used to answer [ScheduleOutcome.PositionCeiling] part-way through, and the rebasing
-     * cluster then ran on alone to ten times its grants; now neither refuses, the twin's peak
-     * effective position passes its ceiling while the rebasing cluster's stays far below, and the
-     * other two peers converge on the rebasing cluster's ledger.
-     */
-    @Test
-    fun aNoRebaseTwinPassesItsCeilingAndPicksAsTheRebasingClusterCallForCall() = runTest(
-        StandardTestDispatcher(),
-        timeout = TEST_WEDGE_BACKSTOP,
-    ) {
-        val started = TimeSource.Monotonic.markNow()
-        val rebasing = bootedCluster(mint = mapOf(0 to SUPPLY))
-        val twin = bootedCluster(mint = mapOf(0 to SUPPLY))
-        twin.peers[0].node.rebaseForTest = false
-        val node = rebasing.peers[0].node.asSchedulingPeer()
-        val twinNode = twin.peers[0].node.asSchedulingPeer()
-        val a = MixedWeightRun(root, lanes, MAX_GRANT, Random(3353))
-        val b = MixedWeightRun(root, lanes, MAX_GRANT, Random(3353))
-
-        var peak = 0.0
-        var twinPeak = 0.0
-        var twinPassedAtGrant = -1
-        while (a.calls < TWIN_CALL_LIMIT) {
-            val outcome = a.step(node)
-            val twinOutcome = b.step(twinNode)
-            assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${a.grants} grants")
-            assertTrue(twinOutcome !is ScheduleOutcome.PositionCeiling, "the twin refused at the ceiling after ${b.grants} grants")
-            assertEquals(b.issuedByLane(twinNode), a.issuedByLane(node), "call ${a.calls}: the two made different picks")
-            twinPeak = maxOf(twinPeak, twinNode.boundMetrics(root).peakPositionFraction)
-            if (twinPassedAtGrant < 0 && twinPeak >= 1.0) twinPassedAtGrant = b.grants
-            if (a.calls % PUMP_EVERY == 0) {
-                rebasing.pump(1L)
-                peak = maxOf(peak, node.boundMetrics(root).peakPositionFraction)
-            }
-        }
-        rebasing.pump()
-        rebasing.pump()
-        val merged = rebasing.peers[0].node.ledger.value
-        println(
-            "[${started.elapsedNow()}] acceptance: the twin passed its ceiling at grant $twinPassedAtGrant, peak $twinPeak; both made " +
-                "${a.grants} grants in ${a.calls} calls, the rebasing cluster with ${node.rebases()} rebases, peak $peak",
-        )
-        assertAll(
-            { assertTrue(twinPassedAtGrant in 1 until a.grants, "the rig: the twin passed its ceiling with grants still to come ($twinPassedAtGrant of ${a.grants})") },
-            { assertEquals(a.grants, b.grants, "the twin granted every grant the rebasing cluster did") },
-            { assertEquals(SUPPLY / MAX_GRANT, a.grants.toLong(), "the rig: the whole supply was granted") },
-            { assertEquals(0, twinNode.rebases(), "the rig: the twin never rebased") },
-            { assertTrue(node.rebases() > 0, "the rig: the rebasing cluster rebased (${node.rebases()} times)") },
-            { assertTrue(merged.origin(root) > Int128.ZERO, "the origin rose, to ${merged.origin(root)}") },
-            { assertTrue(a.chargedBelowReservation > 0, "the rig: leases were charged below their reservation") },
-            { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
-            { assertConverged(rebasing) },
-            { assertNull(merged.conservationShortfall(root, rebasing.everyReplica), "every minted unit is accounted for") },
-        )
-    }
-
-    /**
      * Where the design says the two engines agree, they do: one scheduling peer, a converged view,
      * one level and one grant per call. Each call mints exactly one grant through the log, so the
      * scheduler can make exactly one; [LocalHeddle] gets the same waiting set and picks once. The
-     * run passes many rebases on both sides, so the agreement spans them.
+     * run passes the old ceiling on both sides, so the agreement spans positions past it.
      *
      * The lease is charged in full on the [LocalHeddle] side and below its reservation on the
      * governed side. The difference is deliberate: [LocalHeddle] returns an unspent reservation to
@@ -167,12 +106,12 @@ class HeddleAcceptanceTest {
             }
         }
         cluster.pump()
-        println("[${started.elapsedNow()}] match: $MATCH_CALLS calls, ${node.rebases()} governed rebases, origins ${node.ledger.value.origin(root)} and ${local.snapshot().ledger.origin(root)}")
+        val peak = node.boundMetrics(root).peakPositionFraction
+        println("[${started.elapsedNow()}] match: $MATCH_CALLS calls, peak $peak")
         assertAll(
             { assertEquals(MATCH_CALLS, run.calls, "the run made every call") },
             { assertEquals(MATCH_CALLS, fundedOneGrant, "the rig: each call's root held exactly one grant") },
-            { assertTrue(node.rebases() > 0, "the rig: the governed scheduler rebased (${node.rebases()} times)") },
-            { assertTrue(local.snapshot().ledger.origin(root) > Int128.ZERO, "the rig: LocalHeddle rebased too") },
+            { assertTrue(peak >= 1.0, "the rig: the run passed the old ceiling, $peak") },
             { assertEquals(emptyList<String>(), divergences, "every call picked what LocalHeddle picked") },
             { assertConverged(cluster) },
         )
@@ -182,8 +121,8 @@ class HeddleAcceptanceTest {
      * A parent whose weights spread far wider than sixteen to one, 60/30/10/1, the consumer's shape
      * from #3313. The light child runs alone in bursts while the heavy ones idle, then every child
      * competes again. One unit of virtual time is sixty times as many ticks on the heaviest child's
-     * grid as on the lightest's, so a rebase timed by the light child alone lets the heavy children
-     * wake past their ceiling. The rebase must keep every child clear of its ceiling.
+     * grid as on the lightest's, so the heavy children wake far up their own grids. Nothing rebases
+     * them back down (#3472): every call grants, and every minted unit is accounted for.
      */
     @Test
     fun aParentWeightedSixtyThirtyTenOneRunsPastTheOldCeiling() = runTest(
@@ -210,12 +149,11 @@ class HeddleAcceptanceTest {
         }
         cluster.pump()
         val grants = burst.grants + mix.grants
-        println("[${started.elapsedNow()}] spread: $grants grants (${burst.grants} light alone), ${node.rebases()} rebases, peak $peak")
+        println("[${started.elapsedNow()}] spread: $grants grants (${burst.grants} light alone), peak $peak")
         assertAll(
             { assertEquals(SPREAD_ROUNDS * (BURST_CALLS + MIX_CALLS), burst.calls + mix.calls, "the run made every call") },
             { assertTrue(grants >= LONG_RUN_GRANTS, "the run made its own $grants grants") },
-            { assertTrue(node.rebases() > 0, "the rig: the parent rebased (${node.rebases()} times)") },
-            { assertTrue(peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
+            { assertTrue(peak >= 1.0, "the rig: the run passed the old ceiling: $peak") },
             { assertConverged(cluster) },
             { assertNull(node.ledger.value.conservationShortfall(root, cluster.everyReplica), "every minted unit is accounted for") },
         )
@@ -224,12 +162,13 @@ class HeddleAcceptanceTest {
     /**
      * A heavy newborn, weight 60, joins a parent whose only other child, weight 1, has been running
      * alone and busy for a long time: long enough that the runner's service, counted on the
-     * newborn's grid, is past a `Long`, but not so long that it passed a sixteenth of its own
-     * ceiling. The newborn is seated at the front and the two then both take a grant on every call,
-     * with the peak effective position, read after every call, below the ceiling.
+     * newborn's grid, is past a `Long`. The newborn is seated at the front, past its own ceiling,
+     * since nothing rebases the parent (#3472), and the two then both take a grant on every call.
+     * The public virtual-time reads hold the newborn at its ceiling, so where it was seated is read
+     * wide, off the peak effective position: the two share a ceiling, both denominators being 1.
      */
     @Test
-    fun aHeavyNewbornJoiningABusyLightRunnerNeverMeetsTheCeiling() = runTest(
+    fun aHeavyNewbornJoiningABusyLightRunnerIsSeatedLevelPastItsCeiling() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
@@ -244,15 +183,13 @@ class HeddleAcceptanceTest {
             runnerAlone.step(node)
             if (runnerAlone.calls % PUMP_EVERY == 0) cluster.pump(1L)
         }
-        val rebasesAlone = node.rebases()
         val lightAlone = runnerAlone.issuedByLane(node).single()
         cluster.applied("prepare the heavy newborn") { peer.node.prepare(heavy) }
         cluster.applied("activate the heavy newborn") { peer.node.activate(heavy.id) }
 
         val both = MixedWeightRun(root, listOf(light, heavy), MAX_GRANT, Random(2))
         var peak = 0.0
-        var heavyLevel = Rational.ZERO
-        var lightLevel = Rational.ZERO
+        var heavyAtSeat = 0.0
         repeat(JOINED_CALLS) {
             both.advertise(node, listOf(light, heavy))
             both.schedule(node)
@@ -260,9 +197,10 @@ class HeddleAcceptanceTest {
             both.chargeBelowReservation(node)
             // Right after the seat: later calls give both one grant each, which the light lane's
             // virtual time feels sixty times as much, so only the first call says where the seat was.
+            // The newborn is the peak, sixty times the runner on a shared ceiling: its virtual time,
+            // less the one grant it took, is the front it was seated at.
             if (both.calls == 1) {
-                heavyLevel = peer.node.effectiveVirtualService(heavy, listOf(light, heavy))
-                lightLevel = peer.node.effectiveVirtualService(light, listOf(light, heavy))
+                heavyAtSeat = node.boundMetrics(root).peakPositionFraction * SHARED_CEILING / (16.0 * 60.0) - MAX_GRANT / 60.0
             }
             if (both.calls % PUMP_EVERY == 0) cluster.pump(1L)
         }
@@ -270,34 +208,37 @@ class HeddleAcceptanceTest {
         val ledger = node.ledger.value
         val heavyIssued = ledger.edge(heavy.id)?.issued ?: 0L
         val lightSince = (ledger.edge(light.id)?.issued ?: 0L) - lightAlone
-        println("[${started.elapsedNow()}] newborn: runner made ${runnerAlone.grants} grants alone, $rebasesAlone rebases; then heavy $heavyIssued, light $lightSince, peak $peak")
+        println("[${started.elapsedNow()}] newborn: runner made ${runnerAlone.grants} grants alone; then heavy $heavyIssued, light $lightSince, peak $peak")
         assertAll(
             { assertEquals(RUNNER_CALLS, runnerAlone.calls, "the rig: the runner ran alone for every call") },
-            { assertEquals(0, rebasesAlone, "the rig: the runner alone stayed short of a rebase, so only the newborn's arrival moves the origin") },
             {
                 val onTheNewbornsGrid = runnerAlone.grants.toDouble() * MAX_GRANT * 60.0 * 16.0
                 assertTrue(onTheNewbornsGrid > Long.MAX_VALUE.toDouble(), "the rig: the runner's service on the newborn's grid is past a Long")
             },
             { assertEquals(JOINED_CALLS, both.calls, "the two ran together for every call") },
-            { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
+            { assertTrue(peak >= 1.0, "the rig: the newborn passed its ceiling: $peak") },
             { assertEquals(JOINED_CALLS * MAX_GRANT, heavyIssued, "the newborn was granted on every call") },
             { assertEquals(JOINED_CALLS * MAX_GRANT, lightSince, "and so was the runner") },
-            { assertLevel(heavyLevel, lightLevel, "the newborn was seated level with the runner, not behind it") },
+            {
+                assertTrue(
+                    kotlin.math.abs(heavyAtSeat - lightAlone.toDouble()) <= LEVEL_SLACK.toDouble(),
+                    "the newborn was seated level with the runner, not behind it: $heavyAtSeat against $lightAlone",
+                )
+            },
             { assertConverged(cluster) },
         )
     }
 
     /**
      * A heavy newborn, weight 65,534, joins two light runners that drifted leases apart (#3353, the
-     * window rule), on the governed node, whose first round raises before its seat step
-     * (`preSeatRaise ?: prePickRaise`, not `LocalHeddle`'s path). A guard, not a red: `schedule` fills
-     * each runner's demand every call, so when the newborn joins they ask again as returners, and
-     * both rules aim that raise at the front the returners land at. What this pins is that the raise,
-     * now bounded by each returner's room, still seats the newborn short of its ceiling, read as the
-     * peak effective position after every call, and every call after grants. `LocalHeddleWindowRuleTest` holds the red rows, where the runners stay asking.
+     * window rule), on the governed node, whose first round is not `LocalHeddle`'s path. Written for
+     * the raise the window rule bounded, which seated the newborn short of its ceiling. Nothing
+     * rebases now (#3472): the newborn is seated at the front on its own grid, far past its ceiling,
+     * and is granted all the same, since a pick orders the wide position.
+     * `LocalHeddleWindowRuleTest` holds the rows where the runners stay asking.
      */
     @Test
-    fun aHeavyNewbornJoiningTwoLightsALeaseApartNeverMeetsTheCeiling() = runTest(
+    fun aHeavyNewbornJoiningTwoLightsALeaseApartIsGrantedPastItsCeiling() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
@@ -321,7 +262,6 @@ class HeddleAcceptanceTest {
         val spread = if (l1At > l2At) l1At - l2At else l2At - l1At
         cluster.applied("prepare the heavy newborn") { peer.node.prepare(heavy) }
         cluster.applied("activate the heavy newborn") { peer.node.activate(heavy.id) }
-        val rebasesBefore = node.rebases()
         val all = lights + heavy
         val joined = MixedWeightRun(root, all, MAX_GRANT, Random(3354))
         var peak = 0.0
@@ -335,8 +275,7 @@ class HeddleAcceptanceTest {
         cluster.pump()
         assertAll(
             { assertTrue(spread >= Rational.of(MAX_GRANT), "the rig: the runners stood a lease apart or more, $spread") },
-            { assertTrue(node.rebases() > rebasesBefore, "the rig: the newborn's arrival rebased the parent") },
-            { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
+            { assertTrue(peak >= 1.0, "the rig: the newborn passed its ceiling: $peak") },
             { assertTrue((node.ledger.value.edge(heavy.id)?.issued ?: 0L) > 0L, "the newborn was granted") },
             { assertConverged(cluster) },
         )
@@ -346,8 +285,8 @@ class HeddleAcceptanceTest {
      * Two schedulers at once, cut off from each other for a stretch, then healed. Their picks may
      * differ from any one engine's, so this run checks what replication promises instead: the §8.2
      * bound pieces stay ordered on both sides while they are apart, the three peers converge after,
-     * every minted unit is accounted for, and neither scheduler's peak effective position reaches
-     * the ceiling.
+     * and every minted unit is accounted for, with both schedulers' peak effective positions past
+     * the old ceiling, where nothing rebases them back (#3472).
      */
     @Test
     fun twoSchedulersAcrossAPartitionConvergeAndConserve() = runTest(
@@ -380,11 +319,8 @@ class HeddleAcceptanceTest {
         phase(TOGETHER_CALLS, apart = false)
         cluster.pump()
         cluster.partitionDataPlane(1)
-        val rebasesBeforeApart = nodes.map { it.rebases() }
         phase(APART_CALLS, apart = true)
-        val rebasesWhileApart = nodes.mapIndexed { i, n -> n.rebases() - rebasesBeforeApart[i] }
         val apartLedgersDiffer = nodes[0].ledger.value != nodes[1].ledger.value
-        val originsApart = nodes.map { it.ledger.value.origin(root) }
         cluster.healDataPlane(1)
         cluster.pump(800)
         cluster.pump(800)
@@ -394,18 +330,14 @@ class HeddleAcceptanceTest {
 
         val merged = nodes[0].ledger.value
         val totalGrants = runs.sumOf { it.grants }
-        println("[${started.elapsedNow()}] two schedulers: ${runs.map { it.grants }} grants, ${nodes.map { it.rebases() }} rebases, origin ${merged.origin(root)}")
+        println("[${started.elapsedNow()}] two schedulers: ${runs.map { it.grants }} grants, peaks ${peaks.toList()}")
         assertAll(
             { assertEquals(List(2) { 2 * TOGETHER_CALLS + APART_CALLS }, runs.map { it.calls }, "each scheduler made every call") },
             { assertTrue(totalGrants >= LONG_RUN_GRANTS, "the run went far past the old ceiling: $totalGrants grants") },
-            { assertTrue(nodes.all { it.rebases() > 0 }, "the rig: both schedulers rebased (${nodes.map { it.rebases() }})") },
             { assertTrue(apartLedgersDiffer, "the rig: the partition was real, the two views diverged") },
-            { assertTrue(rebasesWhileApart.all { it > 0 }, "the rig: both sides raised the origin while apart ($rebasesWhileApart)") },
-            { assertTrue(originsApart[0] != originsApart[1], "the rig: the two raises differed, so the heal joins them: $originsApart") },
             { assertTrue(deviationWhileApart > 0L, "the rig: there was a deviation for the bound to bound") },
             { assertEquals(emptyList<String>(), boundBreaches, "the §8.2 pieces stayed ordered on both sides while apart") },
-            { assertTrue(peaks.all { it > 0.0 && it < 1.0 }, "neither scheduler's peak effective position reached the ceiling: ${peaks.toList()}") },
-            { assertTrue(originsApart.all { merged.origin(root) >= it }, "the merged origin is at least each side's: $originsApart") },
+            { assertTrue(peaks.all { it >= 1.0 }, "the rig: both schedulers ran past the old ceiling: ${peaks.toList()}") },
             { assertConverged(cluster) },
             { assertNull(merged.conservationShortfall(root, cluster.everyReplica), "every minted unit is accounted for") },
             { assertTrue(nodes.all { it.boundMetrics(root).isConsistent }, "and the §8.2 pieces are ordered after the heal") },
@@ -422,51 +354,23 @@ class HeddleAcceptanceTest {
      * level with the furthest-ahead one. Without the rule the idle child would keep the whole run as
      * credit and take every slot it is eligible for until it caught up.
      *
-     * The rebase is off on every peer, so no child ever stands below its parent's origin. The
-     * below-zero arm of the old first-sighting rule cannot fire here, and only the restart rule can
-     * level the idle child: the rig asserts both, and that the idle child read far behind the runner
-     * before the boot call, which is what makes "level" mean something. The runs are shorter than
-     * the rebasing row's, so every position stays inside the window the public reads hold it in.
-     * [aRestartedSchedulerWithALongIdleChildBelowZeroComesBackLevel] is the same run with the rebase on.
+     * Nothing rebases, so no child ever stands below zero, and only the restart rule can level the
+     * idle child: the rig asserts that, and that the idle child read far behind the runner before
+     * the boot call, which is what makes "level" mean something. The runs are short enough that
+     * every position stays inside the window the public reads hold it in.
      */
     @Test
     fun aRestartedSchedulerWithALongIdleChildDemandingAtBootComesBackLevel() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
-        val run = restartRun(rebase = false, callsBefore = UNREBASED_CALLS_BEFORE_RESTART, callsAfter = UNREBASED_CALLS_AFTER_RESTART)
+        val run = restartRun(callsBefore = RESTART_CALLS_BEFORE, callsAfter = RESTART_CALLS_AFTER)
         assertAll(
             *run.levelAndConserved(),
-            { assertEquals(0, run.rebasesBefore, "the rig: nothing rebased before the crash") },
-            { assertEquals(0, run.rebasesAfter, "…nor after it") },
             {
                 assertTrue(
                     run.idleAtRestart >= Rational.ZERO,
                     "the rig: the idle child never stood below zero, so only the restart rule moves it: ${run.idleAtRestart}",
-                )
-            },
-        )
-    }
-
-    /**
-     * [aRestartedSchedulerWithALongIdleChildDemandingAtBootComesBackLevel] with the rebase on: the
-     * light child's run raises the origin past the idle child, which therefore stands below zero
-     * when the scheduler restarts. The restart rule clamps it level all the same, as the old
-     * below-zero arm did, which the rule takes in. Retired with the rebase.
-     */
-    @Test
-    fun aRestartedSchedulerWithALongIdleChildBelowZeroComesBackLevel() = runTest(
-        StandardTestDispatcher(),
-        timeout = TEST_WEDGE_BACKSTOP,
-    ) {
-        val run = restartRun(rebase = true, callsBefore = BEFORE_RESTART_CALLS, callsAfter = AFTER_RESTART_CALLS)
-        assertAll(
-            *run.levelAndConserved(),
-            { assertTrue(run.rebasesBefore > 0, "the rig: the scheduler rebased before it crashed") },
-            {
-                assertTrue(
-                    run.idleAtRestart < Rational.ZERO,
-                    "the rig: the idle child stood below zero when the scheduler restarted: ${run.idleAtRestart}",
                 )
             },
         )
@@ -480,8 +384,6 @@ class HeddleAcceptanceTest {
         val callsAfter: Int,
         val idleIssuedBefore: Long,
         val freshReplica: Boolean,
-        val rebasesBefore: Int,
-        val rebasesAfter: Int,
         /** The idle child's effective virtual service on the restarted scheduler, before its first call. */
         val idleAtRestart: Rational,
         /** The runner's, read the same way. */
@@ -494,7 +396,7 @@ class HeddleAcceptanceTest {
         val converged: () -> Unit,
         val shortfall: String?,
     ) {
-        /** The assertions both restart rows make: the rig ran, and the idle child came back level. */
+        /** The rig ran, and the idle child came back level. */
         fun levelAndConserved(): Array<() -> Unit> = arrayOf(
             { assertEquals(plannedBefore, callsBefore, "the run before the restart made every call") },
             { assertEquals(plannedAfter + 1, callsAfter, "and the run after it made every call") },
@@ -516,15 +418,14 @@ class HeddleAcceptanceTest {
     }
 
     /**
-     * The restart run, with [rebase] on or off on every peer: light bursts on one scheduler, which
+     * The restart run: light bursts on one scheduler, which
      * then crashes with its demand withdrawn; the restarted process mints, catches up on the ledger,
      * and makes its boot call with every lane waiting, the long-idle one included; then a run of
      * random calls, and gossip to settle.
      */
-    private suspend fun TestScope.restartRun(rebase: Boolean, callsBefore: Int, callsAfter: Int): RestartRun {
+    private suspend fun TestScope.restartRun(callsBefore: Int, callsAfter: Int): RestartRun {
         val started = TimeSource.Monotonic.markNow()
         val cluster = bootedCluster(mint = mapOf(1 to SUPPLY), lanes = spreadLanes)
-        for (peer in cluster.peers) peer.node.rebaseForTest = rebase
         val idle = spreadLanes.single { it.weight == Weight.of(60L) }
         val light = spreadLanes.single { it.weight == Weight.ONE }
         val before = MixedWeightRun(root, spreadLanes, MAX_GRANT, Random(21), drawFrom = listOf(light), grantsPerCall = BURST_GRANTS)
@@ -537,12 +438,10 @@ class HeddleAcceptanceTest {
         for (lane in spreadLanes) first.advertise(lane.id, Demand.NONE)
         cluster.pump()
         val settledBefore = cluster.peers[0].node.ledger.value
-        val rebasesBefore = first.rebases()
         val idleIssuedBefore = first.ledger.value.edge(idle.id)?.issued ?: 0L
 
         cluster.restart(1)
         val restarted = cluster.peers[1]
-        restarted.node.rebaseForTest = rebase
         cluster.applied("mint to the restarted scheduler") { restarted.node.mint(restarted.replica, SUPPLY) }
         var catchUpPumps = 0
         while (!restarted.node.ledger.value.caughtUpWith(settledBefore, light) && catchUpPumps < CATCH_UP_PUMPS) {
@@ -571,8 +470,8 @@ class HeddleAcceptanceTest {
         cluster.pump(800)
         val merged = cluster.peers[0].node.ledger.value
         println(
-            "[${started.elapsedNow()}] restart, rebase $rebase: ${before.grants} grants before, ${after.grants} after, " +
-                "rebases $rebasesBefore then ${second.rebases()}, idle at $idleAtRestart against $lightAtRestart, then $idleLevel against $lightLevel",
+            "[${started.elapsedNow()}] restart: ${before.grants} grants before, ${after.grants} after, " +
+                "idle at $idleAtRestart against $lightAtRestart, then $idleLevel against $lightLevel",
         )
         return RestartRun(
             plannedBefore = callsBefore,
@@ -581,8 +480,6 @@ class HeddleAcceptanceTest {
             callsAfter = after.calls,
             idleIssuedBefore = idleIssuedBefore,
             freshReplica = restarted.replica != first.self,
-            rebasesBefore = rebasesBefore,
-            rebasesAfter = second.rebases(),
             idleAtRestart = idleAtRestart,
             lightAtRestart = lightAtRestart,
             atBoot = atBoot,
@@ -595,9 +492,9 @@ class HeddleAcceptanceTest {
         )
     }
 
-    /** Whether this ledger holds [settled]'s origin at [root] and [light]'s whole run. */
+    /** Whether this ledger holds [light]'s whole run from [settled]. */
     private fun EntitlementLedger.caughtUpWith(settled: EntitlementLedger, light: AttachmentRecord): Boolean =
-        origin(root) >= settled.origin(root) && (edge(light.id)?.issued ?: 0L) >= (settled.edge(light.id)?.issued ?: 0L)
+        (edge(light.id)?.issued ?: 0L) >= (settled.edge(light.id)?.issued ?: 0L)
 
     // ─────────────────────────────────────────────────────────────────────────────
     // harness
@@ -645,13 +542,7 @@ class HeddleAcceptanceTest {
         /** How far a run goes: ten times the grants after which a static node used to refuse. */
         const val LONG_RUN_GRANTS: Int = 10 * GRANTS_BEFORE_THE_CEILING
 
-        /** The most calls the rebasing long run makes, so a run that stalls reds instead of hanging. */
-        const val LONG_RUN_CALL_LIMIT: Int = 20_000
-
-        /** The twin refuses well inside this many calls; the bound only stops a broken rig running forever. */
-        const val TWIN_CALL_LIMIT: Int = 2_000
-
-        /** Calls the match run makes, one grant each: past the old ceiling and many rebases. */
+        /** Calls the match run makes, one grant each: past the old ceiling. */
         const val MATCH_CALLS: Int = 180
 
         /** Calls each scheduler makes before the partition and again after it heals. */
@@ -661,26 +552,18 @@ class HeddleAcceptanceTest {
          * Calls each scheduler makes while the two are apart. The heal costs grow with the calls made
          * apart: the first pump after it took 15 ms after none, 0.25 s after 8, 0.8 s after 16 and 1.6 s after
          * 32 on the JVM, about ten times that on Kotlin/Native, and 250 exhausted a 512 MB test JVM (#3424).
-         * Eight is enough for each side to raise the origin on its own, which the arm asserts.
+         * Eight is enough for the two views to diverge, which the arm asserts.
          */
         const val APART_CALLS: Int = 8
 
         /**
          * Calls the restart run makes before the crash, light bursts only, and after the boot call.
-         * The run before is long enough to rebase when the rebase is on, so the idle child stands
-         * below zero at the restart in that row; the run after carries the restarted scheduler on
-         * far enough for convergence and conservation to mean something.
+         * Its 256 grants put the runner about `2⁵²` units of virtual time ahead, under the
+         * `2⁶³ / (60 · 16)` ticks the heavy child's public read is held at, so the level the boot
+         * call clamps it to reads exactly.
          */
-        const val BEFORE_RESTART_CALLS: Int = 300
-        const val AFTER_RESTART_CALLS: Int = 1_200
-
-        /**
-         * The same with the rebase off. With no origin to pull the runner back, its 256 grants put it
-         * about `2⁵²` units of virtual time ahead, under the `2⁶³ / (60 · 16)` ticks the heavy child's
-         * public read is held at, so the level the boot call clamps it to reads exactly.
-         */
-        const val UNREBASED_CALLS_BEFORE_RESTART: Int = 32
-        const val UNREBASED_CALLS_AFTER_RESTART: Int = 100
+        const val RESTART_CALLS_BEFORE: Int = 32
+        const val RESTART_CALLS_AFTER: Int = 100
 
         /**
          * The light runner's calls alone, at [RUNNER_GRANTS] each: 1,600 grants, past a `Long` on the
@@ -704,13 +587,16 @@ class HeddleAcceptanceTest {
         const val BURST_GRANTS: Int = 8
         const val MIX_CALLS: Int = 100
 
+        /** The position ceiling of a weight whose denominator is 1, in ticks, as a `Double`. */
+        const val SHARED_CEILING: Double = (Long.MAX_VALUE - MAX_GRANT * 16L).toDouble()
+
         /** How far apart two children may read and still be level: two of the largest grants of virtual time. */
         const val LEVEL_SLACK: Long = 2L * MAX_GRANT
 
         /** Every so many calls, a run lets gossip move. */
         const val PUMP_EVERY: Int = 16
 
-        /** Pumps a restarted peer gets to catch up on the origin. */
+        /** Pumps a restarted peer gets to catch up on the ledger. */
         const val CATCH_UP_PUMPS: Int = 20
 
         const val MAX_REPORTED: Int = 8

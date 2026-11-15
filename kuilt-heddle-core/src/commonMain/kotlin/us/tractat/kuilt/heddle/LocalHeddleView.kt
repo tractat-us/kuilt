@@ -37,12 +37,6 @@ public class LocalHeddleView internal constructor(
     private val capacity: Capacity,
     private val leasable: Leasable,
     /**
-     * Whether the throwaway engines rebase (#3329): off only for a test's twin, which never rebases.
-     * Required rather than defaulted: a default on this internal constructor would put a public
-     * synthetic constructor in the JVM ABI.
-     */
-    private val rebase: Boolean,
-    /**
      * How many leases were open beneath each capped group when the state was taken: counted, not
      * carried, since a pick needs the count against each ceiling and never the leases themselves.
      * Every throwaway engine counts it beside the leases it opens. Empty when no ceiling is set.
@@ -52,7 +46,7 @@ public class LocalHeddleView internal constructor(
 
     /** An engine over this view's state, with its own copy of the wake memory: it picks and tops up as the engine would next. */
     private fun scratch(): LocalHeddle =
-        LocalHeddle.scratch(root, policy, epoch, ledger, allocator.fork(), leasable, capacity, openBeneath).also { it.rebaseForTest = rebase }
+        LocalHeddle.scratch(root, policy, epoch, ledger, allocator.fork(), leasable, capacity, openBeneath)
 
     /**
      * Who would go next: the leaves `reservations.size` calls to [LocalHeddle.acquire] would pick,

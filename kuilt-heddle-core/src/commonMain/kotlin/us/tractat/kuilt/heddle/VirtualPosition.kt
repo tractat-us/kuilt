@@ -56,43 +56,27 @@ internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS
  * **No pick reads it.** A pick orders the full 128-bit effective position, relative to the parent's
  * origin, so a child past its ceiling is ordered exactly and nothing is refused there. A gauge's
  * stored position, the origin, the raw position, the front and a wake clamp are all 128-bit too.
- * What the ceiling still sizes is the rebase that keeps positions near zero ([rebaseThreshold], the
- * window rule, P1′), so that the reads stay exact on a busy parent.
+ * Nothing rebases a busy parent's positions back down (#3472), so a long-running one passes it and
+ * only those reads saturate. What it still sizes is the weight budget's P1′ ([rebaseThreshold]).
  */
 internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADROOM) / w.denominator
 
 /**
- * The lowest effective position, in ticks, an edge of weight [w] is let down to by a rebase or a
- * landing: `−`[positionCeiling] (#3353, the window rule). An edge's **window** is
- * `[positionFloor, positionCeiling)`.
+ * The lowest effective position, in ticks, the public reads of an edge of weight [w] report:
+ * `−`[positionCeiling]. An edge's **window** is `[positionFloor, positionCeiling)`.
  *
- * The rebase lowers a parent's origin to where its demanding children stand on average, not to the
- * one furthest behind, so a child behind that average goes below zero. The floor is how far: no
- * rebase takes a demanding child below it, and a joiner seated where the front is below it is
- * seated at it instead, which costs that joiner a turn and never gives it one. Symmetric with the
- * ceiling, so a position in the window reads as a virtual time exactly ([inWindow]).
- *
- * A child can still go below it by its own returns: a lease cancelled from the floor walks its
- * holder back by the lease, and a child still waiting is still demanding there. A pick orders it
- * all the same, exactly, since it reads the wide position, and the public reads hold it at the
- * floor ([inWindow]). More than `2⁴⁸ / d` ticks below its floor, for a weight
- * `n / d`, `ticks · d` leaves `Long`, which is why the reads saturate rather than convert.
+ * Nothing seats, clamps or returns a child below zero any more (#3472), so only its own returns can
+ * take it there: a lease cancelled walks its holder back by the lease. A pick orders it all the
+ * same, exactly, since it reads the wide position, and the public reads hold it at the floor
+ * ([inWindow]). More than `2⁴⁸ / d` ticks below its floor, for a weight `n / d`, `ticks · d`
+ * leaves `Long`, which is why the reads saturate rather than convert.
  */
 internal fun positionFloor(w: Weight): Long = -positionCeiling(w)
 
 /**
- * The position, in ticks, past which a parent is rebased by raising its origin: a sixteenth of
- * [w]'s [positionCeiling] (#3329, #3353). Far enough below the ceiling that the spread of a busy
- * parent's children above the rebased one never reaches it, and far enough above zero that a rebase
- * is rare. Each child is measured against its own threshold, and the front too, read on every
- * child's grid, so a heavy child joining a light runner's front is never seated past its ceiling
- * (#3353 review, item A). What still climbs past the ceiling is a busy parent beside a demanding
- * child that is never served: each rebase carries that child further below zero, and since the
- * rebase aims at the demanding children's weighted mean, the child drags the mean down with it until
- * no whole step fits beneath it and `Δ` is held at zero. Its siblings then climb on, and a pick goes
- * on ordering them exactly; only the public reads saturate. A weight set so fine that one full lease
- * from just under this threshold passes the ceiling is refused when it is applied
- * ([weightsFitTheBudget], P1′).
+ * A sixteenth of [w]'s [positionCeiling]: the position past which the engine once rebased a parent
+ * (#3329, #3353). Nothing rebases now (#3472); the weight budget's P1′ still measures its lease
+ * room from here ([weightsFitTheBudget]), until W1 replaces it.
  */
 internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16
 
