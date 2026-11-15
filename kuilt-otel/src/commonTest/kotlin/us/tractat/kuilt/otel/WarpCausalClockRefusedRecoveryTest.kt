@@ -96,6 +96,7 @@ class WarpCausalClockRefusedRecoveryTest {
         val fresh = WarpCausalClock(replica)
         val early = fresh.tick()
         (early as? ClockTick.Minted)?.let { used += it.stamp.dot }
+        val earlyPersist = fresh.persist(store)
         val recovery = fresh.recover(store)
         val persisted = fresh.persist(store)
         val next = nextDotAfterRestart(backing)
@@ -105,6 +106,7 @@ class WarpCausalClockRefusedRecoveryTest {
             { assertEquals(1, store.refusals, "the rig did not refuse the recovery read") },
             { assertIs<ClockRecovery.Refused>(recovery, "the refused read was reported as $recovery") },
             { assertEquals(ClockTick.Unrecovered, early, "a clock with no landed read minted") },
+            { assertEquals(ClockPersist.Unrecovered, earlyPersist, "a clock that never read persisted") },
             { assertEquals(ClockPersist.Unrecovered, persisted, "a clock with no landed read persisted") },
             { assertEquals(used.size, used.toSet().size, "a dot was minted twice: $used") },
             { assertTrue(next.seq >= 3L, "the next restart did not resume after seq=2: $next") },
