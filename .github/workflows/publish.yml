@@ -52,8 +52,9 @@ jobs:
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: macos-latest    # cinterop-bearing Apple targets require a Mac host — see header
     # TEMPORARY 60 (was 30), #3464: the stage step grew 6.5 -> 18 -> 25 -> 21 min and then
-    # past the 30-min cap within a few hours on 2026-11-15, freezing snapshots (#3393). 60 is
-    # roughly twice the last completed run's job time. Lower it again once #3464 names the cause.
+    # past the 30-min cap within a few hours on 2026-11-15, freezing snapshots (#3393). The
+    # longest job that still finished took 28 min (run 43675236913); 60 is about twice that.
+    # Lower it again once #3464 names the cause.
     timeout-minutes: 60
     # Job-level override of the workflow default (contents: read). issues: write
     # lets the failure-alert step below open/refresh the "publish broken" issue.
