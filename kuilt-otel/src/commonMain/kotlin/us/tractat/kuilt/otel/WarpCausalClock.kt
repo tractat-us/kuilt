@@ -66,12 +66,21 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * So a [WarpSpanExporter] whose read of the stored spans lands raises the clock's floor before the
  * turn mints anything, and a clock that has not read yet keeps the floor until its read lands. The
  * floor is the larger of two numbers: the highest own-replica dot that read found, a span's stamp or
- * a predecessor a span names, and the high-water mark the span bytes carry (#3435). Every span write
- * carries this clock's `seq` as it stood when the bytes were encoded, so the mark covers dots whose
- * spans were since evicted past `maxSpans` or cleared. A merge raises the floor from the remote set,
- * and an export raises it from an explicit stamp of this replica's. The floor fails only when both
- * keys are corrupt. The floor takes every stored or merged dot's `seq` as given, so one claiming
- * `Long.MAX_VALUE` leaves the clock [ClockTick.Exhausted] (#3432).
+ * a predecessor a span names, and the high-water mark the span bytes carry (#3435). Once this clock's
+ * read has landed, every span write carries its `seq` as it stood when the bytes were encoded, so the
+ * mark covers dots whose spans were since evicted past `maxSpans` or cleared; before then a write
+ * carries only the own dots the exporter has seen. A merge raises the floor from the remote set,
+ * and an export raises it from an explicit stamp of this replica's.
+ *
+ * The floor misses a used dot in three cases. Both entries corrupt: it starts at zero. A dot that
+ * reached a peer from [WarpSpanExporter.snapshot] before its turn's clock write landed, and the crash
+ * came first: no key need be corrupt, since the restart reads a sound clock entry below that dot and a
+ * carried mark no higher, so the next [tick] mints it again until the peer hands it back. That is
+ * #1053's crash window plus gossip, and #3452 tracks it with the log exporter's twin. And a corrupt
+ * span entry over a dot a [WarpSpanExporter.merge] wrote durably ahead of any clock write: a merge
+ * never writes the clock, so the sound clock entry does not cover it. The floor takes every stored or
+ * merged dot's `seq` as given, so one claiming `Long.MAX_VALUE` leaves the clock
+ * [ClockTick.Exhausted] (#3432).
  *
  * ## Thread-safety
  *
