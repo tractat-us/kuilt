@@ -134,6 +134,85 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
     }
 
     /**
+     * A whole-log adopt whose segment is refused while the log carries an own record no key holds,
+     * then a restart. The adopt's leading index write claims the adopted log's seq, so it may land
+     * only once the active segment carrying that record has: otherwise the restart raises the log
+     * past a seq that exists nowhere, and the floor stops below it for good.
+     *
+     * The store refuses only large writes once the adopt comes, the shape a quota-bound store has:
+     * the whole log, padded by a peer's long record, is refused and the active segment is taken.
+     * [adopt] is the turn that builds the whole-log adopt, a merge or an export deduplicating
+     * against the refused merge's record, the two sites that build one.
+     */
+    private fun aRefusedWholeLogAdoptClaimsOnlyWhatTheStoreHolds(adopt: suspend (WarpLogRecordExporter) -> ExportResult) =
+        runTest {
+            val backing = RecordingStore()
+            val sized = RefuseLargeWritesStore(backing, maxBytes = 2_048)
+            val quota = RefuseSegmentWritesStore(sized)
+            val writer = exporterFor(quota)
+            writer.recover()
+            val before = List(25) { writer.export(record(it)) }
+
+            // An own record no key holds, then a refused merge, so the next adopt takes the whole log.
+            quota.refuseSegmentWrites()
+            val unwritten = writer.export(record(600))
+            val (peerLog, _) = Rga.empty<LogRecord>()
+                .insertAllAfter(ReplicaId("C"), RgaId.HEAD, listOf(record(901).copy(body = "c".repeat(4_000))))
+            val refusedMerge = writer.merge(peerLog)
+            quota.acceptSegmentWrites()
+            sized.refuseLargeWrites()
+            val mintedInMemory = writer.snapshot().seqHighWater(replica)
+            val heldBeforeAdopt = ownSeqsHeldWithoutAGap(segmentsOnDisk(backing))
+
+            val refusedAdopt = adopt(writer)
+            val indexAtRestart = indexOf(backing)
+            val heldAtRestart = ownSeqsHeldWithoutAGap(segmentsOnDisk(backing))
+
+            val restarted = exporterFor(backing)
+            restarted.recover()
+            val after = List(300) { restarted.export(record(1000 + it)) }
+            val log = restarted.snapshot()
+            val segments = segmentsOnDisk(backing).map { decodeSegmentForTest(it) }
+
+            assertAll(
+                // The rig: an own record in memory alone, a merge left uncarried, and an adopt of the
+                // whole log refused for its size.
+                { assertTrue(before.all { it == ExportResult.Success }, "the run before the outage: $before") },
+                { assertTrue(unwritten != ExportResult.Success, "the own record was written") },
+                { assertTrue(refusedMerge != ExportResult.Success, "the first merge was written") },
+                { assertTrue(mintedInMemory > heldBeforeAdopt, "the log carried nothing past $heldBeforeAdopt") },
+                { assertTrue(refusedAdopt != ExportResult.Success, "the whole-log adopt was written") },
+                { assertTrue(sized.refusedWrites() >= 1, "no write was refused for its size") },
+                { assertTrue(after.all { it == ExportResult.Success }, "an export after the restart failed") },
+                // The property.
+                {
+                    assertTrue(
+                        indexAtRestart.seqHighWater <= heldAtRestart,
+                        "the index claims seq ${indexAtRestart.seqHighWater}; the store holds 1..$heldAtRestart",
+                    )
+                },
+                {
+                    assertTrue(
+                        log.compactedBelow[replica] >= log.seqHighWater(replica) - 3 * maxRecords,
+                        "the floor stopped at ${log.compactedBelow[replica]} of seq ${log.seqHighWater(replica)}",
+                    )
+                },
+                { assertEquals(0, log.compactedIds.count { it.replicaId == replica }, "an own drop kept a Compact") },
+            )
+        }
+
+    @Test
+    fun aRefusedWholeLogAdoptByAMergeClaimsOnlyWhatTheStoreHolds() =
+        aRefusedWholeLogAdoptClaimsOnlyWhatTheStoreHolds { writer ->
+            val (peerLog, _) = Rga.empty<LogRecord>().insertAllAfter(ReplicaId("D"), RgaId.HEAD, listOf(record(902)))
+            writer.merge(peerLog)
+        }
+
+    @Test
+    fun aRefusedWholeLogAdoptByADeduplicatingExportClaimsOnlyWhatTheStoreHolds() =
+        aRefusedWholeLogAdoptClaimsOnlyWhatTheStoreHolds { writer -> writer.export(record(901)) }
+
+    /**
      * Every index write, at the moment it lands, claims no seq past the run the segment keys then
      * on disk hold, and covers the ids of every segment it names sealed. Driven through two
      * segment-write outages, one healed in place and one carried across a restart, so the first
