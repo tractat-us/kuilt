@@ -187,16 +187,21 @@ class ClockWrapTest {
     /**
      * [MovableTree]'s dense per-replica seq wraps the same way: an op-log holding this replica's
      * seq at [Long.MAX_VALUE] makes its next [MovableTree.addNode] and [MovableTree.move] refuse.
+     *
+     * The tree carries the seq twice, on the op and in its per-replica high-water map, and the mint
+     * reads the map. So the rig rewrites both, and checks that the high-water it decoded is the
+     * ceiling: rewriting the op alone leaves a tree whose next mint is a valid `2`.
      */
     @Test
     fun movableTreeRefusesAtTheSeqCeiling() {
         val ser = MovableTree.serializer(String.serializer())
         val one = MovableTree.empty<String>().addNode(local, ts = 7L, parent = MovableTree.ROOT_ID, value = "a").tree
         val valid = Json.encodeToString(ser, one)
-        val rewritten = valid.replace("\"seq\":1", "\"seq\":$max")
+        val rewritten = valid.replace("\"seq\":1", "\"seq\":$max").replace("\"local\":1", "\"local\":$max")
         val full = Json.decodeFromString(ser, rewritten)
         assertAll(
-            { assertNotEquals(valid, rewritten, "the rig found the seq to rewrite in $valid") },
+            { assertEquals(2, rewritten.split("$max").size - 1, "the rig rewrote the op's seq and the high-water in $valid") },
+            { assertEquals(true, Json.encodeToString(ser, full).contains("\"local\":$max"), "the decoded high-water is the ceiling") },
             { assertFailsWith<ArithmeticException> { full.addNode(local, ts = 8L, parent = MovableTree.ROOT_ID, value = "b") } },
             { assertFailsWith<ArithmeticException> { full.move(local, ts = 9L, node = "a:local:7", newParent = MovableTree.ROOT_ID) } },
         )
