@@ -1136,6 +1136,39 @@ class HeddleNodeTest {
         )
     }
 
+    /**
+     * A child that a merge carried to its ceiling is rebased before the pick, not after it (#3353).
+     * `e2`, demanding at `2R`, is far enough above zero for a step, so nothing holds the rebase back.
+     * The raise used to run only once a pick had granted, and the pick over `e1` refuses first, so the
+     * parent refused for good. Both calls are asserted: the repair is the first, and it lasts.
+     */
+    @Test
+    fun aChildAtItsCeilingIsRebasedBeforeThePick() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val h = harness(peers = 1, mint = mapOf(0 to 100L), topology = flatTopology())
+        h.pump()
+        val node = h.peers[0].node
+        val atCeiling = Gauge(Rational.of(CEILING_AT_WEIGHT_ONE, 16L), folded = 0L)
+        val twoR = CEILING_AT_WEIGHT_ONE / 16L * 2L
+        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling, e2 to Gauge(Rational.of(twoR, 16L), folded = 0L)))))
+        node.advertise(e1, hungry)
+        node.advertise(e2, hungry)
+        h.pump()
+        val gauge = node.ledger.value.gauge(e1)
+        val rebasesBefore = node.rebasesForTest
+        val first = node.schedule(root)
+        val second = node.schedule(root)
+        h.pump()
+        assertAll(
+            { assertEquals(atCeiling, gauge, "the rig: e1 sits at its ceiling") },
+            { assertTrue(first is ScheduleOutcome.Delegated, "the parent is repaired on the first call: $first") },
+            { assertTrue(second !is ScheduleOutcome.PositionCeiling, "and stays repaired: $second") },
+            { assertTrue(node.rebasesForTest > rebasesBefore, "the rig: the repair is a rebase") },
+        )
+    }
+
     /** The cookbook's reading of [ScheduleOutcome], run: idle, then a grant, then a child at its ceiling. */
     @Test
     fun theScheduleOutcomesSampleReadsIdleDelegatedAndTheCeiling() = runTest(

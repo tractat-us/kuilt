@@ -155,6 +155,41 @@ class LocalHeddleRebaseTest {
     }
 
     /**
+     * The same heavy newborn, admitted beside two runners far apart (#3353, the window rule). `a`
+     * sits just under `R` and `b` within a unit of its origin, both last seen waiting, so the front `n` is seated
+     * at is half `a`'s position, which on `n`'s grid is past its ceiling. The charge rebase used to
+     * stop at `b`, the runner furthest behind: one unit, which left `n` past its ceiling, and the parent
+     * refused every acquire after. It now lowers the origin to the front its demanding children
+     * stand at, `n` included, and lets `b` go below zero, inside its window.
+     */
+    @Test
+    fun aHeavyNewbornAdmittedBesideTwoRunnersFarApartDoesNotWedgeTheParent() {
+        val engine = engine()
+        pickOnEach(listOf(engine), setOf(a, b), at = 1L)
+        engine.pushTo(a, threshold - TICKS_PER_UNIT)
+        check(engine.ticks(b) in 0L..TICKS_PER_UNIT) { "the rig: b sits within a unit of its origin, at ${engine.ticks(b)}" }
+        val withHeavy = draft("rebase") {
+            lane("a", Weight.ONE)
+            lane("b", Weight.ONE)
+            lane("c", Weight.ONE)
+            lane("n", Weight.of(60L))
+        }
+        check(engine.apply(withHeavy, generation = 1L).refusals.isEmpty()) { "the rig: n landed" }
+        val n = withHeavy.groupId("n")
+        val rebasesBefore = engine.rebasesForTest
+        val admitted = engine.admit(n, startedAt = 1L)
+        check(admitted is AcquireOutcome.Acquired) { "the rig: n was admitted, $admitted" }
+        engine.complete(admitted.lease.id, actualCost = 1L)
+        val outcome = engine.acquire(setOf(a, b, n), setOf(a, b, n), startedAt = 2L)
+        assertAll(
+            { assertTrue(outcome is AcquireOutcome.Acquired, "the parent is not wedged: $outcome") },
+            { assertTrue(engine.rebasesForTest > rebasesBefore, "the rig: the admit rebased") },
+            { assertTrue(engine.ticks(b) < 0L, "b went below zero, as only the window rule takes it: ${engine.ticks(b)}") },
+            { assertTrue(engine.ticks(b) >= -positionCeiling(Weight.ONE), "and stayed inside its window") },
+        )
+    }
+
+    /**
      * `a` and `b` both wait, `b` the lower at `2R`, so `Δ` is about `2R`; `c` is idle a few ticks
      * above its origin and moves the whole `Δ`, to about `−2R` (#3353). The fold rebase this replaced
      * stopped it at `−R`. The wake clamp takes all of it back, since it is taken wide: when `c` wakes
