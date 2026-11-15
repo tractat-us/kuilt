@@ -65,6 +65,11 @@ class HeddleAcceptanceTest {
      * cluster then ran on alone to ten times its grants; now neither refuses, the twin's peak
      * effective position passes its ceiling while the rebasing cluster's stays far below, and the
      * other two peers converge on the rebasing cluster's ledger.
+     *
+     * The supply is [TWIN_SUPPLY], an eighth of [SUPPLY]: the twin passes its ceiling near grant 92
+     * and ends some five times past it, with about eighty rebases on the other side. The full
+     * supply took 2,000 calls and only repeated that regime, at about 7 ms a call on Kotlin/Native,
+     * which ran this test past `runTest`'s 30 s on the Apple CI runners.
      */
     @Test
     fun aNoRebaseTwinPassesItsCeilingAndPicksAsTheRebasingClusterCallForCall() = runTest(
@@ -72,8 +77,8 @@ class HeddleAcceptanceTest {
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
         val started = TimeSource.Monotonic.markNow()
-        val rebasing = bootedCluster(mint = mapOf(0 to SUPPLY))
-        val twin = bootedCluster(mint = mapOf(0 to SUPPLY))
+        val rebasing = bootedCluster(mint = mapOf(0 to TWIN_SUPPLY))
+        val twin = bootedCluster(mint = mapOf(0 to TWIN_SUPPLY))
         twin.peers[0].node.rebaseForTest = false
         val node = rebasing.peers[0].node.asSchedulingPeer()
         val twinNode = twin.peers[0].node.asSchedulingPeer()
@@ -88,6 +93,7 @@ class HeddleAcceptanceTest {
             val twinOutcome = b.step(twinNode)
             assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${a.grants} grants")
             assertTrue(twinOutcome !is ScheduleOutcome.PositionCeiling, "the twin refused at the ceiling after ${b.grants} grants")
+            assertEquals(outcome, twinOutcome, "call ${a.calls}: the two answered differently")
             assertEquals(b.issuedByLane(twinNode), a.issuedByLane(node), "call ${a.calls}: the two made different picks")
             twinPeak = maxOf(twinPeak, twinNode.boundMetrics(root).peakPositionFraction)
             if (twinPassedAtGrant < 0 && twinPeak >= 1.0) twinPassedAtGrant = b.grants
@@ -95,6 +101,7 @@ class HeddleAcceptanceTest {
                 rebasing.pump(1L)
                 peak = maxOf(peak, node.boundMetrics(root).peakPositionFraction)
             }
+            if (outcome == ScheduleOutcome.NothingToDelegate) break
         }
         rebasing.pump()
         rebasing.pump()
@@ -104,9 +111,9 @@ class HeddleAcceptanceTest {
                 "${a.grants} grants in ${a.calls} calls, the rebasing cluster with ${node.rebases()} rebases, peak $peak",
         )
         assertAll(
-            { assertTrue(twinPassedAtGrant in 1 until a.grants, "the rig: the twin passed its ceiling with grants still to come ($twinPassedAtGrant of ${a.grants})") },
+            { assertTrue(twinPassedAtGrant in 1..a.grants / 2, "the rig: the twin passed its ceiling with half the supply or more to come ($twinPassedAtGrant of ${a.grants})") },
             { assertEquals(a.grants, b.grants, "the twin granted every grant the rebasing cluster did") },
-            { assertEquals(SUPPLY / MAX_GRANT, a.grants.toLong(), "the rig: the whole supply was granted") },
+            { assertEquals(TWIN_SUPPLY / MAX_GRANT, a.grants.toLong(), "the rig: the whole supply was granted") },
             { assertEquals(0, twinNode.rebases(), "the rig: the twin never rebased") },
             { assertTrue(node.rebases() > 0, "the rig: the rebasing cluster rebased (${node.rebases()} times)") },
             { assertTrue(merged.origin(root) > Int128.ZERO, "the origin rose, to ${merged.origin(root)}") },
@@ -648,8 +655,11 @@ class HeddleAcceptanceTest {
         /** The most calls the rebasing long run makes, so a run that stalls reds instead of hanging. */
         const val LONG_RUN_CALL_LIMIT: Int = 20_000
 
-        /** The twin refuses well inside this many calls; the bound only stops a broken rig running forever. */
-        const val TWIN_CALL_LIMIT: Int = 2_000
+        /** The twin run's supply: 2⁵³, 512 grants of [MAX_GRANT], about five times what takes the twin past its ceiling. */
+        const val TWIN_SUPPLY: Long = SUPPLY / 8
+
+        /** The twin run spends [TWIN_SUPPLY] in about 250 calls; the bound only stops a broken rig running forever. */
+        const val TWIN_CALL_LIMIT: Int = 400
 
         /** Calls the match run makes, one grant each: past the old ceiling and many rebases. */
         const val MATCH_CALLS: Int = 180
