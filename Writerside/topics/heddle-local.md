@@ -350,12 +350,6 @@ A group is named by its path from the top, here `listOf("forks")`, and the
 child by its own name. `attachedChildId` turns the pair into the id you lease
 with. Every child of `forks` gets the weight its template gives, 1 by default.
 
-**Coming from v0.7.4.** Its "runtime children" are these attached children, and
-the group's marker is now its template. A config that wrote `runtimeChildren: "1"` writes `template: { weight: "1" }`, and the
-template can now carry a `maxConcurrent` that caps each child. Decode
-configs strictly: a lenient decoder drops the old key without a word, and the
-group loses its template. Snapshots saved by v0.7.4 still restore.
-
 **Taking something out waits for its builds.** A fork you detach, or a lane a
 reload leaves out, closes at once: nothing new is leased there, and `acquire`
 answers `NoLiveLineage`. Builds already running on it finish normally. Until
