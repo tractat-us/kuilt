@@ -41,7 +41,7 @@ class LocalHeddleFineWeightTest {
                 lane("third", Weight.of(1, 3))
             }
         }
-        val engine = LocalHeddle.fromTopology(base, policy, epoch = 1L)
+        val engine = LocalHeddle.bootWhole(base, policy, epoch = 1L)
         val result = engine.apply(finer, generation = 1L)
         val refused = result.refusals.associateBy { it.child }
         val names = listOf(finer.groupId("thin", "a"), finer.groupId("thin", "b"), finer.groupId("thin", "z"), finer.groupId("thick", "third"))
@@ -74,7 +74,7 @@ class LocalHeddleFineWeightTest {
         val a = topology.groupId("a")
         val b = topology.groupId("b")
         val runs = listOf(1L, BAND_COST, full).map { cost ->
-            val engine = LocalHeddle.fromTopology(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
+            val engine = LocalHeddle.bootWhole(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
             run(engine, setOf(a, b), cost)
         }
         assertEquals(listOf(Run(200, 0), Run(200, 0), Run(200, 0)), runs, "every acquire leased, at each cost")

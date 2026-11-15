@@ -41,7 +41,7 @@ class LocalHeddleRebasePropertyTest {
             group("n", Weight.of(2)) { NESTED.forEach { (name, weight) -> lane(name, weight) } }
         }
         val policy = LocalPolicy(defaultReservation = 1L)
-        fun boot() = LocalHeddle.fromTopology(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
+        fun boot() = LocalHeddle.bootWhole(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
         var engine = boot()
         val twin = boot().apply { rebaseForTest = false }
         var beside: LocalHeddle? = null
@@ -148,7 +148,7 @@ class LocalHeddleRebasePropertyTest {
     fun leasesChargedBelowTheirReservationKeepPickingAcrossRebases() {
         val topology = draft("rt") { RETURN_LANES.forEach { (name, weight) -> lane(name, weight) } }
         val policy = LocalPolicy(defaultReservation = 1L)
-        fun boot() = LocalHeddle.fromTopology(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
+        fun boot() = LocalHeddle.bootWhole(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
         val engine = boot()
         val twin = boot().apply { rebaseForTest = false }
         val lanes = RETURN_LANES.map { topology.groupId(it.first) }
@@ -202,7 +202,7 @@ class LocalHeddleRebasePropertyTest {
             lane("a", Weight.of(3L, 7L))
             lane("b", Weight.ONE)
         }
-        val engine = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+        val engine = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
             .apply { reconcileCapacity(1L) }
         val a = topology.groupId("a")
         var picks = 0
@@ -235,7 +235,7 @@ class LocalHeddleRebasePropertyTest {
             lane("w10", Weight.of(10L))
             lane("w1", Weight.ONE)
         }
-        val engine = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply { reconcileCapacity(1L) }
+        val engine = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply { reconcileCapacity(1L) }
         val lanes = listOf("w60", "w30", "w10", "w1").map { topology.groupId(it) }
         val random = Random(3313)
         var picks = 0
@@ -266,7 +266,7 @@ class LocalHeddleRebasePropertyTest {
             lane("a", Weight.ONE)
             lane("b", Weight.ONE)
         }
-        val engine = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply { reconcileCapacity(1L) }
+        val engine = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply { reconcileCapacity(1L) }
         val a = topology.groupId("a")
         var leases = 0
         var extended = 0

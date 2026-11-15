@@ -78,7 +78,7 @@ class LocalHeddlePersistenceTest {
      * persisted wake offset is the one the clamp just wrote.
      */
     private fun wakerScenario(epoch: Long = 0L): Pair<LocalHeddle, List<Lease>> {
-        val h = LocalHeddle.fromTopology(pair, policy, epoch)
+        val h = LocalHeddle.bootWhole(pair, policy, epoch)
         h.reconcileCapacity(totalSlots = 2L)
         repeat(50) {
             val lease = h.lease(setOf(a), startedAt = it.toLong())
@@ -106,7 +106,7 @@ class LocalHeddlePersistenceTest {
 
     /** The edge `root → leaf` of [pair] as [LocalHeddle.fromTopology] boots it, at generation 0. */
     private fun edgeTo(leaf: GroupId): AttachmentId =
-        checkNotNull(LocalHeddle.fromTopology(pair, policy, 0L).snapshot().ledger.lineageOf(leaf)).single()
+        checkNotNull(LocalHeddle.bootWhole(pair, policy, 0L).snapshot().ledger.lineageOf(leaf)).single()
 
     @Test
     fun snapshotRoundTripsThroughJson() {
@@ -235,7 +235,7 @@ class LocalHeddlePersistenceTest {
         val before = Topology("root", listOf(Topology.Lane("a"), Topology.Lane("spare")))
         val after = Topology("root", listOf(Topology.Lane("a")))
         val spare = before.groupId("spare")
-        val h = LocalHeddle.fromTopology(before, policy, epoch = 0L).also { it.reconcileCapacity(2L) }
+        val h = LocalHeddle.bootWhole(before, policy, epoch = 0L).also { it.reconcileCapacity(2L) }
         val leftover = h.lease(setOf(spare))
         val edge = leftover.let { checkNotNull(h.capturedPath(it.id)).single() }
         val first = h.apply(after, generation = 1L)
@@ -302,7 +302,7 @@ class LocalHeddlePersistenceTest {
      */
     @Test
     fun aRootLeaseWithNoPathIsRefused() {
-        val s = LocalHeddle.fromTopology(pair, policy, epoch = 0L).persist()
+        val s = LocalHeddle.bootWhole(pair, policy, epoch = 0L).persist()
         val atRoot = PersistedLease(Lease(LeaseId(0L, 0L), root, reserved = 1L, startedAt = 0L), path = emptyList())
         assertAll(
             { assertEquals(emptyList(), s.ledger.lineageOf(root), "the rig: the root's live lineage is the empty path") },
@@ -344,7 +344,7 @@ class LocalHeddlePersistenceTest {
             ),
         )
         val pool = draft.groupId("pool")
-        val original = LocalHeddle.fromTopology(draft, policy, epoch = 0L)
+        val original = LocalHeddle.bootWhole(draft, policy, epoch = 0L)
         val before = original.admit(pool, startedAt = 0L)
         val restored = throughJson(original)
         assertAll(
@@ -413,7 +413,7 @@ class LocalHeddlePersistenceTest {
         val heavy = tree.groupId("heavy")
         val light = tree.groupId("light")
         val both = setOf(heavy, light)
-        fun away(): LocalHeddle = LocalHeddle.fromTopology(tree, policy, epoch = 0L).apply {
+        fun away(): LocalHeddle = LocalHeddle.bootWhole(tree, policy, epoch = 0L).apply {
             reconcileCapacity(1L)
             for (waiting in listOf(both, setOf(heavy), setOf(heavy))) {
                 val lease = assertIs<AcquireOutcome.Acquired>(acquire(waiting, waiting, startedAt = 0L)).lease
@@ -539,7 +539,7 @@ class LocalHeddlePersistenceTest {
      * either way, since the one retired edge is a group's.
      */
     private fun richScenario(forgets: Boolean = true): Pair<LocalHeddle, List<Lease>> {
-        val h = LocalHeddle.fromTopology(richBefore, richPolicy, epoch = 0L).also { it.reconcileCapacity(4L); it.forgetsForTest = forgets }
+        val h = LocalHeddle.bootWhole(richBefore, richPolicy, epoch = 0L).also { it.reconcileCapacity(4L); it.forgetsForTest = forgets }
         check(h.attach(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
         val interactive = h.lease(setOf(richBefore.groupId("acme", "interactive")), reservation = 2L, startedAt = 10L)
         val spare = h.lease(setOf(richBefore.groupId("spare")), reservation = 3L, startedAt = 11L)
@@ -905,7 +905,7 @@ class LocalHeddlePersistenceTest {
         val (h, open) = wakerScenario()
         val settled = h.lease(setOf(a, b))
         h.complete(settled.id, 1L)
-        val reset = LocalHeddle.fromTopology(pair, policy, epoch = 1L)
+        val reset = LocalHeddle.bootWhole(pair, policy, epoch = 1L)
         val resetBefore = reset.snapshot().ledger
         val restored = throughJson(h)
         val restoredBefore = restored.snapshot().ledger
@@ -928,7 +928,7 @@ class LocalHeddlePersistenceTest {
     @Test
     fun capacitySurvivesRestore() {
         // Sized for one slot, and nothing minted yet: the next acquire has to top up.
-        val h = LocalHeddle.fromTopology(Topology("root", listOf(Topology.Lane("a"))), policy, epoch = 0L)
+        val h = LocalHeddle.bootWhole(Topology("root", listOf(Topology.Lane("a"))), policy, epoch = 0L)
         h.reconcileCapacity(totalSlots = 1L)
         val restored = throughJson(h)
         val uncapacitated = LocalHeddle.restore(
@@ -979,8 +979,8 @@ class LocalHeddlePersistenceTest {
         var compared = 0
         for (seed in 0 until SEEDS) {
             val rng = Random(seed)
-            val reference = LocalHeddle.fromTopology(base, wide, epoch = 0L).also { it.reconcileCapacity(2L) }
-            var subject = LocalHeddle.fromTopology(base, wide, epoch = 0L).also { it.reconcileCapacity(2L) }
+            val reference = LocalHeddle.bootWhole(base, wide, epoch = 0L).also { it.reconcileCapacity(2L) }
+            var subject = LocalHeddle.bootWhole(base, wide, epoch = 0L).also { it.reconcileCapacity(2L) }
             val cut = rng.nextInt(STEPS)
             repeat(STEPS) { step ->
                 if (step == cut) {

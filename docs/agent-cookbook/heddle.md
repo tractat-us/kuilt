@@ -31,7 +31,8 @@ coroutines, and the whole tree, its leases and its history fit in one snapshot.
 **Intent:** when a slot frees, decide whose work runs in it so that over time each group gets
 the share its weight promises; then charge what the work really cost.
 **Primitive:** `LocalHeddle` (`:kuilt-heddle-core`). Start one with
-`LocalHeddle.fromTopology(topology, policy, epoch)` and tell it how many slots you run with
+`LocalHeddle.fromTopology(topology, policy, epoch)`, which returns the engine with what booting
+it did (`val (heddle, booted) = …`; `booted.refusals` is empty when the whole tree booted), and tell it how many slots you run with
 `reconcileCapacity(totalSlots)`. Each free slot is one **lease**:
 `acquire(waiting, eligible, startedAt)` names the leaf whose work runs next and reserves an
 estimated cost for it, and `complete(lease, actualCost)` charges what it really cost, hands the
@@ -74,7 +75,8 @@ The whole loop in one place, from the admin's file to a restart:
     val farm = parsed.topology
     val policy = LocalPolicy(defaultReservation = 3L)
     // The epoch is a boot counter you persist and raise on every start.
-    val heddle = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 4L)
 
     // A contributor opens a fork while the program runs.
@@ -664,6 +666,7 @@ who was waiting. A `PositionCeiling` keeps nothing at all.
 | `extend` | `LeaseOutcome`: `Done`, `PathDraining(edge)` (a reload is closing the path), `SupplyExhausted`, `PositionCeiling(parent)`, `Unknown`, `Stale(currentEpoch)` | a concurrency ceiling |
 | `complete` | `LeaseOutcome`: `Done(charged, overrun)`, `Unknown`, `Stale(currentEpoch)` | anything: a draining path, an overrun, a ceiling |
 | `cancel` | `LeaseOutcome`: `Done`, `Unknown`, `Stale(currentEpoch)` | anything |
+| `fromTopology` | `LocalHeddle.Boot(heddle, result)`: the engine, and an `ApplyResult` naming every group the boot left out, each a `StepRefusal.Refused` | — |
 | `apply`, `attach`, `detach` | `ApplyResult(applied, refusals)`, each refusal a `StepRefusal.Draining` (waits on open leases) or `StepRefusal.Refused` (the ledger will not take it) | — |
 | `decode` | `RestoreResult`: `Restored`, `UnsupportedVersion`, `Corrupt` | — |
 
@@ -708,6 +711,29 @@ group still reached through live edges.
     check(restarted.acquire(setOf(coarse), setOf(coarse), startedAt = 10L) is AcquireOutcome.Acquired)
 ```
 
+**A boot is not a reload.** The weight budget belongs to a whole sibling set, and a reload
+activates a set's new children in id order, so of two new siblings that fit alone but not
+together it refuses the one whose id sorts last, and leaves the running tree as it was. A boot
+has no running tree to keep. Where a group's children's weights do not fit together, it leaves
+out that group and every group beneath it, reports each one, and boots the rest; at the root,
+nothing boots. The answer is the same whatever the children are named and in whatever order they
+are written. Apply a tree that fits to bring the left-out groups back.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalBootRefusal -->
+```kotlin
+    val tree = draft("farm") {
+        group("builds") {
+            lane("fast")
+            lane("fine", Weight.of(1, 30_720))
+        }
+        lane("docs")
+    }
+    val (heddle, booted) = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    val left = setOf(tree.groupId("builds"), tree.groupId("builds", "fast"), tree.groupId("builds", "fine"))
+    check(booted.refusals.map { it.child }.toSet() == left)
+    check(booted.refusals.all { it is StepRefusal.Refused })
+```
+
 `PositionCeiling` is not in the sample, and not faked: a busy parent is rebased long before a
 child nears its ceiling, so no short honest run reaches it. Branch on it like the others; it
 means a demanding child is never served, or that a plain `admit` rebased over a child last seen
@@ -722,11 +748,9 @@ would leave `Long` throws `ArithmeticException` rather than wrapping; the diagno
 well before any ceiling, since they answer in exact `Rational`s: `explain`'s `BehindAtLevel`
 fronts, whose numerator carries the least common multiple of the sibling weights' denominators,
 and `entitlement`. `IllegalStateException` is left for a ledger conflict the engine did not
-create, such as two live edges into one group, a split record or a cycle on a lease's path, and
-for one call a consumer can reach: `LocalHeddle.fromTopology` over a tree whose boot `apply`
-refuses a child, such as a weight with a denominator above 30,719. To get that refusal as a value
-instead, boot from a coarser tree and `apply` the finer one. A typed answer at boot is tracked
-by [#3461](https://github.com/tractat-us/kuilt/issues/3461).
+create, such as two live edges into one group, a split record or a cycle on a lease's path. A
+weight set that does not fit is never one: a boot reports it in `Boot.result`, and a reload in
+its `ApplyResult`.
 
 **The position ceiling.** Each child's progress is a count of sixteenths of a unit, stored exactly
 in 128 bits and read for a pick, net of what it returned, as a `Long` with a ceiling. A busy

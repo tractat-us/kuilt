@@ -441,14 +441,18 @@ public sealed interface LeaseOutcome {
  * [StepRefusal.Refused], and its siblings land. So does one too fine for a full lease: keep every
  * weight's denominator at or below 30,719 (#3353). The limit holds at any lease size, because it is
  * sized for the largest lease, [MAX_RESERVATION]. It is necessary, not sufficient: several fine
- * weights whose denominators share no factor are refused below it too.
+ * weights whose denominators share no factor are refused below it too. A reload refuses the
+ * sibling whose activation tips the set over, and siblings activate in id order, so of two new
+ * siblings that fit alone but not together, the one whose id sorts last is refused. A boot, which
+ * has no previous tree to keep, leaves out their parent and everything beneath it instead (see
+ * [fromTopology]).
  *
  * A state the engine's own invariants rule out throws [IllegalStateException]: that is a bug in
  * the engine, or a ledger conflict the engine did not create, such as two live inbound edges into
  * one group, a divergent record, or a cycle on a lease's path (#1737). [apply] never leaves one on
  * an open lease's path: before it swaps a reload in, it checks that every open lease's path is its
- * leaf's one live lineage. [fromTopology] throws it too, when its boot [apply] refuses a child of
- * a well-formed topology, such as a weight with a denominator above 30,719.
+ * leaf's one live lineage. A boot throws neither: [fromTopology] reports a set of weights that
+ * does not fit in [Boot.result], and leaves out the group that holds it.
  *
  * @sample us.tractat.kuilt.heddle.sampleLocalLease
  * @sample us.tractat.kuilt.heddle.sampleFairShareQueue
@@ -1010,7 +1014,7 @@ public class LocalHeddle private constructor(
         val steps = Topology.diff(new, ledger, generation)
         // Before the run, so the swap forgets what [new] does not want, not what the old topology did not.
         leasable = Leasable.ByTopology(new)
-        run(steps)
+        run(steps, Attribution.CHILD)
     }
 
     /**
@@ -1024,7 +1028,7 @@ public class LocalHeddle private constructor(
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun attach(group: List<String>, name: String, generation: Long): ApplyResult =
-        atomically { run(topology().attach(group, name, ledger, generation)) }
+        atomically { run(topology().attach(group, name, ledger, generation), Attribution.CHILD) }
 
     /**
      * Detach the attached child [name] from the group at [group] ([Topology.detach]):
@@ -1036,7 +1040,7 @@ public class LocalHeddle private constructor(
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
     public fun detach(group: List<String>, name: String): ApplyResult =
-        atomically { run(topology().detach(group, name, ledger)) }
+        atomically { run(topology().detach(group, name, ledger), Attribution.CHILD) }
 
     private fun topology(): Topology =
         checkNotNull((leasable as? Leasable.ByTopology)?.topology) { "an engine over a hand-built ledger has no topology" }
@@ -1047,14 +1051,22 @@ public class LocalHeddle private constructor(
      * child's steps, so the child is left exactly as it was. Each round leaves out at least one more
      * child, so this ends, and the one swap is the attempt in which every child left in landed.
      * That swap also forgets what it can ([forgetQuiesced]).
+     *
+     * [attribution] says what a child the weight budget refuses takes out with it.
      */
-    private fun run(steps: List<TopologyStep>): ApplyResult {
+    private fun run(steps: List<TopologyStep>, attribution: Attribution): ApplyResult {
         val left = LinkedHashMap<GroupId, StepRefusal>()
         while (true) {
             when (val trial = attempt(steps, left.keys)) {
                 is Trial.LeaveOut -> {
                     val fresh = trial.refusals.filter { it.child !in left }
                     check(fresh.isNotEmpty()) { "an attempt left out only children already left out: ${trial.refusals}" }
+                    // The outermost unit first, so a group inside two that do not fit is reported for the outer one.
+                    if (attribution == Attribution.SIBLING_SET) {
+                        for (parent in trial.unfit.sortedWith(compareBy({ it.value.count { c -> c == '/' } }, { it.value }))) {
+                            for (refusal in unitOf(parent, steps)) left.getOrPut(refusal.child) { refusal }
+                        }
+                    }
                     for (refusal in fresh) left.getOrPut(refusal.child) { refusal }
                 }
                 is Trial.Landed -> {
@@ -1065,6 +1077,42 @@ public class LocalHeddle private constructor(
                 }
             }
         }
+    }
+
+    /**
+     * One [StepRefusal.Refused] for [parent], unless it is the [root], and for every group beneath
+     * it that [steps] names, each at its first step: the unit a boot leaves out when [parent]'s
+     * children's weights do not fit the budget together. Every one carries the same reason, so the
+     * answer does not depend on which child's activation tipped the set over.
+     */
+    private fun unitOf(parent: GroupId, steps: List<TopologyStep>): List<StepRefusal> {
+        val reason = "the weights of ${parent.value}'s children do not fit together: they would put the weight " +
+            "arithmetic out of Long, or let one full lease carry a child past its ceiling, so the boot leaves out " +
+            "${parent.value} and every group beneath it"
+        val beneath = parent.value + "/"
+        return steps.asSequence()
+            .filter { it.child == parent || it.child.value.startsWith(beneath) }
+            .distinctBy { it.child }
+            .map { StepRefusal.Refused(it.child, it, reason) }
+            .toList()
+    }
+
+    /** What [run] leaves out when the weight budget refuses a child's activation. */
+    private enum class Attribution {
+        /**
+         * That child alone, as any other refused child is: a reload whose new child does not fit
+         * beside its siblings leaves the tree that was running as it was.
+         */
+        CHILD,
+
+        /**
+         * The child's parent and everything beneath it. A boot has no previous tree to keep, and
+         * the budget is a property of the whole sibling set: which sibling's activation tips it over
+         * depends on how their ids sort, so leaving out that one would run an arbitrary part of a
+         * set that does not fit together. Its parent is the smallest unit the user wrote that is
+         * misconfigured, whatever the names; when it is the [root], nothing boots.
+         */
+        SIBLING_SET,
     }
 
     /**
@@ -1133,7 +1181,8 @@ public class LocalHeddle private constructor(
         }
         if (stuck.isNotEmpty()) {
             return Trial.LeaveOut(
-                stuck.map { (child, leases) ->
+                unfit = emptySet(),
+                refusals = stuck.map { (child, leases) ->
                     val edge = replaced.entries.first { (e, c) -> c == child && leases.any { e in open.getValue(it.id).path } }.key
                     StepRefusal.Draining(child, edge, base.outstanding(edge), leases)
                 },
@@ -1154,6 +1203,7 @@ public class LocalHeddle private constructor(
         val draining = ArrayList<StepRefusal>()
         val stopped = HashSet<GroupId>()
         val leaveOut = ArrayList<StepRefusal>()
+        val unfit = HashSet<GroupId>()
         for (step in steps) {
             val child = step.child
             if (child in leftOut || child in stopped) continue
@@ -1166,6 +1216,7 @@ public class LocalHeddle private constructor(
             // parent would then throw, or one under-charged lease would wedge it (#3313, #3353).
             val overBudget = stepped != null && step is TopologyStep.Activate && !stepped.activationFitsTheBudget(step.edge)
             val next = if (overBudget) null else stepped
+            if (overBudget) unfit += checkNotNull(stepped.record(step.edge)) { "an activation the budget refused has no record" }.parent
             if (next != null) {
                 local = next
                 applied += step
@@ -1188,7 +1239,7 @@ public class LocalHeddle private constructor(
             // The child's first refusal is its answer: its later steps do not run.
             stopped += child
         }
-        if (leaveOut.isNotEmpty()) return Trial.LeaveOut(leaveOut)
+        if (leaveOut.isNotEmpty()) return Trial.LeaveOut(leaveOut, unfit)
 
         val moved = LinkedHashMap<LeaseId, List<AttachmentId>>()
         for (lease in moving) {
@@ -1196,7 +1247,8 @@ public class LocalHeddle private constructor(
             val delegated = path?.let { seatThenDelegate(local, it, lease.lease.reserved, observedDemand(lease.lease.reserved)) }
             if (path == null || delegated == null) {
                 return Trial.LeaveOut(
-                    lease.path.mapNotNull { replaced[it] }.distinct().map { child ->
+                    unfit = emptySet(),
+                    refusals = lease.path.mapNotNull { replaced[it] }.distinct().map { child ->
                         val activate = steps.first { it is TopologyStep.Activate && it.child == child }
                         StepRefusal.Refused(child, activate, "lease ${lease.lease.id} cannot be delegated down ${lease.lease.leaf.value}'s new path")
                     },
@@ -1234,7 +1286,7 @@ public class LocalHeddle private constructor(
      * [steps] applied as [apply] applies a diff, for tests: the seam for a list no diff writes, such
      * as one with a step the ledger refuses outright.
      */
-    internal fun applyStepsForTest(steps: List<TopologyStep>): ApplyResult = atomically { run(steps) }
+    internal fun applyStepsForTest(steps: List<TopologyStep>): ApplyResult = atomically { run(steps, Attribution.CHILD) }
 
     /**
      * Whether [run]'s swap forgets ([forgetQuiesced]); `true` unless a test turns it off, to compare
@@ -1461,8 +1513,11 @@ public class LocalHeddle private constructor(
 
     /** What one [attempt] at a reload came to. */
     private sealed interface Trial {
-        /** Leave these children out and attempt again; the working copy is discarded. */
-        class LeaveOut(val refusals: List<StepRefusal>) : Trial
+        /**
+         * Leave these children out and attempt again; the working copy is discarded. [unfit] holds
+         * every parent at which the weight budget refused an activation.
+         */
+        class LeaveOut(val refusals: List<StepRefusal>, val unfit: Set<GroupId>) : Trial
 
         /** Every child left in landed or is draining: swap [ledger] in and move each lease in [moved] onto its new path. */
         class Landed(
@@ -1487,6 +1542,17 @@ public class LocalHeddle private constructor(
 
     /** One level of a [Descent]: the pick at [parent] chose [edge], on [seated], the ledger with [parent]'s children seated. */
     internal class Level(val parent: GroupId, val seated: EntitlementLedger, val edge: AttachmentId)
+
+    /**
+     * What [fromTopology] booted: the engine, and what booting it did, in the shape a reload
+     * reports. [ApplyResult.refusals] is empty when the whole tree booted; otherwise it names every
+     * group left out, and [heddle] runs the rest.
+     *
+     * @property heddle the engine, running every group [result] does not refuse.
+     * @property result the steps the boot applied, and one refusal per group it left out.
+     * @sample us.tractat.kuilt.heddle.sampleLocalBootRefusal
+     */
+    public data class Boot(public val heddle: LocalHeddle, public val result: ApplyResult)
 
     public companion object {
         /** The one writer. Internal: a consumer never needs to name it. */
@@ -1551,26 +1617,33 @@ public class LocalHeddle private constructor(
 
         /**
          * An engine running [topology], issuing lease ids under [epoch], with no supply yet: it mints
-         * its own once [reconcileCapacity] is called. Its [root] is the topology's root.
+         * its own once [reconcileCapacity] is called. Its [root] is the topology's root. It comes
+         * back with what booting it did, as a [Boot].
          *
-         * It boots the way every later reload arrives: [apply] of [topology] to an empty ledger, at
-         * generation 0. So the ids it starts with are exactly [Topology.lower]'s, and there is no
-         * second, unfloored way to build a tree.
+         * It boots the way every later reload arrives: the steps [apply] would run for [topology]
+         * on an empty ledger, at generation 0, under the same weight budget. So the ids it starts
+         * with are exactly [Topology.lower]'s, and there is no second, unfloored way to build a tree.
          *
-         * @throws IllegalStateException when that boot [apply] refuses a child, as it refuses a
-         *   weight set too fine for one full lease (see "Failure surface"): boot from a coarser tree
-         *   and [apply] the finer one to have the refusal reported instead.
+         * **A boot leaves out what does not fit, and says so.** Where the weights of one group's
+         * children do not fit the budget together (see "Failure surface"), that group and every
+         * group beneath it are left out, each reported in [Boot.result] as a
+         * [StepRefusal.Refused], and the rest of the tree boots. When the group is the [root],
+         * nothing boots, and every group is reported. Unlike a reload's, the answer does not
+         * depend on which sibling's activation tipped the set over, so it is the same whatever the
+         * children are named and whatever order they are written in. [apply] a tree that fits to
+         * bring the groups left out back.
+         *
          * @sample us.tractat.kuilt.heddle.sampleLocalLease
          * @sample us.tractat.kuilt.heddle.sampleFairShareQueue
+         * @sample us.tractat.kuilt.heddle.sampleLocalBootRefusal
          */
-        public fun fromTopology(topology: Topology, policy: LocalPolicy, epoch: Long): LocalHeddle {
+        public fun fromTopology(topology: Topology, policy: LocalPolicy, epoch: Long): Boot {
             val engine = LocalHeddle(
                 topology.groupId(), policy, epoch, EntitlementLedger.ZERO, FairShareAllocator(SELF, policyConfig(policy)),
                 Leasable.ByTopology(topology),
             )
-            val booted = engine.apply(topology, generation = 0L)
-            check(booted.refusals.isEmpty()) { "booting from an empty ledger refused ${booted.refusals}" }
-            return engine
+            val booted = engine.atomically { engine.run(Topology.diff(topology, engine.ledger, generation = 0L), Attribution.SIBLING_SET) }
+            return Boot(engine, booted)
         }
 
         /**

@@ -22,7 +22,7 @@ class LocalHeddleCeilingTest {
     private val policy = LocalPolicy(defaultReservation = 1L)
 
     private fun engine(topology: Topology): LocalHeddle =
-        LocalHeddle.fromTopology(topology, policy, epoch = 0L).also { it.reconcileCapacity(4L) }
+        LocalHeddle.bootWhole(topology, policy, epoch = 0L).also { it.reconcileCapacity(4L) }
 
     private fun LocalHeddle.pick(waiting: Set<GroupId>, eligible: Set<GroupId> = waiting): GroupId =
         assertIs<AcquireOutcome.Acquired>(acquire(waiting, eligible, startedAt = 0L), "expected a lease among $eligible").lease.leaf
@@ -216,7 +216,7 @@ class LocalHeddleCeilingTest {
         val ofSibling = h.explain(b, ab, ab)
         val onlyCapped = h.explain(a, setOf(a), setOf(a))
         val viewed = h.persist().view(policy)
-        val broke = LocalHeddle.fromTopology(heavy(cap = 0L), policy, epoch = 0L)
+        val broke = LocalHeddle.bootWhole(heavy(cap = 0L), policy, epoch = 0L)
         assertAll(
             { assertEquals(WaitExplanation.AtCeiling(a, 1L), ofCapped) },
             { assertEquals(WaitExplanation.Kind.AT_CEILING, ofCapped.kind) },

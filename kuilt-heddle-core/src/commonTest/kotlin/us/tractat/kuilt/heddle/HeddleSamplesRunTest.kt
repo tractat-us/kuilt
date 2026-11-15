@@ -91,6 +91,9 @@ class HeddleSamplesRunTest {
     fun refusalsHold() = sampleRefusals()
 
     @Test
+    fun localBootRefusalHolds() = sampleLocalBootRefusal()
+
+    @Test
     fun snapshotPreviewQueuesHolds() = sampleSnapshotPreviewQueues()
 
     @Test

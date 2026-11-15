@@ -42,7 +42,7 @@ class LocalHeddleApplyPropertyTest {
         for (seed in 0 until seeds) {
             val r = Random(seed)
             val from = randomTree(r)
-            val run = Run(LocalHeddle.fromTopology(from, POLICY, epoch = 0L).also { it.reconcileCapacity(3L) }, from, tally)
+            val run = Run(LocalHeddle.bootWhole(from, POLICY, epoch = 0L).also { it.reconcileCapacity(3L) }, from, tally)
             run.churn(r, tally)
             run.traffic(r, steps = 6)
             run.openLeases(r, 1 + r.nextInt(3))
@@ -74,7 +74,7 @@ class LocalHeddleApplyPropertyTest {
         for (seed in 0 until seeds) {
             val r = Random(seed)
             var target = randomTree(r)
-            val run = Run(LocalHeddle.fromTopology(target, POLICY, epoch = 0L).also { it.reconcileCapacity(1L + r.nextInt(4)) }, target, tally)
+            val run = Run(LocalHeddle.bootWhole(target, POLICY, epoch = 0L).also { it.reconcileCapacity(1L + r.nextInt(4)) }, target, tally)
             repeat(4) { round ->
                 run.churn(r, tally)
                 run.traffic(r, steps = 4 + r.nextInt(8))

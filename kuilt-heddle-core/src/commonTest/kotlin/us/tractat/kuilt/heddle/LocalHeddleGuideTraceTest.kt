@@ -26,7 +26,7 @@ class LocalHeddleGuideTraceTest {
         }
         val web = farm.groupId("web", "builds")
         val mobile = farm.groupId("mobile", "builds")
-        val heddle = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+        val heddle = LocalHeddle.bootWhole(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
         heddle.reconcileCapacity(totalSlots = 4L)
         val both = setOf(web, mobile)
 

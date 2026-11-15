@@ -112,7 +112,7 @@ class LocalHeddleViewTest {
      */
     private fun history(seed: Int, policy: LocalPolicy): LocalHeddle {
         val rng = Random(seed)
-        val h = LocalHeddle.fromTopology(before, policy, epoch = rng.nextLong(0L, 5L))
+        val h = LocalHeddle.bootWhole(before, policy, epoch = rng.nextLong(0L, 5L))
         check(h.attach(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
         if (seed % 2 == 0) h.reconcileCapacity(1L + rng.nextInt(4)) else h.mintSupply(30L + rng.nextInt(60))
         repeat(STEPS) { step ->
@@ -204,7 +204,7 @@ class LocalHeddleViewTest {
     @Test
     fun aViewLeasesByTheTopologyTheSnapshotKept() {
         val policy = LocalPolicy(defaultReservation = 1L)
-        val h = LocalHeddle.fromTopology(before, policy, epoch = 0L).also { it.reconcileCapacity(2L) }
+        val h = LocalHeddle.bootWhole(before, policy, epoch = 0L).also { it.reconcileCapacity(2L) }
         val pool = before.groupId("pool")
         val view = h.persist().view(policy)
         val ledger = h.snapshot().ledger
@@ -220,7 +220,7 @@ class LocalHeddleViewTest {
     /** A view sizes the snapshot's capacity with the policy it is given, as a restore does, and refuses one that cannot. */
     @Test
     fun aViewRefusesAPolicyThatCannotSizeTheCapacity() {
-        val h = LocalHeddle.fromTopology(before, LocalPolicy(defaultReservation = 1L), epoch = 0L).also { it.reconcileCapacity(1_000L) }
+        val h = LocalHeddle.bootWhole(before, LocalPolicy(defaultReservation = 1L), epoch = 0L).also { it.reconcileCapacity(1_000L) }
         val greedy = LocalPolicy(defaultReservation = LocalHeddle.MAX_RESERVATION, supply = SupplyPolicy(lowWatermarkSlots = 1L, targetSlots = 1L shl 20))
         val persisted = h.persist()
         assertAll(

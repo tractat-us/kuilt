@@ -63,7 +63,7 @@ class LocalHeddleOverflowPropertyTest {
             lane("a", Weight.of(3, 7))
             lane("b", Weight.of(2, 5))
         }
-        val engine = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+        val engine = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
             .apply { reconcileCapacity(1L) }
         val lanes = listOf(topology.groupId("a"), topology.groupId("b"))
         val picked = IntArray(lanes.size)
@@ -104,7 +104,7 @@ class LocalHeddleOverflowPropertyTest {
             group("rt", Weight.of(2)) { template(Weight.of(3, 2)) }
         }
         val policy = LocalPolicy(defaultReservation = 1L)
-        var engine = LocalHeddle.fromTopology(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
+        var engine = LocalHeddle.bootWhole(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
         val a = topology.groupId("a")
         val rt = listOf("rt")
         val attached = ArrayDeque<String>()
@@ -171,7 +171,7 @@ class LocalHeddleOverflowPropertyTest {
                 NESTED.forEach { (name, weight) -> lane(name, weight) }
             }
         }
-        val engine = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+        val engine = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
             .apply { reconcileCapacity(1L) }
         val leaves = LANES.map { topology.groupId(it.first) } + NESTED.map { topology.groupId("nested", it.first) }
         val random = Random(seed)

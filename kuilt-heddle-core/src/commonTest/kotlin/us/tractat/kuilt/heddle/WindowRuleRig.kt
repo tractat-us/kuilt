@@ -21,7 +21,7 @@ internal class WindowRuleRig(
     var names: List<String> = lanes.map { it.first }
         private set
 
-    val engine: LocalHeddle = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply {
+    val engine: LocalHeddle = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply {
         windowRuleForTest = windowRule
         reconcileCapacity(1L)
     }

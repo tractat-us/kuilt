@@ -21,7 +21,8 @@ Most programs want the whole loop rather than its parts: when a worker frees up,
 ask whose work runs next, run it, and charge what it really cost. That is
 `LocalHeddle`. Describe the groups and their weights as a `Topology` (in code
 with `draft`, or from an admin's file with `Topology.from`), start an engine with
-`LocalHeddle.fromTopology`, tell it how many slots you run with
+`LocalHeddle.fromTopology`, which also reports any group it left out because its
+children's weights do not fit together, tell it how many slots you run with
 `reconcileCapacity`, and then lease one slot at a time:
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalLease -->
@@ -243,7 +244,9 @@ fine for one full lease is refused: keep every weight's denominator at or below 
 a finer weight set is refused when it is applied. The limit holds at any lease size,
 because it is sized for the largest lease, `MAX_RESERVATION`, and no grant is larger. It
 is necessary, not sufficient: several fine weights whose denominators share no factor
-are refused below it too. `LocalHeddle.apply` answers a `StepRefusal` for such a child. It remembers, between calls, which children it
+are refused below it too. `LocalHeddle.apply` answers a `StepRefusal` for such a child,
+and `LocalHeddle.fromTopology`, which has no running tree to keep, leaves out the
+child's parent and everything beneath it, reporting each in its `Boot`. It remembers, between calls, which children it
 has seen idle and what clamp each carries; that memory is local to the allocator and
 is never part of the ledger.
 

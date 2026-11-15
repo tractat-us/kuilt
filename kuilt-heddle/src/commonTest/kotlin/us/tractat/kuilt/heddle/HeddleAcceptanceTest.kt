@@ -143,7 +143,9 @@ class HeddleAcceptanceTest {
         val cluster = bootedCluster(mint = emptyMap())
         val peer = cluster.peers[0]
         val node = peer.node.asSchedulingPeer()
-        val local = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply { reconcileCapacity(1L) }
+        val boot = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+        check(boot.result.refusals.isEmpty()) { "the boot left out ${boot.result.refusals}" }
+        val local = boot.heddle.apply { reconcileCapacity(1L) }
         val run = MixedWeightRun(root, lanes, MAX_GRANT, Random(3329))
         val divergences = ArrayList<String>()
         var fundedOneGrant = 0
