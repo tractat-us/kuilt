@@ -201,6 +201,52 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
             )
         }
 
+    /**
+     * An adopt that leads with the unwritten active segment, in a turn whose window pass then moves
+     * that segment, still writes the moved one. The leading write is built before the pass, so it
+     * lacks the floor the pass raised; reusing it as the turn's active write would leave that floor
+     * in memory alone, and a restart would read the segment back without it.
+     */
+    @Test
+    fun anAdoptThatLedWithTheActiveSegmentStillWritesTheFloorItsWindowPassRaised() = runTest {
+        val backing = RecordingStore()
+        val quota = RefuseSegmentWritesStore(backing)
+        val writer = exporterFor(quota)
+        writer.recover()
+        repeat(25) { writer.export(record(it)) }
+        quota.refuseSegmentWrites()
+        val unwritten = writer.export(record(600))
+        val (peerLog, _) = Rga.empty<LogRecord>().insertAllAfter(ReplicaId("C"), RgaId.HEAD, listOf(record(901)))
+        val refusedMerge = writer.merge(peerLog)
+        quota.acceptSegmentWrites()
+        val floorBefore = writer.snapshot().compactedBelow[replica]
+
+        val (secondPeerLog, _) = Rga.empty<LogRecord>().insertAllAfter(ReplicaId("D"), RgaId.HEAD, listOf(record(902)))
+        val wholeLogAdopt = writer.merge(secondPeerLog)
+        val live = writer.snapshot()
+        val restarted = exporterFor(backing)
+        restarted.recover()
+        val recovered = restarted.snapshot()
+
+        assertAll(
+            // The rig: the active segment was unwritten, the merge adopted the whole log, and its
+            // window pass raised the floor.
+            { assertTrue(unwritten != ExportResult.Success, "the own record was written") },
+            { assertTrue(refusedMerge != ExportResult.Success, "the first merge was written") },
+            { assertEquals(ExportResult.Success, wholeLogAdopt, "the whole-log adopt") },
+            { assertTrue(live.compactedBelow[replica] > floorBefore, "the pass left the floor at $floorBefore") },
+            // The property.
+            {
+                assertEquals(
+                    live.compactedBelow[replica],
+                    recovered.compactedBelow[replica],
+                    "the floor the pass raised is not on disk",
+                )
+            },
+            { assertEquals(live.toList(), recovered.toList(), "the restart reads back other records") },
+        )
+    }
+
     @Test
     fun aRefusedWholeLogAdoptByAMergeClaimsOnlyWhatTheStoreHolds() =
         aRefusedWholeLogAdoptClaimsOnlyWhatTheStoreHolds { writer ->
