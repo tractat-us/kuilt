@@ -149,7 +149,7 @@ class WarpTelemetryClearTest {
             { assertEquals(emptySet(), persisted.frontier(), "the frontier is forgotten") },
             {
                 assertTrue(
-                    persisted.tick().dot.seq > 2L,
+                    persisted.mint().dot.seq > 2L,
                     "seq must not regress: the two spans above already consumed 1 and 2, " +
                         "so a recovered clock ticks to 3 — a reset one would tick to 1 and " +
                         "re-mint a dot an earlier span already carries",

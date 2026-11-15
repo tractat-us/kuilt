@@ -30,9 +30,9 @@ class WarpSpanExporterAutoStampTest {
 
     @Test
     fun explicitStampWins() = runTest {
-        val clock = WarpCausalClock(ReplicaId("a"))
+        val clock = WarpCausalClock(ReplicaId("a")).armed()
         val exp = WarpSpanExporter(ReplicaId("a"), InMemoryDurableStore(), causalClock = clock)
-        val explicit = clock.tick()
+        val explicit = clock.mint()
         exp.export(span(1, stamp = explicit))
         assertEquals(explicit, exp.snapshot().elements.single().causalStamp)
     }

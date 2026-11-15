@@ -78,25 +78,24 @@ class WarpSpanExporterStoreMintedCancellationTest {
     @Test
     fun aCancellationTheStoreMintsOnTheClockReadDoesNotEscapeItsRecovery() = runTest {
         val backing = RecordingStore()
-        WarpCausalClock(replica).also { it.tick() }.persist(backing)
+        WarpCausalClock(replica).armed().also { it.mint() }.persist(backing)
         val store = CancellationScriptedStore(backing)
         store.arm(StoreCall.READ, StoreAct.MINT, isClock)
 
         val clock = WarpCausalClock(replica)
-        val failures = mutableListOf<Throwable>()
-        val outcome = escapeOf { clock.recover(store) { failures += it } }
+        val outcome = escapeOf { clock.recover(store) }
 
         assertAll(
             { assertEquals(1, store.minted, "the rig never minted on the clock read") },
             { assertNull(outcome.escaped, "a cancellation the store minted escaped the clock's recovery: ${outcome.escaped}") },
-            { assertEquals(1, failures.size, "the unread clock was reported ${failures.size} times, not once") },
+            { assertIs<ClockRecovery.Refused>(outcome.returned, "the unread clock was reported as ${outcome.returned}") },
         )
     }
 
     @Test
     fun theCallersOwnCancellationInTheClockReadStillPropagates() = runTest {
         val backing = RecordingStore()
-        WarpCausalClock(replica).also { it.tick() }.persist(backing)
+        WarpCausalClock(replica).armed().also { it.mint() }.persist(backing)
         val store = CancellationScriptedStore(backing)
         store.arm(StoreCall.READ, StoreAct.PARK, isClock)
 

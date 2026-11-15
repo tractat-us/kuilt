@@ -316,12 +316,18 @@ internal suspend fun sampleArchivingExporter(peersLog: Rga<LogRecord>) {
 }
 
 /** @suppress — sample only */
-internal fun sampleInferCausalLinks() {
+internal suspend fun sampleInferCausalLinks() {
     val clock = WarpCausalClock(ReplicaId("device-uuid-abc123"))
+    // A clock mints only once its recovery read has landed, so it never reuses a dot.
+    check(clock.recover(InMemoryDurableStore()) == ClockRecovery.Recovered)
 
     // One tick per span, in creation order — the clock chains the happens-before frontier.
-    val checkout = clock.tick()   // root span of one trace
-    val charge = clock.tick()     // caused by checkout, but in a *different* trace
+    fun mint(): CausalStamp = when (val tick = clock.tick()) {
+        is ClockTick.Minted -> tick.stamp
+        ClockTick.Unrecovered -> error("recover the clock before minting")
+    }
+    val checkout = mint()   // root span of one trace
+    val charge = mint()     // caused by checkout, but in a *different* trace
 
     fun span(id: Byte, trace: Byte, parent: Byte?, stamp: CausalStamp) = SpanRecord(
         traceId = ByteString(ByteArray(16) { trace }),
