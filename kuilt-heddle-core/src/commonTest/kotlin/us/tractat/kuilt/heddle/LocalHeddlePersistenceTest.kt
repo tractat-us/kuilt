@@ -398,18 +398,20 @@ class LocalHeddlePersistenceTest {
 
     /**
      * Format 1, as checked in. A later release must still decode it ([SUPPORTED_FORMAT_VERSIONS]),
-     * and an engine restored from it carries on as the engine that wrote it would have.
+     * and an engine restored from it carries on as the engine that wrote it would have, had that
+     * engine kept no net-service clock: format 1 predates the clock (#3376).
      */
     @Test
     fun previousFormatRestores() {
         val snapshot = decoded(GOLDEN_FORMAT_1)
         val restored = LocalHeddle.restore(snapshot, policy, epoch = snapshot.epoch + 1)
         val (reference, open) = wakerScenario()
+        val clockless = LocalHeddle.restore(reference.persist().withoutNetClocks(), policy, epoch = snapshot.epoch + 1)
         assertAll(
             { assertEquals(open, snapshot.leases, "the golden holds the scenario's open leases") },
             { assertTrue(wakeOffsetOf(snapshot.allocatorMemory, b) > Int128.ZERO, "and b's wake offset") },
-            { assertEquals(continuation(reference, open), continuation(restored, open)) },
-            { assertEquals(books(reference), books(restored)) },
+            { assertEquals(continuation(clockless, open), continuation(restored, open)) },
+            { assertEquals(books(clockless), books(restored)) },
         )
     }
 
@@ -417,13 +419,15 @@ class LocalHeddlePersistenceTest {
      * Format 1 and format 2 hold one snapshot of the waker scenario. Format 1 stores each position in
      * a gauge's floor, as v0.7.4 wrote it; format 2 stores it in the gauge's ticks (#3353). Read
      * as ticks, the two are equal: the change is in where a position is kept, not in what it is.
+     * Format 2 also keeps the net-service clock, which format 1 predates (#3376).
      */
     @Test
     fun formatOneAndFormatTwoGoldensHoldTheSameSnapshot() {
         assertAll(
             { assertTrue(GOLDEN_FORMAT_2.startsWith("[2,") && GOLDEN_FORMAT_1.startsWith("[1,"), "the rig: one golden per format") },
             { assertTrue(decoded(GOLDEN_FORMAT_1) != decoded(GOLDEN_FORMAT_2), "the rig: format 1 keeps floors, format 2 ticks") },
-            { assertEquals(decoded(GOLDEN_FORMAT_1).withGaugesAsTicks(), decoded(GOLDEN_FORMAT_2)) },
+            { assertTrue(decoded(GOLDEN_FORMAT_2).allocatorMemory.clocks.isNotEmpty(), "the rig: format 2 keeps a clock") },
+            { assertEquals(decoded(GOLDEN_FORMAT_1).withGaugesAsTicks(), decoded(GOLDEN_FORMAT_2).withoutNetClocks()) },
         )
     }
 
@@ -458,7 +462,7 @@ class LocalHeddlePersistenceTest {
             { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_2_CBOR), Cbor)) },
             {
                 val formatOne = assertIs<RestoreResult.Restored>(LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_1_CBOR), Cbor)).snapshot
-                assertEquals(snapshot, formatOne.withGaugesAsTicks(), "format 1's CBOR still reads")
+                assertEquals(snapshot.withoutNetClocks(), formatOne.withGaugesAsTicks(), "format 1's CBOR still reads")
             },
         )
     }
@@ -770,18 +774,22 @@ class LocalHeddlePersistenceTest {
 
     /**
      * The rich scenario as format 1, on the 1/16-unit grid (#3313): never written by a release, but
-     * the same snapshot the current format writes, and an engine restored from it carries on exactly
-     * as the engine that wrote it would have.
+     * the same snapshot the current format writes, less the net-service clock format 1 predates
+     * (#3376), and an engine restored from it carries on exactly as one restored from that.
      */
     @Test
     fun richFormatOneOnTheGridStillRestoresAndCarriesOn() {
         val (reference, open) = richScenario()
         val snapshot = decoded(GOLDEN_FORMAT_1_RICH_GRID)
         val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
+        val clockless = reference.persist().withoutNetClocks()
         assertAll(
             { assertTrue(GOLDEN_FORMAT_1_RICH_GRID.startsWith("[1,"), "the rig: format 1") },
-            { assertEquals(reference.persist(), snapshot.withGaugesAsTicks(), "the same snapshot the current format writes, read as ticks") },
-            { assertEquals(richContinuation(reference, open), richContinuation(restored, open)) },
+            { assertEquals(clockless, snapshot.withGaugesAsTicks(), "the same snapshot the current format writes, read as ticks") },
+            {
+                val expected = LocalHeddle.restore(clockless, richPolicy, epoch = snapshot.epoch + 1)
+                assertEquals(richContinuation(expected, open), richContinuation(restored, open))
+            },
         )
     }
 

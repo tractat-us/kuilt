@@ -32,6 +32,19 @@ internal fun LocalHeddleSnapshot.withGaugesAsTicks(): LocalHeddleSnapshot =
     LocalHeddleSnapshot(epoch, ledger.withGaugesAsTicks(), allocatorMemory, totalSlots, open, lastApplied)
 
 /**
+ * [this] snapshot without the net-service clocks, their per-child marks or the departures read
+ * against them (#3376): what a format-1 snapshot, which predates the clock, restores as.
+ */
+internal fun LocalHeddleSnapshot.withoutNetClocks(): LocalHeddleSnapshot = LocalHeddleSnapshot(
+    epoch,
+    ledger,
+    AllocatorMemory(allocatorMemory.wakeOffsets, allocatorMemory.demandingObserved),
+    totalSlots,
+    open,
+    lastApplied,
+)
+
+/**
  * The virtual time [v] on the grid of an edge of weight [w], narrowed: `⌈v · w · G⌉` ticks, or
  * `⌊…⌋` when [rounding] says so, [wideTicksAt] held at [w]'s [positionCeiling]. Test support only:
  * nothing in the engine narrows a value before the effective position a pick orders (#3353).
