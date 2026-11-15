@@ -214,6 +214,34 @@ class WarpCausalClockSpanFloorTest {
         )
     }
 
+    /**
+     * This replica's spans are gone from its own store and its clock entry is corrupt, so the read
+     * raises no floor. A peer still holds those spans and gossips them back. They are in memory now,
+     * and the next local stamp must not collide with one of them.
+     */
+    @Test
+    fun aCorruptClockMintsAboveTheOwnDotsAMergeGossipsBack() = runTest {
+        val previous = InMemoryDurableStore()
+        val held = durableStampedSpans(previous, 5)
+        val gossipedBack = WarpTelemetry(replica, previous).also { it.recover() }.spans.snapshot()
+        val store = InMemoryDurableStore()
+        val corrupt = corruptTheClock(store)
+
+        val restarted = WarpTelemetry(replica, store).also { it.recover() }
+        val ownBeforeMerge = restarted.spans.snapshot().elements.count { it.causalStamp != null }
+        val merged = restarted.spans.merge(gossipedBack)
+        restarted.spans.export(span(99))
+        val next = restarted.dotOf(99)
+
+        assertAll(
+            { assertEquals((1L..5L).map { Dot(replica, it) }.toSet(), held, "the rig: the peer does not hold 1..5") },
+            { assertIs<ClockRecovery.Undecodable>(corrupt, "the rig: the clock entry decoded as $corrupt") },
+            { assertEquals(0, ownBeforeMerge, "the rig: the restarted store still held a stamped span") },
+            { assertEquals(ExportResult.Success, merged, "the rig: the gossiped spans were not merged") },
+            { assertTrue(next.seq > 5, "the next stamp $next collides with a dot the merge gossiped back") },
+        )
+    }
+
     @Test
     fun aCleanClockAheadOfTheSpansIsNotWoundBack() = runTest {
         val store = InMemoryDurableStore()
