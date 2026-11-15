@@ -848,12 +848,16 @@ the pick:
   grid, past its ceiling for `k` near `2¹⁶`. The window rule seats it near zero.
 - A newborn, a clamped waker and a returner each land at the front on their own
   grid, or at their floor when the front is below it. That costs the joiner a
-  turn, never gives it one: about one lease for each lighter sibling a peer has
-  served past it.
+  turn, never gives it one: how far the front stood below its floor. No rebase
+  causes one, since the raise before a seat is bounded by the room of every
+  demanding child, returners included. It comes from siblings standing below
+  the origin when the joiner arrives, which in a running parent is within about
+  a lease of it, the spread a fair pick leaves between them.
 - It rewrites no gauge and no wake clamp. Every child reads `Δ · w · G` lower, so
   every front comes down `Δ`, every `⌈V · w · G⌉` by exactly `Δ · w · G`, and
-  every clamp `front − raw` is unchanged. The pick is checked unchanged on the
-  raised state before the raise is kept.
+  every clamp `front − raw` is unchanged. No joiner landing under the raise is
+  held at its floor, so it changes no pick, and the pick is checked unchanged on
+  the raised state before the raise is kept.
 - An idle child goes below zero, as far as it has to, past its floor too. Its
   next wake clamp, taken wide, carries it back to the front, so it keeps none of
   that as credit (the review's F1 case).
@@ -902,7 +906,9 @@ each:
   A heavy child joining lighter ones no longer gets there (the window rule).
 - With `k` schedulers granting one child concurrently before their writes merge,
   the margin a child needs is `C − R ≥ k · H`. That is huge for coarse weights and
-  slim near the edge of the weight budget below. It is documented, not enforced.
+  slim near the edge of the weight budget below. It is documented, not enforced:
+  with several schedulers granting one child at once, keep denominator ×
+  schedulers under about 30,000 (#3458).
 - In a `LocalHeddle` parent driven by both picks and plain `admit`s, a child a
   pick last saw demanding, and idle since, still bounds a charging call's `Δ`
   inside its own window until a pick sees it again: a never-served child in
@@ -1584,10 +1590,10 @@ Carried over from the source intact; each is a named property test (§13).
    `V`, and a seat or wake clamp lands under one tick above it, each `1/16` of a
    unit of the edge's own service (§7.1). A parent's origin adds under one tick
    more, on the penalty side, for a child whose grid it is off: one the rebasing
-   peer had not seen. A rebase changes no pick (§7.1), so it adds nothing else,
-   except a joiner held at its floor, which waits about one lease for each
-   lighter sibling a peer has served past it, the penalty side. At the position
-   ceiling every pick there refuses.
+   peer had not seen. A rebase changes no pick (§7.1), so it adds nothing else.
+   A joiner that arrives with no raise where the front is below its floor waits
+   by how far the front stood there, the penalty side, within about a lease in a
+   running parent. At the position ceiling every pick there refuses.
 10. **Closure dominance.** A replica that observed CLOSING never again
     delegates across that generation, regardless of merge order.
 11. **Conflicts surface.** Integrity violations converge to the same explicit
@@ -1598,7 +1604,8 @@ Carried over from the source intact; each is a named property test (§13).
     narrowed for a pick, which saturates at its ceiling; a pick that would order it
     refuses with a typed outcome instead (§7.1). The public reads of a position
     saturate too, at its ceiling and at its floor, so none of them throws on how
-    far a child is from its origin. Everything before it is 128-bit:
+    far a child is from its origin; a front over many children can still throw
+    on the least common multiple of their denominators. Everything before it is 128-bit:
     a gauge's stored position, a parent's origin, the raw position, the front and
     a wake clamp, and arithmetic that would leave 128 bits throws (#3353).
 13. **Consensus only at the embroidery.** Mint, overlapping reshape, and

@@ -237,7 +237,9 @@ public class FairShareAllocator(
      * [raiseBeforePick] without), so a child already at its ceiling is repaired rather than refused,
      * and after it ([raiseOriginBeneath]). So may each later
      * round, inside its own write. That rebase is what keeps a busy parent clear of the position
-     * ceiling, and it changes no pick (#3353).
+     * ceiling, and it changes no pick (#3353): it moves every child alike, and no joiner seated,
+     * clamped or returned under it is held at its floor, which every raise before a pick checks. A
+     * joiner held at its floor with no raise is what the window rule changes ([landing]).
      *
      * The fork is adopted only once the write step has returned, so a cell that throws while writing
      * leaves this allocator as it was. Each later round is its own write, as before: a refusal there,
@@ -1081,8 +1083,12 @@ public class FairShareAllocator(
      * The floor arm is never below the front, so it can only cost the joiner a turn. It is reached
      * when the demanding children stand below the origin on average, which a rebase that aims at
      * their front leaves behind once the one ahead stops asking; on a heavy child's grid the front
-     * is then far below zero. The penalty is `max(0, O − C/(w · G) − F)` in virtual time, about one
-     * lease for each lighter sibling a peer has served past the joiner: a lost turn, not starvation.
+     * is then far below zero.
+     * The penalty is how far the front stood below the joiner's floor, `max(0, −C/(w · G) − F)` in
+     * virtual time relative to the origin: a lost turn, never credit. No rebase causes one, since the
+     * raise before a seat is bounded by every demanding child's room, returners included. It comes
+     * from siblings that stood below the origin when the joiner arrived, which in a running parent is
+     * within about a lease of it, the spread a fair pick leaves between them.
      */
     private fun landing(front: VirtualTime, w: Weight): Int128 {
         val at = front.ticksForWide(w)

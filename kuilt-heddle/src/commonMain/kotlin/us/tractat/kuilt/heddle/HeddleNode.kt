@@ -371,14 +371,17 @@ public class HeddleNode internal constructor(
      * its own ceiling, and a child that a merge carried to its ceiling is brought back under it
      * rather than refused.
      *
-     * Every child reads the same virtual time lower, so no pick changes, and nothing else is
-     * rewritten: a peer that has not seen the raise still seats and checkpoints correctly, since
-     * both write absolute positions.
+     * Every child reads the same virtual time lower, and no joiner landing under the raise is held
+     * at its floor, since the raise is bounded by every demanding child's room, so no pick changes.
+     * Nothing else is rewritten: a peer that has not seen the raise still seats and checkpoints
+     * correctly, since both write absolute positions.
      * [boundMetrics] reports the peak effective position as a fraction of its ceiling.
      *
-     * The ceiling can still be met where a demanding child that is never served is carried down to
-     * its floor, and there holds the step at nothing. A weight set so fine that one step or one full
-     * lease could carry a child past its
+     * The ceiling can still be met two ways. A demanding child that is never served is carried down
+     * to its floor, and there holds the step at nothing. And several schedulers granting one child at
+     * once, before their writes merge, can each add a lease past the margin a rebase keeps: with
+     * several schedulers granting one child at once, keep denominator × schedulers under about
+     * 30,000 (#3458). A weight set so fine that one step or one full lease could carry a child past its
      * ceiling is refused before it is active ([prepare], [activate]), and no grant is larger than
      * [LocalHeddle.MAX_RESERVATION], the lease that limit is sized for (#3353).
      *

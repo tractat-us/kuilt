@@ -196,12 +196,15 @@ read is 128-bit: the gauge stores the position exactly, past the ceiling if it g
 there, and a parent's origin, the raw position, the front and a wake clamp are wide
 too (#3353). A busy parent is rebased long before its ceiling: both `HeddleNode`
 and `LocalHeddle` raise the parent's origin, and neither changes a pick or
-rewrites a gauge. The origin goes to where the demanding children stand on
+rewrites a gauge: a rebase moves every child alike, and no joiner landing under
+it is held at its floor. The origin goes to where the demanding children stand on
 average, held short of any child's floor, the mirror of its ceiling. So a child
 behind the average reads below zero, and a heavy child joining lighter ones does
-not land past its ceiling. The one way left to the ceiling is a demanding child
-that is never served: each rebase carries it down to its floor, where it holds
-the next one at nothing.
+not land past its ceiling. A demanding child that is never served still gets
+there: each rebase carries it down to its floor, where it holds the next one at
+nothing. So does a child `LocalHeddle` last saw demanding, idle since, for a plain
+`admit`'s rebase, and, on `HeddleNode`, several schedulers granting one child at
+once (design §7.1).
 
 ## Deciding who runs next
 

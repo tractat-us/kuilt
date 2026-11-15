@@ -39,7 +39,10 @@ and a snapshot to survive a restart, and no `Seam` or Raft underneath.
   parent rebases by raising its replicated origin in the same patch as a grant, long before the
   ceiling, and `boundMetrics` reports how close its peak child is (#3353). A grant whose
   delegation would carry its child to the ceiling is not made, and `schedule` answers
-  `PositionCeiling` with nothing written. Only a
+  `PositionCeiling` with nothing written. A demanding child that is never served still
+  reaches the ceiling, and so can several schedulers granting one child at once: with several
+  schedulers granting one child at once, keep denominator × schedulers under about 30,000
+  (#3458). Only a
   governed node adds `GateClosed`, with a `Reason`, when this peer may not author entitlement at
   all.
 - `HeddleNode` / `heddleStatic` — the node that runs the tally, demand board, reservations,
