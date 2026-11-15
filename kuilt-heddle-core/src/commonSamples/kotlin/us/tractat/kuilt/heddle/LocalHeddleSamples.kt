@@ -399,5 +399,203 @@ internal fun sampleSnapshotView() {
     check((heddle.acquire(queued, queued, startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf == heavy)
 }
 
+/**
+ * The whole loop in one place, from an admin's config file to a restart: check the tree, start the
+ * engine, attach a child the program found, lease and charge slots, then persist, restore under a
+ * raised boot counter, and settle the work that did not survive.
+ */
+@Suppress("unused")
+internal fun sampleFairShareQueue() {
+    // The admin's file: web gets three parts to mobile's one, and forks are attached as they open.
+    val text = """
+        {"root": "farm", "children": [
+          {"type": "lane", "name": "web", "weight": "3"},
+          {"type": "lane", "name": "mobile"},
+          {"type": "group", "name": "forks", "template": {"maxConcurrent": 1}}
+        ]}
+    """
+    val parsed = Topology.from(Json.decodeFromString<TopologyDocument>(text))
+    // Invalid would carry every problem in the file, each with its address, for the admin to fix.
+    check(parsed is TopologyParse.Valid)
+    val farm = parsed.topology
+    val policy = LocalPolicy(defaultReservation = 3L)
+    // The epoch is a boot counter you persist and raise on every start.
+    val heddle = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 4L)
+
+    // A contributor opens a fork while the program runs.
+    check(heddle.attach(listOf("forks"), "ana", generation = 1L).refusals.isEmpty())
+    val web = farm.groupId("web")
+    val mobile = farm.groupId("mobile")
+    val ana = farm.attachedChildId(listOf("forks"), "ana")
+
+    // Each free slot: lease it, run the work, charge what it really cost.
+    val queued = setOf(web, mobile, ana)
+    val first = heddle.acquire(waiting = queued, eligible = queued, startedAt = 0L)
+    check(first is AcquireOutcome.Acquired)
+    check(heddle.complete(first.lease.id, actualCost = 4L) is LeaseOutcome.Done)
+    val running = (heddle.acquire(queued, queued, startedAt = 4L) as AcquireOutcome.Acquired).lease
+    val lost = (heddle.acquire(queued, queued, startedAt = 4L) as AcquireOutcome.Acquired).lease
+
+    // Under the scheduling lock, persist. Encode and store the text exactly as it comes.
+    val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
+
+    // After the restart: decode, restore under the raised counter, and settle what did not survive.
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored)
+    val restored = LocalHeddle.restore(decoded.snapshot, policy, epoch = 1L)
+    val orphan = restored.reconcileLeases(live = setOf(running.id), now = 10L).orphaned.single()
+    check(orphan.lease == lost)
+    check(restored.complete(orphan.lease.id, orphan.defaultSettlement) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(restored.complete(running.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+}
+
+/**
+ * Work another scheduler already started: [LocalHeddle.admit] charges it to its group with no pick,
+ * and is never refused for supply or at a ceiling, since the work is already running. Only a name
+ * no lease can end at is refused.
+ */
+@Suppress("unused")
+internal fun sampleAdmitExternal() {
+    val farm = draft("farm") {
+        lane("web", Weight.of(3))
+        lane("mobile", maxConcurrent = 1)
+        group("forks") { template() }
+    }
+    val web = farm.groupId("web")
+    val mobile = farm.groupId("mobile")
+    val heddle = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+
+    // No capacity is reconciled, so there is nothing to hand out; an admitted build is charged anyway.
+    val both = setOf(web, mobile)
+    check(heddle.acquire(both, both, startedAt = 0L) == AcquireOutcome.SupplyExhausted)
+    val byHand = heddle.admit(mobile, waiting = both, startedAt = 0L)
+    check(byHand is AcquireOutcome.Acquired)
+
+    // Mobile is now at its ceiling of one, and a second build started by hand is still charged.
+    val another = heddle.admit(mobile, waiting = both, startedAt = 1L)
+    check(another is AcquireOutcome.Acquired)
+    check(heddle.complete(another.lease.id, actualCost = 5L) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+
+    // A group with a template and nothing attached is not somewhere a build can run.
+    val forks = farm.groupId("forks")
+    check(heddle.admit(forks, startedAt = 2L) == AcquireOutcome.NoLiveLineage(forks))
+}
+
+/**
+ * Every refusal is a value, and a refused call changes nothing. A paused lane leaves nothing
+ * eligible; an extend on a path a reload is closing is refused while its complete still settles; a
+ * settled id is unknown, and after a restart stale; and a weight too fine for one full lease is
+ * refused when it is applied, while its sibling lands.
+ *
+ * `PositionCeiling` is not shown. A busy parent is rebased long before any child nears its
+ * ceiling, so no short run reaches it honestly: it takes a demanding child that is never served.
+ * Branch on it like the others: serve or close the child that waits.
+ */
+@Suppress("unused")
+internal fun sampleRefusals() {
+    val pool = draft("pool") {
+        lane("live")
+        lane("paused", maxConcurrent = 0)
+        lane("retiring")
+    }
+    val live = pool.groupId("live")
+    val paused = pool.groupId("paused")
+    val retiring = pool.groupId("retiring")
+    val policy = LocalPolicy(defaultReservation = 3L)
+    val heddle = LocalHeddle.fromTopology(pool, policy, epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 2L)
+
+    // A ceiling of 0 pauses a lane: with only it eligible for this slot, there is nobody to pick.
+    val all = setOf(live, paused, retiring)
+    check(heddle.acquire(waiting = all, eligible = setOf(paused), startedAt = 0L) == AcquireOutcome.NothingEligible)
+    check(heddle.explain(paused, waiting = all, eligible = all) == WaitExplanation.AtCeiling(paused, limit = 0L))
+
+    // A reload removes `retiring` while its lease runs: the extend is refused, the complete settles.
+    val lease = (heddle.acquire(setOf(retiring), setOf(retiring), startedAt = 0L) as AcquireOutcome.Acquired).lease
+    val without = draft("pool") {
+        lane("live")
+        lane("paused", maxConcurrent = 0)
+    }
+    check(heddle.apply(without, generation = 1L).refusals.single() is StepRefusal.Draining)
+    check(heddle.extend(lease.id, amount = 3L) is LeaseOutcome.PathDraining)
+    check(heddle.complete(lease.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+
+    // Settled once, the id is unknown to this engine; after a restart it is from an older epoch.
+    check(heddle.complete(lease.id, actualCost = 3L) == LeaseOutcome.Unknown)
+    val restarted = LocalHeddle.restore(heddle.persist(), policy, epoch = 1L)
+    check(restarted.complete(lease.id, actualCost = 3L) == LeaseOutcome.Stale(currentEpoch = 1L))
+
+    // Keep every weight's denominator at or below 30,719. A finer one is refused when it is
+    // applied, and the rest of the reload lands.
+    val finer = draft("pool") {
+        lane("live")
+        lane("paused", maxConcurrent = 0)
+        lane("fine", Weight.of(1, 30_720))
+        lane("coarse", Weight.of(1, 2))
+    }
+    val refused = restarted.apply(finer, generation = 2L).refusals.single()
+    check(refused is StepRefusal.Refused && refused.child == finer.groupId("fine"))
+    val coarse = finer.groupId("coarse")
+    check(restarted.acquire(setOf(coarse), setOf(coarse), startedAt = 10L) is AcquireOutcome.Acquired)
+}
+
+/**
+ * An admin screen asks a stored snapshot who goes next, given each lane's own queued jobs, with no
+ * engine to start. The view answers exactly as the engine that took the snapshot.
+ */
+@Suppress("unused")
+internal fun sampleSnapshotPreviewQueues() {
+    val farm = draft("farm") {
+        group("web", Weight.of(3)) { lane("builds") }
+        group("mobile") { lane("builds") }
+    }
+    val web = farm.groupId("web", "builds")
+    val mobile = farm.groupId("mobile", "builds")
+    val policy = LocalPolicy(defaultReservation = 3L)
+    val heddle = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 4L)
+    val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
+
+    // On the admin screen: each lane's queued builds by their estimates in minutes, the next one first.
+    val queues = mapOf(web to listOf(3L, 12L, 3L, 3L), mobile to listOf(3L, 3L, 3L))
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored)
+    val view = decoded.snapshot.view(policy)
+    val both = setOf(web, mobile)
+    check(view.previewPicks(queues, eligible = both) == listOf(web, mobile, web, mobile, web, web, mobile))
+    check(view.previewPicks(queues, eligible = both) == heddle.previewPicks(queues, eligible = both))
+}
+
+/**
+ * Repositories the program attaches as it finds them: the template's ceiling lets each run one job
+ * at once, and the group's own ceiling lets them run two all together. `explain` names whichever
+ * ceiling holds a repository back, and the slot goes to a sibling.
+ */
+@Suppress("unused")
+internal fun sampleTemplateCeiling() {
+    val ci = draft("ci") {
+        group("repos", maxConcurrent = 2) { template(maxConcurrent = 1) }
+        lane("nightly")
+    }
+    val heddle = LocalHeddle.fromTopology(ci, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 4L)
+    val (a, b, c) = listOf("a", "b", "c").mapIndexed { i, name ->
+        check(heddle.attach(listOf("repos"), name, generation = i + 1L).refusals.isEmpty())
+        ci.attachedChildId(listOf("repos"), name)
+    }
+    val nightly = ci.groupId("nightly")
+    val all = setOf(a, b, c, nightly)
+
+    // `a` runs one job, its own ceiling.
+    check((heddle.acquire(setOf(a), setOf(a), startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf == a)
+    check(heddle.explain(a, waiting = all, eligible = all) == WaitExplanation.AtCeiling(a, limit = 1L))
+    // `b` runs one too, which puts the group at its ceiling of two: `c` waits on the group.
+    check((heddle.acquire(setOf(b), setOf(b), startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf == b)
+    check(heddle.explain(c, waiting = all, eligible = all) == WaitExplanation.AtCeiling(ci.groupId("repos"), limit = 2L))
+    // So the next slot goes to the nightly lane, however much the repositories have queued.
+    check((heddle.acquire(all, all, startedAt = 1L) as AcquireOutcome.Acquired).lease.leaf == nightly)
+}
+
 /** Two lanes under `pool`, `heavy` at weight 2 beside `light`. */
 private fun twoLanes(): Topology = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light")))
