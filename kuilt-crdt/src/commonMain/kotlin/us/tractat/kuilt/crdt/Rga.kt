@@ -658,6 +658,56 @@ public class Rga<V> private constructor(
     }
 
     /**
+     * The highest seq this state knows [replica] has minted, and so the seq [insertAfter] and
+     * [insertAllAfter] mint past. `0` when it knows of none.
+     *
+     * It counts every op this state holds and its compaction floor, so it can be larger than any
+     * seq a held op carries. Read it beside [lamport] to record where minting stands; see
+     * [advanceClock].
+     *
+     * @sample us.tractat.kuilt.crdt.sampleRgaAdvanceClock
+     */
+    public fun seqHighWater(replica: ReplicaId): Long = currentSeqFor(replica)
+
+    /**
+     * This state with its [lamport] clock raised to at least [lamport], and [replica]'s seq to at
+     * least [seq], so the next id minted as [replica] lies past both. Returns `this` when neither
+     * rises. No op is added, removed or changed, so the result [equals] this state.
+     *
+     * For a replica that has lost sight of ops it minted. A log kept across several keys can come
+     * back with one key unreadable, and the ids in that key are still taken: minting from what was
+     * read hands one of them out again, and a later union keeps one record of the pair. Record
+     * [lamport] and [seqHighWater] somewhere that is read with the rest, and raise the rebuilt state
+     * to them before minting.
+     *
+     * Neither counter is on the wire: a decode derives both from the ops and the floor it finds. So
+     * the raise does not outlive an encode, and the caller keeps the pair itself.
+     *
+     * Only [replica]'s seq moves. Another author's seq is that author's to mint, and nothing here
+     * reads it; [lamport] is the one clock all authors share.
+     *
+     * @throws IllegalArgumentException if [lamport] or [seq] is negative.
+     *
+     * @sample us.tractat.kuilt.crdt.sampleRgaAdvanceClock
+     */
+    public fun advanceClock(replica: ReplicaId, lamport: Long, seq: Long): Rga<V> {
+        require(lamport >= 0L) { "lamport must not be negative; got $lamport" }
+        require(seq >= 0L) { "seq must not be negative; got $seq" }
+        val raisesSeq = seq > currentSeqFor(replica)
+        if (lamport <= this.lamport && !raisesSeq) return this
+        val newCache = RgaCache(
+            insertsById = insertsById,
+            maxSeqByReplica = if (raisesSeq) maxSeqByReplica + (replica to seq) else maxSeqByReplica,
+            tombstones = tombstones,
+            compactedIds = compactedIds,
+            compactPositions = compactPositions,
+            // The same ops under the same floor, so the same order: a held one stays exact.
+            sequence = materializedSequence,
+        )
+        return Rga(ops, maxOf(this.lamport, lamport), compactedBelow, newCache)
+    }
+
+    /**
      * Tombstone the first [count] **visible** elements, minting one [RgaOp.Remove] each.
      *
      * The bulk sibling of `removeAt(0)` repeated, and indistinguishable from it: the

@@ -635,6 +635,31 @@ internal fun sampleRgaDropWindow() {
     check(peer.piece(delta.delta).toList() == listOf("entry-4", "entry-5"))
 }
 
+/**
+ * Mint past ids this replica can no longer see: record where minting stands, and raise a state
+ * rebuilt without those ops back to it before minting again.
+ */
+@Suppress("unused")
+internal fun sampleRgaAdvanceClock() {
+    val a = ReplicaId("A")
+
+    val (full, minted) = Rga.empty<String>().insertAllAfter(a, RgaId.HEAD, listOf("one", "two", "three"))
+    // Kept somewhere that is read with the rest, such as an index naming where the ops live.
+    val lamport = full.lamport
+    val seq = full.seqHighWater(a)
+
+    // Rebuilt from a part that holds only the first op: minting from it would reuse "two"'s id.
+    val partial = Rga.empty<String>().apply(minted.first())
+    check(partial.seqHighWater(a) == 1L)
+
+    val raised = partial.advanceClock(a, lamport, seq)
+    check(raised == partial) // no op added: the same state, with its counters raised
+
+    val (_, next) = raised.insertAllAfter(a, minted.first().id, listOf("four"))
+    check(next.single().id.seq == seq + 1)
+    check(next.single().id.lamport > lamport)
+}
+
 // ── MovableTree ───────────────────────────────────────────────────────────────
 
 /**

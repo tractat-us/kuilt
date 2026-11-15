@@ -1557,6 +1557,7 @@ public final class us/tractat/kuilt/crdt/ResettableCounter$Companion {
 
 public final class us/tractat/kuilt/crdt/Rga : us/tractat/kuilt/crdt/OpLogCrdt, us/tractat/kuilt/crdt/Quilted {
 	public static final field Companion Lus/tractat/kuilt/crdt/Rga$Companion;
+	public final fun advanceClock-m9qO7Lg (Ljava/lang/String;JJ)Lus/tractat/kuilt/crdt/Rga;
 	public final fun apply (Lus/tractat/kuilt/crdt/RgaOp;)Lus/tractat/kuilt/crdt/Rga;
 	public fun causalDots ()Ljava/util/Set;
 	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
@@ -1587,6 +1588,7 @@ public final class us/tractat/kuilt/crdt/Rga : us/tractat/kuilt/crdt/OpLogCrdt, 
 	public final fun positionsFor (Ljava/util/Set;)Ljava/util/Map;
 	public final fun removeAt (I)Lkotlin/Pair;
 	public final fun removeFirst (I)Lkotlin/Pair;
+	public final fun seqHighWater-81S8jZI (Ljava/lang/String;)J
 	public final fun toList ()Ljava/util/List;
 	public fun toString ()Ljava/lang/String;
 	public final fun valueAt (Lus/tractat/kuilt/crdt/RgaId;)Ljava/lang/Object;
