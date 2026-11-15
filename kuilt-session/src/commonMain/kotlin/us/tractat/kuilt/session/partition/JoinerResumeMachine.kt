@@ -354,8 +354,10 @@ internal class JoinerResumeMachine(
 
     /**
      * Guarded by [lock]: a `ResumeAck` resumed the room during the current reconnect episode. Set by
-     * [takeFlightForAck], reset when an episode starts, and read by the critical section in
-     * [runReconnect] that decides how the episode ended.
+     * [takeFlightForAck], and cleared at both ends of an episode: when it starts, and in the critical
+     * section in [runReconnect] that reads it to decide how the episode ended. Every ack-resumed
+     * episode sets it, so a value carried into the next episode would resume that one on a lost
+     * window.
      */
     private var ackResumed = false
 
@@ -739,10 +741,15 @@ internal class JoinerResumeMachine(
         // reconnectJob is cleared FIRST on every branch (this coroutine IS it): onReconnectFailed →
         // leave() must not cancel its own coroutine, or leave()'s seam.close() would be cancelled
         // mid-teardown.
-        val end = lock.withLock {
+        val (end, lateAck) = lock.withLock {
             reconnectJob = null
-            when {
-                resumed || ackResumed -> {
+            // Consume the episode's ack here as well as at the episode's start. Every ack-resumed
+            // episode sets it, so a flag carried into the next episode would resume that one even
+            // though its window was lost: no HostLost, and a detector restored on a dead link.
+            val lateAck = !resumed && ackResumed
+            ackResumed = false
+            val end = when {
+                resumed || lateAck -> {
                     // Re-arm: clear the guard and restart host-liveness monitoring on the healed
                     // generation. The restarted detector both keeps the resumed room monitored and,
                     // on a LATER tear, re-fires TransportClosed → a fresh [attemptReconnect]: with
@@ -759,6 +766,12 @@ internal class JoinerResumeMachine(
                 host.claimHostLost() -> EpisodeEnd.Lost
                 else -> EpisodeEnd.AlreadyEnded
             }
+            end to lateAck
+        }
+        if (lateAck) {
+            // #1618 evidence capture, as the in-loop success line: the episode resumed through an
+            // ack the loop itself never saw, because the window's timer fired first (#3094).
+            logger.info { "resume.ok host=$hostId roomId=${token.roomId.value} via=late-ack" }
         }
         when (end) {
             // #1637: the dwell path emits nothing of its own — no ResumeAck arrives, so the room's
