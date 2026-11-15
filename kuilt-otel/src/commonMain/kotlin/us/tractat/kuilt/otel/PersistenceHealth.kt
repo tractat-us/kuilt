@@ -18,6 +18,15 @@ import kotlinx.coroutines.flow.asStateFlow
  * refuses therefore moves both counters — [acknowledged] for each kind that landed, [failed] for
  * each that did not — and a cancelled batch keeps the turns of the kinds already written. A
  * single-point mutator is a one-kind batch, so it is still one turn.
+ *
+ * **For spans a turn's verdict is per work key too, once the causal clock's work fails.** A
+ * [WarpSpanExporter.export] or [WarpSpanExporter.clear] whose writes all run is one turn over the span
+ * buffer and its clock together. One that skips the clock's write, because the clock's read has not
+ * landed, or writes a clock that can mint no more ([ClockTick.Exhausted]), counts its span work by the
+ * span write and its clock work as one [failed] turn under the clock's key (#3426). So a clock refused
+ * forever stays in [outstandingFailures] however many spans land, until a turn lands the clock's write;
+ * an exhausted clock never leaves it. A refused clock *write* fails the whole turn, since the span
+ * write after it is never made.
  * Metric [WarpMetricExporter.clear] counts its entire delete sequence as a separate turn.
  * Reads, validation failures before persistence, and success without store IO do not count.
  * These counters live only for this exporter instance; they do not measure backend delivery.
@@ -30,7 +39,8 @@ import kotlinx.coroutines.flow.asStateFlow
  * @property outstandingFailures Failed turns whose persistence work has not subsequently
  *   succeeded. A metric write clears failures only for its own persisted kind (integer and
  *   double sums are separate); a metric clear clears only failed clears. A span-only merge
- *   cannot clear a failed turn that also required the causal clock. This is not a global
+ *   cannot clear a failed turn that also required the causal clock, nor a failed clock turn; only a
+ *   turn that lands the clock's write does. This is not a global
  *   consecutive-failure streak: unrelated success leaves these failures outstanding.
  * @property recoveryFailed Whether a read or decode of persisted state failed: at `recover()`, or
  *   on a later retry of a read that had been refused, which a span write turn or a causal clock's
