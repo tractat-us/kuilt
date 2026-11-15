@@ -29,11 +29,20 @@ import kotlin.test.assertTrue
 class BurstLagTest {
     private val root = GroupId("p")
 
+    /**
+     * Set by [everyRowPicksAsItsNoOriginTwin] alone: while it is, [rig] lifts every child and builds
+     * each rig with a [Twin], and collects it here.
+     */
+    private var lifted: MutableList<Rig>? = null
+
     private fun want(max: Long = 1L) = Demand(targetOutstanding = 1_000_000L, maximumUsefulGrant = max)
 
     /** A ledger cell that counts the units each child is delegated: a rise in its base issuance. */
     private class Counting(override var current: EntitlementLedger, private val watched: List<AttachmentRecord>) : LedgerCell {
         val granted = LinkedHashMap<String, Long>().apply { watched.forEach { put(it.child.value, 0L) } }
+
+        /** Each delegation as it landed, `child:units`, in order: the picks a twin is compared on. */
+        val picks = ArrayList<String>()
 
         override fun mutateOrSkip(transform: (EntitlementLedger) -> Patch<EntitlementLedger>?): Boolean {
             val patch = transform(current) ?: return false
@@ -41,7 +50,10 @@ class BurstLagTest {
             current = current.piece(patch.delta)
             for (edge in watched) {
                 val units = current.baseIssuance(edge.id) - before.baseIssuance(edge.id)
-                if (units > 0L) granted[edge.child.value] = granted.getValue(edge.child.value) + units
+                if (units > 0L) {
+                    granted[edge.child.value] = granted.getValue(edge.child.value) + units
+                    picks += "${edge.child.value}:$units"
+                }
             }
             return true
         }
@@ -55,15 +67,39 @@ class BurstLagTest {
         }
     }
 
-    private class Rig(val kids: List<AttachmentRecord>, val cell: Counting, val allocator: FairShareAllocator) {
+    /**
+     * The step B twin of a [Rig]'s allocator (#3472, slice 1): its own copy of the ledger and the wake
+     * memory, the rebase switched off, so it never raises an origin. It is given every call the rig
+     * makes.
+     */
+    private class Twin(val cell: Counting, val allocator: FairShareAllocator)
+
+    private class Rig(val kids: List<AttachmentRecord>, val cell: Counting, val allocator: FairShareAllocator, val twin: Twin? = null) {
         var wakes = 0
+
+        /** With a [twin]: the children this allocator would clamp under the below-zero first-sighting arm, summed over the rounds. */
+        var unobservedBelowZero = 0
 
         fun granted(): Map<String, Long> = cell.granted
 
         /** One `schedule`, each child asking for what [demand] says; counts the wakes it drives. */
         fun round(demand: (AttachmentId) -> Demand) {
             wakes += kids.count { allocator.lastObservedDemanding(it.id) == false && demand(it.id).targetOutstanding > 0L }
+            if (twin != null) unobservedBelowZero += neverObservedBelowZero(cell.current, allocator) { demand(it.id).targetOutstanding > 0L }.size
             allocator.schedule(GroupId("p"), cell, 0L, demand)
+            twin?.let { it.allocator.schedule(GroupId("p"), it.cell, 0L, demand) }
+        }
+
+        /** Mint [units] at the parent, on the twin too. */
+        fun mint(tag: String, units: Long) {
+            cell.mint(tag, units)
+            twin?.cell?.mint(tag, units)
+        }
+
+        /** Refund [units] of [edge]'s grant, on the twin too. */
+        fun refund(edge: AttachmentRecord, units: Long) {
+            cell.refund(edge, units)
+            twin?.cell?.refund(edge, units)
         }
 
         fun ask(asking: (AttachmentId) -> Boolean) {
@@ -81,11 +117,20 @@ class BurstLagTest {
     ): Rig {
         val kids = weights.mapIndexed { i, w -> edgeOf(root, GroupId("p/${names[i]}"), w) }
         var ledger = shapedLedger(root, kids)
-        if (seats.isNotEmpty()) {
+        val twins = lifted
+        if (twins != null) {
+            // Every child seated at one virtual time, far enough up that the heaviest starts past 2⁶³ ticks.
+            val lift = Long.MAX_VALUE / (TICKS_PER_UNIT * weights.max()) + 1L
+            ledger = ledger.piece(
+                EntitlementLedger.of(gauges = kids.indices.associate { i -> kids[i].id to gaugeAt(lift.timesWide(TICKS_PER_UNIT * weights[i]) + (seats[i] ?: 0L), 0L) }),
+            )
+        } else if (seats.isNotEmpty()) {
             ledger = ledger.piece(EntitlementLedger.of(gauges = seats.entries.associate { (i, t) -> kids[i].id to gaugeAt(Int128.of(t), 0L) }))
         }
         val memory = if (observed == null) AllocatorMemory.EMPTY else AllocatorMemory(emptyMap(), kids.associate { it.id to observed })
-        val rig = Rig(kids, Counting(ledger, kids), FairShareAllocator(LOCAL, PolicyConfig(quantum = quantum), memory))
+        val twin = twins?.let { Twin(Counting(ledger, kids), FairShareAllocator(LOCAL, PolicyConfig(quantum = quantum), memory).apply { rebaseEnabled = false }) }
+        val rig = Rig(kids, Counting(ledger, kids), FairShareAllocator(LOCAL, PolicyConfig(quantum = quantum), memory), twin)
+        twins?.add(rig)
         // Seen idle once before the first burst, as a lane that has just been created is.
         if (observed == null) rig.ask { _ -> false }
         return rig
@@ -95,7 +140,7 @@ class BurstLagTest {
     private fun together(weights: List<Long>, perBurst: Long, bursts: Int = BURSTS): Rig {
         val rig = rig(weights)
         repeat(bursts) { i ->
-            rig.cell.mint("m$i", perBurst)
+            rig.mint("m$i", perBurst)
             rig.ask { _ -> true }
             rig.ask { _ -> false }
         }
@@ -109,10 +154,10 @@ class BurstLagTest {
     private fun staggered(weights: List<Long>, first: Int, rest: Long, gap: Boolean = false, bursts: Int = BURSTS): Rig {
         val rig = rig(weights)
         repeat(bursts) { i ->
-            rig.cell.mint("f$i", 1L)
+            rig.mint("f$i", 1L)
             rig.ask { id -> id == rig.kids[first].id }
             if (gap) rig.ask { _ -> false }
-            rig.cell.mint("r$i", rest)
+            rig.mint("r$i", rest)
             rig.ask { _ -> true }
             rig.ask { _ -> false }
         }
@@ -123,11 +168,11 @@ class BurstLagTest {
     private fun ladder(weights: List<Long>, bursts: Int = BURSTS): Rig {
         val rig = rig(weights)
         repeat(bursts) { i ->
-            rig.cell.mint("f$i", 1L)
+            rig.mint("f$i", 1L)
             rig.ask { id -> id == rig.kids[0].id }
-            rig.cell.mint("g$i", 1L)
+            rig.mint("g$i", 1L)
             rig.ask { id -> id != rig.kids[2].id }
-            rig.cell.mint("r$i", 3L)
+            rig.mint("r$i", 3L)
             rig.ask { _ -> true }
             rig.ask { _ -> false }
         }
@@ -211,7 +256,7 @@ class BurstLagTest {
         val (a, b, c) = rig.kids
         rig.ask { id -> !(id == a.id && pause) }
         rig.ask { id -> id == b.id || (id == a.id && !pause) }
-        rig.cell.mint("m", 100L)
+        rig.mint("m", 100L)
         rig.ask { id -> id != c.id }
         return rig.granted().getValue("p/a") to rig.wakes
     }
@@ -240,14 +285,14 @@ class BurstLagTest {
     private fun siblingRefund(early: Boolean): Pair<String, Int> {
         val rig = rig(listOf(1, 1), quantum = 10L, names = listOf("a", "b"))
         val (a, b) = rig.kids
-        rig.cell.mint("m1", 11L)
+        rig.mint("m1", 11L)
         rig.round { id -> if (id == a.id) want(1) else want(10) }
-        if (early) rig.cell.refund(b, 9L)
-        rig.cell.mint("m2", 20L)
+        if (early) rig.refund(b, 9L)
+        rig.mint("m2", 20L)
         rig.round { id -> if (id == a.id) Demand.NONE else want(1) }
-        if (!early) rig.cell.refund(b, 9L)
+        if (!early) rig.refund(b, 9L)
         val before = HashMap(rig.granted())
-        rig.cell.mint("m3", 20L)
+        rig.mint("m3", 20L)
         rig.round { want(1) }
         return listOf("p/a", "p/b").joinToString("/") { "${rig.granted().getValue(it) - before.getValue(it)}" } to rig.wakes
     }
@@ -280,17 +325,17 @@ class BurstLagTest {
         val rig = rig(listOf(1, 1), names = listOf("a", "b"))
         val (a, b) = rig.kids
         val capped = Demand(targetOutstanding = bTarget, maximumUsefulGrant = 1L)
-        rig.cell.mint("first", first)
+        rig.mint("first", first)
         rig.round { id -> if (id == a.id) want() else capped }
         check(rig.granted() == mapOf("p/a" to first - bTarget, "p/b" to bTarget)) { "the rig: b filled partway, ${rig.granted()}" }
         if (idleCall) {
-            rig.cell.mint("idle", 30L)
+            rig.mint("idle", 30L)
             rig.round { id -> if (id == a.id) want() else capped }
             check(rig.granted().getValue("p/b") == bTarget) { "the rig: b took nothing while it held its target" }
         }
         val seen = rig.allocator.lastObservedDemanding(b.id)
         val before = HashMap(rig.granted())
-        rig.cell.mint("last", 40L)
+        rig.mint("last", 40L)
         rig.round { want() }
         val (aTake, bTake) = listOf("p/a", "p/b").map { rig.granted().getValue(it) - before.getValue(it) }
         return Triple(aTake, bTake, seen)
@@ -334,22 +379,8 @@ class BurstLagTest {
     @Test
     fun aReturnerLandingPastItsCeilingIsRebasedBeforeItLands() {
         val r = rebaseThreshold(Weight.ONE)
-        val ceiling = positionCeiling(Weight.ONE)
-        val kids = listOf(edgeOf(root, GroupId("p/a")), edgeOf(root, GroupId("p/b")))
-        val (a, b) = kids
-        val seated = mapOf(a.id to gaugeAt(Int128.of(r - 16L), 0L), b.id to gaugeAt(Int128.of(r - 16L), 0L))
-        val shift = ceiling - (r - 16L) + r / 2
-        val memory = AllocatorMemory(
-            wakeOffsets = emptyMap(),
-            demandingObserved = mapOf(a.id to true, b.id to false),
-            clocks = mapOf(root to shift.timesWide(720_720L)),
-            served = mapOf(a.id to 0L),
-            departures = mapOf(b.id to Int128.ZERO),
-        )
-        val cell = Counting(shapedLedger(root, kids).piece(EntitlementLedger.of(gauges = seated)), kids)
-        cell.mint("m", 10L)
-        val allocator = FairShareAllocator(LOCAL, PolicyConfig(quantum = 1L), memory)
-        val outcome = allocator.schedule(root, cell, 0L) { want() }
+        val (a, b) = returnerKids
+        val (cell, allocator, outcome) = returnerPastItsCeiling(rebase = true)
         val landed = allocator.effectiveVirtualService(cell.current, root, b.id)
         val aAt = allocator.effectiveVirtualService(cell.current, root, a.id)
         // Read as a lead over a: the window rule lowers the origin to the pair's front, so b lands
@@ -363,6 +394,99 @@ class BurstLagTest {
         )
     }
 
+    private val returnerKids = listOf(edgeOf(root, GroupId("p/a")), edgeOf(root, GroupId("p/b")))
+
+    /** The state [aReturnerLandingPastItsCeilingIsRebasedBeforeItLands] sets, and its one `schedule`, rebasing or not. */
+    private fun returnerPastItsCeiling(rebase: Boolean): Triple<Counting, FairShareAllocator, AllocationOutcome> {
+        val r = rebaseThreshold(Weight.ONE)
+        val ceiling = positionCeiling(Weight.ONE)
+        val kids = returnerKids
+        val (a, b) = kids
+        val seated = mapOf(a.id to gaugeAt(Int128.of(r - 16L), 0L), b.id to gaugeAt(Int128.of(r - 16L), 0L))
+        val shift = ceiling - (r - 16L) + r / 2
+        val memory = AllocatorMemory(
+            wakeOffsets = emptyMap(),
+            demandingObserved = mapOf(a.id to true, b.id to false),
+            clocks = mapOf(root to shift.timesWide(720_720L)),
+            served = mapOf(a.id to 0L),
+            departures = mapOf(b.id to Int128.ZERO),
+        )
+        val cell = Counting(shapedLedger(root, kids).piece(EntitlementLedger.of(gauges = seated)), kids)
+        cell.mint("m", 10L)
+        val allocator = FairShareAllocator(LOCAL, PolicyConfig(quantum = 1L), memory).apply { rebaseEnabled = rebase }
+        val outcome = allocator.schedule(root, cell, 0L) { want() }
+        return Triple(cell, allocator, outcome)
+    }
+
+    /**
+     * Every row above, again, beside its step B twin (design §7.1, *Future: positions with no
+     * origin*, slice 1). Since step A a pick orders the full 128-bit position, so an allocator with
+     * the rebase off never raises an origin: it is the engine step B leaves. Each row runs on a rig
+     * that gives both allocators every call, and the two must make the same delegations, unit for
+     * unit and in order.
+     *
+     * The rows as written stay near zero, where nothing rebases, so here each rig seats every child
+     * at one virtual time, far enough up that the heaviest child starts past `2⁶³` ticks on its own
+     * grid. That is a translation, so every row's own assertions still hold and run here too. It
+     * makes the rig fire on every row: the rebasing side rebases, the twin never raises an origin
+     * and holds a position past `2⁶³` throughout, and the rebasing side lands no joiner at its floor
+     * and clamps no never-observed child below zero, the two causes the design lets a row differ by.
+     * The hand-set returner row runs as written, which is already past its ceiling.
+     */
+    @Test
+    fun everyRowPicksAsItsNoOriginTwin() {
+        val rigs = ArrayList<Rig>()
+        lifted = rigs
+        try {
+            shortBurstsHoldTheWeights()
+            aChildThatAlwaysAsksSecondStillGetsItsShare()
+            aChildLeavingASetOfOneBanksNothing()
+            aLadderOfJoinersHoldsTheWeights()
+            aDebtorThatPausesWhileASiblingLeavesKeepsItsPlace()
+            aSiblingRefundDuringTheGapIsPinnedAtItsKnownCredit()
+            aChildFilledPartwayThroughACallIsOwedNothingForItsSiblingsLaterGrants()
+            idlingLongerEarnsNothing()
+            lagOwedWhenLeavingIsStillOwedOnReturn()
+            aReturnerShiftThatDoesNotLandOnItsGridDoesNotDrift()
+        } finally {
+            lifted = null
+        }
+        val (returner, returnerAllocator, returnerOutcome) = returnerPastItsCeiling(rebase = true)
+        val (returnerTwin, returnerTwinAllocator, returnerTwinOutcome) = returnerPastItsCeiling(rebase = false)
+        assertAll(
+            { assertEquals(LIFTED_RIGS, rigs.size, "every row built its rigs lifted and twinned") },
+            *rigs.mapIndexed(::twinAgrees).toTypedArray(),
+            { assertEquals(AllocationOutcome.Delegated(10), returnerOutcome, "returner: the rebasing side delegates") },
+            { assertTrue(returnerAllocator.rebases > 0, "returner: the rig, the rebasing side rebased") },
+            { assertEquals(returnerOutcome, returnerTwinOutcome, "returner: the twin delegates the same") },
+            { assertEquals(0, returnerTwinAllocator.rebases, "returner: the twin never rebased") },
+            { assertEquals(0, returnerAllocator.floorLandingsForTest, "returner: no joiner landed at its floor") },
+            {
+                val peak = peakEffectiveTicks(returnerTwin.current, returnerTwinAllocator.memory.wakeOffsets, root)
+                assertTrue(peak != null && peak >= LONG_LIMIT_TICKS, "returner: the rig, the twin's b landed past 2⁶³ ticks ($peak)")
+            },
+            { assertEquals(returner.picks, returnerTwin.picks, "returner: the same delegations in the same order") },
+        )
+    }
+
+    /** That lifted rig number [i] fired, and that its twin made the same delegations. */
+    private fun twinAgrees(i: Int, rig: Rig): () -> Unit = {
+        val twin = checkNotNull(rig.twin) { "rig $i has no twin" }
+        assertAll(
+            { assertTrue(rig.allocator.rebases > 0, "rig $i: the rig, the rebasing side rebased") },
+            { assertEquals(0, twin.allocator.rebases, "rig $i: the twin never rebased") },
+            { assertEquals(emptyMap(), raisedOrigins(twin.cell.current), "rig $i: the twin never raised an origin") },
+            {
+                val peak = peakEffectiveTicks(twin.cell.current, twin.allocator.memory.wakeOffsets, root)
+                assertTrue(peak != null && peak >= LONG_LIMIT_TICKS, "rig $i: the rig, the twin holds a position past 2⁶³ ticks ($peak)")
+            },
+            { assertEquals(0, rig.allocator.floorLandingsForTest, "rig $i: the rebasing side landed no joiner at its floor") },
+            { assertEquals(0, rig.unobservedBelowZero, "rig $i: the rebasing side clamped no never-observed child below zero") },
+            { assertTrue(rig.cell.picks.isNotEmpty(), "rig $i: the rig delegated") },
+            { assertEquals(rig.cell.picks, twin.cell.picks, "rig $i: the same delegations in the same order") },
+        )
+    }
+
     /**
      * a and b equal. A burst of [first] units both want, then b sits out [idle] rounds in which a
      * takes 2 units alone, then a burst of [last] both want: b's take of that last burst.
@@ -370,16 +494,16 @@ class BurstLagTest {
     private fun takeAfterIdling(idle: Int, first: Long, last: Long): Int {
         val rig = rig(listOf(1, 1))
         val (a, _) = rig.kids
-        rig.cell.mint("first", first)
+        rig.mint("first", first)
         rig.ask { _ -> true }
         repeat(idle) { i ->
-            rig.cell.mint("idle$i", 2L)
+            rig.mint("idle$i", 2L)
             rig.ask { id -> id == a.id }
         }
         val before = rig.granted().getValue("p/b1")
         val handedOut = rig.granted().values.sum()
         val wakesBefore = rig.wakes
-        rig.cell.mint("last", last)
+        rig.mint("last", last)
         rig.ask { _ -> true }
         check(rig.granted().values.sum() == handedOut + last) { "the last burst was handed out in full" }
         check(rig.wakes == wakesBefore + 1) { "b woke for the last burst" }
@@ -425,7 +549,7 @@ class BurstLagTest {
         val rig = rig(weights)
         repeat(bursts) { i ->
             stretches.forEachIndexed { j, stretch ->
-                rig.cell.mint("s$i.$j", stretch.units)
+                rig.mint("s$i.$j", stretch.units)
                 rig.ask { id -> rig.kids.indexOfFirst { it.id == id } in stretch.asking }
             }
         }
@@ -486,6 +610,9 @@ class BurstLagTest {
 
     private companion object {
         const val BURSTS = 300
+
+        /** The rigs the rows build: 18 burst rows, P1 4, P2 2, the partway rows 3, 40 idling samples 2 each, lag 3, drift 4. */
+        const val LIFTED_RIGS = 114
 
         /**
          * Units either way of fair, over the whole run: none. Every rig lands on its fair split
