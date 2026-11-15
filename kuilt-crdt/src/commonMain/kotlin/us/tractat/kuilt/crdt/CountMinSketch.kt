@@ -64,6 +64,10 @@ public data class CellDelta(val row: Int, val col: Int, val value: Long)
  * Full-state anti-entropy still uses the complete `depth × width` matrix; only
  * incremental deltas are sparse.
  *
+ * The type enforces the wire shape, decoding included: every cell is non-negative, a full-state
+ * matrix is exactly `depth × width`, and every sparse cell lies inside it. A sparse delta is for
+ * [piece] only; [estimate] and [add] refuse one.
+ *
  * ## Use
  *
  * Analytics, rate-limiting, adaptive routing over a P2P mesh. Works on all
