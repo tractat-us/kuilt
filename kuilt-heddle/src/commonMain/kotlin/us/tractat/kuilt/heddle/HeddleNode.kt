@@ -361,13 +361,17 @@ public class HeddleNode internal constructor(
      * **A busy parent rebases by raising its origin, long before the position ceiling** (#3353).
      * Each child's position is stored wide, and a pick orders it relative to the parent's origin,
      * narrowed to a `Long` with a ceiling. Once any child's effective position passes a sixteenth
-     * of that ceiling, a round that grants also raises the origin, in the same patch as its grant,
-     * by the largest whole step no demanding child would fall below zero for. Every child reads the
+     * of that ceiling, or the front does, read on any child's grid, a round that grants also raises
+     * the origin, in the same patch as its grant, by the largest whole step no demanding child
+     * would fall below zero for. The same raise can land before the seat and wake step, so a heavy
+     * newborn or waker joining a light runner is never seated past its own ceiling. Every child reads the
      * same virtual time lower, so no pick changes, and nothing else is rewritten: a peer that has
      * not seen the raise still seats and checkpoints correctly, since both write absolute positions.
      * [boundMetrics] reports the peak effective position as a fraction of its ceiling.
      *
-     * The ceiling can still be met: a demanding child that is never served holds the step at zero.
+     * The ceiling can still be met one way: a demanding child that is never served holds the step
+     * at zero. A long-idle child that comes back demanding to a node that never saw it idle, after a
+     * restart, is clamped as a waker rather than read from far below the origin.
      * A pick that would have to order a position at its ceiling is refused, and the rounds stop at
      * that parent: a call that granted first answers [ScheduleOutcome.Delegated], and every call
      * after it [ScheduleOutcome.PositionCeiling]. A refused call writes nothing and leaves the wake

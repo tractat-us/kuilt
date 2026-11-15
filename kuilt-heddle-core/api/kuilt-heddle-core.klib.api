@@ -1985,7 +1985,7 @@ final object us.tractat.kuilt.heddle/HeddlePolicy { // us.tractat.kuilt.heddle/H
     final fun isDemanding(us.tractat.kuilt.heddle/PolicyEdge): kotlin/Boolean // us.tractat.kuilt.heddle/HeddlePolicy.isDemanding|isDemanding(us.tractat.kuilt.heddle.PolicyEdge){}[0]
     final fun pick(kotlin.collections/List<us.tractat.kuilt.heddle/PolicyEdge>, us.tractat.kuilt.heddle/PolicyConfig, kotlin/Long): us.tractat.kuilt.heddle/Grant? // us.tractat.kuilt.heddle/HeddlePolicy.pick|pick(kotlin.collections.List<us.tractat.kuilt.heddle.PolicyEdge>;us.tractat.kuilt.heddle.PolicyConfig;kotlin.Long){}[0]
     final fun virtualService(us.tractat.kuilt.heddle/PolicyEdge): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/HeddlePolicy.virtualService|virtualService(us.tractat.kuilt.heddle.PolicyEdge){}[0]
-    final fun wakeOffset(us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Weight, kotlin/Long): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/HeddlePolicy.wakeOffset|wakeOffset(us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Weight;kotlin.Long){}[0]
+    final fun wakeOffset(us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Weight, kotlin/Long): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.heddle/HeddlePolicy.wakeOffset|wakeOffset(us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Weight;kotlin.Long){}[0]
 }
 
 final object us.tractat.kuilt.heddle/RationalSerializer : kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Rational> { // us.tractat.kuilt.heddle/RationalSerializer|null[0]

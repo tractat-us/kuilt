@@ -23,6 +23,7 @@ public fun mulDiv(a: Long, b: Long, divisor: Long, rounding: Rounding): Long? =
  * with `a` itself past `Long`.
  *
  * @throws ArithmeticException if [divisor] is zero, as `Long / 0` does.
+ * @sample us.tractat.kuilt.math.sampleWideMulDiv
  */
 public fun mulDiv(a: Int128, b: Long, divisor: Long, rounding: Rounding): Int128? {
     if (divisor == 0L) throw ArithmeticException("division by zero: $a · $b / 0")

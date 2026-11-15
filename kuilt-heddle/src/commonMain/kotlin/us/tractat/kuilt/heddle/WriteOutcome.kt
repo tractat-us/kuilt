@@ -53,10 +53,10 @@ public sealed interface ScheduleOutcome {
     public data object NothingToDelegate : ScheduleOutcome
 
     /**
-     * A child of [parent] holds a virtual position at its ceiling, so no pick there orders exactly,
-     * and none was made (#3313). Each position is a `Long` of 1/16-unit ticks that grows with the
-     * service handed down under [parent], so a busy parent reaches it, at about 2⁵⁷ units of
-     * service at a weight of `3/7`. This node has no way yet to bring the positions back down.
+     * A child of [parent] holds an effective position at its ceiling, so no pick there orders
+     * exactly, and none was made (#3313). A busy parent is rebased by raising its origin long before
+     * that (#3353), so it is met only where the rebase is held at nothing: a demanding child that
+     * is never served sits at zero, and no child may go below it.
      */
     public data class PositionCeiling(public val parent: GroupId) : ScheduleOutcome
 

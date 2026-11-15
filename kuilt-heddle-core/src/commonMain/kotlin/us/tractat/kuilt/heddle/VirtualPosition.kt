@@ -66,13 +66,14 @@ internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADR
 
 /**
  * The position, in ticks, past which a parent is rebased: a sixteenth of [w]'s [positionCeiling]
- * ([LocalHeddle] by its folds, #3329; `HeddleNode` by its origin, #3353). Far enough below the ceiling that the spread of a busy parent's
- * children above the rebased one never reaches it, and far enough above zero that a rebase is rare.
+ * ([LocalHeddle] by its folds, #3329; `HeddleNode` by its origin, #3353). Far enough below the
+ * ceiling that the spread of a busy parent's children above the rebased one never reaches it, and
+ * far enough above zero that a rebase is rare. `HeddleNode` measures each child against its own
+ * threshold, and the front too, read on every child's grid, so a heavy child joining a light
+ * runner's front is never seated past its ceiling (#3353 review, item A). What still reaches the
+ * ceiling there is a demanding child that is never served, which holds `Δ` at zero.
  */
 internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16
-
-/** Whether [ticks] is at [w]'s [positionCeiling]: a position there may stand for a larger one. */
-internal fun atCeiling(ticks: Long, w: Weight): Boolean = ticks >= positionCeiling(w)
 
 /**
  * [ticks] held at [w]'s [positionCeiling]: the one place a position saturates rather than throws.
@@ -84,9 +85,6 @@ internal fun saturated(ticks: Int128, w: Weight): Long {
     if (ticks >= Int128.of(ceiling)) return ceiling
     return ticks.toLongOrNull() ?: throw ArithmeticException("Long overflow: a position of $ticks ticks")
 }
-
-/** [units] of an edge's own service as ticks, held at [w]'s [positionCeiling] ([saturated]). */
-internal fun saturatedTicksOf(units: Long, w: Weight): Long = saturated(units.timesWide(TICKS_PER_UNIT), w)
 
 /**
  * Thrown where a pick would have to order a position at its ceiling, or where a deadline leaves
@@ -124,17 +122,6 @@ internal fun weightsFitTheBudget(weights: List<Weight>): Boolean {
  * (design §10.12).
  */
 internal fun ticksOf(units: Long): Long = checkedMul(units, TICKS_PER_UNIT)
-
-/**
- * The virtual time [v] read on the grid of an edge of weight [w]: `⌈v · w · G⌉` ticks, or `⌊…⌋`
- * when [rounding] says so, narrowed to a position: [wideTicksAt] held at [w]'s [positionCeiling]
- * ([saturated], #3313). A front or an offset a pick orders is read here; a stored position is
- * read through [wideTicksAt], which does not cap.
- *
- * @throws ArithmeticException if the result is negative and below `Long.MIN_VALUE`.
- */
-internal fun ticksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILING): Long =
-    saturated(wideTicksAt(v, w, rounding), w)
 
 /**
  * The virtual time [v] read on the grid of an edge of weight [w], exactly and uncapped:
@@ -250,7 +237,11 @@ internal class VirtualTime(
      * §7.3 step 3, read at grid resolution). A bound at the ceiling admits every position below it,
      * as the exact bound would.
      */
-    fun ticksFor(w: Weight): Long = saturated(ticksForWide(w), w)
+    fun ticksFor(w: Weight): Long {
+        val wide = ticksForWide(w)
+        // Below Long, held at its least value: the same penalty-side floor a pick's positions take.
+        return if (wide < Int128.of(Long.MIN_VALUE)) Long.MIN_VALUE else saturated(wide, w)
+    }
 
     /** This time in whole units of virtual time, rounded down: `⌊ticks / (G · w)⌋`. */
     fun unitsFloor(): Int128 =

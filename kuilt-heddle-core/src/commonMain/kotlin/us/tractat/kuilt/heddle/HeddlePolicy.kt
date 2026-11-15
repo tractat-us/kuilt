@@ -227,17 +227,21 @@ public object HeddlePolicy {
     internal fun effectiveTicksWide(edge: PolicyEdge): Int128 = rawTicks(edge) + edge.offsetTicks
 
     /**
-     * The position a pick orders: [effectiveTicksWide] narrowed to a `Long` and held at the edge's
-     * [positionCeiling]. The one narrowing on the way from a gauge to a pick (#3353).
+     * The position a pick orders: [effectiveTicksWide] narrowed to a `Long`, held at the edge's
+     * [positionCeiling] above and at `Long.MIN_VALUE` below. The one narrowing on the way from a
+     * gauge to a pick (#3353).
      *
-     * @throws PositionCeilingException if the position is below `Long`, which only a demanding child
-     *   no rebase may push below zero could reach, and none can.
+     * The low end saturates on the **penalty** side, raising the position, and never refuses. A
+     * demanding child the allocator has watched is never below zero: no rebase takes it there, and a
+     * wake clamps it to the front. One it has not watched, seated and below zero, is clamped as a
+     * waker too ([FairShareAllocator]). So only a child that is not demanding, which no pick orders,
+     * can be down there, and a position raised for a child that cannot win costs nothing.
      */
     internal fun effectiveTicks(edge: PolicyEdge): Long {
         val wide = effectiveTicksWide(edge)
         val weight = edge.record.weight
         if (wide >= Int128.of(positionCeiling(weight))) return positionCeiling(weight)
-        return wide.toLongOrNull() ?: throw PositionCeilingException("${edge.record.id.value} reads $wide ticks, below Long")
+        return wide.toLongOrNull() ?: Long.MIN_VALUE
     }
 
     /**
@@ -344,8 +348,8 @@ public object HeddlePolicy {
      * `max(0, ⌈front · w · G⌉ − p − sleeperCredit · G)` ticks. Adding this offset to
      * [virtualService] clamps the waker up to the current front (with default
      * `sleeperCredit = 0`, to the front rounded up to its grid), so it cannot claim a backlog of
-     * idle virtual time. The result is the clamp a caller stores ([PolicyEdge.offsetTicks]), on the
-     * grid, so reading it back is exact.
+     * idle virtual time. The result is the clamp a caller stores, [PolicyEdge.offsetTicks]: ticks on
+     * the waker's grid, wide and never saturated (#3353), so it feeds back into a [PolicyEdge] as it is.
      *
      * @param front the parent's virtual time at the moment of waking — [front], with the waker
      *   itself (and any co-waker) excluded.
@@ -353,16 +357,10 @@ public object HeddlePolicy {
      * @param weight the edge's weight.
      * @param sleeperCredit bounded credit the waker may keep (default `0`).
      */
-    public fun wakeOffset(front: Rational, vRaw: Rational, weight: Weight, sleeperCredit: Long): Rational =
+    public fun wakeOffset(front: Rational, vRaw: Rational, weight: Weight, sleeperCredit: Long): Int128 =
         // The front rounds up and the waker's own position down, so an off-grid caller's offset
         // can only overshoot the front, never land short of it (§10.5).
-        ticksToVirtual(
-            saturated(
-                clampTicks(wideTicksAt(front, weight), wideTicksAt(vRaw, weight, Rounding.FLOOR), sleeperCredit),
-                weight,
-            ),
-            weight,
-        )
+        clampTicks(wideTicksAt(front, weight), wideTicksAt(vRaw, weight, Rounding.FLOOR), sleeperCredit)
 
     /**
      * [wakeOffset] in ticks, wide: how far a waker at [rawTicks] moves up to reach [frontTicks], less

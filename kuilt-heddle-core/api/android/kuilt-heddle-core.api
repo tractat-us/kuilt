@@ -498,7 +498,7 @@ public final class us/tractat/kuilt/heddle/HeddlePolicy {
 	public final fun isDemanding (Lus/tractat/kuilt/heddle/PolicyEdge;)Z
 	public final fun pick (Ljava/util/List;Lus/tractat/kuilt/heddle/PolicyConfig;J)Lus/tractat/kuilt/heddle/Grant;
 	public final fun virtualService (Lus/tractat/kuilt/heddle/PolicyEdge;)Lus/tractat/kuilt/heddle/Rational;
-	public final fun wakeOffset (Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Weight;J)Lus/tractat/kuilt/heddle/Rational;
+	public final fun wakeOffset (Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Weight;J)Lus/tractat/kuilt/math/Int128;
 }
 
 public final class us/tractat/kuilt/heddle/Lease {

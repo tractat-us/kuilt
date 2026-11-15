@@ -72,7 +72,7 @@ class VirtualPositionTest {
     fun aPublicWakeOffsetNeverLeavesTheWakerShortOfTheFront() {
         val front = Rational.ONE
         val vRaw = Rational.of(1L, 32L) // half a tick at weight 1
-        val offset = HeddlePolicy.wakeOffset(front, vRaw, Weight.ONE, sleeperCredit = 0L)
+        val offset = ticksToVirtual(checkNotNull(HeddlePolicy.wakeOffset(front, vRaw, Weight.ONE, sleeperCredit = 0L).toLongOrNull()), Weight.ONE)
         assertTrue(vRaw + offset >= front, "vRaw + offset = ${vRaw + offset} is short of the front $front")
     }
 

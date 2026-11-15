@@ -302,7 +302,7 @@ class HeddlePolicyTest {
         // 's' wakes. The front is where the scheduler is now: the active sibling's vs.
         val front = active.virtualService()
         sleeper.demand = Demand(targetOutstanding = 1_000_000L, maximumUsefulGrant = 1_000_000L)
-        sleeper.offset = HeddlePolicy.wakeOffset(front, sleeper.virtualService(), sleeper.weight, config.sleeperCredit)
+        sleeper.offset = ticksToVirtual(checkNotNull(HeddlePolicy.wakeOffset(front, sleeper.virtualService(), sleeper.weight, config.sleeperCredit).toLongOrNull()), sleeper.weight)
 
         // Over the next 20 rounds the woken child gets ~half — NOT a 20-grant burst.
         var sleeperGrants = 0
@@ -545,7 +545,7 @@ class HeddlePolicyTest {
         // The sleeper wakes and is clamped to the front of the set it is joining, itself excluded.
         sleeper.demand = Demand(targetOutstanding = 1_000L, maximumUsefulGrant = 1_000L)
         val wakeFront = assertNotNull(front(listOf(runner, sleeper), excluding = setOf("s")))
-        sleeper.offset = HeddlePolicy.wakeOffset(wakeFront, sleeper.virtualService(), sleeper.weight, config.sleeperCredit)
+        sleeper.offset = ticksToVirtual(checkNotNull(HeddlePolicy.wakeOffset(wakeFront, sleeper.virtualService(), sleeper.weight, config.sleeperCredit).toLongOrNull()), sleeper.weight)
 
         // A newborn arrives under the same parent, seated at the same front.
         val creationFront = assertNotNull(front(listOf(runner, sleeper)))

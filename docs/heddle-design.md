@@ -815,8 +815,16 @@ parent's origin (#3353). `LocalHeddle`, for now, raises its children's folds
 
 **`HeddleNode` raises the origin.** After a pick has a grant, and after the seat
 and wake step, `schedule` checks whether any child's effective position has
-passed `R = ceiling / 16`. If one has, it raises the parent's origin by `Δ`, in
-the same patch as the grant:
+passed `R = ceiling / 16` on its own grid, or the front has, read on any child's
+grid. If one has, it raises the parent's origin by `Δ`, in the same patch as the
+grant. The front matters on its own: a light runner holds the front up to `R` on
+*its* grid, and a child `k` times heavier, seated or clamped there, would land
+about `k · R` up its own, past its ceiling for `k > 16`. The same check runs
+before the seat and wake step too, when there are joiners: the front they are
+about to join, on any child's grid, or a child that is not joining, past its
+`R`. There `Δ` is bounded by the demanding children that are not joining, or by
+the front itself when none is, and every seat and clamp then lands at the
+absolute position it would have taken without the raise:
 
 - `Δ` is a whole multiple of the least common multiple of `d / gcd(d, 16n)` over
   the children this peer sees, for each child's weight `n / d`. Then
@@ -899,6 +907,15 @@ both:
 - A `LocalHeddle` parent only ever charged through `admit`, `extend` or an
   overrun, and never picked at, is never rebased. Every `HeddleNode` delegation
   is a pick, so this one is `LocalHeddle`'s alone.
+- Until `LocalHeddle` moves onto origins (slice 7 of #3353), its fold rebase is
+  measured on each child's own grid only, so a `LocalHeddle` parent with a
+  weight spread past 16 can still put a heavy waker or newborn past its ceiling.
+
+A child that is not demanding can sit as far below zero as the origin has
+risen, past `Long`. A pick never orders it: if it comes back demanding to an
+allocator that never saw it idle, a restarted `HeddleNode` say, it is clamped as
+a waker, since no rebase takes a child that kept demanding below zero. And the
+narrowing a pick reads saturates there on the penalty side rather than refusing.
 
 **Returns no longer reach it** (#3360). The ceiling is measured on the raw
 position, net of returns and relative to the origin, and the gross position

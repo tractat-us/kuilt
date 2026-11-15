@@ -88,8 +88,9 @@ public class FairShareAllocator(
     private val demandingObserved = HashMap<AttachmentId, Boolean>()
 
     /**
-     * Whether [schedule] rebases a busy parent by raising its origin (#3353). On by default; a test
-     * switches it off to run a twin that never rebases and compare the picks.
+     * Whether [schedule] rebases a busy parent by raising its origin (#3353). On by default. **Test
+     * only:** a test switches it off to run a twin that never rebases and compare the picks; a parent
+     * with it off reaches its position ceiling.
      */
     @HeddleInternalApi
     public var rebaseEnabled: Boolean = true
@@ -1146,8 +1147,11 @@ internal class Rebase(val ledger: EntitlementLedger, val offsets: Map<Attachment
 internal class StoredOffset(val ticks: Int128, val weight: Weight) {
     /**
      * The clamp as the virtual time it stands for, held at the edge's [positionCeiling]: the form
-     * [AllocatorMemory] still keeps a clamp in, which cannot hold one past `Long`. A clamp there
-     * already puts its edge's effective position at the ceiling, where a pick refuses.
+     * [AllocatorMemory] still keeps a clamp in, which cannot hold one past `Long`. **That hold is on
+     * the credit side**: under an origin a waker's raw position can sit far below zero, so a clamp
+     * past the ceiling is not a sign its effective position is there, and a clamp held short of the
+     * truth hands it the difference after a restore. A bridge for this slice only: #3409 keeps the
+     * clamps wide in [AllocatorMemory] and deletes it, and this slice must not ship without that one.
      */
     fun asVirtualTime(): Rational = ticksToVirtual(saturated(ticks, weight), weight)
 }
