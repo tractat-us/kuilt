@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -120,7 +121,7 @@ class StepBTwinTest {
                     { assertEquals(rebasing.steps, rebasing.picks, "$name: every step leased") },
                     { assertTrue(rebasing.rebases > 0, "$name: the rig, the rebasing side rebased ($rebasing)") },
                     { assertEquals(0, twin.rebases, "$name: the rig, the twin never rebased") },
-                    { assertEquals(us.tractat.kuilt.math.Int128.ZERO, twin.origin, "$name: the rig, the twin never raised an origin") },
+                    { assertEquals(Int128.ZERO, twin.origin, "$name: the rig, the twin never raised an origin") },
                     { assertEquals(0, twin.floorLandings + twin.unobservedBelowZero, "$name: the twin reached no floor arm and no below-zero arm") },
                     { assertTrue(twin.peakTicks >= LONG_LIMIT_TICKS, "$name: the rig, the twin's positions passed 2⁶³ ticks (${twin.peakTicks})") },
                     { assertTrue(rebasing.peakTicks < LONG_LIMIT_TICKS, "$name: the rebasing side stayed inside a Long (${rebasing.peakTicks})") },
@@ -138,6 +139,34 @@ class StepBTwinTest {
     }
 
     /** The first step at which [a] and [b] lease different lanes, as `step: a against b`, or `null`. */
+    /**
+     * The positive control for the below-zero witness every twin row reads ([neverObservedBelowZero]):
+     * it names a child exactly when the allocator's own first-sighting rule clamps it. a and b are
+     * seated 20 ticks apart either side of a raised origin; a fresh allocator has observed neither.
+     */
+    @Test
+    fun theBelowZeroWitnessNamesTheChildTheFirstSightingRuleClamps() {
+        val root = GroupId("p")
+        val (a, b) = listOf(edgeOf(root, GroupId("p/a")), edgeOf(root, GroupId("p/b")))
+        val seated = shapedLedger(root, listOf(a, b))
+            .piece(EntitlementLedger.of(gauges = mapOf(a.id to gaugeAt(Int128.of(160L), 0L), b.id to gaugeAt(Int128.of(480L), 0L))))
+        // 20 units is 320 ticks on a weight-1 grid: a reads −160, b +160.
+        val raised = seated.piece(checkNotNull(seated.raiseOrigin(root, Int128.of(20L))) { "the rig: the origin rose" }.delta)
+        fun fresh() = FairShareAllocator(LOCAL, PolicyConfig(quantum = 1L))
+        val watched = FairShareAllocator(LOCAL, PolicyConfig(quantum = 1L), AllocatorMemory(emptyMap(), mapOf(a.id to true, b.id to true)))
+        val clamping = fresh()
+        val named = neverObservedBelowZero(raised, clamping) { true }
+        clamping.settle(root, raised) { Demand(targetOutstanding = 1L, maximumUsefulGrant = 1L) }
+        assertAll(
+            { assertEquals(listOf(a.id), named, "below zero, never observed and demanding: a, and only a") },
+            { assertEquals(Int128.of(320L), clamping.memory.wakeOffsets[a.id], "and the allocator's own rule clamps a to b, 320 ticks up") },
+            { assertEquals(null, clamping.memory.wakeOffsets[b.id], "and leaves b, which it does not name, alone") },
+            { assertEquals(emptyList(), neverObservedBelowZero(seated, fresh()) { true }, "at or above zero: not the arm") },
+            { assertEquals(emptyList(), neverObservedBelowZero(raised, fresh()) { false }, "not demanding: not the arm") },
+            { assertEquals(emptyList(), neverObservedBelowZero(raised, watched) { true }, "observed: not the arm") },
+        )
+    }
+
     private fun firstDifference(a: List<String>, b: List<String>): String? {
         val at = a.indices.firstOrNull { it >= b.size || a[it] != b[it] } ?: return if (b.size > a.size) "step ${a.size}: nothing against ${b[a.size]}" else null
         return "step $at: ${a[at]} against ${b.getOrNull(at)}"

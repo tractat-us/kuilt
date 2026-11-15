@@ -64,14 +64,15 @@ internal fun neverObservedBelowZero(
     allocator: FairShareAllocator,
     demanding: (AttachmentRecord) -> Boolean,
 ): List<AttachmentId> {
-    val offsets = allocator.memory.wakeOffsets
-    return ledger.allEdges().sorted().filter { edge ->
+    val unobserved = ledger.allEdges().filter { edge ->
         val record = ledger.record(edge) ?: return@filter false
-        if (ledger.activeChildren(record.parent).none { it.attachment == edge }) return@filter false
-        if (allocator.lastObservedDemanding(edge) != null || !demanding(record)) return@filter false
-        val ticks = effectiveTicks(ledger, offsets, edge) ?: return@filter false
-        ticks < Int128.ZERO
+        allocator.lastObservedDemanding(edge) == null && demanding(record) && ledger.gauge(edge) != null &&
+            ledger.activeChildren(record.parent).any { it.attachment == edge }
     }
+    if (unobserved.isEmpty()) return emptyList()
+    // Read only when there is a candidate: the wake memory is sorted on every read.
+    val offsets = allocator.memory.wakeOffsets
+    return unobserved.sorted().filter { edge -> (effectiveTicks(ledger, offsets, edge) ?: return@filter false) < Int128.ZERO }
 }
 
 /** Every parent [ledger] has raised an origin under, with that origin: empty for a twin. */
