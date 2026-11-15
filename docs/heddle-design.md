@@ -1062,6 +1062,97 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   absolute, the parent's origin added back, so the newborn is seated level with
   that runner, not behind it (#3353).
 
+#### Planned: a returning child keeps its place, by the parent's clock (#3376)
+
+**Pausing neither costs a child its place nor buys it a better one.** A child
+that stops asking and asks again later comes back as far ahead or behind the
+others as it was when it stopped. The time it spent away counts for nothing.
+
+The clamp above does not do that. It moves every waker up to the front, so it
+forgives the lag a short burst leaves behind, and a parent that drains between
+bursts forgives it every time. Over 300 bursts the weights stop holding
+(`BurstLagTest`, measured on the stack base):
+
+| Rig | Fair | Clamp today |
+|---|---|---|
+| S1c: weights 2:1, 2 units a burst, both asking | 400 / 200 | 300 / 300 |
+| S7: 2:1, the heavy child asks alone for 1, then both for 1 | 500 / 100 | 600 / 0 |
+| S7b: the same, light child first | 200 / 400 | 300 / 300 |
+| S9: a ladder, 1:2:3 joining one at a time | 550 / 500 / 450 | 600 / 600 / 300 |
+
+S7's first unit is uncontested, so it is the heavy child's. Counting it as
+contested would pay the light child for a stretch it was not asking (§10.6).
+
+**The rule, in one sentence.** Each parent keeps a clock that runs by the
+service its asking children *kept*, issued less refunded, per unit of their
+weight, and a child that comes back moves forward by how far the clock ran
+while it was away.
+
+- **The clock.** Each round at a parent, the allocator adds up how far each
+  child it saw asking last round moved, `issued − returned` since it last
+  looked, and divides by those children's total weight. A child that was not
+  asking adds nothing, its own refunds included: they already lower its own
+  position, and counting them in the clock too would credit it twice. The clock
+  can run backward, on a round in which refunds outweigh grants.
+- **Leaving.** When this peer sees a child stop asking, it records where the
+  clock stood.
+- **Returning.** When the child asks again, its wake offset grows by how far the
+  clock ran since then, read on the child's own grid, and never by less than
+  zero. The record is cleared.
+- **A child this peer never saw stop** is clamped to the front, as above: a first
+  sighting, or a restart that lost its memory.
+
+**Why it earns nothing for idleness.** The clock runs only on service someone
+else kept while the child was away, so the shift is how far the others moved,
+not how long the child slept. It does not read the child's own position, so a
+charge or refund that lands on the child during or after the gap counts as it
+would with no gap. An over-reserved lease that straddles the wake is the child's
+own debt, and its refund cancels the debt (#3238).
+
+It replaces the kept-lag rule #3383 proposed, which stored each child's distance
+from the front and needed a correction for the mean the returner joins. A child
+leaving a set of one kept lag 0 there, so pausing bought it a place (S8: 2:1,
+light first, 150 / 450 against a fair 200 / 400), and a debtor that paused while
+a sibling left lost one (P1: 30 against 35). The clock has no lag to store and
+no correction, and the spike found it exact on S1, S7, S8, S9 and P1, equal to
+kept lag on every noisy-cost arm, and it cut #3238's two-level spill at t7 from
++0.113 to +0.045.
+
+**What it does not close.**
+
+- **P2, a sibling's refund during the gap** (#3239). b's over-reservation reaches
+  the clock at the shared weight before a leaves, and its refund comes off at
+  b's weight alone while a is away, so the clock runs short and a returns that
+  far behind: 19 / 10 against a fair 15 / 14. Closing it needs to know which
+  lease a refund came from, which the ledger does not record.
+- **The two-level spill** is the same channel one level up, and is smaller, not
+  gone.
+- **A cancelled job that held its slot** is charged nothing, with or without a
+  gap. #3238 stays open until a control with no idle gap separates that from
+  wake credit.
+
+**Where it lives.** Beside the wake offsets in `AllocatorMemory`:
+scheduler-local, never replicated. The clock is only ever read as a difference
+against this peer's own record of a departure, and that record is one peer's
+sighting of a transition, with no lattice to join under. Two peers that saw
+different departures compute different offsets, which reorders their grants and
+never creates entitlement, as wake offsets already do. `LocalHeddle` persists it
+in its snapshot; `HeddleNode` keeps it in memory, so a restart forgets it and
+the next wake is a first sighting.
+
+The clock is kept wide, on a grid of `16 · 720,720` ticks to a unit of virtual
+time. `720,720` is the least common multiple of 1 to 16, so a parent whose
+asking children's weights sum to 16 or less, over their common denominator,
+advances exactly; past that each round rounds up, under one grid tick. An origin
+rebase moves every child and no clock, and changes no shift.
+
+**Bounds.** A returning child is moved by what the others kept, so it takes at
+most what it would hold had it kept asking, and the gap adds nothing to §8.2's
+bound. Section 10.6 will read: *No idle credit. A child that stops competing
+comes back moved by how far its parent's clock ran while it was away, and gains
+nothing for the time it was idle. A child never seen to stop is clamped to the
+front. Default sleeper credit is zero.*
+
 ### 7.3 Selection
 
 Per allocation round at one parent, on one peer:
@@ -1309,7 +1400,9 @@ Carried over from the source intact; each is a named property test (§13).
    uncapped. The front it is taken from is wide too, so no seat is taken against
    an understated front (#3353, §7.1).
 6. **No unlimited idle credit.** Default sleeper credit is zero; waking
-   clamps forward.
+   clamps forward. Planned: a returning child moves by how far its parent's
+   net-service clock ran while it was away, and gains nothing for the time it
+   was idle (§7.2, #3376).
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
    post-heal convergence restores a single agreed ledger.
 8. **Projection homomorphism.**
