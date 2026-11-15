@@ -467,6 +467,12 @@ public class HeddleNode internal constructor(
     /** How many origin raises [schedule] has landed on this node: a test's witness that its rig fired. */
     internal val rebasesForTest: Int get() = lock.withLock { allocator.rebases }
 
+    /**
+     * This node's scheduler-local wake memory, a copy: a test's witness that two peers saw different
+     * idle-and-return sightings while their ledgers converged (#3376).
+     */
+    internal val allocatorMemoryForTest: AllocatorMemory get() = lock.withLock { allocator.memory }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // Reservations — leaf earmark → completion, with local single-writer idempotence.
     // ─────────────────────────────────────────────────────────────────────────────
