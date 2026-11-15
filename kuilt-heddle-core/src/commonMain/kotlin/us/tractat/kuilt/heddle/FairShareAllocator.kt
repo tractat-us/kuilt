@@ -878,7 +878,9 @@ public class FairShareAllocator(
             if (unseated.isNotEmpty()) {
                 ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
             }
-            clampWakers(edges, wakers - returners, front)
+            // An unseated waker is a newborn: its seat puts it at the front, and a clamp would count
+            // the front twice (#3454 review).
+            clampWakers(edges, wakers - returners - unseated, front)
             moveReturners(edges, shifts)
         }
         for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
