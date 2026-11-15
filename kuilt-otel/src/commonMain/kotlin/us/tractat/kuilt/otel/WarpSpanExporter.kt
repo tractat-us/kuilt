@@ -347,6 +347,11 @@ public class WarpSpanExporter(
      * window recovers it, and retrying the original unstamped span mints another dot and
      * creates a second stamped copy.
      *
+     * Until a read of the stored spans has landed, the export makes that read first. While the
+     * store refuses it, the export returns [ExportResult.Failure] and writes nothing (#3390): the
+     * span waits in memory, outside [snapshot], and the read that lands adds it after the stored
+     * set, so it is written then. A freshly minted stamp is rolled back as on a refused write.
+     *
      * Returns [ExportResult.Success] after the durable write returns. A failure in that section
      * returns [ExportResult.Failure], and so does a `CancellationException` the [store] mints at
      * this live caller from its own `withTimeout`: only the caller's own cancellation propagates
@@ -495,6 +500,10 @@ public class WarpSpanExporter(
      * remote dots as predecessors — the cross-replica happens-before path (#846).
      *
      * Idempotent: merging the same set twice produces the same result.
+     *
+     * Until a read of the stored spans has landed, the merge makes that read first, and while the
+     * store refuses it returns [ExportResult.Failure] without writing (#3390). The remote set stays
+     * in memory and is written with the stored one once a read lands.
      */
     public suspend fun merge(remote: ORSet<SpanRecord>): ExportResult {
         // Fold the remote replica's causal frontier so the next local tick records
@@ -566,7 +575,11 @@ public class WarpSpanExporter(
      * a failed clear has already emptied memory, so a gated retry would find nothing to drop,
      * write nothing, and report [ExportResult.Success] over a store that still holds every span.
      *
-     * **On failure, [snapshot] already reads empty while the store still holds every span**, and
+     * A clear whose read of the stored spans is still refused changes nothing, in memory or in the
+     * store, and returns [ExportResult.Failure] (#3390). Dropping only what memory holds would let
+     * every unread stored span come back on the next join.
+     *
+     * **On a failed write, [snapshot] already reads empty while the store still holds every span**, and
      * a configured clock's [WarpCausalClock.frontier] likewise reads empty while the persisted
      * one still names the pre-clear dots. Both mutations precede the writes and — unlike
      * [export], which rolls a freshly-minted stamp back out — neither is undone. A caller that
