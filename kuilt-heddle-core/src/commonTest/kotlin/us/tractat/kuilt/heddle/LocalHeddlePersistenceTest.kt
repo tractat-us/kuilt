@@ -20,7 +20,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
-import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -363,9 +362,15 @@ class LocalHeddlePersistenceTest {
 
     /**
      * Restore under the next epoch, with the wake offset `b`'s clamp just wrote, then the same calls
-     * as an engine that never persisted. Picks, outcomes and books all match. The control arm
-     * restores the same snapshot with the wake memory forgotten, and picks differently, so the
-     * memory is what carries the match.
+     * as an engine that never persisted. Picks, outcomes and books all match.
+     *
+     * The second arm restores the same snapshot with the wake memory forgotten, which is a
+     * restarted scheduler, and it picks the same too. That is the restart rule (design §7.2): `b`
+     * is seated and demanding and the forgetful engine has never observed it, so it is a waker and
+     * is clamped back to the front its stored offset had put it at. Before the rule the forgetful
+     * engine kept `b` at its raw position and handed it back its idle credit. So for a clamped
+     * waker the memory no longer carries the match; for a returner it still does, and
+     * [aSnapshotTakenWhileAChildIsAwayKeepsItsPlace] is the witness that the memory matters.
      */
     @Test
     fun restoreReplaysIdenticallyWithAWaker() {
@@ -383,7 +388,7 @@ class LocalHeddlePersistenceTest {
         )
         val expected = continuation(reference, open)
         val actual = continuation(restored, open)
-        val control = continuation(forgetful, open)
+        val forgot = continuation(forgetful, open)
         val bPicks = { picks: List<Any> -> picks.count { it == b } }
         assertAll(
             { assertTrue(offset > Int128.ZERO, "the rig: b's wake offset is non-zero at persist time, $offset") },
@@ -391,8 +396,8 @@ class LocalHeddlePersistenceTest {
             { assertEquals(20, expected.count { it is GroupId }, "the rig: 20 picks ran after the restore") },
             { assertEquals(expected, actual, "the same picks and outcomes as the engine that never persisted") },
             { assertEquals(books(reference), books(restored), "and the same books") },
-            { assertNotEquals(expected, control, "the control: forgetting the memory changes the picks") },
-            { assertTrue(bPicks(control) > bPicks(expected), "it hands b back the idle credit: ${bPicks(control)} against ${bPicks(expected)}") },
+            { assertEquals(expected, forgot, "an engine that forgot its memory picks the same: the restart rule clamps b again") },
+            { assertEquals(bPicks(expected), bPicks(forgot), "so it hands b back no idle credit") },
         )
     }
 
