@@ -9,7 +9,7 @@ run safely once it arrives.
 
 ## Where a task may run (location eligibility)
 
-This builds on the lanes and the ledger described under [Fair share across peers](heddle.md#fair-share-across-peers).
+This builds on [the lanes](heddle.md#weighted-lanes-over-warp) and the ledger described under [Fair share across peers](heddle.md#fair-share-across-peers).
 
 **Intent:** *where* a task is allowed to run — "needs a GPU", "must stay in us-east", "sit
 where the data is". This is orthogonal to the *how much* a lane answers: eligibility
