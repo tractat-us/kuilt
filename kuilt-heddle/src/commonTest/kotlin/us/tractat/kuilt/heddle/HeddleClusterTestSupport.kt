@@ -353,7 +353,7 @@ internal suspend fun TestScope.governedCluster(size: Int, quantum: Long, cap: Lo
     val clusterConfig = ClusterConfig(voters = ids.toSet())
     // The sim's default factory reseeds a restarted node exactly as it seeded the first, so its
     // `ClientIdentity.Auto` id comes back the same and its first forward collides with the old
-    // incarnation's at the leader. A real process draws a fresh id; one seed per start models that.
+    // incarnation's at the leader. A real process draws a fresh id; one seed per start models that (#3425).
     var starts = 0L
     val sim = MultiNodeRaftSim(nodeIds = ids, scope = this, nodeScope = backgroundScope) { id, transport, storage, child ->
         val seed = MULTI_NODE_SIM_SEED + ids.indexOf(id) + 1_000L * starts++

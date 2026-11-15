@@ -576,7 +576,9 @@ idle or something at a parent is wrong, without reading the ledger by hand.
 and a governed one alike. `NothingToDelegate` is the idle answer. `PositionCeiling(parent)` and
 `WeightBudget(parent)` say the parent's children cannot be ordered, and why. A busy parent never
 reaches the first by itself: `schedule` rebases it by raising a replicated origin, so a long run
-keeps granting (#3353). It is reached when a child that waits is never served. The second comes
+keeps granting, at weights as far apart as 60 to 1 and across a restart (#3353). It is reached
+when a child that waits is never served, or under weights so fine-grained that no test reaches
+them (`docs/heddle-design.md` §7.1). The second comes
 from weights gossip merged that a pick cannot sum in `Long`, and clears when one child closes.
 
 **A refusal writes nothing.** The first round of a call, with the newborns it seats before that

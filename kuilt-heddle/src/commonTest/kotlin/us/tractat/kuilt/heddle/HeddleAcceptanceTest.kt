@@ -453,7 +453,7 @@ class HeddleAcceptanceTest {
         /**
          * Calls each scheduler makes while the two are apart. The heal costs grow with the calls made
          * apart: the first pump after it took 15 ms after none, 0.8 s after 16 and 1.6 s after 32 on
-         * the JVM, about ten times that on Kotlin/Native, and 250 exhausted a 512 MB test JVM.
+         * the JVM, about ten times that on Kotlin/Native, and 250 exhausted a 512 MB test JVM (#3424).
          */
         const val APART_CALLS: Int = 16
 
