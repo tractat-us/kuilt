@@ -375,6 +375,28 @@ class WarpMetricExporterRefusedRecoveryTest {
         )
     }
 
+    /** A clear deletes every key, so nothing is left unread: the next write runs without a read. */
+    @Test
+    fun aClearSettlesAKindWhoseReadWasRefused() = runTest {
+        val backing = RecordingStore()
+        seed(backing)
+        val store = KindReadRefusingStore(backing)
+        store.refuse(sumsKey)
+        val exporter = WarpMetricExporter(replica, store).also { it.recover() }
+
+        val cleared = exporter.clear()
+        val written = exporter.incrementSum(otherSum, 1L)
+        val afterRestart = restarted(backing)
+
+        assertAll(
+            { assertEquals(1, store.refusalsOf(sumsKey), "the rig refused ${store.refusalsOf(sumsKey)} reads, not recover's alone") },
+            { assertEquals(MetricExportResult.Success, cleared) },
+            { assertEquals(MetricExportResult.Success, written, "a kind whose key clear deleted still refused its writes") },
+            { assertEquals(1L, afterRestart.sumValue(otherSum)) },
+            { assertEquals(0L, afterRestart.sumValue(sum), "the cleared sums came back") },
+        )
+    }
+
     // ---- Cancellation ----
 
     @Test
