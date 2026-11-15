@@ -2,11 +2,10 @@
 // the module's commonMain (#3323). `KuiltVersion` itself is hand-written; see GenerateKuiltVersion.
 //
 // Applied AFTER kuilt.kmp-library, by `:kuilt-base` alone (`GenerateKuiltVersion.CARRIER`), and
-// applying it anywhere else fails here, at configuration. `:kuilt-base` depends on nothing, so the
-// modules that need the value `api` it rather than carrying a copy each: `:kuilt-heddle-core` can
-// take it without the coroutines `:kuilt-core` would bring, and one class in one package from two
-// jars, a split package, cannot arise. The value is the version of `:kuilt-base`; importing the BOM
-// keeps every module at that version.
+// applying it anywhere else fails here, at configuration. One carrier means one class in one
+// package, never a split package across two jars. No other kuilt module depends on it, because a
+// dependent recompiles on native and wasm on every snapshot (#3464; see GenerateKuiltVersion). The
+// value is the version of `:kuilt-base`; importing the BOM keeps every module at that version.
 //
 // `VERSION` is a plain `val` over an `internal const`: a public `const` is inlined into consumers
 // and would put the version in the carrier's ABI (see GenerateKuiltVersion).
@@ -39,8 +38,8 @@ class PublishedPomArgument(
 if (path != GenerateKuiltVersion.CARRIER) {
     throw GradleException(
         "kuilt.version-constant is applied to $path, but only ${GenerateKuiltVersion.CARRIER} carries " +
-            "KuiltVersion. Depend on it with `api(project(\"${GenerateKuiltVersion.CARRIER}\"))` instead: " +
-            "a second copy would be a second class to keep in step, or a split package.",
+            "KuiltVersion. Depend on ${GenerateKuiltVersion.CARRIER} instead, after reading the warning in " +
+            "GenerateKuiltVersion's KDoc: a second copy would be a second class to keep in step, or a split package.",
     )
 }
 
