@@ -777,9 +777,9 @@ class LocalHeddlePersistenceTest {
     @Test
     fun aZeroWakeOffsetIsCorrupt() {
         val honest = "\"wakeOffsets\":{\"root/acme/batch@1:1#0\":{\"low\":32}"
-        check(honest in GOLDEN_FORMAT_2_RICH) { "the rig: the offsets are where this test expects them" }
+        check(honest in GOLDEN_FORMAT_1_RICH) { "the rig: the offsets are where this test expects them" }
         val zero = honest.replace("{\"root/acme/batch@1:1#0\"", "{\"root/acme/batch/y@2:1#0\":{},\"root/acme/batch@1:1#0\"")
-        val out = LocalHeddle.decode(GOLDEN_FORMAT_2_RICH.replace(honest, zero), Json)
+        val out = LocalHeddle.decode(GOLDEN_FORMAT_1_RICH.replace(honest, zero), Json)
         assertTrue(out is RestoreResult.Corrupt && "root/acme/batch/y@2:1#0" in out.reason, "expected Corrupt naming the zero offset, got $out")
     }
 
