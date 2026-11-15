@@ -252,6 +252,7 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
         val refusals = store.refusedWrites()
         store.allowWrites()
         val floorBefore = exporter.snapshot().compactedBelow[replicaA]
+        val heldForeign = exporter.snapshot().entries().any { it.first == foreignInsert.id }
         val durableBefore = bodiesAfterRestart(backing)
         val sealedBefore = indexOf(backing).sealedSegments.toSet()
 
@@ -263,7 +264,7 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
         assertAll(
             { assertEquals(1, refusals, "the rig refused $refusals writes, not exactly the adopted segment's") },
             { assertTrue(refused is ExportResult.Failure, "the refused merge reported $refused") },
-            { assertTrue(exporter.snapshot().entries().any { it.first == foreignInsert.id }, "the merge did not keep B's record") },
+            { assertTrue(heldForeign, "the refused merge did not leave B's record in memory") },
             { assertTrue("foreign0" !in durableBefore, "the refused merge's record was durable already: $durableBefore") },
             { assertEquals(0L, floorBefore, "a window pass ran before the export turn") },
             { assertTrue(floorAfter > floorBefore, "no window pass ran in the export turn: floor $floorAfter") },
