@@ -359,6 +359,54 @@ class WarpLogRecordExporterUnreadIndexTest {
         assertAll(*checks.toTypedArray())
     }
 
+    /** Delegates to [backing], but refuses every delete of the legacy key, as `IndexedDbDurableStore` does (#3143). */
+    private class KeepsLegacyStore(private val backing: DurableStore, private val legacy: StoreKey) : DurableStore {
+        private val lock = reentrantLock()
+        private var refusedCount = 0
+
+        val refusedDeletes: Int get() = lock.withLock { refusedCount }
+
+        override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+
+        override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = backing.write(key, bytes)
+
+        override suspend fun delete(key: StoreKey) {
+            if (key == legacy) {
+                lock.withLock { refusedCount++ }
+                throw IllegalStateException("store refused delete of ${key.name}")
+            }
+            backing.delete(key)
+        }
+    }
+
+    @Test
+    fun anUndecodableIndexFallsBackToALegacyBlobItsMigrationCouldNotDelete() = runTest {
+        // The migration copied the blob to segment 0 and wrote the index, and the delete of the
+        // legacy key was refused, so the blob outlived it. With the index now undecodable, a start
+        // fresh wrote its own segment 0 and index over the copy, and the blob was never read again.
+        val (backing, legacy) = storeWithALegacyBlob(0 until 12)
+        val store = KeepsLegacyStore(backing, legacyKey)
+        exporterFor(store).recover()
+        val legacyOutlivedMigration = legacyKey.name in backing.keys()
+        val migrated = INDEX_KEY_FOR_TEST.name in backing.keys()
+        backing.putRaw(INDEX_KEY_FOR_TEST, byteArrayOf(0x7f, 0x00, 0x13))
+
+        val exporter = exporterFor(store)
+        exporter.recover()
+        val exported = exporter.export(record(100))
+        val afterRestart = bodiesAfterRestart(backing)
+
+        assertAll(
+            { assertEquals(12, legacy.size, "precondition: the fixture holds no legacy records") },
+            { assertTrue(migrated, "precondition: the migration wrote no index") },
+            { assertTrue(legacyOutlivedMigration, "precondition: the migration deleted the legacy key") },
+            { assertTrue(store.refusedDeletes >= 1, "precondition: the rig refused no delete") },
+            { assertTrue(exporter.health.value.recoveryFailed, "the undecodable index was not reported") },
+            { assertEquals(ExportResult.Success, exported) },
+            { assertEquals(legacy + "body-100", afterRestart, "the legacy records were lost behind an undecodable index") },
+        )
+    }
+
     @Test
     fun theCallersOwnCancellationInEachMigrationCallStillPropagates() = runTest {
         // The control for the two legacy arms: without `ensureActive` each guard would read the
