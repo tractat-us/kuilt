@@ -235,17 +235,13 @@ class WarpLogRecordExporterUnreadIndexTest {
     private suspend fun activeKeyOf(store: RecordingStore): StoreKey =
         StoreKey(segmentKeyForTest(decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST))).active))
 
-    /** Every write [store] has taken. Deletes are not counted: see the arm below. */
-    private fun writes(store: RecordingStore): Int = store.operations().count { it.kind == StoreOpKind.WRITE }
-
     @Test
     fun aRefusedActiveSegmentReadFailsEveryTurnClosedUntilItHeals() = runTest {
         // The active segment is the key the next export writes, so an unread one cannot be
         // installed as empty: that export wrote over it, and a probe lost 6 of 30. Nor can it be
         // sealed and a new one opened, because the ids minted next would reuse the ones it holds.
-        // So it fails closed, as the index does. Recovery's deletes of keys the index has already
-        // retired, and of the superseded legacy key, still run on each read: they are why only
-        // writes are counted here.
+        // So it fails closed, as the index does, and is read before anything else: a refused read
+        // deletes nothing and costs a turn two reads, the index and the active segment.
         val checks = Refusal.entries.flatMap { how ->
             val (backing, persisted) = storeWithThirtyRecords()
             val activeKey = activeKeyOf(backing)
@@ -253,10 +249,14 @@ class WarpLogRecordExporterUnreadIndexTest {
             val store = RefusingStore(backing, Call.READ, { it == activeKey }, times = 3, how = how)
             val exporter = exporterFor(store)
 
+            val mutationsBefore = mutations(backing)
             exporter.recover()
-            val writesBefore = writes(backing)
+            val readsBefore = backing.reads()
             val whileRefused = listOf(exporter.export(record(100)), exporter.export(record(101)))
-            val writesWhileRefused = writes(backing) - writesBefore
+            // The refused active read never reaches `backing`, so each refused turn shows one read.
+            val readsWhileRefused = backing.reads() - readsBefore
+            val mutationsWhileRefused = mutations(backing) - mutationsBefore
+            val failedWhileRefused = exporter.health.value.failed
             val activeWhileRefused = backing.read(activeKey)
             val healed = exporter.export(record(102))
             val afterRestart = bodiesAfterRestart(backing)
@@ -264,7 +264,9 @@ class WarpLogRecordExporterUnreadIndexTest {
             listOf<() -> Unit>(
                 { assertEquals(3, store.refused, "[$how] the active segment read was refused ${store.refused} times, not 3") },
                 { assertTrue(whileRefused.all { it is ExportResult.Failure }, "[$how] a turn ran over an unread active segment: $whileRefused") },
-                { assertEquals(0, writesWhileRefused, "[$how] a turn wrote over an unread active segment") },
+                { assertEquals(0, mutationsWhileRefused, "[$how] recovery or a turn wrote or deleted over an unread active segment") },
+                { assertEquals(2, readsWhileRefused, "[$how] a refused turn read more than the index and the active segment") },
+                { assertEquals(2L, failedWhileRefused, "[$how] the refused turns were not counted as failed") },
                 { assertTrue(activeBefore.contentEquals(activeWhileRefused), "[$how] the unread active segment was written over") },
                 { assertEquals(ExportResult.Success, healed, "[$how] the turn after the read healed failed") },
                 { assertEquals(persisted + "body-102", afterRestart, "[$how] records were lost to the unread active segment") },

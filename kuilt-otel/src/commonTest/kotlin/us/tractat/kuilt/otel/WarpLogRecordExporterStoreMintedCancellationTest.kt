@@ -318,8 +318,10 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
     fun aCancellationTheStoreMintsOnOneSegmentReadCostsThatSegmentAlone() = runTest {
         val backing = RecordingStore()
         val expected = exporterFor(backing).also { e -> repeat(30) { e.export(record(it)) } }.snapshot().toList()
+        // A SEALED segment: a refused active segment fails recovery closed instead, and is read first.
+        val sealed = decodeIndexForTest(requireNotNull(backing.read(INDEX_KEY_FOR_TEST))).sealedSegments
         val store = ScriptedStore(backing)
-        store.arm(Rule(Op.READ, isSegment, Act.MINT))
+        store.arm(Rule(Op.READ, { it.name == segmentKeyForTest(sealed.first()) }, Act.MINT))
 
         val exporter = exporterFor(store)
         val (_, escaped) = escapeOf { exporter.recover() }
@@ -327,6 +329,7 @@ class WarpLogRecordExporterStoreMintedCancellationTest {
         val afterCleanStart = recovered(backing).snapshot().toList()
 
         assertAll(
+            { assertTrue(sealed.isNotEmpty(), "precondition: the fixture sealed no segment") },
             { assertEquals(1, store.minted, "the rig never minted on a segment read") },
             { assertNull(escaped, "a cancellation the store minted escaped recover: $escaped") },
             { assertTrue(held in 1 until expected.size, "one unread segment should cost its records alone; held $held of ${expected.size}") },
