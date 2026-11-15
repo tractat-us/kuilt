@@ -322,7 +322,7 @@ public object HeddlePolicy {
             return VirtualTime.of(effectiveTicksWide(top), top.record.weight)
         }
         // Wide, so a front over a position past the ceiling is still the exact front (#3353): a
-        // joiner seated or clamped against it lands where it belongs, and the pick refuses.
+        // joiner seated or clamped against it lands where it belongs, and the pick orders it.
         return meanOf(demanding)
     }
 

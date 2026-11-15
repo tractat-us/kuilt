@@ -103,7 +103,7 @@ public class FairShareAllocator(
     /**
      * Whether [schedule] rebases a busy parent by raising its origin (#3353). On by default. **Test
      * only:** a test switches it off to run a twin that never rebases and compare the picks; a parent
-     * with it off reaches its position ceiling.
+     * with it off climbs past its position ceiling and picks exactly as the rebasing one does.
      */
     @HeddleInternalApi
     public var rebaseEnabled: Boolean = true
@@ -213,19 +213,17 @@ public class FairShareAllocator(
      * set neither of them is in (§7.2, §10.6, #1752), so a joiner meets the front it is rejoining
      * rather than one it helped set.
      *
-     * Three states stop it, and none throws. A child of [parent] at its position ceiling (#3313)
-     * stops it at the pick that would have to order it. A grant whose delegation would carry its
-     * child to that ceiling is not made, as `LocalHeddle`'s acquire does not make one (#3353): the
-     * child's charges would land inexactly. And active children whose weights fail
-     * [weightsFitTheBudget] stop it before the seat step: the replicated ledger can merge such a
-     * set from writes that each fit (#3353).
+     * One state stops it, and it does not throw: active children whose weights fail
+     * [weightsFitTheBudget] stop it before the seat step, since the replicated ledger can merge such
+     * a set from writes that each fit (#3353). No position stops it: a pick orders the full 128-bit
+     * position, however far a child stands from its parent's origin.
      *
      * ## A refused or empty call writes nothing
      *
      * The seat step and the first pick run together, on a [fork] of this allocator, inside **one**
      * [LedgerCell.mutateOrSkip] (#3353):
-     * - the first pick **refused**, at the ceiling or the budget, or its delegation would reach the
-     *   ceiling: no patch, and the fork is dropped, so no seat, no clamp and no observation is kept;
+     * - the first round **refused** at the weight budget: no patch, and the fork is dropped, so no
+     *   seat, no clamp and no observation is kept;
      * - the first pick found **nothing** to grant: no patch either, so the seats are dropped with
      *   it, but the fork's wake memory is kept, since it observed who was waiting. That is what
      *   [LocalHeddle] does, and it means an idle call writes nothing to a replicated ledger;
@@ -234,10 +232,9 @@ public class FairShareAllocator(
      *
      * A first round may also raise [parent]'s origin, in the same patch, once a child there has
      * climbed past its [rebaseThreshold]: before its pick ([preSeatRaise] with joiners,
-     * [raiseBeforePick] without), so a child already at its ceiling is repaired rather than refused,
-     * and after it ([raiseOriginBeneath]). So may each later
-     * round, inside its own write. That rebase is what keeps a busy parent clear of the position
-     * ceiling, and it changes no pick (#3353): it moves every child alike, and no joiner seated,
+     * [raiseBeforePick] without), and after it ([raiseOriginBeneath]). So may each later round,
+     * inside its own write. That rebase keeps a busy parent's positions near zero, where the public
+     * virtual-time reads are exact, and it changes no pick (#3353): it moves every child alike, and no joiner seated,
      * clamped or returned under it is held at its floor, which every raise before a pick checks. A
      * joiner held at its floor with no raise is what the window rule changes ([landing]).
      *
@@ -254,8 +251,8 @@ public class FairShareAllocator(
      *   nothing. Asked once per active child each time the policy input is built, so it should
      *   answer from live state rather than a copy taken before the call.
      * @return [AllocationOutcome.Delegated] with the count of grants applied this call, even when a
-     *   refusal stopped it after them; otherwise [AllocationOutcome.PositionCeiling] or
-     *   [AllocationOutcome.WeightBudget] when [parent] cannot be ordered, and
+     *   refusal stopped it after them; otherwise [AllocationOutcome.WeightBudget] when [parent]'s
+     *   children cannot be ordered, and
      *   [AllocationOutcome.NothingToDelegate] when it simply had nothing to grant.
      * @throws IllegalStateException when this allocator was built from an [AllocatorMemory] no
      *   allocator wrote, one holding a child's shift remainder at a denominator other than its
@@ -275,7 +272,7 @@ public class FairShareAllocator(
             (round as? FirstRound.Granted)?.patch
         }
         when (val opened = checkNotNull(first) { "the cell's write step never ran its transform" }) {
-            is FirstRound.Refused -> return opened.refusal.at(parent)
+            FirstRound.OverBudget -> return AllocationOutcome.WeightBudget(parent)
             is FirstRound.Empty -> {
                 adoptMemoryOf(opened.fork)
                 return AllocationOutcome.NothingToDelegate
@@ -295,24 +292,16 @@ public class FairShareAllocator(
                 // Before each pick, on the state it lands on: the clock over the last grant, and any
                 // child that grant filled seen leaving at it, not at the next call (#3416 review).
                 markDepartures(parent, policyEdges(s, parent, demand))
-                try {
-                    val cell = ValueCell(s)
-                    // Before the pick, so a child a merge carried to its ceiling is repaired rather
-                    // than refused by the pick it would stop (#3353).
-                    val preRaised = raiseBeforePick(parent, cell, earmarked, demand)
-                    val grant = pickOne(cell.current, parent, earmarked, demand) ?: return@mutateOrSkip null
-                    if (preRaised) checkRaiseChangedNoPick(s, parent, earmarked, demand, grant)
-                    val raised = raiseOriginBeneath(parent, cell, earmarked, demand, grant)
-                    if (!cell.mutateOrSkip { it.delegate(self, grant.attachment, grant.amount) }) return@mutateOrSkip null
-                    // The delegation would carry the child to its ceiling: not made (#3353).
-                    if (cell.current.isAtPositionCeiling(grant.attachment)) return@mutateOrSkip null
-                    rebasedThisRound = raised || preRaised
-                    cell.written?.let(::Patch)
-                } catch (_: PositionCeilingException) {
-                    // The pick would have to order a position at its ceiling (#3313): grant nothing
-                    // more here. No patch is returned, so nothing is written.
-                    null
-                }
+                val cell = ValueCell(s)
+                // Before the pick, so a child a merge carried far from its origin is brought back
+                // down as soon as it is seen (#3353).
+                val preRaised = raiseBeforePick(parent, cell, earmarked, demand)
+                val grant = pickOne(cell.current, parent, earmarked, demand) ?: return@mutateOrSkip null
+                if (preRaised) checkRaiseChangedNoPick(s, parent, earmarked, demand, grant)
+                val raised = raiseOriginBeneath(parent, cell, earmarked, demand, grant)
+                if (!cell.mutateOrSkip { it.delegate(self, grant.attachment, grant.amount) }) return@mutateOrSkip null
+                rebasedThisRound = raised || preRaised
+                cell.written?.let(::Patch)
             }
             if (!applied) break
             if (rebasedThisRound) rebasesForTest++
@@ -390,8 +379,8 @@ public class FairShareAllocator(
      * Raise [parent]'s origin in [cell] **before** a pick, when a child there is past its
      * [rebaseThreshold], and say whether it did (#3353). [schedule] runs it ahead of each pick with
      * no joiners, the seat-and-wake step's own raise ([preSeatRaise]) covering a round with them.
-     * A raise after the pick cannot repair a child that a merge or a delegation carried to its
-     * ceiling, since the pick over it refuses first; this one can, and it changes no pick, which
+     * So a child that a merge or a delegation carried far from its origin is brought back down before
+     * the pick reads it, rather than one grant later. It changes no pick, which
      * [checkRaiseChangedNoPick] checks.
      */
     private fun raiseBeforePick(parent: GroupId, cell: ValueCell, earmarked: Long, demand: (AttachmentId) -> Demand): Boolean {
@@ -414,9 +403,9 @@ public class FairShareAllocator(
     }
 
     /**
-     * That a raise before the pick changed no pick: the pick on [s], unraised, is [grant] too, or it
-     * refuses at the ceiling, which is what the raise is for. A bug detector, as
-     * [checkPreSeatRaiseChangedNoPick] is.
+     * That a raise before the pick changed no pick: the pick on [s], unraised, is [grant] too. A bug
+     * detector, as [checkPreSeatRaiseChangedNoPick] is, and never vacuous: the unraised pick orders
+     * the same wide positions, so it always answers.
      *
      * @throws IllegalStateException if it picks anything else, a bug in the rule.
      */
@@ -427,11 +416,7 @@ public class FairShareAllocator(
         demand: (AttachmentId) -> Demand,
         grant: Grant,
     ) {
-        val unraised = try {
-            pickOne(s, parent, earmarked, demand)
-        } catch (_: PositionCeilingException) {
-            return
-        }
+        val unraised = pickOne(s, parent, earmarked, demand)
         check(unraised == grant) { "the pre-pick rebase at ${parent.value} changed the pick from $unraised to $grant" }
     }
 
@@ -596,10 +581,9 @@ public class FairShareAllocator(
 
     /**
      * That a pre-seat raise changed no pick (#3353 review, item A): the same seat-and-wake step and
-     * pick without it, on this allocator, which the caller forked before the raised step ran, either
-     * picks [grant] too or refuses at the ceiling, which is what the raise is for. A bug detector, not
-     * a proof: in the regime the raise exists for, the twin refuses, so the check is vacuous there
-     * and constrains only a raise that did not need to land. It runs whatever the raise: [preSeatRaise]
+     * pick without it, on this allocator, which the caller forked before the raised step ran, picks
+     * [grant] too. A bug detector, not a proof, but no longer a vacuous one: the twin orders the same
+     * wide positions, so it answers wherever the raised pick does. It runs whatever the raise: [preSeatRaise]
      * bounds `Δ` by the room of every demanding child that is not a newborn or a clamped waker,
      * returners included, so no landing under the raise is held at its floor, and the raise moves
      * every child alike. A twin without it holds no landing at its floor either, since its floor sits
@@ -617,11 +601,7 @@ public class FairShareAllocator(
     ) {
         val cell = ValueCell(s)
         settleJoiners(parent, cell, waiting, raise = null)
-        val unraised = try {
-            pickOne(cell.current, parent, earmarked, eligible)
-        } catch (_: PositionCeilingException) {
-            return
-        }
+        val unraised = pickOne(cell.current, parent, earmarked, eligible)
         check(unraised == grant) { "the pre-seat rebase at ${parent.value} changed the pick from $unraised to $grant" }
     }
 
@@ -659,9 +639,10 @@ public class FairShareAllocator(
     /**
      * The largest whole multiple of [step] at or below [bound], or `null` when that is not above zero:
      * the front is less than one step above the origin, or a demanding child is less than one step
-     * above its floor. A child that is served climbs away from its floor; one that is never served
-     * is carried down to it by each rebase, and holds the next at nothing there: the known limit
-     * (#3329, #3353). A
+     * above its floor. A child that is served climbs away from its floor. One that is never served
+     * is carried further below zero by each rebase and drags the demanding children's mean down
+     * with it, until the mean is less than one step above the origin and the rebase stops (#3329,
+     * #3353); its siblings then climb on, and a pick orders them exactly. A
      * weight set so fine-grained that one step, read on some child's grid, would carry it from its
      * [rebaseThreshold] past its ceiling (`2⁴²/1023` beside `1/1021`, say) is refused when it is
      * applied ([weightsFitTheBudget], P1′), so a step that is merely large only makes a rebase late.
@@ -685,28 +666,20 @@ public class FairShareAllocator(
     ): FirstRound {
         // Before the seat step, which already multiplies by a weight: a replicated ledger can hold a
         // set no single write would have admitted (#3353), and a pick over it throws.
-        if (!fork.childWeightsFit(s, parent)) return FirstRound.Refused(Refusal.WEIGHT_BUDGET)
+        if (!fork.childWeightsFit(s, parent)) return FirstRound.OverBudget
         val cell = ValueCell(s)
-        // A rebase before the seat and wake step too, so no joiner is seated or clamped past its own
-        // ceiling at a front a light runner holds up (#3353 review, item A).
-        // With none, the raise still runs before the pick, so a child at its ceiling is repaired (#3353).
+        // A rebase before the seat and wake step too, so no joiner is seated or clamped far up its own
+        // grid at a front a light runner holds up (#3353 review, item A).
+        // With none, the raise still runs before the pick (#3353).
         val preSeat = fork.preSeatRaise(s, parent, demand) ?: fork.prePickRaise(s, parent, demand)
         fork.settleJoiners(parent, cell, demand, preSeat)
-        val delegated = try {
-            fork.pickOne(cell.current, parent, earmarked, demand)?.let { grant ->
-                if (preSeat != null) fork().checkPreSeatRaiseChangedNoPick(s, parent, earmarked, demand, demand, grant)
-                // The rebase after the seat and wake step, before the grant, in the same patch (#3353).
-                val raised = fork.raiseOriginBeneath(parent, cell, earmarked, demand, grant)
-                val landed = cell.mutateOrSkip { it.delegate(fork.self, grant.attachment, grant.amount) }
-                // The delegation would carry the child to its ceiling, where its charges land inexactly:
-                // the grant is not made, and nothing of the round is kept (#3353), as LocalHeddle does.
-                if (landed && cell.current.isAtPositionCeiling(grant.attachment)) return FirstRound.Refused(Refusal.POSITION_CEILING)
-                landed.also { if (it && (raised || preSeat != null)) fork.rebasesForTest++ }
-            } ?: false
-        } catch (_: PositionCeilingException) {
-            // The pick would have to order a position at its ceiling (#3313): the seats go too.
-            return FirstRound.Refused(Refusal.POSITION_CEILING)
-        }
+        val delegated = fork.pickOne(cell.current, parent, earmarked, demand)?.let { grant ->
+            if (preSeat != null) fork().checkPreSeatRaiseChangedNoPick(s, parent, earmarked, demand, demand, grant)
+            // The rebase after the seat and wake step, before the grant, in the same patch (#3353).
+            val raised = fork.raiseOriginBeneath(parent, cell, earmarked, demand, grant)
+            cell.mutateOrSkip { it.delegate(fork.self, grant.attachment, grant.amount) }
+                .also { if (it && (raised || preSeat != null)) fork.rebasesForTest++ }
+        } ?: false
         if (!delegated) return FirstRound.Empty(fork)
         val written = checkNotNull(cell.written) { "a delegation that landed wrote nothing" }
         return FirstRound.Granted(fork, Patch(written))
@@ -714,26 +687,17 @@ public class FairShareAllocator(
 
     /** How [schedule]'s first round ended. Each arm carries exactly what the caller acts on. */
     private sealed interface FirstRound {
-        /** The pick refused: write nothing, and drop the fork with everything it observed. */
-        class Refused(val refusal: Refusal) : FirstRound
+        /**
+         * [parent]'s children fail [weightsFitTheBudget], the one refusal: write nothing, and drop the
+         * fork with everything it observed.
+         */
+        data object OverBudget : FirstRound
 
         /** Nothing to grant: write nothing, but keep [fork]'s wake memory, which saw who was waiting. */
         class Empty(val fork: FairShareAllocator) : FirstRound
 
         /** A grant: land [patch], the seats with the delegation, and keep [fork]. */
         class Granted(val fork: FairShareAllocator, val patch: Patch<EntitlementLedger>) : FirstRound
-    }
-
-    /** Why [schedule] stopped at a parent it cannot order: the two refusals, and only those. */
-    private enum class Refusal {
-        POSITION_CEILING,
-        WEIGHT_BUDGET,
-        ;
-
-        fun at(parent: GroupId): AllocationOutcome = when (this) {
-            POSITION_CEILING -> AllocationOutcome.PositionCeiling(parent)
-            WEIGHT_BUDGET -> AllocationOutcome.WeightBudget(parent)
-        }
     }
 
     /**
@@ -762,9 +726,6 @@ public class FairShareAllocator(
      *   cannot take this grant. A child [eligible] wants should also be one [waiting] wants.
      * @return the seated ledger and the grant, or `null` when no child can be granted anything:
      *   none is eligible, none is seated, or [parent] holds nothing.
-     * @throws ArithmeticException when a child of [parent] holds a position at its ceiling, as
-     *   [HeddlePolicy.pick] does (#3313). The wake memory has moved by then; a caller that must
-     *   change nothing on a refusal keeps a copy, as [LocalHeddle] does.
      */
     public fun pickChild(
         parent: GroupId,
@@ -835,9 +796,8 @@ public class FairShareAllocator(
      * The step [pickChild] takes before it picks, and nothing more: seat the newborns and clamp the
      * wakers at [parent], reading [waiting], and observe who was waiting. For a delegation that is
      * not a pick but must leave the wake memory as the pick would have ([LocalHeddle.admit] with a
-     * waiting set, #3320). Never throws at a position ceiling, since it orders nothing: a seat or a
-     * clamp taken there is exact and wide, and only the pick that would order it refuses. Returns the
-     * seated ledger; [ledger] is not changed.
+     * waiting set, #3320). A seat or a clamp is exact and wide wherever it lands. Returns the seated
+     * ledger; [ledger] is not changed.
      */
     internal fun settle(parent: GroupId, ledger: EntitlementLedger, waiting: (AttachmentId) -> Demand): EntitlementLedger {
         val cell = ValueCell(ledger)
@@ -905,8 +865,9 @@ public class FairShareAllocator(
 
     /**
      * The highest effective position among [parent]'s active children in [ledger], each as a
-     * fraction of its own [positionCeiling]: how close a pick there is to refusing (#3353). Zero
-     * when [parent] has no active children. A diagnostic that reads this allocator's wake clamps,
+     * fraction of its own [positionCeiling]: how far the rebase has let the parent climb (#3353).
+     * Past `1` the public virtual-time reads there saturate at the ceiling; no pick is affected,
+     * since a pick orders the wide position. Zero when [parent] has no active children. A diagnostic that reads this allocator's wake clamps,
      * so a caller sharing the allocator must hold whatever lock guards it.
      */
     @HeddleInternalApi
@@ -1064,7 +1025,7 @@ public class FairShareAllocator(
      * `aNewbornBesideASubZeroRunnerAndAWakerStartsLevel` pins it.
      *
      * Either way the front is wide and exact (#3353): a child past its ceiling moves it exactly as
-     * far as it should, and the pick that follows refuses.
+     * far as it should, and the pick that follows orders it exactly.
      */
     private fun joinFront(edges: List<PolicyEdge>, joiners: Set<AttachmentId>): VirtualTime {
         val competing = edges.filter { it.record.id !in joiners && HeddlePolicy.isDemanding(it) }
@@ -1444,9 +1405,9 @@ public class FairShareAllocator(
  * What one [FairShareAllocator.schedule] call did at a parent: delegated something, found nothing to
  * delegate, or stopped because the parent cannot be ordered at all.
  *
- * The two refusals are separate arms because they clear differently. [NothingToDelegate] is the
- * ordinary answer, and it clears by itself once holdings or demand arrive. [PositionCeiling] and
- * [WeightBudget] are properties of the parent's children, and they last until those change.
+ * The two empty answers are separate arms because they clear differently. [NothingToDelegate] is
+ * the ordinary answer, and it clears by itself once holdings or demand arrive. [WeightBudget] is a
+ * property of the parent's children, and it lasts until those change.
  */
 public sealed interface AllocationOutcome {
 
@@ -1466,13 +1427,6 @@ public sealed interface AllocationOutcome {
      * child wants anything, or no child is seated yet.
      */
     public data object NothingToDelegate : AllocationOutcome
-
-    /**
-     * A child of [parent] holds a position at its ceiling, so no pick there orders exactly, or the
-     * pick's own delegation would carry its child there, and none was made (#3313, #3353). Nothing
-     * was written for the refused pick.
-     */
-    public data class PositionCeiling(public val parent: GroupId) : AllocationOutcome
 
     /**
      * [parent]'s active children carry weights that fail [weightsFitTheBudget]: a product a pick
