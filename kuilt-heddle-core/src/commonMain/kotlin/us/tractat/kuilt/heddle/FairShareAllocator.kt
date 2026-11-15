@@ -232,8 +232,10 @@ public class FairShareAllocator(
      * - the first pick **granted**: the seats and the delegation land as one patch, and the fork is
      *   kept.
      *
-     * A first round that grants may also raise [parent]'s origin, in the same patch, once a child
-     * there has climbed past its [rebaseThreshold]: see [raiseOriginBeneath]. So may each later
+     * A first round may also raise [parent]'s origin, in the same patch, once a child there has
+     * climbed past its [rebaseThreshold]: before its pick ([preSeatRaise] with joiners,
+     * [raiseBeforePick] without), so a child already at its ceiling is repaired rather than refused,
+     * and after it ([raiseOriginBeneath]). So may each later
      * round, inside its own write. That rebase is what keeps a busy parent clear of the position
      * ceiling, and it changes no pick (#3353).
      *
@@ -352,15 +354,16 @@ public class FairShareAllocator(
      * - **`Δ` is a whole multiple** of the least common multiple of `d / gcd(d, 16n)` over the children
      *   this peer sees, so `Δ · w · G` is whole ticks on every one of their grids and each comes down
      *   by exactly that;
-     * - **`Δ` is at most the smallest effective virtual time** among the seated children this peer
-     *   sees demanding, so none of them goes below zero;
+     * - **`Δ` aims at the front** of the seated children this peer sees demanding, their weighted
+     *   mean, and stops short wherever it would carry one of them below its [positionFloor]
+     *   ([windowBound], #3353): a child behind the front goes below zero, inside its window;
      * - it runs **after the seat and wake step and only after a grant**, and the pick is checked
      *   unchanged on the raised state before the raise is kept.
      *
      * It rewrites no gauge and no wake clamp. Every child's position reads `Δ · w · G` lower, so the
      * mean over any set comes down by `Δ`, every `⌈V · w · G⌉` by exactly `Δ · w · G`, and every
-     * clamp `front − raw` is unchanged. An idle child goes below zero, as far as it must: its next
-     * wake clamp, taken wide, carries it back to the front.
+     * clamp `front − raw` is unchanged. An idle child goes below zero, as far as it must, past its
+     * floor too: its next wake clamp, taken wide, carries it back to the front.
      *
      * @throws IllegalStateException if the raised state would pick differently, a bug in the rule.
      */
@@ -493,13 +496,13 @@ public class FairShareAllocator(
     /**
      * The origin step after a **charging** call lands at [parent] in [ledger]: `admit`, `extend` or a
      * `complete` that overran (#3353 review, item I). A parent a consumer drives only through those
-     * is never picked at, so without this it never rebases. The rule is the pick's, with `Δ` bounded
-     * by the demanding children [waiting] names. A call with no waiting set bounds it by [charged],
-     * the child it charged, and by every child this allocator last saw demanding: a child it saw
-     * idle, or never saw, may go below zero. When it next competes it comes back by its parent's
-     * clock, which reads no position, if this allocator saw it leave, and is clamped as a waker if
-     * not (#3376). An
-     * origin raise moves every child alike, so it changes no pick.
+     * is never picked at, so without this it never rebases. The rule is the pick's, `Δ` aimed at the
+     * front of the demanding children [waiting] names and held inside each one's window. A call with
+     * no waiting set takes that set to be [charged], the child it charged, and every child this
+     * allocator last saw demanding: a child it saw idle, or never saw, may go below its floor. When
+     * it next competes it comes back by its parent's clock, which reads no position, if this
+     * allocator saw it leave, and is clamped as a waker if not (#3376); either way it lands no lower
+     * than its floor. An origin raise moves every child alike, so it changes no pick.
      *
      * A charging call never refuses, so this never throws: `null` when no step is possible, or when
      * the arithmetic would leave 128 bits.
@@ -531,22 +534,22 @@ public class FairShareAllocator(
     /**
      * The `Δ` to raise [parent]'s origin by **before** the seat and wake step, or `null` (#3353 review,
      * item A). Only when there are joiners: the front they are about to be seated at or clamped to
-     * ([joinFront]) is past some child's [rebaseThreshold] on that child's own grid, a child that
-     * is not joining is past its own, or a returner is about to land past its own
+     * ([joinFront]) is past the [rebaseThreshold] of a joiner or a demanding stayer on that child's
+     * own grid, a seated child is past its own, or a returner is about to land past its own
      * ([previewShifts]): it comes back where its parent's clock puts it, not at the front (#3376),
      * so one that left near its ceiling can come back past it. The front counts each returner where
      * it lands, as [settleJoiners] will (#3446). Without it a heavy newborn or waker joining a busy
      * light runner lands about `k · R` up its own grid, `k` the weight ratio, which is past its
      * ceiling for `k > 16`.
      *
-     * `Δ` is bounded by the smallest effective virtual time among the demanding children that are
-     * not joining, or, with none, by the front itself: every newborn and clamped waker lands at the
-     * front, at or above that bound, so none of them goes below zero. A returner moved by its
-     * parent's clock (#3376) lands as far behind its siblings as it left, so one that left owed can
-     * land below zero by that lag; it is served first, and the next raise waits until it climbs.
+     * `Δ` aims at that front ([windowBound]): at most it, and short of carrying any demanding child
+     * that is not joining below its [positionFloor]. With none, it is the front itself. Every newborn
+     * and clamped waker then lands at the front, at or above zero. A returner moved by its parent's
+     * clock (#3376) lands as far behind its siblings as it left, so one that left owed can land below
+     * zero by that lag; it is served first. Each lands no lower than its own floor ([landing]).
      * It is a multiple of the same step as the post-grant raise, over every child, unseated ones
      * included, so every seat, clamp and return lands at exactly the absolute position it would have
-     * without the raise.
+     * without the raise, unless the floor holds it higher.
      */
     private fun preSeatRaise(s: EntitlementLedger, parent: GroupId, demand: (AttachmentId) -> Demand): Int128? {
         if (!rebaseEnabled) return null
@@ -589,7 +592,9 @@ public class FairShareAllocator(
      * pick without it, on this allocator, which the caller forked before the raised step ran, either
      * picks [grant] too or refuses at the ceiling, which is what the raise is for. A bug detector, not
      * a proof: in the regime the raise exists for, the twin refuses, so the check is vacuous there
-     * and constrains only a raise that did not need to land.
+     * and constrains only a raise that did not need to land. A caller skips it when the raised step
+     * held a joiner at its floor ([landing]): that joiner then stands higher than without the raise,
+     * by its penalty, so the twin may rightly pick it where the raised step does not.
      *
      * @throws IllegalStateException if it picks anything else, a bug in the rule.
      */
@@ -617,11 +622,12 @@ public class FairShareAllocator(
 
     /**
      * Whether [edge] wakes: demanding now, and last observed not demanding. Or, never observed at
-     * all, seated, demanding and below zero (#3353 review, item B). A pick's rebase never takes a
-     * child it saw demanding below zero. One there was idle while this allocator was not watching
-     * it, a restarted `HeddleNode` say, or was carried down by a `LocalHeddle` charging call's rebase
-     * while nobody had observed it at all. Clamping it costs it at most turns, the lag it had,
-     * never credit (§10.6).
+     * all, seated, demanding and below zero (#3353 review, item B). The threshold stays at zero
+     * under the window rule, whose rebase leaves a watched demanding child anywhere in `[−C, 0)`:
+     * one this allocator never saw there may be such a child, a restarted `HeddleNode`'s say, and
+     * clamping it costs it at most its lag, once, the penalty side. A threshold at the floor would
+     * leave a child idle while nobody watched below zero with up to a window of credit, which is the
+     * side §10.5 forbids. Clamping costs turns, never credit (§10.6).
      */
     private fun isWaker(edge: PolicyEdge): Boolean {
         if (!HeddlePolicy.isDemanding(edge)) return false
@@ -643,8 +649,10 @@ public class FairShareAllocator(
 
     /**
      * The largest whole multiple of [step] at or below [bound], or `null` when that is not above zero:
-     * the furthest-behind demanding child is less than one step ahead of the origin. A child that is
-     * served climbs past it; one that is never served holds it there, the known limit (#3329). A
+     * the front is less than one step above the origin, or a demanding child is less than one step
+     * above its floor. A child that is served climbs away from its floor; one that is never served
+     * is carried down to it by each rebase, and holds the next at nothing there: the known limit
+     * (#3329, #3353). A
      * weight set so fine-grained that one step, read on some child's grid, would carry it from its
      * [rebaseThreshold] past its ceiling (`2⁴²/1023` beside `1/1021`, say) is refused when it is
      * applied ([weightsFitTheBudget], P1′), so a step that is merely large only makes a rebase late.
@@ -1045,7 +1053,8 @@ public class FairShareAllocator(
      *
      * The third is gone from the competing case too. With a demanding runner below zero, which only
      * a rebase leaves there, the newborn is seated level with it: the seat is absolute, the parent's
-     * origin added back, so it follows the runner below zero (#3353).
+     * origin added back, so it follows the runner below zero (#3353), but no lower than its own
+     * floor ([landing]).
      * `aNewbornBesideASubZeroRunnerAndAWakerStartsLevel` pins it.
      *
      * Either way the front is wide and exact (#3353): a child past its ceiling moves it exactly as
