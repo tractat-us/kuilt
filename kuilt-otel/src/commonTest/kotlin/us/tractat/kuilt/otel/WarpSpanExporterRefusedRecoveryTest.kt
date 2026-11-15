@@ -310,8 +310,8 @@ class WarpSpanExporterRefusedRecoveryTest {
             { assertEquals(1, store.refusals, "the rig did not refuse the recovery read") },
             { assertEquals(ids(1, 5), control, "the control: recover did not evict the newest excess") },
             { assertEquals(ExportResult.Success, healed) },
-            { assertEquals(control, restarted.liveIds(), "the join evicted the wrong end, or kept too many") },
-            { assertEquals(control, durable, "the healed write evicted the wrong end, or lost its span") },
+            { assertEquals(ids(1, 5), restarted.liveIds(), "the join evicted the wrong end, or kept too many") },
+            { assertEquals(ids(1, 5), durable, "the healed write evicted the wrong end, or lost its span") },
         )
     }
 
@@ -337,8 +337,8 @@ class WarpSpanExporterRefusedRecoveryTest {
             { assertEquals(1, store.refusals, "the rig did not refuse the recovery read") },
             { assertEquals(ids(0, 4), control, "the control: recover did not evict the oldest excess") },
             { assertEquals(ExportResult.Success, healed) },
-            { assertEquals(control, restarted.liveIds(), "the join evicted the wrong end, or kept too many") },
-            { assertEquals(control, durable, "the healed write evicted the wrong end, or lost its span") },
+            { assertEquals(ids(0, 4), restarted.liveIds(), "the join evicted the wrong end, or kept too many") },
+            { assertEquals(ids(0, 4), durable, "the healed write evicted the wrong end, or lost its span") },
         )
     }
 
