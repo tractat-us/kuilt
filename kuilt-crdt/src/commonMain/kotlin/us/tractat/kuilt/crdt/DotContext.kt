@@ -45,9 +45,12 @@ public class DotContext private constructor(
      *
      * In practice: create exactly **one** `DotContext` per logical replica and
      * thread it through all of that replica's operations for its lifetime.
+     *
+     * @throws ArithmeticException if [replica]'s contiguous seq is already [Long.MAX_VALUE], as it
+     *   can be in a decoded context (#3417). The next seq would wrap and collide.
      */
     public fun nextDot(replica: ReplicaId): Dot =
-        Dot(replica, (vv[replica] ?: 0L) + 1L)
+        Dot(replica, (vv[replica] ?: 0L).nextTick { "DotContext seq for $replica" })
 
     /** This history with [dot] witnessed (idempotent; compacts the cloud). */
     public fun add(dot: Dot): DotContext = compact(vv, cloud + dot)
