@@ -97,6 +97,29 @@ class LocalHeddleRebaseTest {
     }
 
     /**
+     * A `LocalHeddle` rebase raises the parent's origin and rewrites no gauge (#3353, slice 7). The
+     * rig is [aDemandingChildFarBehindHoldsTheShiftBack]'s: `Δ` is 1,000 units. The fold rebase it
+     * replaces raised `a`'s and `c`'s folds by 1,000 and left the origin at zero.
+     */
+    @Test
+    fun aLocalRebaseRaisesTheOriginAndNoFold() {
+        val engine = engine()
+        engine.pushTo(a, 2 * threshold)
+        engine.pushTo(b, 16_005L)
+        val before = engine.snapshot().ledger
+        val rebasesBefore = engine.rebasesForTest
+
+        engine.acquire(setOf(a, b), setOf(b), startedAt = 1L)
+        val after = engine.snapshot().ledger
+        assertAll(
+            { assertEquals(rebasesBefore + 1, engine.rebasesForTest, "the rig: one rebase") },
+            { assertEquals(us.tractat.kuilt.math.Int128.of(1_000L), after.origin(engine.root), "the origin rose by Δ") },
+            { assertEquals(before.gauge(engine.edgeOf(a)), after.gauge(engine.edgeOf(a)), "a's gauge is as it was") },
+            { assertEquals(before.gauge(engine.edgeOf(c)), after.gauge(engine.edgeOf(c)), "and so is c's") },
+        )
+    }
+
+    /**
      * `a` and `b` both wait, `b` the lower at `2R`, so `Δ` is about `2R`; `c` is idle a few ticks
      * above its origin, and moving it the whole way would put it near `−R` below `−R`. It moves only
      * to `−R` instead: credit the wake clamp takes back. And it does take it back. When `c` wakes
