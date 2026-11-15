@@ -12,7 +12,8 @@ internal fun sampleLocalLease() {
     val tree = twoLanes()
     val heavy = tree.groupId("heavy")
     val light = tree.groupId("light")
-    val heddle = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
     // Four slots: the engine mints its own supply ahead of them.
     heddle.reconcileCapacity(totalSlots = 4L)
 
@@ -43,7 +44,8 @@ internal fun sampleExplainWait() {
     val root = tree.groupId()
     val heavy = tree.groupId("heavy")
     val light = tree.groupId("light")
-    val heddle = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 2L)
 
     val queued = setOf(heavy, light)
@@ -73,7 +75,8 @@ internal fun sampleConcurrencyCeiling() {
     }
     val deploys = tree.groupId("deploys")
     val builds = tree.groupId("builds")
-    val heddle = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 4L)
     val queued = setOf(deploys, builds)
 
@@ -100,7 +103,8 @@ internal fun sampleReconcileLeases() {
     val tree = twoLanes()
     val heavy = tree.groupId("heavy")
     val light = tree.groupId("light")
-    val heddle = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 2L)
     val queued = setOf(heavy, light)
     val kept = (heddle.acquire(queued, queued, startedAt = 100L) as AcquireOutcome.Acquired).lease
@@ -128,7 +132,8 @@ internal fun sampleLocalPersistence() {
     val heavy = tree.groupId("heavy")
     val light = tree.groupId("light")
     val policy = LocalPolicy(defaultReservation = 3L)
-    val heddle = LocalHeddle.fromTopology(tree, policy, epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(tree, policy, epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 2L)
     val queued = setOf(heavy, light)
     val running = (heddle.acquire(queued, queued, startedAt = 100L) as AcquireOutcome.Acquired).lease
@@ -154,7 +159,8 @@ internal fun sampleLocalPersistence() {
 @Suppress("unused")
 internal fun sampleLocalReload() {
     val before = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light"), Topology.Lane("spare")))
-    val heddle = LocalHeddle.fromTopology(before, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(before, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 4L)
     val heavy = before.groupId("heavy")
     val spare = before.groupId("spare")
@@ -192,7 +198,8 @@ internal fun sampleBuildFarm() {
     // A build takes about 3 minutes, so a lease reserves 3 when the caller knows no better.
     val policy = LocalPolicy(defaultReservation = 3L)
     // Load the tree into an engine. Lease ids it hands out carry the epoch, 0 here.
-    val heddle = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    check(booted.refusals.isEmpty())
 
     // Nothing to hand out until the engine knows how many agents there are.
     val both = setOf(web, mobile)
@@ -344,7 +351,8 @@ internal fun samplePreviewQueues() {
     }
     val web = farm.groupId("web", "builds")
     val mobile = farm.groupId("mobile", "builds")
-    val heddle = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 4L)
 
     // Each lane's queued builds, by their estimates in minutes, the next one first.
@@ -381,7 +389,8 @@ internal fun sampleSnapshotView() {
     val heavy = tree.groupId("heavy")
     val light = tree.groupId("light")
     val policy = LocalPolicy(defaultReservation = 3L)
-    val heddle = LocalHeddle.fromTopology(tree, policy, epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(tree, policy, epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 2L)
     val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
 
@@ -420,7 +429,8 @@ internal fun sampleFairShareQueue() {
     val farm = parsed.topology
     val policy = LocalPolicy(defaultReservation = 3L)
     // The epoch is a boot counter you persist and raise on every start.
-    val heddle = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 4L)
 
     // A contributor opens a fork while the program runs.
@@ -464,7 +474,8 @@ internal fun sampleAdmitExternal() {
     }
     val web = farm.groupId("web")
     val mobile = farm.groupId("mobile")
-    val heddle = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
 
     // No capacity is reconciled, so there is nothing to hand out; an admitted build is charged anyway.
     val both = setOf(web, mobile)
@@ -503,7 +514,8 @@ internal fun sampleRefusals() {
     val paused = pool.groupId("paused")
     val retiring = pool.groupId("retiring")
     val policy = LocalPolicy(defaultReservation = 3L)
-    val heddle = LocalHeddle.fromTopology(pool, policy, epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(pool, policy, epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 2L)
 
     // A ceiling of 0 pauses a lane: with only it eligible for this slot, there is nobody to pick.
@@ -541,6 +553,44 @@ internal fun sampleRefusals() {
 }
 
 /**
+ * A boot reports what it leaves out, as a reload does. The weights of `builds`'s lanes do not fit
+ * together, so the boot leaves out `builds` and everything beneath it, whatever the lanes are
+ * called, and runs `docs`. Applying a tree that fits brings `builds` back.
+ */
+@Suppress("unused")
+internal fun sampleLocalBootRefusal() {
+    val tree = draft("farm") {
+        group("builds") {
+            lane("fast")
+            lane("fine", Weight.of(1, 30_720))
+        }
+        lane("docs")
+    }
+    val (heddle, booted) = LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    val left = setOf(tree.groupId("builds"), tree.groupId("builds", "fast"), tree.groupId("builds", "fine"))
+    check(booted.refusals.map { it.child }.toSet() == left)
+    check(booted.refusals.all { it is StepRefusal.Refused })
+
+    // The rest of the tree runs.
+    heddle.reconcileCapacity(totalSlots = 1L)
+    val docs = tree.groupId("docs")
+    val lease = (heddle.acquire(setOf(docs), setOf(docs), startedAt = 0L) as AcquireOutcome.Acquired).lease
+    heddle.complete(lease.id, actualCost = 3L)
+
+    // A tree whose weights fit brings `builds` back, as any reload would.
+    val fits = draft("farm") {
+        group("builds") {
+            lane("fast")
+            lane("fine", Weight.of(1, 30_000))
+        }
+        lane("docs")
+    }
+    check(heddle.apply(fits, generation = 1L).refusals.isEmpty())
+    val fast = fits.groupId("builds", "fast")
+    check(heddle.acquire(setOf(fast), setOf(fast), startedAt = 1L) is AcquireOutcome.Acquired)
+}
+
+/**
  * An admin screen asks a stored snapshot who goes next, given each lane's own queued jobs, with no
  * engine to start. The view answers exactly as the engine that took the snapshot.
  */
@@ -553,7 +603,8 @@ internal fun sampleSnapshotPreviewQueues() {
     val web = farm.groupId("web", "builds")
     val mobile = farm.groupId("mobile", "builds")
     val policy = LocalPolicy(defaultReservation = 3L)
-    val heddle = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 4L)
     val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
 
@@ -578,7 +629,8 @@ internal fun sampleTemplateCeiling() {
         group("repos", maxConcurrent = 2) { template(maxConcurrent = 1) }
         lane("nightly")
     }
-    val heddle = LocalHeddle.fromTopology(ci, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(ci, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 4L)
     val (a, b, c) = listOf("a", "b", "c").mapIndexed { i, name ->
         check(heddle.attach(listOf("repos"), name, generation = i + 1L).refusals.isEmpty())
