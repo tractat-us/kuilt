@@ -109,6 +109,22 @@ public class FairShareAllocator(
     public var rebaseEnabled: Boolean = true
 
     /**
+     * Whether a rebase keeps every child inside its window (#3353): on by default. **Test only:**
+     * off, the rebase runs the rule before it, `Δ` at most the least-served demanding child's
+     * position, a landing never held at its floor, and the front read on every child's grid. A test
+     * runs a twin with it off to show the two rules pick alike wherever the old one never refused.
+     */
+    internal var windowRuleForTest: Boolean = true
+
+    /**
+     * How many joiners this allocator has landed at their floor rather than at the front (#3353):
+     * seated, clamped or returned. The witness a test reads that its floor-landing rig fired. Not
+     * part of [memory].
+     */
+    internal var floorLandingsForTest: Int = 0
+        private set
+
+    /**
      * How many rebases this allocator has made: the origin raises [schedule] landed, plus those it
      * [adopt]ed for [LocalHeddle]. The witness a test reads that its rig fired. Not part
      * of [memory], so an allocator built from one starts at zero.
@@ -158,6 +174,8 @@ public class FairShareAllocator(
         it.shiftRemainders.putAll(shiftRemainders)
         it.rebasesForTest = rebasesForTest
         it.rebaseEnabled = rebaseEnabled
+        it.windowRuleForTest = windowRuleForTest
+        it.floorLandingsForTest = floorLandingsForTest
     }
 
     /**
@@ -316,6 +334,7 @@ public class FairShareAllocator(
         shiftRemainders.clear()
         shiftRemainders.putAll(fork.shiftRemainders)
         rebasesForTest = fork.rebasesForTest
+        floorLandingsForTest = fork.floorLandingsForTest
     }
 
     /**
@@ -367,21 +386,55 @@ public class FairShareAllocator(
         edges: List<PolicyEdge>,
         boundBy: List<PolicyEdge> = edges.filter { it.gauge != null && HeddlePolicy.isDemanding(it) },
     ): Int128? {
-        if (edges.isEmpty()) return null
-        // The front on every child's grid too: a light runner holding the front up would otherwise
-        // put a heavy child joining it past its own ceiling (#3353 review, item A).
+        if (edges.isEmpty() || boundBy.isEmpty()) return null
+        // The front on the grid of every child it binds too: a light runner holding the front up
+        // would otherwise put a heavy child joining it past its own ceiling (#3353 review, item A).
+        // Only those: an idle child's grid is read again when it wakes, as a joiner (window rule).
+        // An id set, so the test is linear in the children.
+        val bound = if (windowRuleForTest) boundBy.mapTo(HashSet()) { it.record.id } else null
         val front = HeddlePolicy.frontTime(edges)
         val past = edges.any { edge ->
             val r = Int128.of(rebaseThreshold(edge.record.weight))
-            HeddlePolicy.effectiveTicksWide(edge) >= r || (front != null && front.ticksForWide(edge.record.weight) >= r)
+            HeddlePolicy.effectiveTicksWide(edge) >= r ||
+                (front != null && (bound == null || edge.record.id in bound) && front.ticksForWide(edge.record.weight) >= r)
         }
         if (!past) return null
         // No guard at a child's ceiling: every read up to the effective position is wide and exact,
         // so a raise there brings the child down like any other, and is the one repair for a heavy
         // joiner seated past it by a delegation that is not a pick (#3353 round 2).
         val step = gridStep(edges) ?: return null
-        if (boundBy.isEmpty()) return null
-        return wholeSteps(boundBy.minOf { unitsOf(it) ?: return null }, step)
+        if (!windowRuleForTest) return wholeSteps(boundBy.minOf { unitsOf(it) ?: return null }, step)
+        val anchor = VirtualTime.mean(boundBy.map { HeddlePolicy.effectiveTicksWide(it) }, boundBy.map { it.record.weight })
+        return wholeSteps(windowBound(anchor, boundBy) ?: return null, step)
+    }
+
+    /**
+     * How far, in whole units, the origin may rise beneath [bound] aiming at [anchor] (#3353, the
+     * window rule): `min(⌊A⌋, min over i of ⌊(p_i + C_i) / (w_i · G)⌋)`, with `A` the [anchor]. The
+     * second term is each child's **room**, how far it can come down before it reaches its
+     * [positionFloor]. So the origin goes to where the bound children stand on average, which is
+     * where a joiner is seated, unless that would carry one of them out of its window. `null` past
+     * 128 bits.
+     *
+     * The rule before it raised the origin only as far as the least-served child, `min ⌊p_i / (w_i · G)⌋`.
+     * Two light siblings a lease apart then held the front half a lease above the origin, and a heavy
+     * child joining it landed `k` times that far up its own grid: past its ceiling for `k` near
+     * `2¹⁶`. Aiming at the front leaves every child behind it below zero, inside its window, and it
+     * is the light ones whose windows are wide.
+     */
+    private fun windowBound(anchor: VirtualTime, bound: List<PolicyEdge>): Int128? {
+        var best = anchor.unitsFloor()
+        for (edge in bound) {
+            val w = edge.record.weight
+            val room = mulDiv(
+                HeddlePolicy.effectiveTicksWide(edge) + Int128.of(positionCeiling(w)),
+                w.denominator,
+                checkedMul(TICKS_PER_UNIT, w.numerator),
+                Rounding.FLOOR,
+            ) ?: return null
+            if (room < best) best = room
+        }
+        return best
     }
 
     /**
@@ -452,15 +505,27 @@ public class FairShareAllocator(
         // the front there (#3446).
         val shifts = previewShifts(parent, edges)
         val front = joinFront(landed(edges, shifts), joiners - shifts.keys)
-        val past = edges.any { front.ticksForWide(it.record.weight) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
+        val demanding = stayers.filter { it.gauge != null && HeddlePolicy.isDemanding(it) }
+        // The front is read on the grid of each child it will seat, clamp or order: the joiners and
+        // the demanding stayers (window rule). An idle stayer's grid is read again when it wakes.
+        val frontGrids = if (windowRuleForTest) {
+            val reads = HashSet(joiners).apply { demanding.mapTo(this) { it.record.id } }
+            edges.filter { it.record.id in reads }
+        } else {
+            edges
+        }
+        val past = frontGrids.any { front.ticksForWide(it.record.weight) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
             stayers.any { HeddlePolicy.effectiveTicksWide(it) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
             edges.any { edge ->
                 shifts[edge.record.id]?.let { HeddlePolicy.effectiveTicksWide(edge) + it.ticks >= Int128.of(rebaseThreshold(edge.record.weight)) } == true
             }
         if (!past) return null
         val step = gridStep(edges) ?: return null
-        val demanding = stayers.filter { it.gauge != null && HeddlePolicy.isDemanding(it) }
-        val bound = if (demanding.isEmpty()) front.unitsFloor() else demanding.minOf { unitsOf(it) ?: return null }
+        val bound = when {
+            demanding.isEmpty() -> front.unitsFloor()
+            windowRuleForTest -> windowBound(front, demanding) ?: return null
+            else -> demanding.minOf { unitsOf(it) ?: return null }
+        }
         return wholeSteps(bound, step)
     }
 
