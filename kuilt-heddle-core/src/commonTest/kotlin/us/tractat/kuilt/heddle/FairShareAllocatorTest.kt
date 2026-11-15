@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
 /**
  * [FairShareAllocator] driven directly, over an in-memory ledger: no seam, no replicator, no
  * coroutines. These are the scheduling properties `HeddleNodeTest` pins through a whole node —
- * the §10.6 wake clamp (#1695), its monotone join (#1714), the one-front joiner set (#1752), the
+ * the §10.6 wake clamp (#1695), a return that keeps it (#1714), the one-front joiner set (#1752), the
  * edge-not-level wake detector, and the earmark subtraction — stated against the one copy of the
  * loop that both now run.
  *
@@ -182,8 +182,21 @@ class FairShareAllocatorTest {
         )
     }
 
+    /**
+     * A returner counts in the front a waker is clamped to at where it lands (#3446), and a second
+     * wake keeps the first one's clamp (#1714). e1 runs alone to 200 and is seen leaving at the
+     * grant that filled it; e2 then wakes beside e1 returning and e3 starved at 0, so its front is
+     * mean(e1 at 200, e3 at 0) = 100, and it runs 20. Left out of the front, e1 would leave e2
+     * clamped to e3 alone, at 0.
+     *
+     * e2 is then seen leaving, so its second wake is a return by its parent's clock, which nobody
+     * moved: its shift is zero and it keeps the clamp of 100 it carries, at 120. Before #3376 that
+     * second wake was a clamp into a front of e3 alone, and a `max` join with the stored offset kept
+     * it at 120; that join is gone, since a clamped child's next wake is always a return (#3416
+     * review). A return that replaced the offset instead of adding to it would give 20.
+     */
     @Test
-    fun aRewakeCannotLowerAnEffectiveVirtualService() {
+    fun aReturnerCountsWhereItLandsAndKeepsItsEarlierClamp() {
         // 220 = e1's 200 plus e2's 20: holdings run out from the second round on, so no later grant
         // can move a raw virtual service and mask the clamp.
         val cell = flatLedger(mapOf(self to 220L))
@@ -198,7 +211,7 @@ class FairShareAllocatorTest {
             { assertEquals(false, allocator.lastObservedDemanding(e1), "the rig: e1 was seen leaving") },
         )
 
-        // e2 wakes into a front of mean(e1 at 200, e3 at 0) = 100, then runs its 20.
+        // e2 wakes into a front of mean(e1 landed at 200, e3 at 0) = 100, then runs its 20.
         allocator.schedule(
             root,
             cell,
@@ -210,14 +223,15 @@ class FairShareAllocatorTest {
             { assertEquals(Rational.of(120L), allocator.effectiveVirtualService(cell, e2), "clamped by 100, then ran 20") },
         )
 
-        // e2 sleeps; then e1 stops too, and e2 re-wakes into a front of e3 alone, at 0.
+        // e2 sleeps, seen leaving; then e1 stops too, and e2 returns by a clock nobody moved.
         allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to competingUnservable, starved to competingUnservable))
+        assertEquals(false, allocator.lastObservedDemanding(e2), "the rig: e2 was seen leaving")
         allocator.schedule(root, cell, earmarked = 0L, demandOf(e2 to hungry, starved to competingUnservable))
 
         assertEquals(
             Rational.of(120L),
             allocator.effectiveVirtualService(cell, e2),
-            "a re-wake into a lower front must not refund the earlier clamp (replacement gives 20)",
+            "a return adds its shift to the clamp e2 carries (replacing it gives 20)",
         )
     }
 
