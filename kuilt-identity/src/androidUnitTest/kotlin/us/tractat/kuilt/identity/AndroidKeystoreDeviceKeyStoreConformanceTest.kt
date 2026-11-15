@@ -7,9 +7,13 @@ import org.robolectric.annotation.Config
 import us.tractat.kuilt.conformance.DeviceKeyStoreConformanceSuite
 import us.tractat.kuilt.conformance.DeviceKeyStoreFixture
 import us.tractat.kuilt.conformance.DeviceKeyStoreFixture.KeyWriteInterruption
+import us.tractat.kuilt.conformance.DeviceKeyStoreFixture.UnreadableGrants
 import us.tractat.kuilt.conformance.DeviceKeyStoreFixture.UnreadableKey
 import us.tractat.kuilt.store.FileChannelDurableStore
+import java.io.File
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.attribute.PosixFilePermission
 import java.security.PublicKey
 import java.util.UUID
 
@@ -49,7 +53,10 @@ import java.util.UUID
  * - **unreadable key** (`Rigged`): `getKey` throws `UnrecoverableKeyException` caused by a
  *   `KeyStoreException` carrying `SYSTEM_ERROR` — the Keystore failing, not the key — while
  *   `getCertificate` answers `null`, as keystore2's does on an error;
- * - **interrupted write** (`AtomicMedium`): for the reason the hook gives.
+ * - **interrupted write** (`AtomicMedium`): for the reason the hook gives;
+ * - **unreadable grants:** every permission taken off the grants record, so opening it fails with
+ *   `EACCES` while the directory still takes a new file; the rig checks it took and says at restore
+ *   whether anything rewrote the record.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], manifest = Config.NONE)
@@ -89,6 +96,31 @@ class AndroidKeystoreDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSu
             makeKeyUnreadable = {
                 keystore.loadFault = { AospKeystore.loadFailure(AospKeystore.SYSTEM_ERROR) }
                 UnreadableKey.Rigged { keystore.loadFault = null }
+            },
+            makeGrantsUnreadable = { unreadableGrantsRecord(directory) },
+        )
+    }
+
+    /**
+     * Every permission taken off the grants record in [directory], so opening it fails with `EACCES`,
+     * while the directory still takes a new file. The rig checks it took (a mode of `000` is not
+     * enforced for root), and restoring answers whether the record was written while unreadable: a
+     * write renames a new, readable file into place, and a delete leaves none.
+     */
+    private fun unreadableGrantsRecord(directory: File): UnreadableGrants {
+        // `grants` needs no escaping, so the record's filename is the key's name.
+        val record = directory.toPath().resolve(AndroidKeystoreDeviceKeyStore.GRANTS.name)
+        check(Files.exists(record, LinkOption.NOFOLLOW_LINKS)) { "precondition: a grants record at $record to fault" }
+        Files.setPosixFilePermissions(record, emptySet())
+        check(!Files.isReadable(record)) { "rig: $record is still readable after chmod 000 — running as root? The fault did not take" }
+        return UnreadableGrants(
+            probe = { FileChannelDurableStore(directory).read(AndroidKeystoreDeviceKeyStore.GRANTS) },
+            restore = {
+                val rewritten = !Files.exists(record, LinkOption.NOFOLLOW_LINKS) || Files.isReadable(record)
+                if (Files.exists(record, LinkOption.NOFOLLOW_LINKS)) {
+                    Files.setPosixFilePermissions(record, setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE))
+                }
+                rewritten
             },
         )
     }
