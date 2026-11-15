@@ -25,7 +25,7 @@ status=0
   "-Pversion=${line}.0-dev.stamp-probe" \
   "-Pkuilt.stampProbe.family=${family}" \
   "-Pkuilt.stampProbe.report=${report}" \
-  --continue "$@" || status=$?
+  --no-build-cache --continue "$@" || status=$?
 echo "stamp-invariance: probe pass took $(( $(date +%s) - start ))s (gradle exit ${status})"
 
 if [ ! -s "$report" ]; then

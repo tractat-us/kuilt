@@ -108,7 +108,9 @@ def main(argv: list[str]) -> int:
         if outcome == "FAILED":
             buckets.setdefault("failed", []).append((path, reasons))
             continue
-        if outcome != "EXECUTED":
+        # FROM-CACHE counts as a re-run: a task is only looked up in the cache when it is NOT up to
+        # date, i.e. when an input changed. The script passes --no-build-cache, so this is a backstop.
+        if outcome not in ("EXECUTED", "FROM-CACHE"):
             continue
         if path not in selected:
             helpers += 1
