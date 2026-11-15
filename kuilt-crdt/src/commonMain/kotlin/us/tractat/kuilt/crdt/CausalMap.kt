@@ -107,6 +107,9 @@ public class CausalMap<K, V : DotStore<V>> private constructor(
      * it walks every key, as `Causal`'s join always has.
      *
      * @throws IllegalArgumentException if [bottom] is not bottom, or the change fails a check.
+     * @throws ArithmeticException if [mutator] calls [Slot.mint] when [replica]'s next seq would
+     *   pass [Long.MAX_VALUE], as a decoded context can leave it (#3417). A mutator that mints
+     *   nothing still runs on such a context.
      */
     public fun apply(
         replica: ReplicaId,
