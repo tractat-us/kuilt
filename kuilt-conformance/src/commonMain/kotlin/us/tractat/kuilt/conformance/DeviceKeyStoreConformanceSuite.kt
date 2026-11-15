@@ -551,7 +551,7 @@ public abstract class DeviceKeyStoreConformanceSuite {
                     {
                         assertNull(
                             writeFailure,
-                            "rig: the medium still takes a new record while the grants are unreadable, or a mistaken rewrite could not land; got $writeFailure",
+                            "rig: the medium still takes a new record while the grants are unreadable, or a mistaken rewrite could not land",
                         )
                     },
                     {
