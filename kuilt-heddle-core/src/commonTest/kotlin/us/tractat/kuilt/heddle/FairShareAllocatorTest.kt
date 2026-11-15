@@ -220,6 +220,29 @@ class FairShareAllocatorTest {
         )
     }
 
+    /**
+     * A newborn joining beside a returner is seated against a front that counts the returner where
+     * it lands, after its shift, not where it stood while away (#3446). e2 leaves at 10 and e1 runs
+     * on alone to 30, so the clock runs 20 and e2 comes back level with e1, at 30. Counted where it
+     * stood, e2 would drag the front to 20 and the newborn would keep the 10 between.
+     */
+    @Test
+    fun aNewbornBesideAReturnerIsSeatedAgainstWhereTheReturnerLands() {
+        val cell = flatLedger(mapOf(self to 20L))
+        val allocator = FairShareAllocator(self, policy)
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to hungry, e2 to hungry))
+        cell.apply(cell.current.mint(MintId("alone"), root, self, 20L))
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to hungry))
+        val e3 = newborn(cell, "e3")
+        cell.apply(cell.current.mint(MintId("joined"), root, self, 10L))
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to competingUnservable, e2 to competingUnservable, e3 to hungry))
+        assertAll(
+            { assertEquals(30L to 10L, issued(cell, e1) to issued(cell, e2), "the rig: e1 ran on alone after e2 left") },
+            { assertEquals(Rational.of(30L), allocator.effectiveVirtualService(cell, e2), "the rig: e2 came back moved by the clock's 20") },
+            { assertEquals(Rational.of(40L), allocator.effectiveVirtualService(cell, e3), "e3 seated level with both, at 30, then ran its 10") },
+        )
+    }
+
     @Test
     fun earmarkedUnitsAreNeverDelegated() {
         val cell = flatLedger(mapOf(self to 100L))
