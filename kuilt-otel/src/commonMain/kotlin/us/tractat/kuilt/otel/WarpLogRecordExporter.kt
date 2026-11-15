@@ -893,8 +893,40 @@ public class WarpLogRecordExporter(
         /** Read, absent, or undecodable and started fresh. Turns write. */
         data object Settled : PersistedRead
 
-        /** The last read was [Load.Refused]. Every turn reads again first, and fails while it is refused. */
-        class Owed(val cause: Throwable) : PersistedRead
+        /**
+         * The last read was [Load.Refused], the [refusals]-th in a row. A turn reads again first,
+         * and fails while it is refused, unless it falls in the next [skipTurns] turns: those fail
+         * with [cause] without touching the store (#3404).
+         */
+        class Owed(val cause: Throwable, val refusals: Int, val skipTurns: Int) : PersistedRead {
+            /** This window with one skipped turn spent. */
+            fun skipped(): Owed = Owed(cause, refusals, skipTurns - 1)
+
+            companion object {
+                /**
+                 * The state after a refused read whose predecessor was [prior]: one more refusal in
+                 * a row, and a window of `min(2^k − 1, MAX_SKIPPED_TURNS)` turns. `k` saturates
+                 * once the window is long past the cap, so the shift never overflows.
+                 */
+                fun after(prior: PersistedRead, cause: Throwable): Owed {
+                    val refusals = minOf(((prior as? Owed)?.refusals ?: 0) + 1, SATURATED_REFUSALS)
+                    return Owed(cause, refusals, minOf((1 shl refusals) - 1, MAX_SKIPPED_TURNS))
+                }
+
+                /**
+                 * The longest run of turns that refuse without reading. A long outage pays one read
+                 * per 64 turns, so under 2% of drained batches wait out the store's timeout. The
+                 * price is on the far side of the outage: a store that heals inside a window is
+                 * seen up to 63 turns late, and each of those turns drops its batch. 63 keeps that
+                 * to one burst of drains rather than minutes of logs, and is `2^6 − 1`, so the
+                 * window reaches it on the sixth refusal in a row.
+                 */
+                private const val MAX_SKIPPED_TURNS = 63
+
+                /** Any `k` past this already caps the window, and `1 shl k` stays positive. */
+                private const val SATURATED_REFUSALS = 30
+            }
+        }
     }
 
     /**
@@ -929,11 +961,17 @@ public class WarpLogRecordExporter(
      * - **An undecodable entry** is bad data. The exporter starts fresh.
      * - **A refused store call** — a throw, or a `CancellationException` the [store] mints at this
      *   live caller from its own `withTimeout` — leaves what is on disk unknown. The exporter
-     *   **fails closed**: every [export], [merge] and [clear] reads again first, and returns
+     *   **fails closed**: an [export], [merge] or [clear] reads again first, and returns
      *   [ExportResult.Failure] and writes nothing while the read is refused. The first read that
      *   succeeds installs the persisted log and that turn runs. Starting fresh here instead wrote
      *   an index naming only segment 0 over an index this run never read, and the store cannot
      *   list keys, so every other segment was lost (#3384).
+     *
+     *   The re-reads back off, counted in turns: after `k` refused reads in a row the next
+     *   `min(2^k − 1, 63)` turns fail the same way without touching the store, so a long outage
+     *   costs one store read per 64 turns rather than one per drained batch (#3404). This call is
+     *   an explicit request, so it **always reads**, window or not. A read that lands, here or in a
+     *   turn, closes the window and resets `k`. One refused here counts toward `k` like any other.
      *
      * Each guard asks `currentCoroutineContext().ensureActive()` before treating a throw as a
      * refusal, so a cancellation of the caller's own job still propagates (#3384).
@@ -961,21 +999,21 @@ public class WarpLogRecordExporter(
             currentCoroutineContext().ensureActive()
             Load.Undecodable(cause)
         }
-        val read = when (load) {
-            Load.Absent -> PersistedRead.Settled
-            is Load.Found -> {
-                installRecovered(load.state)
-                PersistedRead.Settled
-            }
+        when (load) {
+            Load.Absent -> Unit
+            is Load.Found -> installRecovered(load.state)
             is Load.Undecodable -> {
                 logger.error(load.cause) { "otel.logs: persisted state could not be decoded, starting fresh" }
                 recordRecoveryFailure(load.cause)
-                PersistedRead.Settled
             }
-            is Load.Refused -> PersistedRead.Owed(load.cause)
+            // One more refusal in a row, so a longer window; see PersistedRead.Owed.after.
+            is Load.Refused -> return lock.withLock {
+                PersistedRead.Owed.after(persistedRead, load.cause).also { persistedRead = it }
+            }
         }
-        lock.withLock { persistedRead = read }
-        return read
+        // Any read that lands closes the window and resets the count of refusals.
+        lock.withLock { persistedRead = PersistedRead.Settled }
+        return PersistedRead.Settled
     }
 
     /**
@@ -989,9 +1027,22 @@ public class WarpLogRecordExporter(
      * lets the read that heals install the persisted log wholesale: nothing in memory is newer.
      * The refusal is logged once, by [recover]; each refused turn counts on [health] and logs at
      * debug, as a store that stays unreadable would otherwise log once per export.
+     *
+     * A turn inside a refusal's window ([PersistedRead.Owed.skipTurns]) skips the read and refuses
+     * as a refused read does: a [ExportResult.Failure] of the last refusal's cause, counted the same
+     * way, with no store call at all (#3404). With no store call it would not notice the caller's
+     * own cancellation, so it asks: a cancelled caller is cancelled here as a read's `ensureActive`
+     * cancels it, and spends no turn of the window.
      */
     private suspend inline fun <T> afterPersistedRead(refused: (ExportResult) -> T, turn: () -> T): T {
-        if (lock.withLock { persistedRead } is PersistedRead.Owed) {
+        val owed = lock.withLock { persistedRead } as? PersistedRead.Owed
+        if (owed != null && owed.skipTurns > 0) {
+            currentCoroutineContext().ensureActive()
+            lock.withLock { persistedRead = owed.skipped() }
+            logger.debug { "otel.logs: persisted state was refused; this turn skips the read and writes nothing: ${owed.cause}" }
+            return refused(failure(owed.cause))
+        }
+        if (owed != null) {
             val read = readPersistedState()
             if (read is PersistedRead.Owed) {
                 logger.debug { "otel.logs: persisted state is still unreadable, so this turn writes nothing: ${read.cause}" }

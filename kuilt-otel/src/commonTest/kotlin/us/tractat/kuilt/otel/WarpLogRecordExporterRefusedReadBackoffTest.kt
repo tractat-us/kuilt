@@ -96,6 +96,7 @@ class WarpLogRecordExporterRefusedReadBackoffTest {
             exporter.export(record(100 + turn)).also { read += calls(backing, store) > before }
         }
         val expected = expectedReads(turns)
+        val mutationsInTurns = mutations(backing) - mutationsBefore
 
         val afterRestart = bodiesAfterRestart(backing)
         assertAll(
@@ -104,7 +105,7 @@ class WarpLogRecordExporterRefusedReadBackoffTest {
             { assertEquals(1 + expected.count { it }, store.refusals, "the rig refused a different number of reads than were attempted") },
             { assertEquals(expected, read, "the turns read on the wrong schedule") },
             { assertTrue(results.all { it is ExportResult.Failure }, "a turn ran over an unread index") },
-            { assertEquals(0, mutations(backing) - mutationsBefore, "a turn wrote or deleted over an unread index") },
+            { assertEquals(0, mutationsInTurns, "a turn wrote or deleted over an unread index") },
             { assertEquals(turns.toLong(), exporter.health.value.failed, "a refused or skipped turn was not counted as failed") },
             { assertEquals(persisted, afterRestart, "records were lost to the outage") },
         )

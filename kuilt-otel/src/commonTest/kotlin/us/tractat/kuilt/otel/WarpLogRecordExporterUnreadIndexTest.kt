@@ -28,9 +28,10 @@ import kotlin.time.Duration.Companion.milliseconds
  * fresh: the next export wrote an index naming only segment 0 and overwrote segment 0, and every
  * other segment was orphaned. Measured on this fixture, 30 records went in and 1 came back.
  *
- * The rule now: a refused read (an ordinary throw or a cancellation the store mints) is retried on
- * every write turn. Until it succeeds, the turn returns [ExportResult.Failure] and writes and
- * deletes nothing. A *decode* failure is bad data rather than a refusal, so it still starts fresh
+ * The rule now: a refused read (an ordinary throw or a cancellation the store mints) is retried by
+ * the write turns, on a window that backs off by counted turns (#3404, pinned by
+ * [WarpLogRecordExporterRefusedReadBackoffTest]). Until it succeeds, a turn returns
+ * [ExportResult.Failure] and writes and deletes nothing, whether it read or skipped the read. A *decode* failure is bad data rather than a refusal, so it still starts fresh
  * and the exporter is never dead on it (#1860).
  *
  * [RefusingStore] counts every refusal, and each arm asserts the rig fired exactly as often as the
@@ -152,12 +153,14 @@ class WarpLogRecordExporterUnreadIndexTest {
     fun aRefusedIndexReadFailsEveryTurnClosedUntilItHealsAndCostsNoRecords() = runTest {
         val checks = Refusal.entries.flatMap { how ->
             val (backing, persisted) = storeWithThirtyRecords()
-            val store = RefusingStore(backing, Call.READ, isIndex, times = 3, how = how)
+            val store = RefusingStore(backing, Call.READ, isIndex, times = 2, how = how)
             val exporter = exporterFor(store)
 
-            exporter.recover()
+            exporter.recover() // refused 1: the next turn skips the read (#3404)
             val mutationsBefore = mutations(backing)
-            val whileUnread = listOf(exporter.export(record(100)), exporter.export(record(101)))
+            // A skipped turn, then a turn whose read is refused again: a window of 3 more skips.
+            val whileUnread = listOf(exporter.export(record(100)), exporter.export(record(101))) +
+                List(3) { exporter.export(record(110 + it)) }
             val mutationsWhileUnread = mutations(backing) - mutationsBefore
             val healed = exporter.export(record(102))
             val live = exporter.snapshot().toList().map { it.body }
@@ -165,10 +168,10 @@ class WarpLogRecordExporterUnreadIndexTest {
 
             listOf<() -> Unit>(
                 { assertEquals(30, persisted.size, "precondition [$how]: the fixture did not persist 30 records") },
-                { assertEquals(3, store.refused, "[$how] the index read was refused ${store.refused} times, not 3") },
+                { assertEquals(2, store.refused, "[$how] the index read was refused ${store.refused} times, not 2") },
                 { assertTrue(whileUnread.all { it is ExportResult.Failure }, "[$how] a turn ran over an unread index: $whileUnread") },
                 { assertEquals(0, mutationsWhileUnread, "[$how] a turn wrote or deleted over an unread index") },
-                { assertEquals(2L, exporter.health.value.failed, "[$how] the refused turns were not counted as failed") },
+                { assertEquals(5L, exporter.health.value.failed, "[$how] the refused turns were not counted as failed") },
                 { assertTrue(exporter.health.value.recoveryFailed, "[$how] the refused read was not reported") },
                 { assertEquals(ExportResult.Success, healed, "[$how] the turn after the read healed failed") },
                 { assertEquals(persisted + "body-102", live, "[$how] the healed read did not install the persisted log") },
@@ -188,17 +191,19 @@ class WarpLogRecordExporterUnreadIndexTest {
                 .also { it.export(record(500)) }
                 .snapshot()
 
-            exporter.recover()
+            exporter.recover() // refused 1: the next turn skips the read (#3404)
             val mutationsBefore = mutations(backing)
-            val merged = exporter.merge(remote)
-            val cleared = exporter.clear()
+            // Each of merge and clear once inside a window and once reading: skip, refused 2 and
+            // a window of 3, three skips, refused 3.
+            val merged = listOf(exporter.merge(remote), exporter.merge(remote))
+            val cleared = List(3) { exporter.clear() } + exporter.clear()
             val mutationsWhileUnread = mutations(backing) - mutationsBefore
             val afterRestart = bodiesAfterRestart(backing)
 
             listOf<() -> Unit>(
                 { assertEquals(3, store.refused, "[$how] the index read was refused ${store.refused} times, not 3") },
-                { assertTrue(merged is ExportResult.Failure, "[$how] a merge ran over an unread index: $merged") },
-                { assertTrue(cleared is ExportResult.Failure, "[$how] a clear ran over an unread index: $cleared") },
+                { assertTrue(merged.all { it is ExportResult.Failure }, "[$how] a merge ran over an unread index: $merged") },
+                { assertTrue(cleared.all { it is ExportResult.Failure }, "[$how] a clear ran over an unread index: $cleared") },
                 { assertEquals(0, mutationsWhileUnread, "[$how] a merge or clear wrote or deleted over an unread index") },
                 { assertEquals(persisted, afterRestart, "[$how] records were lost to the unread index") },
             )
@@ -246,15 +251,18 @@ class WarpLogRecordExporterUnreadIndexTest {
             val (backing, persisted) = storeWithThirtyRecords()
             val activeKey = activeKeyOf(backing)
             val activeBefore = requireNotNull(backing.read(activeKey)) { "precondition: the active segment was never written" }
-            val store = RefusingStore(backing, Call.READ, { it == activeKey }, times = 3, how = how)
+            val store = RefusingStore(backing, Call.READ, { it == activeKey }, times = 2, how = how)
             val exporter = exporterFor(store)
 
             val mutationsBefore = mutations(backing)
-            exporter.recover()
+            exporter.recover() // refused 1: the next turn skips the read (#3404)
             val readsBefore = backing.reads()
+            // A skipped turn, then a turn whose read is refused again: a window of 3 more skips.
             val whileRefused = listOf(exporter.export(record(100)), exporter.export(record(101)))
-            // The refused active read never reaches `backing`, so each refused turn shows one read.
+            // The skipped turn reads nothing, and the refused active read never reaches `backing`,
+            // so the refused turn shows one read: the index.
             val readsWhileRefused = backing.reads() - readsBefore
+            val windowed = List(3) { exporter.export(record(110 + it)) }
             val mutationsWhileRefused = mutations(backing) - mutationsBefore
             val failedWhileRefused = exporter.health.value.failed
             val activeWhileRefused = backing.read(activeKey)
@@ -262,11 +270,11 @@ class WarpLogRecordExporterUnreadIndexTest {
             val afterRestart = bodiesAfterRestart(backing)
 
             listOf<() -> Unit>(
-                { assertEquals(3, store.refused, "[$how] the active segment read was refused ${store.refused} times, not 3") },
-                { assertTrue(whileRefused.all { it is ExportResult.Failure }, "[$how] a turn ran over an unread active segment: $whileRefused") },
+                { assertEquals(2, store.refused, "[$how] the active segment read was refused ${store.refused} times, not 2") },
+                { assertTrue((whileRefused + windowed).all { it is ExportResult.Failure }, "[$how] a turn ran over an unread active segment: $whileRefused $windowed") },
                 { assertEquals(0, mutationsWhileRefused, "[$how] recovery or a turn wrote or deleted over an unread active segment") },
-                { assertEquals(2, readsWhileRefused, "[$how] a refused turn read more than the index and the active segment") },
-                { assertEquals(2L, failedWhileRefused, "[$how] the refused turns were not counted as failed") },
+                { assertEquals(1, readsWhileRefused, "[$how] a refused turn read more than the index and the active segment") },
+                { assertEquals(5L, failedWhileRefused, "[$how] the refused turns were not counted as failed") },
                 { assertTrue(activeBefore.contentEquals(activeWhileRefused), "[$how] the unread active segment was written over") },
                 { assertEquals(ExportResult.Success, healed, "[$how] the turn after the read healed failed") },
                 { assertEquals(persisted + "body-102", afterRestart, "[$how] records were lost to the unread active segment") },
@@ -306,8 +314,10 @@ class WarpLogRecordExporterUnreadIndexTest {
             val store = RefusingStore(backing, Call.READ, isLegacy, times = 2, how = how)
             val exporter = exporterFor(store)
 
-            exporter.recover()
-            val whileUnread = exporter.export(record(100))
+            exporter.recover() // refused 1: the next turn skips the read (#3404)
+            // A skipped turn, then a turn whose read is refused again: a window of 3 more skips.
+            val whileUnread = listOf(exporter.export(record(100)), exporter.export(record(102))) +
+                List(3) { exporter.export(record(110 + it)) }
             val legacyKeptWhileUnread = legacyKey.name in backing.keys()
             val healed = exporter.export(record(101))
             val afterRestart = bodiesAfterRestart(backing)
@@ -315,7 +325,7 @@ class WarpLogRecordExporterUnreadIndexTest {
             listOf<() -> Unit>(
                 { assertEquals(12, legacy.size, "precondition [$how]: the fixture holds no legacy records") },
                 { assertEquals(2, store.refused, "[$how] the legacy read was refused ${store.refused} times, not 2") },
-                { assertTrue(whileUnread is ExportResult.Failure, "[$how] a turn ran over an unread legacy blob: $whileUnread") },
+                { assertTrue(whileUnread.all { it is ExportResult.Failure }, "[$how] a turn ran over an unread legacy blob: $whileUnread") },
                 { assertTrue(legacyKeptWhileUnread, "[$how] the unread legacy blob was deleted") },
                 { assertEquals(ExportResult.Success, healed) },
                 { assertEquals(legacy + "body-101", afterRestart, "[$how] the legacy records were lost to the unread blob") },
@@ -334,12 +344,14 @@ class WarpLogRecordExporterUnreadIndexTest {
             val store = RefusingStore(backing, Call.WRITE, isIndex, times = 1, how = how)
             val exporter = exporterFor(store)
 
-            exporter.recover()
+            exporter.recover() // refused 1: the next turn skips the read (#3404)
+            val skipped = exporter.export(record(99))
             val healed = exporter.export(record(100))
             val afterRestart = bodiesAfterRestart(backing)
 
             listOf<() -> Unit>(
                 { assertEquals(1, store.refused, "[$how] the migration's index write was refused ${store.refused} times, not 1") },
+                { assertTrue(skipped is ExportResult.Failure, "[$how] the turn inside the window ran: $skipped") },
                 { assertEquals(ExportResult.Success, healed) },
                 { assertEquals(legacy + "body-100", afterRestart, "[$how] the legacy records were lost to a refused migration") },
             )
