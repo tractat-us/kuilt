@@ -1121,7 +1121,7 @@ public class WarpLogRecordExporter(
         }
         if (indexBytes == null) return migrateLegacyBlob()
         val index = runCatchingCancellable { cbor.decodeFromByteArray(indexSerializer, indexBytes) }
-            .getOrElse { cause -> return Load.Undecodable(cause) }
+            .getOrElse { cause -> return migrateBehindUndecodableIndex(cause) }
         // The active segment before anything else, so a refusal returns having deleted nothing
         // and costs a refused turn two reads, not one per segment.
         val active = when (val read = readSegment(index.active)) {
@@ -1188,6 +1188,31 @@ public class WarpLogRecordExporter(
             ),
         )
     }
+
+    /**
+     * What an index that does not decode ([cause]) leaves to load: the legacy blob, if one is still
+     * there, and otherwise nothing.
+     *
+     * A legacy key can outlive its migration, because the delete that follows the index write is
+     * best-effort and a store can refuse it every time (`IndexedDbDurableStore.delete` throws, #3143).
+     * Starting fresh over that key wrote a segment 0 and an index over the migration's copy, and the
+     * next start, finding an index, swept the blob it never read (#3404). So the migration runs
+     * again: it copies the blob to segment 0 and writes a fresh index naming it, and what it finds
+     * is what this returns. A refused legacy read fails closed, as it does with no index at all.
+     *
+     * The records a later index named are not recovered either way; nothing names their segments
+     * any more. So the undecodable index is reported even when the blob loads.
+     */
+    private suspend fun migrateBehindUndecodableIndex(cause: Throwable): Load =
+        when (val legacy = migrateLegacyBlob()) {
+            Load.Absent -> Load.Undecodable(cause)
+            is Load.Found -> {
+                logger.error(cause) { "otel.logs: index does not decode; recovered the legacy entry it superseded" }
+                recordRecoveryFailure(cause)
+                legacy
+            }
+            is Load.Undecodable, is Load.Refused -> legacy
+        }
 
     /**
      * Delete the legacy key once an index is present. An index means one of two things: the
