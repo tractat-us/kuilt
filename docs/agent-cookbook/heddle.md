@@ -469,9 +469,9 @@ engine stopped: every open lease is valid again under its old id, with its path 
 back, so the next picks and top-ups are the ones the old engine would have made, over the same
 leasable groups. The epoch must be above the snapshot's.
 Treat it as a boot counter you persist and only ever raise, since lease ids count from zero in
-each epoch; an old id that is no longer open answers `Stale`. Each release reads its own format
-and the one before it (`LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS`), so stored state survives
-one upgrade. After a restore, settle the work that did not survive with `reconcileLeases`.
+each epoch; an old id that is no longer open answers `Stale`. 0.7.5 reads only snapshots it wrote
+itself (`LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS`); a consumer coming from 0.7.4 starts from
+its topology again. After a restore, settle the work that did not survive with `reconcileLeases`.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalPersistence -->
 ```kotlin
@@ -498,8 +498,9 @@ Four persistence gotchas the sample is too short to show:
   `kotlinx-serialization-cbor`. Both are tested, CBOR's definite- and indefinite-length arrays
   included. **Not ProtoBuf**: it encodes a snapshot, but `decode` answers `Corrupt`, since it
   cannot read back the ledger's maps whose values are maps. `FORMAT_VERSION` is what this
-  release writes and `SUPPORTED_FORMAT_VERSIONS` what it reads: format 2 today, reading 1 and 2,
-  so a snapshot v0.7.4 stored as format 1 still restores.
+  release writes and `SUPPORTED_FORMAT_VERSIONS` what it reads: format 2 today, and only format 2.
+  A snapshot 0.7.4 stored, in format 1, decodes as `UnsupportedVersion`; start from the topology
+  again.
 - **What `decode` checks.** The envelope's shape and version, then consistency: every open lease
   has a positive reservation, an epoch no later than the snapshot's and a path that is its leaf's
   one live lineage from the root, over edges the ledger holds and none retired; leases in id order;

@@ -94,8 +94,7 @@ So a team comes back as far ahead or behind as it was when it went quiet,
 except across a sibling's refund while it was away ([below](#what-it-does-not-promise)).
 Its own builds, and any of them handed back while it was away, still
 count, and the time it sat out counts for nothing. A team the engine never saw
-go quiet, after a restart from a snapshot that predates the clock say, is
-clamped instead:
+go quiet, one it first saw idle say, is clamped instead:
 
 ```text
 offset = max(0, front − ev − sleeperCredit / w)

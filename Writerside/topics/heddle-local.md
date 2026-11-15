@@ -504,10 +504,10 @@ back, because their maps hold other maps. The list is a list rather than an
 object so that a store that reorders an object's keys, as Postgres `jsonb` does,
 cannot move `state` ahead of the version. Equal snapshots encode to equal bytes.
 
-`LocalHeddleSnapshot.FORMAT_VERSION` is the format this release writes.
-`SUPPORTED_FORMAT_VERSIONS` lists the formats it reads: its own and the one
-before it. This release writes format 2 and reads formats 1 and 2, so a
-snapshot stored by v0.7.4, which wrote format 1, still restores.
+`LocalHeddleSnapshot.FORMAT_VERSION` is the format this release writes, and
+`SUPPORTED_FORMAT_VERSIONS` lists the formats it reads. 0.7.5 reads only
+snapshots it wrote itself; a consumer coming from 0.7.4 starts from its
+topology again.
 
 `decode` reads the version first and never throws for what the bytes hold.
 It gives one of three answers:
@@ -515,7 +515,7 @@ It gives one of three answers:
 - **`Restored`** holds the snapshot, ready for `restore`.
 - **`UnsupportedVersion`** means this release does not read the format the
   bytes were written in. It names the format it found and the formats it reads.
-  Either a newer release wrote them, or they skipped a release on the way up.
+  Either a newer release wrote them, or an older one did, such as 0.7.4.
   The engine reads nothing past the version, so nothing is half-loaded.
 - **`Corrupt`** means the bytes are not a snapshot, or hold one that does not add
   up, such as a lease on a part of the tree the books do not hold. Its `reason`
