@@ -538,6 +538,18 @@ public class WarpLogRecordExporter(
      */
     private var durableActive: Rga<LogRecord> = activeSegment
 
+    /**
+     * This replica's highest seq the store holds, with every seq below it: the seq high-water an
+     * index may claim ([LogSegmentIndex.seqHighWater]). Guarded by [lock]; it only rises.
+     *
+     * Raised only once a segment write has returned ([StoreAction.CommitActive],
+     * [StoreAction.CommitAdopt]), to the seq that segment carries, and by recovery to what the index
+     * it read already claimed. Never to [log]'s own seq, which counts what a turn has minted into
+     * memory before any key holds it: an index claiming that, landing beside a refused segment
+     * write, raised a restart's log past seqs no key holds, and its floor could never fold past them.
+     */
+    private var durableSeqHighWater: Long = 0L
+
     private var activeNumber: Long = 0
     private var activeOpCount: Int = 0
     private var nextSegmentNumber: Long = 1
@@ -675,13 +687,15 @@ public class WarpLogRecordExporter(
 
         /**
          * Write [segment]'s [bytes] under [key], and only once that write has returned, advance durable
-         * suppression and record [segment] as what the store holds ([durableActive]).
+         * suppression, record [segment] as what the store holds ([durableActive]), and raise
+         * [durableSeqHighWater] to [seqHighWater], the seq [segment] carries for this replica.
          */
         class CommitActive(
             val key: StoreKey,
             val bytes: ByteArray,
             val suppression: Suppression,
             val segment: Rga<LogRecord>,
+            val seqHighWater: Long,
         ) : StoreAction
 
         /**
@@ -767,12 +781,16 @@ public class WarpLogRecordExporter(
          * A **failed** write — refused, or cancelled, whose bytes may have landed anyway — puts
          * [number] on the retirement ledger instead ([abandonAdopt]), so it is named and swept
          * rather than orphaned or read back as a phantom.
+         *
+         * [seqHighWater] is the seq the adopted log carries for this replica; [durableSeqHighWater]
+         * rises to it once the write returns.
          */
         class CommitAdopt(
             val number: Long,
             val bytes: ByteArray,
             val content: SegmentContent,
             val suppression: Suppression,
+            val seqHighWater: Long,
         ) : StoreAction
 
         /**
@@ -1204,7 +1222,7 @@ public class WarpLogRecordExporter(
             if (absorbed != null) merged = absorbed
         }
         val loaded = absorb(merged, active, index.active) ?: merged
-        val (lamportHighWater, seqHighWater) = highWaterOf(loaded, index.lamportHighWater, index.seqHighWater)
+        val (lamportHighWater, seqHighWater) = highWaterOf(loaded, active, index.lamportHighWater, index.seqHighWater)
         return Load.Found(
             RecoveredState(
                 log = loaded,
@@ -1224,16 +1242,21 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * The higher of a high-water [lamport]/[seq] read from an index and [log]'s own clock and seq
-     * for this replica. Guarded, since it runs past the point where recovery may not throw: a
-     * throw keeps the index's pair, which covers every sealed segment it names.
+     * The highest of a high-water [lamport]/[seq] read from an index, [log]'s own clock and seq for
+     * this replica, and the [active] segment's. Guarded, since it runs past the point where
+     * recovery may not throw: a throw keeps the index's pair, which covers every sealed segment it
+     * names.
      *
-     * The index's pair is needed for a sealed segment that was not read, and [log]'s own for the
-     * active segment, whose ids the index may not cover yet (see [LogSegmentIndex.lamportHighWater]).
+     * The index's pair is needed for a sealed segment that was not read, and the active segment's
+     * for its own ids, which the index may not cover yet (see [LogSegmentIndex.seqHighWater]).
+     * [active] is read on its own as well as through [log] because [log] lacks it when absorbing
+     * it threw.
      */
-    private fun highWaterOf(log: Rga<LogRecord>, lamport: Long, seq: Long): Pair<Long, Long> =
-        runCatchingCancellable { maxOf(lamport, log.lamport) to maxOf(seq, log.seqHighWater(replica)) }
-            .getOrElse { lamport to seq }
+    private fun highWaterOf(log: Rga<LogRecord>, active: Rga<LogRecord>, lamport: Long, seq: Long): Pair<Long, Long> =
+        runCatchingCancellable {
+            maxOf(lamport, log.lamport, active.lamport) to
+                maxOf(seq, log.seqHighWater(replica), active.seqHighWater(replica))
+        }.getOrElse { lamport to seq }
 
     /**
      * What an index that does not decode ([cause]) leaves to load: the legacy blob, if one is still
@@ -1443,6 +1466,8 @@ public class WarpLogRecordExporter(
      */
     private fun adoptNumberingOnly(recovered: RecoveredState) {
         log = log.advanceClock(replica, recovered.lamportHighWater, recovered.seqHighWater)
+        // The index on disk already claims it, so restating it claims nothing new.
+        durableSeqHighWater = maxOf(durableSeqHighWater, recovered.seqHighWater)
         sealedSegments.clear()
         sealedSegments.addAll(recovered.sealedSegments)
         if (recovered.activeNumber !in sealedSegments) sealedSegments += recovered.activeNumber
@@ -1469,6 +1494,8 @@ public class WarpLogRecordExporter(
         suppression: Suppression,
     ) {
         log = raised
+        // What the index read claimed, or more where a segment read holds more: on disk either way.
+        durableSeqHighWater = maxOf(durableSeqHighWater, recovered.seqHighWater)
         durableSuppression = suppression
         sealedSegments.clear()
         sealedSegments.addAll(recovered.sealedSegments)
@@ -2322,6 +2349,7 @@ public class WarpLogRecordExporter(
                     lock.withLock {
                         durableSuppression = durableSuppression.plus(action.suppression)
                         durableActive = action.segment
+                        durableSeqHighWater = maxOf(durableSeqHighWater, action.seqHighWater)
                     }
                 }
                 is StoreAction.CommitRetirement -> {
@@ -2456,6 +2484,9 @@ public class WarpLogRecordExporter(
         // StoreAction.CommitRetirement already put on disk (see applyRetirement). So for those
         // this write restates the ledger; it cannot extend it. It does extend it with an abandoned
         // adopt's number (see abandonAdopt), which was never sealed and needs no covering write.
+        //
+        // It lands before this turn's segment write, so it claims the seq high-water already on
+        // disk, not the one this turn minted (see encodeIndex).
         if (writeIndex) actions += StoreAction.Put(INDEX_KEY, encodeIndex())
         actions += flushActiveSegment(retire = retire, adopting = null)
         return actions
@@ -2489,17 +2520,19 @@ public class WarpLogRecordExporter(
         val activeWrite = activeSegmentWrite()
         actions += activeWrite
         val adoptedNumbers = adopting?.let { listOf(it.number) } ?: emptyList()
-        // This is a projection, not a durable-state update. Every write supplying this coverage
-        // precedes the retirement action; storeTurn stops if any of them is unacknowledged.
+        // Projections, not durable-state updates. Every write supplying this coverage, and this
+        // seq, precedes the retirement and the roll; storeTurn stops if any of them is
+        // unacknowledged, so an index write below lands only once both are on disk.
+        val seqHighWater = maxOf(durableSeqHighWater, activeWrite.seqHighWater, adopting?.seqHighWater ?: 0L)
         val retirement = if (retire) {
             val coverage = durableSuppression.plus(activeWrite.suppression)
                 .plus(adopting?.suppression ?: Suppression())
-            retireSupersededSegments(adoptedNumbers, coverage)
+            retireSupersededSegments(adoptedNumbers, coverage, seqHighWater)
         } else {
             PendingRetirement.NONE
         }
         actions += retirement.actions
-        if (activeOpCount >= segmentOps) actions += rollActiveSegment(retirement.staged, adoptedNumbers)
+        if (activeOpCount >= segmentOps) actions += rollActiveSegment(retirement.staged, adoptedNumbers, seqHighWater)
         return actions
     }
 
@@ -2509,6 +2542,9 @@ public class WarpLogRecordExporter(
         cbor.encodeToByteArray(logSerializer, activeSegment),
         Suppression.of(activeSegment),
         activeSegment,
+        // Every seq this replica minted since the last roll is in the active segment, and the
+        // floor a window pass raised is pieced into it, so this is what the write puts on disk.
+        activeSegment.seqHighWater(replica),
     )
 
     /**
@@ -2561,8 +2597,10 @@ public class WarpLogRecordExporter(
      * [LogSegmentIndex.retired], leaving a swept key named as live forever in a format with no key
      * enumeration. [adopting] is projected for the same reason, the other way round: a merge's
      * adopted segment is sealed only once its write returns, and this index lands after that.
+     * [seqHighWater] is projected the same way: the seq this turn's segment writes will have put on
+     * disk, which covers the segment being sealed ([flushActiveSegment]).
      */
-    private fun rollActiveSegment(staged: List<Long>, adopting: List<Long>): List<StoreAction> {
+    private fun rollActiveSegment(staged: List<Long>, adopting: List<Long>, seqHighWater: Long): List<StoreAction> {
         val sealing = activeNumber
         val opening = nextSegmentNumber
         return listOf(
@@ -2572,6 +2610,7 @@ public class WarpLogRecordExporter(
                     retired = ledgerWith(staged),
                     active = opening,
                     next = opening + 1,
+                    seqHighWater = seqHighWater,
                 ),
                 sealing = sealing,
                 content = contentOf(activeSegment, sealing),
@@ -2644,15 +2683,29 @@ public class WarpLogRecordExporter(
      * cancellation is rethrown past the fold), so the next turn's index write names it as
      * retired. **What is still open is a crash, or a restart, between the failure and that next
      * index write** — the leading write's "sealed" claim is then what the next start reads.
+     *
+     * **The leading write claims [remote]'s seq before any key holds it.** It names the segment
+     * sealed, so it has to cover the ids in it (see [LogSegmentIndex.seqHighWater]), and the
+     * segment is written after it. Usually [remote] carries no seq of this replica's past
+     * [durableSeqHighWater] and the claim is exact. It passes it when [remote] is this replica's
+     * own whole log carrying a turn not yet written, or a peer holds ids of this replica's that
+     * this replica's store has lost. Then a refused adopt followed by a restart before the next
+     * index write is the over-claim [durableSeqHighWater] exists to prevent, in the same window
+     * as the "sealed" claim above.
      */
     private fun adoptRemoteSegment(remote: Rga<LogRecord>): PendingAdopt {
         val number = nextSegmentNumber++
         val suppression = Suppression.of(remote)
+        val seqHighWater = remote.seqHighWater(replica)
         return PendingAdopt(
             number = number,
             suppression = suppression,
+            seqHighWater = seqHighWater,
             actions = listOf(
-                StoreAction.Put(INDEX_KEY, encodeIndex(sealed = sealedSegments + number)),
+                StoreAction.Put(
+                    INDEX_KEY,
+                    encodeIndex(sealed = sealedSegments + number, seqHighWater = maxOf(durableSeqHighWater, seqHighWater)),
+                ),
                 StoreAction.CommitAdopt(
                     number = number,
                     bytes = cbor.encodeToByteArray(logSerializer, remote),
@@ -2661,15 +2714,20 @@ public class WarpLogRecordExporter(
                     // moment it lands.
                     content = contentOf(remote, number),
                     suppression = suppression,
+                    seqHighWater = seqHighWater,
                 ),
             ),
         )
     }
 
-    /** A merge's adopted segment: the number it reserved, and the actions that carry it to disk. */
+    /**
+     * A merge's adopted segment: the number it reserved, the seq it carries for this replica, and
+     * the actions that carry it to disk.
+     */
     private class PendingAdopt(
         val number: Long,
         val suppression: Suppression,
+        val seqHighWater: Long,
         val actions: List<StoreAction>,
     )
 
@@ -2685,6 +2743,7 @@ public class WarpLogRecordExporter(
         sealedSegments += adopt.number
         sealedContents[adopt.number] = adopt.content
         durableSuppression = durableSuppression.plus(adopt.suppression)
+        durableSeqHighWater = maxOf(durableSeqHighWater, adopt.seqHighWater)
     }
 
     /**
@@ -2739,18 +2798,28 @@ public class WarpLogRecordExporter(
      * own write returns. Every other
      * caller passes the fields, and so can only ever restate a ledger that is already on disk.
      *
-     * **Every index carries the high-water as [log] holds it now** ([LogSegmentIndex.lamportHighWater]),
-     * and no caller can pass another. A segment becomes sealed on disk only through an index write
-     * — a roll's, an adopt's leading one, the migration's — and each is encoded after the ops it
-     * seals were minted into [log], so the write that first names a segment sealed covers its ids.
-     * [log]'s clock and seq only rise: recovery raises it to the index's, and every mutation here
-     * keeps both.
+     * **The two high-waters are bounded on opposite sides** ([LogSegmentIndex.seqHighWater]).
+     *
+     * - The **lamport** is [log]'s clock as it stands, and no caller can pass another. It only has
+     *   to be high enough: lamports are not dense, so claiming one no id carries costs a gap in the
+     *   clock and nothing else.
+     * - The **seq** is [seqHighWater], by default [durableSeqHighWater]: only what a segment write
+     *   has already put on disk. Seqs are dense, and a claimed seq no key holds is a hole the floor
+     *   cannot fold past. Two writes may claim more, each only what it names sealed: a roll's and a
+     *   retirement's, which land after this turn's segment writes and project them
+     *   ([flushActiveSegment]), and an adopt's leading write ([adoptRemoteSegment]).
+     *
+     * A segment becomes sealed on disk only through a roll's index, an adopt's leading one or the
+     * migration's, and each claims the seqs of what it seals, so the write that first names a
+     * segment sealed covers its ids. [durableSeqHighWater] only rises, so every later write does
+     * too.
      */
     private fun encodeIndex(
         sealed: List<Long> = sealedSegments,
         retired: List<Long> = retiringSegments,
         active: Long = activeNumber,
         next: Long = nextSegmentNumber,
+        seqHighWater: Long = durableSeqHighWater,
     ): ByteArray = cbor.encodeToByteArray(
         indexSerializer,
         LogSegmentIndex(
@@ -2759,7 +2828,7 @@ public class WarpLogRecordExporter(
             next = next,
             retired = retired.sorted(),
             lamportHighWater = log.lamport,
-            seqHighWater = log.seqHighWater(replica),
+            seqHighWater = seqHighWater,
         ),
     )
 
@@ -2888,7 +2957,7 @@ public class WarpLogRecordExporter(
      * still emits a ledger write when the ledger is non-empty: it restates a ledger already on
      * disk, and stages nothing.
      */
-    private fun retireSupersededSegments(adopting: List<Long>, coverage: Suppression): PendingRetirement {
+    private fun retireSupersededSegments(adopting: List<Long>, coverage: Suppression, seqHighWater: Long): PendingRetirement {
         val retirable = retirableSegments(coverage)
         if (retirable.isEmpty() && retiringSegments.isEmpty()) return PendingRetirement.NONE
         val ledger = ledgerWith(retirable)
@@ -2901,7 +2970,13 @@ public class WarpLogRecordExporter(
                         // `adopting` is never a candidate — it has no `sealedContents` entry until
                         // its write returns — but the index has to keep naming it; see
                         // [adoptRemoteSegment].
-                        bytes = encodeIndex(sealed = sealedSegments + adopting - retirable.toSet(), retired = ledger),
+                        // `seqHighWater` is [flushActiveSegment]'s projection: this write lands only
+                        // after the segment writes queued above it.
+                        bytes = encodeIndex(
+                            sealed = sealedSegments + adopting - retirable.toSet(),
+                            retired = ledger,
+                            seqHighWater = seqHighWater,
+                        ),
                         numbers = retirable,
                     ),
                 )
