@@ -48,7 +48,8 @@ class FileDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() {
             },
             makeKeyUnreadable = { loopKeyFile(keyFile) },
             makeGrantsUnreadable = {
-                unreadableGrantsRecord(directory.resolve(GRANTS_FILE)) {
+                // `grants` needs no escaping, so the record's filename is the key's name.
+                unreadableGrantsRecord(directory.resolve(FileDeviceKeyStore.GRANTS.name)) {
                     FileChannelDurableStore(directory.toFile()).read(FileDeviceKeyStore.GRANTS)
                 }
             },
@@ -92,13 +93,6 @@ class FileDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() {
 }
 
 /**
- * The file a [FileChannelDurableStore] keeps the grants record in: `grants` needs no escaping, so its
- * filename is the key's name. The rig checks the file exists before faulting it, so a store that moved
- * the record reds here rather than faulting nothing.
- */
-internal const val GRANTS_FILE: String = "grants"
-
-/**
  * Every permission taken off [record], so opening it fails with `EACCES` — a file under Data Protection
  * on a locked phone fails the same way — while its directory still takes a new file, so a store that
  * read the failure as "no grants" could still write a new record over it.
@@ -109,7 +103,7 @@ internal const val GRANTS_FILE: String = "grants"
  *
  * @param readDirectly the record read straight off the medium through the store's own backend.
  */
-internal fun unreadableGrantsRecord(
+private fun unreadableGrantsRecord(
     record: Path,
     readDirectly: suspend () -> ByteArray?,
 ): DeviceKeyStoreFixture.UnreadableGrants {
