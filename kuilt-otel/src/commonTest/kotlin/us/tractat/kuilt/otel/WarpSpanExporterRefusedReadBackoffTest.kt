@@ -520,6 +520,32 @@ class WarpSpanExporterRefusedReadBackoffTest {
             { assertEquals(listOf(false, false, false, true), after, "a cancelled export spent a turn of the clock's window") },
         )
     }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun aCallerCancelledBeforeAClockSkipSpendsNothingAndIsCancelled() = runTest {
+        // With the spans read, nothing in the turn before the write suspends on the store: the clock
+        // skip makes no store call. So the skip asks `ensureActive` itself, or a cancelled caller
+        // spends the window and carries on to write.
+        val (store, _, exporter) = clockOutage() // the clock refused 1: a window of 1
+        var returned: ExportResult? = null
+        val spanWritesBefore = store.writesOf(spansKey)
+        launch {
+            coroutineContext.job.cancel()
+            returned = exporter.export(span(10))
+        }.join()
+        val spanWritesInCancelled = store.writesOf(spansKey) - spanWritesBefore
+        val stillSkips = store.readsOf(clockKey).let { before ->
+            exporter.export(span(11))
+            store.readsOf(clockKey) == before
+        }
+
+        assertAll(
+            { assertNull(returned, "a cancelled export returned into its caller: $returned") },
+            { assertEquals(0, spanWritesInCancelled, "a cancelled export wrote its spans") },
+            { assertTrue(stillSkips, "a cancelled export spent the clock's window") },
+        )
+    }
 }
 
 /**
