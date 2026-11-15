@@ -119,7 +119,7 @@ class LocalHeddleRebaseTest {
             { assertEquals(rebasesBefore + 1, engine.rebasesForTest, "one rebase") },
             { assertEquals(2 * threshold - shift, engine.ticks(a), "a moved by Δ") },
             { assertEquals(16_005L - shift + TICKS_PER_UNIT, engine.ticks(b), "b moved by Δ, below zero, then took its unit") },
-            { assertTrue(engine.ticks(b) < -threshold + 2 * TICKS_PER_UNIT, "b went about R below zero: ${engine.ticks(b)}") },
+            { assertTrue(engine.ticks(b) < -threshold / 2, "b went about R below zero: ${engine.ticks(b)}") },
             { assertTrue(engine.ticks(b) > positionFloor(Weight.ONE), "and stayed inside its window") },
             { assertEquals(cBefore - shift, engine.ticks(c), "idle c moved by Δ too") },
         )

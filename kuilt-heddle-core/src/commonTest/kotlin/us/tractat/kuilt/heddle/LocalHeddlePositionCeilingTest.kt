@@ -448,7 +448,8 @@ class LocalHeddlePositionCeilingTest {
      * front (#3353). The review of #3352 sent such a seat to the newborn's own ceiling, because the
      * sibling's position read lower than it stood for and so did the front. Nothing is narrowed
      * before the front is taken now, so the front is exact, the seat is stored exactly, and a pick
-     * over the saturated sibling still refuses. `admit` must charge, so it seats.
+     * over the saturated sibling still refuses. `admit` must charge, so it seats. The sibling `y`
+     * waits at its floor, so the admission's own rebase cannot move `x` off its ceiling (#3353).
      */
     @Test
     fun aSeatAgainstASaturatedFrontLandsAtTheExactFront() {
@@ -467,6 +468,8 @@ class LocalHeddlePositionCeilingTest {
             val lease = (engine.acquire(setOf(x, y), setOf(x, y), startedAt = 0L) as AcquireOutcome.Acquired).lease
             engine.complete(lease.id, actualCost = 1L)
         }
+        // y at its floor holds the admission's own rebase at nothing, so x is still at its ceiling after it.
+        engine.holdAtFloor(y)
         engine.pushTowardCeiling(x, below = 0L)
         check(engine.attach(rt, "n", generation = 2L).refusals.isEmpty())
         val n = rtTopology.attachedChildId(rt, "n")
