@@ -857,6 +857,20 @@ public class EntitlementLedger private constructor(
         return acc.toLongExact()
     }
 
+    /**
+     * [edge]'s effective issuance, `issued + issuedRelocIn` summed over every replica: one of the two
+     * lifetime counters a pick may not carry past [LIFETIME_WATERMARK] (#3475). `0` for an edge
+     * this ledger does not know.
+     */
+    internal fun effectiveIssuance(edge: AttachmentId): Long = effIssuedTotal(edge)
+
+    /**
+     * Every mint record credited to [r] at [root], summed: the root's minted supply, the other
+     * lifetime counter (#3475). The sum over every epoch's record, not one epoch's, since
+     * [holdings] at the root adds all of them.
+     */
+    internal fun mintedSupply(root: GroupId, r: ReplicaId): Long = mintedHeldBy(root, r)
+
     /** `effIssued(edge)[r] − returned(edge)[r]` — [r]'s net inflow across one edge. */
     private fun netInflow(edge: AttachmentId, r: ReplicaId): Long =
         checkedSub(effIssuedSlot(edge, r), slot(returned, edge, r))

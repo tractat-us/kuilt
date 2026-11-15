@@ -392,12 +392,13 @@ public class HeddleNode internal constructor(
      * ([FairShareAllocator.schedule]).
      *
      * @return [ScheduleOutcome.Delegated] with the count of grants applied this call,
-     *   [ScheduleOutcome.NothingToDelegate] when none was, or
-     *   [ScheduleOutcome.WeightBudget] when [parent]'s children cannot be ordered. Never
-     *   [GateClosed]: a static node has no write gate.
-     * @throws ArithmeticException when a grant would carry an edge's issuance past `Long`, the
-     *   lifetime limit (#3475). A throw in the first round writes nothing; one in a later round keeps
-     *   the rounds before it, which have already landed ([FairShareAllocator.schedule]).
+     *   [ScheduleOutcome.NothingToDelegate] when none was,
+     *   [ScheduleOutcome.WeightBudget] when [parent]'s children cannot be ordered, or
+     *   [ScheduleOutcome.LifetimeExhausted] when the first grant would carry its edge's effective
+     *   issuance past the lifetime watermark on this peer's view (#3475): nothing is published, and
+     *   a refusal met after grants answers `Delegated` and keeps them, so the next call answers it.
+     *   Never [GateClosed]: a static node has no write gate. Nothing here throws at the lifetime
+     *   counters: `complete` charges at most what was reserved, so only a grant moves them.
      *
      * A parent that starts answering [ScheduleOutcome.WeightBudget] is also logged, once, at
      * `warn`, naming its active edges and their weights, so a caller that discards the outcome

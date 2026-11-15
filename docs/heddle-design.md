@@ -969,7 +969,7 @@ edges closed before the upgrade, or a fresh log, because a replay refuses them.
 keeps running, but a new sibling there is refused.
 
 `HeddleNode.schedule` meets no ceiling either: a grant past it is made, as
-`LocalHeddle` makes one, and `ScheduleOutcome.PositionCeiling` is not returned.
+`LocalHeddle` makes one: no position refuses it.
 `apply` keeps the weight products in range the
 same way: an activation whose weights would put its parent's `L`, `S`, `G · S` or
 `S · d` out of `Long`, or fail P1′, is refused with a `StepRefusal`. Where a topology act enters a
@@ -1052,14 +1052,16 @@ an edge has had, counted from its start, and it only ever goes up.
 the second.
 
 1. **The `Long` lifetime counters.** An edge's issuance and an epoch's mint are
-   `Long`s, about 9.2 · 10¹⁸ units. Today they throw. Measured on `main` at
-   `3083d775f`, JVM only: two weight-1 lanes at the largest lease, charged in
+   `Long`s, about 9.2 · 10¹⁸ units. Before slice 7 they threw. Measured on `main`
+   at `3083d775f`, JVM only: two weight-1 lanes at the largest lease, charged in
    full, run 524,287 leases, and the next `acquire` throws
    `ArithmeticException` from the mint. Charged one unit each they run
    1,048,574, and the edge's issuance throws. Step B does not create this
    limit. It makes it the only one, so it gets the typed arm the ceiling had,
    on the calls that pick, and no call throws there any more. "The lifetime
-   limit" below is the whole rule.
+   limit" below is the whole rule, built in slice 7: the same run now ends in
+   `LifetimeExhausted` after 507,903 leases, `(Long.MAX_VALUE − 2⁵⁸) / 2⁴⁴`
+   (`LocalHeddleLifetimeRunTest`).
 2. **128 bits, which the weight budget puts out of reach (W1).** With the
    counters in range, the virtual time under a parent never passes about
    `2⁶⁴ · Σ⌈1/wᵢ⌉`: each unit of an edge's service moves that edge by `1/wᵢ`
@@ -1080,7 +1082,8 @@ keeps the clock inside 128 bits today. The clock was never rebased. A lone
 child of weight `1/d` runs it `d · 2²⁴` ticks a unit, which leaves 128 bits
 inside the counters for `d` above about `2⁴⁰`.
 
-**The lifetime limit.** Ruled by @keddie, 2026-11-15 (#3475): a new lease is
+**The lifetime limit.** Built in slice 7 (`LocalHeddleLifetimeTest`,
+`HeddleNodeLifetimeTest`). Ruled by @keddie, 2026-11-15 (#3475): a new lease is
 refused a little before a counter runs out, and work that is already running
 is never refused for it and never throws.
 
@@ -2055,10 +2058,13 @@ Carried over from the source intact; each is a named property test (§13).
     on the least common multiple of their denominators. Everything before it is 128-bit:
     a gauge's stored position, a parent's origin, the raw position, the front and
     a wake clamp, and arithmetic that would leave 128 bits throws (#3353).
-    Step B changes what the `Long` lifetime counters do here: a pick refuses
-    with headroom, and a charge that does not fit is reported, not thrown.
-    Nothing wraps or saturates under either (§7.1, "The lifetime limit";
-    not built yet).
+    The `Long` lifetime counters, an edge's effective issuance and the root's
+    minted supply, are the other exception: no call throws at them. A pick
+    refuses with headroom, as `LifetimeExhausted`, and a charge that does not
+    fit is recorded whole or not at all and reported in `LeaseOutcome.Done.unrecorded`.
+    Nothing wraps or saturates under either (§7.1, "The lifetime limit",
+    built in slice 7). A merged sum of peers' writes past `Long` still throws
+    when read.
 13. **Consensus only at the embroidery.** Mint, overlapping reshape, and
     fencing use `:kuilt-raft`; nothing else coordinates, at any frequency.
 

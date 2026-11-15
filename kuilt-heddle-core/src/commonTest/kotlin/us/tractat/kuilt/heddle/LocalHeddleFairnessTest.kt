@@ -262,7 +262,7 @@ class LocalHeddleFairnessTest {
                         AcquireOutcome.NothingEligible -> run.nothingEligible++
                         AcquireOutcome.SupplyExhausted -> fail("the harness funded step $step, yet the engine reported exhaustion")
                         is AcquireOutcome.NoLiveLineage -> fail("descent failed at ${out.at.value} on step $step")
-                        is AcquireOutcome.PositionCeiling -> fail("no position nears its ceiling here, step $step")
+                        is AcquireOutcome.LifetimeExhausted -> fail("no position nears its ceiling here, step $step")
                     }
                     // A wake is an edge the allocator last observed idle and has now observed waiting.
                     val observed = before.allocatorMemory.demandingObserved
@@ -273,7 +273,7 @@ class LocalHeddleFairnessTest {
                 val plan = checkNotNull(plans[lease.id]) { "lease ${lease.id} untracked" }
                 if (plan.renews && plan.actual > lease.reserved) {
                     if (harness.topUp(plan.reservation, force = false)) {
-                        assertEquals(LeaseOutcome.Done(0L, 0L), heddle.extend(lease.id, plan.reservation, waiting = waitingNow(waiting)))
+                        assertEquals(LeaseOutcome.Done(0L, 0L, 0L), heddle.extend(lease.id, plan.reservation, waiting = waitingNow(waiting)))
                         run.extends++
                     } else {
                         // The work runs on unrenewed and `complete` covers it: a lease that kept
@@ -284,7 +284,7 @@ class LocalHeddleFairnessTest {
                 } else {
                     val overrun = maxOf(0L, plan.actual - lease.reserved)
                     if (overrun > 0L) harness.topUp(overrun, force = true)
-                    assertEquals(LeaseOutcome.Done(plan.actual, overrun), heddle.complete(lease.id, plan.actual, waiting = waitingNow(waiting)))
+                    assertEquals(LeaseOutcome.Done(plan.actual, overrun, 0L), heddle.complete(lease.id, plan.actual, waiting = waitingNow(waiting)))
                     if (overrun > 0L) run.inlineOverruns++
                     run.completes++
                     plans.remove(lease.id)

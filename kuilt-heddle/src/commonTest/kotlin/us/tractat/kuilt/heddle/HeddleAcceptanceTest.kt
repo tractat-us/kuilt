@@ -91,8 +91,8 @@ class HeddleAcceptanceTest {
         while (a.calls < TWIN_CALL_LIMIT) {
             val outcome = a.step(node)
             val twinOutcome = b.step(twinNode)
-            assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${a.grants} grants")
-            assertTrue(twinOutcome !is ScheduleOutcome.PositionCeiling, "the twin refused at the ceiling after ${b.grants} grants")
+            assertTrue(outcome !is ScheduleOutcome.LifetimeExhausted, "refused at the ceiling after ${a.grants} grants")
+            assertTrue(twinOutcome !is ScheduleOutcome.LifetimeExhausted, "the twin refused at the ceiling after ${b.grants} grants")
             assertEquals(outcome, twinOutcome, "call ${a.calls}: the two answered differently")
             assertEquals(b.issuedByLane(twinNode), a.issuedByLane(node), "call ${a.calls}: the two made different picks")
             twinPeak = maxOf(twinPeak, twinNode.boundMetrics(root).peakPositionFraction)

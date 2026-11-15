@@ -73,7 +73,7 @@ class LocalHeddleSupplyTest {
         val extended = h.extend(first.id, 15L, waiting = emptySet()).also { record() } // 20 − 15 < 10: mint 15
         h.extend(first.id, 5L, waiting = emptySet()).also { record() } // 20 − 5 = 15: none
         assertAll(
-            { assertEquals(LeaseOutcome.Done(0L, 0L), extended) },
+            { assertEquals(LeaseOutcome.Done(0L, 0L, 0L), extended) },
             { assertEquals(listOf(25L, 25L, 25L, 40L, 55L, 55L), minted, "minted after each operation") },
             { assertEquals(listOf(20L, 15L, 10L, 20L, 20L, 15L), held, "held at the root after each") },
             { assertEquals(setOf(MintId("local#0")), h.snapshot().ledger.mintIds()) },
@@ -92,7 +92,7 @@ class LocalHeddleSupplyTest {
         val extended = h.extend(lease.id, 50L, waiting = emptySet())
         assertAll(
             { assertEquals(2L, afterAcquire, "the target, 1 slot × 1 × 2 rounds, is left after the 100") },
-            { assertEquals(LeaseOutcome.Done(0L, 0L), extended) },
+            { assertEquals(LeaseOutcome.Done(0L, 0L, 0L), extended) },
             { assertEquals(2L, h.atRoot()) },
             { assertEquals(152L, h.minted()) },
         )
@@ -143,7 +143,7 @@ class LocalHeddleSupplyTest {
             { assertEquals(10L, held, "the rig: the root holds exactly the low watermark, 2 slots × 5") },
             { assertEquals(LeaseOutcome.PathDraining(AttachmentId("root>a/b")), draining) },
             { assertSame(before, h.snapshot().ledger, "nothing was minted for it") },
-            { assertEquals(LeaseOutcome.Done(0L, 0L), extended) },
+            { assertEquals(LeaseOutcome.Done(0L, 0L, 0L), extended) },
             { assertTrue(open.minted() > mintedBefore, "the control: the same extend on an open path tops up") },
         )
     }
@@ -323,7 +323,7 @@ class LocalHeddleSupplyTest {
                 if (out is AcquireOutcome.Acquired) leased++ else refusals += "acquire $leased: $out"
             } else if (rng.nextInt(4) == 0) {
                 val out = h.extend(open[rng.nextInt(open.size)].id, 1L + rng.nextInt(20), waiting = emptySet())
-                if (out == LeaseOutcome.Done(0L, 0L)) extended++ else refusals += "extend at $leased: $out"
+                if (out == LeaseOutcome.Done(0L, 0L, 0L)) extended++ else refusals += "extend at $leased: $out"
             } else {
                 h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(40).toLong(), waiting = emptySet())
                 completed++
@@ -475,8 +475,8 @@ class LocalHeddleSupplyTest {
             { assertEquals(50L to 10L, overran.elapsed to overran.granted, "the rig: it ran past its grant") },
             { assertEquals(10L, overran.defaultSettlement) },
             { assertEquals(3L, under.defaultSettlement) },
-            { assertEquals(LeaseOutcome.Done(charged = 10L, overrun = 0L), doneLong) },
-            { assertEquals(LeaseOutcome.Done(charged = 3L, overrun = 0L), doneShort) },
+            { assertEquals(LeaseOutcome.Done(charged = 10L, overrun = 0L, unrecorded = 0L), doneLong) },
+            { assertEquals(LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L), doneShort) },
             { assertEquals(13L, l.leafSpentTotal()) },
             { assertEquals(87L, l.holdings(root, LOCAL), "the short orphan's 7 unused units went back") },
         )
@@ -492,7 +492,7 @@ class LocalHeddleSupplyTest {
         val l = h.snapshot().ledger
         assertAll(
             { assertEquals(lease, orphan.lease) },
-            { assertEquals(LeaseOutcome.Done(charged = 25L, overrun = 15L), done) },
+            { assertEquals(LeaseOutcome.Done(charged = 25L, overrun = 15L, unrecorded = 0L), done) },
             { assertEquals(25L, assertNotNull(l.edge(AttachmentId("root>a/b"))).spent) },
             { assertEquals(LeaseReconciliation(emptyList(), emptyList()), h.reconcileLeases(emptySet(), now = 45L), "settled") },
             { assertEquals(l.mintedTotal(), l.holdings(root, LOCAL) + l.leafSpentTotal()) },

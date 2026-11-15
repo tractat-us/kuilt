@@ -63,7 +63,7 @@ class FairShareAllocatorWindowRuleTest {
                 }
                 when (outcome) {
                     is AllocationOutcome.Delegated -> grants += outcome.grants
-                    is AllocationOutcome.PositionCeiling -> refusals++
+                    is AllocationOutcome.LifetimeExhausted -> refusals++
                     else -> Unit
                 }
             }

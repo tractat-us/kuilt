@@ -50,7 +50,7 @@ class LocalHeddleExplainTest {
             { assertEquals(WaitExplanation.NotWaiting, broke.explain(root, all, all)) },
             {
                 assertEquals(
-                    listOf("NOT_WAITING", "NOT_ELIGIBLE", "NO_LIVE_LINEAGE", "AT_CEILING", "SUPPLY_EXHAUSTED", "POSITION_CEILING", "BEHIND_AT_LEVEL", "WOULD_BE_PICKED_NEXT"),
+                    listOf("NOT_WAITING", "NOT_ELIGIBLE", "NO_LIVE_LINEAGE", "AT_CEILING", "SUPPLY_EXHAUSTED", "LIFETIME_EXHAUSTED", "BEHIND_AT_LEVEL", "WOULD_BE_PICKED_NEXT"),
                     WaitExplanation.Kind.entries.map { it.name },
                     "the arms' order is part of the API",
                 )
@@ -372,7 +372,7 @@ class LocalHeddleExplainTest {
                 g !in eligible -> WaitExplanation.NotEligible
                 g !in pickable -> WaitExplanation.NoLiveLineage(g)
                 out == AcquireOutcome.SupplyExhausted -> WaitExplanation.SupplyExhausted
-                out is AcquireOutcome.PositionCeiling -> WaitExplanation.PositionCeiling(out.parent)
+                out is AcquireOutcome.LifetimeExhausted -> WaitExplanation.LifetimeExhausted(out.parent)
                 else -> null
             }
             if (expectedBySets != null) {
@@ -458,7 +458,7 @@ class LocalHeddleExplainTest {
         const val STEPS = 60
 
         /** One counter per [WaitExplanation.Kind], by ordinal, then the shapes that matter most. */
-        val CEILING = WaitExplanation.Kind.POSITION_CEILING.ordinal
+        val CEILING = WaitExplanation.Kind.LIFETIME_EXHAUSTED.ordinal
         val AT_CEILING = WaitExplanation.Kind.AT_CEILING.ordinal
         val RIG = WaitExplanation.Kind.entries.map { it.name } + listOf("behindBelowRoot", "behindClosing", "gainedAChild", "wakerEligible", "fundedByTopUp")
         val BEHIND_BELOW_ROOT = WaitExplanation.Kind.entries.size

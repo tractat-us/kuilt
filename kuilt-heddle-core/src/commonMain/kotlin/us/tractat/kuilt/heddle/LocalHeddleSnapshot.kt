@@ -195,7 +195,8 @@ internal data class PersistedLease(val lease: Lease, val path: List<AttachmentId
 
     /**
      * Throws [IllegalArgumentException] unless this lease is one an engine at [epoch], rooted at
-     * [root], could hold open over [ledger]: an id from no later epoch, a positive reservation, and
+     * [root], could hold open over [ledger]: an id from no later epoch, a reservation that is not
+     * negative (`0` for a lease admitted past the lifetime limit, #3475), and
      * a path of known edges leading from [root] to the leaf that is the leaf's one live lineage.
      *
      * That last is the invariant the engine checks after every landed run, so a restored engine
@@ -211,7 +212,7 @@ internal data class PersistedLease(val lease: Lease, val path: List<AttachmentId
         val id = lease.id
         require(id.epoch in 0L..epoch) { "lease $id is from epoch ${id.epoch}, outside 0..$epoch" }
         require(id.seq >= 0L) { "lease $id has a negative sequence number" }
-        require(lease.reserved > 0L) { "lease $id reserves ${lease.reserved}, not a positive amount" }
+        require(lease.reserved >= 0L) { "lease $id reserves ${lease.reserved}, a negative amount" }
         require(path.isNotEmpty()) { "lease $id has an empty path" }
         var at = root
         for (edge in path) {

@@ -33,7 +33,7 @@ children's weights do not fit together, tell it how many slots you run with
     check(first is AcquireOutcome.Acquired)
 
     // The job overran its 3-unit estimate: all 5 units are charged, 2 of them as overrun.
-    check(heddle.complete(first.lease.id, actualCost = 5L, waiting = queued) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+    check(heddle.complete(first.lease.id, actualCost = 5L, waiting = queued) == LeaseOutcome.Done(charged = 5L, overrun = 2L, unrecorded = 0L))
 ```
 
 The rest of the surface, by what you would ask it:
@@ -196,9 +196,15 @@ tally that silently overflowed would be worse than one that stopped. A child's
 position is 128-bit everywhere, and a pick compares the full value, so no position
 refuses a pick: the gauge stores it exactly, and a parent's origin, the raw
 position, the front, a wake clamp and the deadline a pick orders are wide too
-(#3353). What a long-lived engine reaches first is the ledger's `Long` counters,
-an edge's issuance and an epoch's mint, which throw. The `PositionCeiling` outcomes
-are kept for that limit and are not returned today. A position does still have a
+(#3353). What a long-lived engine reaches first is the lifetime limit: two
+`Long` counters, an edge's effective issuance and the root's minted supply. A pick
+keeps `LocalHeddle.LIFETIME_HEADROOM` (2^58 units) in hand on each, and answers
+`LifetimeExhausted(parent)` rather than pass `Long.MAX_VALUE` less that, from
+`LocalHeddle.acquire` and `FairShareAllocator.schedule` alike. Work already running
+is never refused for it: `admit`, `extend` and `complete` use the headroom, and a
+charge that still does not fit is recorded whole or not at all, never in part, and
+reported in `LeaseOutcome.Done.unrecorded`. No call throws at either counter (#3475).
+A position does still have a
 ceiling, past which the public virtual-time reads saturate, the penalty side. A
 busy parent is rebased long before its ceiling: both `HeddleNode`
 and `LocalHeddle` raise the parent's origin, and neither changes a pick or
@@ -240,8 +246,9 @@ until nothing more can move. Before the first pick it seats any child that has n
 yet and clamps any child that just woke, both against one front, so neither joiner
 drags the front down to meet itself. When nobody else is competing, that front is the
 child that has had the most, so everyone joining starts level with it. It answers an `AllocationOutcome`: `Delegated`
-with the grant count, `NothingToDelegate`, or `WeightBudget` when the parent's
-children cannot be ordered at all. Its `PositionCeiling` arm is not returned today.
+with the grant count, `NothingToDelegate`, `WeightBudget` when the parent's
+children cannot be ordered at all, or `LifetimeExhausted` when the first grant would
+carry the picked edge past the lifetime watermark.
 
 Weights have a budget, and it has two halves. A pick multiplies a parent's weights
 together, so a mix whose products leave a 64-bit number is refused. And a weight set too
