@@ -123,6 +123,36 @@ class LocalHeddleRebaseTest {
     }
 
     /**
+     * A heavy newborn seated through `admit` beside a busy runner (#3353 round 2). The runner `a`
+     * sits just under its own threshold `R`, and the front over the three lanes last seen waiting is
+     * about `R / 3`. A fresh lane `n` at weight 60 is admitted before any pick, so it is seated by
+     * the delegation, not by a pick: at that front, about `20 · R` on its own grid, past its ceiling.
+     * The repair used to bail at that child's ceiling, the charge rebase and the next pick's alike,
+     * so the parent refused every acquire after.
+     */
+    @Test
+    fun aHeavyNewbornSeatedByAdmitDoesNotWedgeTheParent() {
+        val engine = engine()
+        engine.pushTo(a, threshold - TICKS_PER_UNIT)
+        val withHeavy = draft("rebase") {
+            lane("a", Weight.ONE)
+            lane("b", Weight.ONE)
+            lane("c", Weight.ONE)
+            lane("n", Weight.of(60L))
+        }
+        check(engine.apply(withHeavy, generation = 1L).refusals.isEmpty()) { "the rig: n landed" }
+        val n = withHeavy.groupId("n")
+        val admitted = engine.admit(n, startedAt = 1L)
+        check(admitted is AcquireOutcome.Acquired) { "the rig: n was admitted, $admitted" }
+        engine.complete(admitted.lease.id, actualCost = 1L)
+        val outcome = engine.acquire(setOf(a, b, c, n), setOf(a, b, c, n), startedAt = 2L)
+        assertAll(
+            { assertTrue(outcome is AcquireOutcome.Acquired, "the parent is not wedged: $outcome") },
+            { assertTrue(engine.rebasesForTest > 0, "the rig: it rebased") },
+        )
+    }
+
+    /**
      * `a` and `b` both wait, `b` the lower at `2R`, so `Δ` is about `2R`; `c` is idle a few ticks
      * above its origin and moves the whole `Δ`, to about `−2R` (#3353). The fold rebase this replaced
      * stopped it at `−R`. The wake clamp takes all of it back, since it is taken wide: when `c` wakes
