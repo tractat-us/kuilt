@@ -1146,14 +1146,21 @@ level by level, and the call lands:
 - What the root cannot fund in whole is not recorded. `LeaseOutcome.Done` gains
   a required `unrecorded: Long`, and `charged` is then the cost less that. The
   lease closes either way. The same field reports an overrun dropped because
-  the root's own child edge is draining, which `Done` reports as charged today.
+  the root's own child edge is draining, which `Done` reported as charged before (#3493).
 - An admission that does not fit reserves nothing. `admit` opens the lease
   with `reserved` zero, so the cost arrives as an overrun when it completes.
+  Nothing else changes, the wake memory included: an admission that charges
+  nothing observes nothing, and the overrun observes the waiting set when it lands.
 - An extension that does not fit reserves nothing and changes nothing, the
   wake memory included. `extend` answers `Done` with `unrecorded` the amount.
   The work carries on, and `complete` charges the cost as an overrun. A
   caller that wants the reason asks `explain`, which answers
   `WaitExplanation.LifetimeExhausted` for a leaf behind a full counter.
+- A reweight moves an open lease's reservation down its new path, which counts
+  on every edge of it again. A move the new path has no room for within `Long`
+  is not made: that child's change is refused, as `StepRefusal.Refused`, until
+  the lease settles. A lease admitted with nothing reserved moves with nothing
+  to delegate. Slice 7 added this; the entry above did not name `apply`.
 
 No counter is ever filled to its limit with part of a charge, and none
 saturates. A saturated counter would break conservation, since the edges of
@@ -1163,14 +1170,21 @@ edge credit it could spend on its other children. And filling the root's
 supply to the brim lets one wrong argument end the engine:
 `complete(lease, Long.MAX_VALUE)` on a healthy scheduler would mint to the
 limit, and every later `acquire` would be refused. Whole-or-nothing records the
-reservation, reports the rest, and the scheduler carries on (§10.1, §10.12).
+reservation, reports the rest, and the scheduler carries on (§10.1, §10.12), on
+any engine that has served more than that one lease (see Open).
 
 Where a charge is not recorded, the lane it ran on has had service its
 position does not show. That is credit, the favour side, and it cannot be
 spent on a pick: the only way to spend it is an `acquire` across the full
 edge, which is refused. It reaches one place, the parent's net-service clock,
 which runs short by the overrun, so a sibling returning there comes back that
-much less moved. Slice 7 measures that, and the same read on a draining path.
+much less moved. Measured in slice 7 on two twins that differ only in whether
+a lane's overrun `O` is recorded, with a sibling away while that lane and one
+more ask: the sibling comes back exactly `O / 2` behind, the clock's shortfall
+over the two asking, and the lane reads `O` lower
+(`anUnrecordedOverrunRunsTheClockShortByItsShare`). The same read on a draining
+path is reasoned, not measured: the closing edge has left its parent's active
+set, so no clock there counts it.
 
 *What the headroom promises.* Unconditionally: no call throws or wraps at a
 lifetime counter, an `acquire` never leaves one past the watermark, and
@@ -1348,8 +1362,10 @@ unambiguous would guard state that nobody holds (@keddie, 2026-11-15).
    `WaitExplanation`, and `AllocationOutcome` with `ScheduleOutcome`), and
    `LeaseOutcome`'s is deleted. The types hold the ruling: with no lifetime arm
    on `LeaseOutcome` or `AdmitOutcome`, a charging call cannot refuse for it,
-   and `unrecorded` has no default. Retires `LocalHeddlePositionCeilingTest`
-   for its lifetime twin. Docs: §7.1, §10.12, the cookbook, both `module.md`s,
+   and `unrecorded` has no default. Built, ahead of slice 3, so
+   `LocalHeddlePositionCeilingTest` stays until slice 3 or 6 retires the
+   rebase and the saturating reads its rows still pin; its lifetime twin is
+   `LocalHeddleLifetimeTest`. Docs: §7.1, §10.12, the cookbook, both `module.md`s,
    `Writerside/topics/heddle-local-turns.md`. #3458 is then a use of the
    headroom, not a limit of its own.
 
@@ -1427,6 +1443,17 @@ not depend on each other.
   headroom covers 16,384 charges of the largest size after the last `acquire`.
   A caller with more open leases than that, each overrunning in full, passes
   it. None is known (#3475).
+- **Whether whole-or-nothing keeps one wrong cost from ending an engine.** The
+  ruling above says it does for `complete(lease, Long.MAX_VALUE)`. It does on an
+  engine that has served anything else, and not on one whose only service is
+  that lease: there the edge and the minted supply each have exactly the
+  overrun's room left under `Long.MAX_VALUE`, so the charge fits whole, the
+  supply ends past the watermark, and every later `acquire` is refused
+  (`completeAtLongMaxOnAFreshEngineFitsExactlyAndFillsTheSupply`). Any cost that
+  lands the supply between the watermark and `Long.MAX_VALUE` does the same on
+  any engine. Slice 7 builds the rule as ruled and pins the boundary; a cap on
+  a single charge, or a charge rule at the watermark for the minted supply, would
+  close it.
 - **Whether boot attribution should narrow** once W1 lands. Today
   `LocalHeddle.Boot` (#3462) leaves out the whole subtree of a parent whose
   children's weights do not fit together, even when one child fails on its

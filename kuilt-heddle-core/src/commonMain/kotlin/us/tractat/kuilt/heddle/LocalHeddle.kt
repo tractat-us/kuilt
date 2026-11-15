@@ -1064,7 +1064,10 @@ public class LocalHeddle private constructor(
      * activates (taking over the old edge's spend with a [TopologyStep.Reconcile] when the group is
      * internal), and the reservation is delegated down the new path, which the lease charges from
      * then on. A lease under a group and its child, both reweighted, crosses two old edges and
-     * moves once. It keeps its id, leaf and reservation, so the caller sees nothing change.
+     * moves once. It keeps its id, leaf and reservation, so the caller sees nothing change. The move
+     * counts the reservation again on every edge the old and new paths share, so where one of them
+     * has no room for it within `Long` the lease is not moved and the child's change is refused,
+     * as [StepRefusal.Refused], until the lease settles (see "The lifetime limit").
      * **The reweighted group's fairness history resets:** its new edge is seated at its parent's
      * front, like a newcomer's, so it is neither owed for its past nor charged for it. A child added
      * back before its removal drained is a new edge for the same group, and its draining leases

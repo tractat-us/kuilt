@@ -232,14 +232,6 @@ class LocalHeddleLifetimeTest {
             for (edge in path) l = l.piece(checkNotNull(l.delegate(LOCAL, edge, credit)).delta)
             l.piece(checkNotNull(l.spendCaptured(LOCAL, path, credit)).delta)
         }
-        val reweighted = draft("life") {
-            lane("a")
-            lane("b")
-            group("g", Weight.of(2)) {
-                lane("x")
-                lane("y")
-            }
-        }
         val applied = h.apply(reweighted, generation = 1L)
         val gEdge = h.path(x).first()
         val ledger = h.state().ledger
@@ -448,6 +440,72 @@ class LocalHeddleLifetimeTest {
             { assertIs<RestoreResult.Restored>(restored, "a snapshot holding the lease restores") },
             { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = R, unrecorded = R), done) },
             { assertEquals(emptyList(), h.state().leases) },
+            { assertEquals(emptyList(), h.state().ledger.validate()) },
+        )
+    }
+
+    // ─── A reweight moving a lease at the limit ──────────────────────────────────────────────────
+
+    private val reweighted = draft("life") {
+        lane("a")
+        lane("b")
+        group("g", Weight.of(2)) {
+            lane("x")
+            lane("y")
+        }
+    }
+
+    /**
+     * A lease admitted with nothing reserved moves with its group's reweight with nothing to
+     * delegate, rather than ask the ledger to delegate nothing, and still completes.
+     */
+    @Test
+    fun aReweightMovesALeaseThatReservedNothing() {
+        val h = engine()
+        h.pump(h.path(x), to = Long.MAX_VALUE - R + 1L)
+        val admitted = assertIs<AcquireOutcome.Acquired>(h.admit(x, setOf(x), startedAt = 0L, reservation = R)).lease
+        val applied = h.apply(reweighted, generation = 1L)
+        val moved = h.capturedPath(admitted.id)
+        val done = h.complete(admitted.id, actualCost = R, waiting = emptySet())
+        assertAll(
+            { assertEquals(0L, admitted.reserved, "the rig: the admit reserved nothing") },
+            { assertEquals(emptyList(), applied.refusals, "the reweight landed") },
+            { assertEquals(h.path(x), moved, "and moved the lease onto x's new lineage") },
+            { assertIs<LeaseOutcome.Done>(done) },
+            { assertEquals(emptyList(), h.state().ledger.validate()) },
+        )
+    }
+
+    /**
+     * A reweight moves an open lease by handing its reservation back up the old path and delegating
+     * it down the new one, so every edge the two share counts it again. Where a shared edge has no
+     * room for that within `Long`, the lease is not moved and nothing throws: the child's change is
+     * refused until the lease settles.
+     */
+    @Test
+    fun aReweightWithNoRoomToMoveALeaseIsRefusedUntilItSettles() {
+        val h = engine()
+        val lease = h.lease(setOf(x), reservation = R)
+        val oldPath = h.path(x)
+        h.pump(listOf(oldPath.first()), to = Long.MAX_VALUE - R + 1L)
+        val heavierX = draft("life") {
+            lane("a")
+            lane("b")
+            group("g") {
+                lane("x", Weight.of(2))
+                lane("y")
+            }
+        }
+        val refused = h.apply(heavierX, generation = 1L)
+        val stillOn = h.capturedPath(lease.id)
+        h.complete(lease.id, actualCost = R, waiting = emptySet())
+        val retried = h.apply(heavierX, generation = 1L)
+        assertAll(
+            { assertEquals(Long.MAX_VALUE - R + 1L, h.issued(oldPath.first()), "the rig: g's edge, shared by both paths, is a unit short of room") },
+            { assertEquals(listOf(x), refused.refusals.map { it.child }, "x's reweight is refused while the lease is open") },
+            { assertIs<StepRefusal.Refused>(refused.refusals.single()) },
+            { assertEquals(oldPath, stillOn, "the lease stays where it was") },
+            { assertEquals(emptyList(), retried.refusals, "and lands once the lease settles") },
             { assertEquals(emptyList(), h.state().ledger.validate()) },
         )
     }
