@@ -15,6 +15,8 @@ internal class WindowRuleRig(
     lanes: List<Pair<String, Weight>>,
     /** Off for a twin on the rule before the window rule ([LocalHeddle.windowRuleForTest]). */
     windowRule: Boolean = true,
+    /** Off for the step B twin, which never rebases and so never raises an origin ([LocalHeddle.rebaseForTest]). */
+    rebase: Boolean = true,
 ) {
     private var topology = topologyOf(lanes)
     private var generation = 1L
@@ -23,6 +25,7 @@ internal class WindowRuleRig(
 
     val engine: LocalHeddle = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply {
         windowRuleForTest = windowRule
+        rebaseForTest = rebase
         reconcileCapacity(1L)
     }
 
@@ -42,10 +45,18 @@ internal class WindowRuleRig(
         val leaves: List<String>,
         /** The highest effective position any lane reached after a step, as a fraction of its ceiling. */
         val peakShare: Double,
+        /** The highest effective position any lane reached after a step, in ticks, relative to the origin. */
+        val peakTicks: Int128,
+        /**
+         * Seated, demanding lanes the engine had never observed and found below zero, summed over the
+         * steps, read before each: the below-zero first-sighting arm a twin row may differ by.
+         */
+        val unobservedBelowZero: Int,
     ) {
         override fun toString(): String =
             "steps=$steps picks=$picks refusals=$refusals firstRefusal=$firstRefusal picksAfterRefusal=$picksAfterRefusal " +
-                "reloads=$reloads rebases=$rebases floorLandings=$floorLandings origin=$origin peakShare=$peakShare"
+                "reloads=$reloads rebases=$rebases floorLandings=$floorLandings origin=$origin peakShare=$peakShare " +
+                "peakTicks=$peakTicks unobservedBelowZero=$unobservedBelowZero"
     }
 
     /** Replace the lanes with [lanes]: a lane left out is retired, a new name is a newborn. */
@@ -72,9 +83,12 @@ internal class WindowRuleRig(
         var reloads = 0
         val leaves = ArrayList<String>()
         var peakShare = 0.0
+        var peakTicks = Int128.ZERO
+        var unobservedBelowZero = 0
         for (step in 0 until steps) {
             if (before(step)) reloads++
             val set = waiting(step, names).mapTo(HashSet()) { topology.groupId(it) }
+            unobservedBelowZero += neverObservedBelowZero(engine.snapshot().ledger, engine.allocator) { it.child in set }.size
             when (val out = engine.acquire(set, set, startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)) {
                 is AcquireOutcome.Acquired -> {
                     picks++
@@ -92,9 +106,14 @@ internal class WindowRuleRig(
                 }
                 else -> error("the rig: step $step answered $out")
             }
-            peakShare = maxOf(peakShare, engine.allocator.peakPositionFraction(engine.snapshot().ledger, engine.root) { Demand.NONE })
+            val ledger = engine.snapshot().ledger
+            peakShare = maxOf(peakShare, engine.allocator.peakPositionFraction(ledger, engine.root) { Demand.NONE })
+            peakEffectiveTicks(ledger, engine.allocator.memory.wakeOffsets, engine.root)?.let { if (it > peakTicks) peakTicks = it }
         }
-        return Result(steps, picks, refusals, firstRefusal, picksAfterRefusal, reloads, engine.rebasesForTest, engine.floorLandingsForTest, engine.snapshot().ledger.origin(engine.root), leaves, peakShare)
+        return Result(
+            steps, picks, refusals, firstRefusal, picksAfterRefusal, reloads, engine.rebasesForTest, engine.floorLandingsForTest,
+            engine.snapshot().ledger.origin(engine.root), leaves, peakShare, peakTicks, unobservedBelowZero,
+        )
     }
 
     companion object {
@@ -127,8 +146,9 @@ internal class WindowRuleRig(
             burst: Int,
             steps: Int,
             windowRule: Boolean = true,
+            rebase: Boolean = true,
         ): Result {
-            val rig = WindowRuleRig(stayers + ("h0" to k), windowRule)
+            val rig = WindowRuleRig(stayers + ("h0" to k), windowRule, rebase)
             var born = 0
             var bornAt = 0
             return rig.run(
