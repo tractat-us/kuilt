@@ -149,12 +149,17 @@ public class WarpSpanExporter(
 
     /**
      * Persist [clock] ahead of the span write, and return why the turn's clock work failed though
-     * nothing threw: a skipped write, with [refusal] or [unrecoveredClock] as the cause, or an
-     * exhausted clock, whose write lands but which can mint no more (#3426). A refused write throws.
+     * nothing threw: a skipped write, with [refusal] as the cause, or an exhausted clock, whose write
+     * lands but which can mint no more (#3426). A refused write throws.
+     *
+     * [refusal] is this turn's retry of the clock's read, which every turn makes while the clock is
+     * unarmed. So a skip always has one: a read that lands arms the clock, nothing disarms it, and a
+     * clock the retry found armed was armed already. A skip without one would be a bug here, and it
+     * throws, which fails the whole turn closed.
      */
     private suspend fun persistClock(clock: WarpCausalClock, refusal: Throwable?): Throwable? =
         when (clock.persist(store)) {
-            ClockPersist.Unrecovered -> refusal ?: unrecoveredClock()
+            ClockPersist.Unrecovered -> checkNotNull(refusal) { "otel.causal.clock: skipped its write with no refused read this turn" }
             ClockPersist.Persisted -> if (clock.isExhausted) exhaustedClock() else null
         }
 
@@ -250,13 +255,6 @@ public class WarpSpanExporter(
 
     private companion object {
         private val STORE_KEY = StoreKey("otel.spans")
-
-        /**
-         * The cause a skipped clock write is counted with when this turn made no refused read to
-         * name: the span's explicit stamp meant the turn made no clock read at all.
-         */
-        private fun unrecoveredClock(): Throwable =
-            IllegalStateException("otel.causal.clock: no read of its entry has landed, so the turn did not write it")
 
         /** The cause an exhausted clock's work is counted with: it has no dot left to mint. */
         private fun exhaustedClock(): Throwable =
@@ -452,10 +450,12 @@ public class WarpSpanExporter(
         // Auto-stamp causal context (#846): a configured clock fills an unstamped
         // span so causal links form with no caller change; an explicit stamp wins.
         val clock = causalClock?.takeIf { span.causalStamp == null }
-        // A clock whose recovery read has not landed (refused, or never made) makes it first (#3390).
+        // A configured clock whose recovery read has not landed (refused, or never made) makes it first
+        // (#3390), whatever the span's stamp: the turn writes the clock either way, so an explicitly
+        // stamped span that skipped the read would count a clock failure its turn never retried (#3426).
         // The read holds ioMutex, the section every clock persist runs in, so it never reads past a
         // write this exporter is making.
-        val clockRefusal = if (clock != null && !clock.isArmed) ioMutex.withLock { retryClockRead(clock) } else null
+        val clockRefusal = causalClock?.takeIf { !it.isArmed }?.let { ioMutex.withLock { retryClockRead(it) } }
         // A recovered exporter stamps and adds before the write section, as it always has, in one hold
         // of `lock`: the read that made it recovered raised the clock's floor under that lock first, so
         // the stamp is above every stamp the stored spans carry (#3407). One whose read has not landed
