@@ -28,10 +28,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.AppleDevice
  *
  * The grants get the same rule from the store beneath them. `NSFileManagerDurableStore.read` answers
  * `null` only when there is no record, and throws when the record is there but cannot be read (no
- * permission, a file protected while the phone is locked, an I/O error). That throw reaches the
- * caller of [grants] or [keepGrant] with nothing written, so a record that could not be read is never
- * rewritten with only the new grant. Until #3327 the store answered `null` for both, and a
- * [keepGrant] made while the phone was locked did exactly that rewrite. The device-key conformance
+ * permission, a file its protection class keeps closed — an iPhone's grants file after a restart,
+ * until the first unlock — or an I/O error). That throw reaches the caller of [grants] or [keepGrant]
+ * with nothing written, so a record that could not be read is never rewritten with only the new
+ * grant. Until #3327 the store answered `null` for both, so a [keepGrant] made while the record could
+ * not be read would write a record holding only the new grant over it. The device-key conformance
  * suite pins it on both platforms (`unreadableGrantsAreRefusedNotRewritten`), over a grants record
  * the process may not open.
  *
