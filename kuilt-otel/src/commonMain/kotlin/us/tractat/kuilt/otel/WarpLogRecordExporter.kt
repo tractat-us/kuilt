@@ -918,27 +918,24 @@ public class WarpLogRecordExporter(
             companion object {
                 /**
                  * The state after a refused read whose predecessor was [prior]: one more refusal in
-                 * a row, and a window of `min(2^k − 1, MAX_SKIPPED_TURNS)` turns. `k` saturates
-                 * once the window is long past the cap, so the shift never overflows.
+                 * a row, `k`, and a window of `2^k − 1` turns. `k` stops at [SATURATED_REFUSALS],
+                 * which is the window's one cap.
                  */
                 fun after(prior: PersistedRead, cause: Throwable): Owed {
                     val refusals = minOf(((prior as? Owed)?.refusals ?: 0) + 1, SATURATED_REFUSALS)
-                    return Owed(cause, refusals, minOf((1 shl refusals) - 1, MAX_SKIPPED_TURNS))
+                    return Owed(cause, refusals, (1 shl refusals) - 1)
                 }
 
                 /**
-                 * The longest run of turns that refuse without reading. A long outage pays one read
+                 * Where `k` stops, so the longest run of turns that refuse without reading is
+                 * `2^6 − 1 = 63`, reached on the sixth refusal in a row. A long outage pays one read
                  * per 64 turns, so under 2% of drained batches wait out the store's timeout. The
                  * price is on the far side of the outage: a store that heals inside a window is
                  * seen up to 63 turns late, and each of those turns drops its batch. The drain is
                  * opportunistic and one turn is about one batch, so the worst case is 63 dropped
                  * batches after the heal. It is not bounded in time: how long those 63 turns take
-                 * is however often the app logs. 63 is `2^6 − 1`, so the window reaches it on the
-                 * sixth refusal in a row.
+                 * is however often the app logs.
                  */
-                private const val MAX_SKIPPED_TURNS = 63
-
-                /** `2^6 − 1` is [MAX_SKIPPED_TURNS], so a `k` past 6 changes nothing and stops here. */
                 private const val SATURATED_REFUSALS = 6
             }
         }
