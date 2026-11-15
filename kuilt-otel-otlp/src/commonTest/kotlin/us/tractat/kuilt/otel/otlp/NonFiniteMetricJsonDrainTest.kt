@@ -30,6 +30,9 @@ class NonFiniteMetricJsonDrainTest {
 
     private val endpoint = "https://c.example:4318"
 
+    /** An unquoted `NaN` / `Infinity` / `-Infinity` in value position: not a JSON number. */
+    private val bareNonFiniteNumber = Regex(""":\s*(NaN|-?Infinity)\s*[,}\]]""")
+
     private suspend fun assertJsonDrainSurvives(route: NonFiniteRoute) {
         val telemetry = telemetryWith(route)
         val collector = RecordingCollector()
@@ -51,6 +54,14 @@ class NonFiniteMetricJsonDrainTest {
                     "$route: the finite series in the same batch must reach the collector; " +
                         "metric POSTs the collector saw = ${metricBodies.size}",
                 )
+            },
+            // A JSON number has no NaN or Infinity, so a fix that only turns on kotlinx's
+            // allowSpecialFloatingPointValues sends a body no strict parser reads. OTLP/JSON follows
+            // the protobuf JSON mapping, which spells them as the strings "NaN", "Infinity" and
+            // "-Infinity". Measured: with that one flag set every other arm here goes green.
+            {
+                val bare = metricBodies.flatMap { body -> bareNonFiniteNumber.findAll(body).map { it.value }.toList() }
+                assertTrue(bare.isEmpty(), "$route: a metric body carries a bare non-JSON number: $bare")
             },
         )
     }
