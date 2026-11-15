@@ -74,7 +74,8 @@ The whole loop in one place, from the admin's file to a restart:
     val farm = parsed.topology
     val policy = LocalPolicy(defaultReservation = 3L)
     // The epoch is a boot counter you persist and raise on every start.
-    val heddle = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 4L)
 
     // A contributor opens a fork while the program runs.

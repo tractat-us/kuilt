@@ -64,7 +64,8 @@ The tree is not fixed. You can change it while builds run, and
 // A build takes about 3 minutes, so a lease reserves 3 when the caller knows no better.
 val policy = LocalPolicy(defaultReservation = 3L)
 // Load the tree into an engine. Lease ids it hands out carry the epoch, 0 here.
-val heddle = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+val (heddle, booted) = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+check(booted.refusals.isEmpty())
 
 // Nothing to hand out until the engine knows how many agents there are.
 val both = setOf(web, mobile)
@@ -74,7 +75,9 @@ heddle.reconcileCapacity(totalSlots = 4L)
 
 `LocalHeddle.fromTopology` loads the tree into an engine called `heddle`, which
 the rest of this page uses. Every lease id it hands out is stamped with `epoch`,
-which [a restart](#when-the-engine-restarts-too) raises.
+which [a restart](#when-the-engine-restarts-too) raises. It also says what the
+start did. `booted.refusals` names each group it left out because its children's
+weights do not fit together. Here that list is empty, and the check says so.
 
 Heddle counts in whatever unit your program counts time in. Here it is minutes.
 It never reads a clock: every time is a number you pass in, so a replay of the
