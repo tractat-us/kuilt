@@ -21,10 +21,10 @@ class HeddlePolicyTest {
      * the counters and wake offset mutate as the harness applies grants, spends, and returns.
      *
      * [seat] is the edge's virtual-time origin, carried the way production carries it since
-     * issue #1752 — a [Gauge] floor with the fold at `0`, so the whole of the edge's issuance
-     * is advanced over it. `null` models an edge nothing has seated yet, which reads from its
-     * own origin. A [Rational], like the wire form; one off the edge's 1/16-unit grid is read
-     * rounded up to it, as an older peer's floor would be (#3313).
+     * issue #1752 — a [Gauge] seated there with the fold at `0`, so the whole of the edge's
+     * issuance is advanced over it. `null` models an edge nothing has seated yet, which reads from
+     * its own origin. A [Rational]; one off the edge's 1/16-unit grid is seated rounded up to it,
+     * as [EntitlementLedger.seat] rounds a front (#3313).
      */
     private class Sim(
         val id: String,
@@ -38,7 +38,7 @@ class HeddlePolicyTest {
     ) {
         val record get() = AttachmentRecord(AttachmentId(id), GroupId("root"), GroupId(id), weight)
         val summary get() = EdgeSummary(AttachmentId(id), issued, returned, spent)
-        fun edge() = PolicyEdge(record, summary, demand, seat?.let { Gauge(it, folded = 0L) }, issued, wideTicksAt(offset, weight))
+        fun edge() = PolicyEdge(record, summary, demand, seat?.let { gaugeOfVirtual(it, 0L, weight) }, issued, wideTicksAt(offset, weight))
         fun virtualService() = HeddlePolicy.virtualService(edge())
 
         /** `ev` as the policy sees it — the raw virtual service plus the wake clamp. */
@@ -533,7 +533,7 @@ class HeddlePolicyTest {
      * competing set* — puts a **newborn** and a **waking sibling** on exactly the same effective
      * virtual time. Under the "all ACTIVE children" definition the newborn is seated at the
      * mean instead, which hands it precisely the idle credit the §10.6 clamp denies the idler
-     * itself — and durably, since a [Gauge] floor only ever moves *up* under the join while the
+     * itself — and durably, since a [Gauge] position only ever moves *up* under the join while the
      * clamp is a recomputed local offset.
      */
     @Test

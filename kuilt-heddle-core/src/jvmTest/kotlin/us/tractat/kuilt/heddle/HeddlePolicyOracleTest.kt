@@ -76,7 +76,9 @@ class HeddlePolicyOracleTest {
                     AttachmentRecord(AttachmentId(c.id), GroupId("root"), GroupId(c.id), c.weight),
                     EdgeSummary(AttachmentId(c.id), c.issued, c.returned, c.spent),
                     if (c.demanding) Demand(targetOutstanding = 30L, maximumUsefulGrant = 15L) else Demand.NONE,
-                    gauge = Gauge(Rational.of(c.ivt), folded = 0L),
+                    // Seated at `ivt` on the edge's grid, `⌈ivt · w · G⌉` ticks, worked out here and
+                    // not by a kuilt-heddle helper: `ivt` and the weight are non-negative.
+                    gauge = Gauge(folded = 0L, ticksLow = (c.ivt * c.weight.numerator * 16L + c.weight.denominator - 1L) / c.weight.denominator),
                     baseIssued = c.issued,
                 )
             }
@@ -128,18 +130,17 @@ class HeddlePolicyOracleTest {
             val q = listOf(config.quantum, need, e.demand.maximumUsefulGrant, holdings, capRoom).min()
             if (q <= 0L) return@mapNotNull null
             val w = e.record.weight
-            // p = ⌈floor · w · G⌉ + G · (baseIssued − folded) − G · returned, in ticks of the edge's
-            // own service (issue #1752's read, on the #3313 grid); an absent gauge means the edge
-            // reads from its own origin. Offset is ZERO in this scenario. Re-derived here from the
-            // gauge's own fields rather than from any kuilt-heddle helper, so the oracle stays an
-            // independent second implementation of the read.
-            val floorTicks = e.gauge?.let { gauge ->
-                Rat(
-                    BigInteger.valueOf(gauge.floor.numerator) * BigInteger.valueOf(w.numerator) * g,
-                    BigInteger.valueOf(gauge.floor.denominator) * BigInteger.valueOf(w.denominator),
-                ).ceil() - g * BigInteger.valueOf(gauge.folded)
+            // p = ticks + G · (baseIssued − folded) − G · returned, in ticks of the edge's own
+            // service (issue #1752's read, on the #3313 grid); an absent gauge means the edge reads
+            // from its own origin. Offset is ZERO in this scenario. Re-derived here from the gauge's
+            // own fields, the low word unsigned, rather than from any kuilt-heddle helper, so the
+            // oracle stays an independent second implementation of the read.
+            val seatTicks = e.gauge?.let { gauge ->
+                (BigInteger.valueOf(gauge.ticksHigh) shl 64) +
+                    BigInteger.valueOf(gauge.ticksLow).and(BigInteger.ONE.shl(64) - BigInteger.ONE) -
+                    g * BigInteger.valueOf(gauge.folded)
             } ?: BigInteger.ZERO
-            val p = floorTicks + g * BigInteger.valueOf(e.baseIssued - e.summary.returned)
+            val p = seatTicks + g * BigInteger.valueOf(e.baseIssued - e.summary.returned)
             Cand(e.record.id, q, p, w)
         }
         if (cands.isEmpty()) return null

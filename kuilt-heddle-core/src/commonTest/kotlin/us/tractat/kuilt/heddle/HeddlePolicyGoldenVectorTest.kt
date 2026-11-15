@@ -209,10 +209,10 @@ internal fun canonicalPicks(): List<String> {
                 summary = EdgeSummary(AttachmentId(c.id), c.issued, c.returned, c.spent),
                 demand = if (c.demanding) Demand(targetOutstanding = 25L, maximumUsefulGrant = 12L) else Demand.NONE,
                 // The seat that used to be `AttachmentRecord.initialVirtualTime = ivt` (issue #1752).
-                // `Gauge(ivt, folded = 0)` with the base issuance as the fold axis reads
+                // A gauge at `ivt`, folded at 0, with the base issuance as the fold axis reads
                 // `ivt + (issued − 0)/w − returned/w`, which is the retired field's formula term for
                 // term — which is why [GOLDEN] did not move when the read path was rewired.
-                gauge = Gauge(Rational.of(c.ivt), folded = 0L),
+                gauge = gaugeOfVirtual(Rational.of(c.ivt), 0L, c.weight),
                 baseIssued = c.issued,
             )
         }

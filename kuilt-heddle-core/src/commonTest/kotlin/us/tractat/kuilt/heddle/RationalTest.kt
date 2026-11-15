@@ -41,8 +41,8 @@ class RationalTest {
 
     /**
      * The cross-products of an order are formed in 128 bits (#3313), so two rationals whose
-     * products leave `Long` still order exactly. Before, the compare threw, and `Gauge.join`, which
-     * orders floors, threw with it.
+     * products leave `Long` still order exactly. Before, the compare threw, and every pick that
+     * sorts by virtual time threw with it.
      */
     @Test
     fun ordersExactlyWhereTheCrossProductsLeaveLong() {
@@ -56,7 +56,6 @@ class RationalTest {
             // (M−2)/(M−1) < (M−1)/M: both are just under one, and only an exact compare sees which.
             { assertTrue(c < d) },
             { assertEquals(Rational.max(c, d), d) },
-            { assertEquals(Gauge(d, 0L), Gauge(c, 0L).join(Gauge(d, 0L))) },
         )
     }
 
@@ -157,9 +156,9 @@ class RationalTest {
     /**
      * The exact ceiling — [Rational.ceil]. Note the contrast with Kotlin's `Long` division,
      * which truncates toward zero: `7/2` truncates to `3` but ceils to `4`. It has no
-     * production caller since the seat moved into [Gauge.floor], which is a [Rational] and
-     * needs no rounding at all (#1752); the direction is pinned here because it is the part a
-     * future `Long` virtual-time field would get wrong.
+     * production caller: a seat is rounded onto its edge's grid of ticks by [wideTicksAt] (#3353).
+     * The direction is pinned here because it is the part a future `Long` virtual-time field
+     * would get wrong.
      */
     @Test
     fun ceilRoundsUpToTheLeastEnclosingWhole() {

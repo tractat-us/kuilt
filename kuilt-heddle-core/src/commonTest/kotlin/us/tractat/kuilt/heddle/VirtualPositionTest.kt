@@ -77,34 +77,6 @@ class VirtualPositionTest {
     }
 
     /**
-     * A checkpoint over a floor written off the grid rounds it up **once**, and every checkpoint
-     * after it is exact: issuance moves a position by whole ticks. This is why rounding cannot
-     * compound across checkpoints the way #1752 warned a fixed-point floor would.
-     */
-    @Test
-    fun aCheckpointRoundsAnOffGridFloorOnceAndNeverAgain() {
-        val offGrid = Gauge(Rational.of(1L, 3L), folded = 0L)
-        val first = offGrid.grossVirtualServiceAt(2L, Weight.ONE, Int128.ZERO) // what `delegate` writes at issuance 2
-        val second = Gauge(first, folded = 2L).grossVirtualServiceAt(5L, Weight.ONE, Int128.ZERO)
-        assertAll(
-            // The rig: the floor really is off the grid before the first checkpoint.
-            { assertTrue(Rational.of(16L, 3L) != Rational.of(ticksAt(offGrid.floor, Weight.ONE))) },
-            // ⌈16/3⌉ = 6 ticks, plus 2 units = 32 ticks: 38/16.
-            { assertEquals(Rational.of(19L, 8L), first) },
-            { assertEquals(first + Rational.of(3L), second, "the second checkpoint adds whole units exactly") },
-            // Merge order cannot matter: the read is a function of the joined gauge, and the join is unchanged.
-            {
-                val stale = Gauge(Rational.of(1L, 3L), 0L)
-                val fresh = Gauge(first, 2L)
-                assertEquals(
-                    stale.join(fresh).grossVirtualServiceAt(5L, Weight.ONE, Int128.ZERO),
-                    fresh.join(stale).grossVirtualServiceAt(5L, Weight.ONE, Int128.ZERO),
-                )
-            },
-        )
-    }
-
-    /**
      * The weight budget [LocalHeddle.apply] enforces: four checks, each pinned by a set that fails
      * it and only it (review of #3352). The other products a pick forms are bounded by these, as
      * [weightsFitTheBudget]'s KDoc shows, so they have no check of their own to pin.
