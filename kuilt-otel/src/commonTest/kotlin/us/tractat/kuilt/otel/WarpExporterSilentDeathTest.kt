@@ -37,19 +37,25 @@ class WarpExporterSilentDeathTest {
     )
 
     /**
-     * A store whose [read] always throws but whose [write] works.
+     * A store whose [read] throws until [healed], but whose [write] works.
      *
      * This is the shape the field failure took: the accumulated entry could not
      * be read back, while the device's storage was otherwise perfectly healthy.
      * Writes are retained so a test can prove the exporter is still *usable*
      * after a failed recovery, not merely that recovery failed to throw.
+     *
+     * [refusedKeys] records every refused read, so an arm can show which recovery it reached.
      */
     private class ReadFailsStore : DurableStore {
         val written: MutableMap<StoreKey, ByteArray> = mutableMapOf()
+        val refusedKeys: MutableList<StoreKey> = mutableListOf()
         var reads: Int = 0
+        var healed: Boolean = false
 
         override suspend fun read(key: StoreKey): ByteArray? {
+            if (healed) return written[key]
             reads++
+            refusedKeys += key
             throw IllegalStateException("simulated unreadable store entry for ${key.name}")
         }
 
@@ -73,20 +79,56 @@ class WarpExporterSilentDeathTest {
         assertEquals(1, store.reads, "recover() should still have attempted the read")
     }
 
+    /**
+     * An unread index fails closed, and the exporter is not dead: it reads again on every turn and
+     * works the moment a read succeeds (#3384).
+     *
+     * This arm used to pin the opposite, a start fresh on the refused read. The index names every
+     * segment and the store cannot list keys, so a start fresh over an unread index wrote an index
+     * naming only segment 0, and every other segment was orphaned. A *decode* failure still starts
+     * fresh; `WarpLogRecordExporterUnreadIndexTest` pins both halves.
+     */
     @Test
-    fun logExportStillWorksAfterAnUnreadableStore() = runTest {
+    fun logExportFailsClosedWhileTheStoreIsUnreadableAndWorksOnceItHeals() = runTest {
         val store = ReadFailsStore()
         val exporter = WarpLogRecordExporter(replica = replica, store = store)
         exporter.recover()
 
-        // The device's storage is healthy — only the accumulated entry was
-        // unreadable. Capture must degrade to "start fresh", not to "dead".
-        val result = exporter.export(record(1))
+        val whileUnreadable = exporter.export(record(1))
+        val writtenWhileUnreadable = store.written.keys.toSet()
+        val refusedWhileUnreadable = store.reads
+        store.healed = true
+        val healed = exporter.export(record(2))
 
         assertAll(
-            { assertEquals(ExportResult.Success, result) },
+            { assertEquals(2, refusedWhileUnreadable, "the turn did not read the index again") },
+            { assertTrue(whileUnreadable is ExportResult.Failure, "a turn ran over an unread index: $whileUnreadable") },
+            { assertEquals(emptySet(), writtenWhileUnreadable, "a turn wrote over an unread index") },
+            { assertEquals(ExportResult.Success, healed) },
             { assertEquals(1, exporter.snapshot().toList().size) },
             { assertTrue(StoreKey("otel.logs.seg.0") in store.written, "the record should have been flushed") },
+        )
+    }
+
+    /**
+     * The other half of the rule above: bytes that do not decode are not a refusal. Through the
+     * whole surface, the first log export after an undecodable index succeeds and the index is
+     * read once, never retried as if the store had refused it.
+     */
+    @Test
+    fun telemetryLogsStartFreshOnAnUndecodableIndex() = runTest {
+        val store = RecordingStore()
+        store.putRaw(StoreKey("otel.logs.idx"), byteArrayOf(0x7f, 0x00, 0x13))
+        val telemetry = WarpTelemetry(replica = replica, store = store)
+
+        telemetry.recover()
+        val exported = telemetry.logs.export(record(1))
+        val indexReads = store.operations().count { it.kind == StoreOpKind.READ && it.key == StoreKey("otel.logs.idx") }
+
+        assertAll(
+            { assertTrue(telemetry.logs.health.value.recoveryFailed, "precondition: the index decoded") },
+            { assertEquals(ExportResult.Success, exported, "an undecodable index left log export dead") },
+            { assertEquals(1, indexReads, "an undecodable index was read $indexReads times, not once") },
         )
     }
 
@@ -116,10 +158,21 @@ class WarpExporterSilentDeathTest {
      */
     @Test
     fun telemetryRecoverSurvivesAThrowingStoreRead() = runTest {
-        val telemetry = WarpTelemetry(replica = replica, store = ReadFailsStore())
+        val store = ReadFailsStore()
+        val telemetry = WarpTelemetry(replica = replica, store = store)
 
         telemetry.recover()
+        val logRecoveryReached = StoreKey("otel.logs.idx") in store.refusedKeys
+        // Logs fail closed while their index is unread (#3384), so this export shows only that
+        // log recovery ran and left an exporter that works once the store does.
+        val whileUnreadable = telemetry.logs.export(record(1))
+        store.healed = true
+        val healed = telemetry.logs.export(record(1))
 
-        assertEquals(ExportResult.Success, telemetry.logs.export(record(1)))
+        assertAll(
+            { assertTrue(logRecoveryReached, "log recovery was never reached: ${store.refusedKeys}") },
+            { assertTrue(whileUnreadable is ExportResult.Failure, "a log turn ran over an unread index") },
+            { assertEquals(ExportResult.Success, healed) },
+        )
     }
 }
