@@ -267,7 +267,7 @@ virtual service.
   below it, the lane was in the running and lost on timing, because
   `nextChild`'s build ends sooner on that scale (or, on a tie, by id).
 - **`front`** is the same average over everyone waiting: the share line.
-  Above it, this side has had more than its share. At or below it, less.
+  Above it, this side has had more than its share. At or below it, no more.
 
 The two lines differ when the agent cannot run everything. A lane below
 `front` can still be above `eligibleFront`, when the lanes this agent cannot
