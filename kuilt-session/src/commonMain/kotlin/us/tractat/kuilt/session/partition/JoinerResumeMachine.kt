@@ -774,8 +774,9 @@ internal class JoinerResumeMachine(
     /**
      * Attempt to resume from [token] after a transport drop: send [AdmitMessage.Resume] to
      * the host — to the host alone, since it carries the member's secret ([sendToHost]) — and await
-     * the reply. The host replies [AdmitMessage.ResumeAck] →
-     * [ResumeResult.Success], or [AdmitMessage.Reject] → [ResumeResult.WindowClosed].
+     * the reply. The host replies [AdmitMessage.ResumeAck] → [ResumeResult.Success], unless the room
+     * has gone terminal by the time the ack is handled, which gives [ResumeResult.WindowClosed]
+     * ([takeFlightForAck]); or [AdmitMessage.Reject] → [ResumeResult.Refused].
      *
      * **Concurrent calls coalesce (#1280).** A room has one reconnect credential and one host,
      * so all concurrent resume attempts target the same outcome: when a resume is already in
@@ -974,9 +975,11 @@ internal class JoinerResumeMachine(
      * slot**, deciding that under [lock]; otherwise leave it alone.
      *
      * A flight that has left the slot was taken by whoever settles it: the room's ResumeAck handler
-     * ([takePendingFlight], which emits `Resumed` and then completes [ResumeResult.Success] outside
-     * the lock), [rejectFlight], or `leave()` ([takePendingFlight] again, completing
-     * [ResumeResult.WindowClosed]). Every one of them completes synchronously after taking, so a
+     * ([takeFlightForAck], which takes the flight and checks for a terminal room in one critical
+     * section, where it either emits `Resumed` and settles on [ResumeResult.Success] or settles on
+     * [ResumeResult.WindowClosed], then completes the flight once the lock is released),
+     * [rejectFlight], or `leave()` ([takePendingFlight], completing [ResumeResult.WindowClosed]).
+     * Every one of them completes synchronously after taking, so a
      * caller that finds the slot gone only has to await. Completing regardless — as this did before
      * the #3155 review — let a tear or a deadline land between the ack's take and its completion and
      * report `TimedOut` for a room that had already announced `Resumed`; the reconnect loop then
