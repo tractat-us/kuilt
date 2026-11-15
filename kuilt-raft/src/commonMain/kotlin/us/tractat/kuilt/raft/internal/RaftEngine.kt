@@ -1587,6 +1587,57 @@ internal class RaftEngine(
     private val followerRole: RaftRole
         get() = if (state.membershipState.isLearner(transport.selfId)) RaftRole.Learner else RaftRole.Follower
 
+    /**
+     * Whether this node may start an election or keep leading (#3123): false exactly when a configuration
+     * that excludes it as a voter is committed and no configuration after it names it one.
+     *
+     * Read from live state at each decision rather than kept as a flag, because it depends on the log
+     * (append, truncate, snapshot install) **and** on the commit index (`leaderCommit`, InstallSnapshot), and
+     * an edge-triggered disarm would need a hook on every one of those writes, with a missed edge a silent
+     * permanent wedge.
+     *
+     * **Why commit and not append.** Dissertation §4.2.2, last paragraph: "a server that is not part of its
+     * own latest configuration should still start new elections, as it might still be needed until the Cnew
+     * entry is committed (as in Figure 4.6)". Figure 4.6 is removing leader S1 from {S1, S2}: S2 still needs
+     * S1's vote for a majority of C_old, and S1 denies it because S2's log is behind, so S1 alone can make
+     * progress. Here that is a removed leader that crashed after appending `Simple(C_new)`, before its peer
+     * received it; gating on the latest configuration alone would leave that cluster with no candidate.
+     * §4.2.2 also says when the gate may close: the commit of C_new is "the first point when the new
+     * configuration can definitely operate without participation from the removed leader".
+     *
+     * **Why the uncommitted suffix, and not only the latest entry.** The commit index is volatile, so after a
+     * restart it falls back to the snapshot (or 0) and the latest committed configuration may predate this
+     * node's admission: a learner seed's bootstrap names no voters. Any configuration above the commit index
+     * that names this node is a change involving it that may still need it, so it stays promotable until the
+     * node learns that suffix is committed. A win in that window commits the suffix on its own term, and the
+     * leader-side check in [advanceCommit] then steps it down.
+     *
+     * A joint configuration counts both sides (§4.3). Votes and appends are answered whatever this says (§4.1).
+     */
+    private val promotable: Boolean
+        get() {
+            val self = transport.selfId
+            // The latest configuration is either in the uncommitted suffix or is the latest committed one, so
+            // naming self there settles it. This is the steady state, and it keeps the leader-side check in
+            // [advanceCommit] O(1) per commit.
+            if (state.membershipState.isVoter(self)) return true
+            // Walk the configuration entries newest first: one naming self wins; the first committed one that
+            // does not is the latest committed configuration, and nothing after it named self.
+            for (i in state.log.indices.reversed()) {
+                val entry = state.log[i]
+                val config = entry.config ?: continue
+                if (config.namesVoter(self)) return true
+                if (entry.index <= state.currentCommitIndex) return false
+            }
+            // No committed configuration in the log: the snapshot's is committed by construction; failing
+            // that, the bootstrap. A bootstrap that seats voters but not this node therefore never
+            // campaigns; whether `raftNode` should refuse that shape is tracked by #3406.
+            return state.snapshotConfig?.namesVoter(self) ?: (self in bootstrapConfig.voters)
+        }
+
+    /** True iff [id] is a voter on either side of this configuration. */
+    private fun ConfigPayload.namesVoter(id: NodeId): Boolean = id in new.voters || old?.voters?.contains(id) == true
+
     // ── Trace helper ──────────────────────────────────────────────────────────
 
     private suspend fun emitTrace(event: RaftTraceEvent) = _trace.emit(event)
@@ -1817,6 +1868,13 @@ internal class RaftEngine(
             resetElectionTimeout()
             return
         }
+        // #3123: a node whose removal is committed sends no PreVote. The timer re-arms as an idle tick, so a
+        // later configuration that names this node again is honoured at the next timeout. See [promotable].
+        if (!promotable) {
+            debug { "onElectionTimeout: not promotable (removal committed) — no campaign" }
+            resetElectionTimeout()
+            return
+        }
         val proposed = state.currentTerm + 1
         preVoteTerm = proposed
         preVoteRound++
@@ -1850,6 +1908,17 @@ internal class RaftEngine(
         if (termPinnedAtCeiling()) {
             preVoteTerm = null
             reportTermPinnedAtCeiling("election")
+            resetElectionTimeout()
+            return
+        }
+        // #3123: the second election entry point, not a redundant one. [onTimeoutNow] reaches here without
+        // [onElectionTimeout] (§3.10 skips PreVote), so this is the only gate on that lane. A PreVote round
+        // cannot complete across the removal-commit edge, because a follower's commit index moves only on an
+        // accepted AppendEntries or InstallSnapshot and both clear [preVoteTerm]; for that lane the check is
+        // defence in depth.
+        if (!promotable) {
+            preVoteTerm = null
+            debug { "startRealElection: not promotable (removal committed) — no election" }
             resetElectionTimeout()
             return
         }
@@ -2057,7 +2126,7 @@ internal class RaftEngine(
      * When we become leader holding a committed Joint, append `Simple(C_new)` here — exactly what
      * [onConfigCommitted]'s Joint branch would have done — reusing [appendConfigEntry] so the behaviour
      * matches the normal path (the trailing `Simple(C_new)` commits, [onConfigCommitted]'s Simple branch
-     * then wakes any pending change and runs the removed-leader step-down).
+     * only completes any pending change, and [advanceCommit] steps a removed leader down afterwards).
      *
      * Two guards keep this from stepping on the normal path:
      *  - `membershipState is Joint` ⇒ no `Simple(C_new)` follows the Joint in the log yet (membership always
@@ -3382,7 +3451,8 @@ internal class RaftEngine(
         // Keeping only the last is safe even if a Joint and its trailing Simple(C_new) both commit in
         // one window: C_new is then already in the log, so onConfigCommitted's Joint branch would only
         // re-append an entry C_new identical to what already exists — skipping it is harmless, and we
-        // run the Simple(C_new) side-effects (complete the deferred, removed-leader step-down) directly.
+        // run the Simple(C_new) side-effect (complete the deferred) directly. The removed-leader step-down
+        // is not a config side-effect: it runs after them, below, from live state.
         var committedConfigEntry: LogEntry? = null
         for (idx in (state.currentCommitIndex + 1)..newCommit) {
             val entry = state.entryAt(idx) ?: continue
@@ -3418,6 +3488,18 @@ internal class RaftEngine(
         readIndexTracker.onNoOpCommitted(state.currentCommitIndex).forEach { it() }
         // Config-commit side effects AFTER commitIndex is bumped — safe to call appendConfigEntry.
         committedConfigEntry?.let { onConfigCommitted(it) }
+        // §4.2.2 / §6.4.1: a leader steps down once a configuration excluding it as a voter is committed. This
+        // is the ONE step-down site for that condition (#3123). [onConfigCommitted] used to carry a second copy
+        // keyed on the window's last config entry; this one reads the condition from live state, so a leader
+        // outside the committed membership cannot persist by a route that bypasses the window's last entry. It
+        // reads the committed configuration, never only the latest: §4.2.2 has the removed leader wait for
+        // C_new to commit before it steps down. It runs after [onConfigCommitted], so a changeMembership caller
+        // is completed before the leader relinquishes. Pinned by the self-removal tests
+        // (`MembershipTest.removeLeader_stepsDownRemovedFromConfig_survivorsElect` and siblings).
+        if (_role.value is RaftRole.Leader && !promotable) {
+            debug { "advanceCommit: leader not promotable (removal committed) — stepping down (RemovedFromConfig)" }
+            stepDownToFollower(StepDownReason.RemovedFromConfig)
+        }
     }
 
     /**
@@ -3931,7 +4013,10 @@ internal class RaftEngine(
             debug { "reevaluateSelfRole: $current → $desired" }
             _role.value = desired
             if (desired is RaftRole.Learner) {
-                electionJob?.cancel()   // learners do not participate in elections
+                // Learners do not participate in elections. This fires on APPEND, before the demotion
+                // commits, so a leader demoted rather than dropped cannot unwedge §4.2.2's Figure 4.6 the
+                // way [promotable] lets a dropped one: tracked by #3405.
+                electionJob?.cancel()
                 electionJob = null
             } else {
                 // Promoted INTO a voting role (Learner → Follower). Arm the election timer now — a
@@ -4044,9 +4129,9 @@ internal class RaftEngine(
      * majorities — append `Simple(new)` to drive the cluster onto C_new alone. The deferred is NOT
      * completed yet; it completes when that `Simple(new)` entry commits (the branch below).
      *
-     * Simple committed: the transition is complete — wake the [changeMembership] caller. §6.4.1: if
-     * this leader is not a voter in C_new (removed-leader / leader-replace), step down once C_new is
-     * durable, so the new cluster elects a leader from its own membershipState.
+     * Simple committed: the transition is complete — this branch only wakes the [changeMembership]
+     * caller. A leader that is not a voter in C_new (removed-leader / leader-replace, §6.4.1) is stepped
+     * down afterwards by [advanceCommit], from live state, once C_new is durable (#3123).
      */
     private suspend fun onConfigCommitted(entry: LogEntry) {
         val payload = entry.config ?: return
@@ -4057,8 +4142,8 @@ internal class RaftEngine(
             // last config entry in the log, so `membershipState is Joint` is exactly the condition "no
             // Simple(C_new) follows the Joint yet." Appending a second C_new diverges from the existing
             // one and wedges replication in an infinite AppendEntries backup loop. Skipping is safe —
-            // C_new already exists; the Simple branch completes the deferred and runs the step-down when
-            // that existing C_new commits.
+            // C_new already exists; the Simple branch completes the deferred when that existing C_new
+            // commits, and [advanceCommit] then steps a removed leader down.
             //
             // WHO actually reaches the false branch is a **follower**, on every ordinary voter-set
             // change — not the new-leader-inherits-a-Joint case this comment used to name. That case is
@@ -4087,11 +4172,8 @@ internal class RaftEngine(
             debug { "onConfigCommitted: Simple committed — completing pendingConfigChange with $result" }
             pendingConfigChange?.complete(result)
             pendingConfigChange = null
-            // §6.4.1: if self is not in the new voter set, step down (removed-leader case).
-            if (_role.value is RaftRole.Leader && transport.selfId !in payload.new.voters) {
-                debug { "onConfigCommitted: self not in new voters — stepping down (RemovedFromConfig)" }
-                stepDownToFollower(StepDownReason.RemovedFromConfig)
-            }
+            // A removed leader's step-down is not here: [advanceCommit] does it from live state, after this
+            // returns (#3123).
         }
     }
 

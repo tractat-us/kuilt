@@ -99,14 +99,19 @@ class LearnerTest {
      * without it.
      *
      * The spec-critical case is a removed learner that applies its own removal: its log then shows it
-     * outside the config. Today such a node resolves to Follower and campaigns, and against a live
-     * leader the only thing stopping it is leader stickiness, a voter that has heard from the leader
-     * denying the pre-vote. Whether it should campaign at all is a separate question; this arm asserts
-     * the outcome either way. The leader normally stops replicating to a removed learner before the
-     * removal entry leaves it, so the entry is handed over by hand, and the rig is that the node has
-     * applied it.
+     * outside the config, and it resolves to Follower. Before #3123 it then campaigned, and against a
+     * live leader only leader stickiness stopped it. Since #3123 a node campaigns only while some
+     * configuration it cannot rule out names it a **voter** (`promotable`), and no configuration ever
+     * named this learner one. So it stays silent even while its removal is uncommitted, the window in
+     * which a removed voter still campaigns (§4.2.2, Figure 4.6). This arm hands it the removal with
+     * `leaderCommit` below the removal's index, the strongest case, and asserts it never campaigns. The
+     * leader normally stops replicating to a removed learner before the removal entry leaves it, so the
+     * entry is handed over by hand, and the rig is that the node has applied it and holds it uncommitted.
      *
-     * Not covered: a removed node campaigning while the leader is down, where stickiness has lapsed.
+     * Leader stickiness against a removed node that does campaign, a voter on the old side of a
+     * committed joint, is pinned (every denial cites `LeaderAlive`, no term moves) by `RemovedNodeCampaignTest.aNodeOnTheOldSideOfACommittedJointStillCampaigns`.
+     * A removed node campaigning while the leader is down is covered by the rest of
+     * `RemovedNodeCampaignTest`.
      */
     @Test
     fun aRemovedLearnerThatAppliesItsRemovalNeverDeposesTheLiveLeader() = raftRunTest {
@@ -115,13 +120,11 @@ class LearnerTest {
         val leaderId = voterIds.first { sim.nodes[it] === leader }
         leader.propose(byteArrayOf(1))
 
-        val deniedToLearner = mutableListOf<RaftTraceEvent.PreVoteDenied>()
-        voterIds.forEach { id ->
-            backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                sim.nodes.getValue(id).trace.filterIsInstance<RaftTraceEvent.PreVoteDenied>()
-                    .filter { it.to == learnerId }
-                    .collect { deniedToLearner += it }
-            }
+        val campaigns = mutableListOf<RaftTraceEvent>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            sim.nodes.getValue(learnerId).trace
+                .filter { it is RaftTraceEvent.PreVoteStarted || it is RaftTraceEvent.Timeout }
+                .collect { campaigns += it }
         }
 
         leader.changeMembership(ClusterConfig(voters = voterIds))
@@ -131,6 +134,7 @@ class LearnerTest {
         val have = sim.storages.getValue(learnerId).entries()
         val lastHave = have.lastOrNull()
         val missing = sim.storages.getValue(leaderId).entries().filter { it.index > (lastHave?.index ?: 0L) }
+        val removal = missing.last { it.config != null }
         sim.deliverAppendEntries(
             to = learnerId,
             from = leaderId,
@@ -138,32 +142,34 @@ class LearnerTest {
             prevLogIndex = lastHave?.index ?: 0L,
             prevLogTerm = lastHave?.term ?: 0L,
             entries = missing,
-            leaderCommit = leader.commitIndex.value,
+            leaderCommit = removal.index - 1L,
         )
-        // The rig fired: the removed node now reads itself as outside the config.
+        // The rig fired: the removed node now reads itself as outside the config, and does not know the
+        // removal is committed.
         sim.awaitTrue("the removed learner has applied its own removal") {
             sim.nodes.getValue(learnerId).membership.value.let { learnerId !in it.learners && learnerId !in it.voters }
         }
+        val removed = sim.nodes.getValue(learnerId)
+        assertTrue(
+            removed.commitIndex.value < removal.index,
+            "rig: the removal at ${removal.index} is uncommitted at the learner (commit ${removed.commitIndex.value})",
+        )
+        assertIs<RaftRole.Follower>(removed.role.value, "rig: the removed learner resolved to Follower, so its election timer is armed")
 
-        // Many election timeouts of the removed node campaigning against a live leader.
+        // Many election timeouts of the removed node, any of which would start a campaign if it could.
         delay(200)
         val after = leader.propose(byteArrayOf(2))
         sim.awaitCommit(after.index, on = voterIds)
         val termsAtEnd = voterIds.associateWith { sim.storages.getValue(it).term() }
 
         assertAll(
-            {
-                assertTrue(
-                    deniedToLearner.all { DenyReason.LeaderAlive in it.reasons },
-                    "any campaign it ran was denied by leader stickiness: ${deniedToLearner.map { it.reasons }}",
-                )
-            },
+            { assertEquals(emptyList(), campaigns, "a removed learner never campaigns (#3123)") },
             { assertIs<RaftRole.Leader>(leader.role.value, "the live leader was never deposed") },
             {
                 assertEquals(
                     termsAfterRemoval,
                     termsAtEnd,
-                    "no voter's term moved: a pre-vote is hypothesis-only",
+                    "no voter's term moved",
                 )
             },
             { assertEquals(voterIds, leader.membership.value.voters, "the voter set, and so the quorum, is untouched") },
