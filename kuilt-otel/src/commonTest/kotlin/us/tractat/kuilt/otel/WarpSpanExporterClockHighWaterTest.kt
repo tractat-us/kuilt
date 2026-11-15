@@ -240,6 +240,36 @@ class WarpSpanExporterClockHighWaterTest {
     }
 
     /**
+     * The clock's entry is ahead of every span: it minted ten dots no stored span holds, as a stamp
+     * rolled back from a refused write leaves one. A write that mints nothing, a merge here, still
+     * carries the clock's `seq`, so a later corrupt entry floors above all ten.
+     */
+    @Test
+    fun aWriteThatMintsNothingStillCarriesTheClocksSeq() = runTest {
+        val store = InMemoryDurableStore()
+        val ahead = WarpCausalClock(replica).armed()
+        repeat(10) { ahead.mint() }
+        val clockWritten = ahead.persist(store)
+        val middle = restart(store)
+        val merged = middle.exporter.merge(WarpSpanExporter(peer, InMemoryDurableStore()).apply { export(peerSpan(1)) }.snapshot())
+        val ownAfterMerge = ownSeqs(middle.exporter)
+        val corrupt = corruptTheClock(store)
+
+        val restarted = restart(store)
+        restarted.exporter.export(span(99))
+        val next = dotOf(restarted.exporter, 99)
+
+        assertAll(
+            { assertEquals(ClockPersist.Persisted, clockWritten, "the rig: the clock entry at 10 was not written") },
+            { assertIs<ClockRecovery.Recovered>(middle.clockRecovery, "the rig: the middle process did not read the clock") },
+            { assertEquals(ExportResult.Success, merged, "the rig: the merge was not saved") },
+            { assertEquals(emptySet(), ownAfterMerge, "the rig: a span holds a dot of this replica's") },
+            { assertIs<ClockRecovery.Undecodable>(corrupt, "the rig: the clock entry decoded as $corrupt") },
+            { assertTrue(next.seq > 10, "the corrupt clock minted $next, under a seq the clock had reached") },
+        )
+    }
+
+    /**
      * The format before #3435 stored the bare set. There are no users of it, so it is not migrated: it
      * reads as undecodable and the exporter starts fresh, as for any other corrupt entry.
      */
