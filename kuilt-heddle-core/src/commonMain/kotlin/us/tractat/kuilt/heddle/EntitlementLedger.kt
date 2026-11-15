@@ -483,8 +483,8 @@ public class EntitlementLedger private constructor(
      * before or after the edge is seated.
      *
      * A position past the edge's ceiling reads as the ceiling rather than throwing (#3313); a pick
-     * that would order it refuses instead (see [AcquireOutcome.PositionCeiling]). One below its
-     * floor, `−ceiling`, reads as the floor (#3353): higher than it is, the penalty side.
+     * reads the wide position instead, and orders it exactly. One below its floor, `−ceiling`, reads
+     * as the floor (#3353): higher than it is, the penalty side.
      */
     public fun grossVirtualService(id: AttachmentId): Rational? =
         recordOf(id)?.let { grossVirtualService(id, it) }
@@ -1624,7 +1624,7 @@ public class EntitlementLedger private constructor(
      * `max(ticks, baseIssued · G)`, taken in 128 bits and stored in the gauge's ticks exactly, with
      * the floor left at zero. Rounding the front up is the only rounding a seat does (design §7.2).
      * Nothing here caps it, and nothing upstream narrows it: a seat past the edge's
-     * [positionCeiling] is stored past it, and only a pick's read narrows it.
+     * [positionCeiling] is stored past it, and a pick orders it there exactly.
      *
      * Absolute is what makes it safe under replication. Two peers that seat one newborn against
      * different origins write the same position, give or take a tick, so the join's `max` adds no
@@ -1651,17 +1651,6 @@ public class EntitlementLedger private constructor(
      */
     private fun checkpoint(edge: AttachmentId, w: Weight, issuedAfter: Long): Gauge =
         gaugeAt(gauges[edge].exactGrossTicksAt(issuedAfter), issuedAfter)
-
-    /**
-     * Whether [edge]'s raw position, relative to its parent's origin, is at its [positionCeiling],
-     * where a pick can no longer order it exactly (#3313). Measured on the relative position, never
-     * the absolute one, which is stored uncapped and never saturates (#3353). `false` for an edge
-     * this ledger does not know.
-     */
-    internal fun isAtPositionCeiling(edge: AttachmentId): Boolean {
-        val record = recordOf(edge) ?: return false
-        return rawTicks(edge, record) >= Int128.of(positionCeiling(record.weight))
-    }
 
     /**
      * [r] returns [amount] of unused entitlement up [edge], restoring the parent's
