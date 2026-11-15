@@ -46,7 +46,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpSpanExporte
  * When the in-memory CRDT already holds [maxSpans] spans, [export] evicts one before it
  * inserts: the earliest by [SpanRecord.startEpochNanos] under [BufferPolicy.DROP_OLDEST], the
  * latest under [BufferPolicy.DROP_NEWEST]. The victim is chosen from the spans already held,
- * so the incoming span is always kept. [merge] does not evict. The read of the stored spans
+ * so an export's own eviction never takes the span it is adding. That is all the cap promises
+ * the incoming span. A recovered exporter adds before the durable-write section, so at the cap a
+ * concurrent export's eviction can take this export's span before this export encodes, and this
+ * export then returns [ExportResult.Success] for a snapshot that does not carry it. An export
+ * that makes the landing read adds and encodes in one step, so its own snapshot always carries its
+ * span. [merge] does not evict. The read of the stored spans
  * that lands, in [recover] or in the first write turn after a refused one, evicts whatever its
  * join brought in beyond [maxSpans] in one batch, by the same policy, before that turn's own
  * insert. **Every eviction is logged** with enough detail to correlate against a backend's
@@ -366,7 +371,8 @@ public class WarpSpanExporter(
      * for the indeterminate commit outcome.
      *
      * When the buffer is full, the eviction policy fires first, logging the
-     * dropped span, then the new span is inserted, so the new span is never the victim.
+     * dropped span, then the new span is inserted, so this export's own eviction never takes it.
+     * A concurrent export's eviction can; see the class's buffer cap section.
      */
     public suspend fun export(span: SpanRecord): ExportResult {
         // Auto-stamp causal context (#846): a configured clock fills an unstamped
@@ -387,7 +393,7 @@ public class WarpSpanExporter(
         // A recovered exporter adds before the write section, as it always has. One whose read has not
         // landed adds nothing yet: the add would reuse a dot a stored span holds (#3390), so it waits
         // for the join inside the section.
-        var added = lock.withLock {
+        val addedEarly = lock.withLock {
             (readState == SpanReadState.Recovered).also { recovered -> if (recovered) insert(stamped) }
         }
         // Serialize the durable-write section across concurrent export()/merge() so the
@@ -397,18 +403,21 @@ public class WarpSpanExporter(
                 // Never write over spans a refused read missed (#3390). A refusal leaves nothing to
                 // undo: the span was not added.
                 readBeforeWrite()?.let { return@withLock it }
-                if (!added) {
-                    // The read has landed and joined the stored set, so this add mints above it and
-                    // evicts from it exactly as the live path does.
-                    lock.withLock { insert(stamped) }
-                    added = true
-                }
                 var work = clockAndSpanWork
                 val written = try {
                     // Re-encode the *latest* spans inside the section so no concurrent add is
                     // dropped by a stale snapshot; encoding before the persist keeps the
                     // persisted seq ≥ every dot in this snapshot (seq is monotonic).
-                    val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
+                    val encoded = lock.withLock {
+                        // The read has landed and joined the stored set, so this add mints above it
+                        // and evicts from it as the live path does. It shares one hold of `lock` with
+                        // the encode: the read made the exporter recovered, so a concurrent export can
+                        // already add before the section, and at the cap that add could evict this
+                        // span between a separate add and encode, leaving a Success for a span the
+                        // snapshot never carried.
+                        if (!addedEarly) insert(stamped)
+                        cbor.encodeToByteArray(spanSerializer, spans)
+                    }
                     // Persist the clock BEFORE the span so the durable clock seq is always ≥
                     // every durable span's dot — a crash between the two writes can only lose
                     // the span, never re-mint its dot on recover (#1053). An unrecovered clock
@@ -442,9 +451,11 @@ public class WarpSpanExporter(
             }
         } catch (cancelled: CancellationException) {
             // Around the whole section, not the write: a recovered waiter on ioMutex has its stamp in
-            // memory too. The removal takes no suspension point, so it completes while this coroutine
-            // is cancelled.
-            if (minted && added) removeFromMemory(stamped)
+            // memory too, and a healing turn adds its stamp inside the section. Removing a stamp that
+            // was never added is an empty patch, since a minted value is unique, so no flag says
+            // whether the add happened. The removal takes no suspension point, so it completes while
+            // this coroutine is cancelled.
+            if (minted) removeFromMemory(stamped)
             throw cancelled
         }
     }
@@ -645,8 +656,9 @@ public class WarpSpanExporter(
     }
 
     /**
-     * The live insert: evict one span if the set is at the cap, then add [stamped], so the incoming
-     * span is never the victim. Must be called with [lock] held, on a recovered exporter.
+     * The live insert: evict one span if the set is at the cap, then add [stamped], so this insert
+     * never evicts the span it adds; a later insert may. Must be called with [lock] held, on a
+     * recovered exporter.
      */
     private fun insert(stamped: SpanRecord) {
         if (spans.elements.size >= maxSpans) evictOne()
