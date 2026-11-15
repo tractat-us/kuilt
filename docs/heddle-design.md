@@ -1238,11 +1238,12 @@ unambiguous would guard state that nobody holds (@keddie, 2026-11-15).
    long-run rows are retargeted to "never refused, and fair". A front read over
    a child past its ceiling threw once nothing rebased; it reads the ceiling.
    Docs: this section, §7.2, §10.5, §10.9, both `module.md`s, the cookbook.
-4. **The origin leaves the ledger and the wire.** The snapshot format already
-   restarted at 1, ahead of the slices, so this changes format 1's layout before
-   0.7.5 ships it. `ParentRecord`, `PolicyEdge.origin`, the canonical-encoding
-   arm, the snapshot golden. Docs: §7.1, §10.5, both `module.md`s,
-   `Writerside/topics/heddle-local.md`.
+4. **The origin leaves the ledger and the wire.** Built (#3498). `ParentRecord`,
+   `EntitlementLedger.origin`, `PolicyEdge.origin` and the canonical-encoding
+   arm are gone. The snapshot format had already restarted at 1 (#3494), so this
+   changes format 1's schema before 0.7.5 ships it; an empty `parents` map was
+   always elided, so no snapshot written after slice 3 changes a byte. Docs:
+   §7.1, §10.5, §10.12.
 5. **The weight budget: W1 for P1′.** `weightsFitTheBudget`, then the last of
    `VirtualPosition.kt`'s ceiling constants. Retargets
    `HeddleWeightBudgetTest`, `LocalHeddleFineWeightTest` and the budget rows of
