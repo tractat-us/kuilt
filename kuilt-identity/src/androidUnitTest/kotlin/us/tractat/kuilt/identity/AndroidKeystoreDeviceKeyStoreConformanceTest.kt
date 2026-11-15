@@ -10,6 +10,7 @@ import us.tractat.kuilt.conformance.DeviceKeyStoreFixture.KeyWriteInterruption
 import us.tractat.kuilt.conformance.DeviceKeyStoreFixture.UnreadableGrants
 import us.tractat.kuilt.conformance.DeviceKeyStoreFixture.UnreadableKey
 import us.tractat.kuilt.store.FileChannelDurableStore
+import us.tractat.kuilt.store.StoreKey
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -103,8 +104,8 @@ class AndroidKeystoreDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSu
 
     /**
      * Every permission taken off the grants record in [directory], so opening it fails with `EACCES`,
-     * while the directory still takes a new file. The rig checks it took (a mode of `000` is not
-     * enforced for root), and restoring answers whether the record was written while unreadable: a
+     * while the directory still takes a new file: the write probe keeps a sibling record there through
+     * the same backend. The rig checks it took (a mode of `000` is not enforced for root), and restoring answers whether the record was written while unreadable: a
      * write renames a new, readable file into place, and a delete leaves none.
      */
     private fun unreadableGrantsRecord(directory: File): UnreadableGrants {
@@ -115,6 +116,7 @@ class AndroidKeystoreDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSu
         check(!Files.isReadable(record)) { "rig: $record is still readable after chmod 000 — running as root? The fault did not take" }
         return UnreadableGrants(
             probe = { FileChannelDurableStore(directory).read(AndroidKeystoreDeviceKeyStore.GRANTS) },
+            probeWrite = { FileChannelDurableStore(directory).write(PROBE_WRITE, byteArrayOf(1)) },
             restore = {
                 val rewritten = !Files.exists(record, LinkOption.NOFOLLOW_LINKS) || Files.isReadable(record)
                 if (Files.exists(record, LinkOption.NOFOLLOW_LINKS)) {
@@ -130,6 +132,9 @@ class AndroidKeystoreDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSu
 
         /** No property here waits on the clock: no rig's failure is of unknown cause. */
         const val NOW = 1_700_000_000_000L
+
+        /** A record beside the grants, written only by the unreadable-grants rig's write probe. */
+        val PROBE_WRITE = StoreKey("probe-write")
     }
 }
 
