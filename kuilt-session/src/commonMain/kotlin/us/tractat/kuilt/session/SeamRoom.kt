@@ -3935,6 +3935,8 @@ internal class SeamRoom(
      * **Joiner only.** The host's [JoinerReconnectController] holds the reconnect window;
      * this method sends [AdmitMessage.Resume] to the host and awaits the reply:
      * - Host replies [AdmitMessage.ResumeAck] → [ResumeResult.Success]; [MembershipEvent.Resumed] fires.
+     *   Unless the room has gone terminal before the ack is handled: then → [ResumeResult.WindowClosed]
+     *   and no event (#3094; see [handleResumeAck]).
      * - Host replies [AdmitMessage.Reject] → [ResumeResult.Refused], carrying the host's
      *   [RejectCode] so the caller can tell an elapsed window from an invalid token from a window
      *   the host has not opened yet (#2364).
