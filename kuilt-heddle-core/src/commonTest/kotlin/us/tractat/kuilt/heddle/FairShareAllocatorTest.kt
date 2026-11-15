@@ -259,6 +259,37 @@ class FairShareAllocatorTest {
     }
 
     /**
+     * A child first seen idle and unseated, which then wakes, is seated at the front and not also
+     * clamped to it (#3454 review). An empty first round keeps its wake memory and drops its seats,
+     * so e3 is seen idle in one empty call and wakes in a second, still with no gauge. Clamped
+     * there, it carried an offset of the whole front into the call that seated it at the front, and
+     * landed near twice the front. A child with no gauge is a newborn: its seat is what puts it at
+     * the front.
+     */
+    @Test
+    fun anUnseatedWakerIsSeatedAtTheFrontNotAlsoClamped() {
+        val cell = flatLedger(mapOf(self to 200L))
+        val allocator = FairShareAllocator(self, policy)
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to hungry))
+        val e3 = newborn(cell, "e3")
+        // Two empty calls, the holdings spent: e3 seen idle, then waking, and seated by neither.
+        val idle = allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to competingUnservable))
+        val idleSeen = allocator.lastObservedDemanding(e3)
+        val woke = allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to competingUnservable, e3 to hungry))
+        val unseated = cell.current.gauge(e3)
+        cell.apply(cell.current.mint(MintId("woke"), root, self, 10L))
+        allocator.schedule(root, cell, earmarked = 0L, demandOf(e1 to competingUnservable, e3 to hungry))
+        assertAll(
+            { assertEquals(200L, issued(cell, e1), "the rig: e1 ran alone to 200") },
+            { assertEquals(listOf(AllocationOutcome.NothingToDelegate, AllocationOutcome.NothingToDelegate), listOf(idle, woke), "the rig: two empty calls") },
+            { assertEquals(false, idleSeen, "the rig: e3 was seen idle") },
+            { assertNull(unseated, "the rig: e3 woke with no gauge") },
+            { assertEquals(10L, issued(cell, e3), "the rig: e3 took the 10") },
+            { assertEquals(Rational.of(210L), allocator.effectiveVirtualService(cell, e3), "seated at the front, 200, then ran 10") },
+        )
+    }
+
+    /**
      * A shift remainder is always on its edge's own grid, since a reweight is a new edge (#3416
      * review), so one at another denominator is a memory no allocator wrote, and the returner it
      * belongs to is refused at its pick rather than moved by a remainder dropped quietly. e2 returns
