@@ -77,13 +77,13 @@ class LocalHeddleWaitingEdgeTest {
      * state ([LocalHeddle.snapshot]: ledger, open leases, wake memory) must be equal; then 40 picks
      * with every known leaf waiting must agree, and so must the two persisted snapshots.
      */
-    private fun lockstep(t: Topology, unknown: Set<GroupId>, seed: Int, tally: Tally) {
+    private fun lockstep(t: Topology, unknown: Set<GroupId>, seed: Int, tally: Tally, label: String) {
         val known = listOf(t.groupId("a"), t.groupId("b"), t.attachedChildId(listOf("tenants"), "t1"))
         val control = bootedWithT1(t)
         val subject = bootedWithT1(t)
         val rng = Random(seed)
         fun same(at: String, left: Any, right: Any) {
-            if (left != right) fail("seed $seed $at: the set with unknown names gave $right, without them $left")
+            if (left != right) fail("$label, seed $seed $at: the set with unknown names gave $right, without them $left")
         }
         repeat(STEPS) { step ->
             val open = control.snapshot().leases
@@ -155,10 +155,12 @@ class LocalHeddleWaitingEdgeTest {
         val names = unknownNames(t)
         val edgeChildren = ledger.allEdges().mapNotNull { ledger.record(it)?.child }.toSet()
         val tally = Tally()
-        val sets = names.values.map { setOf(it) } + listOf(names.values.toSet())
-        for ((i, unknown) in sets.withIndex()) for (seed in 0 until SEEDS) lockstep(t, unknown, seed * 31 + i, tally)
+        val sets = names.map { (label, id) -> label to setOf(id) } + listOf("every one of them" to names.values.toSet())
         val leasable = Leasable.ByTopology(t)
         assertAll(
+            *sets.mapIndexed { i, (label, unknown) ->
+                { for (seed in 0 until SEEDS) lockstep(t, unknown, seed * 31 + i, tally, "ceilings $ceilings, $label") }
+            }.toTypedArray(),
             { assertTrue(names.values.none { it in edgeChildren }, "the rig: no unknown name is a child of any edge") },
             {
                 assertTrue(
