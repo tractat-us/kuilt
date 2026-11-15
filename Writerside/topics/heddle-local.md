@@ -205,17 +205,22 @@ build that finishes early hands the unused minutes back the same way.
 ```kotlin
 // Mobile's queue empties, and web runs twelve builds alone.
 check((0 until 12).map { build(setOf(web), startedAt = 30L + it * 3L) }.all { it == web })
-// Mobile comes back level with web, not owed the twelve builds it sat out.
-val returned = heddle.explain(mobile, waiting = both, eligible = both)
-check(returned is WaitExplanation.BehindAtLevel && returned.leafSideVirtualService == Rational.of(21L))
-check(returned.front == Rational.of(21L))
-check((0 until 8).map { build(both, startedAt = 66L + it * 3L) } == firstEight)
+// Mobile comes back 3 behind web, as it left: still owed web's long build, not the twelve it sat out.
+check(heddle.explain(mobile, waiting = both, eligible = both) == WaitExplanation.WouldBePickedNext)
+val webAhead = heddle.explain(web, waiting = both, eligible = both)
+check(webAhead is WaitExplanation.BehindAtLevel && webAhead.leafSideVirtualService == Rational.of(21L))
+// The line is (3 · 21 + 18) / 4: mobile sits at 18.
+check(webAhead.front == Rational.of(81L, 4L))
+check((0 until 8).map { build(both, startedAt = 66L + it * 3L) } == listOf(mobile, web, mobile, web, web, web, mobile, web))
 ```
 
 While mobile had nothing queued, web used every agent, which is the point of
-sharing. When mobile's work returns, it starts level with web, not twelve builds
-behind it. Without that rule, mobile would take agent after agent until it
-caught up. The next eight builds follow the same three-to-one pattern as the first eight.
+sharing. When mobile's work returns, it is not twelve builds behind web, or
+mobile would take agent after agent until it caught up. It comes back exactly
+as far behind as it was when it went quiet: web's long build still counts, so
+mobile is owed one more build than the three-to-one pattern gives it. It takes
+that build first, and then the pattern resumes. Pausing neither costs a team its
+place nor buys it a better one.
 
 A team counts as quiet only when it is missing from `waiting`. A team that is
 waiting but cannot run on this agent is not quiet, and keeps its place. A team
@@ -243,14 +248,18 @@ check(heddle.entitlement(builds, waiting = queued, totalSlots = 4L) == Rational.
 check((heddle.acquire(queued, queued, startedAt = 1L) as AcquireOutcome.Acquired).lease.leaf == builds)
 
 heddle.complete(deploy.id, actualCost = 1L)
-check(heddle.explain(deploys, waiting = queued, eligible = queued) == WaitExplanation.WouldBePickedNext)
+// Deploys compete again, a third of a build ahead, as they were when they reached the ceiling.
+val back = heddle.explain(deploys, waiting = queued, eligible = queued)
+check(back is WaitExplanation.BehindAtLevel && back.leafSideVirtualService == Rational.of(4L, 3L) && back.front == Rational.of(5L, 4L))
+check(heddle.explain(builds, waiting = queued, eligible = queued) == WaitExplanation.WouldBePickedNext)
 ```
 
 While one deploy runs, the next agent goes to builds, though deploys weigh three
 times as much. `explain` answers `AtCeiling` and names the lane and its limit.
 A capped lane is owed nothing while it waits, so builds are owed all four
-agents. When the deploy finishes, deploys compete again, starting level like a
-team that went quiet, not owed the turns they sat out.
+agents. When the deploy finishes, deploys compete again like a team back from a
+quiet spell: not owed the turns they sat out, and still a third of a build ahead,
+as they were when they reached the ceiling. So builds take the next agent.
 
 A ceiling of `0` pauses a lane. On a group it counts every build beneath it, and
 in a group's template it caps each attached child on its own. When several are full on the
@@ -291,7 +300,7 @@ check(heddle.complete(byHand.lease.id, actualCost = 4L) == LeaseOutcome.Done(cha
 - **`admit`** charges work that started without a pick, such as a build someone
   ran by hand. It is never refused for lack of supply, because the work is already
   running. Pass `waiting` too, and the scheduler sees the queue as a pick would
-  have, so a lane that sat idle and comes back starts level with the others.
+  have, so a lane that sat idle and comes back is placed as a pick would place it.
 
 ## Change the tree while builds run
 
@@ -535,13 +544,13 @@ was really charged. Three limits come with that promise, stated plainly.
   So a lane that always guesses low looks cheaper while its builds run, and wins
   turns it should not. A lane that always guesses high loses turns the same way.
   The charge is corrected at `complete`, but a pick already made stays made.
-- **A quiet spell during a build.** Say mobile's queue empties while one of its
-  builds is still running, and new mobile work arrives before that build ends.
-  Mobile was quiet in between, so it comes back level with web. But that level
-  counted the running build at its full estimate. If the build then finishes
-  early, its unused minutes go back to mobile anyway, and mobile ends up that far
-  ahead. That is a small dose of the head start the quiet-team rule exists to
-  stop. A `cancel` hands back the whole estimate the same way.
+- **A cancel, and a sibling's refund.** A `cancel` charges nothing, so a team
+  that cancels the build ending each of its bursts gains a little share. And say
+  web has a build running that reserved more than it will use when mobile goes quiet. If that
+  build finishes early while mobile is away, its unused minutes come back to web
+  after mobile's place was measured, and mobile returns owed a little more than
+  it is. A build of mobile's own that straddles its quiet spell is fine: its
+  refund lands on mobile, where it belongs.
 
 The last two shrink as estimates get closer to the truth, so:
 
@@ -549,14 +558,15 @@ The last two shrink as estimates get closer to the truth, so:
   default favours lanes whose builds run long; a large one penalises them.
 - **Pass a `reservation` when you know better**, such as the lane's last build
   time, as the Mac agent above does.
-- **Know where the quiet-spell effect lives.** It needs a lane whose queue empties
-  while its own builds still run. A lane that always has work queued, or that
-  finishes everything before it queues more, never meets it. A build that runs
-  past its estimate hands nothing back, so it adds nothing either.
+- **Know where the quiet-spell effect lives.** It needs a lane that goes quiet
+  while a sibling's build still runs. A lane that always has work queued never
+  meets it. A build that runs past its estimate hands nothing back, so it adds
+  nothing either.
 
-Both are known gaps. The quiet-spell effect is tracked by
+Both are known gaps, and so is the cancel. The cancel is tracked by
 [#3238](https://github.com/tractat-us/kuilt/issues/3238). The estimate effect
-is tracked by [#3239](https://github.com/tractat-us/kuilt/issues/3239).
+and the sibling's refund are tracked by
+[#3239](https://github.com/tractat-us/kuilt/issues/3239).
 [What it does not promise](heddle-local-turns.md#what-it-does-not-promise) gives
 the arithmetic and the measured sizes.
 

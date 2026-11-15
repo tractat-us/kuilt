@@ -542,13 +542,13 @@ settles at its estimate:
   empties while its own lease runs is observed idle and comes back by its parent's net-service
   clock. That reads the lease's own refund correctly: an over- or under-reserved lease that
   straddles the gap is charged what it used. But a `cancel` returns the whole reservation, with or
-  without a gap, and a lane that cancels the job ending each burst gains share (+0.030 on the slot
+  without a gap, and a lane that cancels the job ending each burst gains share (+0.015 to +0.044 on the slot
   probe). And a *sibling's* reservation counts in the clock at the weight of everyone asking, while
   its refund lands at the weight of whoever is still asking, so a lane away across a sibling's refund
   comes back owed more than it is, and takes extra turns. The two are tracked by
   [#3238](https://github.com/tractat-us/kuilt/issues/3238) and
   [#3239](https://github.com/tractat-us/kuilt/issues/3239). `HeddleNode`'s `complete` keeps an unused
-  earmark at the leaf, so its refunds do not take this path.
+  earmark at the leaf, so `HeddleNode` does not take either path.
 
 ### Run it over a network — reserve, run, charge once
 
