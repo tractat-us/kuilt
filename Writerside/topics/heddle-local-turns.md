@@ -77,24 +77,42 @@ build is settled, its team's `ev` reflects exactly the time it used.
 ## A team coming back from quiet
 
 A team that had nothing queued sits still while its siblings move on. When it
-has work again, it is a **waker**, and its `ev` is lifted before the pick:
+has work again, it is a **waker**, and its `ev` is lifted before the pick, by
+how far the others moved while it was away.
+
+Each fork keeps a **clock** for that. Every pick, the clock moves by the time
+the teams that were competing kept since the last pick, issued less handed
+back, divided by their total weight. When the engine sees a team go quiet, it
+notes where the clock stood. When the team comes back, its `ev` moves up by how
+far the clock ran since then:
+
+```text
+offset grows by  clockNow − clockWhenItLeft
+```
+
+So a team comes back as far ahead or behind as it was when it went quiet,
+except across a sibling's refund while it was away ([below](#what-it-does-not-promise)).
+Its own builds, and any of them handed back while it was away, still
+count, and the time it sat out counts for nothing. A team the engine never saw
+go quiet, after a restart from a snapshot that predates the clock say, is
+clamped instead:
 
 ```text
 offset = max(0, front − ev − sleeperCredit / w)
 ```
 
 `front` is the weighted average `ev` of the siblings that kept competing, with
-every waker left out. If none of them is competing, there is nobody to catch up
-with. Then the front is the team furthest ahead, counting the idle ones, the
-wakers, and each new team at zero. Everyone coming back starts level with
-whoever has had the most. That can cost a team a turn, but never give it an
-extra one. A child's offset never shrinks against its siblings', so a
-second wake cannot hand back credit the first one took. `sleeperCredit` is the
-idle credit a waker may keep, set on `LocalPolicy`, and it defaults to zero.
+every waker left out. If none of them is competing, the front is the team
+furthest ahead, counting the idle ones, the wakers, and each new team at zero.
+That can cost a team a turn, but never give it an extra one. A child's offset
+never shrinks, so a second wake cannot hand back credit the first one took.
+`sleeperCredit` is the idle credit a clamped waker may keep, set on
+`LocalPolicy`, and it defaults to zero.
 
 "Quiet" means missing from `waiting`. A team that is waiting but cannot run on
-this agent is still competing, so it keeps its claim. The code is `clampWakers`
-in `FairShareAllocator`, and the formula is `HeddlePolicy.wakeOffset`.
+this agent is still competing, so it keeps its claim. The code is
+`settleJoiners` in `FairShareAllocator`, and the clamp's formula is
+`HeddlePolicy.wakeOffset`.
 
 ## The first eight builds, by hand
 
@@ -126,9 +144,11 @@ is 3 agents for web and 1 for mobile, which is 4 split by weights 3 and 1.
 Carry on by hand: web's ninth build runs 9 minutes, so web's `ev` rises by `9/3`
 to 9. The line becomes `(3·9 + 6)/4 = 33/4`, and web, past it, is not eligible.
 That is the `BehindAtLevel(…, 9, 33/4, 33/4)` the sample asserts. Then web runs
-twelve builds alone and reaches 21, while mobile waits at 6. When mobile returns,
-it is a waker: the clamp's front is web's 21, so its offset is `21 − 6 = 15`, and `explain`
-reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
+twelve builds alone and reaches 21, while mobile waits at 6. The clock ran by
+web's 36 minutes over web's weight 3, which is 12. So mobile returns at
+`6 + 12 = 18`, 3 behind web, as it was when it went quiet. The line is
+`(3·21 + 18)/4 = 81/4`. Mobile is eligible and takes the next build, which is
+the one web's overrun owed it, and then the three-to-one pattern resumes.
 
 ## Check it on your own engine
 
@@ -176,19 +196,22 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
   callers send `defaultReservation`, so its size picks the side: small favours
   long jobs, large penalises them. This is tracked by
   [#3239](https://github.com/tractat-us/kuilt/issues/3239).
-- **A lease that straddles a wake.** A lane is a waker when an earlier pick at its
-  parent saw it missing from `waiting`, even with one of its leases still open.
-  The clamp lifts its `ev` to the front, and that `ev` counts the open lease at
-  its full estimate `r`. If the lease then completes at a cost `C` below `r`, `complete`
-  returns `r − C` up the path, and the lane's `ev` drops `(r − C)/w` below where
-  the clamp put it. A `cancel` returns all of `r`, so up to `r/w`. Nothing takes
-  that back while the lane stays busy, so each such lease acts like a
-  `sleeperCredit` of `r − C`. On the same probe, over-reserving only the job that
-  empties the lane's queue gained it 0.056 to 0.136 of share. An under-estimate
-  leaks nothing here, because its overrun is handed down at `complete`, which
-  raises `ev`. This is tracked by
-  [#3238](https://github.com/tractat-us/kuilt/issues/3238). The networked
-  `HeddleNode` does not take this path: its `complete` keeps an unused
+- **A cancel, and a sibling's refund across a quiet spell.** A lane that goes
+  quiet with one of its own leases open comes back by the clock, which does not
+  read the lane's own `ev`. So when that lease completes under its estimate, the
+  refund lowers the lane's `ev` as it would with no quiet spell. On the slot
+  probe, over- or under-reserving the job that empties the queue now moves share
+  by nothing measurable. What is left is smaller. A `cancel` charges nothing,
+  with or without a quiet spell, and cancelling that job gains the lane 0.015 to 0.044 of
+  share. And a *sibling's* open lease counts in the clock at the weight of
+  everyone competing, while its refund lands at the weight of whoever is still
+  competing. A lane away across that refund comes back owed a little more than
+  it is. That one is new with the clock: the clamp it replaced brought the lane
+  back level, which got this case exactly right, and the regression was
+  accepted for the bursts the clock fixes. These are tracked by
+  [#3238](https://github.com/tractat-us/kuilt/issues/3238) and
+  [#3239](https://github.com/tractat-us/kuilt/issues/3239). The networked
+  `HeddleNode` does not take either path: its `complete` keeps an unused
   reservation at the leaf instead of returning it up the path.
 - **A ceiling the engine stays clear of.** Each child's progress is a count of
   sixteenths of a unit. It is stored exactly, in 128 bits, and a pick reads it
@@ -202,11 +225,11 @@ reports it at 21, level with web. The next eight builds repeat rows 1 to 8.
   and change nothing, while `admit` and `complete` still charge. Pick a coarse unit anyway, minutes or seconds rather than
   nanoseconds: one reservation can be at most 2⁴⁴ units.
 
-**Sizing estimates.** The estimate and straddle effects both vanish for a lease
-that settles at its estimate, a `cancel` aside. So aim `defaultReservation` at a
+**Sizing estimates.** The estimate and sibling-refund effects both vanish for a
+lease that settles at its estimate, a `cancel` aside. So aim `defaultReservation` at a
 typical job rather than the longest one, and pass a `reservation` per `acquire` when the lane's history gives a
-better guess. Raising `sleeperCredit` does not help: it grants idle credit on
-purpose, on top of any a straddling lease hands back. The probe behind both
+better guess. Raising `sleeperCredit` does not help: it grants a clamped waker
+idle credit on purpose. The probe behind both
 measurements is not part of the evidence below, which covers only what is on
 `main`.
 
@@ -264,8 +287,10 @@ Each choice above was made on purpose, and each has a written reason.
   deadlines differ only by progress and weight. Job lengths are rarely known in
   advance, so a length per lane would gain little. See Amendment 9 in the
   [same plan](https://github.com/tractat-us/kuilt/blob/main/docs/superpowers/plans/2026-11-12-heddle-topology.md#amendments-after-task-c-2026-11-12-settled-with-the-user).
-- **The wake clamp.** Without it, a team back from a long quiet spell would take
-  every agent until it caught up. Design
+- **The clock, and the wake clamp.** Without them, a team back from a long quiet
+  spell would take every agent until it caught up. A clamp alone forgives the
+  lag a short burst leaves, so a fork that empties between bursts stops holding
+  its weights. Design
   [§7.2](https://github.com/tractat-us/kuilt/blob/main/docs/heddle-design.md#72-neutral-creation-and-no-idle-credit)
   and invariant 6 of [§10](https://github.com/tractat-us/kuilt/blob/main/docs/heddle-design.md#10-normative-invariants)
   forbid unlimited idle credit.

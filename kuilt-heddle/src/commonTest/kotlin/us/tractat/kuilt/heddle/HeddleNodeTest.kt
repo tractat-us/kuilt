@@ -503,6 +503,54 @@ class HeddleNodeTest {
             )
         }
 
+    /**
+     * Two peers that saw different departures still converge on one ledger (#3376). What a peer
+     * remembers about a child that stopped asking and came back is scheduler-local, beside its wake
+     * offsets, so it can reorder that peer's grants and never reaches the ledger.
+     *
+     * Peer 0 runs bursts alone while partitioned, so it sees `e2` stop asking and ask again. Peer 1,
+     * on its own side, sees both children asking throughout. The witness that the sightings really
+     * differed is that the two allocators' memories differ after the heal, while the ledgers agree.
+     */
+    @Test
+    fun peersThatSawDifferentDeparturesConvergeOnHeal() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val h = harness(peers = 2, mint = mapOf(0 to 100L, 1 to 100L), topology = flatTopology())
+            h.pump()
+            h.partition(0)
+            h.partition(1)
+            val (zero, one) = h.peers.map { it.node }
+            fun round(node: HeddleNode, e1Target: Long, e2Target: Long) {
+                node.advertise(e1, Demand(targetOutstanding = e1Target, maximumUsefulGrant = 10L))
+                node.advertise(e2, if (e2Target == 0L) Demand.NONE else Demand(targetOutstanding = e2Target, maximumUsefulGrant = 10L))
+                h.pump(50)
+                node.schedule(root)
+                h.pump(50)
+            }
+            // Peer 0: both ask, then e2 stops while e1 runs on, then both ask for everything left.
+            round(zero, e1Target = 20L, e2Target = 10L)
+            round(zero, e1Target = 50L, e2Target = 0L)
+            round(zero, e1Target = 1_000L, e2Target = 1_000L)
+            // Peer 1: both ask throughout.
+            round(one, e1Target = 1_000L, e2Target = 1_000L)
+            val before = zero.ledger.value
+            assertAll(
+                { assertEquals(100L, before.edge(e1)!!.issued + before.edge(e2)!!.issued, "the rig: peer 0 delegated its 100") },
+                { assertTrue(before.edge(e2)!!.issued > 10L, "the rig: e2 came back and was served on peer 0") },
+                { assertEquals(100L, one.ledger.value.edge(e1)!!.issued + one.ledger.value.edge(e2)!!.issued, "peer 1 delegated its 100") },
+            )
+
+            h.heal(0)
+            h.heal(1)
+            h.pump(800)
+            val merged = zero.ledger.value
+            assertAll(
+                { assertEquals(merged, one.ledger.value, "the ledgers converge") },
+                { assertEquals(200L, merged.edge(e1)!!.issued + merged.edge(e2)!!.issued, "every minted unit delegated once") },
+                { assertTrue(zero.allocatorMemoryForTest != one.allocatorMemoryForTest, "the rig: the two peers' sightings differ") },
+            )
+        }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // 6. A crashed peer's earmarks stay stranded; no other peer's holdings change (§8.1).
     // ─────────────────────────────────────────────────────────────────────────────
@@ -1327,8 +1375,9 @@ class HeddleNodeTest {
 
     /**
      * The rebase changes no pick (#3353): a twin node with rebasing switched off, fed the same
-     * waiting sets, makes exactly the same grants call for call until it refuses at its ceiling,
-     * and the rebasing node carries on past that point.
+     * waiting sets, makes exactly the same grants call for call until the call where it refuses at
+     * its ceiling. That call can stop partway, so there its grants are a prefix of the rebasing
+     * node's, and its next call names the refusal. The rebasing node carries on past that point.
      */
     @Test
     fun aTwinThatNeverRebasesMakesTheSamePicksUntilItRefuses() = runTest(
@@ -1348,7 +1397,14 @@ class HeddleNodeTest {
         while (refusedAt < 0 && a.calls < 100_000) {
             a.step(aPeer)
             if (b.step(bPeer) is ScheduleOutcome.PositionCeiling) refusedAt = b.calls
-            if (refusedAt < 0) assertEquals(b.issuedByLane(bPeer), a.issuedByLane(aPeer), "call ${a.calls}: the two made different picks")
+            if (refusedAt < 0 && b.issuedByLane(bPeer) != a.issuedByLane(aPeer)) {
+                // The twin can meet its ceiling in a later round of a call: it stops there, a prefix of
+                // the rebasing node's grants, and its next call names the refusal.
+                val (ahead, short) = a.issuedByLane(aPeer) to b.issuedByLane(bPeer)
+                assertTrue(ahead.zip(short).all { (x, y) -> x >= y }, "call ${a.calls}: the two made different picks, $ahead against $short")
+                assertTrue(b.step(bPeer) is ScheduleOutcome.PositionCeiling, "call ${a.calls}: the two made different picks, and the twin did not refuse")
+                refusedAt = b.calls
+            }
         }
         val beyond = a.grants
         println("twin: refused at call $refusedAt after ${b.grants} grants; the rebasing node rebased ${rebasing.peers[0].node.rebasesForTest} times")

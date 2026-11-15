@@ -397,19 +397,63 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
+     * A snapshot taken while a child is away keeps where its parent's clock stood when it left
+     * (#3376). `heavy` (weight 2) takes the one pick both ask for, `light` stops asking while
+     * `heavy` takes two alone, and the engine is persisted, restored and asked again with both
+     * waiting. `light` left half a unit behind, so it comes back half a unit behind and takes the
+     * next pick, exactly as the engine that never restarted does.
+     *
+     * The control restores the same snapshot without the clock memory, as a format-1 snapshot
+     * restores: `light` is then a waker this peer never saw leave, clamped level with `heavy`, and
+     * `heavy` takes the next pick on its deadline.
+     */
+    @Test
+    fun aSnapshotTakenWhileAChildIsAwayKeepsItsPlace() {
+        val tree = Topology("root", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light")))
+        val heavy = tree.groupId("heavy")
+        val light = tree.groupId("light")
+        val both = setOf(heavy, light)
+        fun away(): LocalHeddle = LocalHeddle.fromTopology(tree, policy, epoch = 0L).apply {
+            reconcileCapacity(1L)
+            for (waiting in listOf(both, setOf(heavy), setOf(heavy))) {
+                val lease = assertIs<AcquireOutcome.Acquired>(acquire(waiting, waiting, startedAt = 0L)).lease
+                check(complete(lease.id, actualCost = 1L) is LeaseOutcome.Done)
+            }
+        }
+        fun picks(h: LocalHeddle): List<GroupId> = List(6) {
+            val lease = assertIs<AcquireOutcome.Acquired>(h.acquire(both, both, startedAt = 1L)).lease
+            check(h.complete(lease.id, actualCost = 1L) is LeaseOutcome.Done)
+            lease.leaf
+        }
+        val persisted = away().persist()
+        val reference = picks(away())
+        val restored = picks(LocalHeddle.restore(decoded(encode(persisted)), policy, epoch = 1L))
+        val clockless = picks(LocalHeddle.restore(persisted.withoutNetClocks(), policy, epoch = 1L))
+        val lightEdge = checkNotNull(persisted.ledger.lineageOf(light)).single()
+        assertAll(
+            { assertTrue(lightEdge in persisted.allocatorMemory.departures, "the rig: light is away at persist time") },
+            { assertEquals(light, reference.first(), "light left behind, so it comes back behind: $reference") },
+            { assertEquals(reference, restored, "the restored engine picks as the one that never restarted") },
+            { assertEquals(heavy, clockless.first(), "the control: without the clock, light is clamped level: $clockless") },
+        )
+    }
+
+    /**
      * Format 1, as checked in. A later release must still decode it ([SUPPORTED_FORMAT_VERSIONS]),
-     * and an engine restored from it carries on as the engine that wrote it would have.
+     * and an engine restored from it carries on as the engine that wrote it would have, had that
+     * engine kept no net-service clock: format 1 predates the clock (#3376).
      */
     @Test
     fun previousFormatRestores() {
         val snapshot = decoded(GOLDEN_FORMAT_1)
         val restored = LocalHeddle.restore(snapshot, policy, epoch = snapshot.epoch + 1)
         val (reference, open) = wakerScenario()
+        val clockless = LocalHeddle.restore(reference.persist().withoutNetClocks(), policy, epoch = snapshot.epoch + 1)
         assertAll(
             { assertEquals(open, snapshot.leases, "the golden holds the scenario's open leases") },
             { assertTrue(wakeOffsetOf(snapshot.allocatorMemory, b) > Int128.ZERO, "and b's wake offset") },
-            { assertEquals(continuation(reference, open), continuation(restored, open)) },
-            { assertEquals(books(reference), books(restored)) },
+            { assertEquals(continuation(clockless, open), continuation(restored, open)) },
+            { assertEquals(books(clockless), books(restored)) },
         )
     }
 
@@ -417,13 +461,15 @@ class LocalHeddlePersistenceTest {
      * Format 1 and format 2 hold one snapshot of the waker scenario. Format 1 stores each position in
      * a gauge's floor, as v0.7.4 wrote it; format 2 stores it in the gauge's ticks (#3353). Read
      * as ticks, the two are equal: the change is in where a position is kept, not in what it is.
+     * Format 2 also keeps the net-service clock, which format 1 predates (#3376).
      */
     @Test
     fun formatOneAndFormatTwoGoldensHoldTheSameSnapshot() {
         assertAll(
             { assertTrue(GOLDEN_FORMAT_2.startsWith("[2,") && GOLDEN_FORMAT_1.startsWith("[1,"), "the rig: one golden per format") },
             { assertTrue(decoded(GOLDEN_FORMAT_1) != decoded(GOLDEN_FORMAT_2), "the rig: format 1 keeps floors, format 2 ticks") },
-            { assertEquals(decoded(GOLDEN_FORMAT_1).withGaugesAsTicks(), decoded(GOLDEN_FORMAT_2)) },
+            { assertTrue(decoded(GOLDEN_FORMAT_2).allocatorMemory.clocks.isNotEmpty(), "the rig: format 2 keeps a clock") },
+            { assertEquals(decoded(GOLDEN_FORMAT_1).withGaugesAsTicks(), decoded(GOLDEN_FORMAT_2).withoutNetClocks()) },
         )
     }
 
@@ -458,7 +504,7 @@ class LocalHeddlePersistenceTest {
             { assertEquals(RestoreResult.Restored(snapshot), LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_2_CBOR), Cbor)) },
             {
                 val formatOne = assertIs<RestoreResult.Restored>(LocalHeddle.decode(bytesOf(GOLDEN_FORMAT_1_CBOR), Cbor)).snapshot
-                assertEquals(snapshot, formatOne.withGaugesAsTicks(), "format 1's CBOR still reads")
+                assertEquals(snapshot.withoutNetClocks(), formatOne.withGaugesAsTicks(), "format 1's CBOR still reads")
             },
         )
     }
@@ -619,6 +665,7 @@ class LocalHeddlePersistenceTest {
             { assertEquals(richCapped, golden().lastApplied, "the rig: the topology last applied is the reload's, with its ceilings") },
             { assertTrue(golden().ledger.hasForgotten() && edge !in golden().ledger.allEdges(), "the rig: t2's edge is forgotten") },
             { assertTrue("\"forgotten\":" in GOLDEN_FORMAT_2_RICH, "the rig: the fold is in the bytes") },
+            { assertTrue("\"shiftRemainders\":" in GOLDEN_FORMAT_2_RICH, "the rig: a returner's carried rounding is in the bytes") },
             { assertTrue(edge.value !in GOLDEN_FORMAT_2_RICH, "the allocator's memory of t2's edge went with it") },
             { assertTrue((reference.snapshot().ledger.edge(edge)?.spent ?: 0L) > 0L, "the rig: the forgotten edge had spent something") },
             {
@@ -681,11 +728,15 @@ class LocalHeddlePersistenceTest {
     @Test
     fun aFormatOneSnapshotCannotCarryAFold() {
         // Format 1 wrote each wake clamp as a virtual time, so the clamps go back to that shape too (#3353).
-        val wide = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{},\"root/acme/batch@1:1#0\":{\"low\":32},\"root/tenants@1:1#0\":{\"low\":96}}"
+        val wide = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{},\"root/acme/batch@1:1#0\":{\"low\":32},\"root/tenants@1:1#0\":{\"low\":83}}"
         val virtual = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{\"numerator\":0,\"denominator\":1}," +
-            "\"root/acme/batch@1:1#0\":{\"numerator\":2,\"denominator\":1},\"root/tenants@1:1#0\":{\"numerator\":6,\"denominator\":1}}"
+            "\"root/acme/batch@1:1#0\":{\"numerator\":2,\"denominator\":1},\"root/tenants@1:1#0\":{\"numerator\":83,\"denominator\":16}}"
         check(wide in GOLDEN_FORMAT_2_RICH) { "the rig: format 2's clamps are where this test expects them" }
-        val text = GOLDEN_FORMAT_2_RICH.replaceFirst("[2,", "[1,").replace(wide, virtual)
+        // Format 1 predates the net-service clock (#3376) too: its maps, the memory's last three, go.
+        val clockStart = GOLDEN_FORMAT_2_RICH.indexOf(",\"clocks\":")
+        val memoryEnd = GOLDEN_FORMAT_2_RICH.indexOf("},\"leases\":")
+        check(clockStart in 0 until memoryEnd) { "the rig: format 2's clock is where this test expects it" }
+        val text = GOLDEN_FORMAT_2_RICH.removeRange(clockStart, memoryEnd).replaceFirst("[2,", "[1,").replace(wide, virtual)
         val out = LocalHeddle.decode(text, Json)
         assertAll(
             { assertTrue(text.startsWith("[1,") && "\"forgotten\":" in text, "the rig: format 1 with a fold") },
@@ -770,18 +821,22 @@ class LocalHeddlePersistenceTest {
 
     /**
      * The rich scenario as format 1, on the 1/16-unit grid (#3313): never written by a release, but
-     * the same snapshot the current format writes, and an engine restored from it carries on exactly
-     * as the engine that wrote it would have.
+     * the same snapshot the current format writes, less the net-service clock format 1 predates
+     * (#3376), and an engine restored from it carries on exactly as one restored from that.
      */
     @Test
     fun richFormatOneOnTheGridStillRestoresAndCarriesOn() {
         val (reference, open) = richScenario()
         val snapshot = decoded(GOLDEN_FORMAT_1_RICH_GRID)
         val restored = LocalHeddle.restore(snapshot, richPolicy, epoch = snapshot.epoch + 1)
+        val clockless = reference.persist().withoutNetClocks()
         assertAll(
             { assertTrue(GOLDEN_FORMAT_1_RICH_GRID.startsWith("[1,"), "the rig: format 1") },
-            { assertEquals(reference.persist(), snapshot.withGaugesAsTicks(), "the same snapshot the current format writes, read as ticks") },
-            { assertEquals(richContinuation(reference, open), richContinuation(restored, open)) },
+            { assertEquals(clockless, snapshot.withGaugesAsTicks(), "the same snapshot the current format writes, read as ticks") },
+            {
+                val expected = LocalHeddle.restore(clockless, richPolicy, epoch = snapshot.epoch + 1)
+                assertEquals(richContinuation(expected, open), richContinuation(restored, open))
+            },
         )
     }
 

@@ -142,7 +142,7 @@ public class LocalHeddleView internal constructor(
      * is not leasable are each [WaitExplanation.NoLiveLineage]), is beneath a group at its
      * concurrency ceiling ([WaitExplanation.AtCeiling], naming the one nearest the root), or the root
      * cannot fund [reservation]. Past those, the answer is the pick itself, run on a throwaway engine with the
-     * wake memory, so a group waking from idle is clamped here exactly as the acquire would clamp
+     * wake memory, so a group back from idle is placed here exactly as the acquire would place
      * it: [WaitExplanation.WouldBePickedNext] when the pick ends at [leaf],
      * [WaitExplanation.PositionCeiling] when it is refused at a position ceiling on the way, and
      * otherwise [WaitExplanation.BehindAtLevel] at the first group where it goes another way.

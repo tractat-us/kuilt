@@ -85,7 +85,10 @@ internal fun sampleConcurrencyCeiling() {
     check((heddle.acquire(queued, queued, startedAt = 1L) as AcquireOutcome.Acquired).lease.leaf == builds)
 
     heddle.complete(deploy.id, actualCost = 1L)
-    check(heddle.explain(deploys, waiting = queued, eligible = queued) == WaitExplanation.WouldBePickedNext)
+    // Deploys compete again, a third of a build ahead, as they were when they reached the ceiling.
+    val back = heddle.explain(deploys, waiting = queued, eligible = queued)
+    check(back is WaitExplanation.BehindAtLevel && back.leafSideVirtualService == Rational.of(4L, 3L) && back.front == Rational.of(5L, 4L))
+    check(heddle.explain(builds, waiting = queued, eligible = queued) == WaitExplanation.WouldBePickedNext)
 }
 
 /**
@@ -243,11 +246,13 @@ internal fun sampleBuildFarm() {
 
     // Mobile's queue empties, and web runs twelve builds alone.
     check((0 until 12).map { build(setOf(web), startedAt = 30L + it * 3L) }.all { it == web })
-    // Mobile comes back level with web, not owed the twelve builds it sat out.
-    val returned = heddle.explain(mobile, waiting = both, eligible = both)
-    check(returned is WaitExplanation.BehindAtLevel && returned.leafSideVirtualService == Rational.of(21L))
-    check(returned.front == Rational.of(21L))
-    check((0 until 8).map { build(both, startedAt = 66L + it * 3L) } == firstEight)
+    // Mobile comes back 3 behind web, as it left: still owed web's long build, not the twelve it sat out.
+    check(heddle.explain(mobile, waiting = both, eligible = both) == WaitExplanation.WouldBePickedNext)
+    val webAhead = heddle.explain(web, waiting = both, eligible = both)
+    check(webAhead is WaitExplanation.BehindAtLevel && webAhead.leafSideVirtualService == Rational.of(21L))
+    // The line is (3 · 21 + 18) / 4: mobile sits at 18.
+    check(webAhead.front == Rational.of(81L, 4L))
+    check((0 until 8).map { build(both, startedAt = 66L + it * 3L) } == listOf(mobile, web, mobile, web, web, web, mobile, web))
 
     // The next free agent is a Mac, which only mobile builds use. Mobile's last build took
     // 7 minutes, a better estimate than the default.

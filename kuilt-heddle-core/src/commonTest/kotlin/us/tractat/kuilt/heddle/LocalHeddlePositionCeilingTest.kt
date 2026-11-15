@@ -325,6 +325,11 @@ class LocalHeddlePositionCeilingTest {
      * reaches its own: with `a` at 1/1000 and `b` at 1000, `b`'s front is `10⁶` times `a`'s position.
      * Since review of #3352 that pick refused. The front, read on `b`'s grid, is past `b`'s threshold,
      * so the origin is raised before the wake step, `b` is clamped near zero, and the pick goes ahead.
+     *
+     * b is never seen asking before it wakes, so this peer holds no departure for it and clamps it.
+     * A b seen to leave would come back by its parent's clock, near where it left, and count in the
+     * front there (#3446), which then sits nowhere near its ceiling: until that, this rig passed on
+     * a returner the front left out, so it raised the origin for a clamp that never happened.
      */
     @Test
     fun aWakerAboutToBeClampedPastItsCeilingIsRebasedFirst() {
@@ -336,14 +341,17 @@ class LocalHeddlePositionCeilingTest {
         val b = clampTopology.groupId("b")
         val engine = LocalHeddle.fromTopology(clampTopology, LocalPolicy(defaultReservation = 1L, sleeperCredit = 1L), epoch = 1L)
             .apply { reconcileCapacity(1L) }
-        // b is seen waiting, then idle, so the next pick that sees it waiting clamps it as a waker.
-        for (waiting in listOf(setOf(a, b), setOf(a))) {
-            val lease = (engine.acquire(waiting, waiting, startedAt = 0L) as AcquireOutcome.Acquired).lease
+        // b is seen idle, never asking, so the next pick that sees it waiting clamps it as a waker.
+        repeat(2) {
+            val lease = (engine.acquire(setOf(a), setOf(a), startedAt = 0L) as AcquireOutcome.Acquired).lease
             engine.complete(lease.id, actualCost = 1L)
         }
         engine.pushTo(a, 10_000_000_000_000L)
         val aWeight = Weight.of(1, 1000)
         val bWeight = Weight.of(1000)
+        val bEdge = engine.edgeOf(b)
+        check(engine.snapshot().allocatorMemory.demandingObserved[bEdge] == false) { "the rig: b was last observed idle" }
+        check(bEdge !in engine.snapshot().allocatorMemory.departures) { "the rig: b was never seen leaving, so it is clamped" }
         // The rig: a is far below its own ceiling, and b's front, a's position times 10⁶, is past b's.
         check(engine.grossTicks(a) < positionCeiling(aWeight) / 100) { "a sits well below its ceiling" }
         check(engine.grossTicks(a).timesWide(1_000_000L) > Int128.of(positionCeiling(bWeight))) { "b's front is past b's ceiling" }
@@ -359,6 +367,10 @@ class LocalHeddlePositionCeilingTest {
      * The same waker, observed by an `admit` with a waiting set (#3320). An admission is never
      * refused, so it charges, and the clamp it takes past the waker's ceiling saturates rather than
      * throwing: the stored offset is the ceiling itself, and the next pick refuses as it would have.
+     *
+     * b is never seen asking before it wakes, so this peer holds no departure for it and clamps it
+     * to the front. A b seen to leave would come back by its parent's clock instead (#3376), and
+     * the clock runs only on service: it never sees the gauge [pushTo] moves.
      */
     @Test
     fun anAdmitThatClampsAWakerPastItsCeilingChargesAndTheClampSaturates() {
@@ -370,14 +382,15 @@ class LocalHeddlePositionCeilingTest {
         val b = clampTopology.groupId("b")
         val engine = LocalHeddle.fromTopology(clampTopology, LocalPolicy(defaultReservation = 1L, sleeperCredit = 1L), epoch = 1L)
             .apply { reconcileCapacity(1L) }
-        for (waiting in listOf(setOf(a, b), setOf(a))) {
-            val lease = (engine.acquire(waiting, waiting, startedAt = 0L) as AcquireOutcome.Acquired).lease
+        repeat(2) {
+            val lease = (engine.acquire(setOf(a), setOf(a), startedAt = 0L) as AcquireOutcome.Acquired).lease
             engine.complete(lease.id, actualCost = 1L)
         }
         engine.pushTo(a, 10_000_000_000_000L)
         val bWeight = Weight.of(1000)
         val bEdge = engine.edgeOf(b)
         check(engine.snapshot().allocatorMemory.demandingObserved[bEdge] == false) { "the rig: b was last observed idle" }
+        check(bEdge !in engine.snapshot().allocatorMemory.departures) { "the rig: b was never seen leaving, so it is clamped" }
         check(engine.grossTicks(a).timesWide(1_000_000L) > Int128.of(positionCeiling(bWeight))) { "b's front is past b's ceiling" }
         val admitted = engine.admit(a, setOf(a, b), startedAt = 1L)
         val offset = engine.snapshot().allocatorMemory.wakeOffsets[bEdge]

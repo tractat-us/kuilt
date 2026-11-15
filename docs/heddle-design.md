@@ -1024,7 +1024,9 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   stays connected and silently stops converging, and nothing refuses it. So the
   two must not share a cluster, and every peer is upgraded together.
 - **No unlimited idle credit:** when a child goes from not-demanding to
-  demanding, a local wake offset clamps it forward:
+  demanding and this peer never saw it stop, a local wake offset clamps it
+  forward. A child this peer *did* see stop comes back by its parent's clock
+  instead (below, #3376):
 
   ```text
   virtualOffset = max(0, parentVirtualTime − v_raw(e) − sleeperCredit / w(e))
@@ -1134,6 +1136,159 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   and it can sit below zero, at a runner a rebase brought there. The seat is
   absolute, the parent's origin added back, so the newborn is seated level with
   that runner, not behind it (#3353).
+
+#### A returning child keeps its place, by the parent's clock (#3376)
+
+**Pausing neither costs a child its place nor buys it a better one.** A child
+that stops asking and asks again later comes back as far ahead or behind the
+others as it was when it stopped, give or take a sibling's refund while it was
+away (P2, below). The time it spent away counts for nothing.
+
+The clamp above, applied to every waker, did not do that. It moved each one up
+to the front, so it forgave the lag a short burst leaves behind, and a parent
+that drains between bursts forgave it every time. Over 300 bursts the weights
+stopped holding (`BurstLagTest`):
+
+| Rig | Fair | Clamp alone | Clock |
+|---|---|---|---|
+| S1c: weights 2:1, 2 units a burst, both asking | 400 / 200 | 300 / 300 | fair, exactly |
+| S7: 2:1, the heavy child asks alone for 1, then both for 1 | 500 / 100 | 600 / 0 | fair, exactly |
+| S7b: the same, light child first | 200 / 400 | 300 / 300 | fair, exactly |
+| S8: S7 at 1:1, with an idle round between the two units | 450 / 150 | 600 / 0 | fair, exactly |
+| S9: a ladder, 1:2:3 joining one at a time | 550 / 500 / 450 | 600 / 600 / 300 | fair, exactly |
+
+S7's first unit is uncontested, so it is the heavy child's. Counting it as
+contested would pay the light child for a stretch it was not asking (§10.6).
+
+**The rule, in one sentence.** Each parent keeps a clock that runs by the
+service its asking children *kept*, issued less refunded, per unit of their
+weight, and a child that comes back moves forward by how far the clock ran
+while it was away.
+
+- **The clock.** Each time it runs at a parent, the allocator adds up how far
+  each child it last saw asking moved, `issued − returned` since it last
+  looked, and divides by those children's total weight. A child that was not
+  asking adds nothing, its own refunds included: they already lower its own
+  position, and counting them in the clock too would credit it twice. The clock
+  can run backward, on a round in which refunds outweigh grants.
+- **Leaving.** When this peer sees a child stop asking, it records where the
+  clock stood. In `schedule` that is at the grant that filled the child, not
+  at the next call: a child that reaches its target partway through a call has
+  left there, and its siblings' later grants in that call run the clock at
+  their weight alone.
+- **Returning.** When the child asks again, its wake offset grows by how far the
+  clock ran since then, read on the child's own grid, and never by less than
+  zero. The record is cleared. A returner counts in the front that a newborn
+  or a clamped waker beside it is seated at or clamped to, at where it lands
+  (#3446). It competes from there, as far ahead or behind its siblings as it
+  left, so that position is not stale the way a waker's is. Leaving it out
+  seated the others against a set without a child they were about to compete
+  with: a waker joining beside a returner at 200 and a starved sibling at 0
+  was clamped to 0, not to their mean of 100, and kept the difference.
+- **A child this peer saw idle but never saw stop asking** is clamped to the
+  front, as above: one first seen idle, or one restored from a snapshot in
+  format 1, which predates the clock.
+- **A child first seen already asking** is neither moved nor clamped. That
+  covers every child of a restarted `HeddleNode`, which keeps no clock. It
+  keeps its raw position, and is clamped only if that is below zero. This
+  predates the clock: it is the first-sighting rule above.
+
+`FairShareAllocator` runs the clock in its seat-and-wake step, `settleJoiners`,
+which every pick, every `LocalHeddle.admit` with a waiting set and the first
+round of every `schedule` call pass before they grant. `schedule` runs it again
+before each later pick of a call, to see a child that the last grant filled
+(`markDepartures`). A child that stops and asks again with no grant between
+moves by exactly nothing.
+
+**Why it earns nothing for idleness.** The clock runs only on service someone
+else kept while the child was away, so the shift is how far the others moved,
+not how long the child slept. It does not read the child's own position, so a
+charge or refund that lands on the child during or after the gap counts as it
+would with no gap. An over-reserved lease that straddles the wake is the child's
+own debt, and its refund cancels the debt (#3238).
+
+It was chosen over the kept-lag rule #3383 proposed, which stored each child's
+distance from the front and needed a correction for the mean the returner joins.
+A child leaving a set of one kept lag 0 there, so pausing bought it a place (S8:
+2:1, light first, 150 / 450 against a fair 200 / 400), and a debtor that paused
+while a sibling left lost one (P1: 30 against 35). The clock has no lag to store
+and no correction. It is exact on S1, S7, S8, S9 and P1, and #3238's slot rig
+(`WakeCreditSlotTest`, 4,000 ticks) reads an over- or under-reserved lease that
+straddles a wake as honest, where the clamp alone gave +0.136 and −0.030 at t7.
+
+The returning child's lag now outlives its absence, so some pictures of "level
+on return" moved. A deploy lane at its ceiling sat out the next pick while builds
+took it, and it comes back as far ahead of builds as it was, not level with
+them. A team that went quiet owing a sibling's overrun is still owed it when it
+returns. `LocalHeddleFairnessTest`'s churn arm, against waiting-set GPS, went
+from 0.0157 to 0.0113 overall and from 0.089 to 0.073 over its worst window.
+
+**What it does not close.**
+
+- **P2, a sibling's refund during the gap** (#3239). b's over-reservation reaches
+  the clock at the shared weight before a leaves, and its refund comes off at
+  b's weight alone while a is away, so the clock runs short and a returns that
+  far behind: 19 / 10 against a fair 15 / 14. Closing it needs to know which
+  lease a refund came from, which the ledger does not record. **This is new
+  with the clock.** The clamp it replaces put a level with b on return and
+  split P2 exactly, 15 / 14. The ruling on #3376 accepted the regression for
+  the bursts the clock fixes.
+- **The two-level spill** is the same channel one level up, and is smaller, not
+  gone: +0.045 / −0.029 at t7, against the clamp's +0.111 / −0.100.
+- **A cancelled job that held its slot** is charged nothing, with or without a
+  gap (+0.030 at t7). #3238 stays open until a control with no idle gap
+  separates that from wake credit.
+- **A child that asks but cannot be served**, trimmed or ineligible for every
+  slot, still counts in the clock's weight and slows it. Not measured.
+
+**Where it lives.** Beside the wake offsets in `AllocatorMemory`:
+scheduler-local, never replicated. The clock is only ever read as a difference
+against this peer's own record of a departure, and that record is one peer's
+sighting of a transition, with no lattice to join under. Two peers that saw
+different departures compute different offsets, which reorders their grants and
+never creates entitlement, as wake offsets already do. `LocalHeddle` persists it
+in its snapshot, format 2, as `AllocatorMemory`'s `clocks`, `served`,
+`departures` and `shiftRemainders`; `HeddleNode` keeps it in memory, so a restart forgets it and
+every child it sees asking afterwards is a first sighting.
+
+The clock is kept wide, on a grid of `16 · 720,720` ticks to a unit of virtual
+time. `720,720` is the least common multiple of 1 to 16, so a parent whose
+asking children's total weight, over their common denominator, divides the grid
+advances exactly; every total up to 16 does. A total with a prime factor above
+13, or a prime power past the grid's own (27, say), rounds each step up,
+by under one clock tick.
+
+A shift is a whole number of the returner's own ticks, and the clock's run
+since it left is in general a fraction of one, so each shift rounds. The
+rounding is carried (`shiftOf`): the child keeps what its last shift ran past
+the clock, under one tick, and its next shift takes that off before rounding
+up. So its shifts add up to the clock's runs plus that last remainder: never
+credit, and nothing builds up. `LocalHeddle` persists the remainders in its
+snapshot beside the clock; `HeddleNode` keeps them in memory.
+
+Two simpler rules drift. The difference of the run's two ends, each read on
+the grid rounded up, errs by where those ends fall between ticks, and that does
+not telescope: a repeating pattern of bursts locks the ends into one phase, and
+the same error comes back every return. On `BurstLagTest`'s off-grid rigs, where
+the clock runs `16/13` and `32/10` of the returner's ticks while it is back, it
+held the returner 4 to 5 units over fair from 300 bursts to 1,200, credit that
+§10.5 forbids, and on a second pattern drifted it from −16 to −66. One
+rounded-up run would never fall short, but it rounds every return the same way,
+and on the 3:1 rigs that cost the light child 9 of its fair 75 over 300 bursts.
+
+An origin rebase moves every child and no clock, and changes no shift. A
+returner does not land at the front, though, so the rebase taken before the
+seat-and-wake step also triggers on where each returner will land
+(`previewShifts`), and reads the front with each returner at its landing.
+Without that, a child that left near its ceiling came back past it and the pick
+refused.
+A returner that left owed can land below zero by what it is owed. It is served
+first, and the next rebase waits until it climbs.
+
+**Bounds.** A returning child is moved by what the others kept, so it takes at
+most what it would hold had it kept asking, except across P2 and the two-level
+spill above (#3239), and the gap adds nothing to §8.2's bound. §10's invariant
+6 says so.
 
 ### 7.3 Selection
 
@@ -1382,8 +1537,12 @@ Carried over from the source intact; each is a named property test (§13).
    grid, so it means the same under any later origin, and it is stored exactly and
    uncapped. The front it is taken from is wide too, so no seat is taken against
    an understated front (#3353, §7.1).
-6. **No unlimited idle credit.** Default sleeper credit is zero; waking
-   clamps forward.
+6. **No unlimited idle credit.** A child that stops competing comes back moved
+   by how far its parent's net-service clock ran while it was away, and gains
+   nothing for the time it was idle. A child seen idle but never seen to stop
+   is clamped to the front, and one first seen asking keeps its position
+   unless that is below zero. Default sleeper credit is zero, and applies only
+   to a clamped waker (§7.2, #3376).
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
    post-heal convergence restores a single agreed ledger.
 8. **Projection homomorphism.**
@@ -1553,8 +1712,9 @@ at its ceiling is dropped from `waiting` and from `eligible`.
   once the count is under the ceiling.
 
 **Fairness.** A node at its ceiling, or paused, counts as idle at its parent.
-When it can take work again it wakes at the parent's front through the existing
-wake clamp (`settleJoiners`), with no banked credit (§10 invariant 6).
+When it can take work again it comes back by its parent's clock
+(`settleJoiners`), as far ahead or behind as it was when it reached the ceiling,
+with no banked credit (§10 invariant 6).
 
 **Reporting.**
 
