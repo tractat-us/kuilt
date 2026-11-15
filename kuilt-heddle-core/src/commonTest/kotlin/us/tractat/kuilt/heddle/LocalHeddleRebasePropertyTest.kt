@@ -194,7 +194,9 @@ class LocalHeddleRebasePropertyTest {
      * nothing brought down, so this lane met [AcquireOutcome.PositionCeiling] after 4,681 picks
      * (measured on the slice 2–4 base, JVM). The ceiling is now measured on the raw position,
      * net of returns and relative to the parent's origin, and the gross is stored wide (#3353), so
-     * the lane makes [RETURNED_LANE_PICKS] picks with no refusal.
+     * the lane makes [RETURNED_LANE_PICKS] picks with no refusal. No pick refuses now, so what pins
+     * the net-of-returns read is the peak: the gross passes the ceiling, and the effective position a
+     * pick reads stays below it.
      */
     @Test
     fun aLaneThatReturnsAlmostAllOfEachReservationNeverReachesTheCeiling() {
@@ -206,17 +208,21 @@ class LocalHeddleRebasePropertyTest {
             .apply { reconcileCapacity(1L) }
         val a = topology.groupId("a")
         var picks = 0
+        var peak = 0.0
         repeat(RETURNED_LANE_PICKS) { step ->
             val outcome = engine.acquire(setOf(a), setOf(a), startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
             check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
             engine.complete(outcome.lease.id, actualCost = 1L)
             picks++
+            if (step % SAMPLE_EVERY == 0) peak = maxOf(peak, peakShare(engine))
         }
+        peak = maxOf(peak, peakShare(engine))
         val returned = checkNotNull(engine.snapshot().ledger.let { it.edge(checkNotNull(it.lineageOf(a)).last()) }).returned
         assertAll(
             { assertEquals(RETURNED_LANE_PICKS, picks, "the run made its own picks") },
             // The bound the old read met: returned · G at the ceiling of weight 3/7.
             { assertTrue(returned.timesWide(TICKS_PER_UNIT) > Int128.of(positionCeiling(Weight.of(3L, 7L))), "the rig: the lane returned past the old bound ($returned units)") },
+            { assertTrue(peak < 1.0, "the effective position, net of returns, stayed below the ceiling: $peak") },
         )
     }
 
@@ -225,7 +231,7 @@ class LocalHeddleRebasePropertyTest {
      * light lane alone for [WIDE_ALONE] picks, then a waiting set drawn afresh each pick, leases at [LocalHeddle.MAX_RESERVATION] charged half or
      * cancelled. Rebased on each lane's own grid, the light lane could hold the front at its
      * threshold, and a heavy lane waking to it landed past its own ceiling. The run counts its own
-     * picks and rebases.
+     * picks and rebases, and pins the peak effective position below the ceiling.
      */
     @Test
     fun aWideSpreadNeverReachesTheCeiling() {
@@ -239,6 +245,7 @@ class LocalHeddleRebasePropertyTest {
         val lanes = listOf("w60", "w30", "w10", "w1").map { topology.groupId(it) }
         val random = Random(3313)
         var picks = 0
+        var peak = 0.0
         repeat(WIDE_PICKS) { step ->
             // The light lane alone first, long enough to climb toward its own threshold; then any set.
             val waiting = if (step < WIDE_ALONE) setOf(lanes[3]) else lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }.toSet()
@@ -246,10 +253,12 @@ class LocalHeddleRebasePropertyTest {
             check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
             if (step % 4 == 0) engine.cancel(outcome.lease.id) else engine.complete(outcome.lease.id, actualCost = LocalHeddle.MAX_RESERVATION / 2)
             picks++
+            peak = maxOf(peak, peakShare(engine))
         }
         assertAll(
             { assertEquals(WIDE_PICKS, picks, "every step made one pick") },
             { assertTrue(engine.rebasesForTest >= 1, "the rig: the run rebased (${engine.rebasesForTest})") },
+            { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
         )
     }
 
@@ -258,7 +267,7 @@ class LocalHeddleRebasePropertyTest {
      * (#3353 review, item I). Only a pick used to rebase, so this lane's position climbed by
      * [LocalHeddle.MAX_RESERVATION] per lease until `extend` refused with `PositionCeiling`. A
      * charging call now runs the same origin step at every parent on its path. The run counts its
-     * own leases and rebases.
+     * own leases and rebases, and pins the peak effective position below the ceiling.
      */
     @Test
     fun aParentDrivenOnlyByChargingCallsNeverReachesTheCeiling() {
@@ -270,6 +279,7 @@ class LocalHeddleRebasePropertyTest {
         val a = topology.groupId("a")
         var leases = 0
         var extended = 0
+        var peak = 0.0
         repeat(CHARGED_LEASES) { step ->
             val admitted = engine.admit(a, startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
             check(admitted is AcquireOutcome.Acquired) { "lease ${step + 1}: expected a lease, got $admitted" }
@@ -280,13 +290,24 @@ class LocalHeddleRebasePropertyTest {
             }
             engine.complete(admitted.lease.id, actualCost = LocalHeddle.MAX_RESERVATION)
             leases++
+            peak = maxOf(peak, peakShare(engine))
         }
         assertAll(
             { assertEquals(CHARGED_LEASES, leases, "every step admitted and completed one lease") },
             { assertTrue(extended > 0, "the rig: leases were extended") },
             { assertTrue(engine.rebasesForTest >= 1, "the rig: the parent rebased (${engine.rebasesForTest})") },
+            { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
         )
     }
+
+    /**
+     * The highest effective position among the root's children in [engine], as a share of each
+     * one's own ceiling: the position a pick reads, net of returns, plus its wake clamp
+     * ([FairShareAllocator.peakPositionFraction]). Unlike [highestCeilingShare] it leaves the gross
+     * out, which a lane that returns most of each lease carries past its ceiling by design.
+     */
+    private fun peakShare(engine: LocalHeddle): Double =
+        engine.allocator.peakPositionFraction(engine.snapshot().ledger, engine.root) { Demand.NONE }
 
     /**
      * The largest share of its own ceiling any edge's position reads at in [engine]: its gross

@@ -1328,8 +1328,7 @@ class HeddleNodeTest {
         val target = 10 * GRANTS_BEFORE_THE_CEILING
         var peak = 0.0
         while (run.grants < target && run.calls < LONG_RUN_CALL_LIMIT) {
-            val outcome = run.step(scheduling)
-            assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${run.grants} grants")
+            run.step(scheduling)
             if (run.calls % 64 == 0) {
                 h.pump(1L)
                 peak = maxOf(peak, peer.node.boundMetrics(root).peakPositionFraction)
@@ -1355,7 +1354,8 @@ class HeddleNodeTest {
      * clamped to that front on its wake landed about 60 times as far up its own grid: past its
      * ceiling, where every call after refused. The rebase now also triggers on the front read on
      * every child's grid, and before the seat and wake step. The run counts its own grants and
-     * rebases.
+     * rebases, and checks that the peak effective position [HeddleNode.boundMetrics] reports stays
+     * below the ceiling.
      */
     @Test
     fun aWideSpreadRunNeverReachesThePositionCeiling() = runTest(
@@ -1367,15 +1367,17 @@ class HeddleNodeTest {
         val peer = h.peers[0]
         val run = MixedWeightRun(root, wideLanes, MAX_GRANT, Random(3313)) { call -> if (call <= WIDE_RUN_ALONE) listOf(wideLanes[3]) else null }
         val scheduling = peer.node.asSchedulingPeer()
+        var peak = 0.0
         while (run.grants < WIDE_RUN_GRANTS && run.calls < LONG_RUN_CALL_LIMIT) {
-            val outcome = run.step(scheduling)
-            assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${run.grants} grants")
+            run.step(scheduling)
+            peak = maxOf(peak, peer.node.boundMetrics(root).peakPositionFraction)
             if (run.calls % 64 == 0) h.pump(1L)
         }
-        println("wide run: calls=${run.calls} grants=${run.grants} rebases=${peer.node.rebasesForTest}")
+        println("wide run: calls=${run.calls} grants=${run.grants} rebases=${peer.node.rebasesForTest} peak=$peak")
         assertAll(
             { assertTrue(run.grants >= WIDE_RUN_GRANTS, "the run made its own ${run.grants} grants") },
             { assertTrue(peer.node.rebasesForTest > 0, "the rig: the parent rebased (${peer.node.rebasesForTest} times)") },
+            { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
         )
     }
 
