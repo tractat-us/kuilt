@@ -447,8 +447,8 @@ public sealed interface LeaseOutcome {
  * the engine, or a ledger conflict the engine did not create, such as two live inbound edges into
  * one group, a divergent record, or a cycle on a lease's path (#1737). [apply] never leaves one on
  * an open lease's path: before it swaps a reload in, it checks that every open lease's path is its
- * leaf's one live lineage. The one public way to reach it with a well-formed topology is
- * [fromTopology] over weights its boot [apply] refuses, such as a denominator above 30,719.
+ * leaf's one live lineage. [fromTopology] throws it too, when its boot [apply] refuses a child of
+ * a well-formed topology, such as a weight with a denominator above 30,719.
  *
  * @sample us.tractat.kuilt.heddle.sampleLocalLease
  * @sample us.tractat.kuilt.heddle.sampleFairShareQueue
