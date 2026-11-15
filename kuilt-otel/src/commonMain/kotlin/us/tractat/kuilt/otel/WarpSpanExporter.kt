@@ -226,10 +226,10 @@ public class WarpSpanExporter(
      *
      * If a [WarpCausalClock] was supplied, an **unstamped** span is auto-stamped with
      * causal context before insert (#846) — an explicit [SpanRecord.causalStamp]
-     * always wins. While the clock's recovery read is refused, each export retries that read
-     * first; until it lands the span is saved **unstamped** and the clock's entry is not
-     * written, so no dot already in the store is minted again (#3390). The turn then counts
-     * only the span's write in [health].
+     * always wins. Until the clock's recovery read has landed (refused, or never made), each
+     * export makes that read first; until it lands the span is saved **unstamped** and the
+     * clock's entry is not written, so no dot already in the store is minted again (#3390). The
+     * turn then counts only the span's write in [health].
      *
      * ## Crash-window invariant (#1053)
      *
@@ -298,6 +298,9 @@ public class WarpSpanExporter(
         // clock persist and the span write are one ordered unit (#1053).
         return try {
             ioMutex.withLock {
+                // A turn that did not tick still persists the clock, so a clock whose read has not
+                // landed is read here first and never written blind (#3390).
+                causalClock?.let { clockRecovered(it.retryRecovery(store)) }
                 var work = clockAndSpanWork
                 val written = try {
                     // Re-encode the *latest* spans inside the section so no concurrent add is
@@ -344,13 +347,13 @@ public class WarpSpanExporter(
     }
 
     /**
-     * Mint a stamp from [clock], first retrying its recovery read if that was refused (#3390). The
-     * retry holds [ioMutex], the section every clock persist runs in, so it never reads past a write
-     * this exporter is making. [ClockTick.Unrecovered] while the read is still refused: the span goes
-     * out unstamped.
+     * Mint a stamp from [clock], first making its recovery read if none has landed: refused, or
+     * never made (#3390). The read holds [ioMutex], the section every clock persist runs in, so it
+     * never reads past a write this exporter is making. [ClockTick.Unrecovered] while the read is
+     * still refused: the span goes out unstamped.
      */
     private suspend fun tickFrom(clock: WarpCausalClock): ClockTick {
-        if (clock.isUnrecovered) ioMutex.withLock { clockRecovered(clock.retryRecovery(store)) }
+        if (!clock.isArmed) ioMutex.withLock { clockRecovered(clock.retryRecovery(store)) }
         return clock.tick()
     }
 
@@ -457,9 +460,9 @@ public class WarpSpanExporter(
      * drop precedes the write.
      */
     public suspend fun clear(): ExportResult = ioMutex.withLock {
-        // A clock whose recovery read was refused gets that read retried here too, so a clear is
-        // not the turn that writes a `seq` below the durable one (#3390). Still refused, the clear
-        // writes the spans and leaves the clock's entry alone.
+        // A clock whose recovery read has not landed (refused, or never made) is read here too, so a
+        // clear is not the turn that writes a `seq` below the durable one (#3390). Still refused,
+        // the clear writes the spans and leaves the clock's entry alone.
         causalClock?.let { clockRecovered(it.retryRecovery(store)) }
         var work = clockAndSpanWork
         val written = try {

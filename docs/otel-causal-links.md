@@ -68,13 +68,13 @@ predecessor — that is how links cross machines.
 The clock **must** be recovered from durable storage on restart: a restart that reset
 `seq` to 0 would re-mint dots already used and silently corrupt causality. `tick()`
 stays pure; the caller `persist()`s after a batch is durably exported, and `recover()`s
-at startup. `recover()` says what it found: `Recovered`, `Undecodable` (the clock starts
-fresh) or `Refused`. A refused read on a clock that has not read or minted yet leaves it
-**unrecovered**: `tick()` answers `ClockTick.Unrecovered` and `persist()` answers
-`ClockPersist.Unrecovered` rather than guess at `seq`. The span exporter then saves spans
-unstamped and retries the read on each export, and the first read that lands re-arms the
-clock. A clock that has already read or minted keeps going, since this device wrote every
-`seq` its store can hold.
+at startup. A clock mints and persists **only after that read has landed**: until then
+`tick()` answers `ClockTick.Unrecovered` and `persist()` answers `ClockPersist.Unrecovered`
+rather than guess at `seq`. `recover()` says what it found: `Recovered`, `Undecodable` (the
+clock starts fresh) or `Refused`. While the read is refused, the span exporter saves spans
+unstamped and retries the read on each export and clear, and the first read that lands arms
+the clock. A clock whose read has landed keeps going through a later refusal, since this
+device wrote every `seq` its store can hold.
 
 ### The cross-boundary rule
 

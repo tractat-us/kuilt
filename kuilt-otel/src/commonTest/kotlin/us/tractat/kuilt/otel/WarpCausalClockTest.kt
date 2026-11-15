@@ -16,8 +16,8 @@ class WarpCausalClockTest {
     private val replicaB = ReplicaId("B")
 
     @Test
-    fun tickMintsMonotonicDotsWithFrontierPredecessors() {
-        val clock = WarpCausalClock(replicaA)
+    fun tickMintsMonotonicDotsWithFrontierPredecessors() = runTest {
+        val clock = WarpCausalClock(replicaA).armed()
         val first = clock.mint()
         val second = clock.mint()
         val third = clock.mint()
@@ -33,8 +33,8 @@ class WarpCausalClockTest {
     }
 
     @Test
-    fun frontierReflectsMostRecentTick() {
-        val clock = WarpCausalClock(replicaA)
+    fun frontierReflectsMostRecentTick() = runTest {
+        val clock = WarpCausalClock(replicaA).armed()
         assertEquals(emptySet(), clock.frontier())
         val stamp = clock.mint()
         assertEquals(setOf(stamp.dot), clock.frontier())
@@ -44,7 +44,7 @@ class WarpCausalClockTest {
     @Test
     fun recoverDoesNotReissueUsedSeq() = runTest(StandardTestDispatcher()) {
         val store = InMemoryDurableStore()
-        val clock1 = WarpCausalClock(replicaA)
+        val clock1 = WarpCausalClock(replicaA).armed()
         clock1.mint()
         val second = clock1.mint()
         clock1.persist(store)
@@ -70,8 +70,8 @@ class WarpCausalClockTest {
     }
 
     @Test
-    fun observeFoldsRemoteFrontierIntoNextTick() {
-        val clock = WarpCausalClock(replicaA)
+    fun observeFoldsRemoteFrontierIntoNextTick() = runTest {
+        val clock = WarpCausalClock(replicaA).armed()
         val local = clock.mint()
         val remote = Dot(replicaB, 7L)
         clock.observe(setOf(remote))

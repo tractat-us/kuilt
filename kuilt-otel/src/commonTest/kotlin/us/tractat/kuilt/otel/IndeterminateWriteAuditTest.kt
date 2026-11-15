@@ -200,7 +200,7 @@ class IndeterminateWriteAuditTest {
     fun clockCommitBeforeFailureRecoversItsHighWaterMark() = runTest {
         for (mode in listOf(CommitMode.FAIL, CommitMode.MINT_CANCEL)) {
             val store = CommitThenFailStore(WarpCausalClock.STORE_KEY, mode)
-            val clock = WarpCausalClock(replica)
+            val clock = WarpCausalClock(replica).armed()
             val minted = clock.mint().dot
             assertFailsWith<Exception> { clock.persist(store) }
             val recovered = WarpCausalClock(replica).also { it.recover(store) }

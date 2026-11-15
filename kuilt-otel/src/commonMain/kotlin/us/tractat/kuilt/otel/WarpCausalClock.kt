@@ -33,29 +33,29 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * the lost edge is tracked by #3028.
  * Cross-signal causality (a log or metric happening-before a span) is future work.
  *
- * ## Recovery is mandatory
+ * ## Recovery is mandatory, and enforced
  *
  * A restart that reset `seq` to 0 would re-mint dots already used by earlier spans
- * and silently corrupt causality. Always [recover] from a [DurableStore] at startup,
- * and [persist] after the spans of a batch are durably exported. [tick] itself stays
- * pure (non-suspending) so the lock stays tight; persistence is the caller's
- * explicit step.
+ * and silently corrupt causality. So a clock **mints and persists only after a [recover] read
+ * has landed**. Until then [tick] answers [ClockTick.Unrecovered] and [persist] answers
+ * [ClockPersist.Unrecovered], minting and writing nothing. [persist] after the spans of a batch
+ * are durably exported. [tick] itself stays pure (non-suspending) so the lock stays tight;
+ * persistence is the caller's explicit step.
  *
  * ## A refused read fails closed
  *
  * A [recover] whose read the store **refuses** (an exception, or a cancellation the store
- * minted from its own `withTimeout`) returns [ClockRecovery.Refused]. If the clock had neither
- * read nor minted yet, it is now **unrecovered**: the durable high-water mark exists but is
- * unknown, so [tick] answers [ClockTick.Unrecovered] and [persist] answers
- * [ClockPersist.Unrecovered] rather than mint a dot that may already be used or write a `seq`
- * below the durable one (#3390). [observe] and [frontier] still work. The next [recover] whose
- * read lands re-arms the clock and keeps what it observed meanwhile. A [WarpSpanExporter]
- * retries that read on each export and saves unstamped spans until it lands: causal edges are
- * lost, a dot is never re-minted.
+ * minted from its own `withTimeout`) returns [ClockRecovery.Refused]. On a clock whose read had
+ * not landed, the durable high-water mark exists but is unknown, so the clock keeps refusing to
+ * mint a dot that may already be used or write a `seq` below the durable one (#3390). [observe]
+ * and [frontier] still work. The next [recover] whose read lands arms the clock and keeps what it
+ * observed meanwhile. A [WarpSpanExporter] retries that read on each export and clear and saves
+ * unstamped spans until it lands: causal edges are lost, a dot is never re-minted.
  *
- * A clock that has already read or minted is never demoted by a refusal. This process is the
- * only writer of the clock's entry, so its own `seq` is at least the durable one, and demoting it
- * would strand a dot already handed to a span whose turn has not persisted yet.
+ * A clock whose read has landed is never demoted by a refusal. This process is the only writer of
+ * the clock's entry, and it has minted only above the `seq` it read, so its own `seq` is at least
+ * the durable one. Demoting it would strand a dot already handed to a span whose turn has not
+ * persisted yet.
  *
  * An **undecodable** entry is different: the bytes were read and cannot be decoded, so no later
  * read can do better. The clock starts fresh at `seq=0` and the next [persist] replaces the entry,
@@ -87,23 +87,22 @@ public class WarpCausalClock(private val replica: ReplicaId) {
      * current frontier (empty on the very first tick). Advances the frontier to the
      * new dot.
      *
-     * Answers [ClockTick.Unrecovered], minting nothing, while the clock is unrecovered: it does
-     * not know which dots are already used. [recover] again to re-arm it.
+     * Answers [ClockTick.Unrecovered], minting nothing, until a [recover] read has landed: the
+     * clock does not know which dots are already used.
      */
     public fun tick(): ClockTick = lock.withLock {
-        val current = state
-        val next = when (current) {
-            is ClockState.Unrecovered -> return@withLock ClockTick.Unrecovered
-            is ClockState.Unread -> 1L
-            is ClockState.Armed -> current.seq + 1
+        when (val current = state) {
+            is ClockState.Unread, is ClockState.Unrecovered -> ClockTick.Unrecovered
+            is ClockState.Armed -> {
+                val newDot = Dot(replica, current.seq + 1)
+                state = ClockState.Armed(newDot.seq, setOf(newDot))
+                ClockTick.Minted(CausalStamp(dot = newDot, predecessors = current.frontier))
+            }
         }
-        val newDot = Dot(replica, next)
-        state = ClockState.Armed(next, setOf(newDot))
-        ClockTick.Minted(CausalStamp(dot = newDot, predecessors = current.frontier))
     }
 
-    /** Whether a refused [recover] left the clock unrecovered, so it mints and persists nothing. */
-    internal val isUnrecovered: Boolean get() = lock.withLock { state is ClockState.Unrecovered }
+    /** Whether a [recover] read has landed, so the clock mints and persists. */
+    internal val isArmed: Boolean get() = lock.withLock { state is ClockState.Armed }
 
     /**
      * Fold a [remote] frontier (received from another replica via anti-entropy) into
@@ -136,16 +135,16 @@ public class WarpCausalClock(private val replica: ReplicaId) {
     internal fun clearFrontier(): Unit = lock.withLock { state = state.cleared() }
 
     /**
-     * Reload `(seq, frontier)` from [store]. Call once at startup before any [tick]; a missing
-     * entry answers [ClockRecovery.Recovered] and an undecodable one
-     * [ClockRecovery.Undecodable], and both leave the clock fresh (seq 0). A read never moves
-     * `seq` backwards: an entry older than what this clock already minted is ignored.
+     * Reload `(seq, frontier)` from [store], arming the clock. Call once at startup: until a read
+     * lands, [tick] and [persist] refuse. A missing entry answers [ClockRecovery.Recovered] and an
+     * undecodable one [ClockRecovery.Undecodable], and both arm the clock fresh (seq 0). A read
+     * never moves `seq` backwards: an entry older than what this clock already minted is ignored.
      *
      * A refused read, including a cancellation the store minted, answers
-     * [ClockRecovery.Refused] and is logged at ERROR. On a clock that had neither read nor minted
-     * it leaves the clock **unrecovered**: [tick] and [persist] refuse until a later call here
-     * reads the store, so the durable high-water mark is never overwritten and no dot is minted
-     * twice (#3390). A cancellation of the caller's own job still propagates.
+     * [ClockRecovery.Refused] and is logged at ERROR. A clock whose read had not landed stays
+     * unable to mint or persist until a later call here reads the store, so the durable
+     * high-water mark is never overwritten and no dot is minted twice (#3390). A clock whose read
+     * had landed keeps minting. A cancellation of the caller's own job still propagates.
      */
     public suspend fun recover(store: DurableStore): ClockRecovery = when (val read = read(store)) {
         is ClockRead.Refused -> {
@@ -157,20 +156,26 @@ public class WarpCausalClock(private val replica: ReplicaId) {
     }
 
     /**
-     * Retry the read a refused [recover] could not make, if the clock is still unrecovered: the span
-     * exporter's per-turn retry. A clock that is not unrecovered answers [ClockRecovery.Recovered]
-     * with no read. A refusal here logs at debug, not error, because the outage was already reported
-     * once, and a store that stays locked would otherwise log a stack trace per export.
+     * Make the read a clock still needs, if its read has not landed: the span exporter's per-turn
+     * retry, which also arms a clock nobody recovered. An armed clock answers
+     * [ClockRecovery.Recovered] with no read. A repeated refusal logs at debug, not error, because the
+     * outage was already reported once, and a store that stays locked would otherwise log a stack
+     * trace per export.
      */
     internal suspend fun retryRecovery(store: DurableStore): ClockRecovery {
-        if (!isUnrecovered) return ClockRecovery.Recovered
+        if (isArmed) return ClockRecovery.Recovered
         return when (val read = read(store)) {
             is ClockRead.Refused -> {
-                logger.debug { "otel.causal.clock: store read still refused: ${read.cause}" }
+                val first = lock.withLock { (state is ClockState.Unread).also { state = state.refused() } }
+                if (first) {
+                    logger.error(read.cause) { "otel.causal.clock: store read failed; minting nothing until a read lands" }
+                } else {
+                    logger.debug { "otel.causal.clock: store read still refused: ${read.cause}" }
+                }
                 ClockRecovery.Refused(read.cause)
             }
             is ClockRead.Landed -> arm(read).also {
-                logger.info { "otel.causal.clock: store read landed; minting again" }
+                logger.info { "otel.causal.clock: store read landed; minting" }
             }
         }
     }
@@ -208,16 +213,14 @@ public class WarpCausalClock(private val replica: ReplicaId) {
      * Durably persist the current `(seq, frontier)` to [store]. Call after a batch of
      * [tick]s is durably exported so a restart never re-mints a used dot.
      *
-     * Answers [ClockPersist.Unrecovered] with no write while the clock is unrecovered: writing then
-     * would replace a durable high-water mark this clock never saw. [recover] again first. A store
-     * that refuses the write still throws, as [DurableStore.write] does.
+     * Answers [ClockPersist.Unrecovered] with no write until a [recover] read has landed: writing
+     * then would replace a durable high-water mark this clock never saw. A store that refuses the
+     * write still throws, as [DurableStore.write] does.
      */
     public suspend fun persist(store: DurableStore): ClockPersist {
         val snapshot = lock.withLock {
             when (val current = state) {
-                is ClockState.Unrecovered -> null
-                // Never recovered and never minted: what this has always written, `seq=0`.
-                is ClockState.Unread -> PersistedClock(0L, current.frontier)
+                is ClockState.Unread, is ClockState.Unrecovered -> null
                 is ClockState.Armed -> PersistedClock(current.seq, current.frontier)
             }
         } ?: return ClockPersist.Unrecovered
@@ -235,8 +238,9 @@ public sealed interface ClockRecovery {
     public data class Undecodable(public val cause: Throwable) : ClockRecovery
 
     /**
-     * The store refused the read. A clock that had not read or minted yet is now unrecovered; one
-     * that had keeps minting, since this process wrote every `seq` the store can hold.
+     * The store refused the read. A clock whose read had not landed still mints and persists
+     * nothing; one whose read had landed keeps minting, since this process wrote every `seq` the
+     * store can hold.
      */
     public data class Refused(public val cause: Throwable) : ClockRecovery
 }
@@ -246,7 +250,7 @@ public sealed interface ClockTick {
     /** A fresh dot, carried in [stamp]. */
     public data class Minted(public val stamp: CausalStamp) : ClockTick
 
-    /** The clock's recovery read was refused, so it minted nothing. */
+    /** No recovery read has landed, because it was refused or never made, so it minted nothing. */
     public data object Unrecovered : ClockTick
 }
 
@@ -255,7 +259,7 @@ public sealed interface ClockPersist {
     /** The clock's `(seq, frontier)` was written. */
     public data object Persisted : ClockPersist
 
-    /** The clock's recovery read was refused, so it wrote nothing. */
+    /** No recovery read has landed, because it was refused or never made, so it wrote nothing. */
     public data object Unrecovered : ClockPersist
 }
 
@@ -263,10 +267,11 @@ public sealed interface ClockPersist {
  * What the clock knows about the dots already used. A sealed type rather than a flag beside `seq`,
  * so every path that mints, persists or meets a refused read has to say what it does in each case.
  *
- * Only [Unread] can become [Unrecovered]. Once a read has landed or a dot was minted, this process
- * holds a `seq` at least as high as the durable one, because it is the only writer of the clock's
- * key. A refused read then teaches it nothing, and demoting it would strand a dot already handed to
- * a span whose turn is still waiting to persist.
+ * Only a landed read reaches [Armed], and only [Armed] mints or persists. So a clock that holds a
+ * `seq` has read the durable one and minted only above it, and as the only writer of the clock's
+ * key it is at least as high as the store. A refused read then teaches it nothing, and demoting it
+ * would strand a dot already handed to a span whose turn is still waiting to persist. [Unread] and
+ * [Unrecovered] behave alike; they differ only in whether a refusal has been reported yet.
  */
 private sealed interface ClockState {
     val frontier: Set<Dot>
@@ -284,7 +289,7 @@ private sealed interface ClockState {
         is Armed -> copy(frontier = emptySet())
     }
 
-    /** A refused read demotes only a clock that has neither read nor minted. */
+    /** A refused read moves [Unread] to [Unrecovered] and leaves an [Armed] clock alone. */
     fun refused(): ClockState = if (this is Unread) Unrecovered(frontier, frontierCleared) else this
 
     /**
@@ -305,7 +310,7 @@ private sealed interface ClockState {
         is Unrecovered -> Armed(0L, frontier)
     }
 
-    /** No read has landed and nothing was minted: the state a clock is constructed in. */
+    /** No read has landed or been refused yet: the state a clock is constructed in. */
     data class Unread(override val frontier: Set<Dot>, val frontierCleared: Boolean) : ClockState
 
     /**

@@ -373,32 +373,34 @@ class WarpCausalClockRefusedRecoveryTest {
     // ---- What a turn with an unrecovered clock acknowledges ----
 
     /**
-     * A turn whose clock write was skipped wrote only the span key, so it must not resolve an earlier
-     * failure that needed the clock's write too.
+     * A turn whose clock write was skipped needed only the span key, so when it fails, a later
+     * span-only write that lands resolves it. Counted against the clock key too, it would stay
+     * outstanding for good: an unrecovered clock writes nothing that could resolve it.
+     *
+     * The converse the round-1 review asked for, a skipped turn resolving an earlier clock-plus-span
+     * failure, is now unreachable: a clock-plus-span turn needs an armed clock, and an armed clock is
+     * never demoted, so no skipped turn can follow one.
      */
     @Test
-    fun aTurnThatSkippedTheClockWriteLeavesAFailedClockTurnOutstanding() = runTest {
+    fun aFailedTurnThatSkippedTheClockWriteIsResolvedByASpanOnlyWrite() = runTest {
         val backing = InMemoryDurableStore()
-        val refusing = ReadRefusingStore(backing, clockKey, refusingAtStart = false)
-        val store = CancellationScriptedStore(refusing)
+        val store = CancellationScriptedStore(ReadRefusingStore(backing, clockKey))
         val clock = WarpCausalClock(replica)
         val exporter = WarpSpanExporter(replica, store, causalClock = clock)
-        val stamped = span(1).copy(causalStamp = CausalStamp(Dot(ReplicaId("b"), 1L), emptySet()))
+        val remote = WarpSpanExporter(ReplicaId("b"), InMemoryDurableStore()).also { it.export(span(2)) }.snapshot()
 
         store.arm(StoreCall.WRITE, StoreAct.MINT) { it == StoreKey("otel.spans") }
-        val failedTurn = exporter.export(stamped)
+        val failedTurn = exporter.export(span(1))
         val outstandingAfterFailure = exporter.health.value.outstandingFailures
-        refusing.refuse()
-        clock.recover(store)
-        val skippedTurn = exporter.export(span(2))
+        val merged = exporter.merge(remote)
 
         assertAll(
-            { assertEquals(1, store.minted, "the rig never refused the first turn's span write") },
-            { assertTrue(failedTurn is ExportResult.Failure, "the rig: the first turn did not fail") },
+            { assertEquals(1, store.minted, "the rig never refused the export's span write") },
+            { assertIs<ExportResult.Failure>(failedTurn, "the rig: the export did not fail") },
+            { assertTrue(clock.frontier().isEmpty() && exporter.snapshot().elements.none { it.causalStamp != null }, "the rig: the clock stamped") },
             { assertEquals(1L, outstandingAfterFailure, "the rig: the failed turn was not outstanding") },
-            { assertTrue(refusing.refusals >= 1, "the rig did not refuse the clock's recovery read") },
-            { assertEquals(ExportResult.Success, skippedTurn) },
-            { assertEquals(1L, exporter.health.value.outstandingFailures, "a span-only turn resolved a failed clock turn") },
+            { assertEquals(ExportResult.Success, merged) },
+            { assertEquals(0L, exporter.health.value.outstandingFailures, "a span-only write left a span-only failure outstanding") },
         )
     }
 }

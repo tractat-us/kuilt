@@ -62,5 +62,5 @@ class OtelSamplesRunTest {
     fun warpSpanExporterHolds(): TestResult = runTest { sampleWarpSpanExporter() }
 
     @Test
-    fun inferCausalLinksHolds() = sampleInferCausalLinks()
+    fun inferCausalLinksHolds(): TestResult = runTest { sampleInferCausalLinks() }
 }
