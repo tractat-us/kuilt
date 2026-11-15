@@ -1238,6 +1238,20 @@ public class LocalHeddle private constructor(
     /** How many rebases moved this engine's positions, counting only calls it kept: the witness a test reads. */
     internal val rebasesForTest: Int get() = allocator.rebasesForTest
 
+    /**
+     * Whether this engine's rebases keep every child inside its window (#3353). Off only in a test's
+     * twin, which then runs the rule before it, to show the two pick alike wherever the old one never
+     * refused. Kept by the allocator, so it survives every call; a [restore] starts with it on.
+     */
+    internal var windowRuleForTest: Boolean
+        get() = allocator.windowRuleForTest
+        set(value) {
+            allocator.windowRuleForTest = value
+        }
+
+    /** How many joiners this engine landed at their floor, counting only calls it kept: a test's witness. */
+    internal val floorLandingsForTest: Int get() = allocator.floorLandingsForTest
+
     /** The path [lease] charges, for tests: what it was opened on, or what a reweight moved it onto. */
     internal fun capturedPath(lease: LeaseId): List<AttachmentId>? = open[lease]?.path
 
