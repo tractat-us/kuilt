@@ -81,6 +81,8 @@ internal class MixedWeightRun(
     private val lanes: List<AttachmentRecord>,
     private val grant: Long,
     private val random: Random,
+    /** The waiting set of call number `call`, counted from one, or `null` for a fresh random draw. */
+    private val phase: (call: Int) -> List<AttachmentRecord>? = { null },
 ) {
     var calls: Int = 0
         private set
@@ -90,8 +92,7 @@ internal class MixedWeightRun(
         private set
 
     /** The next waiting set: each lane with even odds, and never empty. */
-    fun drawWaiting(): List<AttachmentRecord> =
-        lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }
+    fun drawWaiting(): List<AttachmentRecord> = phase(calls + 1) ?: lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }
 
     /** Give every lane in [waiting] one [grant] more than it has outstanding, and every other lane nothing. */
     fun advertise(peer: SchedulingPeer, waiting: List<AttachmentRecord>) {
@@ -141,7 +142,7 @@ internal class MixedWeightRun(
 internal fun EntitlementLedger.conservationShortfall(root: GroupId, replicas: Collection<ReplicaId>): String? {
     val conflicts = validate()
     if (conflicts.isNotEmpty()) return "the ledger reports $conflicts"
-    val groups = listOf(root) + activeChildren(root).map { it.child }
+    val groups = listOf(root) + activeChildren(root).mapNotNull { record(it.attachment)?.child }
     var held = 0L
     for (g in groups) for (r in replicas) held = checkNotNull(held.plusOrNull(holdings(g, r))) { "held overflows" }
     val accounted = checkNotNull(held.plusOrNull(leafSpentTotal())) { "held + spent overflows" }
