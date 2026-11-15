@@ -154,6 +154,47 @@ class FairShareAllocatorOriginTest {
     fun aOneToSixtyNewbornJoinsABusyLightRunner() = assertAHeavyNewbornJoinsABusyLightRunner(60L)
 
     /**
+     * A restarted allocator meets a long-idle child demanding again (#3353 review, item B). It has
+     * observed nothing, so the child is not a waker by observation. It sits about 2⁶⁸ ticks below
+     * the origin on its own grid, past `Long`, and the pick that ordered it refused with
+     * `PositionCeiling` on every call. A seated, demanding child below zero that this allocator never
+     * saw is clamped as a waker now: no rebase takes a child that kept demanding below zero.
+     */
+    @Test
+    fun aNeverObservedChildFarBelowTheOriginIsClampedNotRefused() {
+        val runner = AttachmentRecord(AttachmentId("a"), root, GroupId("a"), Weight.ONE)
+        val idler = AttachmentRecord(AttachmentId("b"), root, GroupId("b"), Weight.of(15L))
+        val origin = Int128.of(1L shl 60)
+        var ledger = withChildren(runner, idler)
+        ledger = ledger.piece(
+            EntitlementLedger.of(
+                gauges = mapOf(
+                    runner.id to gaugeAt(originTicks(origin, Weight.ONE) + 1_600L, folded = 0L),
+                    idler.id to gaugeAt(Int128.ZERO, folded = 0L),
+                ),
+                origins = mapOf(root to origin),
+            ),
+        )
+        val cell = object : LedgerCell {
+            override var current: EntitlementLedger = ledger
+            override fun mutateOrSkip(transform: (EntitlementLedger) -> us.tractat.kuilt.crdt.Patch<EntitlementLedger>?): Boolean {
+                val patch = transform(current) ?: return false
+                current = current.piece(patch.delta)
+                return true
+            }
+        }
+        val wants = Demand(targetOutstanding = 1_000L, maximumUsefulGrant = 1L)
+        val allocator = FairShareAllocator(self, PolicyConfig(quantum = 1L))
+        val outcome = allocator.schedule(root, cell, earmarked = 0L) { wants }
+        val below = originTicks(origin, idler.weight)
+        assertAll(
+            { assertTrue(below.toLongOrNull() == null, "the rig: b sits past Long below the origin, $below ticks") },
+            { assertTrue(outcome is AllocationOutcome.Delegated, "the parent is scheduled, not refused: $outcome") },
+            { assertTrue((allocator.memory.wakeOffsets[idler.id] ?: Rational.ZERO) > Rational.ZERO, "b was clamped as a waker") },
+        )
+    }
+
+    /**
      * The origin join is a `max` on the whole 128-bit value (#3353). `(1, 0)` is 2⁶⁴ and `(0, −1)` is
      * 2⁶⁴ − 1, the low word unsigned; a `max` on each word would assemble `(1, −1)`, which neither
      * side wrote.
