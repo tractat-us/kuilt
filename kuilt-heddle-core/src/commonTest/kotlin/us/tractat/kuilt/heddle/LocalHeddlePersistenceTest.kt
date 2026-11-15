@@ -693,6 +693,59 @@ class LocalHeddlePersistenceTest {
         )
     }
 
+    /**
+     * A wake clamp past `Long` survives a persist, a decode and a restore exactly (#3353 review,
+     * item F): one past 2⁶⁴ ticks, whose high word is set, and one whose low word has its top bit
+     * set, which a reader taking the low word as signed would read negative.
+     */
+    @Test
+    fun wideWakeClampsRoundTripThroughASnapshot() {
+        val base = decoded(GOLDEN_FORMAT_2)
+        val pastTwoToThe64 = Int128.fromTwosComplement(3L, 5L)
+        val topBitOfLow = Int128.fromTwosComplement(0L, Long.MIN_VALUE + 7L)
+        for (clamp in listOf(pastTwoToThe64, topBitOfLow)) {
+            val memory = AllocatorMemory(
+                wakeOffsets = mapOf(edgeTo(b) to clamp),
+                demandingObserved = base.allocatorMemory.demandingObserved,
+            )
+            val snapshot = LocalHeddleSnapshot(base.epoch, base.ledger, memory, base.totalSlots, base.open, base.lastApplied)
+            val text = encode(snapshot)
+            val back = decoded(text)
+            val restored = LocalHeddle.restore(back, policy, epoch = 1L)
+            assertAll(
+                { assertTrue(clamp.toLongOrNull() == null || clamp.low < 0L, "the rig: $clamp is past Long or has the low word's top bit set") },
+                { assertEquals(clamp, back.allocatorMemory.wakeOffsets[edgeTo(b)], "decoded exactly: $text") },
+                { assertEquals(clamp, restored.snapshot().allocatorMemory.wakeOffsets[edgeTo(b)], "and restored exactly") },
+            )
+        }
+    }
+
+    /**
+     * A gauge folded above its edge's issuance is refused at decode, by name (#3353 review, item G).
+     * Only the fold rebase of a development build between #3355 and slice 7 wrote one; restored, the
+     * first delegation over it would throw an untyped `IllegalArgumentException` at a later
+     * `acquire`. No release wrote one: v0.7.4 predates #3355.
+     */
+    @Test
+    fun aGaugeFoldedAboveItsIssuanceIsCorrupt() {
+        val honest = "{\"folded\":51,\"ticksLow\":816}"
+        check(honest in GOLDEN_FORMAT_2) { "the rig: a's gauge is where this test expects it" }
+        val out = LocalHeddle.decode(GOLDEN_FORMAT_2.replace(honest, "{\"folded\":60,\"ticksLow\":816}"), Json)
+        assertAll(
+            { assertIs<RestoreResult.Restored>(LocalHeddle.decode(GOLDEN_FORMAT_2, Json), "the control: the honest golden restores") },
+            { assertTrue(out is RestoreResult.Corrupt && "above its base issuance" in out.reason, "expected Corrupt naming the fold, got $out") },
+        )
+    }
+
+    /** A wake clamp's high word carries its sign, and a clamp is never negative, so `{"high":-1}` is corrupt. */
+    @Test
+    fun aNegativeWakeClampIsCorrupt() {
+        val honest = "{\"low\":800}"
+        check(honest in GOLDEN_FORMAT_2) { "the rig: b's clamp is where this test expects it" }
+        val out = LocalHeddle.decode(GOLDEN_FORMAT_2.replace(honest, "{\"high\":-1}"), Json)
+        assertTrue(out is RestoreResult.Corrupt && "wake clamp" in out.reason, "expected Corrupt naming the clamp, got $out")
+    }
+
     /** An honest fold is never negative, so a snapshot whose fold is, in either of its two maps, is corrupt. */
     @Test
     fun aNegativeFoldIsCorrupt() {

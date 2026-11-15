@@ -601,7 +601,8 @@ public class FairShareAllocator(
      * wakers at [parent], reading [waiting], and observe who was waiting. For a delegation that is
      * not a pick but must leave the wake memory as the pick would have ([LocalHeddle.admit] with a
      * waiting set, #3320). Never throws at a position ceiling, since it orders nothing: a seat or a
-     * clamp taken there saturates. Returns the seated ledger; [ledger] is not changed.
+     * clamp taken there is exact and wide, and only the pick that would order it refuses. Returns the
+     * seated ledger; [ledger] is not changed.
      */
     internal fun settle(parent: GroupId, ledger: EntitlementLedger, waiting: (AttachmentId) -> Demand): EntitlementLedger {
         val cell = ValueCell(ledger)
@@ -884,12 +885,11 @@ public class FairShareAllocator(
      * side when the front genuinely regresses. Two other things lower a stored offset. An edge is
      * forgotten when it leaves the active set, which
      * [EntitlementLedger.activate][EntitlementLedger.activate] makes permanent (closure dominance,
-     * §10.10), so a cleared clamp can never come back to an edge that will compete again. And
-     * a rebase takes whole units off it ([rebased], [adopt]), by exactly as much as it leaves the
-     * edge's raw position where it was: the effective position comes down with its siblings', and the next clamp's
-     * `max` loses the same amount on both sides, so no turn moves (#3329). The offset is the front
-     * less the raw position at the last wake, so for a child that idles between picks it grows by
-     * every stretch sat out; without the rebase it would reach the ceiling on its own.
+     * §10.10), so a cleared clamp can never come back to an edge that will compete again. A rebase
+     * does not touch it (#3353): it raises the parent's origin, which lowers the front and the raw
+     * position alike, so the next clamp's `max` is unchanged and no turn moves. The offset is the
+     * front less the raw position at the last wake, so for a child that idles while the origin rises
+     * it grows by every stretch sat out; it is wide, so it can, without nearing any ceiling.
      *
      * The demanding state is sampled **once per scheduling round, at entry**, before any grant
      * lands. Sampling again after the loop would mark a child that its own grants had just

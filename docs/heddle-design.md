@@ -736,8 +736,8 @@ create any.
 
 For active edge `e` with weight `w(e)`, the baseline `b(e)` is read off the edge's
 replicated `Gauge` rather than off its record — a position paired with a fold: the base
-issuance the writer had observed when it asserted that position, or, in a `LocalHeddle`
-ledger, a fold a rebase has raised above it (below). The position is
+issuance the writer had observed when it asserted that position. No rebase moves a fold:
+both engines rebase by raising the parent's origin instead (below). The position is
 `P(e) = max(⌈floor(e) · w(e) · G⌉, ticks(e))`, on the edge's own grid of `G` ticks to a
 unit (below). Every seat and checkpoint writes `ticks`, a 128-bit count, exact and never
 capped (#3353). A `floor` written by an earlier build is still read, through the `max`:

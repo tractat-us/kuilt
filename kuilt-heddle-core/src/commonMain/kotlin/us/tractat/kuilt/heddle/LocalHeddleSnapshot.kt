@@ -94,6 +94,16 @@ public class LocalHeddleSnapshot internal constructor(
             }
         }
         for (persisted in open) persisted.requireConsistent(root, epoch, ledger)
+        // No gauge is folded above its edge's issuance (#3353): only the fold rebase of a development
+        // build between #3355 and slice 7 wrote one, and a delegation over it would throw later.
+        for (edge in ledger.gaugedEdges()) {
+            val folded = checkNotNull(ledger.gauge(edge)).folded
+            val issued = ledger.baseIssuance(edge)
+            require(folded <= issued) {
+                "the gauge on ${edge.value} is folded at $folded, above its base issuance $issued: a fold " +
+                    "rebase from a development build, which this release does not restore"
+            }
+        }
     }
 
     /**
@@ -276,9 +286,10 @@ private class AllocatorMemoryFormat1(
     val demandingObserved: Map<AttachmentId, Boolean>,
 ) {
     /**
-     * The memory, each clamp read onto its edge's grid in [ledger]: exact, since format 1 wrote every
-     * clamp on that grid. A clamp whose edge [ledger] does not know, one record, is dropped, as an
-     * allocator forgets an edge its ledger no longer holds.
+     * The memory, each clamp read onto its edge's grid in [ledger], rounded up: exact for a clamp
+     * already on that grid, and the penalty side, a sliver more clamp, for one off it. v0.7.4 wrote
+     * clamps off the grid, with fat denominators. A clamp whose edge [ledger] does not know, one
+     * record, is dropped, as an allocator forgets an edge its ledger no longer holds.
      */
     fun onGridsOf(ledger: EntitlementLedger): AllocatorMemory = AllocatorMemory(
         wakeOffsets = wakeOffsets.mapNotNull { (id, v) -> ledger.record(id)?.let { id to wideTicksAt(v, it.weight) } }.toMap(),

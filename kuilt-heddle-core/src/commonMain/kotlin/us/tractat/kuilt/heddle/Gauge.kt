@@ -73,7 +73,7 @@ import us.tractat.kuilt.math.timesWide
  *
  * Neither engine raises a fold: both rebase a busy parent by raising its origin (#3353), so every
  * gauge's ticks are absolute, and every gauge asserts a position of at least its fold's issuance in
- * ticks. A fold never stands above the edge's issuance.
+ * ticks. A fold never stands above any writer's observed issuance, and so never above the edge's.
  *
  * ## The read is deliberately not monotone in the view
  *

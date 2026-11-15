@@ -450,6 +450,9 @@ public class EntitlementLedger private constructor(
      */
     public fun gauge(id: AttachmentId): Gauge? = gauges[id]
 
+    /** The edges that carry a [Gauge], for a check that has to visit every one. */
+    internal fun gaugedEdges(): Set<AttachmentId> = gauges.keys
+
     /**
      * [id]'s **base** issuance — `Σ_r issued(id)[r]`, excluding relocation credit. This is the
      * [Gauge]'s fold axis: the read advances the gauge's position by `(baseIssuance − folded)`
