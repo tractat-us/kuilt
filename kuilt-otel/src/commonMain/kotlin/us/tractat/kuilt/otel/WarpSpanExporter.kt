@@ -110,9 +110,11 @@ public class WarpSpanExporter(
      * corrupt floors above dots no stored span still holds: one evicted past [maxSpans], one [clear]
      * removed, one only a peer has.
      *
-     * It only rises. It folds in the value the landing read found carried and every own dot in the
-     * join, every own dot a [merge] brings, every own dot an export adds, an explicit stamp's
-     * included, and, at each encode, a configured clock's `seq` once its read has landed. A [clear]
+     * It only rises. It folds in the value the landing read found carried, every own dot a [merge]
+     * brings, every own dot an export adds, an explicit stamp's included, and, at each encode, a
+     * configured clock's `seq` once its read has landed. So it is at least every own dot [spans] has
+     * held, and the landing read relies on that instead of scanning the join: a new path that puts an
+     * own dot into [spans] must raise it too. A [clear]
      * leaves it alone, as the clock's `seq` is left alone. Over-claiming costs a gap in the clock's
      * sequence, which nothing reads as missing: [inferCausalLinks] resolves a dot by equality alone.
      */
@@ -374,19 +376,22 @@ public class WarpSpanExporter(
      * cap, and allow writes. Memory holds no local export yet, only remote sets merged meanwhile, so
      * the join is one `piece` and the excess one batch.
      *
-     * The floor is the larger of the high-water mark the bytes carry (#3435) and the highest dot of
-     * this replica's in the join, taken **before** the eviction so an evicted span's dot still counts
-     * (#3407). The carried mark covers the dots no stored span holds any more: evicted before the last
-     * write, cleared, or held only by a peer. The join's dots count a span's own stamp and every
-     * predecessor it names: once this replica's span is evicted, a remote span that observed it may be
-     * the only evidence its dot was minted, and re-minting it would resolve that predecessor to a new
-     * span. The floor is raised before the state turns [SpanReadState.Recovered], in the same hold of
-     * [lock], and [export] mints before its write section only from a recovered exporter under that
-     * lock, so no stamp is minted below it. A clock whose own entry was corrupt starts at `seq=0` and
-     * would otherwise re-mint those dots.
+     * The floor is [ownHighWater] once the carried mark (#3435) is folded in, raised **before** the
+     * eviction so an evicted span's dot still counts (#3407). That covers every own dot in the join,
+     * a span's stamp and every predecessor it names, with no scan of the join: each path that puts an
+     * own dot into [spans] raises the mark by it. A stored span's dot was in memory when its bytes were
+     * encoded, so the mark they carry covers it, and a merged span's dot was folded in by [merge]. The
+     * carried mark also covers the dots no stored span holds any more: evicted before the last write,
+     * cleared, or held only by a peer. Once this replica's span is evicted, a remote span that observed
+     * it may be the only evidence its dot was minted, and re-minting it would resolve that predecessor
+     * to a new span. The floor is raised before the state turns [SpanReadState.Recovered], in the same
+     * hold of [lock], and [export] mints before its write section only from a recovered exporter under
+     * that lock, so no stamp is minted below it. A clock whose own entry was corrupt starts at `seq=0`
+     * and would otherwise re-mint those dots.
      *
      * An undecodable entry, the bare set this key held before #3435 included, starts fresh and loses
-     * its carried mark with it: the floor then rests on the clock's entry alone.
+     * its carried mark with it: the floor then rests on the clock's entry and on what [merge]s folded
+     * in meanwhile.
      */
     private fun spanReadLanded(read: SpanRead.Landed) {
         if (read is SpanRead.Undecodable) {
@@ -398,7 +403,6 @@ public class WarpSpanExporter(
                 spans = read.stored.spans.piece(spans)
                 raiseHighWater(read.stored.ownHighWater)
             }
-            highestOwnDot(spans.elements)?.let(::raiseHighWater)
             causalClock?.raiseFloor(ownHighWater)
             evictExcess()
             readState = SpanReadState.Recovered
