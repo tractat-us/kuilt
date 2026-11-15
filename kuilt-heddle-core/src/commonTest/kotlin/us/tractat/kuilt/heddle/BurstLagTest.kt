@@ -416,8 +416,11 @@ class BurstLagTest {
     private companion object {
         const val BURSTS = 300
 
-        /** Units either way of fair, over the whole run: the quantum at the end of the last burst. */
-        const val TOLERANCE = 2L
+        /**
+         * Units either way of fair, over the whole run: none. Every rig lands on its fair split
+         * exactly, S1w's to the unit it rounds to, so a drift of one unit over 300 bursts reds.
+         */
+        const val TOLERANCE = 0L
         const val SEED = 3376L
         const val SAMPLES = 40
     }
