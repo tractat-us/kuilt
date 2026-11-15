@@ -29,8 +29,8 @@ import us.tractat.kuilt.math.timesWide
  * @property offsetTicks scheduler-local forward clamp applied on wake so an idle child cannot
  *   bank a backlog of virtual time (design §7.2), in ticks of the edge's own service and wide
  *   (#3353). Zero for a child that never slept; computed on an idle→demand edge —
- *   [FairShareAllocator] detects that edge and carries the offset here (issue #1695), joining
- *   each new value with the one already stored so a re-wake into a lower front can never
+ *   [FairShareAllocator] detects that edge and carries the offset here (issue #1695), and a
+ *   returner's shift only ever adds to it (#3376), so a re-wake into a lower front can never
  *   refund an earlier clamp (issue #1714). Deliberately *not* replicated — divergent
  *   offsets reorder locally but never touch conservation. Non-negative.
  * @property origin the parent's origin in whole virtual-time units ([EntitlementLedger.origin]):
