@@ -54,33 +54,10 @@ class WarpSpanExporterClockCeilingTest {
     /** A clock that has minted one stamp per span of a full buffer: far from its own ceiling. */
     private suspend fun clock(): WarpCausalClock = WarpCausalClock(local).armed()
 
-    /**
-     * The fixture's ORSet as its serial shape, with the context written by hand: [ORSet]'s
-     * context is reachable at the ceiling only by decoding, since minting `1..MAX` is not.
-     */
-    @Serializable
-    private class ContextShape(val vv: Map<ReplicaId, Long>, val cloud: List<Dot>)
-
-    @Serializable
-    private class CausalShape(val store: DotMap<SpanRecord, DotSet>, val context: ContextShape)
-
-    @Serializable
-    private class SetShape(val causal: CausalShape)
-
     private val cbor = Cbor { alwaysUseByteString = true }
     private val setSerializer = ORSet.serializer(SpanRecord.serializer())
 
-    /**
-     * A peer's copy of [held]: the same spans, under a context that has seen every dot of [local]'s
-     * up to [Long.MAX_VALUE]. It must carry the spans, since a context covering their dots without
-     * them would be a peer that removed them.
-     */
-    private fun peerSetAtTheCeiling(held: ORSet<SpanRecord>): ORSet<SpanRecord> {
-        val shape = cbor.decodeFromByteArray(SetShape.serializer(), cbor.encodeToByteArray(setSerializer, held))
-        val context = ContextShape(shape.causal.context.vv + (local to Long.MAX_VALUE), shape.causal.context.cloud)
-        val raised = SetShape(CausalShape(shape.causal.store, context))
-        return cbor.decodeFromByteArray(setSerializer, cbor.encodeToByteArray(SetShape.serializer(), raised))
-    }
+    private fun peerSetAtTheCeiling(held: ORSet<SpanRecord>): ORSet<SpanRecord> = spanSetAtTheCeiling(held, local)
 
     private fun ORSet<SpanRecord>.refusesAnAdd(): Boolean =
         assertFailsWith<ArithmeticException> { add(local, span(EXTRA)) }.let { true }
@@ -215,4 +192,32 @@ class WarpSpanExporterClockCeilingTest {
         const val CAP = 3
         const val EXTRA = 99
     }
+}
+
+/**
+ * A span set's serial shape, with the context written by hand: an [ORSet]'s context is reachable
+ * at the ceiling only by decoding, since minting `1..MAX` is not.
+ */
+@Serializable
+private class ContextShape(val vv: Map<ReplicaId, Long>, val cloud: List<Dot>)
+
+@Serializable
+private class CausalShape(val store: DotMap<SpanRecord, DotSet>, val context: ContextShape)
+
+@Serializable
+private class SetShape(val causal: CausalShape)
+
+private val shapeCbor = Cbor { alwaysUseByteString = true }
+
+/**
+ * A peer's copy of [held]: the same spans, under a context that has seen every dot of [replica]'s
+ * up to [Long.MAX_VALUE], so the next add on [replica]'s behalf would wrap. It must carry the spans,
+ * since a context covering their dots without them would be a peer that removed them.
+ */
+internal fun spanSetAtTheCeiling(held: ORSet<SpanRecord>, replica: ReplicaId): ORSet<SpanRecord> {
+    val setSerializer = ORSet.serializer(SpanRecord.serializer())
+    val shape = shapeCbor.decodeFromByteArray(SetShape.serializer(), shapeCbor.encodeToByteArray(setSerializer, held))
+    val context = ContextShape(shape.causal.context.vv + (replica to Long.MAX_VALUE), shape.causal.context.cloud)
+    val raised = SetShape(CausalShape(shape.causal.store, context))
+    return shapeCbor.decodeFromByteArray(setSerializer, shapeCbor.encodeToByteArray(SetShape.serializer(), raised))
 }
