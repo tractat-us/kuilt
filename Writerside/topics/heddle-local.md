@@ -125,6 +125,8 @@ check((0 until 8).map { build(both, startedAt = it * 3L) } == firstEight)
 
 Six to two: three to one. `previewPicks` answers "who goes next?" for several
 builds ahead without moving anything, and the real builds then match it.
+[Showing who goes next](heddle-local-preview.md) turns it into a status line a
+person can read.
 
 ![The first eight builds go web, mobile, web, web, web, mobile, web, web. After mobile's quiet spell, the next eight follow the same pattern.](heddle-local-turns.svg)
 
@@ -168,7 +170,9 @@ it) and `SupplyExhausted`. A log line or a metric should use the answer's `kind`
 and its group ids. The numbers move on every pick.
 
 `entitlement` is the fair share as a number of agents: of four, web is owed
-three while both teams keep work queued.
+three while both teams keep work queued. To put all three answers on a screen,
+from a running engine or a saved one, see
+[Showing who goes next](heddle-local-preview.md).
 
 ## A build that runs long
 
