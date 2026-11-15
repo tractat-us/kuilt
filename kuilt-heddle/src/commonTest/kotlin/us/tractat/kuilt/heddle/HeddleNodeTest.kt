@@ -1064,6 +1064,19 @@ class HeddleNodeTest {
         h.pump()
         assertEquals(200L, node.ledger.value.edge(e1)!!.issued, "e1 runs alone to its target")
 
+        // Phase 1b — e1 asks again, unservably. The grant that filled e1 was seen as its leaving, so
+        // this call is its return, by a clock that has not moved since; from here it is a stayer, and
+        // holds the front e2 wakes into (#3416 review).
+        node.advertise(e1, competingUnservable)
+        node.advertise(starved.id, competingUnservable)
+        node.schedule(root)
+        h.pump()
+        assertEquals(
+            Rational.of(200L),
+            node.probeEffectiveVirtualService(e1, others = listOf(starved.id)),
+            "the rig: e1 came back exactly where it left",
+        )
+
         // Phase 2 — e2 wakes into a front of mean(e1 at 200, e3 at 0) = 100, then runs its 20.
         node.advertise(e1, competingUnservable)
         node.advertise(e2, Demand(targetOutstanding = 20L, maximumUsefulGrant = 10L))
@@ -1396,7 +1409,14 @@ class HeddleNodeTest {
         while (refusedAt < 0 && a.calls < 100_000) {
             a.step(aPeer)
             if (b.step(bPeer) is ScheduleOutcome.PositionCeiling) refusedAt = b.calls
-            if (refusedAt < 0) assertEquals(b.issuedByLane(bPeer), a.issuedByLane(aPeer), "call ${a.calls}: the two made different picks")
+            if (refusedAt < 0 && b.issuedByLane(bPeer) != a.issuedByLane(aPeer)) {
+                // The twin can meet its ceiling in a later round of a call: it stops there, a prefix of
+                // the rebasing node's grants, and its next call names the refusal.
+                val (ahead, short) = a.issuedByLane(aPeer) to b.issuedByLane(bPeer)
+                assertTrue(ahead.zip(short).all { (x, y) -> x >= y }, "call ${a.calls}: the two made different picks, $ahead against $short")
+                assertTrue(b.step(bPeer) is ScheduleOutcome.PositionCeiling, "call ${a.calls}: the two made different picks, and the twin did not refuse")
+                refusedAt = b.calls
+            }
         }
         val beyond = a.grants
         println("twin: refused at call $refusedAt after ${b.grants} grants; the rebasing node rebased ${rebasing.peers[0].node.rebasesForTest} times")
