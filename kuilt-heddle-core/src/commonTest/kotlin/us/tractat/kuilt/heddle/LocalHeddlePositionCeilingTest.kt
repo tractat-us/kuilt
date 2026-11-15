@@ -51,7 +51,7 @@ class LocalHeddlePositionCeilingTest {
 
     private val root = engine().root
 
-    private fun engine() = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+    private fun engine() = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
         .apply { reconcileCapacity(1L) }
 
     /** A history in which lanes idle and wake, so the wake memory is not empty. */
@@ -315,7 +315,7 @@ class LocalHeddlePositionCeilingTest {
             lane("a", Weight.of(1L shl 57, 3L))
             lane("b", Weight.of(1L, 192L))
         }
-        val engine = LocalHeddle.fromTopology(first, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+        val engine = LocalHeddle.bootWhole(first, LocalPolicy(defaultReservation = 1L), epoch = 1L)
         val result = engine.apply(second, generation = 1L)
         val refusal = result.refusals.singleOrNull()
         assertAll(
@@ -380,7 +380,7 @@ class LocalHeddlePositionCeilingTest {
         }
         val a = clampTopology.groupId("a")
         val b = clampTopology.groupId("b")
-        val engine = LocalHeddle.fromTopology(clampTopology, LocalPolicy(defaultReservation = 1L, sleeperCredit = 1L), epoch = 1L)
+        val engine = LocalHeddle.bootWhole(clampTopology, LocalPolicy(defaultReservation = 1L, sleeperCredit = 1L), epoch = 1L)
             .apply { reconcileCapacity(1L) }
         // b is seen idle, never asking, so the next pick that sees it waiting clamps it as a waker.
         repeat(2) {
@@ -421,7 +421,7 @@ class LocalHeddlePositionCeilingTest {
         }
         val a = clampTopology.groupId("a")
         val b = clampTopology.groupId("b")
-        val engine = LocalHeddle.fromTopology(clampTopology, LocalPolicy(defaultReservation = 1L, sleeperCredit = 1L), epoch = 1L)
+        val engine = LocalHeddle.bootWhole(clampTopology, LocalPolicy(defaultReservation = 1L, sleeperCredit = 1L), epoch = 1L)
             .apply { reconcileCapacity(1L) }
         repeat(2) {
             val lease = (engine.acquire(setOf(a), setOf(a), startedAt = 0L) as AcquireOutcome.Acquired).lease
@@ -458,7 +458,7 @@ class LocalHeddlePositionCeilingTest {
             group("rt", Weight.of(2)) { template(Weight.of(3, 2)) }
         }
         val rt = listOf("rt")
-        val engine = LocalHeddle.fromTopology(rtTopology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+        val engine = LocalHeddle.bootWhole(rtTopology, LocalPolicy(defaultReservation = 1L), epoch = 1L)
             .apply { reconcileCapacity(1L) }
         for (name in listOf("x", "y")) check(engine.attach(rt, name, generation = 1L).refusals.isEmpty())
         val x = rtTopology.attachedChildId(rt, "x")

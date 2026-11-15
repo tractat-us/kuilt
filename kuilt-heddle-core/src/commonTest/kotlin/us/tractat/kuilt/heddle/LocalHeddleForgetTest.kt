@@ -24,7 +24,7 @@ class LocalHeddleForgetTest {
     private val policy = LocalPolicy(defaultReservation = 2L)
     private val tenants = listOf("tenants")
 
-    private fun engine(): LocalHeddle = LocalHeddle.fromTopology(tree, policy, epoch = 0L).also { it.reconcileCapacity(4L) }
+    private fun engine(): LocalHeddle = LocalHeddle.bootWhole(tree, policy, epoch = 0L).also { it.reconcileCapacity(4L) }
 
     private fun encodedSize(h: LocalHeddle): Int = Json.encodeToString(LocalHeddleSnapshot.serializer(), h.persist()).length
 

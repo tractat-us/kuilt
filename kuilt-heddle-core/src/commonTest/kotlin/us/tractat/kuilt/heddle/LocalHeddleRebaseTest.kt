@@ -36,7 +36,7 @@ class LocalHeddleRebaseTest {
 
     /** An engine in which every lane has been picked once, so every lane is seated and observed waiting. */
     private fun engine(rebase: Boolean = true, over: Topology = topology) =
-        LocalHeddle.fromTopology(over, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+        LocalHeddle.bootWhole(over, LocalPolicy(defaultReservation = 1L), epoch = 1L)
             .apply {
                 rebaseForTest = rebase
                 reconcileCapacity(1L)

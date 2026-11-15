@@ -61,7 +61,7 @@ class LocalHeddleApplyTest {
     private val c = t.attachedChildId(listOf("tenants"), "c-7f3a")
 
     private fun engine(topology: Topology = t): LocalHeddle =
-        LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 2L), epoch = 0L).also { it.reconcileCapacity(4L) }
+        LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 2L), epoch = 0L).also { it.reconcileCapacity(4L) }
 
     private fun LocalHeddle.edgeInto(group: GroupId): AttachmentId = assertNotNull(snapshot().ledger.lineageOf(group)).last()
 
