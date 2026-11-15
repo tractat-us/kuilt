@@ -63,13 +63,14 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * [persist] replaces the entry, so bad data never leaves it dead.
  *
  * Fresh does not mean unused, because durable spans still carry this replica's old dots (#3407).
- * So a [WarpSpanExporter] whose read of the stored spans lands raises the clock's floor to the
- * highest own-replica dot that read found, a span's stamp or a predecessor a span names, before the
- * turn mints anything, and a clock that has not read yet keeps the floor until its read lands. A
- * merge raises it the same way from the remote set. Still uncovered: a dot no stored span carries
- * or names (its span evicted past `maxSpans` or cleared before the restart) can be re-minted after
- * a corrupt entry until a peer hands it back, and a stamp minted before that merge keeps the
- * collision (#3435). The floor takes every stored or merged dot's `seq` as given, so one claiming
+ * So a [WarpSpanExporter] whose read of the stored spans lands raises the clock's floor before the
+ * turn mints anything, and a clock that has not read yet keeps the floor until its read lands. The
+ * floor is the larger of two numbers: the highest own-replica dot that read found, a span's stamp or
+ * a predecessor a span names, and the high-water mark the span bytes carry (#3435). Every span write
+ * carries this clock's `seq` as it stood when the bytes were encoded, so the mark covers dots whose
+ * spans were since evicted past `maxSpans` or cleared. A merge raises the floor from the remote set,
+ * and an export raises it from an explicit stamp of this replica's. The floor fails only when both
+ * keys are corrupt. The floor takes every stored or merged dot's `seq` as given, so one claiming
  * `Long.MAX_VALUE` leaves the clock [ClockTick.Exhausted] (#3432).
  *
  * ## Thread-safety
@@ -117,6 +118,13 @@ public class WarpCausalClock(private val replica: ReplicaId) {
 
     /** Whether a [recover] read has landed, so the clock mints and persists. */
     internal val isArmed: Boolean get() = lock.withLock { state is ClockState.Armed }
+
+    /**
+     * The highest `seq` this clock has minted or knows is used, or `null` while no read has landed:
+     * an unarmed clock does not know the durable one (#3435). A [WarpSpanExporter] carries it in the
+     * span bytes, so a later process whose clock entry is corrupt still floors above it.
+     */
+    internal fun highWater(): Long? = lock.withLock { (state as? ClockState.Armed)?.seq }
 
     /**
      * Fold a [remote] frontier (received from another replica via anti-entropy) into
