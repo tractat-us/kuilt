@@ -160,7 +160,7 @@ class HeddleAcceptanceTest {
                 local.acquire(waitingGroups, waitingGroups, startedAt = call.toLong(), reservation = MAX_GRANT),
                 "call ${call + 1}: LocalHeddle picks",
             ).lease
-            assertIs<LeaseOutcome.Done>(local.complete(lease.id, actualCost = MAX_GRANT))
+            assertIs<LeaseOutcome.Done>(local.complete(lease.id, actualCost = MAX_GRANT, waiting = emptySet()))
 
             if (outcome != ScheduleOutcome.Delegated(1) || picked != listOf(lease.leaf)) {
                 if (divergences.size < MAX_REPORTED) divergences += "call ${call + 1}: $outcome to $picked, LocalHeddle ${lease.leaf.value}"

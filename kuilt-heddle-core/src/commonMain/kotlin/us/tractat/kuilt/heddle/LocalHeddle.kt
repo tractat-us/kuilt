@@ -243,8 +243,9 @@ public sealed interface LeaseOutcome {
  * the tree and reserves an estimated cost for it. When the work finishes, [complete] charges what
  * it really cost and hands back what it did not use. Cost is time, by convention, in whatever unit
  * the caller counts in. A lease that runs long is [extend]ed, or charged its overrun at the end;
- * a charge is never refused. Work another scheduler already started is [admit]ted, with no pick;
- * pass the waiting set to [admit] and the wake memory observes it as the pick would have.
+ * a charge is never refused. Work another scheduler already started is [admit]ted, with no pick.
+ * Every call that charges, [admit], [extend] and [complete], takes the waiting set, and the wake
+ * memory observes it as a pick would have before the charge lands (#3471).
  *
  * Start one with [fromTopology], and change the tree while it runs with [apply]: a reload is one
  * unit, a reweight moves the leases open under it onto the new edge, and a removal drains (see
@@ -415,14 +416,12 @@ public sealed interface LeaseOutcome {
  * front is below its floor is seated at the floor instead, which costs it a turn and never gives it
  * one. The ceiling is measured net of
  * returns, so returned service never reaches it (#3360). A charging call, [admit], [extend] or an
- * overrun at [complete], runs the same step at every parent on its path, so a parent driven only
- * that way is rebased too. A busy parent still climbs past the ceiling where no whole step fits.
- * The rebase aims at the weighted mean of the children it counts as demanding, so one that is
- * never served drags that mean down with it until it sits less than one step above the origin, and
- * the rebase stops; a child counted demanding that is in fact idle does the same, which is what a
- * charging call with no waiting set does with a child a pick last saw demanding, a plain [admit],
- * an [extend] or an overrunning [complete] alike. Either way the picks are unaffected: they go on
- * ordering the wide positions exactly. A weight set so fine that one step or one full lease could
+ * overrun at [complete], runs the same step at every parent on its path, bounded by the call's own
+ * waiting set, so a parent driven only that way is rebased too. A busy parent still climbs past the
+ * ceiling where no whole step fits. The rebase aims at the weighted mean of the children that are
+ * demanding, so one that is never served drags that mean down with it until it sits less than one
+ * step above the origin, and the rebase stops. The picks are unaffected: they go on ordering the
+ * wide positions exactly. A weight set so fine that one step or one full lease could
  * carry a child past its ceiling is refused at [apply] instead (#3353).
  *
  * Nothing is narrowed on the way to a pick, a seat or a wake clamp, so each is taken against the
@@ -596,19 +595,21 @@ public class LocalHeddle private constructor(
      * [ledger], a charging call's result down [path], with the origin step run at every parent on
      * the path, top down (#3353 review, item I): the same rule a pick runs, so a parent driven only
      * through [admit], [extend] and overruns at [complete] is rebased too. [waiting] is the call's
-     * waiting set, when it has one. Every raise is counted ([FairShareAllocator.adopt]), and the
-     * call keeps the result in its one swap. Never throws: a parent with no step is left as it is.
+     * waiting set, observed on the way down ([observeAndDelegate]), so the step is bounded by who is
+     * demanding now and never by who was last seen demanding (#3471). Every raise is counted
+     * ([FairShareAllocator.adopt]), and the call keeps the result in its one swap. Never throws: a
+     * parent with no step is left as it is.
      */
     private fun rebasedAfterCharge(
         ledger: EntitlementLedger,
         path: List<AttachmentId>,
-        waiting: ((AttachmentId) -> Demand)?,
+        waiting: (AttachmentId) -> Demand,
     ): EntitlementLedger {
         if (!rebaseForTest) return ledger
         var local = ledger
         for (edge in path) {
             val parent = checkNotNull(local.record(edge)) { "charged path edge ${edge.value} has no record" }.parent
-            val rebase = allocator.chargeRebase(parent, local, waiting, charged = edge) ?: continue
+            val rebase = allocator.chargeRebase(parent, local, waiting) ?: continue
             allocator.adopt(rebase)
             local = rebase.ledger
         }
@@ -696,41 +697,15 @@ public class LocalHeddle private constructor(
 
     /**
      * Charge work another scheduler already started at [leaf]: open a lease for it with no pick,
-     * delegating [reservation] down the leaf's lineage. Never refused for supply, since the work is
-     * already running; a shortfall at the root is minted.
+     * delegating [reservation] down the leaf's lineage, and leave the wake memory as
+     * `acquire(waiting, eligible = {leaf})` would have (#3320). Never refused for supply, since the
+     * work is already running; a shortfall at the root is minted.
      *
-     * Returns [AcquireOutcome.NoLiveLineage] when [leaf] is not leasable (the root, a group with an
-     * active child, or a group the topology declares no lane: see "What a lease ends at"), or has no
-     * lineage of active edges to the root. The ledger is then unchanged.
-     *
-     * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION].
-     * @sample us.tractat.kuilt.heddle.sampleAdmitExternal
-     */
-    public fun admit(leaf: GroupId, startedAt: Long, reservation: Long = policy.defaultReservation): AdmitOutcome = atomically {
-        requireReservation("reservation", reservation)
-        val base = ledger
-        if (!base.canEndAt(leaf)) return@atomically AcquireOutcome.NoLiveLineage(leaf)
-        val path = checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }
-
-        val (funded, minted) = fund(base, reservation)
-        val local = seatThenDelegate(funded, path, reservation, observedDemand(reservation))
-            ?: return@atomically AcquireOutcome.NoLiveLineage(leaf)
-        ledger = rebasedAfterCharge(local, path, waiting = null)
-        forcedMints += minted
-        AcquireOutcome.Acquired(open(leaf, path, reservation, startedAt))
-    }
-
-    /**
-     * [admit], observing [waiting] on the way: charge work another scheduler already started at
-     * [leaf], and leave the wake memory as `acquire(waiting, eligible = {leaf})` would have (#3320).
-     * For a caller whose work is always started elsewhere: the plain [admit] observes nothing, so
-     * a group it saw idle that comes back is never treated as a waker.
-     *
-     * At each group down [leaf]'s lineage it seats the newborns and clamps the wakers against
-     * [waiting], as that pick does, then delegates [reservation] down the lineage without picking.
-     * So it is never refused for supply, and the charge lands as the plain [admit]'s does. The
-     * equivalence holds wherever that acquire would lease; where it would be refused, this still
-     * charges.
+     * [waiting] is required, as it is on [extend] and [complete]: a charge is observed against who is
+     * waiting now, never against who was last seen waiting (#3471). At each group down [leaf]'s
+     * lineage it seats the newborns and clamps the wakers against [waiting], as that pick does, then
+     * delegates [reservation] down the lineage without picking. The equivalence holds wherever that
+     * acquire would lease; where it would be refused, this still charges.
      *
      * Nor is it refused at a concurrency ceiling (see "Ceilings"), so with ceilings set the
      * equivalence covers only a [leaf] with no group at its ceiling on its lineage. It observes
@@ -739,9 +714,10 @@ public class LocalHeddle private constructor(
      * nothing and returns [AcquireOutcome.NothingEligible], while this charges the work and observes
      * [leaf] as waiting, since it is running.
      *
-     * Returns [AcquireOutcome.NoLiveLineage] when [leaf] is not leasable or has no lineage of
-     * active edges to the root, as [admit] does. The ledger is then unchanged, but the wake memory
-     * has observed [waiting] at the root, as the refused acquire's pick would have when the engine can
+     * Returns [AcquireOutcome.NoLiveLineage] when [leaf] is not leasable (the root, a group with an
+     * active child, or a group the topology declares no lane: see "What a lease ends at"), or has no
+     * lineage of active edges to the root. The ledger is then unchanged, but the wake memory has
+     * observed [waiting] at the root, as the refused acquire's pick would have when the engine can
      * fund the reservation; where it cannot, that acquire returns [AcquireOutcome.SupplyExhausted]
      * and observes nothing.
      *
@@ -758,10 +734,7 @@ public class LocalHeddle private constructor(
         requireReservation("reservation", reservation)
         require(leaf in waiting) { "leaf must be in waiting" }
         val base = ledger
-        // Observed as the acquire's pick observes it, a capped leaf idle; the admitted leaf is
-        // running work whatever its ceiling, so it is kept.
-        val observed = belowCeilings(waiting, emptySet()).first + leaf
-        val seen = demands(base, observed, setOf(leaf), reservation).waiting
+        val seen = observedWaiting(base, waiting, running = leaf, reservation)
         if (!base.canEndAt(leaf)) {
             // The refused acquire's pick observes at the root before it finds nothing to pick.
             allocator.settle(root, base, seen)
@@ -770,15 +743,7 @@ public class LocalHeddle private constructor(
         val path = checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }
 
         val (funded, minted) = fund(base, reservation)
-        var local = funded
-        for (edge in path) {
-            val parent = checkNotNull(local.record(edge)) { "lineage edge ${edge.value} has no record" }.parent
-            local = allocator.settle(parent, local, seen)
-            local = checkNotNull(seatThenDelegate(local, listOf(edge), reservation, seen)) {
-                "the delegation of $reservation down ${edge.value}, admitted down a live lineage, was refused"
-            }
-        }
-        ledger = rebasedAfterCharge(local, path, seen)
+        ledger = rebasedAfterCharge(observeAndDelegate(funded, path, reservation, seen), path, seen)
         forcedMints += minted
         AcquireOutcome.Acquired(open(leaf, path, reservation, startedAt))
     }
@@ -786,20 +751,27 @@ public class LocalHeddle private constructor(
     /**
      * Reserve [amount] more for [lease], down the path it was opened on. Not a new pick.
      *
+     * [waiting] is every leaf with work queued, as for [acquire]; the lease's own leaf counts as
+     * waiting whatever [waiting] says, since its work is running and asking for more. It is observed
+     * at every group down the path before the extension lands, so a sibling that has gone idle is
+     * seen leaving before the extension moves its parent's clock, and comes back moved by it rather
+     * than owed it (#3471).
+     *
      * Returns [LeaseOutcome.PathDraining] when an edge of that path is no longer ACTIVE,
      * and [LeaseOutcome.SupplyExhausted] when the root holds less than [amount] and no capacity is
-     * reconciled. Neither changes anything.
+     * reconciled. Neither changes anything, the wake memory included.
      *
      * @throws IllegalArgumentException when [amount] is not in `1..`[MAX_RESERVATION].
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
-    public fun extend(lease: LeaseId, amount: Long): LeaseOutcome = atomically {
+    public fun extend(lease: LeaseId, amount: Long, waiting: Set<GroupId>): LeaseOutcome = atomically {
         requireReservation("extend amount", amount)
         val current = open[lease] ?: return@atomically missing(lease)
         val base = ledger
         base.firstNotActive(current.path)?.let { return@atomically LeaseOutcome.PathDraining(it) }
         val funded = supplied(base, amount) ?: return@atomically LeaseOutcome.SupplyExhausted
-        ledger = rebasedAfterCharge(delegateOrFail(funded, current.path, amount), current.path, waiting = null)
+        val seen = observedWaiting(base, waiting, running = current.lease.leaf, amount)
+        ledger = rebasedAfterCharge(observeAndDelegate(funded, current.path, amount, seen), current.path, seen)
         open[lease] = current.copy(lease = current.lease.copy(reserved = checkedAdd(current.lease.reserved, amount)))
         LeaseOutcome.Done(charged = 0L, overrun = 0L)
     }
@@ -809,6 +781,13 @@ public class LocalHeddle private constructor(
      * extended inline first (minted at the root if the root is short) and reported as the overrun;
      * below it, the unused remainder is handed back up the path. Never refused.
      *
+     * [waiting] is every leaf with work queued once this lease's work is done, as for [acquire]. An
+     * overrun is a charge, so where there is one [waiting] is observed at every group the overrun
+     * crosses before it lands, as [extend] observes it (#3471). The overrun is the running work's own
+     * charge, so the lease's leaf counts as waiting for it whatever [waiting] says, as in [extend],
+     * even when this was its last job. A completion within the reservation charges nothing new, so it
+     * observes nothing.
+     *
      * When an edge of the lease's path is no longer ACTIVE, an overrun cannot be delegated across
      * it. The reservation is still charged at the leaf, and the overrun is charged at the deepest
      * group of the path that ACTIVE edges still reach from the root (see "A draining path" in the
@@ -817,7 +796,7 @@ public class LocalHeddle private constructor(
      * @throws IllegalArgumentException when [actualCost] is negative.
      * @sample us.tractat.kuilt.heddle.sampleLocalLease
      */
-    public fun complete(lease: LeaseId, actualCost: Long): LeaseOutcome = atomically {
+    public fun complete(lease: LeaseId, actualCost: Long, waiting: Set<GroupId>): LeaseOutcome = atomically {
         require(actualCost >= 0L) { "actualCost must be non-negative, was $actualCost" }
         val current = open[lease] ?: return@atomically missing(lease)
         val path = current.path
@@ -830,9 +809,10 @@ public class LocalHeddle private constructor(
         var local = ledger
         var minted = 0
         if (overrun > 0L && reach.isNotEmpty()) {
+            val seen = observedWaiting(local, waiting, running = current.lease.leaf, overrun)
             val (funded, forced) = fund(local, overrun)
             minted = forced
-            local = rebasedAfterCharge(delegateOrFail(funded, reach, overrun), reach, waiting = null)
+            local = rebasedAfterCharge(observeAndDelegate(funded, reach, overrun, seen), reach, seen)
         }
         // What the leaf holds for this lease, and what of it is charged there; the rest goes back up.
         val atLeafHeld = if (toLeaf) checkedAdd(reserved, overrun) else reserved
@@ -844,6 +824,42 @@ public class LocalHeddle private constructor(
         forcedMints += minted
         open.remove(lease)
         LeaseOutcome.Done(charged = actualCost, overrun = overrun)
+    }
+
+    /**
+     * [waiting] as the demand a charging call observes in [base]: every leaf beneath a group at its
+     * concurrency ceiling counted idle, as the acquire's pick counts it, and [running], the leaf whose
+     * running work the call charges, counted waiting whatever its ceiling. Every charge is some
+     * running work's own, an overrunning [complete]'s included: counted idle, a leaf charged for its
+     * last job would be seen leaving before its own charge landed, and the sibling that idled
+     * through it would bank the charge.
+     */
+    private fun observedWaiting(base: EntitlementLedger, waiting: Set<GroupId>, running: GroupId, amount: Long): (AttachmentId) -> Demand {
+        val observed = belowCeilings(waiting, emptySet()).first + running
+        return demands(base, observed, setOf(running), amount).waiting
+    }
+
+    /**
+     * [amount] delegated down [path] from [start], observing [seen] at each group first: the seat
+     * and wake step the acquire's pick runs there ([FairShareAllocator.settle]), then the
+     * delegation, which seats an unseated edge against [seen] too. A refusal is a bug: [path] is a
+     * live lineage the caller checked.
+     */
+    private fun observeAndDelegate(
+        start: EntitlementLedger,
+        path: List<AttachmentId>,
+        amount: Long,
+        seen: (AttachmentId) -> Demand,
+    ): EntitlementLedger {
+        var local = start
+        for (edge in path) {
+            val parent = checkNotNull(local.record(edge)) { "charged path edge ${edge.value} has no record" }.parent
+            local = allocator.settle(parent, local, seen)
+            local = checkNotNull(seatThenDelegate(local, listOf(edge), amount, seen)) {
+                "the delegation of $amount down ${edge.value}, a live lineage, was refused"
+            }
+        }
+        return local
     }
 
     /**
@@ -1243,7 +1259,7 @@ public class LocalHeddle private constructor(
 
         // Every open lease's path is its leaf's one live lineage: no lease crosses a retired edge, and
         // the reload left no leaf with two live inbound edges, a divergent record or a cycle, which
-        // `delegateOrFail` and `releaseUp` throw on. An engine bug if not; the ledger is not swapped.
+        // `observeAndDelegate` and `releaseUp` throw on. An engine bug if not; the ledger is not swapped.
         for (lease in open.values) {
             val path = moved[lease.lease.id] ?: lease.path
             check(local.lineageOf(lease.lease.leaf) == path) {
@@ -1378,12 +1394,6 @@ public class LocalHeddle private constructor(
         return local
     }
 
-    /** [seatThenDelegate] down a path this engine captured itself, where a refusal is a bug. */
-    private fun delegateOrFail(start: EntitlementLedger, path: List<AttachmentId>, amount: Long): EntitlementLedger =
-        checkNotNull(seatThenDelegate(start, path, amount, observedDemand(amount))) {
-            "the delegation of $amount down a captured path ${path.map { it.value }} was refused"
-        }
-
     /** Charge [amount] at the end of [path], a prefix of a path this engine captured; a refusal is a bug. */
     private fun spendOrFail(start: EntitlementLedger, path: List<AttachmentId>, amount: Long): EntitlementLedger {
         if (amount == 0L) return start
@@ -1428,8 +1438,10 @@ public class LocalHeddle private constructor(
     }
 
     /**
-     * A demand view for a delegation that is not a pick: each edge as the allocator last observed
-     * it. Only seating reads it, to find the front a newborn joins, and it observes nothing.
+     * A demand view for the one delegation that is not a call with a waiting set: a reload moving an
+     * open lease onto its new path ([apply]). Each edge as the allocator last observed it; only
+     * seating reads it, to find the front a newborn joins, and it observes nothing. Every charging
+     * call observes its own waiting set instead (#3471).
      */
     private fun observedDemand(amount: Long): (AttachmentId) -> Demand {
         val wants = Demand(targetOutstanding = UNBOUNDED_TARGET, maximumUsefulGrant = amount)

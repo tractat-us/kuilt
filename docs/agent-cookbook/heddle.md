@@ -35,7 +35,7 @@ the share its weight promises; then charge what the work really cost.
 it did (`val (heddle, booted) = …`; `booted.refusals` is empty when the whole tree booted), and tell it how many slots you run with
 `reconcileCapacity(totalSlots)`. Each free slot is one **lease**:
 `acquire(waiting, eligible, startedAt)` names the leaf whose work runs next and reserves an
-estimated cost for it, and `complete(lease, actualCost)` charges what it really cost, hands the
+estimated cost for it, and `complete(lease, actualCost, waiting)` charges what it really cost, hands the
 unused part back, and reports any overrun, which is never refused.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleLocalLease -->
@@ -46,12 +46,12 @@ unused part back, and reports any overrun, which is never refused.
     check(first is AcquireOutcome.Acquired)
 
     // The job overran its 3-unit estimate: all 5 units are charged, 2 of them as overrun.
-    check(heddle.complete(first.lease.id, actualCost = 5L) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+    check(heddle.complete(first.lease.id, actualCost = 5L, waiting = queued) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
 
     // Over many slots the shares follow the weights, 2 : 1.
     val picks = (0 until 30).map {
         val lease = (heddle.acquire(queued, queued, startedAt = it.toLong()) as AcquireOutcome.Acquired).lease
-        heddle.complete(lease.id, actualCost = 3L)
+        heddle.complete(lease.id, actualCost = 3L, waiting = queued)
         lease.leaf
     }
     check(picks.count { it == heavy } in 19..21)
@@ -89,7 +89,7 @@ The whole loop in one place, from the admin's file to a restart:
     val queued = setOf(web, mobile, ana)
     val first = heddle.acquire(waiting = queued, eligible = queued, startedAt = 0L)
     check(first is AcquireOutcome.Acquired)
-    check(heddle.complete(first.lease.id, actualCost = 4L) is LeaseOutcome.Done)
+    check(heddle.complete(first.lease.id, actualCost = 4L, waiting = emptySet()) is LeaseOutcome.Done)
     val running = (heddle.acquire(queued, queued, startedAt = 4L) as AcquireOutcome.Acquired).lease
     val lost = (heddle.acquire(queued, queued, startedAt = 4L) as AcquireOutcome.Acquired).lease
 
@@ -102,8 +102,8 @@ The whole loop in one place, from the admin's file to a restart:
     val restored = LocalHeddle.restore(decoded.snapshot, policy, epoch = 1L)
     val orphan = restored.reconcileLeases(live = setOf(running.id), now = 10L).orphaned.single()
     check(orphan.lease == lost)
-    check(restored.complete(orphan.lease.id, orphan.defaultSettlement) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
-    check(restored.complete(running.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(restored.complete(orphan.lease.id, orphan.defaultSettlement, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(restored.complete(running.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
 ```
 
 Cost is time, in your own unit. `LocalPolicy.defaultReservation` is the estimate a lease
@@ -317,8 +317,8 @@ as one unit, swapped in once. Open leases survive it and are still charged once,
     // Spare is closed to new work and waits for its lease; heavy's lease moved onto its new edge.
     val waiting = reload.refusals.single()
     check(waiting is StepRefusal.Draining && waiting.child == spare && waiting.blockingLeases == listOf(leftover))
-    check(heddle.complete(running.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
-    check(heddle.complete(leftover.id, actualCost = 2L) == LeaseOutcome.Done(charged = 2L, overrun = 0L))
+    check(heddle.complete(running.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.complete(leftover.id, actualCost = 2L, waiting = emptySet()) == LeaseOutcome.Done(charged = 2L, overrun = 0L))
 
     // Once the drain is over, the same reload finishes the job.
     check(heddle.apply(after, generation = 1L).refusals.isEmpty())
@@ -544,9 +544,9 @@ The view takes each lane's queue of estimates as the engine does:
 
 **Intent:** someone started a job by hand, or another scheduler placed it, and it must still be
 charged to its group like any other, with no pick.
-**Primitive:** `LocalHeddle.admit(leaf, startedAt)`, or `admit(leaf, waiting, startedAt)`. Both
-open a lease at the leaf without a pick and are never refused for supply or at a ceiling, since
-the work is already running; a shortfall at the root is minted. Settle the lease with
+**Primitive:** `LocalHeddle.admit(leaf, waiting, startedAt)`, with `waiting` every leaf that has
+work queued. It opens a lease at the leaf without a pick and is never refused for supply or at a
+ceiling, since the work is already running; a shortfall at the root is minted. Settle the lease with
 `complete` as usual.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleAdmitExternal -->
@@ -560,17 +560,18 @@ the work is already running; a shortfall at the root is minted. Settle the lease
     // Mobile is now at its ceiling of one, and a second build started by hand is still charged.
     val another = heddle.admit(mobile, waiting = both, startedAt = 1L)
     check(another is AcquireOutcome.Acquired)
-    check(heddle.complete(another.lease.id, actualCost = 5L) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+    check(heddle.complete(another.lease.id, actualCost = 5L, waiting = emptySet()) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
 
     // A group with a template and nothing attached is not somewhere a build can run.
     val forks = farm.groupId("forks")
-    check(heddle.admit(forks, startedAt = 2L) == AcquireOutcome.NoLiveLineage(forks))
+    check(heddle.admit(forks, waiting = setOf(forks), startedAt = 2L) == AcquireOutcome.NoLiveLineage(forks))
 ```
 
-**Pass `waiting` when your work is always started elsewhere.** The plain `admit` observes nothing,
-so a sibling it saw idle that comes back is never treated as returning from idle. The overload
-leaves the wake memory as `acquire(waiting, eligible = {leaf})` would have, wherever that acquire
-would lease. The only refusal is `NoLiveLineage(leaf)`, for a name that is not leasable or has no
+**Every call that charges takes `waiting`.** `admit`, `extend` and `complete` each observe the
+waiting set you pass before their charge lands (#3471), so a sibling that sat idle while you
+charged is seen leaving first, and comes back without having banked your charge. `admit` leaves
+the wake memory as `acquire(waiting, eligible = {leaf})` would have, wherever that acquire would
+lease. `extend` and `complete` count the lease's own leaf as waiting, since the charge is its own running work's, even on its last job. `complete` observes only when it charges an overrun. The only refusal is `NoLiveLineage(leaf)`, for a name that is not leasable or has no
 live path from the root.
 
 ## Surviving a restart
@@ -593,7 +594,7 @@ made, and the work that did not survive settled.
     val restarted = LocalHeddle.restore(decoded.snapshot, policy, epoch = decoded.snapshot.epoch + 1)
 
     // The lease that was running is still open, and settles as it would have.
-    check(restarted.complete(running.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(restarted.complete(running.id, actualCost = 3L, waiting = queued) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
 ```
 
 The encoding is a two-element array, `[formatVersion, state]`, so a store that reorders object
@@ -632,7 +633,7 @@ engine holds open with the ones whose work you still have running, reports both 
 changes nothing. `orphaned` lists each open lease you did not name, with `elapsed`, which is
 `now − startedAt` and never below zero if your clock went back. `unknown` lists the ids you named
 that the engine holds no lease for. Which orphans to settle, and at what cost, is yours to decide;
-the documented default is `complete(lease, orphan.defaultSettlement)`: the time it ran, capped at
+the documented default is `complete(lease, orphan.defaultSettlement, waiting)`: the time it ran, capped at
 `granted`, its reservation plus extensions, because a dead job's overrun cannot be checked. Work
 that will resume belongs in `live`, so it never becomes an orphan.
 
@@ -646,7 +647,7 @@ that will resume belongs in `live`, so it never becomes an orphan.
     check(orphan.lease == lost && orphan.elapsed == 9L && orphan.granted == 3L)
 
     // It ran 9 units against the 3 it was granted, which a dead job cannot prove: charge 3.
-    check(heddle.complete(orphan.lease.id, orphan.defaultSettlement) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.complete(orphan.lease.id, orphan.defaultSettlement, waiting = queued) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
     check(heddle.reconcileLeases(live = setOf(kept.id), now = 110L).orphaned.isEmpty())
 ```
 
@@ -689,13 +690,13 @@ group still reached through live edges.
         lane("paused", maxConcurrent = 0)
     }
     check(heddle.apply(without, generation = 1L).refusals.single() is StepRefusal.Draining)
-    check(heddle.extend(lease.id, amount = 3L) is LeaseOutcome.PathDraining)
-    check(heddle.complete(lease.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.extend(lease.id, amount = 3L, waiting = emptySet()) is LeaseOutcome.PathDraining)
+    check(heddle.complete(lease.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
 
     // Settled once, the id is unknown to this engine; after a restart it is from an older epoch.
-    check(heddle.complete(lease.id, actualCost = 3L) == LeaseOutcome.Unknown)
+    check(heddle.complete(lease.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Unknown)
     val restarted = LocalHeddle.restore(heddle.persist(), policy, epoch = 1L)
-    check(restarted.complete(lease.id, actualCost = 3L) == LeaseOutcome.Stale(currentEpoch = 1L))
+    check(restarted.complete(lease.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Stale(currentEpoch = 1L))
 
     // Keep every weight's denominator at or below 30,719. A finer one is refused when it is
     // applied, and the rest of the reload lands.

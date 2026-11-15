@@ -78,13 +78,13 @@ class LocalHeddleCeilingTest {
         val held = List(2) { assertIs<AcquireOutcome.Acquired>(h.acquire(all, setOf(la), startedAt = 0L)).lease }
         val whileCapped = List(20) {
             val lease = assertIs<AcquireOutcome.Acquired>(h.acquire(all, all, startedAt = 0L)).lease
-            check(h.complete(lease.id, 1L) is LeaseOutcome.Done)
+            check(h.complete(lease.id, 1L, waiting = emptySet()) is LeaseOutcome.Done)
             lease.leaf
         }
-        check(h.complete(held[0].id, 1L) is LeaseOutcome.Done)
+        check(h.complete(held[0].id, 1L, waiting = emptySet()) is LeaseOutcome.Done)
         val afterWake = List(6) {
             val lease = assertIs<AcquireOutcome.Acquired>(h.acquire(all, all, startedAt = 0L)).lease
-            check(h.complete(lease.id, 1L) is LeaseOutcome.Done)
+            check(h.complete(lease.id, 1L, waiting = emptySet()) is LeaseOutcome.Done)
             lease.leaf
         }
         assertAll(
@@ -140,13 +140,13 @@ class LocalHeddleCeilingTest {
     @Test
     fun admitExtendAndCompleteAreNeverRefusedAtACeiling() {
         val h = engine(heavy(cap = 0L))
-        val plain = h.admit(a, startedAt = 0L)
+        val plain = h.admit(a, waiting = setOf(a), startedAt = 0L)
         val observing = h.admit(a, ab, startedAt = 0L)
         val lease = assertIs<AcquireOutcome.Acquired>(plain).lease
         assertAll(
             { assertIs<AcquireOutcome.Acquired>(observing) },
-            { assertEquals(LeaseOutcome.Done(0L, 0L), h.extend(lease.id, 1L)) },
-            { assertEquals(LeaseOutcome.Done(3L, 1L), h.complete(lease.id, 3L)) },
+            { assertEquals(LeaseOutcome.Done(0L, 0L), h.extend(lease.id, 1L, waiting = emptySet())) },
+            { assertEquals(LeaseOutcome.Done(3L, 1L), h.complete(lease.id, 3L, waiting = emptySet())) },
             { assertEquals(AcquireOutcome.NothingEligible, h.acquire(ab, setOf(a), startedAt = 0L), "and the lane stays paused") },
         )
     }
@@ -165,7 +165,7 @@ class LocalHeddleCeilingTest {
         val acquires = engine(t)
         for (h in listOf(admits, acquires)) {
             h.lease(setOf(la))
-            repeat(3) { check(h.complete(h.lease(setOf(lb, lc)).id, 1L) is LeaseOutcome.Done) }
+            repeat(3) { check(h.complete(h.lease(setOf(lb, lc)).id, 1L, waiting = emptySet()) is LeaseOutcome.Done) }
         }
         val admitted = admits.admit(lb, all, startedAt = 0L)
         val acquired = acquires.acquire(all, setOf(lb), startedAt = 0L)
@@ -344,7 +344,7 @@ class LocalHeddleCeilingTest {
             repeat(30) { step ->
                 val open = h.snapshot().leases
                 if (open.isNotEmpty() && rng.nextInt(3) == 0) {
-                    check(h.complete(open[rng.nextInt(open.size)].id, 1L) is LeaseOutcome.Done)
+                    check(h.complete(open[rng.nextInt(open.size)].id, 1L, waiting = emptySet()) is LeaseOutcome.Done)
                     return@repeat
                 }
                 val at = "seed $seed step $step"

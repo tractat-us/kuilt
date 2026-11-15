@@ -47,7 +47,7 @@ class LocalHeddleGuideTraceTest {
             val picked = heddle.explain(row.winner, waiting = both, eligible = both)
             val lease = heddle.acquire(both, both, startedAt = row.build.toLong())
             val leaf = (lease as? AcquireOutcome.Acquired)?.lease
-            if (leaf != null) heddle.complete(leaf.id, actualCost = 3L)
+            if (leaf != null) heddle.complete(leaf.id, actualCost = 3L, waiting = emptySet())
             checks += { assertEquals(row.winner, leaf?.leaf, "build ${row.build} goes to ${row.winner.value}") }
             checks += { assertEquals(WaitExplanation.WouldBePickedNext, picked, "build ${row.build}: the winner is picked next") }
             checks += {

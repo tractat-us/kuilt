@@ -33,7 +33,7 @@ class LocalHeddleForgetTest {
     private fun LocalHeddle.cycle(i: Int) {
         check(attach(tenants, "u$i", generation = 0L).refusals.isEmpty()) { "attach u$i" }
         val lease = lease(setOf(tree.attachedChildId(tenants, "u$i")), reservation = 2L, startedAt = i.toLong())
-        check(complete(lease.id, 1L + i % 3) is LeaseOutcome.Done) { "complete u$i" }
+        check(complete(lease.id, 1L + i % 3, waiting = emptySet()) is LeaseOutcome.Done) { "complete u$i" }
         check(detach(tenants, "u$i").refusals.isEmpty()) { "detach u$i" }
     }
 
@@ -80,9 +80,9 @@ class LocalHeddleForgetTest {
                 val all = (attached.sorted().map { tree.attachedChildId(tenants, it) } + tree.groupId("steady")).toSet()
                 h.acquire(all, all.filterTo(LinkedHashSet()) { r.nextBoolean() }.ifEmpty { all }, at, 1L + r.nextInt(3))
             }
-            8 -> if (open.isEmpty()) "idle" else h.extend(open[r.nextInt(open.size)].id, 1L + r.nextInt(2))
+            8 -> if (open.isEmpty()) "idle" else h.extend(open[r.nextInt(open.size)].id, 1L + r.nextInt(2), waiting = emptySet())
             9 -> if (open.isEmpty()) "idle" else h.cancel(open[r.nextInt(open.size)].id)
-            else -> if (open.isEmpty()) "idle" else h.complete(open[r.nextInt(open.size)].id, r.nextLong(0L, 6L))
+            else -> if (open.isEmpty()) "idle" else h.complete(open[r.nextInt(open.size)].id, r.nextLong(0L, 6L), waiting = emptySet())
         }
     }
 
@@ -280,7 +280,7 @@ class LocalHeddleForgetTest {
         fun twin(forgets: Boolean) = engine().also { h ->
             h.forgetsForTest = forgets
             users.forEach { check(h.attach(tenants, it, generation = 0L).refusals.isEmpty()) }
-            ids.forEach { check(h.complete(h.lease(setOf(it), reservation = 1L).id, 1L) is LeaseOutcome.Done) }
+            ids.forEach { check(h.complete(h.lease(setOf(it), reservation = 1L).id, 1L, waiting = emptySet()) is LeaseOutcome.Done) }
             val edge = checkNotNull(h.snapshot().ledger.lineageOf(ids[0])).last()
             val target = 2 * (positionCeiling(Weight.ONE) / 16)
             h.reshapeForTest { l ->
@@ -289,8 +289,8 @@ class LocalHeddleForgetTest {
                 l.piece(EntitlementLedger.of(gauges = mapOf(edge to gaugeAt(Int128.of(positionTicks), gauge.folded))))
             }
             val rebasesBefore = h.rebasesForTest
-            check(h.complete(h.lease(setOf(ids[1]), reservation = 1L).id, 1L) is LeaseOutcome.Done)
-            check(h.acquire(ids.toSet(), setOf(ids[1]), startedAt = 1L).let { it is AcquireOutcome.Acquired && h.complete(it.lease.id, 1L) is LeaseOutcome.Done })
+            check(h.complete(h.lease(setOf(ids[1]), reservation = 1L).id, 1L, waiting = emptySet()) is LeaseOutcome.Done)
+            check(h.acquire(ids.toSet(), setOf(ids[1]), startedAt = 1L).let { it is AcquireOutcome.Acquired && h.complete(it.lease.id, 1L, waiting = emptySet()) is LeaseOutcome.Done })
             check(h.rebasesForTest > rebasesBefore) { "the rig: the pick rebased" }
         }
         val subject = twin(forgets = true)
@@ -304,7 +304,7 @@ class LocalHeddleForgetTest {
             listOf(subject, reference).map { h ->
                 val out = h.acquire(ids.take(2).toSet(), ids.take(2).toSet(), startedAt = 10L + i)
                 check(out is AcquireOutcome.Acquired) { "acquire $i: $out" }
-                check(h.complete(out.lease.id, 1L + i % 2) is LeaseOutcome.Done)
+                check(h.complete(out.lease.id, 1L + i % 2, waiting = emptySet()) is LeaseOutcome.Done)
                 out.lease.leaf
             }
         }

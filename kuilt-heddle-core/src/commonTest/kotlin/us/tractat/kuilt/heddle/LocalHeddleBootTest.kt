@@ -43,7 +43,7 @@ class LocalHeddleBootTest {
     }
 
     private fun LocalHeddle.Boot.leasable(topology: Topology): Set<GroupId> =
-        topology.groupIds().filterTo(HashSet()) { heddle.admit(it, startedAt = 0L) is AcquireOutcome.Acquired }
+        topology.groupIds().filterTo(HashSet()) { heddle.admit(it, waiting = setOf(it), startedAt = 0L) is AcquireOutcome.Acquired }
 
     private fun Topology.groupIds(): List<GroupId> {
         val out = ArrayList<GroupId>()

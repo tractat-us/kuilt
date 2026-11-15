@@ -122,7 +122,7 @@ class LocalHeddleFineWeightTest {
             when (val out = engine.acquire(waiting, waiting, startedAt = step.toLong(), reservation = full).also { afterAcquire() }) {
                 is AcquireOutcome.Acquired -> {
                     acquired++
-                    engine.complete(out.lease.id, actualCost = cost)
+                    engine.complete(out.lease.id, actualCost = cost, waiting = emptySet())
                 }
                 is AcquireOutcome.PositionCeiling -> refused++
                 else -> error("unexpected $out")

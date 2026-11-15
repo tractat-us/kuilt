@@ -48,11 +48,11 @@ class LocalHeddleLeasableTest {
     fun admitRefusesAGroupThatIsNotALaneOrAttachedChild() {
         val h = engine()
         val before = h.snapshot().ledger
-        val refusedPool = h.admit(pool, startedAt = 0L)
-        val refusedAcme = h.admit(acme, startedAt = 0L)
+        val refusedPool = h.admit(pool, waiting = setOf(pool), startedAt = 0L)
+        val refusedAcme = h.admit(acme, waiting = setOf(acme), startedAt = 0L)
         val unchanged = h.snapshot().ledger
-        val lane = h.admit(s, startedAt = 0L)
-        val runtime = h.admit(c, startedAt = 0L)
+        val lane = h.admit(s, waiting = setOf(s), startedAt = 0L)
+        val runtime = h.admit(c, waiting = setOf(c), startedAt = 0L)
         assertAll(
             { assertTrue(before.isLeaf(pool) && before.isLeaf(acme), "the rig: the ledger reads both groups as leaves") },
             { assertEquals(AcquireOutcome.NoLiveLineage(pool), refusedPool, "a group with a template with nothing attached") },
@@ -74,7 +74,7 @@ class LocalHeddleLeasableTest {
         val share = h.entitlement(s, everyone, totalSlots = 4L)
         val outs = (0 until 20).map {
             val out = h.acquire(everyone, everyone, startedAt = it.toLong())
-            if (out is AcquireOutcome.Acquired) h.complete(out.lease.id, 1L)
+            if (out is AcquireOutcome.Acquired) h.complete(out.lease.id, 1L, waiting = emptySet())
             out
         }
         val leaves = outs.map { (it as? AcquireOutcome.Acquired)?.lease?.leaf ?: GroupId("$it") }

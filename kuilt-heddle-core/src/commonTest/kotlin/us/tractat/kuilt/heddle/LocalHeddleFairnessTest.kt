@@ -133,14 +133,23 @@ class LocalHeddleFairnessTest {
                     // (§7.2, #3416 review): 4 picks moved to a and 1 to c, off b, and the overall error
                     // rose from 0.011151 to 0.011287, the window's unmoved. The two-reading shift it
                     // replaces erred both ways, and here happened to err toward the reference.
-                    "a=6662 b=2958 c=3182 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
-                        "exhaustedAcquires=0 exhaustedExtends=0 inlineOverruns=878 filtered=1489 seesExtended=1994 wakes=1030 " +
+                    // Re-pinned for charging calls that observe their waiting set (#3471): an extend or
+                    // an overrun sees an idle leaf leave before it lands, so 19 picks moved off a and 27
+                    // off b, all 46 to c, the overall error fell from 0.011287 to 0.009803 and the window
+                    // error from 0.073276 to 0.068865. Fewer wakes, since a leaf seen leaving at a charge
+                    // comes back by the clock rather than as a waker. Re-pinned for an overrun on a
+                    // leaf's last job counting that leaf as waiting (#3471 review): the overrun now moves
+                    // its parent's clock, so 33 picks moved off a, 5 to b and 28 to c, the overall error
+                    // fell from 0.009803 to 0.007225 and the window error from 0.068865 to 0.062730, and
+                    // wakes fell from 849 to 775.
+                    "a=6610 b=2936 c=3256 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
+                        "exhaustedAcquires=0 exhaustedExtends=0 inlineOverruns=878 filtered=1489 seesExtended=1994 wakes=775 " +
                         "mints=322 forcedMints=0 minUnspent=33",
                     run.fingerprint(),
                 )
             },
-            { assertEquals(0.011287, overall, PIN_TOLERANCE, "pinned overall error") },
-            { assertEquals(0.073276, window, PIN_TOLERANCE, "pinned window error") },
+            { assertEquals(0.007225, overall, PIN_TOLERANCE, "pinned overall error") },
+            { assertEquals(0.062730, window, PIN_TOLERANCE, "pinned window error") },
         )
     }
 
@@ -161,9 +170,12 @@ class LocalHeddleFairnessTest {
                     // again for the UNIFIED joiner front (§7.2, #3353): 3 picks moved from a to b. Re-pinned
                     // for the net-service clock (§7.2, #3376): 31 picks moved to a and 42 to c, off b.
                     // Re-pinned for the carried shift remainder (#3416 review): 1 pick moved off a and
-                    // 2 off b, all 3 to c.
-                    "a=4061 b=1760 c=1919 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
-                        "exhaustedAcquires=2403 exhaustedExtends=40 inlineOverruns=737 filtered=914 seesExtended=1325 wakes=857 " +
+                    // 2 off b, all 3 to c. Re-pinned for charging calls that observe their waiting set
+                    // (#3471): 27 picks moved to a, 13 off b and 14 off c. Re-pinned for an overrun on a
+                    // leaf's last job counting that leaf as waiting (#3471 review): 12 picks moved off a
+                    // and 20 off c, all 32 to b, and wakes fell from 712 to 639.
+                    "a=4076 b=1779 c=1885 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
+                        "exhaustedAcquires=2403 exhaustedExtends=40 inlineOverruns=737 filtered=914 seesExtended=1325 wakes=639 " +
                         "mints=3316 forcedMints=460 minUnspent=0",
                     run.fingerprint(),
                 )
@@ -204,6 +216,9 @@ class LocalHeddleFairnessTest {
             return true
         }
     }
+
+    /** The leaves [waiting] marks, as a charging call's waiting set. */
+    private fun waitingNow(waiting: BooleanArray): Set<GroupId> = LEAVES.filterIndexedTo(HashSet()) { i, _ -> waiting[i] }
 
     private fun runFairness(seed: Int, churn: Boolean, supply: Supply): FairnessRun {
         val rng = Random(seed)
@@ -258,7 +273,7 @@ class LocalHeddleFairnessTest {
                 val plan = checkNotNull(plans[lease.id]) { "lease ${lease.id} untracked" }
                 if (plan.renews && plan.actual > lease.reserved) {
                     if (harness.topUp(plan.reservation, force = false)) {
-                        assertEquals(LeaseOutcome.Done(0L, 0L), heddle.extend(lease.id, plan.reservation))
+                        assertEquals(LeaseOutcome.Done(0L, 0L), heddle.extend(lease.id, plan.reservation, waiting = waitingNow(waiting)))
                         run.extends++
                     } else {
                         // The work runs on unrenewed and `complete` covers it: a lease that kept
@@ -269,7 +284,7 @@ class LocalHeddleFairnessTest {
                 } else {
                     val overrun = maxOf(0L, plan.actual - lease.reserved)
                     if (overrun > 0L) harness.topUp(overrun, force = true)
-                    assertEquals(LeaseOutcome.Done(plan.actual, overrun), heddle.complete(lease.id, plan.actual))
+                    assertEquals(LeaseOutcome.Done(plan.actual, overrun), heddle.complete(lease.id, plan.actual, waiting = waitingNow(waiting)))
                     if (overrun > 0L) run.inlineOverruns++
                     run.completes++
                     plans.remove(lease.id)

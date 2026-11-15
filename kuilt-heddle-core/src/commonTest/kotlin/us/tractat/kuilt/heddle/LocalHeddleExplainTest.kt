@@ -29,7 +29,7 @@ class LocalHeddleExplainTest {
     /** Acquire with [waiting] as both sets, complete at the reservation, and return the leaf. */
     private fun cycle(h: LocalHeddle, waiting: Set<GroupId>): GroupId {
         val lease = h.lease(waiting)
-        h.complete(lease.id, lease.reserved)
+        h.complete(lease.id, lease.reserved, waiting = emptySet())
         return lease.leaf
     }
 
@@ -183,7 +183,7 @@ class LocalHeddleExplainTest {
         // z waits through four slots it cannot run, so x and y run two each.
         repeat(4) {
             val lease = (h.acquire(waiting, setOf(x, y), startedAt = 0L) as AcquireOutcome.Acquired).lease
-            h.complete(lease.id, lease.reserved)
+            h.complete(lease.id, lease.reserved, waiting = emptySet())
         }
         // y ties x and loses on id: its side is at 2, not above the eligible front of x and y (2), so
         // it was a candidate. It is above the front of all three waiting (4/3), which says z is owed.
@@ -205,7 +205,7 @@ class LocalHeddleExplainTest {
         // Everyone waits throughout; z runs ten slots, then y ten, so ev(x) = 0, ev(y) = 10/10, ev(z) = 10.
         for (only in listOf(z, y)) repeat(10) {
             val lease = (h.acquire(waiting, setOf(only), startedAt = 0L) as AcquireOutcome.Acquired).lease
-            h.complete(lease.id, lease.reserved)
+            h.complete(lease.id, lease.reserved, waiting = emptySet())
         }
         val why = h.explain(y, waiting, setOf(x, y), reservation = 5L)
         // y's side (1) is below the share line of all three (20/12), yet above the line the pick drew
@@ -286,7 +286,7 @@ class LocalHeddleExplainTest {
                         acquires++
                     }
                     open.isEmpty() -> reshape(h, rng)
-                    draw == 5 -> h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(8).toLong())
+                    draw == 5 -> h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(8).toLong(), waiting = emptySet())
                     draw == 6 -> h.cancel(open[rng.nextInt(open.size)].id)
                     else -> reshape(h, rng)
                 }

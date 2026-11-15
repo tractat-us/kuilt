@@ -33,7 +33,7 @@ children's weights do not fit together, tell it how many slots you run with
     check(first is AcquireOutcome.Acquired)
 
     // The job overran its 3-unit estimate: all 5 units are charged, 2 of them as overrun.
-    check(heddle.complete(first.lease.id, actualCost = 5L) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+    check(heddle.complete(first.lease.id, actualCost = 5L, waiting = queued) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
 ```
 
 The rest of the surface, by what you would ask it:
@@ -205,11 +205,12 @@ rewrites a gauge: a rebase moves every child alike, and no joiner landing under
 it is held at its floor. The origin goes to where the demanding children stand on
 average, held short of any child's floor, the mirror of its ceiling. So a child
 behind the average reads below zero, and a heavy child joining lighter ones does
-not land past its ceiling. A demanding child that is never served still gets
-there: each rebase carries it down to its floor, where it holds the next one at
-nothing. So does a child `LocalHeddle` last saw demanding, idle since, for a plain
-`admit`'s rebase, and, on `HeddleNode`, several schedulers granting one child at
-once (design §7.1).
+not land past its ceiling. A busy parent beside a demanding child that is never
+served still climbs past it: that child drags the demanding children's average down
+with it until no whole step of the rebase fits. So can several schedulers granting
+one child at once on `HeddleNode` (design §7.1). The picks are unaffected either way.
+Every `LocalHeddle` call that charges, `admit`, `extend` and `complete`, takes the
+waiting set and observes it before its charge lands (#3471).
 
 ## Deciding who runs next
 

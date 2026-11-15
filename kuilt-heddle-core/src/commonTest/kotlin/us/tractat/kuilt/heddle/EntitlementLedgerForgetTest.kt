@@ -301,9 +301,9 @@ class EntitlementLedgerForgetTest {
                 val all = leasable(history)
                 h.acquire(all, all.filterTo(HashSet()) { r.nextBoolean() }.ifEmpty { all }, at, 1L + r.nextInt(3))
             }
-            6 -> if (open.isEmpty()) "idle" else h.extend(open[r.nextInt(open.size)].id, 1L + r.nextInt(2))
+            6 -> if (open.isEmpty()) "idle" else h.extend(open[r.nextInt(open.size)].id, 1L + r.nextInt(2), waiting = emptySet())
             7 -> if (open.isEmpty()) "idle" else h.cancel(open[r.nextInt(open.size)].id)
-            else -> if (open.isEmpty()) "idle" else h.complete(open[r.nextInt(open.size)].id, r.nextLong(0L, 6L))
+            else -> if (open.isEmpty()) "idle" else h.complete(open[r.nextInt(open.size)].id, r.nextLong(0L, 6L), waiting = emptySet())
         }
     }
 
