@@ -619,7 +619,7 @@ public class FairShareAllocator(
         return when (demandingObserved[edge.record.id]) {
             false -> true
             true -> false
-            null -> edge.gauge != null && HeddlePolicy.effectiveTicksWide(edge) < Int128.ZERO
+            null -> edge.gauge != null
         }
     }
 
