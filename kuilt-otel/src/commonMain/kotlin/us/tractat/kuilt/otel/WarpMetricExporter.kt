@@ -77,7 +77,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  *
  * - [record] and the single-point mutators return a [MetricExportResult]. Counting an update twice
  *   is wrong, so the result says which updates a retry may send. [MetricExportResult.Refused] is
- *   an overflow: nothing was counted, and the same call would be refused again.
+ *   an overflow: nothing was counted, and the same call may be refused again until that series is
+ *   cleared or evicted.
  *   [MetricExportResult.Partial] lists in `uncounted` exactly the updates of a kind whose read the
  *   store refused (#3390), so recording that list again counts each of them once. Every other
  *   update of a Partial was counted, in memory, and is not yet on disk where its write was
@@ -431,7 +432,6 @@ public class WarpMetricExporter(
         StoredKind.entries.forEach { kind ->
             val read = readKind(kind)
             if (read is PersistedRead.Owed) {
-                persistence.recoveryFailed(read.cause)
                 logRefusal(kind, read)
             }
         }
@@ -496,6 +496,7 @@ public class WarpMetricExporter(
         read: KindRead<V>,
         series: LinkedHashMap<MetricKey, V>,
     ): PersistedRead {
+        if (read is KindRead.Refused) persistence.recoveryFailed(read.cause)
         if (read is KindRead.Undecodable) {
             persistence.recoveryFailed(read.cause)
             logger.warn(read.cause) { "${kind.storeKey.name}: corrupt store entry, starting fresh" }
@@ -1384,7 +1385,8 @@ public sealed interface MetricExportResult {
     /**
      * Nothing was counted: an update would carry one of this replica's counts past
      * [Long.MAX_VALUE], so the whole call was refused before anything was applied or written. The
-     * same call is refused the same way again; a retry has to leave out the series [overflow] names.
+     * same call may be refused again until that series is cleared or evicted; a retry has to leave
+     * out the series [overflow] names.
      */
     public data class Refused(public val overflow: MetricOverflowException) : MetricExportResult
 

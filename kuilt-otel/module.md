@@ -146,7 +146,8 @@ hands over. `KuiltMetricExporter`, in `kuilt-otel-sdk`, is the bridge between th
 nothing about the collector, which hears about the update on a later drain.
 
 The result says what a retry may send. A `Refused` is an overflow: the whole call
-was refused before anything was applied, and the same call is refused again. A
+was refused before anything was applied, and the same call may be refused again until
+that series is cleared or evicted. A
 `Partial` lists in `uncounted` exactly the updates of a metric kind the store would
 not let it read. Those were not applied, so recording just that list again counts
 each once. Every other update of a `Partial` was counted. A refused write means
