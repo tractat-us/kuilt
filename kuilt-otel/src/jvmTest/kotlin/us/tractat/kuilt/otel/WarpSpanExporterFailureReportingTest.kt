@@ -351,6 +351,51 @@ class WarpSpanExporterFailureReportingTest {
         )
     }
 
+    /**
+     * An add the set's clock ceiling refuses attempted no write, so it is not a write outage (#3441).
+     * The healing turn is the shape that used to be one: its add runs inside the write section, and
+     * the throw was caught as a refused write, logged as one and latched, so the store's real outage
+     * after it went unreported.
+     */
+    @Test
+    fun anAddRefusedAtTheCeilingOpensNoWriteOutage() = runTest {
+        val store = WriteRefusingStore(RecordingStore())
+        val replica = ReplicaId("A")
+        val first = exporterFor(store)
+        val seeded = first.export(span(0))
+        val merged = first.merge(spanSetAtTheCeiling(first.snapshot(), replica))
+        var refusal: ExportResult = ExportResult.Success
+        var mergeResult: ExportResult = ExportResult.Success
+        var afterRefusal = 0
+        lateinit var lines: List<ILoggingEvent>
+
+        capturingLogsOf(SPAN_EXPORTER_LOGGER) { captured ->
+            // A second process over the same store, which reads its spans inside the write section.
+            val healing = exporterFor(store)
+            refusal = healing.export(span(1))
+            afterRefusal = captured.naming(WRITE_FRAGMENT).size
+
+            store.refuseWrites()
+            mergeResult = healing.merge(remote(2))
+            lines = captured.naming(WRITE_FRAGMENT).toList()
+        }
+
+        assertAll(
+            { assertEquals(ExportResult.Success, seeded, "precondition: the rig's span did not land") },
+            { assertEquals(ExportResult.Success, merged, "precondition: the rig's ceiling did not reach the store") },
+            { assertIs<ArithmeticException>(assertIs<ExportResult.Failure>(refusal).cause, "precondition: the export did not reach the ceiling") },
+            { assertIs<ExportResult.Failure>(mergeResult, "precondition: the store's refusal did not reach the merge") },
+            { assertEquals(0, afterRefusal, "the ceiling refusal was reported as a durable write failure") },
+            {
+                val only = lines.singleOrNull()?.formattedMessage
+                assertTrue(
+                    only != null && MERGE_FRAGMENT in only,
+                    "the store's outage after the refusal was not reported once, by the merge: ${lines.map { it.formattedMessage }}",
+                )
+            },
+        )
+    }
+
     private companion object {
         /** The exporter's logger name, spelled out because the production constant is private. */
         const val SPAN_EXPORTER_LOGGER = "us.tractat.kuilt.otel.WarpSpanExporter"
