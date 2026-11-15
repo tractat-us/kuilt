@@ -795,8 +795,11 @@ exact; no pick depends on it.
 
 **What bounds a parent's life is the `Long` counters.** An edge's issuance and an
 epoch's mint are `Long`s, about 9.2 × 10¹⁸ units. The call whose delegation or
-mint would pass one throws `ArithmeticException` and changes nothing, a charging
-call included.
+mint would pass one throws `ArithmeticException`. On `LocalHeddle` that call
+changes nothing, a charging call included. `FairShareAllocator.schedule`, and so
+`HeddleNode.schedule`, writes each round on its own, so a throw in round `k > 1`
+keeps rounds `1..k−1`, which have already landed; a throw in the first round
+writes nothing.
 
 - **No credit leaks through.** Nothing is narrowed before the effective
   position, so no front, seat or clamp is taken against an understated value. A

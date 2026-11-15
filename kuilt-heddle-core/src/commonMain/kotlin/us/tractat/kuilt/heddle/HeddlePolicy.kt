@@ -307,7 +307,7 @@ public object HeddlePolicy {
 
     /**
      * [front] kept unreduced, for the two writers that use it: a joiner of weight `w` is seated, or
-     * clamped, at [VirtualTime.ticksFor] on its own grid. The [Rational] form is for diagnostics;
+     * clamped, at [VirtualTime.ticksForWide] on its own grid. The [Rational] form is for diagnostics;
      * dividing it out is what used to grow every stored denominator (#3313).
      */
     internal fun frontTime(edges: List<PolicyEdge>, excluding: Set<AttachmentId> = emptySet()): VirtualTime? {

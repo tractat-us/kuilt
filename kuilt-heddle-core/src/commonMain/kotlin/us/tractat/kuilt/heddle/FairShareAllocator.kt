@@ -254,6 +254,10 @@ public class FairShareAllocator(
      *   refusal stopped it after them; otherwise [AllocationOutcome.WeightBudget] when [parent]'s
      *   children cannot be ordered, and
      *   [AllocationOutcome.NothingToDelegate] when it simply had nothing to grant.
+     * @throws ArithmeticException when a grant would carry an edge's issuance past `Long`, the
+     *   lifetime limit (#3475). In the first round that writes nothing, and the fork is dropped. In a
+     *   round `k > 1` it keeps rounds `1..k−1`, which have already landed, unlike [LocalHeddle],
+     *   whose calls change nothing when they throw.
      * @throws IllegalStateException when this allocator was built from an [AllocatorMemory] no
      *   allocator wrote, one holding a child's shift remainder at a denominator other than its
      *   weight's (#3416 review), and that child returns: a remainder is always on its edge's own

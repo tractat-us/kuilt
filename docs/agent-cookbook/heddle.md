@@ -829,7 +829,9 @@ parent's children cannot be ordered: weights gossip merged that a pick cannot su
 that are too fine for one full lease. It clears when one child closes. `PositionCeiling(parent)`
 is not returned today: a pick compares the full 128-bit position, so a long run keeps granting
 however far its children climb, at weights as far apart as 60 to 1, across a restart, and with
-several schedulers granting one child at once.
+several schedulers granting one child at once. What a long-running parent does meet is the
+lifetime limit: a grant that would carry an edge's issuance past `Long` throws
+`ArithmeticException`, and the rounds the call made before it stay landed (#3475).
 
 **A refusal writes nothing.** The first round of a call, with the newborns it seats before that
 pick, lands as one patch or not at all, so a refused call leaves the ledger and the wake clamps as

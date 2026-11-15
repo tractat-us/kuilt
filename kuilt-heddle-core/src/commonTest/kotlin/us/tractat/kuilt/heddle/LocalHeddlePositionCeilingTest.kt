@@ -397,7 +397,7 @@ class LocalHeddlePositionCeilingTest {
         )
     }
 
-    /** Put [lane]'s gross position at exactly [ticks], by raising its floor as [pushTowardCeiling] does. */
+    /** Put [lane]'s gross position at exactly [ticks], by raising its gauge as [pushTowardCeiling] does. */
     private fun LocalHeddle.pushTo(lane: GroupId, ticks: Long) {
         val below = ceilingOf(lane) - ticks
         pushTowardCeiling(lane, below)
