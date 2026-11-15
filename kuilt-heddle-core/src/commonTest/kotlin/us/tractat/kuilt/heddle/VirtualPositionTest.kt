@@ -118,10 +118,44 @@ class VirtualPositionTest {
             { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, p), Weight.of(1, q))), "L, the lcm of the denominators") },
             { assertTrue(!weightsFitTheBudget(listOf(Weight.of(Long.MAX_VALUE / 2 + 1), Weight.of(Long.MAX_VALUE / 2 + 1))), "S, the sum over L") },
             { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1L shl 59))), "G · S, the front's denominator in ticks") },
-            { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, 1L shl 40), Weight.ONE)), "S · d, the divisor ticksFor forms") },
+            { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, 30_719), Weight.of(1L shl 34))), "S · d, the divisor ticksFor forms") },
             // Each failing set passes every check before its own, so each arm reaches the one it names.
             { assertTrue(weightsFitTheBudget(listOf(Weight.of(1L shl 58))), "half the G · S set fits") },
-            { assertTrue(weightsFitTheBudget(listOf(Weight.of(1, 1L shl 20), Weight.ONE)), "a smaller S · d set fits") },
+            // A denominator at most 30,719, so the lease arm below passes and the control isolates S · d.
+            { assertTrue(weightsFitTheBudget(listOf(Weight.of(1, 30_719), Weight.of(1L shl 32))), "a smaller S · d set fits") },
+        )
+    }
+
+    /**
+     * The budget's fifth check, P1′ (#3353): every child `i` of the set keeps
+     * `positionCeiling(wᵢ) − rebaseThreshold(wᵢ) > MAX_RESERVATION · G + gridStep(S) · G · nᵢ/dᵢ`.
+     * A child is rebased only once it passes its threshold `R`, and the origin moves in whole grid
+     * steps, so one full lease from there must stay below the ceiling `C`. Each refused set below
+     * passes the four `Long` checks, so this arm is what refuses it, and each term has a set that
+     * only it refuses:
+     * - `1/30,720` alone: `C` clears one lease, `C − R` does not (the `− R` term);
+     * - `{1, 2⁵⁹ − 2⁵⁰}`: one origin step moves the heavy child about `2⁶³` ticks (the step term);
+     * - `2²⁰ · 176.4…` beside `1/3`: each fits alone, and the `1/3` beside it triples the heavy
+     *   child's step, so only a check over the whole set refuses it.
+     *
+     * At full leases that puts every denominator at or below 30,719: `{1/30,718, 1/30,719}` fits and
+     * `{1/30,719, 1/30,720}` does not.
+     */
+    @Test
+    fun aWeightSetTooFineForOneFullLeaseFailsTheBudget() {
+        val heavy = Weight.of(185_000_000_000_000_000L)
+        val third = Weight.of(1, 3)
+        assertAll(
+            { assertTrue(weightsFitTheBudget(listOf(Weight.of(1, 30_719))), "the finest weight that fits alone") },
+            { assertTrue(weightsFitTheBudget(listOf(Weight.of(1, 30_718), Weight.of(1, 30_719))), "the finest pair that fits") },
+            { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, 30_720))), "one step finer: the − R term refuses it") },
+            { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, 30_719), Weight.of(1, 30_720))), "a pair one step finer") },
+            { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, 30_721), Weight.of(1, 30_722))), "the band pair the review wedged") },
+            { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, 32_767))), "a lease alone passes the ceiling") },
+            { assertTrue(!weightsFitTheBudget(listOf(Weight.ONE, Weight.of((1L shl 59) - (1L shl 50)))), "one step passes the window") },
+            { assertTrue(weightsFitTheBudget(listOf(Weight.ONE, Weight.of(1L shl 58))), "a step half that fits") },
+            { assertTrue(weightsFitTheBudget(listOf(heavy)) && weightsFitTheBudget(listOf(third)), "each fits alone") },
+            { assertTrue(!weightsFitTheBudget(listOf(heavy, third)), "together the step triples on the heavy grid") },
         )
     }
 }
