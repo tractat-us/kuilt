@@ -626,10 +626,10 @@ is the type's rule rather than a `validate()` arm: `ForgottenEdges` refuses a
 negative entry when it is built, so a hand-built or corrupt snapshot that
 carries one fails to decode.
 
-**The format.** `forgotten` is encoded under snapshot format 2, which reads
-formats 1 and 2. v0.7.4 wrote format 1, and a format-1 snapshot that carries a
-fold is refused, since format 1 predates it. Every encoded change for the next
-release goes under that one bump.
+**The format.** `forgotten` is encoded under snapshot format 2, the only
+format 0.7.5 reads. v0.7.4 wrote format 1, which 0.7.5 refuses by name: a
+consumer coming from 0.7.4 starts from its topology again. Every encoded change
+for the next release goes under that one bump.
 
 #### As built: the engine forgets
 
@@ -637,8 +637,8 @@ release goes under that one bump.
 each `apply`, `attach` and `detach`. That swap forgets:
 
 - every RETIRED edge `forgetRefusal` passes and no open lease's path crosses.
-  Every one, not only the edges this swap retired, so a ledger restored from a
-  v0.7.4 snapshot compacts in its first swap;
+  Every one, not only the edges this swap retired, so an edge an open lease
+  held at an earlier swap goes at the first swap after that lease settles;
 - every PREPARED edge the topology in force does not want: a diff of that
   topology would leave it prepared and name it in no step. It moves the floor and
   gives its parent a row, nothing else. An attached child's prepared edge is kept
@@ -1036,8 +1036,8 @@ the `Long` ceiling on a position: at `2⁻⁴` the churn fairness error measured
   On the waker's grid that is `max(0, ⌈V · w · G⌉ − p − sleeperCredit · G)`
   ticks, the same up-rounding the seat takes. Sleeper credit is service units,
   so it scales onto the grid by `G` like any other service. The stored offset is
-  joined with `max` on the grid and kept there, so it never carries a front's
-  denominator into the next one. The clamp and the stored offset are 128-bit
+  kept on the grid, so it never carries a front's denominator into the next
+  one. The clamp and the stored offset are 128-bit
   (#3353): a waker idle since long before the parent's origin was raised sits far
   below its siblings, and the clamp carries it the whole way back to the front.
 
@@ -1186,8 +1186,10 @@ while it was away.
   with: a waker joining beside a returner at 200 and a starved sibling at 0
   was clamped to 0, not to their mean of 100, and kept the difference.
 - **A child this peer saw idle but never saw stop asking** is clamped to the
-  front, as above: one first seen idle, or one restored from a snapshot in
-  format 1, which predates the clock.
+  front, as above: one first seen idle. It holds no wake offset yet, since a
+  child clamped once is seen asking and then seen leaving, so its next wake is
+  a return. So the clamp is written, not joined with a stored offset (#3416
+  review).
 - **A child first seen already asking** is neither moved nor clamped. That
   covers every child of a restarted `HeddleNode`, which keeps no clock. It
   keeps its raw position, and is clamped only if that is below zero. This
