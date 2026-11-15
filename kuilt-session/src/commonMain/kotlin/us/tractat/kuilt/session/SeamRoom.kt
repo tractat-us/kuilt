@@ -1892,17 +1892,29 @@ internal class SeamRoom(
      * takes it and fires exactly one [MembershipEvent.Resumed]; a duplicate or stray
      * host ack finds no pending flight ([JoinerResumeMachine.takePendingFlight]
      * returns `null`) and emits nothing.
+     *
+     * **A terminal room resumes nothing (#3094).** A reconnect window that expires leaves its
+     * flight installed until [leave] takes it, and [markHostLost] announces `HostLost` before that.
+     * An ack handled in between settles the flight as [ResumeResult.WindowClosed], which is what
+     * [resume] returns on a terminal room, and emits no `Resumed`. The check and the `Resumed`
+     * share one critical section with the take, so an ack that saw the room live emitted its
+     * `Resumed` before [markHostLost] could set [hostLost]: no `Resumed` can follow `HostLost`.
      */
     private fun handleResumeAck(sender: PeerId) {
-        val deferred = lock.withLock {
+        val (flight, verdict) = lock.withLock {
             val host = hostPeerId
             if (host == null || sender != host) return
             val flight = resumeMachine?.takePendingFlight() ?: return
-            updateMemberLiveness(sender, Liveness.Connected)
-            flight
+            val verdict: ResumeResult.JoinerOutcome = if (closed || hostLost) {
+                ResumeResult.WindowClosed
+            } else {
+                updateMemberLiveness(sender, Liveness.Connected)
+                emitEvent(MembershipEvent.Resumed(selfId))
+                ResumeResult.Success
+            }
+            flight to verdict
         }
-        emitEvent(MembershipEvent.Resumed(selfId))
-        deferred.complete(ResumeResult.Success)
+        flight.complete(verdict)
     }
 
     /**
