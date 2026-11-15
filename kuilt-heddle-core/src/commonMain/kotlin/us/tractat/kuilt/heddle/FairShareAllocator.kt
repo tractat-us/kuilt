@@ -7,6 +7,7 @@ import us.tractat.kuilt.math.Rounding
 import us.tractat.kuilt.math.mulDiv
 import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.math.timesOrNull
+import us.tractat.kuilt.math.timesWide
 
 /**
  * Where a [FairShareAllocator] reads the ledger and lands its writes.
@@ -81,6 +82,18 @@ public class FairShareAllocator(
     private val wakeOffsets = HashMap<AttachmentId, Int128>()
     private val demandingObserved = HashMap<AttachmentId, Boolean>()
 
+    /** Each parent's net-service clock, in [CLOCK_TICKS_PER_UNIT] ticks of virtual time (#3376). */
+    private val clocks = HashMap<GroupId, Int128>()
+
+    /** Each child's `baseIssued − returned` when its parent's clock last ran. */
+    private val served = HashMap<AttachmentId, Long>()
+
+    /** Where its parent's clock stood when this peer saw a child stop asking. */
+    private val leftAt = HashMap<AttachmentId, Int128>()
+
+    /** SPIKE (#3376): emulate a replicated max-register clock, which can never run backward. */
+    internal var spikeClockMonotone: Boolean = false
+
     /**
      * Whether [schedule] rebases a busy parent by raising its origin (#3353). On by default; a test
      * switches it off to run a twin that never rebases and compare the picks.
@@ -124,6 +137,10 @@ public class FairShareAllocator(
     internal fun fork(): FairShareAllocator = FairShareAllocator(self, policy).also {
         it.wakeOffsets.putAll(wakeOffsets)
         it.demandingObserved.putAll(demandingObserved)
+        it.clocks.putAll(clocks)
+        it.served.putAll(served)
+        it.leftAt.putAll(leftAt)
+        it.spikeClockMonotone = spikeClockMonotone
         it.rebasesForTest = rebasesForTest
         it.rebaseEnabled = rebaseEnabled
     }
@@ -144,6 +161,8 @@ public class FairShareAllocator(
     internal fun forget(edges: Set<AttachmentId>) {
         wakeOffsets.keys.removeAll(edges)
         demandingObserved.keys.removeAll(edges)
+        served.keys.removeAll(edges)
+        leftAt.keys.removeAll(edges)
     }
 
     /** The demanding state [edge] was last observed in, or `null` when it has never been observed. */
@@ -261,6 +280,12 @@ public class FairShareAllocator(
         wakeOffsets.putAll(fork.wakeOffsets)
         demandingObserved.clear()
         demandingObserved.putAll(fork.demandingObserved)
+        clocks.clear()
+        clocks.putAll(fork.clocks)
+        served.clear()
+        served.putAll(fork.served)
+        leftAt.clear()
+        leftAt.putAll(fork.leftAt)
         rebasesForTest = fork.rebasesForTest
     }
 
@@ -644,8 +669,15 @@ public class FairShareAllocator(
         val s = ledger.current
         val edges = policyEdges(s, parent, demand)
         forgetDepartedChildren(edges, s, parent)
-        if (edges.isEmpty()) return
+        if (edges.isEmpty()) {
+            clocks.remove(parent)
+            return
+        }
 
+        val clock = runClock(parent, edges)
+        for (edge in edges) {
+            if (wasAsking(edge) && !HeddlePolicy.isDemanding(edge)) leftAt[edge.record.id] = clock
+        }
         val unseated = edges.filter { it.gauge == null }.mapTo(HashSet()) { it.record.id }
         val wakers = edges
             .filter { HeddlePolicy.isDemanding(it) && demandingObserved[it.record.id] == false }
@@ -656,7 +688,8 @@ public class FairShareAllocator(
             if (unseated.isNotEmpty()) {
                 ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
             }
-            clampWakers(edges, wakers, front)
+            clampWakers(edges, wakers.filterTo(HashSet()) { it !in leftAt }, front)
+            moveReturners(edges, wakers.filterTo(HashSet()) { it in leftAt }, clock)
         }
         for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
     }
@@ -736,6 +769,58 @@ public class FairShareAllocator(
         }
         demandingObserved.keys.removeAll(departed)
         wakeOffsets.keys.removeAll(departed)
+        served.keys.removeAll(departed)
+        leftAt.keys.removeAll(departed)
+    }
+
+    /** Whether this peer saw [edge] asking last round, seated: a child the clock counts. */
+    private fun wasAsking(edge: PolicyEdge): Boolean = demandingObserved[edge.record.id] == true && edge.gauge != null
+
+    /**
+     * Run [parent]'s net-service clock over what its children kept since it last ran, and return it
+     * (#3376). Only the children seen asking last round count: their `issued − returned` since
+     * then, over their total weight. A child not asking adds nothing, its own refunds included.
+     */
+    private fun runClock(parent: GroupId, edges: List<PolicyEdge>): Int128 {
+        var kept = 0L
+        val weights = ArrayList<Weight>()
+        for (edge in edges) {
+            val net = checkedSub(edge.baseIssued, edge.summary.returned)
+            val last = served.put(edge.record.id, net)
+            if (!wasAsking(edge)) continue
+            weights += edge.record.weight
+            if (last != null) kept = checkedAdd(kept, checkedSub(net, last))
+        }
+        val before = clocks[parent] ?: Int128.ZERO
+        if (weights.isEmpty() || kept == 0L) return before
+        // kept / Σw = kept · L / S, with Σw = S / L over the common denominator L.
+        val l = weights.fold(1L) { acc, w -> checkedMul(acc / gcdOf(acc, w.denominator), w.denominator) }
+        val sum = weights.fold(0L) { acc, w -> checkedAdd(acc, checkedMul(w.numerator, l / w.denominator)) }
+        val step = mulDiv(kept.timesWide(CLOCK_TICKS_PER_UNIT), l, sum, Rounding.CEILING)
+            ?: throw ArithmeticException("Int128 overflow: a clock step of $kept units")
+        val after = if (spikeClockMonotone) maxOf(before, before + step) else before + step
+        clocks[parent] = after
+        return after
+    }
+
+    /** Move each of [returners] forward by how far [clock] ran since it left, read on its own grid. */
+    private fun moveReturners(edges: List<PolicyEdge>, returners: Set<AttachmentId>, clock: Int128) {
+        for (edge in edges) {
+            val id = edge.record.id
+            if (id !in returners) continue
+            val left = checkNotNull(leftAt.remove(id)) { "a returner with no departure" }
+            val w = edge.record.weight
+            val shift = maxOf(Int128.ZERO, clockOnGrid(clock, w) - clockOnGrid(left, w))
+            wakeOffsets[id] = edge.offsetTicks + shift
+        }
+    }
+
+    /** [clock] on the grid of a child of weight [w]: `⌈clock · w · G / CLOCK_TICKS_PER_UNIT⌉` ticks. */
+    private fun clockOnGrid(clock: Int128, w: Weight): Int128 {
+        val scaled = mulDiv(clock, w.numerator, CLOCK_GRID, Rounding.CEILING)
+            ?: throw ArithmeticException("Int128 overflow: a clock of $clock read at weight $w")
+        return mulDiv(scaled, 1L, w.denominator, Rounding.CEILING)
+            ?: throw ArithmeticException("Int128 overflow: a clock of $clock read at weight $w")
     }
 
     /**
@@ -828,6 +913,12 @@ public class FairShareAllocator(
     private companion object {
         /** A backstop against a policy that never runs dry; one call never applies more grants. */
         const val MAX_ROUNDS_PER_CALL: Int = 100_000
+
+        /** The clock's grid above a child's own: the least common multiple of 1 to 16. */
+        const val CLOCK_GRID: Long = 720_720L
+
+        /** Clock ticks to a unit of virtual time: a child's [TICKS_PER_UNIT], times [CLOCK_GRID]. */
+        const val CLOCK_TICKS_PER_UNIT: Long = TICKS_PER_UNIT * CLOCK_GRID
     }
 }
 
