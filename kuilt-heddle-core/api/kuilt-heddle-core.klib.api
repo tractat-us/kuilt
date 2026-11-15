@@ -1214,13 +1214,29 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
     final fun reconcileLeases(kotlin.collections/Set<us.tractat.kuilt.heddle/LeaseId>, kotlin/Long): us.tractat.kuilt.heddle/LeaseReconciliation // us.tractat.kuilt.heddle/LocalHeddle.reconcileLeases|reconcileLeases(kotlin.collections.Set<us.tractat.kuilt.heddle.LeaseId>;kotlin.Long){}[0]
     final fun snapshot(): us.tractat.kuilt.heddle/LocalHeddleState // us.tractat.kuilt.heddle/LocalHeddle.snapshot|snapshot(){}[0]
 
+    final class Boot { // us.tractat.kuilt.heddle/LocalHeddle.Boot|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/LocalHeddle, us.tractat.kuilt.heddle/ApplyResult) // us.tractat.kuilt.heddle/LocalHeddle.Boot.<init>|<init>(us.tractat.kuilt.heddle.LocalHeddle;us.tractat.kuilt.heddle.ApplyResult){}[0]
+
+        final val heddle // us.tractat.kuilt.heddle/LocalHeddle.Boot.heddle|{}heddle[0]
+            final fun <get-heddle>(): us.tractat.kuilt.heddle/LocalHeddle // us.tractat.kuilt.heddle/LocalHeddle.Boot.heddle.<get-heddle>|<get-heddle>(){}[0]
+        final val result // us.tractat.kuilt.heddle/LocalHeddle.Boot.result|{}result[0]
+            final fun <get-result>(): us.tractat.kuilt.heddle/ApplyResult // us.tractat.kuilt.heddle/LocalHeddle.Boot.result.<get-result>|<get-result>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/LocalHeddle // us.tractat.kuilt.heddle/LocalHeddle.Boot.component1|component1(){}[0]
+        final fun component2(): us.tractat.kuilt.heddle/ApplyResult // us.tractat.kuilt.heddle/LocalHeddle.Boot.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/LocalHeddle = ..., us.tractat.kuilt.heddle/ApplyResult = ...): us.tractat.kuilt.heddle/LocalHeddle.Boot // us.tractat.kuilt.heddle/LocalHeddle.Boot.copy|copy(us.tractat.kuilt.heddle.LocalHeddle;us.tractat.kuilt.heddle.ApplyResult){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LocalHeddle.Boot.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LocalHeddle.Boot.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LocalHeddle.Boot.toString|toString(){}[0]
+    }
+
     final object Companion { // us.tractat.kuilt.heddle/LocalHeddle.Companion|null[0]
         final const val MAX_RESERVATION // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION|{}MAX_RESERVATION[0]
             final fun <get-MAX_RESERVATION>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION.<get-MAX_RESERVATION>|<get-MAX_RESERVATION>(){}[0]
 
         final fun decode(kotlin/ByteArray, kotlinx.serialization/BinaryFormat): us.tractat.kuilt.heddle/RestoreResult // us.tractat.kuilt.heddle/LocalHeddle.Companion.decode|decode(kotlin.ByteArray;kotlinx.serialization.BinaryFormat){}[0]
         final fun decode(kotlin/String, kotlinx.serialization/StringFormat): us.tractat.kuilt.heddle/RestoreResult // us.tractat.kuilt.heddle/LocalHeddle.Companion.decode|decode(kotlin.String;kotlinx.serialization.StringFormat){}[0]
-        final fun fromTopology(us.tractat.kuilt.heddle/Topology, us.tractat.kuilt.heddle/LocalPolicy, kotlin/Long): us.tractat.kuilt.heddle/LocalHeddle // us.tractat.kuilt.heddle/LocalHeddle.Companion.fromTopology|fromTopology(us.tractat.kuilt.heddle.Topology;us.tractat.kuilt.heddle.LocalPolicy;kotlin.Long){}[0]
+        final fun fromTopology(us.tractat.kuilt.heddle/Topology, us.tractat.kuilt.heddle/LocalPolicy, kotlin/Long): us.tractat.kuilt.heddle/LocalHeddle.Boot // us.tractat.kuilt.heddle/LocalHeddle.Companion.fromTopology|fromTopology(us.tractat.kuilt.heddle.Topology;us.tractat.kuilt.heddle.LocalPolicy;kotlin.Long){}[0]
         final fun restore(us.tractat.kuilt.heddle/LocalHeddleSnapshot, us.tractat.kuilt.heddle/LocalPolicy, kotlin/Long): us.tractat.kuilt.heddle/LocalHeddle // us.tractat.kuilt.heddle/LocalHeddle.Companion.restore|restore(us.tractat.kuilt.heddle.LocalHeddleSnapshot;us.tractat.kuilt.heddle.LocalPolicy;kotlin.Long){}[0]
     }
 }

@@ -845,10 +845,23 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun snapshot ()Lus/tractat/kuilt/heddle/LocalHeddleState;
 }
 
+public final class us/tractat/kuilt/heddle/LocalHeddle$Boot {
+	public fun <init> (Lus/tractat/kuilt/heddle/LocalHeddle;Lus/tractat/kuilt/heddle/ApplyResult;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/LocalHeddle;
+	public final fun component2 ()Lus/tractat/kuilt/heddle/ApplyResult;
+	public final fun copy (Lus/tractat/kuilt/heddle/LocalHeddle;Lus/tractat/kuilt/heddle/ApplyResult;)Lus/tractat/kuilt/heddle/LocalHeddle$Boot;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/LocalHeddle$Boot;Lus/tractat/kuilt/heddle/LocalHeddle;Lus/tractat/kuilt/heddle/ApplyResult;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/LocalHeddle$Boot;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHeddle ()Lus/tractat/kuilt/heddle/LocalHeddle;
+	public final fun getResult ()Lus/tractat/kuilt/heddle/ApplyResult;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class us/tractat/kuilt/heddle/LocalHeddle$Companion {
 	public final fun decode (Ljava/lang/String;Lkotlinx/serialization/StringFormat;)Lus/tractat/kuilt/heddle/RestoreResult;
 	public final fun decode ([BLkotlinx/serialization/BinaryFormat;)Lus/tractat/kuilt/heddle/RestoreResult;
-	public final fun fromTopology (Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/LocalPolicy;J)Lus/tractat/kuilt/heddle/LocalHeddle;
+	public final fun fromTopology (Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/LocalPolicy;J)Lus/tractat/kuilt/heddle/LocalHeddle$Boot;
 	public final fun restore (Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;Lus/tractat/kuilt/heddle/LocalPolicy;J)Lus/tractat/kuilt/heddle/LocalHeddle;
 }
 
