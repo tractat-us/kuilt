@@ -300,9 +300,10 @@ settles. A bad argument throws `IllegalArgumentException`, such as a reservation
 `LocalHeddle.MAX_RESERVATION` (2^44 cost units). Each child's progress is a count of
 sixteenths of a unit, stored exactly in 128 bits and read for a pick, net of what it returned, as
 a `Long` with a ceiling. A pick rebases a busy parent's children long before it, all by the same
-virtual time, so no pick changes. A parent still reaches the ceiling while a demanding child sits
-at zero and is never served, or when it is only ever charged through `admit`, `extend` or an
-overrun and never picked at. Returned service no longer counts toward it (#3360). At the ceiling, `acquire` and `extend` return
+virtual time, so no pick changes, and so does a charging call, `admit`, `extend` or an overrun. A
+parent still reaches the ceiling only where no whole step fits: a demanding child sits at zero and
+is never served, or the weights are so fine-grained that one step spans a child's ceiling. Returned
+service no longer counts toward it (#3360). At the ceiling, `acquire` and `extend` return
 `PositionCeiling(parent)` and change nothing, while `admit` and `complete` still charge. `IllegalStateException` is left only for a conflicted ledger, such as two live edges into
 one group, a split record or a cycle, which the public surface cannot reach today. The
 engine reads no clock and no random source, and it is not thread-safe: call every method under your
@@ -602,8 +603,9 @@ quantifies over (`enrolledReplicas()` reads it back); only a peer may depart its
 `ReserveOutcome.NoHoldings` and `ScheduleOutcome.NothingToDelegate`, so a node that never
 enrolled can no longer pass for an idle one. Nor can a parent whose children cannot be ordered:
 `schedule` rebases a busy parent by raising its replicated origin long before a child's position
-nears its ceiling, so no pick changes (#3353); it answers `PositionCeiling(parent)` only where a
-demanding child that is never served holds the rebase at zero, and
+nears its ceiling, so no pick changes (#3353); it answers `PositionCeiling(parent)` only where no
+whole step fits, a demanding child that is never served holding the rebase at zero or weights so
+fine-grained that one step spans a child's ceiling, and
 `WeightBudget(parent)` when gossip merged an active set whose weights a pick cannot sum in `Long`,
 both on a static node too. **A peer that cannot read a log entry stops there**:
 `GateClosed.Reason.UnreadableControlEntry` names the log index and format version, `enroll` is
