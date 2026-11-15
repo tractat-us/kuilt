@@ -71,9 +71,11 @@ public data class PolicyEdge(
  *   whose weight fits the budget past its position ceiling.
  * @property perChildOutstandingCap ceiling on a child's outstanding entitlement; a
  *   grant is trimmed so `outstanding` never crosses it. Defaults to unbounded.
- * @property sleeperCredit bounded virtual-time credit a waking child may keep, in the
- *   [wakeOffset][HeddlePolicy.wakeOffset] clamp. Defaults to `0` — the design default,
- *   "no unlimited idle credit" (§10.6). Non-negative.
+ * @property sleeperCredit bounded virtual-time credit a **clamped** waker may keep, in the
+ *   [wakeOffset][HeddlePolicy.wakeOffset] clamp: a child this peer saw idle but never saw stop
+ *   asking. A child it saw stop comes back moved by its parent's net-service clock, and this
+ *   credit does not apply to it, since it would only add credit (#3376). Defaults to `0` — the
+ *   design default, "no unlimited idle credit" (§10.6). Non-negative.
  */
 public data class PolicyConfig(
     public val quantum: Long,

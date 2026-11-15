@@ -36,8 +36,11 @@ public data class SupplyPolicy(
  *
  * @property defaultReservation the cost a lease reserves when the caller passes no estimate, in the
  *   caller's cost unit (time, by convention: R2). Positive, and at most [LocalHeddle.MAX_RESERVATION].
- * @property sleeperCredit the virtual-time credit a group that wakes from idle may keep (design
- *   §10.6). `0`, the default, keeps none. Non-negative. It is not the whole bound: a lease still
+ * @property sleeperCredit the virtual-time credit a **clamped** waker may keep (design §10.6): a
+ *   group this engine saw idle but never saw stop asking, one restored from a format-1 snapshot
+ *   say. A group it saw stop comes back moved by its parent's net-service clock, and this credit
+ *   does not apply to it, since it would only add credit (#3376). `0`, the default, keeps none.
+ *   Non-negative. It is not the whole bound: a lease still
  *   open when its group wakes can hand more back at [LocalHeddle.complete] or [LocalHeddle.cancel],
  *   up to its reservation over the edge's weight, tracked by #3238.
  * @property supply how far ahead of its leases the engine mints supply.
