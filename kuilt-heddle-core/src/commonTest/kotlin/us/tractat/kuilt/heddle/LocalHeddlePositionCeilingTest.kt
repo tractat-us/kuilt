@@ -17,20 +17,22 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
- * What the engine does at the position ceiling (#3313's ruling): a call that **chooses** refuses
- * with a typed outcome and changes nothing, wake memory included; a call that **charges** lands, and
- * the position saturates at [positionCeiling] instead of throwing.
+ * What the engine does at and past the position ceiling. Picks order the full 128-bit position, so
+ * every call that used to refuse there now lands, the choosing ones ([LocalHeddle.acquire],
+ * [LocalHeddle.extend], [LocalHeddle.explain], [LocalHeddle.previewPicks]) and the charging ones
+ * alike; the position goes past [positionCeiling] exactly; and only the public virtual-time reads
+ * saturate there. Each arm that used to assert a `PositionCeiling` refusal asserts, at the same rig,
+ * what the engine does instead.
  *
- * The ceiling is reached by raising one lane's gauge to just under it ([pushTowardCeiling]),
- * since a run that gets there by picks takes thousands of maximum-size leases. Every arm first
- * asserts that its lane is where the rig put it, so a refusal is the ceiling's doing and not a
- * fixture that never got there.
+ * The ceiling is reached by raising one lane's gauge to just under it ([pushTowardCeiling]), since a
+ * run that gets there by picks takes thousands of maximum-size leases. Every arm first asserts that
+ * its lane is where the rig put it, so a landing past the ceiling is not a fixture that never got
+ * there.
  *
- * The engine rebases a parent long before a child gets there (#3329), so an arm that wants the
- * ceiling keeps a demanding sibling at its floor ([holdAtFloor]): the rebase takes no demanding
- * child out of its window, so a sibling with no room left holds it at nothing (#3353, the window
- * rule). That is where a demanding child that is never served ends up, the one way a running engine
- * still reaches the ceiling. Every position is planted relative to the parent's origin, which
+ * The engine rebases a parent long before a child gets there (#3329), so an arm that wants a child
+ * to stay past the ceiling keeps a demanding sibling below its floor ([holdAtFloor]): the rebase
+ * takes no demanding child out of its window, so a sibling with no room left holds it at nothing
+ * (#3353, the window rule). Every position is planted relative to the parent's origin, which
  * [holdAtFloor] raises.
  */
 class LocalHeddlePositionCeilingTest {
@@ -67,14 +69,31 @@ class LocalHeddlePositionCeilingTest {
     private fun LocalHeddle.edgeOf(lane: GroupId): AttachmentId =
         checkNotNull(snapshot().ledger.lineageOf(lane)?.last()) { "${lane.value} has no lineage" }
 
-    /** [lane]'s gross position in ticks of its own service, relative to its parent's origin, as a pick reads it. */
-    private fun LocalHeddle.grossTicks(lane: GroupId): Long {
+    /** [lane]'s gross position in ticks of its own service, relative to its parent's origin, exactly, as a pick reads it. */
+    private fun LocalHeddle.grossWide(lane: GroupId): Int128 {
         val ledger = snapshot().ledger
         val edge = edgeOf(lane)
         val record = checkNotNull(ledger.record(edge))
         val gross = ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge))
-        return saturated(gross - originTicks(ledger.origin(record.parent), record.weight), record.weight)
+        return gross - originTicks(ledger.origin(record.parent), record.weight)
     }
+
+    /** [grossWide] held at [lane]'s ceiling, as a `Long`: what the rig plants and checks. */
+    private fun LocalHeddle.grossTicks(lane: GroupId): Long =
+        saturated(grossWide(lane), checkNotNull(snapshot().ledger.record(edgeOf(lane))).weight)
+
+    /** [lane]'s gross virtual service as the public read reports it, held inside its window. */
+    private fun LocalHeddle.publicGross(lane: GroupId): Rational =
+        checkNotNull(snapshot().ledger.grossVirtualService(edgeOf(lane)))
+
+    /** [lane]'s ceiling as the public read reports it: `C / (G · w)`. */
+    private fun LocalHeddle.publicCeiling(lane: GroupId): Rational {
+        val weight = checkNotNull(snapshot().ledger.record(edgeOf(lane))).weight
+        return ticksToVirtual(positionCeiling(weight), weight)
+    }
+
+    /** The leaf [outcome] leased. */
+    private fun leafOf(outcome: AcquireOutcome): GroupId = assertIs<AcquireOutcome.Acquired>(outcome, "it lands: $outcome").lease.leaf
 
     private fun LocalHeddle.ceilingOf(lane: GroupId): Long =
         positionCeiling(checkNotNull(snapshot().ledger.record(edgeOf(lane))).weight)
@@ -124,28 +143,26 @@ class LocalHeddlePositionCeilingTest {
 
     private fun LocalHeddle.bytes(): ByteArray = Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), persist())
 
+    /**
+     * A sibling at its ceiling no longer stops a pick at its parent: the pick orders the wide
+     * positions, so with `b` alone eligible it picks `b`, and the engine moves. This used to be
+     * refused with `PositionCeiling` and change nothing.
+     */
     @Test
-    fun anAcquireAtASaturatedParentRefusesTypedAndChangesNothing() {
+    fun anAcquireBesideASiblingAtItsCeilingLands() {
         val engine = engine().apply { warmUp() }
-        val twin = engine().apply { warmUp() }
         engine.pushTowardCeiling(a, below = 0L)
-        twin.pushTowardCeiling(a, below = 0L)
         val stateBefore = engine.snapshot()
-        val bytesBefore = engine.bytes()
 
-        // b alone is eligible, but a is a child of the same parent: the pick there would order a
-        // saturated position, so it is refused, not guessed.
-        val refused = engine.acquire(setOf(a, b), setOf(b), startedAt = 100L)
+        val outcome = engine.acquire(setOf(a, b), setOf(b), startedAt = 100L)
         assertAll(
-            { assertEquals(AcquireOutcome.PositionCeiling(root), refused) },
-            { assertEquals(stateBefore, engine.snapshot(), "the state is as it was, wake memory included") },
-            { assertContentEquals(bytesBefore, engine.bytes(), "the snapshot encodes as it did") },
-            { assertContentEquals(twin.bytes(), engine.bytes(), "and matches a twin that never made the call") },
+            { assertEquals(b, leafOf(outcome), "b, the one eligible leaf, is picked") },
+            { assertNotEquals(stateBefore, engine.snapshot(), "and the engine kept the lease") },
         )
     }
 
     @Test
-    fun aSaturatedNestedGroupRefusesOnlyPicksThatOrderIt() {
+    fun aSaturatedNestedGroupLeasesBothBesideAndBeneathIt() {
         val engine = engine().apply { warmUp() }
         engine.pushTowardCeiling(x, below = 0L)
         val elsewhere = engine.acquire(setOf(a, b), setOf(a, b), startedAt = 100L)
@@ -158,65 +175,79 @@ class LocalHeddlePositionCeilingTest {
         )
     }
 
+    /**
+     * A pick whose own delegation carries its child past the ceiling lands, and the position goes
+     * past it exactly, by the one unit leased. Only the public read stops at the ceiling. This used
+     * to be refused with `PositionCeiling`, with `a` left where it was.
+     */
     @Test
-    fun anAcquireWhoseOwnDelegationWouldSaturateRefuses() {
+    fun anAcquireWhoseOwnDelegationCrossesTheCeilingLandsExactly() {
         // No warm-up: a carries no wake offset, so the pick itself reads a below its ceiling and
         // only the delegation can be what crosses.
         val engine = engine()
-        // One pick with a and b both waiting seats b and wakes nobody. b then waits beside a at its
-        // floor, which holds the rebase at nothing.
+        // One pick with a and b both waiting seats b and wakes nobody. b then waits beside a below
+        // its floor, which holds the rebase at nothing.
         val seating = (engine.acquire(setOf(a, b), setOf(a, b), startedAt = 99L) as AcquireOutcome.Acquired).lease
         engine.complete(seating.id, actualCost = 1L)
         check(engine.snapshot().allocatorMemory.wakeOffsets.isEmpty()) { "nobody has woken, so there are no wake offsets" }
         engine.holdAtFloor(b)
-        // One unit is 16 ticks: one tick under the ceiling, a pick of a is still exact, and its
-        // delegation is what would cross.
+        // One unit is 16 ticks: one tick under the ceiling, the delegation of one unit crosses it.
         engine.pushTowardCeiling(a, below = 1L)
-        val stateBefore = engine.snapshot()
-        val refused = engine.acquire(setOf(a, b), setOf(a), startedAt = 100L)
+        val outcome = engine.acquire(setOf(a, b), setOf(a), startedAt = 100L)
+        val past = Int128.of(engine.ceilingOf(a) - 1L + TICKS_PER_UNIT)
         assertAll(
-            { assertEquals(AcquireOutcome.PositionCeiling(root), refused) },
-            { assertEquals(stateBefore, engine.snapshot()) },
-            { assertEquals(engine.ceilingOf(a) - 1L, engine.grossTicks(a), "a did not move") },
+            { assertEquals(a, leafOf(outcome)) },
+            { assertEquals(past, engine.grossWide(a), "a is one unit further on, past its ceiling, exactly") },
+            { assertEquals(engine.publicCeiling(a), engine.publicGross(a), "while the public read holds at the ceiling") },
         )
     }
 
+    /**
+     * An extend whose delegation crosses the ceiling lands, and the lease holds the extension. This
+     * used to be refused with `PositionCeiling`, the reservation left as it was.
+     */
     @Test
-    fun anExtendAcrossTheCeilingRefusesTypedAndChangesNothing() {
+    fun anExtendAcrossTheCeilingLandsAndTheLeaseHoldsIt() {
         val engine = engine()
-        // An extend's own rebase runs after its charge, so its delegation is what crosses. b waits
-        // beside a at its floor all the same, which holds every rebase at nothing.
+        // An extend's own rebase runs after its charge. b waits beside a below its floor all the
+        // same, which holds every rebase at nothing, so a stays where the extension puts it.
         val lease = (engine.acquire(setOf(a, b), setOf(a), startedAt = 100L) as AcquireOutcome.Acquired).lease
         engine.holdAtFloor(b)
         engine.pushTowardCeiling(a, below = 1L)
-        val stateBefore = engine.snapshot()
-        val bytesBefore = engine.bytes()
-        val refused = engine.extend(lease.id, amount = 1L)
+        val extended = engine.extend(lease.id, amount = 1L)
         assertAll(
-            { assertEquals(LeaseOutcome.PositionCeiling(root), refused) },
-            { assertEquals(stateBefore, engine.snapshot(), "the lease's reservation is as it was") },
-            { assertContentEquals(bytesBefore, engine.bytes()) },
-            // The lease still settles: a charge is never refused.
-            { assertIs<LeaseOutcome.Done>(engine.complete(lease.id, actualCost = 1L)) },
+            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 0L), extended) },
+            { assertEquals(lease.reserved + 1L, engine.snapshot().leases.single().reserved, "the lease holds the extension") },
+            { assertEquals(Int128.of(engine.ceilingOf(a) - 1L + TICKS_PER_UNIT), engine.grossWide(a), "a went past its ceiling exactly") },
+            { assertIs<LeaseOutcome.Done>(engine.complete(lease.id, actualCost = 2L)) },
         )
     }
 
+    /**
+     * An admission and an overrunning completion each carry `a` further past its ceiling, by exactly
+     * what they charge, and the next acquire beside it still picks: the books and the positions stay
+     * exact, and only the public read stops at the ceiling. The last assertion used to be a
+     * `PositionCeiling` refusal.
+     */
     @Test
-    fun admitAndCompleteNeverRefuseAndThePositionSaturates() {
+    fun admitAndCompleteCarryThePositionPastTheCeilingExactly() {
         val engine = engine().apply { warmUp() }
         engine.holdAtFloor(b)
         engine.pushTowardCeiling(a, below = 1L)
+        val start = engine.grossWide(a)
         val admitted = engine.admit(a, startedAt = 100L, reservation = LocalHeddle.MAX_RESERVATION)
         val lease = assertIs<AcquireOutcome.Acquired>(admitted).lease
-        val afterAdmit = engine.grossTicks(a)
+        val afterAdmit = engine.grossWide(a)
         val done = engine.complete(lease.id, actualCost = 3 * LocalHeddle.MAX_RESERVATION)
+        val unit = Int128.of(LocalHeddle.MAX_RESERVATION * TICKS_PER_UNIT)
         assertAll(
-            { assertEquals(engine.ceilingOf(a), afterAdmit, "the admission saturated a's position") },
+            { assertEquals(Int128.of(engine.ceilingOf(a) - 1L), start, "the rig: a starts a tick under its ceiling") },
+            { assertEquals(start + unit, afterAdmit, "the admission moved a by its reservation, past the ceiling") },
             { assertEquals(LeaseOutcome.Done(charged = 3 * LocalHeddle.MAX_RESERVATION, overrun = 2 * LocalHeddle.MAX_RESERVATION), done) },
-            { assertEquals(engine.ceilingOf(a), engine.grossTicks(a), "the overrun's checkpoint saturated too") },
-            // What saturates is the position, never the books: the charge is exact.
+            { assertEquals(afterAdmit + unit + unit, engine.grossWide(a), "and the overrun's checkpoint by the overrun") },
+            { assertEquals(engine.publicCeiling(a), engine.publicGross(a), "the public read holds at the ceiling") },
             { assertEquals(0L, engine.snapshot().ledger.edge(engine.edgeOf(a))?.outstanding) },
-            { assertEquals(AcquireOutcome.PositionCeiling(root), engine.acquire(setOf(a, b), setOf(b), startedAt = 101L)) },
+            { assertEquals(b, leafOf(engine.acquire(setOf(a, b), setOf(b), startedAt = 101L)), "and the next pick goes ahead") },
         )
     }
 
@@ -257,35 +288,39 @@ class LocalHeddlePositionCeilingTest {
         )
     }
 
+    /**
+     * [LocalHeddle.explain] and [LocalHeddle.previewPicks] agree with the acquire beside a sibling at
+     * its ceiling: the leaf is picked next, and the preview lists it. Both used to name the ceiling.
+     */
     @Test
-    fun explainAndPreviewNameTheCeiling() {
+    fun explainAndPreviewAgreeWithTheAcquirePastTheCeiling() {
         val engine = engine().apply { warmUp() }
         engine.pushTowardCeiling(a, below = 0L)
         val why = engine.explain(b, waiting = setOf(a, b), eligible = setOf(b))
+        val preview = engine.previewPicks(mapOf(a to 1, b to 1), setOf(b), listOf(1L))
         assertAll(
-            { assertEquals(WaitExplanation.PositionCeiling(root), why) },
-            { assertEquals(WaitExplanation.Kind.POSITION_CEILING, why.kind) },
-            { assertEquals(emptyList(), engine.previewPicks(mapOf(a to 1, b to 1), setOf(b), listOf(1L))) },
+            { assertEquals(WaitExplanation.WouldBePickedNext, why) },
+            { assertEquals(listOf(b), preview) },
+            { assertEquals(b, leafOf(engine.acquire(setOf(a, b), setOf(b), startedAt = 100L)), "and the acquire picks it") },
         )
     }
 
     /**
-     * A queues preview stops at a position-ceiling refusal from either call it makes (#3321): the
-     * acquire, when a sibling of the pick is saturated, or the extend that takes the lease up to its
-     * head, when that delegation would cross. In the second the acquire landed, and its pick is
-     * still left out. Each arm has a control that differs only in the refusal.
+     * A queues preview runs on past the ceiling from either call it makes (#3321): the acquire, beside
+     * a sibling at its ceiling, and the extend that takes the lease up to its head, whose delegation
+     * crosses. Each arm has a control below the ceiling, and each lists what that control lists.
+     * Both used to stop the preview there.
      */
     @Test
-    fun aQueuePreviewStopsAtTheCeiling() {
+    fun aQueuePreviewRunsOnPastTheCeiling() {
         val queues = mapOf(a to listOf(1L), b to listOf(1L))
         val unsaturated = engine().apply { warmUp() }.previewPicks(queues, setOf(b), reservation = 1L)
         val saturated = engine().apply { warmUp() }
         saturated.pushTowardCeiling(a, below = 0L)
 
         // One unit is 16 ticks: 17 under, an acquire of 1 lands one tick under, and an extend crosses.
-        // b waits beside a, never eligible, at its floor: it holds the rebase's shift at zero
-        // (#3353), the one way a running engine still reaches the ceiling, so a is not brought down.
-        // One pick with both waiting seats b first.
+        // b waits beside a, never eligible, below its floor: it holds the rebase's shift at zero
+        // (#3353), so a is not brought down. One pick with both waiting seats b first.
         val crossing = engine()
         val seating = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a, b), setOf(a), startedAt = 0L)).lease
         crossing.complete(seating.id, actualCost = 1L)
@@ -298,11 +333,12 @@ class LocalHeddlePositionCeilingTest {
         val lease = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a, b), setOf(a), startedAt = 0L, reservation = 1L)).lease
         assertAll(
             { assertEquals(listOf(b), unsaturated, "the control: b is picked when a is not saturated") },
-            { assertEquals(emptyList(), saturated.previewPicks(queues, setOf(b), reservation = 1L)) },
+            { assertEquals(listOf(b), saturated.previewPicks(queues, setOf(b), reservation = 1L), "and when it is") },
             { assertEquals(listOf(a), withoutExtend, "the control: the acquire alone lands") },
-            { assertEquals(emptyList(), withExtend) },
+            { assertEquals(listOf(a), withExtend, "and so does the acquire whose extend crosses") },
             { assertTrue(unchanged, "neither preview moved the engine") },
-            { assertEquals(LeaseOutcome.PositionCeiling(root), crossing.extend(lease.id, 1L), "the rig: the extend is what refuses") },
+            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 0L), crossing.extend(lease.id, 1L), "the rig: the extend lands") },
+            { assertTrue(crossing.grossWide(a) > Int128.of(crossing.ceilingOf(a)), "the rig: and it crossed the ceiling") },
         )
     }
 
@@ -325,8 +361,13 @@ class LocalHeddlePositionCeilingTest {
         )
     }
 
+    /**
+     * [FairShareAllocator.schedule] and [FairShareAllocator.pickChild] beside a child at its ceiling
+     * grant as they would anywhere: the schedule delegates and writes, and the pick names a child.
+     * They used to answer `PositionCeiling`, write nothing, and throw.
+     */
     @Test
-    fun scheduleStopsAtASaturatedParentAndPickChildThrows() {
+    fun scheduleAndPickChildGrantBesideAChildAtItsCeiling() {
         val engine = engine().apply { warmUp() }
         engine.holdAtFloor(b)
         engine.pushTowardCeiling(a, below = 0L)
@@ -347,10 +388,12 @@ class LocalHeddlePositionCeilingTest {
                 return true
             }
         }
+        val picked = FairShareAllocator(self, PolicyConfig(quantum = 1L), engine.snapshot().allocatorMemory)
+            .pickChild(root, ledger, { wants }, { wants })
         assertAll(
-            { assertEquals(AllocationOutcome.PositionCeiling(root), allocator.schedule(root, cell, earmarked = 0L) { wants }) },
-            { assertEquals(ledger, cell.current, "the refused pick wrote nothing") },
-            { assertFailsWith<ArithmeticException> { allocator.pickChild(root, ledger, { wants }, { wants }) } },
+            { assertIs<AllocationOutcome.Delegated>(allocator.schedule(root, cell, earmarked = 0L) { wants }) },
+            { assertNotEquals(ledger, cell.current, "the grants were written") },
+            { assertTrue(picked != null, "and a single pick names a child") },
         )
     }
 
@@ -406,8 +449,8 @@ class LocalHeddlePositionCeilingTest {
 
     /**
      * The same waker, observed by an `admit` with a waiting set (#3320). An admission is never
-     * refused, so it charges, and the clamp it takes past the waker's ceiling saturates rather than
-     * throwing: the stored offset is the ceiling itself, and the next pick refuses as it would have.
+     * refused, so it charges, and the clamp it takes past the waker's ceiling is stored exactly, wide,
+     * and the next pick goes ahead.
      *
      * b is never seen asking before it wakes, so this peer holds no departure for it and clamps it
      * to the front. A b seen to leave would come back by its parent's clock instead (#3376), and
@@ -447,8 +490,8 @@ class LocalHeddlePositionCeilingTest {
      * A newborn seated against a front that includes a sibling at its ceiling lands at the exact
      * front (#3353). The review of #3352 sent such a seat to the newborn's own ceiling, because the
      * sibling's position read lower than it stood for and so did the front. Nothing is narrowed
-     * before the front is taken now, so the front is exact, the seat is stored exactly, and a pick
-     * over the saturated sibling still refuses. `admit` must charge, so it seats. The sibling `y`
+     * before the front is taken now, so the front is exact and the seat is stored exactly. `admit`
+     * must charge, so it seats. The sibling `y`
      * waits at its floor, so the admission's own rebase cannot move `x` off its ceiling (#3353).
      */
     @Test
