@@ -1072,15 +1072,21 @@ public class FairShareAllocator(
      *
      * A run that went backward, refunds outweighing grants while the child was away, moves it by
      * nothing, since a shift only ever gives a turn up. Its remainder is still carried, so what that
-     * drops is the backward run alone, the penalty side. A remainder taken at another weight
-     * denominator is dropped, by under one tick a reweighting, also the penalty side.
+     * drops is the backward run alone, the penalty side.
+     *
+     * A carried remainder is always on [edge]'s own grid: an edge's weight is part of its record,
+     * so a reweight is a new edge, which starts with no remainder. The denominator a remainder
+     * carries is therefore checked here, never compared, and one taken at another denominator is a
+     * memory no allocator wrote.
      */
     private fun shiftOf(edge: PolicyEdge, clock: Int128): Shift {
         val id = edge.record.id
         val left = checkNotNull(departures[id]) { "a returner with no departure: ${id.value}" }
         val w = edge.record.weight
         val d = w.denominator
-        val carried = shiftRemainders[id]?.takeIf { it.denominator == d }?.numerator ?: Int128.ZERO
+        val carried = shiftRemainders[id]?.also { r ->
+            check(r.denominator == d) { "a shift remainder on ${id.value} was taken at denominator ${r.denominator}, not its weight's $d" }
+        }?.numerator ?: Int128.ZERO
         // The run less the carry, in units of 1 / (CLOCK_GRID · d) of a tick, so it is a whole number.
         val owed = wide(mulDiv(clock - left, w.numerator, 1L, Rounding.FLOOR), clock, w) - carried
         // ⌈owed / (CLOCK_GRID · d)⌉ in two exact steps, since CLOCK_GRID · d can pass a Long.
