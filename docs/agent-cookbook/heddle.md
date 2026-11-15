@@ -66,17 +66,21 @@ queued; `eligible` is the ones this particular slot can run, say the Mac builds 
 Only an eligible leaf is picked, but a waiting one that cannot run here keeps its claim, so it is
 not treated as returning from idle when a slot it can run comes up. A leaf with nothing queued
 is idle: it banks no credit, and when it comes back it is as far ahead of or behind its siblings
-as it was when it left, moved by how far its parent's net-service clock ran meanwhile, rather
-than owed the slots it could not have used. A new leaf starts level with its siblings. Work no
+as it was when it left, moved by how far its parent's net-service clock ran meanwhile, give or
+take a sibling's refund in that time ([#3239](https://github.com/tractat-us/kuilt/issues/3239)),
+rather than owed the slots it could not have used. A child this engine never saw stop is clamped
+level with its siblings instead. A new leaf starts level with its siblings. Work no
 pick could reach counts as idle even when you list it as waiting: a leaf behind an edge a reload
 is closing, or a group that has gained a child.
 
-**Supply is the engine's own.** It mints nothing until `reconcileCapacity` is called; from then
-on `acquire` and `extend` top the root up inside the same operation whenever it would drop
-below the low watermark of `LocalPolicy.supply` (a `SupplyPolicy`, counted in rounds of every
-slot leased once at the default reservation). So `SupplyExhausted` means no capacity was
-reconciled. Call it again whenever your slot count changes. Every mint of an epoch rewrites one
-record, so the ledger never grows with service.
+**Supply is the engine's own.** Until `reconcileCapacity` is called it mints nothing ahead, so
+`acquire` and `extend` answer `SupplyExhausted`. `complete` and `admit` are never refused and
+mint any shortfall at the root. Once capacity is reconciled, `acquire` and `extend` top the root
+up inside the same operation whenever it would drop below the low watermark of
+`LocalPolicy.supply` (a `SupplyPolicy`, counted in rounds of every slot leased once at the
+default reservation). The low watermark is also the headroom an overrun or an `admit` mints
+past. Call `reconcileCapacity` again whenever your slot count changes. Every mint of an epoch
+rewrites one record, so the ledger never grows with service.
 
 **A lease ends only at a lane**, or at an attached child of a group with a template. A group
 that happens to have nothing attached right now is never leased, and `admit` and `explain`
@@ -506,7 +510,8 @@ memory, the reconciled capacity and the topology last applied come back.
   in each epoch, so restoring one snapshot twice under the same epoch (a crash straight after the
   first restore, say) gives two engines that number leases alike, and a job from the first run
   can settle the second's lease. Keep a boot counter in storage and raise it on every start;
-  `restore` throws `IllegalArgumentException` only when the epoch is not above the snapshot's.
+  `restore` throws `IllegalArgumentException` when the epoch is not above the snapshot's, or when
+  the policy cannot size the snapshot's `totalSlots`.
   An old id that is no longer open answers `Stale`.
 - **Formats.** `:kuilt-heddle-core` brings no format: add `kotlinx-serialization-json` or
   `kotlinx-serialization-cbor`. Both are tested, CBOR's definite- and indefinite-length arrays
@@ -553,7 +558,7 @@ that will resume belongs in `live`, so it never becomes an orphan.
 
 **Intent:** know every answer a `LocalHeddle` call can give, so a loop branches on a typed outcome
 instead of catching exceptions, and know the few limits a caller can reach.
-**Primitive:** the outcome types. A refusal is a value, never an exception, and a refused call
+**Primitive:** the outcome types. A refusal is a value, never an exception, and a refused step or call
 leaves the ledger and the leases as they were. Only the wake memory may move: a `NoLiveLineage`
 from `acquire`, or from the `admit` that takes a waiting set, keeps what its pick observed about
 who was waiting. A `PositionCeiling` keeps nothing at all.
@@ -576,7 +581,8 @@ group still reached through live edges.
 **What throws.** A bad argument throws `IllegalArgumentException`: a reservation or extension
 outside `1..LocalHeddle.MAX_RESERVATION` (2^44 cost units), an `eligible` set that is not a
 subset of `waiting`, a negative `actualCost`, a topology whose root is not the engine's, an
-`attach` to a group with no template, a restore epoch not above the snapshot's. Arithmetic that
+`attach` to a group with no template, a restore epoch not above the snapshot's, a policy that cannot size the snapshot's
+`totalSlots` at restore. Arithmetic that
 would leave `Long` throws `ArithmeticException` rather than wrapping; the diagnostics can reach it
 well before any ceiling, since they answer in exact `Rational`s: `explain`'s `BehindAtLevel`
 fronts, whose numerator carries the least common multiple of the sibling weights' denominators,
