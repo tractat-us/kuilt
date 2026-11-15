@@ -67,7 +67,6 @@ class WarpSpanExporterRefusedRecoveryTest {
             { assertTrue(store.refusals > refusedRecovery, "the export did not retry the refused read") },
             { assertIs<ExportResult.Failure>(result, "an export over an unread store reported $result") },
             { assertEquals(ids(1, 2), durable, "the export overwrote the durable spans it never read") },
-            { assertEquals(ids(3), restarted.liveIds(), "the refused export dropped its live span") },
         )
     }
 
@@ -154,8 +153,9 @@ class WarpSpanExporterRefusedRecoveryTest {
         restarted.export(span(3))
         val refused = restarted.clear()
         val durableAfterRefused = idsAfterRestart(backing)
-        val liveAfterRefused = restarted.liveIds()
         store.heal()
+        restarted.export(span(4))
+        val durableAfterHeal = idsAfterRestart(backing)
         val healed = restarted.clear()
         val durableAfterHealed = idsAfterRestart(backing)
 
@@ -163,7 +163,7 @@ class WarpSpanExporterRefusedRecoveryTest {
             { assertTrue(store.refusals >= 3, "the rig did not refuse the reads before the clear") },
             { assertIs<ExportResult.Failure>(refused, "a clear over an unread store reported $refused") },
             { assertEquals(ids(1, 2), durableAfterRefused, "the refused clear overwrote the durable spans") },
-            { assertEquals(ids(3), liveAfterRefused, "the refused clear dropped the live spans") },
+            { assertEquals(ids(1, 2, 3, 4), durableAfterHeal, "the refused clear dropped a live span") },
             { assertEquals(ExportResult.Success, healed) },
             { assertEquals(emptySet(), durableAfterHealed, "the healed clear left a durable span behind") },
         )
