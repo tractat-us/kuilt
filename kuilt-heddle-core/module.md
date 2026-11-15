@@ -194,9 +194,9 @@ ceiling instead. A pick that would have to order a position there is refused wit
 typed `PositionCeiling` outcome, and a charge still lands. Everything before that
 read is 128-bit: the gauge stores the position exactly, past the ceiling if it gets
 there, and a parent's origin, the raw position, the front and a wake clamp are wide
-too (#3353). A busy parent is rebased long before its ceiling: `HeddleNode` raises
-the parent's replicated origin, and `LocalHeddle` raises its children's folds, and
-neither changes a pick.
+too (#3353). A busy parent is rebased long before its ceiling: both `HeddleNode`
+and `LocalHeddle` raise the parent's origin, and neither changes a pick or
+rewrites a gauge.
 
 ## Deciding who runs next
 

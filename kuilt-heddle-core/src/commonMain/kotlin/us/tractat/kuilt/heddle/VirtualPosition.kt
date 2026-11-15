@@ -65,13 +65,13 @@ internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS
 internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADROOM) / w.denominator
 
 /**
- * The position, in ticks, past which a parent is rebased: a sixteenth of [w]'s [positionCeiling]
- * ([LocalHeddle] by its folds, #3329; `HeddleNode` by its origin, #3353). Far enough below the
- * ceiling that the spread of a busy parent's children above the rebased one never reaches it, and
- * far enough above zero that a rebase is rare. `HeddleNode` measures each child against its own
- * threshold, and the front too, read on every child's grid, so a heavy child joining a light
- * runner's front is never seated past its ceiling (#3353 review, item A). What still reaches the
- * ceiling there is a demanding child that is never served, which holds `Δ` at zero.
+ * The position, in ticks, past which a parent is rebased by raising its origin: a sixteenth of
+ * [w]'s [positionCeiling] (#3329, #3353). Far enough below the ceiling that the spread of a busy
+ * parent's children above the rebased one never reaches it, and far enough above zero that a rebase
+ * is rare. Each child is measured against its own threshold, and the front too, read on every
+ * child's grid, so a heavy child joining a light runner's front is never seated past its ceiling
+ * (#3353 review, item A). What still reaches the ceiling is a demanding child that is never served,
+ * which holds `Δ` at zero, and a `LocalHeddle` parent that is only charged and never picked at.
  */
 internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16
 

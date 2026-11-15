@@ -390,25 +390,19 @@ public sealed interface LeaseOutcome {
  * - a call that **charges**, [admit] or [complete], lands as usual. The books stay exact; only the
  *   position is held at the ceiling.
  *
- * A running engine rarely gets there, because a pick **rebases** its parent first (#3329). Once
- * a child's position passes a sixteenth of its ceiling, every child of that parent comes down by
- * one virtual time, its wake offset first and then its gauge fold, as far as the demanding child
- * furthest behind allows, and an idle child no further than a sixteenth of its ceiling below
- * zero. Every competing child moves alike, so no pick changes. The ceiling is still reachable
- * three ways:
+ * A running engine rarely gets there, because a pick **rebases** its parent first (#3329,
+ * #3353). Once a child's effective position passes a sixteenth of its ceiling, the pick raises the
+ * parent's origin by one virtual time, as far as the demanding child furthest behind allows. Every
+ * child reads that much lower, an idle one included, so no pick changes, and no gauge or wake clamp
+ * is rewritten. The ceiling is measured net of returns, so returned service never reaches it
+ * (#3360). It is still reachable two ways:
  * - a demanding child sits at zero and is never served, which holds the rebase at nothing;
  * - a parent is only ever charged through [admit], [extend] or an overrun at [complete], and never
- *   picked at, so it is never rebased;
- * - an edge's lifetime **returned** service, reserved but not charged by a [complete] below the
- *   reservation or a [cancel], passes about [positionCeiling]`(w) / 16` units, about
- *   `5.8 × 10¹⁷ / w.denominator`, since a rebase cannot bring returns down (#3360). At
- *   [MAX_RESERVATION] charged 1 unit, a weight of 3/7 gets there in about 4,700 leases; a
- *   600,000-unit reservation returned in full takes about 1.4 × 10¹¹ leases at that weight. A
- *   workload that charges what it reserves never reaches it.
+ *   picked at, so it is never rebased.
  *
- * A seat or a wake clamp taken against a front that includes a position at
- * its ceiling lands at the joiner's own ceiling, the penalty end, so nothing an understated front
- * would have handed out is kept as credit once the saturated child leaves.
+ * Nothing is narrowed before the effective position a pick orders, so a seat or a wake clamp
+ * taken against a front that includes a position at its ceiling is taken against the exact front,
+ * and nothing an understated front would have handed out is kept as credit (#3353).
  *
  * The diagnostics still answer in exact [Rational]s, and those can throw [ArithmeticException]
  * before the ceiling: [explain]'s [WaitExplanation.BehindAtLevel] fronts, whose numerator carries
@@ -560,7 +554,7 @@ public class LocalHeddle private constructor(
             is Descent.Refused -> AcquireOutcome.NoLiveLineage(descent.at)
             is Descent.Ceiling -> AcquireOutcome.PositionCeiling(descent.at)
             is Descent.Reached -> {
-                // The ledger and the wake offsets its rebases lowered are kept together, or neither.
+                // The rebases are in the ledger; counted only when it is kept.
                 ledger = descent.ledger
                 descent.rebases.forEach(allocator::adopt)
                 AcquireOutcome.Acquired(open(descent.leaf, descent.levels.map { it.edge }, reservation, startedAt))
@@ -574,8 +568,8 @@ public class LocalHeddle private constructor(
      * picked, until it reaches an eligible leaf. Every step lands on a local value; [base] is not
      * changed. Only the allocator's wake memory moves, which is why a [LocalHeddleView] runs it on a
      * throwaway engine. A level that rebases its parent (#3329) hands the rebase back in
-     * [Descent.Reached.rebases] rather than changing the allocator: its lowered wake offsets belong to
-     * the delegated ledger, and are adopted only with it.
+     * [Descent.Reached.rebases]: the raised origin is in the delegated ledger, and the allocator
+     * counts it only when that ledger is kept.
      */
     internal fun descend(base: EntitlementLedger, demands: Demands, eligible: Set<GroupId>, reservation: Long): Descent {
         var local = base
@@ -594,8 +588,7 @@ public class LocalHeddle private constructor(
             check(grant.amount == reservation) {
                 "picked ${edge.value} for ${grant.amount}, not the reservation $reservation"
             }
-            // The settled ledger, not the rebased one: it reads right against the wake offsets the
-            // allocator holds until the rebase is adopted, which is what [explain] reads it with.
+            // The settled ledger, not the rebased one: what the pick was made on, which is what [explain] reads it with.
             levels += Level(group, pick.settled, edge)
             pick.rebase?.let(rebases::add)
             local = checkNotNull(seatThenDelegate(pick.pick.ledger, listOf(edge), reservation, demands.waiting)) {
