@@ -95,7 +95,7 @@ stops counts in `failed`, and the first span write that lands resolves it. Metri
 same for each metric kind on its own: a refused read of the histograms fails the
 histogram turns, and a batch's sums still write. Each kind retries its read on the same
 doubling window as the logs, counted in that kind's own turns, so a refused histogram read
-backs off the histograms alone and a turn that writes only sums spends none of it. A
+backs off the histograms alone and a turn that writes only sums spends none of it. A batch refused for an overflow spends one as well, since it would have read the kind; it still counts no turn on `health`. A
 skipped turn fails exactly as a refused read does. A metric exporter nobody recovered reads
 each kind before its first write.
 

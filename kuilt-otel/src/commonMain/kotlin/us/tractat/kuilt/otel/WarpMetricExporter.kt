@@ -435,8 +435,9 @@ public class WarpMetricExporter(
      * The re-reads back off **per kind**, counted in the kind's own turns: after `k` refused reads of
      * a kind in a row, the next `2^k − 1` turns that touch the kind, `k` capped at 6 so at most 63,
      * refuse it as a refused read does, without touching the store (#3436). A turn that does not
-     * touch the kind spends nothing of its window, and a refused histograms read backs off the
-     * histograms alone. A long outage of a kind then costs one store read per 64 of its turns rather
+     * touch the kind spends nothing of its window. A batch refused for an overflow spends one as
+     * well, since it would have read the kind; it still counts no turn on `health`. A refused
+     * histograms read backs off the histograms alone. A long outage of a kind then costs one store read per 64 of its turns rather
      * than one per turn, each paying the store's timeout. This call is an explicit request, so it
      * **always reads every kind**, window or not; a read of a kind that lands, here or in a turn,
      * closes that kind's window and resets its `k`, and one refused here counts toward `k` like any
@@ -456,7 +457,7 @@ public class WarpMetricExporter(
 
     /**
      * Log a refused read of [kind]: at ERROR the first time, at DEBUG after that, as a store that
-     * stays unreadable is refused again on every turn of the kind and would otherwise log a stack
+     * stays unreadable is refused again on its window and would otherwise log a stack
      * trace per write.
      */
     private fun logRefusal(kind: StoredKind, read: PersistedRead.Owed) {
@@ -591,9 +592,13 @@ public class WarpMetricExporter(
         if (skips.isNotEmpty()) {
             currentCoroutineContext().ensureActive()
             lock.withLock {
-                // A compare, not a blind store: if anything replaced a kind's window since it was
-                // read above, this turn spends nothing of the new one.
-                skips.forEach { (kind, seen) -> if (owedReads[kind] === seen) owedReads = owedReads + (kind to seen.skipped()) }
+                // writeMutex is the guarantee: every caller of refusedReads and every writer of
+                // owedReads holds it, so nothing replaced a window since it was read above. The check
+                // fails loudly if that ever stops being true, rather than spending a window it did not read.
+                skips.forEach { (kind, seen) ->
+                    check(owedReads[kind] === seen) { "a kind's read window was replaced outside writeMutex" }
+                    owedReads = owedReads + (kind to seen.skipped())
+                }
             }
             skips.forEach { (kind, seen) ->
                 refused[kind] = MetricKindUnreadException(kind.storeKey, seen.backoff.cause)

@@ -24,7 +24,7 @@ import kotlin.test.assertTrue
  *
  * Before the fix a refused read started its kind fresh, and the kind's next write encoded that
  * fresh map over the persisted one: a sum of `5` read back as `1` after one `incrementSum(1)`.
- * The rule now: while a kind's read is owed, every turn of that kind reads again first, and while
+ * The rule now: while a kind's read is owed, the kind reads again once its window has passed, and while
  * the read is still refused the turn admits nothing of that kind and writes nothing of it. The read
  * that lands joins the persisted series into memory, and the turn goes on. A *decode* failure still
  * starts fresh.
