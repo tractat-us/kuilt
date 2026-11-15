@@ -25,6 +25,9 @@ import kotlin.test.assertTrue
  *
  * - With one scheduling peer, a converged view, one level and one grant per call, the cluster
  *   picks exactly as [LocalHeddle] does, call for call, across rebases on both sides.
+ * - A parent weighted 60/30/10/1, a heavy newborn joining a busy light runner, and a restarted
+ *   scheduler whose heaviest child idled the whole run keep granting, and the newborn and the
+ *   idle child come back level with the runner rather than behind it.
  * - With two schedulers at once, a partition between them, or a restarted scheduler, the picks are
  *   allowed to differ. Those runs check instead that the cluster converges, that every minted unit
  *   is accounted for, and that the §8.2 bound pieces stay ordered.
