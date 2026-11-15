@@ -397,6 +397,48 @@ class LocalHeddlePersistenceTest {
     }
 
     /**
+     * A snapshot taken while a child is away keeps where its parent's clock stood when it left
+     * (#3376). `heavy` (weight 2) takes the one pick both ask for, `light` stops asking while
+     * `heavy` takes two alone, and the engine is persisted, restored and asked again with both
+     * waiting. `light` left half a unit behind, so it comes back half a unit behind and takes the
+     * next pick, exactly as the engine that never restarted does.
+     *
+     * The control restores the same snapshot without the clock memory, as a format-1 snapshot
+     * restores: `light` is then a waker this peer never saw leave, clamped level with `heavy`, and
+     * `heavy` takes the next pick on its deadline.
+     */
+    @Test
+    fun aSnapshotTakenWhileAChildIsAwayKeepsItsPlace() {
+        val tree = Topology("root", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light")))
+        val heavy = tree.groupId("heavy")
+        val light = tree.groupId("light")
+        val both = setOf(heavy, light)
+        fun away(): LocalHeddle = LocalHeddle.fromTopology(tree, policy, epoch = 0L).apply {
+            reconcileCapacity(1L)
+            for (waiting in listOf(both, setOf(heavy), setOf(heavy))) {
+                val lease = assertIs<AcquireOutcome.Acquired>(acquire(waiting, waiting, startedAt = 0L)).lease
+                check(complete(lease.id, actualCost = 1L) is LeaseOutcome.Done)
+            }
+        }
+        fun picks(h: LocalHeddle): List<GroupId> = List(6) {
+            val lease = assertIs<AcquireOutcome.Acquired>(h.acquire(both, both, startedAt = 1L)).lease
+            check(h.complete(lease.id, actualCost = 1L) is LeaseOutcome.Done)
+            lease.leaf
+        }
+        val persisted = away().persist()
+        val reference = picks(away())
+        val restored = picks(LocalHeddle.restore(decoded(encode(persisted)), policy, epoch = 1L))
+        val clockless = picks(LocalHeddle.restore(persisted.withoutNetClocks(), policy, epoch = 1L))
+        val lightEdge = checkNotNull(persisted.ledger.lineageOf(light)).single()
+        assertAll(
+            { assertTrue(lightEdge in persisted.allocatorMemory.departures, "the rig: light is away at persist time") },
+            { assertEquals(light, reference.first(), "light left behind, so it comes back behind: $reference") },
+            { assertEquals(reference, restored, "the restored engine picks as the one that never restarted") },
+            { assertEquals(heavy, clockless.first(), "the control: without the clock, light is clamped level: $clockless") },
+        )
+    }
+
+    /**
      * Format 1, as checked in. A later release must still decode it ([SUPPORTED_FORMAT_VERSIONS]),
      * and an engine restored from it carries on as the engine that wrote it would have, had that
      * engine kept no net-service clock: format 1 predates the clock (#3376).
