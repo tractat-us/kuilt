@@ -149,10 +149,11 @@ class ClockWrapTest {
 
     private val rgaSerializer = Rga.wireSerializer(String.serializer())
 
-    private fun rgaWith(author: ReplicaId, field: String): Rga<String> {
+    /** One insert by [author], encoded, then its `field` rewritten to [value] and decoded. */
+    private fun rgaWith(author: ReplicaId, field: String, value: Long = max): Rga<String> {
         val (one, _) = Rga.empty<String>().insertAt(author, 0, "a")
         val valid = Json.encodeToString(rgaSerializer, one)
-        val rewritten = valid.replace("\"$field\":1", "\"$field\":$max")
+        val rewritten = valid.replace("\"$field\":1", "\"$field\":$value")
         assertNotEquals(valid, rewritten, "the rig found $field to rewrite in $valid")
         return Json.decodeFromString(rgaSerializer, rewritten)
     }
@@ -192,6 +193,24 @@ class ClockWrapTest {
         assertAll(
             { assertEquals(max - 1L, nearlyFull.lamport, "the rig's clock is one below the ceiling") },
             { assertEquals(max, nearlyFull.insertAllAfter(local, RgaId.HEAD, listOf("b")).first.lamport) },
+            { assertFailsWith<ArithmeticException> { nearlyFull.insertAllAfter(local, RgaId.HEAD, listOf("b", "c")) } },
+        )
+    }
+
+    /**
+     * The seq half of the same crossing. A run that starts at this replica's seq one below the
+     * ceiling mints the ceiling for its first value and must refuse at its second. The Lamport arm
+     * above cannot see this half: there the local seq starts at `1`. Nor can
+     * [rgaInsertRefusesAtTheSeqCeiling]: a seq already at the ceiling refuses on the run's first
+     * step, whichever way the loop counts.
+     */
+    @Test
+    fun rgaInsertAllAfterRefusesARunThatCrossesTheSeqCeiling() {
+        val nearlyFull = rgaWith(local, "seq", max - 1L)
+        val inserts = { rga: Rga<String> -> rga.ops.filterIsInstance<RgaOp.Insert<String>>() }
+        assertAll(
+            { assertEquals(listOf(max - 1L), inserts(nearlyFull).map { it.id.seq }, "the rig's decoded op carries seq one below the ceiling") },
+            { assertEquals(listOf(max), nearlyFull.insertAllAfter(local, RgaId.HEAD, listOf("b")).second.map { it.id.seq }) },
             { assertFailsWith<ArithmeticException> { nearlyFull.insertAllAfter(local, RgaId.HEAD, listOf("b", "c")) } },
         )
     }
