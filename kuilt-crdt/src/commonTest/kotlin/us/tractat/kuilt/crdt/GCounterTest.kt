@@ -5,6 +5,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 
 class GCounterTest {
 
@@ -144,6 +145,38 @@ class GCounterTest {
             { assertEquals(1L shl 62, left.value, "each side fits on its own") },
             { assertEquals(1L shl 62, right.value, "each side fits on its own") },
             { assertFailsWith<ArithmeticException> { left.piece(right).value } },
+        )
+    }
+
+    /**
+     * A G-counter's slots are non-negative by definition: [GCounter.inc] only ever raises one, and
+     * every sum built on the counter assumes it. A negative slot handed to [GCounter.of] is refused
+     * (#3397). Before the fix it was accepted, and `value` came out below a slot's own count.
+     */
+    @Test
+    fun ofRefusesANegativeSlot() {
+        assertFailsWith<IllegalArgumentException> { GCounter.of(a to 5L, b to -1L) }
+    }
+
+    /** The boundary on the other side: a zero slot is a legal seed. */
+    @Test
+    fun ofAcceptsAZeroSlot() {
+        assertEquals(0L, GCounter.of(a to 0L).count(a))
+    }
+
+    /**
+     * The decoder refuses a negative slot too, because the check lives in the type rather than in
+     * [GCounter.of] (#3397). The rig asserts that the JSON it rewrites really carries the slot it
+     * negates, so a change of wire shape cannot turn this into a decode of a valid counter.
+     */
+    @Test
+    fun decoderRefusesANegativeSlot() {
+        val valid = Json.encodeToString(GCounter.serializer(), GCounter.of(a to 7L))
+        val negated = valid.replace(":7", ":-7")
+        assertAll(
+            { assertEquals(7L, Json.decodeFromString(GCounter.serializer(), valid).count(a), "the valid encoding decodes") },
+            { assertNotEquals(valid, negated, "the rig found the slot to negate in $valid") },
+            { assertFailsWith<IllegalArgumentException> { Json.decodeFromString(GCounter.serializer(), negated) } },
         )
     }
 }

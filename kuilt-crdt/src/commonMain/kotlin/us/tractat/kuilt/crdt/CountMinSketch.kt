@@ -2,6 +2,7 @@ package us.tractat.kuilt.crdt
 
 import kotlinx.serialization.Serializable
 import us.tractat.kuilt.crdt.internal.Murmur3
+import us.tractat.kuilt.math.plusOrNull
 
 /**
  * A single changed cell in a [CountMinSketch] sparse delta: the (row, col) position
@@ -105,12 +106,20 @@ public class CountMinSketch private constructor(
      * Use this overload when the caller already holds or can cache the UTF-8
      * encoding of the key — it avoids the `ByteArray` allocation that
      * [add(String)][add] performs on every call.
+     *
+     * @throws ArithmeticException if any of the item's cells is already at [Long.MAX_VALUE]. A
+     *   wrapped cell would be negative, and [piece], a max, would discard it, so the occurrence
+     *   would be lost on every replica with nothing to say so (#3397).
      */
     public fun add(encodedItem: ByteArray): Patch<CountMinSketch> {
         val sparse = buildList(depth) {
             for (row in 0 until depth) {
                 val col = columnFor(encodedItem, row, width)
-                add(CellDelta(row, col, cells[row][col] + 1L))
+                val raised = cells[row][col].plusOrNull(1L)
+                    ?: throw ArithmeticException(
+                        "CountMinSketch cell ($row, $col) is at Long.MAX_VALUE and cannot count another occurrence",
+                    )
+                add(CellDelta(row, col, raised))
             }
         }
         return Patch(CountMinSketch(width, depth, stubCells(depth), sparse))
@@ -123,6 +132,8 @@ public class CountMinSketch private constructor(
      *
      * For high-frequency hot paths where the same key is added many times,
      * prefer [add(ByteArray)][add] with a cached encoding to avoid per-call allocation.
+     *
+     * @throws ArithmeticException if any of the item's cells is already at [Long.MAX_VALUE] (#3397).
      */
     public fun add(item: String): Patch<CountMinSketch> = add(item.encodeToByteArray())
 
@@ -138,15 +149,10 @@ public class CountMinSketch private constructor(
      * replicas. The estimate is always ≥ the true count seen by any single
      * merged replica, and within the Count-Min error bound with high probability.
      */
-    public fun estimate(encodedItem: ByteArray): Long {
-        var min = Long.MAX_VALUE
-        for (row in 0 until depth) {
-            val col = columnFor(encodedItem, row, width)
-            val v = cells[row][col]
-            if (v < min) min = v
-        }
-        return if (min == Long.MAX_VALUE) 0L else min
-    }
+    public fun estimate(encodedItem: ByteArray): Long =
+        // `depth` is at least 1, so there is always a row to take the minimum over. A sentinel of
+        // Long.MAX_VALUE for "no row seen" answered 0 for an item whose every cell was full (#3397).
+        (0 until depth).minOf { row -> cells[row][columnFor(encodedItem, row, width)] }
 
     /**
      * Estimate the number of times [item] has been added. Because replicas merge

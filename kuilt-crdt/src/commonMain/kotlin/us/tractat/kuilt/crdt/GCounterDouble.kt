@@ -19,6 +19,9 @@ import kotlinx.serialization.Serializable
  * same number. (Very large magnitude differences can still lose low-order bits — the
  * honest floating-point limit, analogous to [HyperLogLog]'s estimation error.)
  *
+ * Every slot is non-negative and not NaN, and the type enforces it: [of] and the decoder both
+ * refuse such a count. A NaN slot would win every join, since `maxOf` with NaN is NaN.
+ *
  * @sample us.tractat.kuilt.crdt.sampleGCounterDouble
  */
 @Serializable
@@ -26,6 +29,13 @@ public class GCounterDouble private constructor(
     @Serializable(with = CanonicalMapSerializer::class)
     private val counts: Map<ReplicaId, Double>,
 ) : Quilted<GCounterDouble> {
+
+    // In `init`, not in `of`: the generated decoder runs it too (#3397). `>= 0.0` is false for NaN.
+    init {
+        for ((replica, count) in counts) {
+            require(count >= 0.0) { "GCounterDouble slot $replica must be non-negative and not NaN, was $count" }
+        }
+    }
 
     /** The counter's value: the sum of all per-replica counts, in canonical replica order. */
     public val value: Double get() = counts.entries.sortedBy { it.key }.sumOf { it.value }
@@ -54,7 +64,11 @@ public class GCounterDouble private constructor(
         /** The zero counter. */
         public val ZERO: GCounterDouble = GCounterDouble(emptyMap())
 
-        /** A counter with the given per-replica counts (test/seed helper). */
+        /**
+         * A counter with the given per-replica counts (test/seed helper).
+         *
+         * @throws IllegalArgumentException if any count is negative or NaN.
+         */
         public fun of(vararg pairs: Pair<ReplicaId, Double>): GCounterDouble = GCounterDouble(pairs.toMap())
     }
 }
