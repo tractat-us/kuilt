@@ -91,9 +91,17 @@ internal interface JoinerResumeHost {
     fun onNoOpResume(hostId: PeerId, at: Instant)
 
     /**
+     * Mark the room host-lost now, and return whether this call did it (`false` when it already
+     * was). The machine calls it inside the critical section that decides an episode failed, so a
+     * `ResumeAck` handled after that decision finds the room terminal (#3094).
+     */
+    fun claimHostLost(): Boolean
+
+    /**
      * The reconnect failed terminally (no credentials, window expired, or a non-conforming
-     * loom): the room marks the host lost and tears down. [reason] classifies the failure —
-     * see [FailureReason].
+     * loom), and [claimHostLost] has already marked the room host-lost: the room announces
+     * `HostLost` and tears down. Called at most once, and only after [claimHostLost] returned
+     * `true`. [reason] classifies the failure — see [FailureReason].
      */
     suspend fun onReconnectFailed(at: Instant, reason: FailureReason)
 }
