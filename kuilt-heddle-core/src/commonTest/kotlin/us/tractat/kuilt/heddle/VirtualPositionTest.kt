@@ -135,7 +135,7 @@ class VirtualPositionTest {
      * only it refuses:
      * - `1/30,720` alone: `C` clears one lease, `C − R` does not (the `− R` term);
      * - `{1, 2⁵⁹ − 2⁵⁰}`: one origin step moves the heavy child about `2⁶³` ticks (the step term);
-     * - `2²⁰ · 176.4…` beside `1/3`: each fits alone, and the `1/3` beside it triples the heavy
+     * - `1.85 · 10¹⁷` beside `1/3`: each fits alone, and the `1/3` beside it triples the heavy
      *   child's step, so only a check over the whole set refuses it.
      *
      * At full leases that puts every denominator at or below 30,719: `{1/30,718, 1/30,719}` fits and
