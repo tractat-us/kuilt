@@ -783,8 +783,10 @@ public class LocalHeddle private constructor(
      *
      * [waiting] is every leaf with work queued once this lease's work is done, as for [acquire]. An
      * overrun is a charge, so where there is one [waiting] is observed at every group the overrun
-     * crosses before it lands, as [extend] observes it (#3471). A completion within the reservation
-     * charges nothing new, so it observes nothing.
+     * crosses before it lands, as [extend] observes it (#3471). The overrun is the running work's own
+     * charge, so the lease's leaf counts as waiting for it whatever [waiting] says, as in [extend],
+     * even when this was its last job. A completion within the reservation charges nothing new, so it
+     * observes nothing.
      *
      * When an edge of the lease's path is no longer ACTIVE, an overrun cannot be delegated across
      * it. The reservation is still charged at the leaf, and the overrun is charged at the deepest
@@ -807,7 +809,7 @@ public class LocalHeddle private constructor(
         var local = ledger
         var minted = 0
         if (overrun > 0L && reach.isNotEmpty()) {
-            val seen = observedWaiting(local, waiting, running = null, overrun)
+            val seen = observedWaiting(local, waiting, running = current.lease.leaf, overrun)
             val (funded, forced) = fund(local, overrun)
             minted = forced
             local = rebasedAfterCharge(observeAndDelegate(funded, reach, overrun, seen), reach, seen)
@@ -827,12 +829,14 @@ public class LocalHeddle private constructor(
     /**
      * [waiting] as the demand a charging call observes in [base]: every leaf beneath a group at its
      * concurrency ceiling counted idle, as the acquire's pick counts it, and [running], the leaf whose
-     * running work the call charges, counted waiting whatever its ceiling. `null` when the call
-     * charges no running leaf's further work, an overrunning [complete].
+     * running work the call charges, counted waiting whatever its ceiling. Every charge is some
+     * running work's own, an overrunning [complete]'s included: counted idle, a leaf charged for its
+     * last job would be seen leaving before its own charge landed, and the sibling that idled
+     * through it would bank the charge.
      */
-    private fun observedWaiting(base: EntitlementLedger, waiting: Set<GroupId>, running: GroupId?, amount: Long): (AttachmentId) -> Demand {
-        val observed = belowCeilings(waiting, emptySet()).first.let { if (running == null) it else it + running }
-        return demands(base, observed, if (running == null) emptySet() else setOf(running), amount).waiting
+    private fun observedWaiting(base: EntitlementLedger, waiting: Set<GroupId>, running: GroupId, amount: Long): (AttachmentId) -> Demand {
+        val observed = belowCeilings(waiting, emptySet()).first + running
+        return demands(base, observed, setOf(running), amount).waiting
     }
 
     /**

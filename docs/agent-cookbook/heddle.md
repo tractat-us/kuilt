@@ -544,9 +544,9 @@ The view takes each lane's queue of estimates as the engine does:
 
 **Intent:** someone started a job by hand, or another scheduler placed it, and it must still be
 charged to its group like any other, with no pick.
-**Primitive:** `LocalHeddle.admit(leaf, startedAt)`, or `admit(leaf, waiting, startedAt)`. Both
-open a lease at the leaf without a pick and are never refused for supply or at a ceiling, since
-the work is already running; a shortfall at the root is minted. Settle the lease with
+**Primitive:** `LocalHeddle.admit(leaf, waiting, startedAt)`, with `waiting` every leaf that has
+work queued. It opens a lease at the leaf without a pick and is never refused for supply or at a
+ceiling, since the work is already running; a shortfall at the root is minted. Settle the lease with
 `complete` as usual.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleAdmitExternal -->
@@ -571,7 +571,7 @@ the work is already running; a shortfall at the root is minted. Settle the lease
 waiting set you pass before their charge lands (#3471), so a sibling that sat idle while you
 charged is seen leaving first, and comes back without having banked your charge. `admit` leaves
 the wake memory as `acquire(waiting, eligible = {leaf})` would have, wherever that acquire would
-lease. `complete` observes only when it charges an overrun. The only refusal is `NoLiveLineage(leaf)`, for a name that is not leasable or has no
+lease. `extend` and `complete` count the lease's own leaf as waiting, since the charge is its own running work's, even on its last job. `complete` observes only when it charges an overrun. The only refusal is `NoLiveLineage(leaf)`, for a name that is not leasable or has no
 live path from the root.
 
 ## Surviving a restart

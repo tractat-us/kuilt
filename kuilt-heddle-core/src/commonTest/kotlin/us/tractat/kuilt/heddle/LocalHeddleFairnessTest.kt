@@ -137,15 +137,19 @@ class LocalHeddleFairnessTest {
                     // an overrun sees an idle leaf leave before it lands, so 19 picks moved off a and 27
                     // off b, all 46 to c, the overall error fell from 0.011287 to 0.009803 and the window
                     // error from 0.073276 to 0.068865. Fewer wakes, since a leaf seen leaving at a charge
-                    // comes back by the clock rather than as a waker.
-                    "a=6643 b=2931 c=3228 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
-                        "exhaustedAcquires=0 exhaustedExtends=0 inlineOverruns=878 filtered=1489 seesExtended=1994 wakes=849 " +
+                    // comes back by the clock rather than as a waker. Re-pinned for an overrun on a
+                    // leaf's last job counting that leaf as waiting (#3471 review): the overrun now moves
+                    // its parent's clock, so 33 picks moved off a, 5 to b and 28 to c, the overall error
+                    // fell from 0.009803 to 0.007225 and the window error from 0.068865 to 0.062730, and
+                    // wakes fell from 849 to 775.
+                    "a=6610 b=2936 c=3256 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
+                        "exhaustedAcquires=0 exhaustedExtends=0 inlineOverruns=878 filtered=1489 seesExtended=1994 wakes=775 " +
                         "mints=322 forcedMints=0 minUnspent=33",
                     run.fingerprint(),
                 )
             },
-            { assertEquals(0.009803, overall, PIN_TOLERANCE, "pinned overall error") },
-            { assertEquals(0.068865, window, PIN_TOLERANCE, "pinned window error") },
+            { assertEquals(0.007225, overall, PIN_TOLERANCE, "pinned overall error") },
+            { assertEquals(0.062730, window, PIN_TOLERANCE, "pinned window error") },
         )
     }
 
@@ -167,9 +171,11 @@ class LocalHeddleFairnessTest {
                     // for the net-service clock (§7.2, #3376): 31 picks moved to a and 42 to c, off b.
                     // Re-pinned for the carried shift remainder (#3416 review): 1 pick moved off a and
                     // 2 off b, all 3 to c. Re-pinned for charging calls that observe their waiting set
-                    // (#3471): 27 picks moved to a, 13 off b and 14 off c.
-                    "a=4088 b=1747 c=1905 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
-                        "exhaustedAcquires=2403 exhaustedExtends=40 inlineOverruns=737 filtered=914 seesExtended=1325 wakes=712 " +
+                    // (#3471): 27 picks moved to a, 13 off b and 14 off c. Re-pinned for an overrun on a
+                    // leaf's last job counting that leaf as waiting (#3471 review): 12 picks moved off a
+                    // and 20 off c, all 32 to b, and wakes fell from 712 to 639.
+                    "a=4076 b=1779 c=1885 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
+                        "exhaustedAcquires=2403 exhaustedExtends=40 inlineOverruns=737 filtered=914 seesExtended=1325 wakes=639 " +
                         "mints=3316 forcedMints=460 minUnspent=0",
                     run.fingerprint(),
                 )

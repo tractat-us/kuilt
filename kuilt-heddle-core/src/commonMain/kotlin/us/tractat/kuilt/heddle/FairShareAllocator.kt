@@ -1320,9 +1320,11 @@ public class FairShareAllocator(
      * clamp on an idle→demand *event* this peer has actually observed, and a window that opens and
      * closes between two samples is not seen. Single-peer, a child that stops partway through a
      * call is seen at the grant that stopped it, and an idle interval between calls is seen at the
-     * next entry that observes: a pick, or a `LocalHeddle` charging call, which observes its own
-     * waiting set before its charge lands (#3471), so a charge in the interval is not banked by the
-     * child that idled through it. Two windows escape. One is multi-peer: a child may
+     * next entry that observes: a pick, or a `LocalHeddle` charging call, which observes its waiting
+     * set, with the leaf it charges counted waiting, before its charge lands (#3471). So a sibling
+     * that idled through the charge is seen leaving before the charge moves its parent's clock, and
+     * does not bank it; that holds when the charge is an overrun on the charged leaf's last job too.
+     * Two windows escape. One is multi-peer: a child may
      * idle and re-demand between this peer's rounds while *another* peer's grants advance its
      * siblings, so this peer sees demanding→demanding and moves nothing. Accepted by design: the
      * resulting catch-up burst is capped by this peer's holdings and the §8.2 caps, any peer that
