@@ -229,6 +229,72 @@ class WarpLogRecordExporterUnreadIndexTest {
         )
     }
 
+    // ---- The active segment: never write over what was not read ----
+
+    /** The active segment's key in [store], from the index it holds. */
+    private suspend fun activeKeyOf(store: RecordingStore): StoreKey =
+        StoreKey(segmentKeyForTest(decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST))).active))
+
+    /** Every write [store] has taken. Deletes are not counted: see the arm below. */
+    private fun writes(store: RecordingStore): Int = store.operations().count { it.kind == StoreOpKind.WRITE }
+
+    @Test
+    fun aRefusedActiveSegmentReadFailsEveryTurnClosedUntilItHeals() = runTest {
+        // The active segment is the key the next export writes, so an unread one cannot be
+        // installed as empty: that export wrote over it, and a probe lost 6 of 30. Nor can it be
+        // sealed and a new one opened, because the ids minted next would reuse the ones it holds.
+        // So it fails closed, as the index does. Recovery's deletes of keys the index has already
+        // retired, and of the superseded legacy key, still run on each read: they are why only
+        // writes are counted here.
+        val checks = Refusal.entries.flatMap { how ->
+            val (backing, persisted) = storeWithThirtyRecords()
+            val activeKey = activeKeyOf(backing)
+            val activeBefore = requireNotNull(backing.read(activeKey)) { "precondition: the active segment was never written" }
+            val store = RefusingStore(backing, Call.READ, { it == activeKey }, times = 3, how = how)
+            val exporter = exporterFor(store)
+
+            exporter.recover()
+            val writesBefore = writes(backing)
+            val whileRefused = listOf(exporter.export(record(100)), exporter.export(record(101)))
+            val writesWhileRefused = writes(backing) - writesBefore
+            val activeWhileRefused = backing.read(activeKey)
+            val healed = exporter.export(record(102))
+            val afterRestart = bodiesAfterRestart(backing)
+
+            listOf<() -> Unit>(
+                { assertEquals(3, store.refused, "[$how] the active segment read was refused ${store.refused} times, not 3") },
+                { assertTrue(whileRefused.all { it is ExportResult.Failure }, "[$how] a turn ran over an unread active segment: $whileRefused") },
+                { assertEquals(0, writesWhileRefused, "[$how] a turn wrote over an unread active segment") },
+                { assertTrue(activeBefore.contentEquals(activeWhileRefused), "[$how] the unread active segment was written over") },
+                { assertEquals(ExportResult.Success, healed, "[$how] the turn after the read healed failed") },
+                { assertEquals(persisted + "body-102", afterRestart, "[$how] records were lost to the unread active segment") },
+            )
+        }
+        assertAll(*checks.toTypedArray())
+    }
+
+    @Test
+    fun anUndecodableActiveSegmentIsWrittenOverAndCostsOnlyItsOwnRecords() = runTest {
+        // The control: bad bytes are not a refusal. Nothing in them is readable, so writing over
+        // them loses nothing more, and the exporter keeps working at once.
+        val (backing, persisted) = storeWithThirtyRecords()
+        val activeKey = activeKeyOf(backing)
+        val activeBodies = decodeSegmentForTest(requireNotNull(backing.read(activeKey))).toList().map { it.body }
+        backing.putRaw(activeKey, byteArrayOf(0x7f, 0x00, 0x13))
+        val exporter = exporterFor(backing)
+
+        exporter.recover()
+        val exported = exporter.export(record(100))
+        val afterRestart = bodiesAfterRestart(backing)
+
+        assertAll(
+            { assertTrue(activeBodies.isNotEmpty(), "precondition: the active segment held no records") },
+            { assertEquals(ExportResult.Success, exported, "an undecodable active segment stopped the export") },
+            { assertEquals(persisted - activeBodies.toSet() + "body-100", afterRestart) },
+        )
+    }
+
+
     // ---- The legacy blob: never delete what was not read ----
 
     @Test
