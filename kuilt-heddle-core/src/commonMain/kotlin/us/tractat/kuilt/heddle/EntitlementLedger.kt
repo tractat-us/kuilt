@@ -483,10 +483,8 @@ public class EntitlementLedger private constructor(
      * before or after the edge is seated.
      *
      * A position past the edge's ceiling reads as the ceiling rather than throwing (#3313); a pick
-     * that would order it refuses instead (see [AcquireOutcome.PositionCeiling]).
-     *
-     * @throws ArithmeticException if the position relative to the origin is below `Long`, which only
-     *   a child idle since long before many rebases reaches.
+     * that would order it refuses instead (see [AcquireOutcome.PositionCeiling]). One below its
+     * floor, `−ceiling`, reads as the floor (#3353): higher than it is, the penalty side.
      */
     public fun grossVirtualService(id: AttachmentId): Rational? =
         recordOf(id)?.let { grossVirtualService(id, it) }
@@ -496,13 +494,11 @@ public class EntitlementLedger private constructor(
      * `b + committedService / weight`, with the gauge supplying `b` and the fold), relative to its
      * parent's [origin]. The raw position a pick reads, before the wake clamp ([rawTicksAt]),
      * computed wide and narrowed only here. `null` if [id] is unknown or divergent. Past the
-     * ceiling it reads the ceiling.
-     *
-     * @throws ArithmeticException if the position is below `Long`, as for [grossVirtualService].
+     * ceiling it reads the ceiling, and below the floor the floor, as [grossVirtualService] does.
      */
     public fun virtualService(id: AttachmentId): Rational? {
         val record = recordOf(id) ?: return null
-        return ticksToVirtual(saturated(rawTicks(id, record), record.weight), record.weight)
+        return readVirtual(rawTicks(id, record), record.weight)
     }
 
     /** [id]'s raw position, wide, relative to its parent's origin ([rawTicksAt], #3353). */

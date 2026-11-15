@@ -65,6 +65,23 @@ internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS
 internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADROOM) / w.denominator
 
 /**
+ * The lowest effective position, in ticks, an edge of weight [w] is let down to by a rebase or a
+ * landing: `−`[positionCeiling] (#3353, the window rule). An edge's **window** is
+ * `[positionFloor, positionCeiling)`.
+ *
+ * The rebase lowers a parent's origin to where its demanding children stand on average, not to the
+ * one furthest behind, so a child behind that average goes below zero. The floor is how far: no
+ * rebase takes a demanding child below it, and a joiner seated where the front is below it is
+ * seated at it instead, which costs that joiner a turn and never gives it one. Symmetric with the
+ * ceiling, so a position in the window reads as a virtual time exactly ([inWindow]).
+ *
+ * A child can still go below it by its own returns: a lease cancelled from the floor walks its
+ * holder back by the lease. Nothing orders on that: such a child is not demanding, and the public
+ * reads hold it at the floor.
+ */
+internal fun positionFloor(w: Weight): Long = -positionCeiling(w)
+
+/**
  * The position, in ticks, past which a parent is rebased by raising its origin: a sixteenth of
  * [w]'s [positionCeiling] (#3329, #3353). Far enough below the ceiling that the spread of a busy
  * parent's children above the rebased one never reaches it, and far enough above zero that a rebase
@@ -251,10 +268,30 @@ private fun absRemainder(a: Long, b: Long): Long {
  * @throws ArithmeticException if the reduced numerator does not fit in a `Long`.
  */
 internal fun ticksToVirtual(ticks: Long, w: Weight): Rational {
+    // An in-window position (|ticks| <= C) never throws: |ticks| · d <= Long.MAX_VALUE − H.
     val scale = checkedMul(TICKS_PER_UNIT, w.numerator)
     val g = gcdOf(if (ticks < 0L) checkedNegate(ticks) else ticks, scale)
     return Rational.of(checkedMul(ticks / g, w.denominator), scale / g)
 }
+
+/**
+ * [ticks] held inside [w]'s window ([positionFloor], [positionCeiling]): the position a public read
+ * reports (#3353). Above, at the ceiling, as before; below, at the floor, so a child a `cancel` has
+ * walked back past its floor reads higher than it is, the penalty side, rather than throwing.
+ */
+internal fun inWindow(ticks: Int128, w: Weight): Long {
+    val ceiling = positionCeiling(w)
+    if (ticks >= Int128.of(ceiling)) return ceiling
+    val floor = positionFloor(w)
+    if (ticks <= Int128.of(floor)) return floor
+    return checkNotNull(ticks.toLongOrNull()) { "a position inside its window fits a Long: $ticks" }
+}
+
+/**
+ * [ticks] as the virtual time a public read reports: [inWindow], then [ticksToVirtual]. Total: every
+ * position in a window converts exactly, so no read throws however far a child is from its origin.
+ */
+internal fun readVirtual(ticks: Int128, w: Weight): Rational = ticksToVirtual(inWindow(ticks, w), w)
 
 internal tailrec fun gcdOf(a: Long, b: Long): Long = if (b == 0L) a else gcdOf(b, a % b)
 

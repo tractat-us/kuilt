@@ -217,10 +217,10 @@ public object HeddlePolicy {
      * `delegate` writes, so the value the writer asserted and the value the scheduler reads are
      * one expression.
      *
-     * @throws ArithmeticException if the exact arithmetic would exceed `Long` (§10.12).
+     * Held inside the edge's window (#3353): past its ceiling it reads the ceiling, below its floor
+     * the floor, so it never throws on a position.
      */
-    public fun virtualService(edge: PolicyEdge): Rational =
-        ticksToVirtual(saturated(rawTicks(edge), edge.record.weight), edge.record.weight)
+    public fun virtualService(edge: PolicyEdge): Rational = readVirtual(rawTicks(edge), edge.record.weight)
 
     /**
      * [virtualService] as a position: whole ticks of the edge's own service, relative to the
