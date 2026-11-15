@@ -453,7 +453,7 @@ class BurstLagTest {
      * that, in a repeating pattern, locks into one phase and adds up: toward **credit** on the first
      * rig, which §10.5 forbids, and toward penalty on the second. A shift that carries its own
      * rounding forward keeps x's total over-shift under one tick, so its stray from fair is the same
-     * after 600 bursts as after 300.
+     * after 1,200 bursts as after 300, and within a unit of fair.
      */
     @Test
     fun aReturnerShiftThatDoesNotLandOnItsGridDoesNotDrift() {
@@ -463,15 +463,15 @@ class BurstLagTest {
         val penalty = listOf(1L, 5L, 10L, 4L) to listOf(Stretch(setOf(1, 2), 1L), Stretch(setOf(0, 1, 3), 1L), Stretch(setOf(0, 1), 2L))
         val rows = listOf("credit" to credit, "penalty" to penalty).map { (label, rig) ->
             val (weights, stretches) = rig
-            Triple(label, strayOfX(weights, stretches, 300), strayOfX(weights, stretches, 600))
+            Triple(label, strayOfX(weights, stretches, 300), strayOfX(weights, stretches, 1_200))
         }
-        println("stray of x from fair, at 300 and 600 bursts: ${rows.joinToString { (l, a, b) -> "$l $a, $b" }}")
+        println("stray of x from fair, at 300 and 1,200 bursts: ${rows.joinToString { (l, a, b) -> "$l $a, $b" }}")
         assertAll(
             *rows.map { (label, short, long) ->
-                { assertTrue(abs(long - short) < Rational.ONE, "$label: x strays $short from fair at 300 bursts and $long at 600") }
+                { assertTrue(abs(long - short) < Rational.ONE, "$label: x strays $short from fair at 300 bursts and $long at 1,200") }
             }.toTypedArray(),
             *rows.map { (label, _, long) ->
-                { assertTrue(abs(long) < Rational.of(2L), "$label: x strays $long from fair at 600 bursts") }
+                { assertTrue(abs(long) < Rational.ONE, "$label: x strays $long from fair at 1,200 bursts") }
             }.toTypedArray(),
         )
     }
