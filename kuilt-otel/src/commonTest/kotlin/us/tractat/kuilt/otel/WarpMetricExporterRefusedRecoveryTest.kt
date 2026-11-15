@@ -601,19 +601,29 @@ class WarpMetricExporterRefusedRecoveryTest {
     }
 
     /**
-     * A cap below zero has no meaning, and the heal's eviction loop would spin on it forever, under
-     * both locks, since an empty exporter is still over a cap of `-1`. A cap of zero is allowed: the
-     * heal evicts until the exporter is empty, and stops.
+     * A cap below one is refused. Below zero the heal's eviction loop had nothing left to evict and
+     * an exporter still over the cap; at zero the heal and a write disagreed, the heal evicting to
+     * nothing and a write of a new series keeping it, since there was nothing to evict for it. At a
+     * cap of one both hold one series. Recover joins the seeded series kind by kind and evicts as it
+     * goes, so `DROP_OLDEST` leaves the last kind read, the histogram, with its three seeded values.
      */
     @Test
-    fun aNegativeBufferCapIsRefusedAndACapOfZeroStillHeals() = runTest {
+    fun aBufferCapBelowOneIsRefusedAndACapOfOneHoldsOneSeriesOnHealAndWrite() = runTest {
         val backing = RecordingStore()
         seed(backing)
-        val zero = WarpMetricExporter(replica, backing, maxMetrics = 0).also { it.recover() }
+        val one = WarpMetricExporter(replica, backing, maxMetrics = 1).also { it.recover() }
+        val healed = one.snapshotAll()
+        val written = one.incrementSum(otherSum, 1L)
 
         assertAll(
             { assertFailsWith<IllegalArgumentException>("a cap of -1 was accepted") { WarpMetricExporter(replica, backing, maxMetrics = -1) } },
-            { assertEquals(0, zero.metricCount(), "a cap of zero kept ${zero.metricCount()} series") },
+            { assertFailsWith<IllegalArgumentException>("a cap of 0 was accepted") { WarpMetricExporter(replica, backing, maxMetrics = 0) } },
+            { assertEquals(setOf(histogram), healed.histograms.keys, "the series a capped recover kept") },
+            { assertEquals(3L, healed.histograms[histogram]?.count, "recover did not join the seeded histogram") },
+            { assertEquals(emptySet(), healed.sums.keys + healed.doubleSums.keys + healed.gauges.keys + healed.cardinalities.keys) },
+            { assertEquals(MetricExportResult.Success, written) },
+            { assertEquals(1, one.metricCount(), "a write of a new series at a cap of one kept ${one.metricCount()} series") },
+            { assertEquals(1L, one.sumValue(otherSum), "the new series did not take the place of the healed one") },
         )
     }
 
