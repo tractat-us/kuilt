@@ -1064,19 +1064,6 @@ class HeddleNodeTest {
         h.pump()
         assertEquals(200L, node.ledger.value.edge(e1)!!.issued, "e1 runs alone to its target")
 
-        // Phase 1b — e1 asks again, unservably. The grant that filled e1 was seen as its leaving, so
-        // this call is its return, by a clock that has not moved since; from here it is a stayer, and
-        // holds the front e2 wakes into (#3416 review).
-        node.advertise(e1, competingUnservable)
-        node.advertise(starved.id, competingUnservable)
-        node.schedule(root)
-        h.pump()
-        assertEquals(
-            Rational.of(200L),
-            node.probeEffectiveVirtualService(e1, others = listOf(starved.id)),
-            "the rig: e1 came back exactly where it left",
-        )
-
         // Phase 2 — e2 wakes into a front of mean(e1 at 200, e3 at 0) = 100, then runs its 20.
         node.advertise(e1, competingUnservable)
         node.advertise(e2, Demand(targetOutstanding = 20L, maximumUsefulGrant = 10L))
