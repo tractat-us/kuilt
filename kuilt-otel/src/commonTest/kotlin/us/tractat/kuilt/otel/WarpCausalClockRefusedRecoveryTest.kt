@@ -2,8 +2,11 @@ package us.tractat.kuilt.otel
 
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.Dot
@@ -243,6 +246,131 @@ class WarpCausalClockRefusedRecoveryTest {
             { assertEquals(Dot(replica, 3L), persisted.tick().dot, "the clear overwrote the durable seq") },
         )
     }
+
+    // ---- A refusal never demotes a clock that has already read or minted ----
+
+    /**
+     * The interleaving from the #3399 review. B's export persists the clock at 1 and parks on its
+     * span write. A ticks 2 outside the write mutex and queues behind it. A concurrent `recover` is
+     * refused. If that refusal demoted the clock, A's turn would skip the clock write while its
+     * span snapshot carried dot 2, so a restart would re-mint 2.
+     */
+    @Test
+    fun aRefusedSecondRecoveryNeverDemotesAClockMidExport() = runTest {
+        val backing = InMemoryDurableStore()
+        val gated = GatedWriteStore(backing, StoreKey("otel.spans"))
+        val store = ReadRefusingStore(gated, clockKey, refusingAtStart = false)
+        val clock = WarpCausalClock(replica)
+        val exporter = WarpSpanExporter(replica, store, causalClock = clock)
+        clock.recover(store)
+
+        val b = launch { exporter.export(span(1)) }
+        runCurrent()
+        val parkedOnB = gated.parked
+        val a = launch { exporter.export(span(2)) }
+        runCurrent()
+        store.refuse()
+        clock.recover(store)
+        val refusedReads = store.refusals
+        store.heal()
+        gated.release()
+        b.join()
+        a.join()
+
+        val durable = WarpSpanExporter(replica, backing).also { it.recover() }.snapshot().elements
+        val used = durable.mapNotNull { it.causalStamp?.dot } + nextDotAfterRestart(backing)
+        assertAll(
+            { assertEquals(1, parkedOnB, "the rig never parked B's span write") },
+            { assertEquals(1, refusedReads, "the rig did not refuse the concurrent recovery read") },
+            { assertEquals(2, durable.size, "a span write did not land") },
+            { assertEquals(used.size, used.toSet().size, "a restart re-minted a durable dot: $used") },
+        )
+    }
+
+    // ---- A clear while the read is refused ----
+
+    /** The clear dropped the frontier, so the read that re-arms the clock must not bring it back. */
+    @Test
+    fun aClearMadeWhileTheReadIsRefusedIsNotUndoneByTheReArm() = runTest {
+        val backing = InMemoryDurableStore()
+        durableClockAtTwo(backing)
+        val store = ReadRefusingStore(backing, clockKey)
+        val clock = WarpCausalClock(replica)
+        val exporter = WarpSpanExporter(replica, store, causalClock = clock)
+
+        clock.recover(store)
+        val cleared = exporter.clear()
+        val refusedReads = store.refusals
+        store.heal()
+        exporter.export(span(1))
+        val stamp = exporter.snapshot().elements.single().causalStamp
+
+        assertAll(
+            { assertEquals(2, refusedReads, "the rig did not refuse both the recovery and the clear's retry") },
+            { assertEquals(ExportResult.Success, cleared) },
+            { assertEquals(Dot(replica, 3L), stamp?.dot, "the export did not re-arm the clock") },
+            { assertEquals(emptySet(), stamp?.predecessors, "the re-arm restored the frontier the clear dropped") },
+        )
+    }
+
+    // ---- What a turn with an unrecovered clock acknowledges ----
+
+    /**
+     * A turn whose clock write was skipped wrote only the span key, so it must not resolve an earlier
+     * failure that needed the clock's write too.
+     */
+    @Test
+    fun aTurnThatSkippedTheClockWriteLeavesAFailedClockTurnOutstanding() = runTest {
+        val backing = InMemoryDurableStore()
+        val refusing = ReadRefusingStore(backing, clockKey, refusingAtStart = false)
+        val store = CancellationScriptedStore(refusing)
+        val clock = WarpCausalClock(replica)
+        val exporter = WarpSpanExporter(replica, store, causalClock = clock)
+        val stamped = span(1).copy(causalStamp = CausalStamp(Dot(ReplicaId("b"), 1L), emptySet()))
+
+        store.arm(StoreCall.WRITE, StoreAct.MINT) { it == StoreKey("otel.spans") }
+        val failedTurn = exporter.export(stamped)
+        val outstandingAfterFailure = exporter.health.value.outstandingFailures
+        refusing.refuse()
+        clock.recover(store)
+        val skippedTurn = exporter.export(span(2))
+
+        assertAll(
+            { assertEquals(1, store.minted, "the rig never refused the first turn's span write") },
+            { assertTrue(failedTurn is ExportResult.Failure, "the rig: the first turn did not fail") },
+            { assertEquals(1L, outstandingAfterFailure, "the rig: the failed turn was not outstanding") },
+            { assertTrue(refusing.refusals >= 1, "the rig did not refuse the clock's recovery read") },
+            { assertEquals(ExportResult.Success, skippedTurn) },
+            { assertEquals(1L, exporter.health.value.outstandingFailures, "a span-only turn resolved a failed clock turn") },
+        )
+    }
+}
+
+/**
+ * Delegates to [backing], but parks the first write of [gatedKey] until [release], so a test can
+ * hold one export inside its write section while another queues behind it.
+ */
+private class GatedWriteStore(private val backing: DurableStore, private val gatedKey: StoreKey) : DurableStore {
+    private val lock = reentrantLock()
+    private val gate = CompletableDeferred<Unit>()
+    private var armed = true
+    private var parkedCount = 0
+
+    val parked: Int get() = lock.withLock { parkedCount }
+
+    fun release() {
+        gate.complete(Unit)
+    }
+
+    override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+
+    override suspend fun write(key: StoreKey, bytes: ByteArray) {
+        val park = lock.withLock { (armed && key == gatedKey).also { if (it) { armed = false; parkedCount++ } } }
+        if (park) gate.await()
+        backing.write(key, bytes)
+    }
+
+    override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
 }
 
 /**
@@ -250,14 +378,20 @@ class WarpCausalClockRefusedRecoveryTest {
  * keeps failing for a while, as a locked or quota-bound one does. Counts its [refusals] so an arm
  * can assert its rig fired.
  */
-private class ReadRefusingStore(private val backing: DurableStore, private val refused: StoreKey) : DurableStore {
+private class ReadRefusingStore(
+    private val backing: DurableStore,
+    private val refused: StoreKey,
+    refusingAtStart: Boolean = true,
+) : DurableStore {
     private val lock = reentrantLock()
-    private var refusing = true
+    private var refusing = refusingAtStart
     private var refusalCount = 0
 
     val refusals: Int get() = lock.withLock { refusalCount }
 
     fun heal(): Unit = lock.withLock { refusing = false }
+
+    fun refuse(): Unit = lock.withLock { refusing = true }
 
     override suspend fun read(key: StoreKey): ByteArray? {
         val refuse = lock.withLock { (refusing && key == refused).also { if (it) refusalCount++ } }
