@@ -71,7 +71,8 @@ internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADR
  * is rare. Each child is measured against its own threshold, and the front too, read on every
  * child's grid, so a heavy child joining a light runner's front is never seated past its ceiling
  * (#3353 review, item A). What still reaches the ceiling is a demanding child that is never served,
- * which holds `Δ` at zero, and a weight set so fine-grained that no whole step fits.
+ * which holds `Δ` at zero. A weight set so fine that one full lease from just under this threshold
+ * passes the ceiling is refused when it is applied ([weightsFitTheBudget], P1′).
  */
 internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16
 
@@ -95,17 +96,46 @@ internal fun saturated(ticks: Int128, w: Weight): Long {
 internal class PositionCeilingException(message: String) : ArithmeticException(message)
 
 /**
- * Whether one parent's children, of [weights], keep every product a pick forms in `Long`
- * ([VirtualTime.mean], [VirtualTime.ticksFor], [compareVirtual]). Four checks cover them all:
+ * Whether one parent's children, of [weights], fit the weight budget: every product a pick forms
+ * stays in `Long`, and one full lease fits every child's window. Every site that admits a weight
+ * set asks this one question (#3353): `Prepare` and `Activate` on the control log, an ungoverned
+ * node's `prepare` and `activate`, a static node's boot, [LocalHeddle.apply], and
+ * [FairShareAllocator.schedule] on read, for a set a merge assembled.
+ *
+ * ## The `Long` products
+ *
+ * Four checks cover them all ([VirtualTime.mean], [VirtualTime.ticksFor], [compareVirtual]):
  * - `L`, the least common multiple of the denominators;
  * - `S = Σ n · L/d`, the weights' sum over `L`;
  * - `G · S`, the front's denominator in ticks;
  * - `S · d` for every weight, the divisor [VirtualTime.ticksFor] forms.
  *
  * The other products follow. `L · n = (n · L/d) · d ≤ S · d`, since `n · L/d` is one term of `S`.
- * And `d_a · n_b ≤ L · n_b ≤ S · d_b`, since `d_a` divides `L`. A subset's `L` divides the whole
- * set's, so its `S` is no larger, and every front a pick takes over part of the set stays in range
- * too. A reload that would break it is refused at [LocalHeddle.apply] (#3313).
+ * And `d_a · n_b ≤ L · n_b ≤ S · d_b`, since `d_a` divides `L`.
+ *
+ * ## One full lease (P1′)
+ *
+ * Then, for every child `i`, `C_i − R_i > H + gridStep(S) · G · n_i/d_i`, where `C` is the
+ * [positionCeiling], `R` the [rebaseThreshold], `H` the [POSITION_HEADROOM] (one lease of
+ * [LocalHeddle.MAX_RESERVATION]) and [gridStepOf] the whole step the origin moves in. A child is
+ * rebased only once it passes `R`, and the origin moves by whole steps, so a child can sit up to
+ * `R` plus one step on its own grid with no rebase due. Its next lease adds up to `H`, and that
+ * must stay below `C`. Without the check a child that an under-charged `complete` parks between
+ * `C − H` and `R` is never rebased, its next lease saturates, and the parent refuses every pick
+ * there for good (#3353 review: `{1/30,721, 1/30,722}`, one lease charged `1.172 · 10¹²`).
+ *
+ * The step is the whole set's, so activating one child can refuse on behalf of another:
+ * activating `1/3` beside a heavy child triples that child's step. The rule keeps every
+ * denominator at or below 30,719, at any lease size: `H` is a constant, the largest lease, and
+ * [HeddlePolicy.pick] grants no more than that. Near that edge, several fine weights whose denominators
+ * share no factor are refused too, since the step grows with their least common multiple.
+ *
+ * ## Subsets
+ *
+ * A subset's `L` divides the whole set's, so its `S` is no larger, and its grid step divides the
+ * whole set's, so every front a pick takes over part of the set stays in range too. And a weight
+ * that fails alone fails beside any siblings, which is what lets a `Prepare` be refused on the
+ * record alone.
  */
 internal fun weightsFitTheBudget(weights: List<Weight>): Boolean {
     if (weights.isEmpty()) return true
@@ -114,7 +144,46 @@ internal fun weightsFitTheBudget(weights: List<Weight>): Boolean {
     var sum = 0L
     for (w in weights) sum = sum.plusOrNull(w.numerator.timesOrNull(l / w.denominator) ?: return false) ?: return false
     if (sum.timesOrNull(TICKS_PER_UNIT) == null) return false
-    return weights.all { sum.timesOrNull(it.denominator) != null }
+    if (!weights.all { sum.timesOrNull(it.denominator) != null }) return false
+    val step = gridStepOf(weights) ?: return false
+    return weights.all { aFullLeaseFits(it, step) }
+}
+
+/**
+ * Whether one lease of [LocalHeddle.MAX_RESERVATION] from just under [w]'s [rebaseThreshold], plus
+ * one origin step of [step] on its grid, stays below its [positionCeiling]: P1′, in 128 bits.
+ */
+private fun aFullLeaseFits(w: Weight, step: Long): Boolean {
+    val ceiling = positionCeiling(w)
+    val window = Int128.of(ceiling - rebaseThreshold(w))
+    return window > Int128.of(POSITION_HEADROOM) + stepTicks(step, w)
+}
+
+/**
+ * One origin step of [step] units of virtual time on [w]'s grid, in ticks: `step · G · n / d`,
+ * exactly. [step] is a whole multiple of `d / gcd(d, G · n)`, so the quotient is whole.
+ */
+private fun stepTicks(step: Long, w: Weight): Int128 {
+    val scale = checkedMul(TICKS_PER_UNIT, w.numerator)
+    val g = gcdOf(w.denominator, scale)
+    return (step / (w.denominator / g)).timesWide(scale / g)
+}
+
+/**
+ * The least origin step, in whole units of virtual time, that moves an edge of every one of
+ * [weights] by whole ticks: the lcm of `d / gcd(d, G · n)`, or `null` when it leaves `Long`.
+ *
+ * Never `null` for a set inside the `Long` budget: each `d / gcd(d, G · n)` divides `d`, so their
+ * lcm divides `L`. The rebase steps the origin in multiples of it, and P1′ measures one step with
+ * it, so the two cannot disagree about what a step is.
+ */
+internal fun gridStepOf(weights: List<Weight>): Long? {
+    var step = 1L
+    for (w in weights) {
+        val need = w.denominator / gcdOf(w.denominator, checkedMul(TICKS_PER_UNIT, w.numerator))
+        step = (step / gcdOf(step, need)).timesOrNull(need) ?: return null
+    }
+    return step
 }
 
 /**

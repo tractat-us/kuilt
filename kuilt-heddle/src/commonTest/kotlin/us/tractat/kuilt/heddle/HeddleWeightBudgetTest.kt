@@ -275,6 +275,67 @@ class HeddleWeightBudgetTest {
             )
         }
 
+    /**
+     * A weight set too fine for one full lease (#3353, P1′) is refused on every path a replicated
+     * ledger is written by, as one whose sums leave `Long` is: [TOO_FINE] fails alone, at `Prepare`,
+     * and [THIRD] beside an active [HEAVY] fails at `Activate`, though each fits alone, because the
+     * `1/3` triples the heavy child's grid step. [AT_THE_LIMIT], the finest weight that fits, is
+     * the control.
+     */
+    @Test
+    fun aGovernedWeightSetTooFineForOneFullLeaseIsRefused() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val governed = bootGoverned()
+            val tooFine = governed.prepare(AttachmentRecord(E1, ROOT, C1, TOO_FINE))
+            val atTheLimit = governed.prepare(AttachmentRecord(E3, ROOT, C3, AT_THE_LIMIT))
+            assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E2, ROOT, C2, HEAVY)), "rig: fits alone")
+            assertIs<ControlOutcome.Applied>(governed.activate(E2), "rig: the heavy child is active")
+            assertIs<ControlOutcome.Applied>(governed.prepare(AttachmentRecord(E4, ROOT, C4, THIRD)), "rig: fits alone")
+            val third = governed.activate(E4)
+            assertAll(
+                { assertFalse(weightFitsTheBudget(TOO_FINE), "rig: the weight fails the budget alone") },
+                { assertTrue(weightFitsTheBudget(HEAVY) && weightFitsTheBudget(THIRD), "rig: each fits alone") },
+                { assertEquals(ControlConflict.WeightBudget(ROOT, E1), assertIs<ControlOutcome.Conflict>(tooFine, "prepare").conflict) },
+                { assertIs<ControlOutcome.Applied>(atTheLimit, "the control: the finest weight that fits is prepared") },
+                { assertEquals(ControlConflict.WeightBudget(ROOT, E4), assertIs<ControlOutcome.Conflict>(third, "activate").conflict) },
+                { assertEquals(Lifecycle.PREPARED, governed.ledger.value.lifecycle(E4), "the edge stays prepared") },
+            )
+        }
+
+    @Test
+    fun anUngovernedWeightSetTooFineForOneFullLeaseIsRefused() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val node = bootStatic()
+            val tooFine = node.prepare(AttachmentRecord(E1, ROOT, C1, TOO_FINE))
+            val atTheLimit = node.prepare(AttachmentRecord(E3, ROOT, C3, AT_THE_LIMIT))
+            assertTrue(node.prepare(AttachmentRecord(E2, ROOT, C2, HEAVY)), "rig: fits alone")
+            assertTrue(node.activate(E2), "rig: the heavy child is active")
+            assertTrue(node.prepare(AttachmentRecord(E4, ROOT, C4, THIRD)), "rig: fits alone")
+            val third = node.activate(E4)
+            assertAll(
+                { assertFalse(tooFine, "prepare") },
+                { assertTrue(atTheLimit, "the control: the finest weight that fits is prepared") },
+                { assertFalse(third, "activate") },
+                { assertEquals(Lifecycle.PREPARED, node.ledger.value.lifecycle(E4), "the edge stays prepared") },
+            )
+        }
+
+    @Test
+    fun heddleStaticRefusesATopologyTooFineForOneFullLease() =
+        runTest(StandardTestDispatcher(), timeout = TEST_WEDGE_BACKSTOP) {
+            val alone = listOf(AttachmentRecord(E1, ROOT, C1, TOO_FINE))
+            val pair = listOf(AttachmentRecord(E2, ROOT, C2, HEAVY), AttachmentRecord(E4, ROOT, C4, THIRD))
+            val fits = listOf(AttachmentRecord(E2, ROOT, C2, HEAVY), AttachmentRecord(E3, ROOT, C3, Weight.ONE))
+            val aloneSeam = InMemoryLoom().host(Pattern("fine-alone"))
+            val pairSeam = InMemoryLoom().host(Pattern("fine-pair"))
+            val fitsSeam = InMemoryLoom().host(Pattern("fine-fits"))
+            assertAll(
+                { assertFailsWith<IllegalArgumentException>("alone") { staticOn(aloneSeam, alone) } },
+                { assertFailsWith<IllegalArgumentException>("the pair") { staticOn(pairSeam, pair) } },
+                { assertEquals(SUPPLY, staticOn(fitsSeam, fits).ledger.value.mintedTotal(), "the control boots") },
+            )
+        }
+
     private fun TestScope.staticOn(seam: Seam, topology: List<AttachmentRecord>): HeddleNode {
         val self = ReplicaId(seam.selfId.value)
         return backgroundScope.heddleStatic(
@@ -349,6 +410,10 @@ class HeddleWeightBudgetTest {
         val C2 = GroupId("c2")
         val E1 = AttachmentId("e1")
         val E2 = AttachmentId("e2")
+        val C3 = GroupId("c3")
+        val C4 = GroupId("c4")
+        val E3 = AttachmentId("e3")
+        val E4 = AttachmentId("e4")
         val SELF = ReplicaId("self")
         const val SUPPLY = 100L
         val HUNGRY = Demand(targetOutstanding = 1_000L, maximumUsefulGrant = 1_000L)
@@ -364,5 +429,17 @@ class HeddleWeightBudgetTest {
 
         /** `1/192`, which fits alone. */
         val SMALL_SIBLING: Weight = Weight.of(1L, 192L)
+
+        /** `1/32,767`: one lease of `MAX_RESERVATION` alone passes its ceiling. */
+        val TOO_FINE: Weight = Weight.of(1L, 32_767L)
+
+        /** `1/30,719`, the finest weight one full lease fits (#3353, P1′). */
+        val AT_THE_LIMIT: Weight = Weight.of(1L, 30_719L)
+
+        /** `1.85 · 10¹⁷`, which fits alone: one grid step of 1 is `16 · HEAVY` ticks, under its window. */
+        val HEAVY: Weight = Weight.of(185_000_000_000_000_000L)
+
+        /** `1/3`, which fits alone, and beside [HEAVY] makes its grid step 3, past its window. */
+        val THIRD: Weight = Weight.of(1L, 3L)
     }
 }

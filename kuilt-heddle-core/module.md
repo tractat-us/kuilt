@@ -226,7 +226,16 @@ yet and clamps any child that just woke, both against one front, so neither join
 drags the front down to meet itself. When nobody else is competing, that front is the
 child that has had the most, so everyone joining starts level with it. It answers an `AllocationOutcome`: `Delegated`
 with the grant count, `NothingToDelegate`, or `PositionCeiling` or `WeightBudget`
-when the parent's children cannot be ordered at all. It remembers, between calls, which children it
+when the parent's children cannot be ordered at all. A grant whose delegation would carry
+its child to the position ceiling is not made, and the call answers `PositionCeiling`.
+
+Weights have a budget, and it has two halves. A pick multiplies a parent's weights
+together, so a mix whose products leave a 64-bit number is refused. And a weight set too
+fine for one full lease is refused: keep every weight's denominator at or below 30,719;
+a finer weight set is refused when it is applied. The limit holds at any lease size,
+because it is sized for the largest lease, `MAX_RESERVATION`, and no grant is larger. It
+is necessary, not sufficient: several fine weights whose denominators share no factor
+are refused below it too. `LocalHeddle.apply` answers a `StepRefusal` for such a child. It remembers, between calls, which children it
 has seen idle and what clamp each carries; that memory is local to the allocator and
 is never part of the ledger.
 

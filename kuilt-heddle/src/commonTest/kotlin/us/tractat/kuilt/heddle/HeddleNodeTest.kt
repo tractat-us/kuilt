@@ -1266,6 +1266,66 @@ class HeddleNodeTest {
     }
 
     /**
+     * The node checks the ceiling after it delegates, as `LocalHeddle` does (#3353): a grant whose
+     * delegation would carry its child to its ceiling is not made, and the round answers
+     * [ScheduleOutcome.PositionCeiling] with nothing written. One lease of [MAX_GRANT] puts a
+     * `1/30,719` child 93.75% of the way up its own grid, so the second would pass it. Rebasing is
+     * off, which is the one way a running parent still gets there: a demanding child that is never
+     * served holds the origin where it is. Before this the node made that second grant and left the
+     * child past its ceiling.
+     */
+    @Test
+    fun aGrantThatWouldCarryAChildPastItsCeilingIsHeldBack() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val fine = AttachmentRecord(AttachmentId("fine"), root, GroupId("g-fine"), Weight.of(1L, 30_719L))
+        val h = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = listOf(fine), quantum = MAX_GRANT)
+        h.pump()
+        val node = h.peers[0].node
+        node.rebaseForTest = false
+        node.advertise(fine.id, Demand(4L * MAX_GRANT, MAX_GRANT))
+        val first = node.schedule(root)
+        val afterFirst = node.ledger.value
+        val peak = node.boundMetrics(root).peakPositionFraction
+        val second = node.schedule(root)
+        val afterSecond = node.ledger.value
+        assertAll(
+            { assertEquals(ScheduleOutcome.Delegated(1), first, "one lease fits; the second would pass the ceiling") },
+            { assertEquals(MAX_GRANT, afterFirst.edge(fine.id)?.issued, "exactly one lease went down the edge") },
+            { assertTrue(peak > 0.9 && peak < 1.0, "the child sits one lease up, below its ceiling: $peak") },
+            { assertEquals(ScheduleOutcome.PositionCeiling(root), second, "the next call names the ceiling") },
+            { assertEquals(afterFirst, afterSecond, "and writes nothing") },
+        )
+    }
+
+    /**
+     * A grant is never larger than [LocalHeddle.MAX_RESERVATION], whatever the configured quantum
+     * (#3353), so the lease P1′ sizes the weight budget for is the largest a node can make. A
+     * `1/1024` child fits the budget. With a quantum of `2⁵⁰` its first grant alone would carry it
+     * past its ceiling, and before the cap every call answered [ScheduleOutcome.PositionCeiling].
+     */
+    @Test
+    fun aGrantIsCappedAtTheLargestLeaseWhateverTheQuantum() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val coarse = AttachmentRecord(AttachmentId("coarse"), root, GroupId("g-coarse"), Weight.of(1L, 1024L))
+        val h = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = listOf(coarse), quantum = HUGE_QUANTUM)
+        h.pump()
+        val node = h.peers[0].node
+        node.advertise(coarse.id, Demand(4L * HUGE_QUANTUM, HUGE_QUANTUM))
+        val outcomes = List(4) { node.schedule(root) }
+        assertAll(
+            { assertTrue(weightFitsTheBudget(coarse.weight), "rig: the weight fits the budget") },
+            { assertTrue(outcomes.none { it is ScheduleOutcome.PositionCeiling }, "no call met the ceiling: $outcomes") },
+            { assertIs<ScheduleOutcome.Delegated>(outcomes.first(), "the first call granted") },
+            { assertEquals(0L, (node.ledger.value.edge(coarse.id)?.issued ?: 0L) % MAX_GRANT, "every grant was one largest lease") },
+            { assertTrue((node.ledger.value.edge(coarse.id)?.issued ?: 0L) > 0L, "and something was granted") },
+        )
+    }
+
+    /**
      * The rebase changes no pick (#3353): a twin node with rebasing switched off, fed the same
      * waiting sets, makes exactly the same grants call for call until it refuses at its ceiling,
      * and the rebasing node carries on past that point.
@@ -1523,6 +1583,9 @@ class HeddleNodeTest {
 
         /** The largest grant a long run makes: [LocalHeddle.MAX_RESERVATION], the deadline headroom a position keeps. */
         const val MAX_GRANT: Long = LocalHeddle.MAX_RESERVATION
+
+        /** A quantum far past [MAX_GRANT]: one grant of it would carry a `1/1024` child past its ceiling. */
+        const val HUGE_QUANTUM: Long = 1L shl 50
 
         /** Enough root supply for every long run here, and two peers' fit a `Long`: 2⁶¹, about 130,000 grants of [MAX_GRANT]. */
         const val LONG_RUN_MINT: Long = 1L shl 61

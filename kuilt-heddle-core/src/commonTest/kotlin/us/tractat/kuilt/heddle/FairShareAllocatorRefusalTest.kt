@@ -80,25 +80,47 @@ class FairShareAllocatorRefusalTest {
     }
 
     /**
-     * A call that grants and then meets the ceiling reports the grants: progress was made, and the
-     * caller learns of the ceiling on the next call. `e1` sits 100 ticks below its ceiling, so the
-     * first grant of 10 units (160 ticks) saturates it and the second pick refuses. The rebase is
-     * off: it would bring `e1` back down after that grant, which is what it is for (#3353).
+     * A grant whose delegation would carry its child to the ceiling is not made (#3353): the round
+     * answers the ceiling and writes nothing, as `LocalHeddle`'s acquire does. `e1` sits 100 ticks
+     * below its ceiling, and one grant of 10 units is 160 ticks, so the very first grant would
+     * saturate it. The rebase is off: it would bring `e1` back down first, which is what it is for.
      */
     @Test
-    fun aCeilingMetAfterAGrantAnswersDelegatedAndTheNextCallAnswersTheCeiling() {
-        val cell = CountingCell(seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 100L))
+    fun aGrantWhoseDelegationWouldReachTheCeilingIsNotMadeAndWritesNothing() {
+        val start = seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 100L)
+        val cell = CountingCell(start)
         check(!cell.current.isAtPositionCeiling(e1)) { "the rig: e1 starts below its ceiling" }
+        val allocator = FairShareAllocator(self, policy).apply { rebaseEnabled = false }
+        val memoryBefore = allocator.memory
+        val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
+        val outcome = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
+        assertAll(
+            { assertEquals(AllocationOutcome.PositionCeiling(root), outcome, "the parent says why it stopped") },
+            { assertEquals(start, cell.current, "and nothing was written") },
+            { assertEquals(0, cell.writes, "not one patch") },
+            { assertEquals(memoryBefore, allocator.memory, "and the allocator observed nothing") },
+        )
+    }
+
+    /**
+     * The same check in a later round: `e1` sits 200 ticks below its ceiling, so the first grant
+     * lands 40 ticks under it and the second would pass it. The call reports the one grant, and the
+     * next call meets the ceiling in its first round and names it.
+     */
+    @Test
+    fun aLaterRoundWhoseDelegationWouldReachTheCeilingStopsAfterTheGrantsBeforeIt() {
+        val cell = CountingCell(seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 200L))
         val allocator = FairShareAllocator(self, policy).apply { rebaseEnabled = false }
         val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
         val first = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
-        val reachedCeiling = cell.current.isAtPositionCeiling(e1)
+        val afterFirst = cell.current
         val second = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
         assertAll(
             { assertEquals(AllocationOutcome.Delegated(1), first, "one grant landed before the ceiling") },
-            { assertTrue(reachedCeiling, "the rig: that grant took e1 to its ceiling") },
-            { assertEquals(10L, cell.current.edge(e1)?.issued, "exactly one quantum went down e1") },
+            { assertEquals(10L, afterFirst.edge(e1)?.issued, "exactly one quantum went down e1") },
+            { assertTrue(!afterFirst.isAtPositionCeiling(e1), "and e1 stayed below its ceiling") },
             { assertEquals(AllocationOutcome.PositionCeiling(root), second, "the next call names the ceiling") },
+            { assertEquals(afterFirst, cell.current, "and writes nothing") },
         )
     }
 

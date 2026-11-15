@@ -301,7 +301,8 @@ sixteenths of a unit, stored exactly in 128 bits and read for a pick, net of wha
 a `Long` with a ceiling. A pick rebases a busy parent's children long before it, all by the same
 virtual time, so no pick changes, and so does a charging call, `admit`, `extend` or an overrun. A
 parent still reaches the ceiling only where no whole step fits: a demanding child sits at zero and
-is never served, or the weights are so fine-grained that one step spans a child's ceiling. Returned
+is never served. A weight set so fine that one step or one full lease could carry a child past its
+ceiling is refused when it is applied, the weight budget's second half (#3353). Returned
 service no longer counts toward it (#3360). At the ceiling, `acquire` and `extend` return
 `PositionCeiling(parent)` and change nothing, while `admit` and `complete` still charge. `IllegalStateException` is left only for a conflicted ledger, such as two live edges into
 one group, a split record or a cycle, which the public surface cannot reach today. The
@@ -615,7 +616,7 @@ reshapes don't corrupt the tree.
 **Primitive:** `heddleGoverned(...)` → `GovernedHeddleNode` (`:kuilt-heddle`) — the same data
 plane as `heddleStatic`, but `mint`/`prepare`/`activate`/`close`/`retire` are serialized
 through `:kuilt-raft`; each returns a `ControlOutcome` (`Applied`, `Conflict` with the
-structured reason when it loses a race or names a weight the picks cannot do arithmetic on
+structured reason when it loses a race or names a weight set the weight budget refuses
 (`ControlConflict.WeightBudget`), or `Indeterminate` when this peer halted with the call in
 flight, so the act may still commit and a blind retry can double-mint). If a gossip-lagged peer's `retire` races a delegate
 and strands budget on a since-reparented child, `reconcile(child)` re-homes it — net inflow
@@ -642,10 +643,14 @@ quantifies over (`enrolledReplicas()` reads it back); only a peer may depart its
 enrolled can no longer pass for an idle one. Nor can a parent whose children cannot be ordered:
 `schedule` rebases a busy parent by raising its replicated origin long before a child's position
 nears its ceiling, so no pick changes (#3353); it answers `PositionCeiling(parent)` only where no
-whole step fits, a demanding child that is never served holding the rebase at zero or weights so
-fine-grained that one step spans a child's ceiling, and
-`WeightBudget(parent)` when gossip merged an active set whose weights a pick cannot sum in `Long`,
-both on a static node too. **A peer that cannot read a log entry stops there**:
+whole step fits, a demanding child that is never served holding the rebase at zero, and it makes
+no grant whose own delegation would reach the ceiling. It answers
+`WeightBudget(parent)` when gossip merged an active set whose weights a pick cannot sum in `Long`
+or that is too fine for one full lease, both on a static node too. Keep every weight's denominator
+at or below 30,719; a finer weight set is refused when it is applied, at `prepare`/`activate` with
+`ControlConflict.WeightBudget`. The limit holds at any lease size, because it is sized for the
+largest lease, and no grant is larger than `MAX_RESERVATION`. It is necessary, not sufficient:
+several fine weights whose denominators share no factor are refused below it too. **A peer that cannot read a log entry stops there**:
 `GateClosed.Reason.UnreadableControlEntry` names the log index and format version, `enroll` is
 refused, and a restart stops at the same entry, so it takes a build that can read the entry or a
 fresh log. The same bytes stop every peer on that build, and one peer on a newer build stops older

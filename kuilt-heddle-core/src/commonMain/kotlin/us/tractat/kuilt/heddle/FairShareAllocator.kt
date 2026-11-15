@@ -161,17 +161,19 @@ public class FairShareAllocator(
      * set neither of them is in (§7.2, §10.6, #1752), so a joiner meets the front it is rejoining
      * rather than one it helped set.
      *
-     * Two states stop it, and neither throws. A child of [parent] at its position ceiling (#3313)
-     * stops it at the pick that would have to order it. Active children whose weights put a pick's
-     * products out of `Long` ([weightsFitTheBudget]) stop it before the seat step: the replicated
-     * ledger can merge such a set from writes that each fit (#3353).
+     * Three states stop it, and none throws. A child of [parent] at its position ceiling (#3313)
+     * stops it at the pick that would have to order it. A grant whose delegation would carry its
+     * child to that ceiling is not made, as `LocalHeddle`'s acquire does not make one (#3353): the
+     * child's charges would land inexactly. And active children whose weights fail
+     * [weightsFitTheBudget] stop it before the seat step: the replicated ledger can merge such a
+     * set from writes that each fit (#3353).
      *
      * ## A refused or empty call writes nothing
      *
      * The seat step and the first pick run together, on a [fork] of this allocator, inside **one**
      * [LedgerCell.mutateOrSkip] (#3353):
-     * - the first pick **refused**, at the ceiling or the budget: no patch, and the fork is dropped,
-     *   so no seat, no clamp and no observation is kept;
+     * - the first pick **refused**, at the ceiling or the budget, or its delegation would reach the
+     *   ceiling: no patch, and the fork is dropped, so no seat, no clamp and no observation is kept;
      * - the first pick found **nothing** to grant: no patch either, so the seats are dropped with
      *   it, but the fork's wake memory is kept, since it observed who was waiting. That is what
      *   [LocalHeddle] does, and it means an idle call writes nothing to a replicated ledger;
@@ -235,6 +237,8 @@ public class FairShareAllocator(
                     val cell = ValueCell(s)
                     val raised = raiseOriginBeneath(parent, cell, earmarked, demand, grant)
                     if (!cell.mutateOrSkip { it.delegate(self, grant.attachment, grant.amount) }) return@mutateOrSkip null
+                    // The delegation would carry the child to its ceiling: not made (#3353).
+                    if (cell.current.isAtPositionCeiling(grant.attachment)) return@mutateOrSkip null
                     rebasedThisRound = raised
                     cell.written?.let(::Patch)
                 } catch (_: PositionCeilingException) {
@@ -444,22 +448,8 @@ public class FairShareAllocator(
         }
     }
 
-    /**
-     * The least `Δ` that moves every one of [edges] by whole ticks: the lcm of `d / gcd(d, G · n)`.
-     *
-     * Never `null` under the weight budget: each `d / gcd(d, G · n)` divides `d`, so their lcm
-     * divides `L`, the lcm of the denominators, which [weightsFitTheBudget] keeps in `Long`. The
-     * `null` guards a set merged past the budget, which [schedule] refuses before it gets here.
-     */
-    private fun gridStep(edges: List<PolicyEdge>): Long? {
-        var step = 1L
-        for (edge in edges) {
-            val w = edge.record.weight
-            val need = w.denominator / gcdOf(w.denominator, checkedMul(TICKS_PER_UNIT, w.numerator))
-            step = (step / gcdOf(step, need)).timesOrNull(need) ?: return null
-        }
-        return step
-    }
+    /** The least `Δ` that moves every one of [edges] by whole ticks: [gridStepOf] over their weights. */
+    private fun gridStep(edges: List<PolicyEdge>): Long? = gridStepOf(edges.map { it.record.weight })
 
     /** [edge]'s effective virtual time in whole units, rounded down, or `null` past 128 bits. */
     private fun unitsOf(edge: PolicyEdge): Int128? {
@@ -470,11 +460,10 @@ public class FairShareAllocator(
     /**
      * The largest whole multiple of [step] at or below [bound], or `null` when that is not above zero:
      * the furthest-behind demanding child is less than one step ahead of the origin. A child that is
-     * served climbs past it; one that is never served holds it there, the known limit (#3329). So does
-     * a weight set so fine-grained that one step, read on some child's grid, is large there. Past that
-     * child's [rebaseThreshold] but under 16 of them, it only makes a rebase late. Past 16, its
-     * ceiling, it wedges the parent for as long as that child demands. That needs a spread near
-     * 10¹², `2⁴²/1023` beside `1/1021` say, and about 2⁴⁹ units of service.
+     * served climbs past it; one that is never served holds it there, the known limit (#3329). A
+     * weight set so fine-grained that one step, read on some child's grid, would carry it from its
+     * [rebaseThreshold] past its ceiling (`2⁴²/1023` beside `1/1021`, say) is refused when it is
+     * applied ([weightsFitTheBudget], P1′), so a step that is merely large only makes a rebase late.
      */
     private fun wholeSteps(bound: Int128, step: Long): Int128? {
         val steps = mulDiv(bound, 1L, step, Rounding.FLOOR) ?: return null
@@ -506,8 +495,11 @@ public class FairShareAllocator(
                 if (preSeat != null) fork().checkPreSeatRaiseChangedNoPick(s, parent, earmarked, demand, demand, grant)
                 // The rebase after the seat and wake step, before the grant, in the same patch (#3353).
                 val raised = fork.raiseOriginBeneath(parent, cell, earmarked, demand, grant)
-                cell.mutateOrSkip { it.delegate(fork.self, grant.attachment, grant.amount) }
-                    .also { if (it && (raised || preSeat != null)) fork.rebasesForTest++ }
+                val landed = cell.mutateOrSkip { it.delegate(fork.self, grant.attachment, grant.amount) }
+                // The delegation would carry the child to its ceiling, where its charges land inexactly:
+                // the grant is not made, and nothing of the round is kept (#3353), as LocalHeddle does.
+                if (landed && cell.current.isAtPositionCeiling(grant.attachment)) return FirstRound.Refused(Refusal.POSITION_CEILING)
+                landed.also { if (it && (raised || preSeat != null)) fork.rebasesForTest++ }
             } ?: false
         } catch (_: PositionCeilingException) {
             // The pick would have to order a position at its ceiling (#3313): the seats go too.
@@ -1016,14 +1008,16 @@ public sealed interface AllocationOutcome {
     public data object NothingToDelegate : AllocationOutcome
 
     /**
-     * A child of [parent] holds a position at its ceiling, so no pick there orders exactly, and none
-     * was made (#3313). Nothing was written for the refused pick.
+     * A child of [parent] holds a position at its ceiling, so no pick there orders exactly, or the
+     * pick's own delegation would carry its child there, and none was made (#3313, #3353). Nothing
+     * was written for the refused pick.
      */
     public data class PositionCeiling(public val parent: GroupId) : AllocationOutcome
 
     /**
-     * [parent]'s active children carry weights whose products a pick forms leave `Long`, so no pick
-     * there can be computed (#3353). Nothing was written. A replicated ledger can hold such a set
+     * [parent]'s active children carry weights that fail [weightsFitTheBudget]: a product a pick
+     * forms leaves `Long`, so no pick there can be computed, or the set is too fine for one full
+     * lease (#3353). Nothing was written. A replicated ledger can hold such a set
      * however carefully each write was checked: two peers can each activate a child that fits on its
      * own view, and the merge of the two does not fit.
      */

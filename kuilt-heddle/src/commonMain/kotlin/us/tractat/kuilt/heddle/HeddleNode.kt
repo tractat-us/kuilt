@@ -246,7 +246,8 @@ public class HeddleNode internal constructor(
      * unseated.
      *
      * **A weight a pick cannot do arithmetic on is refused** (#3353): `false` when [record]'s weight,
-     * alone under its parent, would put a product a pick forms out of `Long`, as
+     * alone under its parent, would put a product a pick forms out of `Long`, or is too fine for one
+     * full lease (any denominator above 30,719 is, at any lease size), as
      * [GovernedHeddleNode.prepare][GovernedHeddleNode.prepare] answers a
      * [ControlConflict.WeightBudget].
      */
@@ -257,7 +258,8 @@ public class HeddleNode internal constructor(
      * Open delegation across [edge] ([EntitlementLedger.activate]); returns whether it applied.
      *
      * `false` as well when [edge]'s weight, beside the children already active at its parent on
-     * this peer's view, would put a product a pick forms out of `Long` (#3353). The view is local:
+     * this peer's view, would put a product a pick forms out of `Long`, or make the set too fine for
+     * one full lease (#3353). The view is local:
      * a sibling another peer activated concurrently is not in it, which is why only the governed
      * path's log order makes this check the same on every peer.
      */
@@ -371,13 +373,15 @@ public class HeddleNode internal constructor(
      * both write absolute positions.
      * [boundMetrics] reports the peak effective position as a fraction of its ceiling.
      *
-     * The ceiling can still be met. A demanding child that is never served holds the step at zero.
-     * And a weight set fine-grained enough that one step spans 16 times a child's threshold, its
-     * ceiling, cannot step while that child demands.
+     * The ceiling can still be met where a demanding child that is never served holds the step at
+     * zero. A weight set so fine that one step or one full lease could carry a child past its
+     * ceiling is refused before it is active ([prepare], [activate]), and no grant is larger than
+     * [LocalHeddle.MAX_RESERVATION], the lease that limit is sized for (#3353).
      *
      * A long-idle child that comes back demanding to a node that never saw it idle, after a restart,
-     * is clamped as a waker rather than read from far below the origin. A pick that would have to order a position at its ceiling is refused, and the rounds stop at
-     * that parent: a call that granted first answers [ScheduleOutcome.Delegated], and every call
+     * is clamped as a waker rather than read from far below the origin. A pick that would have to
+     * order a position at its ceiling is refused, and so is a grant whose own delegation would carry
+     * its child there (#3353); the rounds stop at that parent: a call that granted first answers [ScheduleOutcome.Delegated], and every call
      * after it [ScheduleOutcome.PositionCeiling]. A refused call writes nothing and leaves the wake
      * clamps as they were, and a call with nothing to grant writes nothing either
      * ([FairShareAllocator.schedule]).
@@ -402,7 +406,8 @@ public class HeddleNode internal constructor(
             val edges = s.activeChildren(parent).joinToString { c -> "${c.attachment.value} (${s.record(c.attachment)?.weight})" }
             logger.warn {
                 "heddle: no pick at ${parent.value} can be computed, its active children's weights put a " +
-                    "pick's sums out of Long; nothing is delegated there until one closes. Active: $edges"
+                    "pick's sums out of Long or are too fine for one full lease; nothing is delegated there " +
+                    "until one closes. Active: $edges"
             }
         }
         outcome
@@ -412,7 +417,7 @@ public class HeddleNode internal constructor(
      * [parent]'s **current virtual time** `V` on this peer (design §7.2; issue #1688) — a
      * **diagnostic** read of this view's front. `null` when [parent] has no active children in
      * *this peer's view* and there is therefore no front to take, and `null` too when their
-     * weights put the front's sums out of `Long`, where [schedule] answers
+     * weights fail the weight budget, where [schedule] answers
      * [ScheduleOutcome.WeightBudget].
      *
      * **Nothing has to be done with this value any more, and that is the point** (issue #1752).

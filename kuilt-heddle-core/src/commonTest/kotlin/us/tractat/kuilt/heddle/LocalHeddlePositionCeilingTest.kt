@@ -270,13 +270,12 @@ class LocalHeddlePositionCeilingTest {
 
     @Test
     fun aWeightSetOverTheBudgetIsRefusedAtApply() {
-        // Two primes just over 2³², so the lcm of the denominators leaves Long.
-        val p = 4_294_967_311L
-        val q = 4_294_967_357L
-        val first = draft("budget") { lane("a", Weight.of(1, p)) }
+        // `2⁵⁷/3` fits alone, and beside `1/192` the sum over `L = 192` is `2⁶³ + 1`, out of Long.
+        // A lone `1/p` with `p` past 2³² no longer boots: it is too fine for one full lease (#3353).
+        val first = draft("budget") { lane("a", Weight.of(1L shl 57, 3L)) }
         val second = draft("budget") {
-            lane("a", Weight.of(1, p))
-            lane("b", Weight.of(1, q))
+            lane("a", Weight.of(1L shl 57, 3L))
+            lane("b", Weight.of(1L, 192L))
         }
         val engine = LocalHeddle.fromTopology(first, LocalPolicy(defaultReservation = 1L), epoch = 1L)
         val result = engine.apply(second, generation = 1L)
