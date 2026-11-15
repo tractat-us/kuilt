@@ -141,6 +141,8 @@ public class ORMap<K, S : Quilted<S>> private constructor(
      * and so does exactly this delta's contribution, in either order and on every peer, because the
      * remove can only retire tags it observed and this one is not among them (#2086).
      *
+     * @throws ArithmeticException if [replica]'s seq in this map's context is already at
+     *   [Long.MAX_VALUE], as a decoded context can leave it (#3417). The next tag would wrap.
      * @sample us.tractat.kuilt.crdt.sampleORMap
      */
     public fun put(replica: ReplicaId, key: K, value: S): Patch<ORMap<K, S>> =
