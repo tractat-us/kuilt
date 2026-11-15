@@ -757,14 +757,9 @@ its `ApplyResult`.
 **The position ceiling.** Each child's progress is a count of sixteenths of a unit, stored exactly
 in 128 bits and compared by a pick in 128 bits too, so no position ever refuses a pick. It has a
 ceiling all the same, past which the public virtual-time reads (`virtualService` and its kin)
-report the ceiling, the penalty side. A busy parent never gets near it by itself: long before, a
-pick **rebases** the parent's children, all by the same virtual time, so no pick changes, and so
-does a charging call. The rebase aims at the demanding children's average and stops at each one's
-floor, the mirror of its ceiling (the window rule), so a heavy child joining lighter ones lands
-near zero, not past its ceiling. A parent still climbs past the ceiling where no whole step fits:
-a demanding child that is never served drags that average down with it until no step fits, and
-so does a child a charging call counts as demanding while it is idle. The picks carry on exactly
-there; only the reads saturate.
+report the ceiling, the penalty side. Nothing brings a busy parent's positions back down, so a
+long-running parent passes it, and a heavy child joining lighter ones lands far up its own grid
+at once. The picks carry on exactly there; only the reads saturate.
 
 **The lifetime limit.** What a long-lived engine meets first is the ledger's `Long` counters: an
 edge's issuance and an epoch's mint, about 9.2 × 10¹⁸ units each. The call that would pass one
@@ -859,8 +854,8 @@ internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
 ```
 
 `BoundMetrics.peakPositionFraction` from `boundMetrics(parent)` says how far the parent has
-climbed: the highest child position as a fraction of its ceiling, held well below one by the
-rebase. Past one the ledger's virtual-time reads saturate; the picks do not change.
+climbed: the highest child position as a fraction of its ceiling. A long-running parent passes
+one; the ledger's virtual-time reads saturate there, and the picks do not change.
 
 ## Minting quota and reshaping with agreement
 
