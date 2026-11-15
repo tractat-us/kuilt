@@ -80,13 +80,25 @@ Starting fresh is not starting unused: the stored spans still carry this device'
 So when the span exporter's read of its stored spans lands, at startup or on the first export
 after the store heals, it raises the clock above the highest dot of this device's it found,
 before that export stamps anything. It counts a span's own dot and the earlier dots the span
-names. A merge raises the clock the same way, from the spans a peer sends.
+names. A merge raises the clock the same way, from the spans a peer sends, and so does a span
+the caller stamped with one of this device's dots.
 
-Two gaps remain. A dot whose span left the store before the restart (evicted from the buffer,
-or cleared) can be minted again after a corrupt clock entry, until a peer sends that span back.
-A span stamped before that merge keeps the clash. And the clock trusts every dot it reads or
-merges, so a buggy peer's dot at the largest possible number stops it stamping at all: later
-spans are saved without a stamp.
+The stored spans cannot name a dot whose span has left: evicted from the buffer, or cleared. So
+every span write also saves this device's high-water mark: every dot of this device's the spans
+have held and, once the clock has read its own entry, the clock's number when the write was made.
+The floor is the larger of that mark and the highest dot the stored spans carry. The mark is read
+from the running clock as the write is made, so it covers every dot minted before that write.
+
+Three gaps remain. If both saved entries are corrupt, the floor starts at zero. A span can reach
+a peer through `snapshot()` before its export has written the clock; if the device crashes then,
+no entry need be corrupt: the restart reads a clock below that dot, and a new span can take the
+dot until the peer sends it back. That is the export's crash window plus gossip, tracked in
+#3452 with the log exporter's twin. And a corrupt span entry starts fresh and loses its mark. A
+sound clock entry still covers every dot an export or clear wrote, since those write the clock
+first, but not a dot a merge wrote before any clock write: a merge never writes the clock.
+
+The clock also trusts every dot it reads, merges or is handed, so a buggy peer's dot at the
+largest possible number stops it stamping at all: later spans are saved without a stamp.
 
 ### The cross-boundary rule
 

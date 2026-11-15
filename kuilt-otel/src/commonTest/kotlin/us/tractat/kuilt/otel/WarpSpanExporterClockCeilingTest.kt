@@ -55,7 +55,6 @@ class WarpSpanExporterClockCeilingTest {
     private suspend fun clock(): WarpCausalClock = WarpCausalClock(local).armed()
 
     private val cbor = Cbor { alwaysUseByteString = true }
-    private val setSerializer = ORSet.serializer(SpanRecord.serializer())
 
     private fun peerSetAtTheCeiling(held: ORSet<SpanRecord>): ORSet<SpanRecord> = spanSetAtTheCeiling(held, local)
 
@@ -67,7 +66,7 @@ class WarpSpanExporterClockCeilingTest {
     private fun RecordingStore.mutations(): Int = operations().count { it.kind != StoreOpKind.READ }
 
     private suspend fun RecordingStore.storedSpans(): ORSet<SpanRecord>? =
-        read(spanKey)?.let { cbor.decodeFromByteArray(setSerializer, it) }
+        read(spanKey)?.let { cbor.decodeFromByteArray(StoredSpans.serializer(), it).spans }
 
     /** Export, catching what escapes it: the defect under test is that something does. */
     private suspend fun WarpSpanExporter.exportCatching(span: SpanRecord): Any = try {

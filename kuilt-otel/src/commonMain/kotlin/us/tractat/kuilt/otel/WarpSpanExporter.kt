@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.ORSet
@@ -101,6 +103,22 @@ public class WarpSpanExporter(
     private val lock = reentrantLock()
     private val ioMutex = Mutex()
     private var spans: ORSet<SpanRecord> = ORSet.empty()
+
+    /**
+     * The highest `seq` of this replica's dots that this exporter knows is used, guarded by [lock]
+     * (#3435). Every span write carries it in the bytes, so a later process whose clock entry is
+     * corrupt floors above dots no stored span still holds: one evicted past [maxSpans], one [clear]
+     * removed, one only a peer has.
+     *
+     * It only rises. It folds in the value the landing read found carried, every own dot a [merge]
+     * brings, every own dot an export adds, an explicit stamp's included, and, at each encode, a
+     * configured clock's `seq` once its read has landed. So it is at least every own dot [spans] has
+     * held, and the landing read relies on that instead of scanning the join: a new path that puts an
+     * own dot into [spans] must raise it too. A [clear]
+     * leaves it alone, as the clock's `seq` is left alone. Over-claiming costs a gap in the clock's
+     * sequence, which nothing reads as missing: [inferCausalLinks] resolves a dot by equality alone.
+     */
+    private var ownHighWater: Long = 0L
 
     /**
      * Whether this exporter has read the stored spans, guarded by [lock] and landed only under
@@ -269,7 +287,7 @@ public class WarpSpanExporter(
         // major type 2 (byte string) rather than an array of integers, halving the
         // wire size vs. the default array encoding.
         private val cbor = Cbor { alwaysUseByteString = true }
-        private val spanSerializer = ORSet.serializer(SpanRecord.serializer())
+        private val storedSerializer = StoredSpans.serializer()
     }
 
     /**
@@ -329,7 +347,7 @@ public class WarpSpanExporter(
             currentCoroutineContext().ensureActive()
             return SpanRead.Refused(cause)
         } ?: return SpanRead.Absent
-        return runCatchingCancellable { cbor.decodeFromByteArray(spanSerializer, bytes) }
+        return runCatchingCancellable { cbor.decodeFromByteArray(storedSerializer, bytes) }
             .fold(onSuccess = { SpanRead.Found(it) }, onFailure = { SpanRead.Undecodable(it) })
     }
 
@@ -358,14 +376,22 @@ public class WarpSpanExporter(
      * cap, and allow writes. Memory holds no local export yet, only remote sets merged meanwhile, so
      * the join is one `piece` and the excess one batch.
      *
-     * The floor is the highest dot of this replica's in the join, taken **before** the eviction so
-     * an evicted span's dot still counts (#3407). It counts a span's own stamp and every predecessor
-     * it names: once this replica's span is evicted, a remote span that observed it may be the only
-     * evidence its dot was minted, and re-minting it would resolve that predecessor to a new span. It
-     * is raised before the state turns [SpanReadState.Recovered], in the same hold of [lock], and
-     * [export] mints before its write section only from a recovered exporter under that lock, so no
-     * stamp is minted below it. A clock whose own entry was corrupt starts at `seq=0` and would
-     * otherwise re-mint the dots these spans carry.
+     * The floor is [ownHighWater] once the carried mark (#3435) is folded in, raised **before** the
+     * eviction so an evicted span's dot still counts (#3407). That covers every own dot in the join,
+     * a span's stamp and every predecessor it names, with no scan of the join: each path that puts an
+     * own dot into [spans] raises the mark by it. A stored span's dot was in memory when its bytes were
+     * encoded, so the mark they carry covers it, and a merged span's dot was folded in by [merge]. The
+     * carried mark also covers the dots no stored span holds any more: evicted before the last write,
+     * cleared, or held only by a peer. Once this replica's span is evicted, a remote span that observed
+     * it may be the only evidence its dot was minted, and re-minting it would resolve that predecessor
+     * to a new span. The floor is raised before the state turns [SpanReadState.Recovered], in the same
+     * hold of [lock], and [export] mints before its write section only from a recovered exporter under
+     * that lock, so no stamp is minted below it. A clock whose own entry was corrupt starts at `seq=0`
+     * and would otherwise re-mint those dots.
+     *
+     * An undecodable entry, the bare set this key held before #3435 included, starts fresh and loses
+     * its carried mark with it: the floor then rests on the clock's entry and on what [merge]s folded
+     * in meanwhile.
      */
     private fun spanReadLanded(read: SpanRead.Landed) {
         if (read is SpanRead.Undecodable) {
@@ -373,8 +399,11 @@ public class WarpSpanExporter(
             logger.warn(read.cause) { "otel.spans: corrupt store entry, starting fresh" }
         }
         lock.withLock {
-            if (read is SpanRead.Found) spans = read.spans.piece(spans)
-            causalClock?.let { clock -> highestOwnDot()?.let(clock::raiseFloor) }
+            if (read is SpanRead.Found) {
+                spans = read.stored.spans.piece(spans)
+                raiseHighWater(read.stored.ownHighWater)
+            }
+            causalClock?.raiseFloor(ownHighWater)
             evictExcess()
             readState = SpanReadState.Recovered
         }
@@ -382,12 +411,28 @@ public class WarpSpanExporter(
 
     /**
      * The highest `seq` among this replica's dots in [set], stamps and predecessors both. Must be
-     * called with [lock] held when [set] is [spans].
+     * called with [lock] held when [set] is [spans]'s.
      */
-    private fun highestOwnDot(set: ORSet<SpanRecord> = spans): Long? = set.elements
+    private fun highestOwnDot(set: Collection<SpanRecord>): Long? = set
         .flatMap { span -> span.causalStamp?.let { it.predecessors + it.dot }.orEmpty() }
         .filter { it.replica == replica }
         .maxOfOrNull { it.seq }
+
+    /** Fold [usedSeq] into [ownHighWater], which only rises. Must be called with [lock] held. */
+    private fun raiseHighWater(usedSeq: Long) {
+        if (usedSeq > ownHighWater) ownHighWater = usedSeq
+    }
+
+    /**
+     * Encode [spans] with the high-water mark this write carries (#3435). A configured clock's `seq`
+     * is folded in first, so the mark covers every dot it minted, a rolled-back stamp's and an evicted
+     * span's included, and the clock entry this process read. Every dot in the snapshot was minted
+     * before this encode, so the mark is at least each of them. Must be called with [lock] held.
+     */
+    private fun encodeSpans(): ByteArray {
+        causalClock?.highWater()?.let(::raiseHighWater)
+        return cbor.encodeToByteArray(storedSerializer, StoredSpans(spans, ownHighWater))
+    }
 
     /**
      * Export one span: insert it into the CRDT and durably flush to [store].
@@ -399,6 +444,15 @@ public class WarpSpanExporter(
      * clock's entry is not written, so no dot already in the store is minted again (#3390). The
      * turn then counts in [health] per work key: the span's write as it went, and the skipped clock
      * write as a failed turn the first clock write that lands resolves (#3426).
+     *
+     * An explicit stamp of this replica's, its own dot or a predecessor it names, raises the clock's
+     * floor when the span is added, so the clock never mints that dot itself (#3435). Its `seq` is
+     * taken as given: a stamp claiming [Long.MAX_VALUE] leaves the clock [ClockTick.Exhausted].
+     *
+     * Every write carries this replica's high-water mark in the span bytes, at least every dot the
+     * clock has minted and every own dot the set has held. A restart whose clock entry is corrupt
+     * floors the clock above it, so a dot whose span was since evicted or cleared is not minted again
+     * (#3435).
      *
      * ## Crash-window invariant (#1053)
      *
@@ -503,7 +557,7 @@ public class WarpSpanExporter(
                         // evict this span between a separate add and encode, leaving a Success for a
                         // span the snapshot never carried.
                         if (!addedEarly) stamped = insert(span, clock)
-                        cbor.encodeToByteArray(spanSerializer, spans)
+                        encodeSpans()
                     }
                     // Persist the clock BEFORE the span so the durable clock seq is always ≥
                     // every durable span's dot — a crash between the two writes can only lose
@@ -604,8 +658,10 @@ public class WarpSpanExporter(
      *
      * The clock's floor is raised too, to the highest dot of this replica's the remote set carries
      * or names, in the same hold of `lock` as the join (#3407). A peer can hand back spans this
-     * replica minted and then lost (evicted, cleared, or behind a corrupt clock entry), and a stamp
-     * minted after they land must not collide with one. A stamp minted before the merge still can.
+     * replica minted and then lost, and a stamp minted after they land must not collide with one. The
+     * high-water mark the span bytes carry (#3435) already covers every own dot that was in memory
+     * when a span write was encoded, so a stamp minted before the merge collides only with a dot that
+     * reached the peer from [snapshot] before any write carrying it landed, and the crash came first.
      * The raise takes the peer's `seq` as given: a dot at `Long.MAX_VALUE` leaves the clock
      * [ClockTick.Exhausted], so later spans are saved unstamped. Whether a merge should refuse such
      * a dot is #3432.
@@ -622,7 +678,10 @@ public class WarpSpanExporter(
         causalClock?.observe(remote.elements.mapNotNull { it.causalStamp?.dot }.toSet())
         lock.withLock {
             spans = spans.piece(remote)
-            causalClock?.let { clock -> highestOwnDot(remote)?.let(clock::raiseFloor) }
+            highestOwnDot(remote.elements)?.let { usedSeq ->
+                raiseHighWater(usedSeq)
+                causalClock?.raiseFloor(usedSeq)
+            }
         }
         // Share the durable-write section with export() so a concurrent export()+merge()
         // cannot lost-update the STORE_KEY snapshot (#1053).
@@ -630,7 +689,7 @@ public class WarpSpanExporter(
             // The remote spans stay in memory; the write waits for a read to land (#3390).
             readBeforeWrite()?.let { return@withLock it }
             val written = try {
-                val encoded = lock.withLock { cbor.encodeToByteArray(spanSerializer, spans) }
+                val encoded = lock.withLock { encodeSpans() }
                 store.write(STORE_KEY, encoded)
                 Result.success(Unit)
             } catch (cause: Throwable) {
@@ -713,7 +772,8 @@ public class WarpSpanExporter(
         val written = try {
             val encoded = lock.withLock {
                 spans = spans.piece { it.removeAll(it.elements) }
-                cbor.encodeToByteArray(spanSerializer, spans)
+                // The high-water mark is not reset: the removed spans' dots stay used (#3435).
+                encodeSpans()
             }
             // The frontier belongs to this method, not to the facade — so a caller reaching this
             // exporter directly, rather than through WarpTelemetry.clear(), gets it too. It names
@@ -791,7 +851,7 @@ public class WarpSpanExporter(
      *
      * The eviction and the real add are then built on locals, and [spans] is written once, after
      * both have returned, as `WarpLogRecordExporter.applyTurn` builds its turn. Everything after the
-     * add is a log line and a field write that cannot throw; keep it that way.
+     * add is a log line, field writes and floor raises (`maxOf`), none of which can throw; keep it that way.
      */
     private fun insert(span: SpanRecord, clock: WarpCausalClock?): Stamping {
         val victim = if (spans.elements.size >= maxSpans) victimOf(spans.elements) else null
@@ -805,6 +865,13 @@ public class WarpSpanExporter(
         val added = evicted.piece { it.add(replica, stamping.span) }
         victim?.let(::logEviction)
         spans = added
+        // An explicit stamp of this replica's is a used dot the clock did not mint: raise the clock
+        // now, so it never mints that dot, and the mark, so a restart floors above it once its span is
+        // evicted (#3435). A minted stamp is the clock's `seq`, so for one this leaves the clock alone.
+        highestOwnDot(listOf(stamping.span))?.let { usedSeq ->
+            raiseHighWater(usedSeq)
+            causalClock?.raiseFloor(usedSeq)
+        }
         return stamping
     }
 
@@ -899,5 +966,23 @@ private sealed interface SpanRead {
 
     data class Undecodable(val cause: Throwable) : Landed
 
-    data class Found(val spans: ORSet<SpanRecord>) : Landed
+    data class Found(val stored: StoredSpans) : Landed
+}
+
+/**
+ * What [WarpSpanExporter] writes under `otel.spans`: the [spans] and this replica's [ownHighWater],
+ * the highest `seq` of its dots known used when the bytes were encoded (#3435). The set alone cannot
+ * say so: a span evicted or cleared takes its dot with it.
+ *
+ * The bytes before #3435 were the bare set. Nobody stored that format, so it is not migrated: it
+ * fails to decode here and reads as a corrupt entry.
+ */
+@Serializable
+internal class StoredSpans(
+    @SerialName("spans") val spans: ORSet<SpanRecord>,
+    @SerialName("ownHighWater") val ownHighWater: Long,
+) {
+    init {
+        require(ownHighWater >= 0L) { "ownHighWater must not be negative: $ownHighWater" }
+    }
 }
