@@ -4,6 +4,7 @@ import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
@@ -26,6 +27,7 @@ import kotlin.test.assertTrue
  * than dropped, that the read folds **base** issuance only, and how far an exact `Rational`
  * denominator can chain before it runs out of `Long`.
  */
+@OptIn(ExperimentalSerializationApi::class)
 class GaugeTest {
 
     // ── the register laws: componentwise join, and why lexicographic-by-position is wrong ──

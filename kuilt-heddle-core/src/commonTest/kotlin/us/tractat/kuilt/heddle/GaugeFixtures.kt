@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.math.Int128
@@ -35,6 +36,7 @@ internal fun withLegacyFloor(json: String, floor: Long = 70L): String {
  * just before it is the gauge's own, since `folded` is always written first; a definite-length one
  * is counted up by the entry added, an indefinite-length one needs nothing.
  */
+@OptIn(ExperimentalSerializationApi::class)
 internal fun withLegacyFloor(cbor: ByteArray, floor: Long = 70L): ByteArray {
     val folded = Cbor.encodeToByteArray(String.serializer(), "folded")
     val entry = Cbor.encodeToByteArray(String.serializer(), "floor") +

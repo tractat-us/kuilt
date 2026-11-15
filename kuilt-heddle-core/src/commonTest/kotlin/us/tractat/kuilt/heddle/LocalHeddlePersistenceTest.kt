@@ -825,6 +825,7 @@ class LocalHeddlePersistenceTest {
      * its ticks alone, lower than it was written. The untouched snapshot restoring under that same
      * lenient format is the control.
      */
+    @OptIn(ExperimentalSerializationApi::class)
     @Test
     fun aSnapshotWhoseGaugeCarriesAFloorIsCorrupt() {
         val snapshot = wakerScenario().first.persist()
