@@ -453,8 +453,11 @@ internal class JoinerResumeMachine(
      * re-weaves the base, waits for [SeamState.Woven], restarts the room's incoming collect on
      * the fresh generation, and calls [resume]. On [ResumeResult.Success] the room stays live
      * (its ResumeAck handler already emitted `Resumed`); on timeout / re-weave failure / a
-     * non-Success resume it falls to [JoinerResumeHost.onReconnectFailed]. Transient
-     * re-weave/resume failures are retried until the window deadline.
+     * non-Success resume it marks the room host-lost ([JoinerResumeHost.claimHostLost]) and falls
+     * to [JoinerResumeHost.onReconnectFailed]. Transient re-weave/resume failures are retried
+     * until the window deadline. One exception to the timeout rule: an ack that resumed the room
+     * after the window's timer fired but before the episode was decided resumes the episode too
+     * ([takeFlightForAck], #3094).
      *
      * **A blip the host never observed (#1637).** When only *our* side of the link tore, the host's
      * detector never fires, it opens no reconnect window, and it answers every `Resume` with the
