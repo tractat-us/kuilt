@@ -21,13 +21,9 @@ check(writtenByThisKuilt)
 
 ## Declare it yourself
 
-No other kuilt module brings this one with it, so add it next to the modules you already use.
-Under the BOM it needs no version, and it stays at the same version as every other kuilt module:
-
-```kotlin
-implementation(platform("us.tractat.kuilt:kuilt-bom:<version>"))
-implementation("us.tractat.kuilt:kuilt-base")
-```
+No other kuilt module brings this one with it, so add `us.tractat.kuilt:kuilt-base` next to the
+modules you already use. Under the BOM it needs no version, and it stays at the same version as
+every other kuilt module.
 
 ## What the value is
 
