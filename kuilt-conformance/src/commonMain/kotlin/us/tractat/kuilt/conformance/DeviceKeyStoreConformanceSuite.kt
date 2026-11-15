@@ -16,6 +16,7 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
@@ -70,6 +71,12 @@ import kotlin.test.assertTrue
  * permission it lacks, a file system loop, a Keychain locked before the first unlock — is not damage,
  * and the store throws: replacing it would turn a passing condition into a new identity on every
  * launch it lasts for. [anUnreadableKeyIsRefusedNotReplaced] is the second half.
+ *
+ * Grants get the same split. A record that was read and does not decode is dropped
+ * ([corruptGrantsAreDroppedNotFatal]); a record the medium cannot read right now is refused, and is
+ * never rewritten while it is out of reach ([unreadableGrantsAreRefusedNotRewritten]). Reading that
+ * failure as "no grants" would let the next [DeviceKeyStore.keepGrant] write a record holding only
+ * the new grant over every grant the device had.
  *
  * ## What it deliberately does not require
  *
@@ -487,6 +494,70 @@ public abstract class DeviceKeyStoreConformanceSuite {
         }
     }
 
+    /**
+     * A grants record the medium cannot read *right now* is refused, not read as "no grants":
+     * [DeviceKeyStore.grants] and [DeviceKeyStore.keepGrant] throw an [Exception], nothing writes the
+     * record while it is out of reach, and once the medium can read again the held grant is intact.
+     *
+     * The other half of [corruptGrantsAreDroppedNotFatal], and the case a locked iPhone reaches: a file
+     * under Data Protection cannot be opened, while its directory still takes a new file. A store that
+     * answered "no grants" for a failed read would then keep a new grant by writing a record holding
+     * only that grant, over every grant the device held.
+     *
+     * The rig must fire: its probe reads the record straight off the medium, bypassing the store, and
+     * the property requires that read to fail. The grant offered during the fault is newer than the
+     * held one, so a store that wrote it anyway leaves a different record behind, and the read after
+     * the restore reds as well as the rig's own count of writes.
+     */
+    @Test
+    public fun unreadableGrantsAreRefusedNotRewritten(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        when (val fixture = newFixture()) {
+            is DeviceKeyStoreFixture.KeepsNothing -> assertForgets(fixture)
+            is DeviceKeyStoreFixture.Durable -> {
+                val store = fixture.open { }
+                val me = store.deviceKey().id
+                val host = DeviceKey.generate()
+                val held = grant(host, me, T)
+                store.keepGrant(held)
+                val control = fixture.open { }.grants()
+                val newer = grant(host, me, T + 1_000)
+
+                val rig = fixture.makeGrantsUnreadable()
+                var probeFailure: Throwable? = null
+                var readFailure: Throwable? = null
+                var keepFailure: Throwable? = null
+                var rewritten = true // the restore below always answers
+                try {
+                    probeFailure = thrownBy { rig.probe() }
+                    readFailure = thrownBy { fixture.open { }.grants() }
+                    keepFailure = thrownBy { fixture.open { }.keepGrant(newer) }
+                } finally {
+                    rewritten = rig.restore()
+                }
+                val afterRestore = fixture.open { }.grants()
+
+                assertAll(
+                    { assertEquals(listOf(held), control, "precondition: the grant was kept before the fault") },
+                    { assertNotNull(probeFailure, "rig: a read straight off the medium fails while the grants are unreadable") },
+                    {
+                        assertTrue(
+                            readFailure is Exception,
+                            "a grants record the medium cannot read throws an Exception, not an empty list; got $readFailure",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            keepFailure is Exception,
+                            "keeping a grant over a record that cannot be read throws an Exception; got $keepFailure",
+                        )
+                    },
+                    { assertFalse(rewritten, "no grant write happens while the record is unreadable") },
+                    { assertEquals(listOf(held), afterRestore, "once the medium can read again, the held grant is intact") },
+                )
+            }
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /**
@@ -547,6 +618,20 @@ public abstract class DeviceKeyStoreConformanceSuite {
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
+        e
+    }
+
+    /**
+     * What [block] threw — any [Throwable], so a failure that is not an [Exception] is seen and named
+     * rather than escaping the property — or `null` if it returned. Cancellation of this test is never
+     * a verdict.
+     */
+    private suspend fun thrownBy(block: suspend () -> Unit): Throwable? = try {
+        block()
+        null
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
         e
     }
 
