@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
@@ -23,6 +24,7 @@ import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.HyperLogLog
 import us.tractat.kuilt.crdt.LWWRegister
 import us.tractat.kuilt.crdt.Patch
+import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.store.DurableStore
@@ -75,10 +77,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * CRDT keeps the change, and the next successful write of that kind persists it. Retrying a
  * failed [incrementSum] therefore adds it twice.
  *
- * The one Failure that means "not counted" is a refusal, before anything is applied, of a sum
+ * Two Failures mean "not counted". One is a refusal, before anything is applied, of a sum
  * increment or histogram update that would carry one of this replica's counts past
  * [Long.MAX_VALUE]: its cause is a [MetricOverflowException] (#3318, #3354), and nothing was
- * applied or written.
+ * applied or written. The other is a kind whose persisted series [recover] could not read: until a
+ * read lands, that kind's updates are not applied and its key is not written, and the cause is the
+ * store's refusal of the read (#3390). See [recover].
  *
  * ## Batches
  *
@@ -177,7 +181,9 @@ public class WarpMetricExporter(
     //  - `lock` (atomicfu reentrant) guards the five CRDT maps only. No suspend call is ever made
     //    inside it — CBOR encode/decode and CRDT mutations are pure.
     //  - `writeMutex` (coroutine Mutex) serializes the whole *durable-write* critical section: the
-    //    mutate-and-encode and the store write form one ordered unit. Without it a mutation could
+    //    mutate-and-encode and the store write form one ordered unit. [recover] and the read a turn
+    //    owes after a refused one run inside it too, so a read and the join it installs never
+    //    interleave with a write of the same kind (#3390). Without it a mutation could
     //    encode the whole map, suspend, and land those stale bytes after a concurrent [clear] had
     //    already deleted the keys — resurrecting every pre-clear series on the next recover
     //    (#2232). The same shape was closed in WarpSpanExporter by #1053 and in
@@ -318,56 +324,199 @@ public class WarpMetricExporter(
     // ── Recovery ───────────────────────────────────────────────────────────────
 
     /**
+     * What one read of a kind's persisted series found. The split that matters is the last two
+     * arms: a store that **refused** the read leaves what is on disk unknown, while bytes that came
+     * back and did not **decode** are known to be bad.
+     */
+    private sealed interface KindRead<out V> {
+        /** Nothing of this kind was ever persisted. */
+        data object Absent : KindRead<Nothing>
+
+        class Found<V>(val series: Map<MetricKey, V>) : KindRead<V>
+
+        /** Bytes came back and did not decode. Bad data, so the kind starts fresh. */
+        class Undecodable(val cause: Throwable) : KindRead<Nothing>
+
+        /**
+         * The store refused the read, a store-minted cancellation included. Each kind is one
+         * whole-map key, so a write now would replace series this run never saw (#3390).
+         */
+        class Refused(val cause: Throwable) : KindRead<Nothing>
+    }
+
+    /** Whether a kind's write turns may run, or first owe a read of its persisted series. */
+    private sealed interface PersistedRead {
+        /** Read, absent, or undecodable and started fresh. Turns of this kind write. */
+        data object Settled : PersistedRead
+
+        /** The last read was [KindRead.Refused]. Every turn of this kind reads again first. */
+        class Owed(val cause: Throwable) : PersistedRead
+    }
+
+    /**
+     * The kinds whose last read was refused, with the cause; a kind absent here is
+     * [PersistedRead.Settled]. Every kind is settled at construction, so an exporter over a fresh
+     * store that never calls [recover] writes as it always has.
+     *
+     * Guarded by [lock] and changed only under [writeMutex], by [settle], in the same [lock]
+     * section that installs what the read found, and by a [clear] that deleted every key. So no
+     * turn can see a kind settled whose series are not yet in memory.
+     *
+     * **Why a turn of an owed kind admits nothing, rather than applying in memory and skipping only
+     * the write.** Three of the five kinds count per replica — [GCounter], [GCounterDouble] and
+     * [DDSketch]'s bucket cells — and their join is the per-replica **maximum**. An update applied
+     * to the fresh map a refused read left would start this replica's slot again from zero beside
+     * the durable one: a second history of the same slot. The heal's join keeps the larger of the
+     * two and silently drops the other (a durable `5` and an unread-time `+10` join to `10`, not
+     * `15`). Admitting nothing keeps memory on the store's own history, so the join on heal is
+     * exact, and it is idempotent, so a repeated read cannot double-count either.
+     */
+    private var owedReads: Map<StoredKind, Throwable> = emptyMap()
+
+    /**
      * Reload persisted metric state from [store]. Call once at startup before any
-     * calls to the mutating methods. Idempotent: a second call re-reads and re-decodes
-     * the same bytes.
+     * calls to the mutating methods. Idempotent: a second call re-reads the same bytes and joins
+     * them into memory, so a series memory already holds ahead of the store, an increment a refused
+     * write left there say, is kept.
      *
      * If persisted state is corrupt or absent for a given kind, that kind starts fresh
      * (a warning is logged). The other kinds are unaffected.
      *
-     * A refused read costs its kind alone in the same way, and that includes a
-     * `CancellationException` the [store] mints at this live caller, from its own `withTimeout`,
-     * say. A cancellation of the caller's own job still propagates (#3388).
+     * A **refused** read, a `CancellationException` the [store] mints at this live caller from its
+     * own `withTimeout` included, costs its kind alone and **fails closed** (#3390): every later
+     * call that would write that kind, [record] and the `merge*` methods, reads it again first, and
+     * while the read is still refused admits **nothing** of that kind, writes nothing of it, and
+     * returns [MetricExportResult.Failure] with the read's cause. Updates of the other kinds in the
+     * same batch go ahead. The read that lands joins the persisted series into memory and that turn
+     * runs. Until then the kind reads as empty. Starting fresh here instead wrote a map naming only
+     * this run's series over the persisted one: a durable sum of `5` read back as `1`.
+     *
+     * Serialized with every write turn by the same mutex, so it may run concurrently with them.
+     * A cancellation of the caller's own job still propagates (#3388).
      */
-    public suspend fun recover() {
-        recoverSums()
-        recoverSumsDouble()
-        recoverGauges()
-        recoverCardinalities()
-        recoverHistograms()
-    }
-
-    private suspend fun recoverHistograms() {
-        val bytes = try {
-            store.read(HISTOGRAM_STORE_KEY)
-        } catch (cause: Throwable) {
-            // The other kinds' recovery follows, so only this coroutine's own cancellation may end
-            // it; one the store minted is a refused read (#3388).
-            currentCoroutineContext().ensureActive()
-            persistence.recoveryFailed(cause)
-            logger.error(cause) { "otel.metrics.histograms: store read failed, starting fresh" }
-            return
-        } ?: return
-        val recovered = runCatchingCancellable<Map<MetricKey, DDSketch>> {
-            cbor.decodeFromByteArray(histogramsSerializer, bytes)
-        }.getOrElse { cause ->
-            persistence.recoveryFailed(cause)
-            logger.warn(cause) { "otel.metrics.histograms: corrupt store entry, starting fresh" }
-            return
-        }
-        // A series written under another configuration — the prototype changed across a restart —
-        // cannot be kept: its bucket indices mean other values, so an AddExponentialHistogram mapped
-        // at histogramScale would land at the wrong values, and a peer's merge would refuse it.
-        val (kept, foreign) = recovered.entries.partition { (_, sketch) -> sketch.hasPrototypeConfiguration() }
-        if (foreign.isNotEmpty()) {
-            logger.warn {
-                "otel.metrics.histograms: dropping ${foreign.size} recovered series written under another " +
-                    "configuration than histogramPrototype (${foreign.first().value.configuration()} vs " +
-                    "${histogramPrototype.configuration()}); the next histogram write removes them from the store"
+    public suspend fun recover(): Unit = writeMutex.withLock {
+        StoredKind.entries.forEach { kind ->
+            val read = readKind(kind)
+            if (read is PersistedRead.Owed) {
+                persistence.recoveryFailed(read.cause)
+                logger.error(read.cause) {
+                    "${kind.storeKey.name}: store read failed; this kind's writes are refused until a read succeeds"
+                }
             }
         }
-        lock.withLock { kept.forEach { (k, v) -> histograms[k] = v } }
     }
+
+    /**
+     * Read [kind]'s persisted series, join what it found into memory, and record whether the
+     * kind's turns may now write. Shared by [recover] and the read a turn owes ([refusedReads]).
+     * Must hold [writeMutex].
+     */
+    private suspend fun readKind(kind: StoredKind): PersistedRead = when (kind) {
+        StoredKind.SUMS -> settle(kind, read(kind, sumsSerializer), sums)
+        StoredKind.SUMS_DOUBLE -> settle(kind, read(kind, sumsDoubleSerializer), sumsDouble)
+        StoredKind.GAUGES -> settle(kind, read(kind, gaugesSerializer), gauges)
+        StoredKind.CARDINALITIES -> settle(kind, read(kind, cardinalitiesSerializer), cardinalities)
+        StoredKind.HISTOGRAMS -> settle(kind, read(kind, histogramsSerializer).keepingPrototypeConfiguration(), histograms)
+    }
+
+    private suspend fun <V> read(kind: StoredKind, serializer: KSerializer<Map<MetricKey, V>>): KindRead<V> {
+        val bytes = try {
+            store.read(kind.storeKey)
+        } catch (cause: Throwable) {
+            // Only this coroutine's own cancellation may end it; one the store minted is a refused
+            // read (#3388).
+            currentCoroutineContext().ensureActive()
+            return KindRead.Refused(cause)
+        } ?: return KindRead.Absent
+        return runCatchingCancellable { cbor.decodeFromByteArray(serializer, bytes) }
+            .fold(onSuccess = { KindRead.Found(it) }, onFailure = { KindRead.Undecodable(it) })
+    }
+
+    /**
+     * Join a [KindRead.Found] into [series] and settle [kind], or mark it owed on a refusal.
+     *
+     * The join and the change to [owedReads] are **one** [lock] section, so a kind is never settled
+     * with its persisted series not yet joined, nor joined while still marked owed. It is a join
+     * rather than a replace so that a second [recover] keeps what memory holds ahead of the store,
+     * and the series it adds are held to [maxMetrics] like any other.
+     */
+    private fun <V : Quilted<V>> settle(
+        kind: StoredKind,
+        read: KindRead<V>,
+        series: LinkedHashMap<MetricKey, V>,
+    ): PersistedRead {
+        if (read is KindRead.Undecodable) {
+            persistence.recoveryFailed(read.cause)
+            logger.warn(read.cause) { "${kind.storeKey.name}: corrupt store entry, starting fresh" }
+        }
+        val outcome = if (read is KindRead.Refused) PersistedRead.Owed(read.cause) else PersistedRead.Settled
+        lock.withLock {
+            if (read is KindRead.Found) {
+                read.series.forEach { (key, persisted) -> series[key] = series[key]?.piece(persisted) ?: persisted }
+                while (totalCount() > maxMetrics) evictOne()
+            }
+            owedReads = when (outcome) {
+                is PersistedRead.Owed -> owedReads + (kind to outcome.cause)
+                PersistedRead.Settled -> owedReads - kind
+            }
+        }
+        return outcome
+    }
+
+    /**
+     * A series written under another configuration — the prototype changed across a restart —
+     * cannot be kept: its bucket indices mean other values, so an AddExponentialHistogram mapped at
+     * histogramScale would land at the wrong values, and a peer's merge would refuse it.
+     */
+    private fun KindRead<DDSketch>.keepingPrototypeConfiguration(): KindRead<DDSketch> {
+        if (this !is KindRead.Found) return this
+        val (kept, foreign) = series.entries.partition { (_, sketch) -> sketch.hasPrototypeConfiguration() }
+        if (foreign.isEmpty()) return this
+        logger.warn {
+            "otel.metrics.histograms: dropping ${foreign.size} recovered series written under another " +
+                "configuration than histogramPrototype (${foreign.first().value.configuration()} vs " +
+                "${histogramPrototype.configuration()}); the next histogram write removes them from the store"
+        }
+        return KindRead.Found(kept.associate { (key, sketch) -> key to sketch })
+    }
+
+    /**
+     * Read again each of [kinds] whose read is owed, in the fixed kind order, and return the ones
+     * still refused with their causes. Must hold [writeMutex].
+     *
+     * A turn of a kind returned here admits nothing of it and writes nothing of it; it counts as a
+     * failed turn of that kind on [health]. The refusal was logged once by [recover], so a refused
+     * turn logs at debug, as a store that stays unreadable would otherwise log once per write.
+     */
+    private suspend fun refusedReads(kinds: Set<StoredKind>): Map<StoredKind, Throwable> {
+        val owed = lock.withLock { owedReads.keys }
+        if (owed.none { it in kinds }) return emptyMap()
+        val refused = LinkedHashMap<StoredKind, Throwable>()
+        StoredKind.entries.filter { it in kinds && it in owed }.forEach { kind ->
+            when (val read = readKind(kind)) {
+                is PersistedRead.Owed -> {
+                    refused[kind] = read.cause
+                    persistence.failed(setOf(kind.storeKey), read.cause)
+                    logger.debug {
+                        "${kind.storeKey.name}: persisted series still unreadable, so this turn admits and writes " +
+                            "nothing of the kind: ${read.cause}"
+                    }
+                }
+                PersistedRead.Settled -> logger.info { "${kind.storeKey.name}: persisted series read after a refusal; writes resume" }
+            }
+        }
+        return refused
+    }
+
+    /**
+     * Run [turn] under [writeMutex] once [kind]'s persisted series has been read; while that read is
+     * still refused, return its [MetricExportResult.Failure] without running [turn]. The `merge*`
+     * methods' turn; [record] reads per kind itself, since a batch spans kinds.
+     */
+    private suspend inline fun writeTurn(kind: StoredKind, turn: () -> MetricExportResult): MetricExportResult =
+        writeMutex.withLock {
+            refusedReads(setOf(kind))[kind]?.let { MetricExportResult.Failure(it) } ?: turn()
+        }
 
     /** Whether this sketch can live in [histograms]: [histogramPrototype]'s exact configuration. */
     private fun DDSketch.hasPrototypeConfiguration(): Boolean =
@@ -377,90 +526,6 @@ public class WarpMetricExporter(
 
     private fun DDSketch.configuration(): String =
         "(α=$relativeAccuracy, range=[$minIndexedValue, $maxIndexedValue])"
-
-    private suspend fun recoverSumsDouble() {
-        val bytes = try {
-            store.read(SUM_DOUBLE_STORE_KEY)
-        } catch (cause: Throwable) {
-            // The other kinds' recovery follows, so only this coroutine's own cancellation may end
-            // it; one the store minted is a refused read (#3388).
-            currentCoroutineContext().ensureActive()
-            persistence.recoveryFailed(cause)
-            logger.error(cause) { "otel.metrics.sums.double: store read failed, starting fresh" }
-            return
-        } ?: return
-        val recovered = runCatchingCancellable<Map<MetricKey, GCounterDouble>> {
-            cbor.decodeFromByteArray(sumsDoubleSerializer, bytes)
-        }.getOrElse { cause ->
-            persistence.recoveryFailed(cause)
-            logger.warn(cause) { "otel.metrics.sums.double: corrupt store entry, starting fresh" }
-            return
-        }
-        lock.withLock { recovered.forEach { (k, v) -> sumsDouble[k] = v } }
-    }
-
-    private suspend fun recoverSums() {
-        val bytes = try {
-            store.read(SUM_STORE_KEY)
-        } catch (cause: Throwable) {
-            // The other kinds' recovery follows, so only this coroutine's own cancellation may end
-            // it; one the store minted is a refused read (#3388).
-            currentCoroutineContext().ensureActive()
-            persistence.recoveryFailed(cause)
-            logger.error(cause) { "otel.metrics.sums: store read failed, starting fresh" }
-            return
-        } ?: return
-        val recovered = runCatchingCancellable<Map<MetricKey, GCounter>> {
-            cbor.decodeFromByteArray(sumsSerializer, bytes)
-        }.getOrElse { cause ->
-            persistence.recoveryFailed(cause)
-            logger.warn(cause) { "otel.metrics.sums: corrupt store entry, starting fresh" }
-            return
-        }
-        lock.withLock { recovered.forEach { (k, v) -> sums[k] = v } }
-    }
-
-    private suspend fun recoverGauges() {
-        val bytes = try {
-            store.read(GAUGE_STORE_KEY)
-        } catch (cause: Throwable) {
-            // The other kinds' recovery follows, so only this coroutine's own cancellation may end
-            // it; one the store minted is a refused read (#3388).
-            currentCoroutineContext().ensureActive()
-            persistence.recoveryFailed(cause)
-            logger.error(cause) { "otel.metrics.gauges: store read failed, starting fresh" }
-            return
-        } ?: return
-        val recovered = runCatchingCancellable<Map<MetricKey, LWWRegister<Double>>> {
-            cbor.decodeFromByteArray(gaugesSerializer, bytes)
-        }.getOrElse { cause ->
-            persistence.recoveryFailed(cause)
-            logger.warn(cause) { "otel.metrics.gauges: corrupt store entry, starting fresh" }
-            return
-        }
-        lock.withLock { recovered.forEach { (k, v) -> gauges[k] = v } }
-    }
-
-    private suspend fun recoverCardinalities() {
-        val bytes = try {
-            store.read(CARDINALITY_STORE_KEY)
-        } catch (cause: Throwable) {
-            // The other kinds' recovery follows, so only this coroutine's own cancellation may end
-            // it; one the store minted is a refused read (#3388).
-            currentCoroutineContext().ensureActive()
-            persistence.recoveryFailed(cause)
-            logger.error(cause) { "otel.metrics.cardinalities: store read failed, starting fresh" }
-            return
-        } ?: return
-        val recovered = runCatchingCancellable<Map<MetricKey, HyperLogLog>> {
-            cbor.decodeFromByteArray(cardinalitiesSerializer, bytes)
-        }.getOrElse { cause ->
-            persistence.recoveryFailed(cause)
-            logger.warn(cause) { "otel.metrics.cardinalities: corrupt store entry, starting fresh" }
-            return
-        }
-        lock.withLock { recovered.forEach { (k, v) -> cardinalities[k] = v } }
-    }
 
     // ── Clearing ──────────────────────────────────────────────────────────────
 
@@ -514,6 +579,8 @@ public class WarpMetricExporter(
         }
         deleted.fold(
             onSuccess = {
+                // Every key is now known absent and memory is empty, so no kind still owes a read.
+                lock.withLock { owedReads = emptyMap() }
                 persistence.acknowledged(CLEAR_WORK)
                 MetricExportResult.Success
             },
@@ -547,8 +614,12 @@ public class WarpMetricExporter(
      *   [MetricExportResult.Failure] (in the fixed kind order sums, double sums, gauges,
      *   cardinalities, histograms) is returned. Stopping at the first refusal would leave the later
      *   kinds off disk, which applying the updates one by one never does.
+     * - A kind whose persisted series is still unread after a refused [recover] read is read again
+     *   first. While that read is refused, the batch's updates **of that kind** are not applied and
+     *   the kind is not written, and its Failure is the read's cause; the other kinds go ahead.
      * - A [MetricExportResult.Failure] from a write means "not yet durable", not "not counted"
-     *   (a refused batch, below, is the one Failure that means "not counted"): every update in
+     *   (an unread kind, above, and a refused batch, below, are the Failures that mean "not
+     *   counted"): every update in
      *   the batch stays in memory, and the next successful write of a refused kind persists it. So
      *   the batch is **not atomic** on disk — a kind the store took is durable even when another
      *   kind was refused — and retrying a failed batch counts its increments twice, exactly as
@@ -596,10 +667,14 @@ public class WarpMetricExporter(
         if (updates.isEmpty()) return MetricExportResult.Success
         updates.forEach(::validate)
         return writeMutex.withLock {
+            // A kind whose persisted series is still unread admits nothing; the rest of the batch
+            // goes on. Read first, so the overflow check below counts what the store held (#3390).
+            val unread = refusedReads(updates.mapTo(HashSet()) { it.storedKind })
+            val admitted = if (unread.isEmpty()) updates else updates.filter { it.storedKind !in unread }
             var overflow: MetricOverflowException? = null
             var firstRefusal = false
             val writes = lock.withLock {
-                overflow = firstOverflowLocked(updates)?.also { refused ->
+                overflow = firstOverflowLocked(admitted)?.also { refused ->
                     firstRefusal = when (refused) {
                         is MetricSumOverflowException -> refusedSums.firstSighting(refused.key, sums.keys)
                         is MetricHistogramOverflowException -> refusedHistograms.firstSighting(refused.key, histograms.keys)
@@ -608,7 +683,7 @@ public class WarpMetricExporter(
                 if (overflow != null) return@withLock emptyList()
                 // The last series each kind's updates named — only for the failure log line.
                 val touched = LinkedHashMap<StoredKind, MetricKey>()
-                updates.forEach { update -> touched[applyLocked(update)] = update.key }
+                admitted.forEach { update -> touched[applyLocked(update)] = update.key }
                 StoredKind.entries.mapNotNull { kind ->
                     touched[kind]?.let { lastKey -> PendingWrite(kind, encode(kind), lastKey) }
                 }
@@ -619,17 +694,28 @@ public class WarpMetricExporter(
                 if (firstRefusal) logger.warn(line) else logger.debug(line)
                 return@withLock MetricExportResult.Failure(refused)
             }
-            var firstFailure: MetricExportResult.Failure? = null
+            val failures = HashMap<StoredKind, MetricExportResult.Failure>()
+            unread.forEach { (kind, cause) -> failures[kind] = MetricExportResult.Failure(cause) }
             writes.forEach { write ->
                 val result = persist(write.kind.storeKey, write.encoded, write.lastKey)
-                if (firstFailure == null && result is MetricExportResult.Failure) firstFailure = result
+                if (result is MetricExportResult.Failure) failures[write.kind] = result
             }
-            firstFailure ?: MetricExportResult.Success
+            StoredKind.entries.firstNotNullOfOrNull { failures[it] } ?: MetricExportResult.Success
         }
     }
 
     /** One kind's encoded map, ready to write outside [lock]. */
     private class PendingWrite(val kind: StoredKind, val encoded: ByteArray, val lastKey: MetricKey)
+
+    /** The persisted map [this] update changes. */
+    private val MetricUpdate.storedKind: StoredKind
+        get() = when (this) {
+            is MetricUpdate.IncrementSum -> StoredKind.SUMS
+            is MetricUpdate.IncrementSumDouble -> StoredKind.SUMS_DOUBLE
+            is MetricUpdate.SetGauge -> StoredKind.GAUGES
+            is MetricUpdate.AddCardinality -> StoredKind.CARDINALITIES
+            is MetricUpdate.RecordHistogram, is MetricUpdate.AddExponentialHistogram -> StoredKind.HISTOGRAMS
+        }
 
     /** The five persisted maps, in the fixed order a batch writes them. */
     private enum class StoredKind(val storeKey: StoreKey) {
@@ -829,7 +915,7 @@ public class WarpMetricExporter(
      * Returns [MetricExportResult.Success] after the durable write.
      */
     public suspend fun mergeSum(key: MetricKey, remote: GCounter): MetricExportResult =
-        writeMutex.withLock {
+        writeTurn(StoredKind.SUMS) {
             val encoded = lock.withLock {
                 val current = sums[key] ?: GCounter.ZERO
                 sums[key] = current.piece(remote)
@@ -871,7 +957,7 @@ public class WarpMetricExporter(
      * Returns [MetricExportResult.Success] after the durable write.
      */
     public suspend fun mergeSumDouble(key: MetricKey, remote: GCounterDouble): MetricExportResult =
-        writeMutex.withLock {
+        writeTurn(StoredKind.SUMS_DOUBLE) {
             val encoded = lock.withLock {
                 val current = sumsDouble[key] ?: GCounterDouble.ZERO
                 sumsDouble[key] = current.piece(remote)
@@ -914,7 +1000,7 @@ public class WarpMetricExporter(
     public suspend fun mergeGauge(
         key: MetricKey,
         remote: LWWRegister<Double>,
-    ): MetricExportResult = writeMutex.withLock {
+    ): MetricExportResult = writeTurn(StoredKind.GAUGES) {
         val encoded = lock.withLock {
             val current = gauges[key] ?: LWWRegister.empty<Double>()
             gauges[key] = current.piece(remote)
@@ -957,7 +1043,7 @@ public class WarpMetricExporter(
     public suspend fun mergeCardinality(
         key: MetricKey,
         remote: HyperLogLog,
-    ): MetricExportResult = writeMutex.withLock {
+    ): MetricExportResult = writeTurn(StoredKind.CARDINALITIES) {
         val encoded = lock.withLock {
             val current = cardinalities[key] ?: HyperLogLog.empty()
             cardinalities[key] = current.piece(remote)
@@ -1015,7 +1101,7 @@ public class WarpMetricExporter(
             "mergeHistogram for ${key.name}: remote sketch ${remote.configuration()} does not match " +
                 "histogramPrototype ${histogramPrototype.configuration()}"
         }
-        return writeMutex.withLock {
+        return writeTurn(StoredKind.HISTOGRAMS) {
             val encoded = lock.withLock {
                 val current = histograms[key]
                 histograms[key] = current?.piece(remote) ?: remote
@@ -1214,9 +1300,11 @@ public sealed interface MetricExportResult {
     /**
      * The durable write failed; whether the metric was persisted is indeterminate.
      *
-     * The one exception is a [cause] that is a [MetricOverflowException]: then the call was
-     * refused before anything was applied, so nothing was counted and nothing written, and
-     * retrying it is refused the same way.
+     * Two exceptions mean nothing was counted. A [cause] that is a [MetricOverflowException]: the
+     * call was refused before anything was applied, and retrying it is refused the same way. And
+     * a call to a kind whose persisted series is still unread after a refused recovery read: its
+     * updates of that kind were not applied, and [cause] is the store's refusal of the read; see
+     * [WarpMetricExporter.recover].
      */
     public data class Failure(public val cause: Throwable) : MetricExportResult
 }

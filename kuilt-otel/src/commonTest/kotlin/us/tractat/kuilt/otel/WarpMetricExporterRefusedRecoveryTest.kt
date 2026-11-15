@@ -3,6 +3,7 @@ package us.tractat.kuilt.otel
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -241,6 +242,7 @@ class WarpMetricExporterRefusedRecoveryTest {
      * The merge on heal must happen exactly once: a second turn after the heal must not read and
      * merge again. Two turns race the heal; the first parks inside the read, the second waits.
      */
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun twoTurnsRacingTheHealReadOnceAndCountBothUpdatesOnce() = runTest {
         val backing = RecordingStore()
