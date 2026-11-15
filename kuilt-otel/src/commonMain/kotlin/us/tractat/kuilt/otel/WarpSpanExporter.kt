@@ -324,10 +324,10 @@ public class WarpSpanExporter(
     }
 
     /**
-     * The highest `seq` among this replica's dots in [spans], stamps and predecessors both. Must be
-     * called with [lock] held.
+     * The highest `seq` among this replica's dots in [set], stamps and predecessors both. Must be
+     * called with [lock] held when [set] is [spans].
      */
-    private fun highestOwnDot(): Long? = spans.elements
+    private fun highestOwnDot(set: ORSet<SpanRecord> = spans): Long? = set.elements
         .flatMap { span -> span.causalStamp?.let { it.predecessors + it.dot }.orEmpty() }
         .filter { it.replica == replica }
         .maxOfOrNull { it.seq }
@@ -380,7 +380,7 @@ public class WarpSpanExporter(
      * write section, and inside it makes that read first (#3390). While the store refuses the read,
      * the export returns [ExportResult.Failure] having changed nothing, the clock included: its span
      * is in neither memory nor the store, so the caller's retry is its only copy. The read that lands
-     * joins the stored set and raises the clock above every stamp of this replica's it found (#3407),
+     * joins the stored set and raises the clock above every dot of this replica's it found (#3407),
      * and the export then stamps, adds and writes its span exactly as a recovered one does.
      *
      * Returns [ExportResult.Success] after the durable write returns. A failure in that section
@@ -425,7 +425,7 @@ public class WarpSpanExporter(
                     // persisted seq ≥ every dot in this snapshot (seq is monotonic).
                     val encoded = lock.withLock {
                         // The read has landed, joined the stored set and raised the clock's floor, so
-                        // this stamp mints above every stored stamp (#3407), and this add mints above the
+                        // this stamp mints above every stored dot (#3407), and this add mints above the
                         // set's dots and evicts from it as the live path does. It shares one hold of
                         // `lock` with the encode: the read made the exporter recovered, so a concurrent
                         // export can already add before the section, and at the cap that add could
@@ -522,6 +522,14 @@ public class WarpSpanExporter(
      * folded into the local clock first, so the next auto-stamped span records those
      * remote dots as predecessors — the cross-replica happens-before path (#846).
      *
+     * The clock's floor is raised too, to the highest dot of this replica's the remote set carries
+     * or names, in the same hold of `lock` as the join (#3407). A peer can hand back spans this
+     * replica minted and then lost (evicted, cleared, or behind a corrupt clock entry), and a stamp
+     * minted after they land must not collide with one. A stamp minted before the merge still can.
+     * The raise takes the peer's `seq` as given: a dot at `Long.MAX_VALUE` leaves the clock
+     * [ClockTick.Exhausted], so later spans are saved unstamped. Whether a merge should refuse such
+     * a dot is #3432.
+     *
      * Idempotent: merging the same set twice produces the same result.
      *
      * Until a read of the stored spans has landed, the merge makes that read first, and while the
@@ -532,7 +540,10 @@ public class WarpSpanExporter(
         // Fold the remote replica's causal frontier so the next local tick records
         // those dots as predecessors — the cross-replica happens-before path (#846).
         causalClock?.observe(remote.elements.mapNotNull { it.causalStamp?.dot }.toSet())
-        lock.withLock { spans = spans.piece(remote) }
+        lock.withLock {
+            spans = spans.piece(remote)
+            causalClock?.let { clock -> highestOwnDot(remote)?.let(clock::raiseFloor) }
+        }
         // Share the durable-write section with export() so a concurrent export()+merge()
         // cannot lost-update the STORE_KEY snapshot (#1053).
         return ioMutex.withLock {

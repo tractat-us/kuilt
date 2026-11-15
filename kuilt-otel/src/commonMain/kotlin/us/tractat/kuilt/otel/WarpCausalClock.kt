@@ -65,11 +65,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * Fresh does not mean unused, because durable spans still carry this replica's old dots (#3407).
  * So a [WarpSpanExporter] whose read of the stored spans lands raises the clock's floor to the
  * highest own-replica dot that read found, a span's stamp or a predecessor a span names, before the
- * turn mints anything, and a clock that has not read yet keeps the floor until its read lands. This
- * covers only the spans the store still holds. A dot no stored span carries or names (its span
- * evicted past `maxSpans` or cleared before the restart, with no stored span naming it as a
- * predecessor, or held only by a peer or a collector) is not in that read, and a corrupt entry can
- * still re-mint it.
+ * turn mints anything, and a clock that has not read yet keeps the floor until its read lands. A
+ * merge raises it the same way from the remote set. Still uncovered: a dot no stored span carries
+ * or names (its span evicted past `maxSpans` or cleared before the restart) can be re-minted after
+ * a corrupt entry until a peer hands it back, and a stamp minted before that merge keeps the
+ * collision (#3435). The floor takes every stored or merged dot's `seq` as given, so one claiming
+ * `Long.MAX_VALUE` leaves the clock [ClockTick.Exhausted] (#3432).
  *
  * ## Thread-safety
  *

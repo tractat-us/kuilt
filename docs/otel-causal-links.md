@@ -79,9 +79,14 @@ device wrote every `seq` its store can hold.
 Starting fresh is not starting unused: the stored spans still carry this device's old dots.
 So when the span exporter's read of its stored spans lands, at startup or on the first export
 after the store heals, it raises the clock above the highest dot of this device's it found,
-before that export stamps anything. That covers only the spans the store still holds. A dot
-whose span left the store before the restart (evicted from the buffer, or cleared), or that
-only a peer or a collector still holds, can be minted again after a corrupt clock entry.
+before that export stamps anything. It counts a span's own dot and the earlier dots the span
+names. A merge raises the clock the same way, from the spans a peer sends.
+
+Two gaps remain. A dot whose span left the store before the restart (evicted from the buffer,
+or cleared) can be minted again after a corrupt clock entry, until a peer sends that span back.
+A span stamped before that merge keeps the clash. And the clock trusts every dot it reads or
+merges, so a buggy peer's dot at the largest possible number stops it stamping at all: later
+spans are saved without a stamp.
 
 ### The cross-boundary rule
 
