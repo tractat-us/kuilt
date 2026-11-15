@@ -450,6 +450,9 @@ public class EntitlementLedger private constructor(
      */
     public fun gauge(id: AttachmentId): Gauge? = gauges[id]
 
+    /** The edges that carry a [Gauge], for a check that has to visit every one. */
+    internal fun gaugedEdges(): Set<AttachmentId> = gauges.keys
+
     /**
      * [id]'s **base** issuance — `Σ_r issued(id)[r]`, excluding relocation credit. This is the
      * [Gauge]'s fold axis: the read advances the gauge's position by `(baseIssuance − folded)`
@@ -1640,16 +1643,15 @@ public class EntitlementLedger private constructor(
 
     /**
      * The gauge [delegate] writes for [edge] at base issuance [issuedAfter]: the exact gross
-     * position there, uncapped, at that fold ([exactGrossTicksAt]).
+     * position there, absolute and uncapped, at that fold ([exactGrossTicksAt]).
      *
-     * Held at zero from below. A position can read below zero only where a `LocalHeddle` rebase has
-     * raised the fold above the issuance (#3329). There the checkpoint is a lower position at a
-     * lower fold than the gauge it joins, and the joined gauge reads the same as the raised one
-     * alone, whether the checkpoint carries that lower position or zero: the stored position is
-     * never negative, so zero is no higher than it.
+     * Never negative, so it needs no clamp: every gauge any write stores asserts a position of at
+     * least its fold's issuance in ticks (a seat takes `max(front, observed · G)`, a checkpoint
+     * advances one that already did), the componentwise join keeps that, and nothing raises a fold
+     * above the issuance any more (#3353). So the gross at any issuance reads at least that issuance.
      */
     private fun checkpoint(edge: AttachmentId, w: Weight, issuedAfter: Long): Gauge =
-        gaugeAt(maxOf(gauges[edge].exactGrossTicksAt(issuedAfter, w), Int128.ZERO), issuedAfter)
+        gaugeAt(gauges[edge].exactGrossTicksAt(issuedAfter, w), issuedAfter)
 
     /**
      * Whether [edge]'s raw position, relative to its parent's origin, is at its [positionCeiling],

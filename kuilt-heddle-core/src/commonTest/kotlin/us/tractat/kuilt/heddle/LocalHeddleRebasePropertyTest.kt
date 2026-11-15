@@ -221,6 +221,74 @@ class LocalHeddleRebasePropertyTest {
     }
 
     /**
+     * The 60/30/10/1 spread #3313 was reported with, on `LocalHeddle` (#3353 review, item A): the
+     * light lane alone for [WIDE_ALONE] picks, then a waiting set drawn afresh each pick, leases at [LocalHeddle.MAX_RESERVATION] charged half or
+     * cancelled. Rebased on each lane's own grid, the light lane could hold the front at its
+     * threshold, and a heavy lane waking to it landed past its own ceiling. The run counts its own
+     * picks and rebases.
+     */
+    @Test
+    fun aWideSpreadNeverReachesTheCeiling() {
+        val topology = draft("wide") {
+            lane("w60", Weight.of(60L))
+            lane("w30", Weight.of(30L))
+            lane("w10", Weight.of(10L))
+            lane("w1", Weight.ONE)
+        }
+        val engine = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply { reconcileCapacity(1L) }
+        val lanes = listOf("w60", "w30", "w10", "w1").map { topology.groupId(it) }
+        val random = Random(3313)
+        var picks = 0
+        repeat(WIDE_PICKS) { step ->
+            // The light lane alone first, long enough to climb toward its own threshold; then any set.
+            val waiting = if (step < WIDE_ALONE) setOf(lanes[3]) else lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }.toSet()
+            val outcome = engine.acquire(waiting, waiting, startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
+            check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
+            if (step % 4 == 0) engine.cancel(outcome.lease.id) else engine.complete(outcome.lease.id, actualCost = LocalHeddle.MAX_RESERVATION / 2)
+            picks++
+        }
+        assertAll(
+            { assertEquals(WIDE_PICKS, picks, "every step made one pick") },
+            { assertTrue(engine.rebasesForTest >= 1, "the rig: the run rebased (${engine.rebasesForTest})") },
+        )
+    }
+
+    /**
+     * A parent driven only by charging calls, `admit`, `extend` and `complete`, and never picked at
+     * (#3353 review, item I). Only a pick used to rebase, so this lane's position climbed by
+     * [LocalHeddle.MAX_RESERVATION] per lease until `extend` refused with `PositionCeiling`. A
+     * charging call now runs the same origin step at every parent on its path. The run counts its
+     * own leases and rebases.
+     */
+    @Test
+    fun aParentDrivenOnlyByChargingCallsNeverReachesTheCeiling() {
+        val topology = draft("charged") {
+            lane("a", Weight.ONE)
+            lane("b", Weight.ONE)
+        }
+        val engine = LocalHeddle.fromTopology(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply { reconcileCapacity(1L) }
+        val a = topology.groupId("a")
+        var leases = 0
+        var extended = 0
+        repeat(CHARGED_LEASES) { step ->
+            val admitted = engine.admit(a, startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
+            check(admitted is AcquireOutcome.Acquired) { "lease ${step + 1}: expected a lease, got $admitted" }
+            if (step % 3 == 0) {
+                val out = engine.extend(admitted.lease.id, LocalHeddle.MAX_RESERVATION)
+                check(out !is LeaseOutcome.PositionCeiling) { "lease ${step + 1}: extend refused at the ceiling" }
+                extended++
+            }
+            engine.complete(admitted.lease.id, actualCost = LocalHeddle.MAX_RESERVATION)
+            leases++
+        }
+        assertAll(
+            { assertEquals(CHARGED_LEASES, leases, "every step admitted and completed one lease") },
+            { assertTrue(extended > 0, "the rig: leases were extended") },
+            { assertTrue(engine.rebasesForTest >= 1, "the rig: the parent rebased (${engine.rebasesForTest})") },
+        )
+    }
+
+    /**
      * The largest share of its own ceiling any edge's position reads at in [engine]: its gross
      * position, or its effective one, the raw position plus the wake offset a pick reads.
      */
@@ -229,11 +297,12 @@ class LocalHeddleRebasePropertyTest {
         val ledger = state.ledger
         return ledger.allEdges().maxOf { edge ->
             val weight = checkNotNull(ledger.record(edge)).weight
-            val wideGross = ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge), weight)
-            val gross = saturated(wideGross, weight)
-            val raw = saturated(wideGross - (ledger.edge(edge)?.returned ?: 0L) * TICKS_PER_UNIT, weight)
-            val offset = state.allocatorMemory.wakeOffsets[edge]?.let { ticksAt(it, weight) } ?: 0L
-            maxOf(gross, raw + offset).toDouble() / positionCeiling(weight).toDouble()
+            val origin = originTicks(ledger.origin(checkNotNull(ledger.record(edge)).parent), weight)
+            val wideGross = ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge), weight) - origin
+            // Wide: an idle lane sits as far below zero as the origin has risen past it (#3353).
+            val raw = wideGross - (ledger.edge(edge)?.returned ?: 0L) * TICKS_PER_UNIT
+            val effective = raw + (state.allocatorMemory.wakeOffsets[edge] ?: Int128.ZERO)
+            maxOf(wideGross.toDouble(), effective.toDouble()) / positionCeiling(weight).toDouble()
         }
     }
 
@@ -263,6 +332,13 @@ class LocalHeddleRebasePropertyTest {
         )
 
         const val RETURN_PICKS = 30_000
+
+        /** Leases the charge-only run admits: past the 2¹⁵ that took a weight-1 lane to its ceiling. */
+        const val CHARGED_LEASES = 40_000
+
+        /** Picks the 60/30/10/1 run makes, and the first of them its light lane makes alone. */
+        const val WIDE_PICKS = 30_000
+        const val WIDE_ALONE = 3_000
 
         /** Over twenty times the 4,681 picks #3360's lane made before it refused. */
         const val RETURNED_LANE_PICKS = 100_000

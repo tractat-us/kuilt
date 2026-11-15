@@ -1101,7 +1101,8 @@ class HeddleNodeTest {
         h.pump()
         val node = h.peers[0].node
         val atCeiling = Gauge(Rational.of(CEILING_AT_WEIGHT_ONE, 16L), folded = 0L)
-        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling))))
+        // e2 seated at zero and demanding holds the rebase at nothing, the never-served limit (#3353).
+        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling, e2 to Gauge(folded = 0L)))))
         node.advertise(e1, hungry)
         node.advertise(e2, hungry)
         h.pump()
@@ -1129,7 +1130,8 @@ class HeddleNodeTest {
         h.pump()
         val node = h.peers[0].node
         val atCeiling = Gauge(Rational.of(CEILING_AT_WEIGHT_ONE, 16L), folded = 0L)
-        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling))))
+        // e2 seated at zero and demanding holds the rebase at nothing, the never-served limit (#3353).
+        node.asControlSink().publish(Patch(EntitlementLedger.of(gauges = mapOf(e1 to atCeiling, e2 to Gauge(folded = 0L)))))
         val newborn = AttachmentRecord(AttachmentId("e3"), root, GroupId("g3"), Weight.ONE)
         assertTrue(node.prepare(newborn) && node.activate(newborn.id))
         for (edge in listOf(e1, e2, newborn.id)) node.advertise(edge, hungry)

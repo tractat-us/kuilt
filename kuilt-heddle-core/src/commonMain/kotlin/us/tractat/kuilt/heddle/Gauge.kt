@@ -10,8 +10,7 @@ import us.tractat.kuilt.math.timesWide
 
 /**
  * One edge's replicated **virtual-time gauge**: an asserted lower bound on its gross position,
- * paired with the base issuance the writer had actually observed when it asserted it, or, in a
- * `LocalHeddle` ledger, with a fold a rebase has raised above that (see below).
+ * paired with the base issuance the writer had actually observed when it asserted it.
  *
  * A gauge is a claim of the form *"when this edge's base issuance stood at [folded], its gross
  * position was at least `P`"*. The position is kept in one of two places. Every seat and checkpoint
@@ -72,12 +71,9 @@ import us.tractat.kuilt.math.timesWide
  * parent's origin rose past it. A seat is written absolute too: the origin the seating peer saw,
  * added back on the edge's grid, so a seat means the same under any later origin.
  *
- * They are not yet absolute in a `LocalHeddle` ledger. A rebase there raises the fold (below), and
- * the next checkpoint after issuance passes the raised fold reads through it: ticks of `1000 · G`
- * at fold 1000, the fold raised to 1500, and a checkpoint at issuance 1600 stores `1100 · G`, not
- * `1600 · G`. That holds until `LocalHeddle` moves its rebase onto per-parent origins (#3353,
- * slice 7). The replicated `HeddleNode` raises its parents' origins instead and no fold, so its
- * ticks are absolute already.
+ * Neither engine raises a fold: both rebase a busy parent by raising its origin (#3353), so every
+ * gauge's ticks are absolute, and every gauge asserts a position of at least its fold's issuance in
+ * ticks. A fold never stands above any writer's observed issuance, and so never above the edge's.
  *
  * ## The read is deliberately not monotone in the view
  *
@@ -92,21 +88,8 @@ import us.tractat.kuilt.math.timesWide
  *
  * Under a rebase the sandwich is **relative**, not absolute: a rebase lowers every child of a
  * parent by one virtual time together, so a position reads its service less every rebase taken
- * since. In a `HeddleNode` ledger that is the parent's origin, and an idle child can read as far
- * below zero as the origin has risen; in a `LocalHeddle` ledger it is a raised fold, down to `−R`
- * for an idle child (#3329). Read the bounds against the siblings, not against zero.
- *
- * ## A fold above issuance: `LocalHeddle`'s rebase
- *
- * `LocalHeddle` brings a busy parent's positions back down by **raising** its children's folds
- * (#3329): raising [folded] by `k` units lowers the read by exactly `k` units of the edge's own
- * service, and the componentwise join keeps the raise, where a lowered position would be undone by
- * the next checkpoint. So in a `LocalHeddle` ledger a fold can stand above the edge's issuance.
- * Nothing about the read changes for it: `(baseIssued − folded)` is simply negative. A checkpoint
- * written over such a gauge asserts a lower position at a lower fold, and joined with the raised
- * gauge it reads the same as the raised gauge alone. Where that lower position is below zero it is
- * written as zero, which reads the same way. The replicated `HeddleNode` never raises a fold this
- * way (#3353).
+ * since: the parent's origin, so an idle child can read as far below zero as the origin has risen
+ * past it (#3353). Read the bounds against the siblings, not against zero.
  *
  * ## Wire form
  *
@@ -121,8 +104,8 @@ import us.tractat.kuilt.math.timesWide
  *
  * @property floor the asserted lower bound on gross virtual service at [folded], as a build before
  *   #3353 wrote it. Zero in every gauge this build writes.
- * @property folded the base issuance the writer observed when it asserted its position, or above
- *   it once a `LocalHeddle` rebase has raised it; non-negative.
+ * @property folded the base issuance the writer observed when it asserted its position;
+ *   non-negative.
  * @property ticksHigh the upper 64 bits of the asserted position, in ticks of the edge's own
  *   service: signed, and non-negative.
  * @property ticksLow the lower 64 bits of the asserted position, in ticks, read as unsigned. The

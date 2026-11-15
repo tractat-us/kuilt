@@ -55,8 +55,10 @@ public sealed interface ScheduleOutcome {
     /**
      * A child of [parent] holds an effective position at its ceiling, so no pick there orders
      * exactly, and none was made (#3313). A busy parent is rebased by raising its origin long before
-     * that (#3353), so it is met only where the rebase is held at nothing: a demanding child that
-     * is never served sits at zero, and no child may go below it.
+     * that (#3353), so it is met only where no whole step of the rebase fits. A demanding child that
+     * is never served sits at zero, and no child may go below it. Or the weights are so
+     * fine-grained that one step, read on some child's grid, spans 16 times that child's threshold,
+     * its ceiling, which wedges the parent while that child demands.
      */
     public data class PositionCeiling(public val parent: GroupId) : ScheduleOutcome
 

@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import kotlinx.serialization.BinaryFormat
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.cbor.Cbor
@@ -100,8 +101,8 @@ class LocalHeddlePersistenceTest {
         return outcomes
     }
 
-    private fun wakeOffsetOf(memory: AllocatorMemory, leaf: GroupId): Rational =
-        memory.wakeOffsets[edgeTo(leaf)] ?: Rational.ZERO
+    private fun wakeOffsetOf(memory: AllocatorMemory, leaf: GroupId): Int128 =
+        memory.wakeOffsets[edgeTo(leaf)] ?: Int128.ZERO
 
     /** The edge `root → leaf` of [pair] as [LocalHeddle.fromTopology] boots it, at generation 0. */
     private fun edgeTo(leaf: GroupId): AttachmentId =
@@ -385,7 +386,7 @@ class LocalHeddlePersistenceTest {
         val control = continuation(forgetful, open)
         val bPicks = { picks: List<Any> -> picks.count { it == b } }
         assertAll(
-            { assertTrue(offset > Rational.ZERO, "the rig: b's wake offset is non-zero at persist time, $offset") },
+            { assertTrue(offset > Int128.ZERO, "the rig: b's wake offset is non-zero at persist time, $offset") },
             { assertEquals(true, persisted.allocatorMemory.demandingObserved[edgeTo(b)], "and b was last seen waiting") },
             { assertEquals(20, expected.count { it is GroupId }, "the rig: 20 picks ran after the restore") },
             { assertEquals(expected, actual, "the same picks and outcomes as the engine that never persisted") },
@@ -406,7 +407,7 @@ class LocalHeddlePersistenceTest {
         val (reference, open) = wakerScenario()
         assertAll(
             { assertEquals(open, snapshot.leases, "the golden holds the scenario's open leases") },
-            { assertTrue(wakeOffsetOf(snapshot.allocatorMemory, b) > Rational.ZERO, "and b's wake offset") },
+            { assertTrue(wakeOffsetOf(snapshot.allocatorMemory, b) > Int128.ZERO, "and b's wake offset") },
             { assertEquals(continuation(reference, open), continuation(restored, open)) },
             { assertEquals(books(reference), books(restored)) },
         )
@@ -679,12 +680,70 @@ class LocalHeddlePersistenceTest {
     /** Format 1 predates the fold, so a format-1 snapshot that carries one is corrupt. */
     @Test
     fun aFormatOneSnapshotCannotCarryAFold() {
-        val text = GOLDEN_FORMAT_2_RICH.replaceFirst("[2,", "[1,")
+        // Format 1 wrote each wake clamp as a virtual time, so the clamps go back to that shape too (#3353).
+        val wide = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{},\"root/acme/batch@1:1#0\":{\"low\":32},\"root/tenants@1:1#0\":{\"low\":96}}"
+        val virtual = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{\"numerator\":0,\"denominator\":1}," +
+            "\"root/acme/batch@1:1#0\":{\"numerator\":2,\"denominator\":1},\"root/tenants@1:1#0\":{\"numerator\":6,\"denominator\":1}}"
+        check(wide in GOLDEN_FORMAT_2_RICH) { "the rig: format 2's clamps are where this test expects them" }
+        val text = GOLDEN_FORMAT_2_RICH.replaceFirst("[2,", "[1,").replace(wide, virtual)
         val out = LocalHeddle.decode(text, Json)
         assertAll(
             { assertTrue(text.startsWith("[1,") && "\"forgotten\":" in text, "the rig: format 1 with a fold") },
             { assertTrue(out is RestoreResult.Corrupt && "format 1 predates" in out.reason, "expected Corrupt naming format 1, got $out") },
         )
+    }
+
+    /**
+     * A wake clamp past `Long` survives a persist, a decode and a restore exactly (#3353 review,
+     * item F): one past 2⁶⁴ ticks, whose high word is set, and one whose low word has its top bit
+     * set, which a reader taking the low word as signed would read negative.
+     */
+    @Test
+    fun wideWakeClampsRoundTripThroughASnapshot() {
+        val base = decoded(GOLDEN_FORMAT_2)
+        val pastTwoToThe64 = Int128.fromTwosComplement(3L, 5L)
+        val topBitOfLow = Int128.fromTwosComplement(0L, Long.MIN_VALUE + 7L)
+        for (clamp in listOf(pastTwoToThe64, topBitOfLow)) {
+            val memory = AllocatorMemory(
+                wakeOffsets = mapOf(edgeTo(b) to clamp),
+                demandingObserved = base.allocatorMemory.demandingObserved,
+            )
+            val snapshot = LocalHeddleSnapshot(base.epoch, base.ledger, memory, base.totalSlots, base.open, base.lastApplied)
+            val text = encode(snapshot)
+            val back = decoded(text)
+            val restored = LocalHeddle.restore(back, policy, epoch = 1L)
+            assertAll(
+                { assertTrue(clamp.toLongOrNull() == null || clamp.low < 0L, "the rig: $clamp is past Long or has the low word's top bit set") },
+                { assertEquals(clamp, back.allocatorMemory.wakeOffsets[edgeTo(b)], "decoded exactly: $text") },
+                { assertEquals(clamp, restored.snapshot().allocatorMemory.wakeOffsets[edgeTo(b)], "and restored exactly") },
+            )
+        }
+    }
+
+    /**
+     * A gauge folded above its edge's issuance is refused at decode, by name (#3353 review, item G).
+     * Only the fold rebase of a development build between #3355 and slice 7 wrote one; restored, the
+     * first delegation over it would throw an untyped `IllegalArgumentException` at a later
+     * `acquire`. No release wrote one: v0.7.4 predates #3355.
+     */
+    @Test
+    fun aGaugeFoldedAboveItsIssuanceIsCorrupt() {
+        val honest = "{\"folded\":51,\"ticksLow\":816}"
+        check(honest in GOLDEN_FORMAT_2) { "the rig: a's gauge is where this test expects it" }
+        val out = LocalHeddle.decode(GOLDEN_FORMAT_2.replace(honest, "{\"folded\":60,\"ticksLow\":816}"), Json)
+        assertAll(
+            { assertIs<RestoreResult.Restored>(LocalHeddle.decode(GOLDEN_FORMAT_2, Json), "the control: the honest golden restores") },
+            { assertTrue(out is RestoreResult.Corrupt && "above its base issuance" in out.reason, "expected Corrupt naming the fold, got $out") },
+        )
+    }
+
+    /** A wake clamp's high word carries its sign, and a clamp is never negative, so `{"high":-1}` is corrupt. */
+    @Test
+    fun aNegativeWakeClampIsCorrupt() {
+        val honest = "{\"low\":800}"
+        check(honest in GOLDEN_FORMAT_2) { "the rig: b's clamp is where this test expects it" }
+        val out = LocalHeddle.decode(GOLDEN_FORMAT_2.replace(honest, "{\"high\":-1}"), Json)
+        assertTrue(out is RestoreResult.Corrupt && "wake clamp" in out.reason, "expected Corrupt naming the clamp, got $out")
     }
 
     /** An honest fold is never negative, so a snapshot whose fold is, in either of its two maps, is corrupt. */

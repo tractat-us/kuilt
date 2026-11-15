@@ -61,10 +61,12 @@ class FairShareAllocatorUnifiedFrontTest {
         observed: Map<AttachmentRecord, Boolean>,
         idle: Set<AttachmentRecord>,
         supply: Long,
+        origin: Long = 0L,
     ): Run {
         val children = seats.keys.toList() + newborns
         var l = shapedLedger(root, children)
         l = l.piece(EntitlementLedger.of(gauges = seats.mapKeys { it.key.id }))
+        if (origin > 0L) l = l.piece(EntitlementLedger.of(origins = mapOf(root to Int128.of(origin))))
         l = l.piece(l.mint(MintId("m"), root, LOCAL, supply).delta)
         val cell = CountingCell(l, children)
         val allocator = FairShareAllocator(
@@ -86,7 +88,7 @@ class FairShareAllocatorUnifiedFrontTest {
         val run = wake(mapOf(a to 1_600L, b to 0L, c to 160L), idle = setOf(c), supply = 100L)
         assertAll(
             { assertEquals(AllocationOutcome.Delegated(100), run.outcome, "the rig: all 100 units went out") },
-            { assertEquals(ticksToVirtual(1_600L, Weight.ONE), run.memory.wakeOffsets[b.id], "b is clamped to a, not to the bystander") },
+            { assertEquals(Int128.of(1_600L), run.memory.wakeOffsets[b.id], "b is clamped to a, not to the bystander") },
             { assertEquals(50, run.granted[a], "a takes half") },
             { assertEquals(50, run.granted[b], "and so does b") },
             { assertEquals(null, run.granted[c], "the idle bystander takes none") },
@@ -105,38 +107,56 @@ class FairShareAllocatorUnifiedFrontTest {
     }
 
     /**
-     * S4b, a known regression that origins fix: a runner `b` at −100, a waker `a` at −100 and a
-     * newborn `n`. `b` is a demanding non-joiner, so the front is its mean, −100, and the newborn's
-     * seat cannot go below its own origin, 0. It waits 100 behind them both. The old rule raised the
-     * front to the newborn's origin whenever wakers joined beside it, which penalised the waker
-     * instead: 117/17/16. A runner gets below zero only through `LocalHeddle`'s fold rebase, which
-     * raises a gauge's fold above its issuance, and that is how the rig puts them there: a fold of
-     * 100 over no issuance reads −100. Slice 7 of #3353 replaces that rebase with per-parent origins,
-     * and flips this arm to the newborn not waiting.
+     * S4b, flipped by origins (#3353, slice 7): a runner `b` at −100, a waker `a` at −100 and a
+     * newborn `n`. `b` is a demanding non-joiner, so the front is its mean, −100. Positions now sit
+     * below zero only relative to the parent's origin, here 100 over gauges at zero, and the seat is
+     * absolute, so the newborn is seated at the origin plus the front: level with both, at −100. The
+ * gauges sit at 100 under an origin of 200, not at zero under 100, so that a seat which forgot the
+ * origin would land below the newborn's own start and be lifted there, 100 behind, and show it.
+     * Under the fold rebase the runner was below its own absolute zero and the seat could not follow
+     * it there, so the newborn waited 100 behind them: 75/75/0.
      */
     @Test
-    fun aNewbornBehindASubZeroRunnerWaitsUntilOrigins() {
+    fun aNewbornBesideASubZeroRunnerAndAWakerStartsLevel() {
         val n = edgeOf(root, GroupId("p/n"))
         val run = schedule(
-            seats = mapOf(b to gaugeAt(Int128.ZERO, folded = 100L), a to gaugeAt(Int128.ZERO, folded = 100L)),
+            seats = mapOf(b to gaugeAt(Int128.of(1_600L), folded = 0L), a to gaugeAt(Int128.of(1_600L), folded = 0L)),
             newborns = listOf(n),
             observed = mapOf(b to true, a to false),
             idle = emptySet(),
             supply = 150L,
+            origin = 200L,
         )
         assertAll(
             { assertEquals(AllocationOutcome.Delegated(150), run.outcome, "the rig: all 150 units went out") },
-            {
-                assertEquals(
-                    Rational.ZERO,
-                    run.memory.wakeOffsets[a.id] ?: Rational.ZERO,
-                    "a is clamped to the runner's −100, which moves it nothing; the old raise moved it 100",
-                )
-            },
             { assertEquals(true, run.memory.demandingObserved[a.id], "the rig: a was observed waking") },
-            { assertEquals(75, run.granted[a], "the waker comes level with the runner") },
-            { assertEquals(75, run.granted[b], "and the runner keeps its half") },
-            { assertEquals(null, run.granted[n], "the newborn, seated at its origin 100 ahead, waits: slice 7 flips this") },
+            { assertEquals(Int128.ZERO, run.memory.wakeOffsets[a.id] ?: Int128.ZERO, "a is clamped to the runner's −100, which moves it nothing") },
+            { assertEquals(50, run.granted[a], "the waker comes level with the runner") },
+            { assertEquals(50, run.granted[b], "and the runner keeps its share") },
+            { assertEquals(50, run.granted[n], "and the newborn, seated level, takes its share too") },
+        )
+    }
+
+    /**
+     * S4, flipped by origins (#3353, slice 7): a runner `b` at −100 and a newborn `n`, no waker. The
+     * newborn is seated at the runner, so the two split 150 evenly. Under the fold rebase the seat
+     * could not go below absolute zero, so the newborn started 100 ahead and the split was 125/25.
+     */
+    @Test
+    fun aNewbornBesideASubZeroRunnerStartsLevel() {
+        val n = edgeOf(root, GroupId("p/n"))
+        val run = schedule(
+            seats = mapOf(b to gaugeAt(Int128.of(1_600L), folded = 0L)),
+            newborns = listOf(n),
+            observed = mapOf(b to true),
+            idle = emptySet(),
+            supply = 150L,
+            origin = 200L,
+        )
+        assertAll(
+            { assertEquals(AllocationOutcome.Delegated(150), run.outcome, "the rig: all 150 units went out") },
+            { assertEquals(75, run.granted[b], "the runner takes half") },
+            { assertEquals(75, run.granted[n], "and so does the newborn") },
         )
     }
 }

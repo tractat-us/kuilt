@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import kotlinx.serialization.json.Json
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -117,11 +118,11 @@ class FairShareAllocatorPickChildTest {
         val e1 = AttachmentId("a/b")
         val e2 = AttachmentId("#3")
         val one = AllocatorMemory(
-            wakeOffsets = linkedMapOf(e1 to Rational.of(3L, 2L), e2 to Rational.ONE),
+            wakeOffsets = linkedMapOf(e1 to Int128.of(24L), e2 to Int128.of(16L)),
             demandingObserved = linkedMapOf(e1 to true, e2 to false),
         )
         val other = AllocatorMemory(
-            wakeOffsets = linkedMapOf(e2 to Rational.ONE, e1 to Rational.of(3L, 2L)),
+            wakeOffsets = linkedMapOf(e2 to Int128.of(16L), e1 to Int128.of(24L)),
             demandingObserved = linkedMapOf(e2 to false, e1 to true),
         )
         val bytes = Json.encodeToString(AllocatorMemory.serializer(), one)
