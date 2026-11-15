@@ -450,7 +450,7 @@ class LocalHeddleTest {
             val lease = h.lease(setOf(a), reservation = 2L)
             h.complete(lease.id, 3L, waiting = emptySet()) // a 1-unit overrun with the root empty: a forced mint
         }
-        val admitted = assertNotNull((h.admit(a, 0L, reservation = 4L) as? AcquireOutcome.Acquired)?.lease)
+        val admitted = assertNotNull((h.admit(a, setOf(a), 0L, reservation = 4L) as? AcquireOutcome.Acquired)?.lease)
         h.complete(admitted.id, 4L, waiting = emptySet())
         repeat(30) { h.mintSupply(1L) }
         val one = h.snapshot().ledger
@@ -514,7 +514,7 @@ class LocalHeddleTest {
             { assertEquals(LeaseOutcome.Done(0L, 0L), extended) },
             { assertEquals(3 * max, assertNotNull(h.snapshot().ledger.edge(AttachmentId("root>a"))).outstanding, "3 × 2^44 outstanding on one edge") },
             { assertFailsWith<IllegalArgumentException> { h.acquire(setOf(a), setOf(a), 0L, reservation = max + 1) } },
-            { assertFailsWith<IllegalArgumentException> { h.admit(a, 0L, reservation = max + 1) } },
+            { assertFailsWith<IllegalArgumentException> { h.admit(a, setOf(a), 0L, reservation = max + 1) } },
             { assertFailsWith<IllegalArgumentException> { h.extend(second.id, max + 1, waiting = emptySet()) } },
             { assertFailsWith<IllegalArgumentException> { LocalPolicy(defaultReservation = max + 1) } },
             { assertEquals(LeaseOutcome.Done(2 * max, 0L), h.complete(first.id, 2 * max, waiting = emptySet())) },
@@ -669,10 +669,10 @@ class LocalHeddleTest {
         val h = engineOver(shapedLedger(root, listOf(edgeOf(root, t), edgeOf(t, a)), prepared = listOf(edgeOf(root, x))), root, supply = 10)
         val before = h.snapshot().ledger
         assertAll(
-            { assertEquals(AcquireOutcome.NoLiveLineage(root), h.admit(root, 0L), "the root is never a leaf") },
-            { assertEquals(AcquireOutcome.NoLiveLineage(t), h.admit(t, 0L), "a group with an active child is not a leaf") },
-            { assertEquals(AcquireOutcome.NoLiveLineage(x), h.admit(x, 0L), "a prepared edge is no lineage") },
-            { assertEquals(AcquireOutcome.NoLiveLineage(GroupId("#3")), h.admit(GroupId("#3"), 0L), "an unknown name") },
+            { assertEquals(AcquireOutcome.NoLiveLineage(root), h.admit(root, setOf(root), 0L), "the root is never a leaf") },
+            { assertEquals(AcquireOutcome.NoLiveLineage(t), h.admit(t, setOf(t), 0L), "a group with an active child is not a leaf") },
+            { assertEquals(AcquireOutcome.NoLiveLineage(x), h.admit(x, setOf(x), 0L), "a prepared edge is no lineage") },
+            { assertEquals(AcquireOutcome.NoLiveLineage(GroupId("#3")), h.admit(GroupId("#3"), setOf(GroupId("#3")), 0L), "an unknown name") },
             { assertSame(before, h.snapshot().ledger) },
         )
     }

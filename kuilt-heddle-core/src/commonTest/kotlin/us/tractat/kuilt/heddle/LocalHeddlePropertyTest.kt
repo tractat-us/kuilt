@@ -94,7 +94,7 @@ class LocalHeddlePropertyTest {
                     kind == 1 -> { onOp(h, seed, h.extend(open[rng.nextInt(open.size)].id, 1L + rng.nextInt(4), waiting = emptySet())); kinds[1]++ }
                     kind == 2 -> { h.complete(open[rng.nextInt(open.size)].id, rng.nextInt(9).toLong(), waiting = emptySet()); kinds[2]++ }
                     kind == 3 -> { h.cancel(open[rng.nextInt(open.size)].id); kinds[3]++ }
-                    else -> { h.admit(leaves[rng.nextInt(leaves.size)], startedAt = step.toLong(), reservation = 1L + rng.nextInt(5)); kinds[4]++ }
+                    else -> { leaves[rng.nextInt(leaves.size)].let { l -> h.admit(l, setOf(l), startedAt = step.toLong(), reservation = 1L + rng.nextInt(5)) }; kinds[4]++ }
                 }
                 operations++
                 assertConserved(h, "seed $seed step $step")
@@ -359,7 +359,7 @@ class LocalHeddlePropertyTest {
                         }
                     }
                     draw == 6 -> h.cancel(open[rng.nextInt(open.size)].id)
-                    draw == 7 -> h.admit(reshapeGroups[rng.nextInt(reshapeGroups.size)], step.toLong(), 1L + rng.nextInt(5))
+                    draw == 7 -> reshapeGroups[rng.nextInt(reshapeGroups.size)].let { g -> h.admit(g, setOf(g), step.toLong(), 1L + rng.nextInt(5)) }
                     else -> reshape(h, rng, seen)
                 }
                 steps++

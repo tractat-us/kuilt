@@ -70,7 +70,7 @@ class LocalHeddleApplyTest {
     /** Acquire and complete [n] slots with [waiting] as both sets, each at its reservation. */
     private fun LocalHeddle.serve(waiting: Set<GroupId>, n: Int) = repeat(n) {
         val lease = lease(waiting, reservation = 2L, startedAt = it.toLong())
-        complete(lease.id, 2L)
+        complete(lease.id, 2L, waiting = emptySet())
     }
 
     @Test

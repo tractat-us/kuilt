@@ -33,7 +33,7 @@ class LocalHeddleForgetTest {
     private fun LocalHeddle.cycle(i: Int) {
         check(attach(tenants, "u$i", generation = 0L).refusals.isEmpty()) { "attach u$i" }
         val lease = lease(setOf(tree.attachedChildId(tenants, "u$i")), reservation = 2L, startedAt = i.toLong())
-        check(complete(lease.id, 1L + i % 3) is LeaseOutcome.Done) { "complete u$i" }
+        check(complete(lease.id, 1L + i % 3, waiting = emptySet()) is LeaseOutcome.Done) { "complete u$i" }
         check(detach(tenants, "u$i").refusals.isEmpty()) { "detach u$i" }
     }
 

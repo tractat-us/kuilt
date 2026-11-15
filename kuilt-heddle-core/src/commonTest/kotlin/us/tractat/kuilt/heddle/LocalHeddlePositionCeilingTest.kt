@@ -62,7 +62,7 @@ class LocalHeddlePositionCeilingTest {
         repeat(20) { i ->
             val waiting = sets[i % sets.size]
             val lease = (acquire(waiting, waiting, startedAt = i.toLong()) as AcquireOutcome.Acquired).lease
-            complete(lease.id, actualCost = 1L + i % 4)
+            complete(lease.id, actualCost = 1L + i % 4, waiting = emptySet())
         }
     }
 

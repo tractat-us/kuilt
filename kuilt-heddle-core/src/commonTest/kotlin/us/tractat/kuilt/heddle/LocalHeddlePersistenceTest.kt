@@ -417,7 +417,7 @@ class LocalHeddlePersistenceTest {
             reconcileCapacity(1L)
             for (waiting in listOf(both, setOf(heavy), setOf(heavy))) {
                 val lease = assertIs<AcquireOutcome.Acquired>(acquire(waiting, waiting, startedAt = 0L)).lease
-                check(complete(lease.id, actualCost = 1L) is LeaseOutcome.Done)
+                check(complete(lease.id, actualCost = 1L, waiting = emptySet()) is LeaseOutcome.Done)
             }
         }
         fun picks(h: LocalHeddle): List<GroupId> = List(6) {
@@ -1044,7 +1044,7 @@ class LocalHeddlePersistenceTest {
                     }
                     kind == 4 -> {
                         val leaf = leaves[rng.nextInt(leaves.size)]
-                        shape(reference.admit(leaf, step.toLong())) to shape(subject.admit(leaf, step.toLong()))
+                        shape(reference.admit(leaf, setOf(leaf), step.toLong())) to shape(subject.admit(leaf, setOf(leaf), step.toLong()))
                     }
                     kind == 5 -> {
                         val draft = drafts[rng.nextInt(drafts.size)]

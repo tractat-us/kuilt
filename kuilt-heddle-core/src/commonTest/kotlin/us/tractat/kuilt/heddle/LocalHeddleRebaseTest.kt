@@ -42,7 +42,7 @@ class LocalHeddleRebaseTest {
                 reconcileCapacity(1L)
                 repeat(3) {
                     val lease = (acquire(setOf(a, b, c), setOf(a, b, c), startedAt = 0L) as AcquireOutcome.Acquired).lease
-                    complete(lease.id, actualCost = 1L)
+                    complete(lease.id, actualCost = 1L, waiting = emptySet())
                 }
             }
 
