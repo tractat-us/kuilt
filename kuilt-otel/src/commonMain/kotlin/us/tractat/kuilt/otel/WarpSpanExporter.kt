@@ -784,7 +784,9 @@ public class WarpSpanExporter(
      * span nothing would hold (#3441). So the add is tried first, on the unstamped span, and its
      * refusal is thrown as a [CeilingRefusal] before the clock ticks. The trial is exact rather than a
      * check that approximates it: an add's dot comes from the set's context and [replica] alone,
-     * never from the element, so the trial refuses exactly when the real add would. The clock has no
+     * never from the element, and the trial and the real add run on the same receiver (the set after
+     * the eviction, built first as a pure local), so the trial refuses exactly when the real add
+     * would, even when the store's dots are not all in its context. The clock has no
      * way to take a tick back, which is why the trial comes before it rather than a rollback after.
      *
      * The eviction and the real add are then built on locals, and [spans] is written once, after
@@ -792,14 +794,14 @@ public class WarpSpanExporter(
      * add is a log line and a field write that cannot throw; keep it that way.
      */
     private fun insert(span: SpanRecord, clock: WarpCausalClock?): Stamping {
+        val victim = if (spans.elements.size >= maxSpans) victimOf(spans.elements) else null
+        val evicted = victim?.let { chosen -> spans.piece { it.remove(chosen) } } ?: spans
         try {
-            spans.add(replica, span)
+            evicted.add(replica, span)
         } catch (ceiling: ArithmeticException) {
             throw CeilingRefusal(ceiling)
         }
         val stamping = stampOf(span, clock)
-        val victim = if (spans.elements.size >= maxSpans) victimOf(spans.elements) else null
-        val evicted = victim?.let { chosen -> spans.piece { it.remove(chosen) } } ?: spans
         val added = evicted.piece { it.add(replica, stamping.span) }
         victim?.let(::logEviction)
         spans = added

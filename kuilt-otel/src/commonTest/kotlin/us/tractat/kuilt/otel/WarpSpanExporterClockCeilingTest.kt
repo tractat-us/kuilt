@@ -59,8 +59,10 @@ class WarpSpanExporterClockCeilingTest {
 
     private fun peerSetAtTheCeiling(held: ORSet<SpanRecord>): ORSet<SpanRecord> = spanSetAtTheCeiling(held, local)
 
-    private fun ORSet<SpanRecord>.refusesAnAdd(): Boolean =
-        assertFailsWith<ArithmeticException> { add(local, span(EXTRA)) }.let { true }
+    /** Asserts that an add on this set is refused; the rig's precondition. */
+    private fun ORSet<SpanRecord>.assertRefusesAnAdd() {
+        assertFailsWith<ArithmeticException> { add(local, span(EXTRA)) }
+    }
 
     private fun RecordingStore.mutations(): Int = operations().count { it.kind != StoreOpKind.READ }
 
@@ -90,7 +92,7 @@ class WarpSpanExporterClockCeilingTest {
             { assertEquals(List(CAP) { ExportResult.Success }, filled, "the rig's spans land") },
             { assertEquals(ExportResult.Success, merged, "the rig's merge lands") },
             { assertEquals(CAP, exporter.snapshot().elements.size, "the rig's buffer is full") },
-            { assertEquals(true, exporter.snapshot().refusesAnAdd(), "the rig's set is at the ceiling for this replica") },
+            { exporter.snapshot().assertRefusesAnAdd() },
         )
         return exporter
     }
