@@ -179,9 +179,9 @@ public class WarpTelemetry(
     }
 
     /** Bridge the metric exporter's own result type into the one this facade reports. */
-    private fun MetricExportResult.asExportResult(): ExportResult = when (this) {
-        is MetricExportResult.Success -> ExportResult.Success
-        is MetricExportResult.Failure -> ExportResult.Failure(cause)
+    private fun MetricWriteResult.asExportResult(): ExportResult = when (this) {
+        is MetricWriteResult.Success -> ExportResult.Success
+        is MetricWriteResult.Failure -> ExportResult.Failure(cause)
     }
 }
 

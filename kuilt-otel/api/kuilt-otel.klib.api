@@ -249,20 +249,33 @@ sealed interface us.tractat.kuilt.otel/ExportResult { // us.tractat.kuilt.otel/E
 }
 
 sealed interface us.tractat.kuilt.otel/MetricExportResult { // us.tractat.kuilt.otel/MetricExportResult|null[0]
-    final class Failure : us.tractat.kuilt.otel/MetricExportResult { // us.tractat.kuilt.otel/MetricExportResult.Failure|null[0]
-        constructor <init>(kotlin.collections/List<kotlin/Throwable>) // us.tractat.kuilt.otel/MetricExportResult.Failure.<init>|<init>(kotlin.collections.List<kotlin.Throwable>){}[0]
-        constructor <init>(kotlin/Throwable) // us.tractat.kuilt.otel/MetricExportResult.Failure.<init>|<init>(kotlin.Throwable){}[0]
+    final class Partial : us.tractat.kuilt.otel/MetricExportResult { // us.tractat.kuilt.otel/MetricExportResult.Partial|null[0]
+        constructor <init>(kotlin.collections/List<us.tractat.kuilt.otel/MetricUpdate>, kotlin.collections/List<kotlin/Throwable>) // us.tractat.kuilt.otel/MetricExportResult.Partial.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.otel.MetricUpdate>;kotlin.collections.List<kotlin.Throwable>){}[0]
 
-        final val cause // us.tractat.kuilt.otel/MetricExportResult.Failure.cause|{}cause[0]
-            final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.otel/MetricExportResult.Failure.cause.<get-cause>|<get-cause>(){}[0]
-        final val causes // us.tractat.kuilt.otel/MetricExportResult.Failure.causes|{}causes[0]
-            final fun <get-causes>(): kotlin.collections/List<kotlin/Throwable> // us.tractat.kuilt.otel/MetricExportResult.Failure.causes.<get-causes>|<get-causes>(){}[0]
+        final val causes // us.tractat.kuilt.otel/MetricExportResult.Partial.causes|{}causes[0]
+            final fun <get-causes>(): kotlin.collections/List<kotlin/Throwable> // us.tractat.kuilt.otel/MetricExportResult.Partial.causes.<get-causes>|<get-causes>(){}[0]
+        final val uncounted // us.tractat.kuilt.otel/MetricExportResult.Partial.uncounted|{}uncounted[0]
+            final fun <get-uncounted>(): kotlin.collections/List<us.tractat.kuilt.otel/MetricUpdate> // us.tractat.kuilt.otel/MetricExportResult.Partial.uncounted.<get-uncounted>|<get-uncounted>(){}[0]
 
-        final fun component1(): kotlin.collections/List<kotlin/Throwable> // us.tractat.kuilt.otel/MetricExportResult.Failure.component1|component1(){}[0]
-        final fun copy(kotlin.collections/List<kotlin/Throwable> = ...): us.tractat.kuilt.otel/MetricExportResult.Failure // us.tractat.kuilt.otel/MetricExportResult.Failure.copy|copy(kotlin.collections.List<kotlin.Throwable>){}[0]
-        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricExportResult.Failure.equals|equals(kotlin.Any?){}[0]
-        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricExportResult.Failure.hashCode|hashCode(){}[0]
-        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricExportResult.Failure.toString|toString(){}[0]
+        final fun component1(): kotlin.collections/List<us.tractat.kuilt.otel/MetricUpdate> // us.tractat.kuilt.otel/MetricExportResult.Partial.component1|component1(){}[0]
+        final fun component2(): kotlin.collections/List<kotlin/Throwable> // us.tractat.kuilt.otel/MetricExportResult.Partial.component2|component2(){}[0]
+        final fun copy(kotlin.collections/List<us.tractat.kuilt.otel/MetricUpdate> = ..., kotlin.collections/List<kotlin/Throwable> = ...): us.tractat.kuilt.otel/MetricExportResult.Partial // us.tractat.kuilt.otel/MetricExportResult.Partial.copy|copy(kotlin.collections.List<us.tractat.kuilt.otel.MetricUpdate>;kotlin.collections.List<kotlin.Throwable>){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricExportResult.Partial.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricExportResult.Partial.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricExportResult.Partial.toString|toString(){}[0]
+    }
+
+    final class Refused : us.tractat.kuilt.otel/MetricExportResult { // us.tractat.kuilt.otel/MetricExportResult.Refused|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricOverflowException) // us.tractat.kuilt.otel/MetricExportResult.Refused.<init>|<init>(us.tractat.kuilt.otel.MetricOverflowException){}[0]
+
+        final val overflow // us.tractat.kuilt.otel/MetricExportResult.Refused.overflow|{}overflow[0]
+            final fun <get-overflow>(): us.tractat.kuilt.otel/MetricOverflowException // us.tractat.kuilt.otel/MetricExportResult.Refused.overflow.<get-overflow>|<get-overflow>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricOverflowException // us.tractat.kuilt.otel/MetricExportResult.Refused.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricOverflowException = ...): us.tractat.kuilt.otel/MetricExportResult.Refused // us.tractat.kuilt.otel/MetricExportResult.Refused.copy|copy(us.tractat.kuilt.otel.MetricOverflowException){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricExportResult.Refused.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricExportResult.Refused.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricExportResult.Refused.toString|toString(){}[0]
     }
 
     final object Success : us.tractat.kuilt.otel/MetricExportResult { // us.tractat.kuilt.otel/MetricExportResult.Success|null[0]
@@ -528,6 +541,27 @@ sealed interface us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/M
     }
 }
 
+sealed interface us.tractat.kuilt.otel/MetricWriteResult { // us.tractat.kuilt.otel/MetricWriteResult|null[0]
+    final class Failure : us.tractat.kuilt.otel/MetricWriteResult { // us.tractat.kuilt.otel/MetricWriteResult.Failure|null[0]
+        constructor <init>(kotlin/Throwable) // us.tractat.kuilt.otel/MetricWriteResult.Failure.<init>|<init>(kotlin.Throwable){}[0]
+
+        final val cause // us.tractat.kuilt.otel/MetricWriteResult.Failure.cause|{}cause[0]
+            final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.otel/MetricWriteResult.Failure.cause.<get-cause>|<get-cause>(){}[0]
+
+        final fun component1(): kotlin/Throwable // us.tractat.kuilt.otel/MetricWriteResult.Failure.component1|component1(){}[0]
+        final fun copy(kotlin/Throwable = ...): us.tractat.kuilt.otel/MetricWriteResult.Failure // us.tractat.kuilt.otel/MetricWriteResult.Failure.copy|copy(kotlin.Throwable){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricWriteResult.Failure.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricWriteResult.Failure.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricWriteResult.Failure.toString|toString(){}[0]
+    }
+
+    final object Success : us.tractat.kuilt.otel/MetricWriteResult { // us.tractat.kuilt.otel/MetricWriteResult.Success|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricWriteResult.Success.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricWriteResult.Success.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricWriteResult.Success.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.otel/SpanStatus { // us.tractat.kuilt.otel/SpanStatus|null[0]
     final class Error : us.tractat.kuilt.otel/SpanStatus { // us.tractat.kuilt.otel/SpanStatus.Error|null[0]
         constructor <init>(kotlin/String) // us.tractat.kuilt.otel/SpanStatus.Error.<init>|<init>(kotlin.String){}[0]
@@ -781,13 +815,11 @@ final class us.tractat.kuilt.otel/MetricKey { // us.tractat.kuilt.otel/MetricKey
     }
 }
 
-final class us.tractat.kuilt.otel/MetricKindUnreadException : us.tractat.kuilt.otel/MetricNotCountedException { // us.tractat.kuilt.otel/MetricKindUnreadException|null[0]
+final class us.tractat.kuilt.otel/MetricKindUnreadException : kotlin/Exception { // us.tractat.kuilt.otel/MetricKindUnreadException|null[0]
     final val cause // us.tractat.kuilt.otel/MetricKindUnreadException.cause|{}cause[0]
         final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.otel/MetricKindUnreadException.cause.<get-cause>|<get-cause>(){}[0]
     final val storeKey // us.tractat.kuilt.otel/MetricKindUnreadException.storeKey|{}storeKey[0]
         final fun <get-storeKey>(): us.tractat.kuilt.store/StoreKey // us.tractat.kuilt.otel/MetricKindUnreadException.storeKey.<get-storeKey>|<get-storeKey>(){}[0]
-
-    final fun carries(us.tractat.kuilt.otel/MetricUpdate): kotlin/Boolean // us.tractat.kuilt.otel/MetricKindUnreadException.carries|carries(us.tractat.kuilt.otel.MetricUpdate){}[0]
 }
 
 final class us.tractat.kuilt.otel/MetricSumOverflowException : us.tractat.kuilt.otel/MetricOverflowException { // us.tractat.kuilt.otel/MetricSumOverflowException|null[0]
@@ -988,14 +1020,14 @@ final class us.tractat.kuilt.otel/WarpMetricExporter { // us.tractat.kuilt.otel/
     final fun sumSnapshot(us.tractat.kuilt.otel/MetricKey): us.tractat.kuilt.crdt/GCounter // us.tractat.kuilt.otel/WarpMetricExporter.sumSnapshot|sumSnapshot(us.tractat.kuilt.otel.MetricKey){}[0]
     final fun sumValue(us.tractat.kuilt.otel/MetricKey): kotlin/Long // us.tractat.kuilt.otel/WarpMetricExporter.sumValue|sumValue(us.tractat.kuilt.otel.MetricKey){}[0]
     final suspend fun addCardinality(us.tractat.kuilt.otel/MetricKey, kotlin/String): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.addCardinality|addCardinality(us.tractat.kuilt.otel.MetricKey;kotlin.String){}[0]
-    final suspend fun clear(): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.clear|clear(){}[0]
+    final suspend fun clear(): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.clear|clear(){}[0]
     final suspend fun incrementSum(us.tractat.kuilt.otel/MetricKey, kotlin/Long = ...): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.incrementSum|incrementSum(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
     final suspend fun incrementSumDouble(us.tractat.kuilt.otel/MetricKey, kotlin/Double): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.incrementSumDouble|incrementSumDouble(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
-    final suspend fun mergeCardinality(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/HyperLogLog): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeCardinality|mergeCardinality(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.HyperLogLog){}[0]
-    final suspend fun mergeGauge(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/LWWRegister<kotlin/Double>): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeGauge|mergeGauge(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.LWWRegister<kotlin.Double>){}[0]
-    final suspend fun mergeHistogram(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/DDSketch): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeHistogram|mergeHistogram(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.DDSketch){}[0]
-    final suspend fun mergeSum(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounter): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeSum|mergeSum(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.GCounter){}[0]
-    final suspend fun mergeSumDouble(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounterDouble): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeSumDouble|mergeSumDouble(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.GCounterDouble){}[0]
+    final suspend fun mergeCardinality(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/HyperLogLog): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeCardinality|mergeCardinality(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.HyperLogLog){}[0]
+    final suspend fun mergeGauge(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/LWWRegister<kotlin/Double>): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeGauge|mergeGauge(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.LWWRegister<kotlin.Double>){}[0]
+    final suspend fun mergeHistogram(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/DDSketch): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeHistogram|mergeHistogram(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.DDSketch){}[0]
+    final suspend fun mergeSum(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounter): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeSum|mergeSum(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.GCounter){}[0]
+    final suspend fun mergeSumDouble(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounterDouble): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeSumDouble|mergeSumDouble(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.GCounterDouble){}[0]
     final suspend fun record(kotlin.collections/List<us.tractat.kuilt.otel/MetricUpdate>): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.record|record(kotlin.collections.List<us.tractat.kuilt.otel.MetricUpdate>){}[0]
     final suspend fun recordHistogram(us.tractat.kuilt.otel/MetricKey, kotlin/Double): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.recordHistogram|recordHistogram(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
     final suspend fun recover() // us.tractat.kuilt.otel/WarpMetricExporter.recover|recover(){}[0]
@@ -1037,9 +1069,7 @@ final class us.tractat.kuilt.otel/WarpTelemetry { // us.tractat.kuilt.otel/WarpT
     final suspend fun recover() // us.tractat.kuilt.otel/WarpTelemetry.recover|recover(){}[0]
 }
 
-sealed class us.tractat.kuilt.otel/MetricNotCountedException : kotlin/Exception // us.tractat.kuilt.otel/MetricNotCountedException|null[0]
-
-sealed class us.tractat.kuilt.otel/MetricOverflowException : us.tractat.kuilt.otel/MetricNotCountedException { // us.tractat.kuilt.otel/MetricOverflowException|null[0]
+sealed class us.tractat.kuilt.otel/MetricOverflowException : kotlin/ArithmeticException { // us.tractat.kuilt.otel/MetricOverflowException|null[0]
     abstract val key // us.tractat.kuilt.otel/MetricOverflowException.key|{}key[0]
         abstract fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricOverflowException.key.<get-key>|<get-key>(){}[0]
 }

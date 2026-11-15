@@ -69,26 +69,26 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * ## Key inversion
  *
  * Every mutating method — [incrementSum], [incrementSumDouble], [setGauge], [addCardinality],
- * [recordHistogram], their `merge*` twins, and the batch form [record] — returns [MetricExportResult.Success] only once
- * the updated CRDT is **durably written to [DurableStore]**, never when it is delivered to any
- * backend. Delivery is asynchronous and eventually consistent.
+ * [recordHistogram], their `merge*` twins, the batch form [record], and [clear] — reports success
+ * only once the updated CRDT is **durably written to [DurableStore]**, never when it is delivered to
+ * any backend. Delivery is asynchronous and eventually consistent.
  *
- * A [MetricExportResult.Failure] whose causes are the store's own refusals means "not yet
- * durable", not "not counted": the in-memory CRDT keeps the change, and the next successful write
- * of that kind persists it. Retrying a failed [incrementSum] therefore adds it twice.
+ * The two families return different types, because retrying them means different things:
  *
- * A cause that is a [MetricNotCountedException] means the opposite, and a Failure lists those
- * first, so a refused write of one kind never hides one. There are two:
+ * - [record] and the single-point mutators return a [MetricExportResult]. Counting an update twice
+ *   is wrong, so the result says which updates a retry may send. [MetricExportResult.Refused] is
+ *   an overflow: nothing was counted, and the same call would be refused again.
+ *   [MetricExportResult.Partial] lists in `uncounted` exactly the updates of a kind whose read the
+ *   store refused (#3390), so recording that list again counts each of them once. Every other
+ *   update of a Partial was counted, in memory, and is not yet on disk where its write was
+ *   refused; the next successful write of that kind persists it, so retrying it counts it twice.
+ * - The `merge*` methods and [clear] return a [MetricWriteResult]. A merge is a lattice join and a
+ *   clear is a delete, so calling either again is always safe and the result needs no more than
+ *   [MetricWriteResult.Failure]'s cause. A merge over a kind whose read is refused merges nothing,
+ *   and its cause is a [MetricKindUnreadException].
  *
- * - A [MetricOverflowException]: a sum increment or histogram update would carry one of this
- *   replica's counts past [Long.MAX_VALUE] (#3318, #3354). The whole call was refused before
- *   anything was applied, and it is its Failure's only cause.
- * - A [MetricKindUnreadException]: a kind whose persisted series no read has joined yet, because
- *   the store refused the read (#3390). The call's updates of that kind, the ones
- *   [MetricKindUnreadException.carries] names, were not applied and its key was not written; the
- *   call's other kinds went ahead. A kind is read by [recover], or by its own first turn on an
- *   exporter that skipped [recover], and again by every turn while the store refuses. See
- *   [recover].
+ * A kind is read by [recover], or by its own first turn on an exporter that skipped [recover], and
+ * again by every turn while the store refuses. See [recover].
  *
  * ## Batches
  *
@@ -116,7 +116,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * one outage, and — the part a boolean latch gets wrong — a store that refuses one key while
  * accepting another stays a single outage rather than re-reporting on every alternation. The next
  * line comes only once the store has taken back every key it was refusing. Every failure is still
- * returned to the caller as [MetricExportResult.Failure] carrying the cause, so nothing is hidden
+ * returned to the caller, carrying the cause, so nothing is hidden
  * from a programmatic reader — only from the log. See `durableWriteOutage`.
  *
  * ## Thread safety
@@ -414,9 +414,10 @@ public class WarpMetricExporter(
      * A **refused** read, a `CancellationException` the [store] mints at this live caller from its
      * own `withTimeout` included, costs its kind alone and **fails closed** (#3390): every later
      * call that would write that kind, [record] and the `merge*` methods, reads it again first, and
-     * while the read is still refused admits **nothing** of that kind, writes nothing of it, and
-     * returns a [MetricExportResult.Failure] led by a [MetricKindUnreadException] for the kind.
-     * Updates of the other kinds in the same batch go ahead. The read that lands joins the
+     * while the read is still refused admits **nothing** of that kind and writes nothing of it. A
+     * [record] returns a [MetricExportResult.Partial] listing those updates as `uncounted`, and a
+     * `merge*` a [MetricWriteResult.Failure]; either carries a [MetricKindUnreadException] for the
+     * kind. Updates of the other kinds in the same batch go ahead. The read that lands joins the
      * persisted series into memory and that turn runs. Until then the readers see what memory
      * already held of the kind: nothing, unless an earlier read of it in this process landed, in
      * which case memory keeps that read's series and the refusal changes none of them. Starting
@@ -549,7 +550,7 @@ public class WarpMetricExporter(
         StoredKind.entries.filter { it in kinds && it in owed }.forEach { kind ->
             when (val read = readKind(kind)) {
                 is PersistedRead.Owed -> {
-                    refused[kind] = MetricKindUnreadException(kind, read.cause)
+                    refused[kind] = MetricKindUnreadException(kind.storeKey, read.cause)
                     logRefusal(kind, read)
                 }
                 PersistedRead.Settled -> logger.debug { "${kind.storeKey.name}: persisted series read; writes of the kind go ahead" }
@@ -565,14 +566,14 @@ public class WarpMetricExporter(
 
     /**
      * Run [turn] under [writeMutex] once [kind]'s persisted series has been read; while that read is
-     * still refused, return its [MetricExportResult.Failure] without running [turn]. The `merge*`
+     * still refused, return a [MetricWriteResult.Failure] without running [turn]. The `merge*`
      * methods' turn; [record] reads per kind itself, since a batch spans kinds.
      */
-    private suspend inline fun writeTurn(kind: StoredKind, turn: () -> MetricExportResult): MetricExportResult =
+    private suspend inline fun writeTurn(kind: StoredKind, turn: () -> MetricWriteResult): MetricWriteResult =
         writeMutex.withLock {
             val refused = refusedReads(setOf(kind))
             countRefused(refused)
-            refused[kind]?.let { MetricExportResult.Failure(it) } ?: turn()
+            refused[kind]?.let { MetricWriteResult.Failure(it) } ?: turn()
         }
 
     /** Whether this sketch can live in [histograms]: [histogramPrototype]'s exact configuration. */
@@ -599,13 +600,13 @@ public class WarpMetricExporter(
      * The keys are deleted rather than rewritten empty: there is no retained context to
      * preserve here, so deleting reclaims the bytes and [recover] treats an absent key as empty.
      *
-     * **Never throws.** A refused delete returns [MetricExportResult.Failure]; the in-memory
+     * **Never throws.** A refused delete returns [MetricWriteResult.Failure]; the in-memory
      * maps are cleared either way, so a retry converges. No kind owes a read after a clear, so a
      * kind whose delete was refused is not read back by its own next write, which replaces what
      * the delete left and so finishes the clear for that kind. Until that write lands the dropped
      * series are still on disk, though: a [recover] called before it reads them back into memory,
      * where the kind's next write persists them again, and so does the first [recover] after a
-     * restart. Retrying the clear until it returns [MetricExportResult.Success] is what removes them.
+     * restart. Retrying the clear until it returns [MetricWriteResult.Success] is what removes them.
      *
      * Its failure line is **not** deduplicated against the durable-write outage latch, and that is
      * deliberate on both arms: a `clear` is caller-initiated rather than retried, so it cannot
@@ -618,7 +619,7 @@ public class WarpMetricExporter(
      * **permanent**: nothing rewrites a deleted key unless that metric kind is used afresh, so a
      * restart brings back every pre-clear series (#2232).
      */
-    public suspend fun clear(): MetricExportResult = writeMutex.withLock {
+    public suspend fun clear(): MetricWriteResult = writeMutex.withLock {
         lock.withLock {
             sums.clear()
             sumsDouble.clear()
@@ -645,12 +646,12 @@ public class WarpMetricExporter(
         deleted.fold(
             onSuccess = {
                 persistence.acknowledged(CLEAR_WORK)
-                MetricExportResult.Success
+                MetricWriteResult.Success
             },
             onFailure = { cause ->
                 persistence.failed(CLEAR_WORK, cause)
                 logger.error(cause) { "otel.metrics: durable delete failed during clear" }
-                MetricExportResult.Failure(cause)
+                MetricWriteResult.Failure(cause)
             },
         )
     }
@@ -673,21 +674,22 @@ public class WarpMetricExporter(
      * - Returns [MetricExportResult.Success] only once **every** kind the batch touched is durably
      *   written. Nothing is held back waiting for more updates; the batch is whatever the caller
      *   had in hand, and it is on disk before this returns.
-     * - Every touched kind's write is **attempted**, even after one is refused. Stopping at the first
-     *   refusal would leave the later kinds off disk, which applying the updates one by one never
-     *   does. The [MetricExportResult.Failure] carries every kind's verdict: first a
-     *   [MetricKindUnreadException] per unread kind, then each refused write's cause, each group in
-     *   the fixed kind order sums, double sums, gauges, cardinalities, histograms.
      * - A kind whose persisted series no read has joined yet — [recover] was refused, or never
      *   called — is read first. While that read is refused, the batch's updates **of that kind**
-     *   are not counted: not applied, and the kind is not written. Its verdict is a
-     *   [MetricKindUnreadException], whose `carries` names those updates; the other kinds go ahead.
-     *   Recording exactly those updates again counts each once.
-     * - A refused write means "not yet durable", not "not counted": every admitted update stays in
-     *   memory, and the next successful write of a refused kind persists it. So the batch is **not
-     *   atomic** on disk — a kind the store took is durable even when another kind was refused —
-     *   and retrying an update of a refused write counts it twice, exactly as retrying a failed
-     *   [incrementSum] does. A refused batch, below, is the other Failure that means "not counted".
+     *   are not counted: not applied, and the kind's write is never attempted. The other kinds go
+     *   ahead. The result is a [MetricExportResult.Partial] whose `uncounted` is exactly those
+     *   updates, in batch order, so recording that list again counts each of them once; its
+     *   `causes` holds a [MetricKindUnreadException] per unread kind.
+     * - Every write of a kind that was read is **attempted**, even after one is refused. Stopping at
+     *   the first refusal would leave the later kinds off disk, which applying the updates one by
+     *   one never does. A refused write makes the result a [MetricExportResult.Partial] too, with
+     *   the store's refusal among its `causes`, after the unread kinds' and in the fixed kind order
+     *   sums, double sums, gauges, cardinalities, histograms.
+     * - A refused write means "not yet durable", not "not counted": its updates stay in memory, are
+     *   not in `uncounted`, and the next successful write of a refused kind persists them. So the
+     *   batch is **not atomic** on disk — a kind the store took is durable even when another kind
+     *   was refused — and retrying an update of a refused write counts it twice, exactly as
+     *   retrying an [incrementSum] whose write was refused does.
      * - On [health] each kind's write is its own turn: a batch counts one turn per kind it
      *   touched, and a partial refusal moves both `acknowledged` and `failed`. An unread kind's
      *   turn counts as failed. A refused batch is no turn of any kind and moves nothing.
@@ -716,10 +718,10 @@ public class WarpMetricExporter(
      *    [MetricUpdate.AddExponentialHistogram] it is this replica's slot in each bucket the update
      *    touches, and in the sketch's zero and overflow counters, and also the sum of counts that
      *    fold onto one bucket (#3354). A weighted count can get there on its own. Such a batch is
-     *    **refused**: it returns a [MetricExportResult.Failure] whose only cause is a
-     *    [MetricOverflowException] naming the series, a [MetricSumOverflowException] or a
-     *    [MetricHistogramOverflowException], and nothing from it is applied or written. The refusal
-     *    is logged at WARN the first time a series causes one and at DEBUG after that.
+     *    **refused**: it returns a [MetricExportResult.Refused] whose `overflow` names the series,
+     *    a [MetricSumOverflowException] or a [MetricHistogramOverflowException], and nothing from it
+     *    is applied or written, the kinds that were read included. The refusal is logged at WARN the
+     *    first time a series causes one and at DEBUG after that.
      *
      * So neither a bad histogram scale nor an overflow leaves a batch applied half-way, and the
      * one-by-one equivalence above holds for every batch this accepts.
@@ -757,17 +759,19 @@ public class WarpMetricExporter(
                 // WARN once per series: a saturated delta series is refused again on every export.
                 val line = { "WarpMetricExporter: batch of ${updates.size} refused, nothing applied: ${refused.message}" }
                 if (firstRefusal) logger.warn(line) else logger.debug(line)
-                return@withLock MetricExportResult.Failure(refused)
+                return@withLock MetricExportResult.Refused(refused)
             }
             // Past the overflow check, so this is a turn of every kind the batch touched.
             countRefused(unread)
-            val notDurable = writes.mapNotNull { write ->
-                (persist(write.kind.storeKey, write.encoded, write.lastKey) as? MetricExportResult.Failure)?.cause
-            }
-            // What was not counted leads, so a caller reading only `cause` never takes an uncounted
-            // update for a counted one that is merely not yet on disk.
+            val notDurable = writes.mapNotNull { write -> persist(write.kind.storeKey, write.encoded, write.lastKey) }
             val causes = unread.values + notDurable
-            if (causes.isEmpty()) MetricExportResult.Success else MetricExportResult.Failure(causes)
+            if (causes.isEmpty()) {
+                MetricExportResult.Success
+            } else {
+                // Only the unread kinds' updates: every other update was applied, so a retry of it
+                // would count it twice.
+                MetricExportResult.Partial(updates.filter { it.storedKind in unread }, causes)
+            }
         }
     }
 
@@ -949,8 +953,8 @@ public class WarpMetricExporter(
      * idempotent. Sequential calls to [incrementSum] each *do* add to the total, which
      * is the correct cumulative semantics.
      *
-     * Returns a [MetricExportResult.Failure] whose cause is a [MetricSumOverflowException], having
-     * applied and written nothing, when this replica's count for [key] cannot take [by] more
+     * Returns a [MetricExportResult.Refused] whose `overflow` is a [MetricSumOverflowException],
+     * having applied and written nothing, when this replica's count for [key] cannot take [by] more
      * without passing [Long.MAX_VALUE].
      */
     public suspend fun incrementSum(key: MetricKey, by: Long = 1L): MetricExportResult =
@@ -960,9 +964,9 @@ public class WarpMetricExporter(
      * Merge a remote [GCounter] snapshot into this exporter's sum for [key].
      *
      * Idempotent: merging the same snapshot twice produces the same result.
-     * Returns [MetricExportResult.Success] after the durable write.
+     * Returns [MetricWriteResult.Success] after the durable write.
      */
-    public suspend fun mergeSum(key: MetricKey, remote: GCounter): MetricExportResult =
+    public suspend fun mergeSum(key: MetricKey, remote: GCounter): MetricWriteResult =
         writeTurn(StoredKind.SUMS) {
             val encoded = lock.withLock {
                 val current = sums[key] ?: GCounter.ZERO
@@ -1002,9 +1006,9 @@ public class WarpMetricExporter(
      * Merge a remote [GCounterDouble] snapshot into this exporter's double-sum for [key].
      *
      * Idempotent: merging the same snapshot twice produces the same result.
-     * Returns [MetricExportResult.Success] after the durable write.
+     * Returns [MetricWriteResult.Success] after the durable write.
      */
-    public suspend fun mergeSumDouble(key: MetricKey, remote: GCounterDouble): MetricExportResult =
+    public suspend fun mergeSumDouble(key: MetricKey, remote: GCounterDouble): MetricWriteResult =
         writeTurn(StoredKind.SUMS_DOUBLE) {
             val encoded = lock.withLock {
                 val current = sumsDouble[key] ?: GCounterDouble.ZERO
@@ -1043,12 +1047,12 @@ public class WarpMetricExporter(
     /**
      * Merge a remote [LWWRegister] snapshot into this exporter's gauge for [key].
      *
-     * Idempotent. Returns [MetricExportResult.Success] after the durable write.
+     * Idempotent. Returns [MetricWriteResult.Success] after the durable write.
      */
     public suspend fun mergeGauge(
         key: MetricKey,
         remote: LWWRegister<Double>,
-    ): MetricExportResult = writeTurn(StoredKind.GAUGES) {
+    ): MetricWriteResult = writeTurn(StoredKind.GAUGES) {
         val encoded = lock.withLock {
             val current = gauges[key] ?: LWWRegister.empty<Double>()
             gauges[key] = current.piece(remote)
@@ -1085,13 +1089,13 @@ public class WarpMetricExporter(
      * Merge a remote [HyperLogLog] snapshot into this exporter's sketch for [key].
      *
      * The join is element-wise max, so duplicates across replicas are automatically
-     * deduplicated. Idempotent. Returns [MetricExportResult.Success] after the durable
+     * deduplicated. Idempotent. Returns [MetricWriteResult.Success] after the durable
      * write.
      */
     public suspend fun mergeCardinality(
         key: MetricKey,
         remote: HyperLogLog,
-    ): MetricExportResult = writeTurn(StoredKind.CARDINALITIES) {
+    ): MetricWriteResult = writeTurn(StoredKind.CARDINALITIES) {
         val encoded = lock.withLock {
             val current = cardinalities[key] ?: HyperLogLog.empty()
             cardinalities[key] = current.piece(remote)
@@ -1122,7 +1126,7 @@ public class WarpMetricExporter(
      * Sequential [recordHistogram] calls each *do* count — the correct cumulative
      * distribution semantics.
      *
-     * Returns a [MetricExportResult.Failure] whose cause is a [MetricHistogramOverflowException],
+     * Returns a [MetricExportResult.Refused] whose `overflow` is a [MetricHistogramOverflowException],
      * having applied and written nothing, when this replica's slot for [value] is already at
      * [Long.MAX_VALUE].
      *
@@ -1135,14 +1139,14 @@ public class WarpMetricExporter(
      * Merge a remote [DDSketch] snapshot into this exporter's histogram for [key].
      *
      * Idempotent and lossless: the merged sketch equals the sketch of the combined
-     * measurement stream. Returns [MetricExportResult.Success] after the durable write.
+     * measurement stream. Returns [MetricWriteResult.Success] after the durable write.
      *
      * @throws IllegalArgumentException if [remote]'s configuration — relative accuracy,
      *   `minIndexedValue` and `maxIndexedValue` — is not exactly [histogramPrototype]'s. Every
      *   series here holds that configuration, which is what lets [histogramScale] describe them
      *   all; a fresh key does not take a foreign one either.
      */
-    public suspend fun mergeHistogram(key: MetricKey, remote: DDSketch): MetricExportResult {
+    public suspend fun mergeHistogram(key: MetricKey, remote: DDSketch): MetricWriteResult {
         // Validation stays outside the mutex: it throws by contract, and a throwing caller has no
         // business holding the durable-write section.
         require(remote.hasPrototypeConfiguration()) {
@@ -1213,20 +1217,23 @@ public class WarpMetricExporter(
 
     // ── Persistence (called outside lock) ────────────────────────────────────
 
-    private suspend fun persistSums(encoded: ByteArray, key: MetricKey): MetricExportResult =
-        persist(SUM_STORE_KEY, encoded, key)
+    private suspend fun persistSums(encoded: ByteArray, key: MetricKey): MetricWriteResult =
+        persist(SUM_STORE_KEY, encoded, key).asWriteResult()
 
-    private suspend fun persistSumsDouble(encoded: ByteArray, key: MetricKey): MetricExportResult =
-        persist(SUM_DOUBLE_STORE_KEY, encoded, key)
+    private suspend fun persistSumsDouble(encoded: ByteArray, key: MetricKey): MetricWriteResult =
+        persist(SUM_DOUBLE_STORE_KEY, encoded, key).asWriteResult()
 
-    private suspend fun persistGauges(encoded: ByteArray, key: MetricKey): MetricExportResult =
-        persist(GAUGE_STORE_KEY, encoded, key)
+    private suspend fun persistGauges(encoded: ByteArray, key: MetricKey): MetricWriteResult =
+        persist(GAUGE_STORE_KEY, encoded, key).asWriteResult()
 
-    private suspend fun persistCardinalities(encoded: ByteArray, key: MetricKey): MetricExportResult =
-        persist(CARDINALITY_STORE_KEY, encoded, key)
+    private suspend fun persistCardinalities(encoded: ByteArray, key: MetricKey): MetricWriteResult =
+        persist(CARDINALITY_STORE_KEY, encoded, key).asWriteResult()
 
-    private suspend fun persistHistograms(encoded: ByteArray, key: MetricKey): MetricExportResult =
-        persist(HISTOGRAM_STORE_KEY, encoded, key)
+    private suspend fun persistHistograms(encoded: ByteArray, key: MetricKey): MetricWriteResult =
+        persist(HISTOGRAM_STORE_KEY, encoded, key).asWriteResult()
+
+    /** A [persist] refusal, or `null` for a landed write, as a merge's result. */
+    private fun Throwable?.asWriteResult(): MetricWriteResult = this?.let { MetricWriteResult.Failure(it) } ?: MetricWriteResult.Success
 
     /**
      * The one durable write on this exporter — every mutating method funnels through here.
@@ -1239,11 +1246,12 @@ public class WarpMetricExporter(
      *
      * The throwable is **kept** on the line. Unlike a refused sweep of superseded garbage, a refused
      * durable write is the store rejecting the application's own data, and at one line per outage
-     * the trace is affordable. Every failure is returned to the caller as
-     * [MetricExportResult.Failure] carrying the cause regardless, so deduplicating the *line* hides
-     * nothing from a programmatic reader.
+     * the trace is affordable. Every failure is returned to the caller carrying the cause
+     * regardless, so deduplicating the *line* hides nothing from a programmatic reader.
+     *
+     * Returns the store's refusal, or `null` once the write landed.
      */
-    private suspend fun persist(storeKey: StoreKey, encoded: ByteArray, metricKey: MetricKey): MetricExportResult {
+    private suspend fun persist(storeKey: StoreKey, encoded: ByteArray, metricKey: MetricKey): Throwable? {
         val written = try {
             store.write(storeKey, encoded)
             Result.success(Unit)
@@ -1259,7 +1267,7 @@ public class WarpMetricExporter(
                 // The store took THIS key back. It says nothing about the others, so only this
                 // one leaves the set; the outage stays open while any key is still refused.
                 durableWriteOutage.update { it - storeKey }
-                MetricExportResult.Success
+                null
             },
             onFailure = { cause ->
                 persistence.failed(setOf(storeKey), cause)
@@ -1271,7 +1279,7 @@ public class WarpMetricExporter(
                         "WarpMetricExporter: durable write failed for metric ${metricKey.name} (${metricKey.kind})"
                     }
                 }
-                MetricExportResult.Failure(cause)
+                cause
             },
         )
     }
@@ -1365,74 +1373,85 @@ internal val MetricUpdate.storedKind: StoredKind
         is MetricUpdate.RecordHistogram, is MetricUpdate.AddExponentialHistogram -> StoredKind.HISTOGRAMS
     }
 
-/** The result of a [WarpMetricExporter] mutating call. */
+/**
+ * The result of [WarpMetricExporter.record] and of the single-point mutators built on it. Each arm
+ * says what a retry may send: counting an update twice is as wrong as dropping it.
+ */
 public sealed interface MetricExportResult {
-    /** The metric was durably written to the local store. */
+    /** Every update was counted, and every kind the call touched is durably written. */
     public data object Success : MetricExportResult
 
     /**
-     * The call did not end durable. [causes] holds every kind's verdict, never empty, and the
-     * verdicts that mean "not counted" come first, so [cause] names one whenever there is one.
-     *
-     * - A store's refusal of a write: that kind's updates were counted, in memory, and are not yet
-     *   on disk. Whether the bytes landed is indeterminate, and retrying the updates counts them
-     *   twice.
-     * - A [MetricNotCountedException]: updates that were never applied. A
-     *   [MetricOverflowException] refused the whole call before anything was applied, and is then
-     *   the only cause; retrying it is refused the same way. A [MetricKindUnreadException] names
-     *   one kind whose updates were not applied, because the store refused its read; see
-     *   [WarpMetricExporter.recover]. Recording those updates again counts each once.
+     * Nothing was counted: an update would carry one of this replica's counts past
+     * [Long.MAX_VALUE], so the whole call was refused before anything was applied or written. The
+     * same call is refused the same way again; a retry has to leave out the series [overflow] names.
      */
-    public data class Failure(public val causes: List<Throwable>) : MetricExportResult {
-        public constructor(cause: Throwable) : this(listOf(cause))
+    public data class Refused(public val overflow: MetricOverflowException) : MetricExportResult
 
+    /**
+     * The call did not end durable. [uncounted] is exactly the updates that were not applied, in
+     * call order: those of a kind whose persisted series the store refused to read (#3390). Recording
+     * [uncounted] again counts each of them once. Every other update was counted, in memory, and
+     * may not be on disk yet where its kind's write was refused, so retrying it counts it twice; the
+     * next successful write of its kind persists it.
+     *
+     * [causes] is diagnostic and never empty: a [MetricKindUnreadException] per unread kind, then
+     * the store's refusal of each write, in the fixed kind order. Whether a refused write's bytes
+     * landed is indeterminate.
+     */
+    public data class Partial(
+        public val uncounted: List<MetricUpdate>,
+        public val causes: List<Throwable>,
+    ) : MetricExportResult {
         init {
-            require(causes.isNotEmpty()) { "a Failure needs a cause" }
+            require(causes.isNotEmpty()) { "a Partial needs a cause" }
         }
-
-        /** The first of [causes]: a [MetricNotCountedException] whenever any cause is one. */
-        public val cause: Throwable get() = causes.first()
     }
 }
 
 /**
- * Why some or all of a [WarpMetricExporter] call's updates were **not counted**: nothing of them
- * reached memory or the store. Only the exporter constructs one; it arrives in a
- * [MetricExportResult.Failure]'s causes.
+ * The result of a `merge*` on [WarpMetricExporter], or of [WarpMetricExporter.clear]. A merge is a
+ * lattice join and a clear is a delete, so either may always be called again: a second merge of the
+ * same state changes nothing, and a second clear deletes what the first could not.
  */
-public sealed class MetricNotCountedException(message: String, cause: Throwable? = null) : Exception(message, cause)
+public sealed interface MetricWriteResult {
+    /** The merge or the clear is durably written. */
+    public data object Success : MetricWriteResult
+
+    /**
+     * The call did not end durable. A merge's [cause] is the store's refusal of the write, whose
+     * merged state stays in memory, or a [MetricKindUnreadException], in which case nothing was
+     * merged. A clear's is the refused delete; memory is cleared either way.
+     */
+    public data class Failure(public val cause: Throwable) : MetricWriteResult
+}
 
 /**
  * A kind of metric whose persisted series no read has joined into memory yet, because the store
- * refused the read (#3390). The call's updates of that kind, the ones [carries] names, were not
- * applied, and its store key [storeKey] was not written. The store's refusal is [cause].
+ * refused the read (#3390). Nothing of that kind was applied, and its store key [storeKey] was not
+ * written. The store's refusal is [cause]. It arrives in a [MetricExportResult.Partial]'s causes or
+ * as a [MetricWriteResult.Failure]'s cause; only the exporter constructs one.
  *
  * @property storeKey the persisted map of the kind that could not be read.
  */
 public class MetricKindUnreadException internal constructor(
-    private val kind: StoredKind,
+    public val storeKey: StoreKey,
     /** The store's refusal of the read. */
     override val cause: Throwable,
-) : MetricNotCountedException("${kind.storeKey.name}: the store refused the read of this kind, so none of its updates were counted", cause) {
-    public val storeKey: StoreKey get() = kind.storeKey
-
-    /** Whether [update] is of the kind that could not be read, and so was not counted. */
-    public fun carries(update: MetricUpdate): Boolean = update.storedKind == kind
-}
+) : Exception("${storeKey.name}: the store refused the read of this kind, so none of its updates were counted", cause)
 
 /**
  * Why a [WarpMetricExporter.record] was refused: an update would carry one of this replica's
  * counts for the series [key] past [Long.MAX_VALUE]. A wrapped count would be negative, and a
  * counter's merge, a max, would drop it, so the update would be lost everywhere with nothing to
- * say so. It arrives as the only cause of a [MetricExportResult.Failure], and the batch that carried it
- * applied nothing.
+ * say so. It arrives as a [MetricExportResult.Refused], and the batch that carried it applied nothing.
  *
  * Which kind of series [key] names is the subclass: [MetricSumOverflowException] for a sum,
  * [MetricHistogramOverflowException] for a histogram. A sum and a histogram can share a
  * [MetricKey], so a caller leaving the series out of a retry needs both. Only the exporter
  * constructs one; a consumer only receives it.
  */
-public sealed class MetricOverflowException(message: String) : MetricNotCountedException(message) {
+public sealed class MetricOverflowException(message: String) : ArithmeticException(message) {
     /** The series whose count cannot take the update. */
     public abstract val key: MetricKey
 }
