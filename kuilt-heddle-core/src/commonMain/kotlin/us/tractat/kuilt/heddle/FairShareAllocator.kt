@@ -1087,20 +1087,26 @@ public class FairShareAllocator(
      * front less the raw position at the last wake, so for a child that idles while the origin rises
      * it grows by every stretch sat out; it is wide, so it can, without nearing any ceiling.
      *
-     * The demanding state is sampled **once per scheduling round, at entry**, before any grant
-     * lands. Sampling again after the loop would mark a child that its own grants had just
-     * satisfied as "idle", making the next round a spurious wake for it.
+     * The two edges are sampled at different moments. **Idle→demand** is seen at a [schedule]
+     * call's entry, before any grant lands, and only there. **Demand→idle** is seen there and again
+     * before each later pick of the call ([markDepartures]), so a child that a grant fills is seen
+     * leaving at that grant. That second sample makes no spurious clamp: it stamps a departure, so
+     * the child comes back by the clock, and a child that stops and asks again with no grant
+     * between moves by exactly nothing (#3416 review).
      *
      * **§10.6 is therefore enforced only modulo that sampling** (issue #1715). §7.2 defines the
-     * clamp on an idle→demand *event* this peer has actually observed, and sampling once per
-     * [schedule] entry cannot see a window that opens and closes between two samples.
-     * Single-peer that is exactly right: the front moves only on this peer's own grants, all of
-     * which land after the entry sample, so an idle interval between rounds banks nothing. The
-     * escape is multi-peer — a child may idle and re-demand between this peer's rounds while
-     * *another* peer's grants advance its siblings, so this peer sees demanding→demanding and does
-     * not clamp. Accepted by design: the resulting catch-up burst is capped by this peer's holdings
-     * and the §8.2 caps, any peer that did observe the window clamps independently, and wake
-     * offsets are scheduler-local anyway, so divergence between peers is already tolerated.
+     * clamp on an idle→demand *event* this peer has actually observed, and a window that opens and
+     * closes between two samples is not seen. Single-peer, a child that stops partway through a
+     * call is seen at the grant that stopped it, and an idle interval between calls is seen at the
+     * next entry, so neither banks anything. Two windows escape. One is multi-peer: a child may
+     * idle and re-demand between this peer's rounds while *another* peer's grants advance its
+     * siblings, so this peer sees demanding→demanding and moves nothing. Accepted by design: the
+     * resulting catch-up burst is capped by this peer's holdings and the §8.2 caps, any peer that
+     * did observe the window acts on it independently, and wake memory is scheduler-local anyway,
+     * so divergence between peers is already tolerated. The other is a child that stops and asks
+     * again within one call, which needs a merge to lower its outstanding mid-call: it competes
+     * from where it stands, and at the next entry it is moved by the clock's whole run since it
+     * stopped on top of the grants it took meanwhile, which is the penalty side.
      */
     private fun clampWakers(edges: List<PolicyEdge>, wakers: Set<AttachmentId>, front: VirtualTime) {
         for (edge in edges) {
