@@ -83,11 +83,13 @@ partly refuses moves both `acknowledged` and `failed`.
 
 `failed` counts failed turns. `outstandingFailures` stays nonzero until the same work
 succeeds: a healthy sum write cannot hide a failing histogram, and a successful metric
-clear cannot prove writes work. A failed startup read or decode sets `recoveryFailed`
-for the instance's lifetime; `lastFailure` retains the latest cause after recovery.
-Bad bytes start the log buffer fresh. A store that refuses the log read instead makes
-every log turn fail, and write nothing, until a later read succeeds. That keeps the
-records on disk the read would have found.
+clear cannot prove writes work. A failed read or decode of saved state sets
+`recoveryFailed` for the instance's lifetime, whether it failed in `recover()` or when a
+later turn retried a refused read; `lastFailure` retains the latest cause after recovery.
+Bad bytes start the log and span buffers fresh. A store that refuses the read instead
+makes every log or span turn fail, and write nothing, until a later read succeeds. That
+keeps the records and spans on disk the read would have found. A span turn that read
+stops counts in `failed`, and the first span write that lands resolves it.
 A failed turn may still have saved its data, and a cancelled turn counts as neither
 acknowledged nor failed; a cancelled metric batch keeps the turns of the kinds it had
 already written. "Cancelled" means the caller was cancelled. When the store cancels
