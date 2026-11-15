@@ -1114,7 +1114,7 @@ public class LocalHeddle private constructor(
             val stepped = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
             // An activation whose weight would put its parent's weight products out of Long: the
             // ledger would take it, and every pick at that parent would then throw (#3313).
-            val overBudget = stepped != null && step is TopologyStep.Activate && !stepped.siblingWeightsFit(step.edge)
+            val overBudget = stepped != null && step is TopologyStep.Activate && !stepped.activationFitsTheBudget(step.edge)
             val next = if (overBudget) null else stepped
             if (next != null) {
                 local = next
@@ -1456,12 +1456,6 @@ public class LocalHeddle private constructor(
         /** The index of the first edge of [path] that is not ACTIVE, or `null` when every edge is. */
         private fun EntitlementLedger.firstNotActiveIndex(path: List<AttachmentId>): Int? =
             path.indexOfFirst { lifecycle(it) != Lifecycle.ACTIVE }.takeIf { it >= 0 }
-
-        /** Whether the active children beside [edge], itself included, fit [weightsFitTheBudget]. */
-        private fun EntitlementLedger.siblingWeightsFit(edge: AttachmentId): Boolean {
-            val parent = record(edge)?.parent ?: return true
-            return weightsFitTheBudget(activeChildren(parent).mapNotNull { record(it.attachment)?.weight })
-        }
 
         /** What [edge] still carries: issued, less returned and spent. `0` for an edge this ledger does not know. */
         private fun EntitlementLedger.outstanding(edge: AttachmentId): Long = edge(edge)?.outstanding ?: 0L
