@@ -51,11 +51,11 @@ jobs:
     # NOT tag pushes: tags are Maven Central releases (the maven-central job below).
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: macos-latest    # cinterop-bearing Apple targets require a Mac host — see header
-    # TEMPORARY 60 (was 30), #3464: the stage step grew 6.5 -> 18 -> 25 -> 21 min and then
-    # past the 30-min cap within a few hours on 2026-11-15, freezing snapshots (#3393). The
-    # longest job that still finished took 28 min (run 43675236913); 60 is about twice that.
-    # Lower it again once #3464 names the cause.
-    timeout-minutes: 60
+    # 30: with the run number out of every cache key but `:kuilt-base`'s (#3464), a snapshot
+    # stages in about 9 min (run 43733885157: 10 compiles executed). That is about 3x headroom.
+    # A cold cache (all ~350 compiles) took 25-30 min, so a timeout here after a cache wipe is
+    # expected once, and the next run is warm. The stamp-invariance check in ci.yml keeps it so.
+    timeout-minutes: 30
     # Job-level override of the workflow default (contents: read). issues: write
     # lets the failure-alert step below open/refresh the "publish broken" issue.
     # Scoped to THIS job only — the maven-central job keeps its own permissions.
@@ -223,8 +223,9 @@ jobs:
   maven-central:
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_to_central)
     runs-on: macos-latest    # same cinterop constraint as the publish job — Apple klibs need a Mac host
-    # TEMPORARY 60 (was 30), #3464: this job runs the same staging build as `publish` above, so
-    # a tag would hit the same 30-min cap. Lower it with the publish job's once #3464 is fixed.
+    # 60, deliberately above the snapshot job's 30: a release runs rarely, on a tag whose
+    # version is new, and may meet a cold cache. A cold staging build took 25-30 min (#3464), and
+    # a timed-out release costs far more than a long one.
     timeout-minutes: 60
     permissions:
       contents: write       # create the GitHub Release
