@@ -825,10 +825,10 @@ final class us.tractat.kuilt.otel/MetricKindUnreadException : kotlin/Exception {
 final class us.tractat.kuilt.otel/MetricSumOverflowException : us.tractat.kuilt.otel/MetricOverflowException { // us.tractat.kuilt.otel/MetricSumOverflowException|null[0]
     final val by // us.tractat.kuilt.otel/MetricSumOverflowException.by|{}by[0]
         final fun <get-by>(): kotlin/Long // us.tractat.kuilt.otel/MetricSumOverflowException.by.<get-by>|<get-by>(){}[0]
-    final val count // us.tractat.kuilt.otel/MetricSumOverflowException.count|{}count[0]
-        final fun <get-count>(): kotlin/Long // us.tractat.kuilt.otel/MetricSumOverflowException.count.<get-count>|<get-count>(){}[0]
     final val key // us.tractat.kuilt.otel/MetricSumOverflowException.key|{}key[0]
         final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricSumOverflowException.key.<get-key>|<get-key>(){}[0]
+    final val total // us.tractat.kuilt.otel/MetricSumOverflowException.total|{}total[0]
+        final fun <get-total>(): kotlin/Long? // us.tractat.kuilt.otel/MetricSumOverflowException.total.<get-total>|<get-total>(){}[0]
 }
 
 final class us.tractat.kuilt.otel/PersistenceHealth { // us.tractat.kuilt.otel/PersistenceHealth|null[0]

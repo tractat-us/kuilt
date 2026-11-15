@@ -712,11 +712,12 @@ public class WarpMetricExporter(
      *    coarser than [histogramScale], or one whose count lists the caller has since made negative —
      *    is checked for **every** update and **thrown** as [IllegalArgumentException], since it is
      *    a caller's mistake. Nothing in memory or on disk changes.
-     * 2. Whether an update would carry this replica's count for a sum, or a histogram series'
-     *    total over every replica, past [Long.MAX_VALUE] is
+     * 2. Whether an update would carry a sum or histogram series' total over every replica past
+     *    [Long.MAX_VALUE] is
      *    checked for the whole batch, counting its earlier updates to the same series, against the
-     *    series as they stand. For a [MetricUpdate.IncrementSum] that is this replica's count for its
-     *    sum series (#3318). For a [MetricUpdate.RecordHistogram] or
+     *    series as they stand. For a [MetricUpdate.IncrementSum] that is its sum series' total —
+     *    every replica's slot, a peer's merged in included — which is the value the OTLP bridge
+     *    exports (#3445); this replica's slot is part of it (#3318). For a [MetricUpdate.RecordHistogram] or
      *    [MetricUpdate.AddExponentialHistogram] it is the series' total count — summed over every
      *    replica's slots, a peer's merged in included, across both signs' buckets and the zero
      *    counter — which is the count the OTLP bridge exports (#3403); and with it this replica's
@@ -810,11 +811,17 @@ public class WarpMetricExporter(
     }
 
     /**
-     * The refusal for the first update in [updates] that would carry this replica's count for a sum,
-     * or a histogram series' total over every replica, past [Long.MAX_VALUE], counting the batch's own earlier updates to the same series, or `null`
-     * when every one fits. Called inside [lock], before anything is applied.
+     * The refusal for the first update in [updates] that would carry a sum or histogram series'
+     * total over every replica past [Long.MAX_VALUE], counting the batch's own earlier updates to the
+     * same series, or `null` when every one fits. Called inside [lock], before anything is applied.
      *
-     * A [MetricUpdate.IncrementSum] is checked against this replica's count for its series (#3318).
+     * A [MetricUpdate.IncrementSum] is checked against its series' total, read with
+     * [GCounter.valueOrNull] (#3445): the exact sum over every replica's slot, a peer's merged in
+     * included, which is the value the OTLP bridge exports and the one it skips the series for when
+     * it does not fit. The batch's earlier increments are then added to it checked, so no
+     * intermediate wraps. This replica's slot is part of that total, because slots are never
+     * negative, so a slot that cannot take an increment (#3318) is one the total cannot take either,
+     * and [GCounter.inc] in [applyLocked] cannot throw for a batch this accepts.
      * A histogram update is checked by making it, through [DDSketch.addOrNull] and
      * [DDSketch.addBucketsOrNull], against a running copy of its series that the batch's earlier
      * histogram updates have already been made to (#3354). Those are the very calls [applyLocked]
@@ -838,9 +845,12 @@ public class WarpMetricExporter(
         for (update in updates) {
             when (update) {
                 is MetricUpdate.IncrementSum -> {
-                    val count = runningSums[update.key] ?: sums[update.key]?.count(replica) ?: 0L
-                    runningSums[update.key] = count.plusOrNull(update.by)
-                        ?: return MetricSumOverflowException(update.key, count, update.by)
+                    // The total the bridge exports as the point's value: every replica's slot, summed
+                    // exactly. A slot that fits can still carry it past Long with a peer's merged in (#3445).
+                    val total = runningSums[update.key] ?: (sums[update.key] ?: GCounter.ZERO).valueOrNull()
+                        ?: return MetricSumOverflowException(update.key, total = null, by = update.by)
+                    runningSums[update.key] = total.plusOrNull(update.by)
+                        ?: return MetricSumOverflowException(update.key, total, update.by)
                 }
                 is MetricUpdate.RecordHistogram,
                 is MetricUpdate.AddExponentialHistogram,
@@ -968,8 +978,8 @@ public class WarpMetricExporter(
      * is the correct cumulative semantics.
      *
      * Returns a [MetricExportResult.Refused] whose `overflow` is a [MetricSumOverflowException],
-     * having applied and written nothing, when this replica's count for [key] cannot take [by] more
-     * without passing [Long.MAX_VALUE].
+     * having applied and written nothing, when the series' total over every replica cannot take [by]
+     * more without passing [Long.MAX_VALUE] (#3445).
      */
     public suspend fun incrementSum(key: MetricKey, by: Long = 1L): MetricExportResult =
         record(listOf(MetricUpdate.IncrementSum(key, by)))
@@ -979,6 +989,12 @@ public class WarpMetricExporter(
      *
      * Idempotent: merging the same snapshot twice produces the same result.
      * Returns [MetricWriteResult.Success] after the durable write.
+     *
+     * **Not refused when the join carries the total past [Long.MAX_VALUE].** [record] refuses an
+     * increment that would (#3445), but a merge is a lattice join: refusing it would leave this
+     * replica's counter apart from the peer's for good, and the peer's own counter, and every other
+     * replica that joins it, would still hold the total. So the join is kept, the OTLP bridge skips
+     * the series with a WARN naming it, and every later [record] increment to it is refused.
      */
     public suspend fun mergeSum(key: MetricKey, remote: GCounter): MetricWriteResult =
         writeTurn(StoredKind.SUMS) {
@@ -1402,8 +1418,8 @@ public sealed interface MetricExportResult {
     public data object Success : MetricExportResult
 
     /**
-     * Nothing was counted: an update would carry this replica's count for a sum, or a histogram
-     * series' total over every replica, past [Long.MAX_VALUE], so the whole call was refused before anything was applied or written. The
+     * Nothing was counted: an update would carry a sum or histogram series' total over every
+     * replica past [Long.MAX_VALUE], so the whole call was refused before anything was applied or written. The
      * same call may be refused again until that series is cleared or evicted; a retry has to leave
      * out the series [overflow] names.
      */
@@ -1462,11 +1478,12 @@ public class MetricKindUnreadException internal constructor(
 ) : Exception("${storeKey.name}: the store refused the read of this kind, so none of its updates were counted", cause)
 
 /**
- * Why a [WarpMetricExporter.record] was refused: an update would carry this replica's count for
- * the sum [key], or the histogram [key]'s total over every replica, past [Long.MAX_VALUE]. For a
- * sum, or a slot of a histogram, a wrapped count would be negative, and a counter's merge, a max,
- * would drop it, so the update would be lost everywhere with nothing to say so. For a histogram's
- * total the reason is that the OTLP bridge cannot export the series. It arrives as a [MetricExportResult.Refused], and the batch that carried it applied nothing.
+ * Why a [WarpMetricExporter.record] was refused: an update would carry the series [key]'s total
+ * over every replica past [Long.MAX_VALUE]. The total is what the OTLP bridge exports, so a series
+ * past it is one the bridge skips. The narrower case, this replica's own slot passing
+ * [Long.MAX_VALUE], is part of it: a wrapped slot would be negative, and a counter's merge, a max,
+ * would drop it, so the update would be lost everywhere with nothing to say so. It arrives as a
+ * [MetricExportResult.Refused], and the batch that carried it applied nothing.
  *
  * Which kind of series [key] names is the subclass: [MetricSumOverflowException] for a sum,
  * [MetricHistogramOverflowException] for a histogram. A sum and a histogram can share a
@@ -1479,21 +1496,29 @@ public sealed class MetricOverflowException(message: String) : ArithmeticExcepti
 }
 
 /**
- * A [MetricOverflowException] for a sum: an increment would carry this replica's count for the sum
- * series [key] past [Long.MAX_VALUE] (#3318).
+ * A [MetricOverflowException] for a sum: an increment would carry the sum series [key]'s total
+ * past [Long.MAX_VALUE] (#3445), counting the batch's own earlier increments to it. The total is
+ * summed over every replica's slot, a peer's merged in included, and is the value the OTLP bridge
+ * exports, so a series past it is one the bridge could not export. That includes the narrower case
+ * of #3318, this replica's own slot passing [Long.MAX_VALUE].
  *
  * @property key the sum series that cannot take the increment.
- * @property count this replica's count for [key] before the refused increment, including the
- *   batch's own earlier increments to it.
+ * @property total the series' total over every replica before the refused increment, including the
+ *   batch's own earlier increments to it; `null` when that total already passes [Long.MAX_VALUE],
+ *   which a [WarpMetricExporter.mergeSum] join can leave.
  * @property by the refused increment.
  */
 public class MetricSumOverflowException internal constructor(
     override val key: MetricKey,
-    public val count: Long,
+    public val total: Long?,
     public val by: Long,
 ) : MetricOverflowException(
-    "sum series ${key.name} ${key.attributes}: this replica's count $count cannot take $by more " +
-        "without passing Long.MAX_VALUE",
+    "sum series ${key.name} ${key.attributes}: " +
+        if (total == null) {
+            "its total over every replica already passes Long.MAX_VALUE"
+        } else {
+            "its total over every replica, $total, cannot take $by more without passing Long.MAX_VALUE"
+        },
 )
 
 /**
