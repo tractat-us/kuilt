@@ -54,6 +54,22 @@ class LocalHeddleWindowRuleTest {
         assertNeverRefused(rig.run(500, waiting = WindowRuleRig.randomWaker(Random(3353), idle = 1_000, burst = 50)), heavyPicked = "heavy")
     }
 
+    /**
+     * `{1, 1, 1, 1}` and a weight-57,344 waker: a twin on the rule before refuses 50 steps from step
+     * 69, one waking burst, and the window rule refuses none. Measured on this tree with the rule
+     * before switched back on, not on the base, which also lacks the raise before the pick.
+     */
+    @Test
+    fun aHeavyWakerBesideFourLightsIsNeverRefused() {
+        fun run(windowRule: Boolean) = WindowRuleRig(four + ("heavy" to Weight.of(57_344L)), windowRule)
+            .run(500, waiting = WindowRuleRig.randomWaker(Random(3354), idle = 200, burst = 50))
+        val before = run(windowRule = false)
+        assertAll(
+            { assertTrue(before.refusals > 0, "the rig: the rule before refuses this row, $before") },
+            { assertNeverRefused(run(windowRule = true), heavyPicked = "heavy") },
+        )
+    }
+
     /** `{1, 1, 1, 1}` and a weight-2²⁰ lane, every lane on a coin flip each step: three refusals, from step 15. */
     @Test
     fun aHeavyLaneInAChurningSetIsNeverRefused() {

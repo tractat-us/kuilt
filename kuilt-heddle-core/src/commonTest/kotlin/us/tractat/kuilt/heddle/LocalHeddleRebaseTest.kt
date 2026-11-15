@@ -1,6 +1,8 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.Rounding
+import us.tractat.kuilt.math.mulDiv
 import us.tractat.kuilt.math.timesWide
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -161,6 +163,57 @@ class LocalHeddleRebaseTest {
             { assertEquals(Int128.of(positionFloor(heavy)), nAt, "n sits at its floor") },
             { assertTrue(nAt > bAt.timesWide(1L shl 20), "above the front on its grid, so it is owed nothing") },
             { assertEquals(b, (out as AcquireOutcome.Acquired).lease.leaf, "and b, behind it, is served first") },
+        )
+    }
+
+    /**
+     * The same rig twice, on the window rule and on the rule before it (#3353): what the floor
+     * landing costs, and whom. The two rules move the origin by different amounts, but a rebase moves
+     * every child alike, so `a`, `b` and `c` stand exactly as far from one another on both. Only `n`'s
+     * landing differs: the rule before seats it at the front, `b`'s position on its grid, and the
+     * window rule at its floor, higher by `floor − front`. That is its whole penalty, the documented
+     * one, and no sibling gains or loses anything by it. The rig plants `b` about `R` below the origin,
+     * so the penalty here is that large; in a running parent the front sits within about a lease of
+     * the origin, and so does the penalty.
+     */
+    @Test
+    fun aFloorLandingCostsTheJoinerItsPenaltyAndNoSiblingAnything() {
+        val heavy = Weight.of(1L shl 20)
+        val withHeavy = draft("rebase") {
+            lane("a", Weight.ONE)
+            lane("b", Weight.ONE)
+            lane("c", Weight.ONE)
+            lane("n", heavy)
+        }
+        val n = withHeavy.groupId("n")
+        class Landed(val a: Int128, val b: Int128, val c: Int128, val n: Int128, val bBefore: Int128, val floorLandings: Int)
+        fun land(windowRule: Boolean): Landed {
+            val engine = engine().apply { windowRuleForTest = windowRule }
+            engine.pushTo(a, 2 * threshold)
+            engine.pushTo(b, 16_005L)
+            engine.acquire(setOf(a, b), setOf(b), startedAt = 1L)
+            check(engine.apply(withHeavy, generation = 1L).refusals.isEmpty()) { "the rig: n landed" }
+            val bBefore = engine.wideTicks(b)
+            val out = engine.acquire(setOf(b, n), setOf(b), startedAt = 2L)
+            check(out is AcquireOutcome.Acquired && out.lease.leaf == b) { "the rig: b is picked on both rules, $out" }
+            val ledger = engine.snapshot().ledger
+            val nEdge = engine.edgeOf(n)
+            val nAt = ledger.gauge(nEdge).rawTicksAt(ledger.baseIssuance(nEdge), ledger.edge(nEdge)?.returned ?: 0L, heavy, ledger.origin(engine.root))
+            return Landed(engine.wideTicks(a), engine.wideTicks(b), engine.wideTicks(c), nAt, bBefore, engine.floorLandingsForTest)
+        }
+        val window = land(windowRule = true)
+        val before = land(windowRule = false)
+        val k = 1L shl 20
+        // n's position less b's, both on n's grid, where b's position is k times as many ticks.
+        fun nAheadOfB(l: Landed) = l.n - checkNotNull(mulDiv(l.b, k, 1L, Rounding.FLOOR))
+        val front = checkNotNull(mulDiv(window.bBefore, k, 1L, Rounding.FLOOR))
+        val penalty = Int128.of(positionFloor(heavy)) - front
+        assertAll(
+            { assertEquals(1, window.floorLandings - before.floorLandings, "the rig: only the window rule held n at its floor") },
+            { assertTrue(penalty > Int128.ZERO, "the rig: the front is below n's floor") },
+            { assertEquals(before.a - before.b, window.a - window.b, "a stands where it did against b") },
+            { assertEquals(before.c - before.b, window.c - window.b, "and so does c") },
+            { assertEquals(penalty, nAheadOfB(window) - nAheadOfB(before), "n's whole loss is floor − front") },
         )
     }
 
