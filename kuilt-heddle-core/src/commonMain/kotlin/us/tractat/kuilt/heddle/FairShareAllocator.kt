@@ -1122,8 +1122,11 @@ public class FairShareAllocator(
      *
      * Every child that this peer has previously observed **not** competing and that competes now
      * has crossed the idle→demand edge the design §7.2 clamp is defined on. [settleJoiners] hands
-     * this only the wakers it holds no departure for, the ones it never saw stop asking: a child it
-     * first saw idle. A waker it saw stop comes back by its parent's clock instead ([moveReturners],
+     * this only the **seated** wakers it holds no departure for, the ones it never saw stop asking: a
+     * child it first saw idle. An unseated waker is a newborn, and its seat is what puts it at the
+     * front; clamped as well, it would count the front twice, and land near double it once an empty
+     * first round had dropped the seat that call wrote and kept the clamp (#3454 review). A waker it
+     * saw stop comes back by its parent's clock instead ([moveReturners],
      * #3376), which keeps the lag a short burst leaves where the clamp would forgive it. Each waker
      * here is clamped forward to [HeddlePolicy.front] — the front of the set it is rejoining — so it
      * re-enters level with the children that kept running instead of spending the whole idle
@@ -1141,14 +1144,18 @@ public class FairShareAllocator(
      * (#1714, #3416 review). #1714 was a second wake refunding the first one's clamp: the front is a
      * weighted mean over whoever competes *now*, so a child clamped once, run and asleep again could
      * re-wake beside a starved sibling into a lower front, and a replaced offset handed back the
-     * credit the first clamp took. A `max` join with the stored offset fixed it, and no child reaches
-     * that join with an offset any more. Once clamped, a child is last seen asking, at the end of
-     * this call, and seated, so its next stop stamps a departure ([markDepartures]) and its next wake
-     * is a return by the clock ([moveReturners]), which only adds to the offset. A departure clears
-     * only on that return, which sees the child asking again, or with the edge forgotten, which
-     * drops the offset too. So every waker here holds no offset, and the join `max(0, computed)` was
-     * `computed`. A waker holding an offset and no departure is a memory no allocator writes: the
-     * format 1 v0.7.4 wrote carried one, and this release does not read it (#3353).
+     * credit the first clamp took. A `max` join with the stored offset fixed it. The invariant that
+     * now makes the join `max(0, computed) = computed` is: **no waker handed here holds an offset.**
+     * It rests on three facts. An offset is only ever written on a seated child: a clamp skips an
+     * unseated one, and a return needs a departure, which [markDepartures] stamps only on a child
+     * with a gauge. A gauge, once a child has one, stays until the edge is forgotten. And the call
+     * that writes an offset ends seeing the child asking, a memory an empty first round keeps along
+     * with the offset. So that child's next stop stamps a departure, and its next wake is a return by
+     * the clock ([moveReturners]), which only adds to the offset. A departure clears only on that
+     * return, which sees the child asking again, or with the edge forgotten, which drops the offset
+     * too. A refused first round keeps none of it. A waker holding an offset and no departure is a
+     * memory no allocator writes: the format 1 v0.7.4 wrote carried one, and this release does not
+     * read it (#3353).
      *
      * Two things lower a stored offset, and neither returns a turn. An edge is forgotten when it
      * leaves the active set, which [EntitlementLedger.activate][EntitlementLedger.activate] makes
@@ -1190,9 +1197,9 @@ public class FairShareAllocator(
                 rawTicks = HeddlePolicy.rawTicks(edge),
                 sleeperCredit = policy.sleeperCredit,
             )
-            // Written, not joined: a waker here holds no offset (see above). Both sides are on the
-            // waker's grid, and the result is stored on it, so a stored offset never carries a
-            // front's denominator into the next one (#3313).
+            // Written, not joined: a seated waker with no departure holds no offset (see above).
+            // Both sides are on the waker's grid, and the result is stored on it, so a stored offset
+            // never carries a front's denominator into the next one (#3313).
             wakeOffsets[edge.record.id] = computed
         }
     }
