@@ -1192,9 +1192,8 @@ that means two layouts is how a snapshot gets misread, so it is refused.
    the cookbook, both `module.md`s, `Writerside/topics/heddle-local-turns.md`.
    #3458 is then no longer a limit.
 
-Slice 2 goes first so that slice 3 leaves the restarted scheduler's row green;
-if the restart rule is not wanted (Open, below), slice 3 retires that row's
-"level" assertion instead. Slice 4 follows 3. Slices 5, 6 and 7 follow 3 and do
+Slice 2 goes first so that slice 3 leaves the restarted scheduler's row green.
+Slice 4 follows 3. Slices 5, 6 and 7 follow 3 and do
 not depend on each other.
 
 #### Settled — don't reopen
@@ -1219,20 +1218,24 @@ not depend on each other.
 - Persisting `HeddleNode`'s wake memory in place of the restart rule: it is
   scheduler-local by design, and a second store for it is a larger change than
   the gap it closes (#3472).
+- Dropping the restart rule and keeping unbounded idle credit after a restart:
+  a child that idled before a crash would come back owed its whole idle time
+  and could take every slot it is eligible for. Losing a child's lag once per
+  restart, and once per scheduler that first sees it, is bounded and
+  predictable; unbounded credit is the starvation this entry exists to remove.
+  Ruled by @keddie, 2026-11-15 (#3472).
+- W1 in place of P1′'s lease clause, `LifetimeExhausted` in place of
+  `PositionCeiling`, and `VirtualTime` as the public read type: each costs less
+  than the alternative it replaces. Ruled by @keddie, 2026-11-15 (#3472).
 
 #### Open
 
-- **Whether the restart rule is wanted.** It is a behaviour change on its own
-  slice, so it can be dropped without touching the rest. Without it, a
-  restarted `HeddleNode` hands a child that idled before the crash its whole
-  idle time as credit, in a run of any length. Today that is true of every run
-  short of a rebase. With it, a restart costs every child its lag once, and a
-  second scheduler's first sight of a child costs that child its lag in that
-  scheduler's view. Not ruled.
 - **The constants of W1.** The clause is reasoned from the counters' range, not
   measured. Slice 5 owes the proof.
-- **A typed boot result for a weight the budget refuses** stays open under
-  #3461.
+- **Whether boot attribution should narrow** once W1 lands. Today
+  `LocalHeddle.Boot` (#3462) leaves out the whole subtree of a parent whose
+  children's weights do not fit together, even when one child fails on its
+  own. W1 removes most single-weight failures, so this may stop mattering.
 
 ### 7.2 Neutral creation and no idle credit
 
