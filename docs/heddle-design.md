@@ -905,11 +905,12 @@ each:
 - A demanding child that is never served holds `Δ` at zero: it sits less than
   one step ahead of the origin, so no whole step fits below it.
   `LocalHeddlePositionCeilingTest` rigs it.
-- A weight set so fine-grained that one step, read on some child's grid, spans
-  more than that child's `R`. The step's lcm always fits `Long` under the weight
-  budget, since it divides the denominators' lcm `L`. But `16 · S` ticks can be up
-  to 256 times `R`, so this needs denominators whose lcm is near `Long`, and no
-  test reaches it.
+- A weight set so fine-grained that one step, read on some child's grid, is
+  large there. The step's lcm always fits `Long` under the weight budget, since it
+  divides the denominators' lcm `L`. Past that child's `R` but under `16R` the step
+  only makes a rebase late. Past `16R`, its ceiling, it wedges the parent while that
+  child demands. That takes a spread near 10¹², `2⁴²/1023` beside `1/1021` say, and
+  about 2⁴⁹ units of service, and no test reaches it.
 - A `LocalHeddle` parent only ever charged through `admit`, `extend` or an
   overrun, and never picked at, is never rebased. Every `HeddleNode` delegation
   is a pick, so this one is `LocalHeddle`'s alone.

@@ -356,10 +356,6 @@ public class FairShareAllocator(
     }
 
     /**
-     * [schedule]'s first round on [fork], against the one ledger value [s]: the seat step and the
-     * first pick. Nothing is written; the caller lands [FirstRound.Granted.patch] and adopts the fork.
-     */
-    /**
      * The `Δ` to raise [parent]'s origin by **before** the seat and wake step, or `null` (#3353 review,
      * item A). Only when there are joiners: the front they are about to be seated at or clamped to
      * ([joinFront]) is past some child's [rebaseThreshold] on that child's own grid, or a child that
@@ -392,7 +388,8 @@ public class FairShareAllocator(
     /**
      * That a pre-seat raise changed no pick (#3353 review, item A): the same first round without it,
      * on a fork of this allocator, either picks [grant] too or refuses at the ceiling, which is what
-     * the raise is for.
+     * the raise is for. A bug detector, not a proof: in the regime the raise exists for, the twin
+     * refuses, so the check is vacuous there and constrains only a raise that did not need to land.
      *
      * @throws IllegalStateException if it picks anything else, a bug in the rule.
      */
@@ -460,9 +457,10 @@ public class FairShareAllocator(
      * The largest whole multiple of [step] at or below [bound], or `null` when that is not above zero:
      * the furthest-behind demanding child is less than one step ahead of the origin. A child that is
      * served climbs past it; one that is never served holds it there, the known limit (#3329). So does
-     * a weight set so fine-grained that one step, read on some child's grid, is past that child's
-     * [rebaseThreshold]: it is within the budget (`16 · S` ticks can reach 256 times `R`), but takes
-     * denominators whose lcm is near `Long`.
+     * a weight set so fine-grained that one step, read on some child's grid, is large there. Past that
+     * child's [rebaseThreshold] but under 16 of them, it only makes a rebase late. Past 16, its
+     * ceiling, it wedges the parent for as long as that child demands. That needs a spread near
+     * 10¹², `2⁴²/1023` beside `1/1021` say, and about 2⁴⁹ units of service.
      */
     private fun wholeSteps(bound: Int128, step: Long): Int128? {
         val steps = mulDiv(bound, 1L, step, Rounding.FLOOR) ?: return null
@@ -470,6 +468,10 @@ public class FairShareAllocator(
         return mulDiv(steps, step, 1L, Rounding.FLOOR)
     }
 
+    /**
+     * [schedule]'s first round on [fork], against the one ledger value [s]: the seat step and the
+     * first pick. Nothing is written; the caller lands [FirstRound.Granted.patch] and adopts the fork.
+     */
     private fun firstRound(
         fork: FairShareAllocator,
         s: EntitlementLedger,
