@@ -118,8 +118,7 @@ different module's job (`kuilt-bolt` and `kuilt-crdt` respectively).
 
 ## Dependencies
 
-Coroutines, atomicfu and `:kuilt-base`, which depends on nothing and carries
-`KuiltVersion`. That is the entire bill: no CRDT lattice, no serialization
+Coroutines and atomicfu. That is the entire bill: no CRDT lattice, no serialization
 format, no logging facade. A consumer that wants a durable key→bytes store on one
 platform should not inherit a telemetry stack along with it — which is exactly why this
 module was split out of `kuilt-otel` (#2497).
