@@ -1411,6 +1411,43 @@ class HeddleNodeTest {
     }
 
     /**
+     * [HeddleNode.parentVirtualTime] over a busy child past its ceiling reads it at the ceiling, and
+     * does not throw (#3485). Two `1/30,000` children: `busy` is granted the root's three leases of
+     * [MAX_GRANT], while `starved` demands and is never served, so it holds the rebase and `busy`
+     * climbs past its ceiling with the rebase on. The front is the mean of the two public reads.
+     * It used to throw `PolicyEdge offsetTicks must be non-negative`: the read held `busy` by
+     * lowering its wake offset below zero.
+     */
+    @Test
+    fun theFrontOverABusyChildPastItsCeilingReadsItAtTheCeiling() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val fine = Weight.of(1L, 30_000L)
+        val busy = AttachmentRecord(AttachmentId("busy"), root, GroupId("g-busy"), fine)
+        val starved = AttachmentRecord(AttachmentId("starved"), root, GroupId("g-starved"), fine)
+        val h = harness(peers = 1, mint = mapOf(0 to 3L * MAX_GRANT), topology = listOf(busy, starved), quantum = MAX_GRANT)
+        h.pump()
+        val node = h.peers[0].node
+        // Asks for more than the root holds, so it is still demanding when the front is read.
+        node.advertise(busy.id, Demand(4L * MAX_GRANT, MAX_GRANT))
+        node.advertise(starved.id, Demand(targetOutstanding = 1L, maximumUsefulGrant = 0L))
+        val outcome = node.schedule(root)
+        val ledger = node.ledger.value
+        // A `1/30,000` child's ceiling, `C / (G · w)` with `C = ⌊CEILING_AT_WEIGHT_ONE / 30,000⌋`.
+        val ceiling = Rational.of(CEILING_AT_WEIGHT_ONE / 30_000L * 30_000L, 16L)
+        val busyRead = assertNotNull(ledger.virtualService(busy.id))
+        val starvedRead = assertNotNull(ledger.virtualService(starved.id))
+        assertAll(
+            { assertEquals(ScheduleOutcome.Delegated(3), outcome, "the rig: the root's three leases, all to busy") },
+            { assertTrue(node.boundMetrics(root).peakPositionFraction > 1.0, "the rig: busy is past its ceiling") },
+            { assertEquals(ceiling, busyRead, "the rig: busy's public read is held at its ceiling") },
+            { assertTrue(starvedRead > Rational.ZERO - ceiling && starvedRead < Rational.ZERO, "the rig: starved is below the origin, inside its window: $starvedRead") },
+            { assertEquals((busyRead + starvedRead) / Rational.of(2L), node.parentVirtualTime(root)) },
+        )
+    }
+
+    /**
      * A grant is never larger than [LocalHeddle.MAX_RESERVATION], whatever the configured quantum
      * (#3353), so the lease P1′ sizes the weight budget for is the largest a node can make. A
      * `1/1024` child fits the budget. With a quantum of `2⁵⁰` its first grant alone would carry it

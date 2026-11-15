@@ -4,6 +4,8 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -75,6 +77,42 @@ class LocalHeddleExplainTest {
             { assertEquals(WaitExplanation.BehindAtLevel(root, q, Rational.ONE, Rational.of(1L, 2L), Rational.of(1L, 2L)), after[b], "the first level, not p") },
             { assertEquals(WaitExplanation.WouldBePickedNext, after[c]) },
             { assertEquals(c, second) },
+        )
+    }
+
+    /**
+     * A lane past its ceiling is explained, not thrown out of (#3485). `x` and `y` are `1/30,000`
+     * each, both waiting and only `x` eligible, the way a slot waits that cannot run `y`: three leases
+     * of [LocalHeddle.MAX_RESERVATION], each completed in full, carry `x` past its ceiling while `y`,
+     * demanding and never served, holds the rebase. Asked with both eligible, the pick goes to `y`,
+     * and the front is the mean of the two public reads, `x` held at its ceiling. This used to throw
+     * `PolicyEdge offsetTicks must be non-negative` from the second lease on.
+     */
+    @Test
+    fun explainBesideALanePastItsCeilingReadsItAtTheCeiling() {
+        val x = GroupId("x")
+        val y = GroupId("y")
+        val fine = Weight.of(1L, 30_000L)
+        val xEdge = AttachmentRecord(AttachmentId("root>x"), root, x, fine)
+        val yEdge = AttachmentRecord(AttachmentId("root>y"), root, y, fine)
+        val h = engineOver(shapedLedger(root, listOf(xEdge, yEdge)), root, supply = 0L).apply { reconcileCapacity(1L) }
+        val both = setOf(x, y)
+        val leased = (1..3).map { i ->
+            val lease = assertIs<AcquireOutcome.Acquired>(h.acquire(both, setOf(x), startedAt = i.toLong(), reservation = LocalHeddle.MAX_RESERVATION)).lease
+            assertIs<LeaseOutcome.Done>(h.complete(lease.id, LocalHeddle.MAX_RESERVATION, waiting = both))
+            lease.leaf
+        }
+        val ledger = h.snapshot().ledger
+        val ceiling = ticksToVirtual(positionCeiling(fine), fine)
+        val xRead = assertNotNull(ledger.virtualService(xEdge.id))
+        val yRead = assertNotNull(ledger.virtualService(yEdge.id))
+        val front = (xRead + yRead) / Rational.of(2L)
+        assertAll(
+            { assertEquals(listOf(x, x, x), leased, "the rig: every lease went to x") },
+            { assertTrue(h.allocator.peakPositionFraction(ledger, root) { Demand.NONE } > 1.0, "the rig: x is past its ceiling") },
+            { assertEquals(ceiling, xRead, "the rig: x's public read is held at its ceiling") },
+            { assertTrue(yRead > Rational.ZERO - ceiling && yRead < Rational.ZERO, "the rig: y is below the origin, inside its window: $yRead") },
+            { assertEquals(WaitExplanation.BehindAtLevel(root, y, ceiling, front, front), h.explain(x, both, both)) },
         )
     }
 

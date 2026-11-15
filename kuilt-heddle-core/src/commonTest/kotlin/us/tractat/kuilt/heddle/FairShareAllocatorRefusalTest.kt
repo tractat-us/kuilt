@@ -124,6 +124,46 @@ class FairShareAllocatorRefusalTest {
     }
 
     /**
+     * A diagnostic front over a busy child past its ceiling reads it at the ceiling, and does not
+     * throw (#3485). `e1` and `e2` are `1/30,000` each, so one lease of [LocalHeddle.MAX_RESERVATION]
+     * carries a child 92% of the way up its grid. `e2` demands and is never served, the way a lane
+     * waits that no slot can run, so it holds the rebase while three grants carry `e1` past its
+     * ceiling; it is still inside its own window. The front is then the mean of the two public
+     * reads, and with nobody demanding it is the furthest ahead, `e1`'s ceiling. Both used to throw
+     * `PolicyEdge offsetTicks must be non-negative`: the read held `e1` by lowering its wake offset
+     * below zero. [FairShareAllocator.virtualTime] is what `LocalHeddle.explain`'s `BehindAtLevel`
+     * and `HeddleNode.parentVirtualTime` read.
+     */
+    @Test
+    fun aFrontOverAChildPastItsCeilingReadsTheCeiling() {
+        val fine = Weight.of(1L, 30_000L)
+        val lease = LocalHeddle.MAX_RESERVATION
+        val cell = CountingCell(
+            withChildren(
+                EntitlementLedger.bootstrap(root, mapOf(self to 3L * lease), nonce = "genesis"),
+                AttachmentRecord(e1, root, GroupId("g1"), fine),
+                AttachmentRecord(e2, root, GroupId("g2"), fine),
+            ),
+        )
+        val allocator = FairShareAllocator(self, PolicyConfig(quantum = lease))
+        val busyBesideStarved = { edge: AttachmentId ->
+            if (edge == e1) Demand(targetOutstanding = 4L * lease, maximumUsefulGrant = lease) else Demand(targetOutstanding = 1L, maximumUsefulGrant = 0L)
+        }
+        val outcome = allocator.schedule(root, cell, earmarked = 0L, busyBesideStarved)
+        val ceiling = ticksToVirtual(positionCeiling(fine), fine)
+        val e1Read = assertNotNull(cell.current.virtualService(e1))
+        val e2Read = assertNotNull(cell.current.virtualService(e2))
+        assertAll(
+            { assertEquals(AllocationOutcome.Delegated(3), outcome, "the rig: all three grants went to e1") },
+            { assertTrue(allocator.peakPositionFraction(cell.current, root, busyBesideStarved) > 1.0, "the rig: e1 is past its ceiling") },
+            { assertEquals(ceiling, e1Read, "the rig: e1's public read is held at its ceiling") },
+            { assertTrue(e2Read > Rational.ZERO - ceiling && e2Read < Rational.ZERO, "the rig: e2 is below the origin, inside its window: $e2Read") },
+            { assertEquals((e1Read + e2Read) / Rational.of(2L), allocator.virtualTime(cell.current, root, busyBesideStarved), "the demanding front, e1 held at its ceiling") },
+            { assertEquals(ceiling, allocator.virtualTime(cell.current, root) { Demand.NONE }, "and the idle one, the furthest ahead") },
+        )
+    }
+
+    /**
      * The same in a later round: `e1` sits 200 ticks below its ceiling, so the first grant lands 40
      * ticks under it and the second passes it. The call goes on granting, and the next call finds
      * the supply spent rather than a ceiling. This used to stop after one grant and name the ceiling.
