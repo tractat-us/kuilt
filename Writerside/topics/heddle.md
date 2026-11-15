@@ -54,7 +54,8 @@ can delay and why a missing device's share cannot just be taken back.
 Is everything in one program, with no network at all?
 [Fair share in one program](heddle-local.md) shares a build farm's agents
 between two teams, one build at a time. [Showing who goes next](heddle-local-preview.md)
-tells each person where their build stands in line, and why.
+tells each person where their build stands in line, and
+[Explaining a wait](heddle-local-explain.md) tells them why.
 
 [Follow a Warp job](warp-jobs.md) to see how a team label connects a photo
 to its allowance. Automatic recovery of a crashed

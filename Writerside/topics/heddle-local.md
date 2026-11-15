@@ -170,9 +170,9 @@ it) and `SupplyExhausted`. A log line or a metric should use the answer's `kind`
 and its group ids. The numbers move on every pick.
 
 `entitlement` is the fair share as a number of agents: of four, web is owed
-three while both teams keep work queued. To put all three answers on a screen,
-from a running engine or a saved one, see
-[Showing who goes next](heddle-local-preview.md).
+three while both teams keep work queued. To turn every answer `explain` can give
+into words a person can act on, from a running engine or a saved one, see
+[Explaining a wait](heddle-local-explain.md).
 
 ## A build that runs long
 
