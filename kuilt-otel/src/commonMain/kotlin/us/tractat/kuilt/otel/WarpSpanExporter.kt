@@ -43,10 +43,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpSpanExporte
  *
  * ## Buffer cap
  *
- * When the in-memory CRDT already holds [maxSpans] spans, [export] evicts one before it
+ * When the in-memory CRDT already holds [maxSpans] spans, [export] evicts one as it
  * inserts: the earliest by [SpanRecord.startEpochNanos] under [BufferPolicy.DROP_OLDEST], the
  * latest under [BufferPolicy.DROP_NEWEST]. The victim is chosen from the spans already held,
- * so an export's own eviction never takes the span it is adding. That is all the cap promises
+ * so an export's own eviction never takes the span it is adding, and it is committed only with
+ * the add, so an export whose add is refused evicts nothing (#3441). That is all the cap promises
  * the incoming span. A recovered exporter adds before the durable-write section, so at the cap a
  * concurrent export's eviction can take this export's span before this export encodes, and this
  * export then returns [ExportResult.Success] for a snapshot that does not carry it. An export
@@ -446,9 +447,16 @@ public class WarpSpanExporter(
      * (#3388). Neither failure nor cancellation establishes that the span was not persisted. See [DurableStore.write]
      * for the indeterminate commit outcome.
      *
-     * When the buffer is full, the eviction policy fires first, logging the
-     * dropped span, then the new span is inserted, so this export's own eviction never takes it.
-     * A concurrent export's eviction can; see the class's buffer cap section.
+     * When the buffer is full, the eviction policy picks a victim among the spans already held and
+     * the new span is inserted, so this export's own eviction never takes it. A concurrent export's
+     * eviction can; see the class's buffer cap section.
+     *
+     * **An add the set refuses changes nothing.** Past the set's own clock ceiling, which a [merge]
+     * of a peer's set naming this replica's dot near [Long.MAX_VALUE] can bring within reach, the
+     * add throws `ArithmeticException` (#3429). The export then evicts, stamps and writes nothing,
+     * counts one failed turn of its span work in [health], and returns that exception as the
+     * [ExportResult.Failure]'s cause (#3441). The set's context never moves back, so once it is at
+     * the ceiling every export is refused this way.
      */
     public suspend fun export(span: SpanRecord): ExportResult {
         // Auto-stamp causal context (#846): a configured clock fills an unstamped
@@ -466,8 +474,11 @@ public class WarpSpanExporter(
         // stamps and adds nothing yet: the add would reuse a dot a stored span holds (#3390), and the
         // stamp could re-mint one a stored span carries, so both wait for the read inside the section.
         // `null` until this export has stamped.
-        var stamped: Stamping? = lock.withLock {
-            if (readState == SpanReadState.Recovered) stampOf(span, clock).also { insert(it.span) } else null
+        var stamped: Stamping? = try {
+            lock.withLock { if (readState == SpanReadState.Recovered) insert(span, clock) else null }
+        } catch (refused: CeilingRefusal) {
+            // Nothing moved: not the set, not the clock, not the store (#3441).
+            return refusedAtCeiling(refused.ceiling)
         }
         val addedEarly = stamped != null
         // Serialize the durable-write section across concurrent export()/merge() so the
@@ -491,7 +502,7 @@ public class WarpSpanExporter(
                         // export can already add before the section, and at the cap that add could
                         // evict this span between a separate add and encode, leaving a Success for a
                         // span the snapshot never carried.
-                        if (!addedEarly) stamped = stampOf(span, clock).also { insert(it.span) }
+                        if (!addedEarly) stamped = insert(span, clock)
                         cbor.encodeToByteArray(spanSerializer, spans)
                     }
                     // Persist the clock BEFORE the span so the durable clock seq is always ≥
@@ -504,6 +515,10 @@ public class WarpSpanExporter(
                         ?: if (stamped?.exhausted == true) exhaustedClock() else null
                     store.write(STORE_KEY, encoded)
                     Result.success(Unit)
+                } catch (refused: CeilingRefusal) {
+                    // The add was refused before anything moved or was written: a refused turn, not
+                    // a refused write, so it opens no write outage (#3441).
+                    return@withLock refusedAtCeiling(refused.ceiling)
                 } catch (cause: Throwable) {
                     // Only this coroutine's own cancellation propagates, to the rollback below. One
                     // the store minted from its own `withTimeout` is a refused write (#3388).
@@ -757,36 +772,69 @@ public class WarpSpanExporter(
     }
 
     /**
-     * The live insert: evict one span if the set is at the cap, then add [stamped], so this insert
-     * never evicts the span it adds; a later insert may. Must be called with [lock] held, on a
-     * recovered exporter.
+     * The live insert: stamp [span] by [clock], evict one span if the set is at the cap, and add the
+     * stamped span, so this insert never evicts the span it adds; a later insert may. Returns what it
+     * saved. Must be called with [lock] held, on a recovered exporter.
+     *
+     * ## Refuse first, then build, then commit
+     *
+     * [ORSet.add] throws `ArithmeticException` once this replica's seq in the set's context is at
+     * [Long.MAX_VALUE] (#3429), and a [merge] can put it there. In the old order (evict, then add) a
+     * refused export had already dropped a span from memory, and its clock had already ticked for a
+     * span nothing would hold (#3441). So the add is tried first, on the unstamped span, and its
+     * refusal is thrown as a [CeilingRefusal] before the clock ticks. The trial is exact rather than a
+     * check that approximates it: an add's dot comes from the set's context and [replica] alone,
+     * never from the element, so the trial refuses exactly when the real add would. The clock has no
+     * way to take a tick back, which is why the trial comes before it rather than a rollback after.
+     *
+     * The eviction and the real add are then built on locals, and [spans] is written once, after
+     * both have returned, as `WarpLogRecordExporter.applyTurn` builds its turn. Everything after the
+     * add is a log line and a field write that cannot throw; keep it that way.
      */
-    private fun insert(stamped: SpanRecord) {
-        if (spans.elements.size >= maxSpans) evictOne()
-        spans = spans.piece { it.add(replica, stamped) }
+    private fun insert(span: SpanRecord, clock: WarpCausalClock?): Stamping {
+        try {
+            spans.add(replica, span)
+        } catch (ceiling: ArithmeticException) {
+            throw CeilingRefusal(ceiling)
+        }
+        val stamping = stampOf(span, clock)
+        val victim = if (spans.elements.size >= maxSpans) victimOf(spans.elements) else null
+        val evicted = victim?.let { chosen -> spans.piece { it.remove(chosen) } } ?: spans
+        val added = evicted.piece { it.add(replica, stamping.span) }
+        victim?.let(::logEviction)
+        spans = added
+        return stamping
     }
 
-    /** Evict the [bufferPolicy]'s victim. Must be called with [lock] held. */
-    private fun evictOne() {
-        val current = spans.elements
-        val victim = when (bufferPolicy) {
-            BufferPolicy.DROP_OLDEST -> current.minByOrNull { it.startEpochNanos }
-            BufferPolicy.DROP_NEWEST -> current.maxByOrNull { it.startEpochNanos }
-        } ?: return
-        logEviction(victim)
-        spans = spans.piece { it.remove(victim) }
+    /** The [bufferPolicy]'s victim among [current], or `null` when it is empty. */
+    private fun victimOf(current: Set<SpanRecord>): SpanRecord? = when (bufferPolicy) {
+        BufferPolicy.DROP_OLDEST -> current.minByOrNull { it.startEpochNanos }
+        BufferPolicy.DROP_NEWEST -> current.maxByOrNull { it.startEpochNanos }
+    }
+
+    /**
+     * A turn whose add the set's clock ceiling refused (#3441): count one failed turn of the span
+     * work, which the next span write that lands resolves, and return the ceiling's exception as the
+     * failure. It made no write, so it opens no write outage (see [durableWriteOutage]); and it is
+     * logged at debug only, since a set at the ceiling stays there and every export would repeat it.
+     */
+    private fun refusedAtCeiling(ceiling: ArithmeticException): ExportResult {
+        persistence.failed(spanWork, ceiling)
+        logger.debug { "otel.spans: add refused at the set's clock ceiling; nothing evicted, stamped or written: $ceiling" }
+        return ExportResult.Failure(ceiling)
     }
 
     /**
      * Evict everything beyond [maxSpans] in one batch: the victims are picked once, by the order
-     * repeated [evictOne] calls would pick them, and removed with one [ORSet.removeAll], since a
+     * repeated [victimOf] picks would take them, and removed with one [ORSet.removeAll], since a
      * removal per victim would pay a causal join each (#2245). Must be called with [lock] held.
      */
     private fun evictExcess() {
         val current = spans.elements
         val excess = current.size - maxSpans
         if (excess <= 0) return
-        // Stable sorts, so ties go in iteration order, as minBy/maxBy break them in evictOne.
+        // Stable sorts, so ties go in iteration order, as minBy/maxBy break them in victimOf. A
+        // removal mints no dot, so unlike insert's add this cannot meet the ceiling (#3441).
         val victims = when (bufferPolicy) {
             BufferPolicy.DROP_OLDEST -> current.sortedBy { it.startEpochNanos }
             BufferPolicy.DROP_NEWEST -> current.sortedByDescending { it.startEpochNanos }
@@ -812,6 +860,13 @@ public sealed interface ExportResult {
     /** The durable write failed; whether the span was persisted is indeterminate. */
     public data class Failure(public val cause: Throwable) : ExportResult
 }
+
+/**
+ * [WarpSpanExporter]'s add refused at the set's clock ceiling, before anything moved: [ceiling] is
+ * the `ArithmeticException` [ORSet.add] threw (#3441). Private, so a catch of it can only ever see
+ * that refusal, and never a store's or an encoder's exception of the same type.
+ */
+private class CeilingRefusal(val ceiling: ArithmeticException) : Exception(ceiling.message, ceiling)
 
 /**
  * The span one export saves, and whether it wanted a dot from an exhausted clock and so saves it
