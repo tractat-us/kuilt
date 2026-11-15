@@ -407,8 +407,10 @@ public class FairShareAllocator(
     /**
      * The `Δ` to raise [parent]'s origin by **before** the seat and wake step, or `null` (#3353 review,
      * item A). Only when there are joiners: the front they are about to be seated at or clamped to
-     * ([joinFront]) is past some child's [rebaseThreshold] on that child's own grid, or a child that
-     * is not joining is past its own. Without it a heavy newborn or waker joining a busy light runner
+     * ([joinFront]) is past some child's [rebaseThreshold] on that child's own grid, a child that
+     * is not joining is past its own, or a returner is about to land past its own
+     * ([returnerLandings]): it comes back where its parent's clock puts it, not at the front (#3376),
+     * so one that left near its ceiling can come back past it. Without it a heavy newborn or waker joining a busy light runner
      * lands about `k · R` up its own grid, `k` the weight ratio, which is past its ceiling for `k > 16`.
      *
      * `Δ` is bounded by the smallest effective virtual time among the demanding children that are
@@ -427,8 +429,11 @@ public class FairShareAllocator(
         if (joiners.isEmpty()) return null
         val stayers = edges.filter { it.record.id !in joiners }
         val front = joinFront(edges, joiners)
+        // A returner lands where its parent's clock puts it, not at the front (#3376).
+        val landings = returnerLandings(parent, edges)
         val past = edges.any { front.ticksForWide(it.record.weight) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
-            stayers.any { HeddlePolicy.effectiveTicksWide(it) >= Int128.of(rebaseThreshold(it.record.weight)) }
+            stayers.any { HeddlePolicy.effectiveTicksWide(it) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
+            edges.any { edge -> landings[edge.record.id]?.let { it >= Int128.of(rebaseThreshold(edge.record.weight)) } == true }
         if (!past) return null
         val step = gridStep(edges) ?: return null
         val demanding = stayers.filter { it.gauge != null && HeddlePolicy.isDemanding(it) }
@@ -956,23 +961,52 @@ public class FairShareAllocator(
      * and its siblings' alike.
      */
     private fun runClock(parent: GroupId, edges: List<PolicyEdge>): Int128 {
+        val step = clockStep(parent, edges)
+        for (edge in edges) served[edge.record.id] = checkedSub(edge.baseIssued, edge.summary.returned)
+        val before = clocks[parent] ?: Int128.ZERO
+        if (step == Int128.ZERO) return before
+        return (before + step).also { clocks[parent] = it }
+    }
+
+    /**
+     * How far [runClock] would move [parent]'s clock over [edges] now, changing nothing: zero when
+     * no child was asking or none kept anything since the clock last ran.
+     */
+    private fun clockStep(parent: GroupId, edges: List<PolicyEdge>): Int128 {
         var kept = 0L
         val weights = ArrayList<Weight>()
         for (edge in edges) {
-            val net = checkedSub(edge.baseIssued, edge.summary.returned)
-            val last = served.put(edge.record.id, net)
             if (!wasAsking(edge)) continue
             weights += edge.record.weight
-            if (last != null) kept = checkedAdd(kept, checkedSub(net, last))
+            val last = served[edge.record.id] ?: continue
+            kept = checkedAdd(kept, checkedSub(checkedSub(edge.baseIssued, edge.summary.returned), last))
         }
-        val before = clocks[parent] ?: Int128.ZERO
-        if (weights.isEmpty() || kept == 0L) return before
+        if (weights.isEmpty() || kept == 0L) return Int128.ZERO
         // kept / Σw = kept · L / S, with Σw = S / L over the common denominator L.
         val l = weights.fold(1L) { acc, w -> checkedMul(acc / gcdOf(acc, w.denominator), w.denominator) }
         val sum = weights.fold(0L) { acc, w -> checkedAdd(acc, checkedMul(w.numerator, l / w.denominator)) }
-        val step = mulDiv(kept.timesWide(CLOCK_TICKS_PER_UNIT), l, sum, Rounding.CEILING)
+        return mulDiv(kept.timesWide(CLOCK_TICKS_PER_UNIT), l, sum, Rounding.CEILING)
             ?: throw ArithmeticException("Int128 overflow: a clock step of $kept units at ${parent.value}")
-        return (before + step).also { clocks[parent] = it }
+    }
+
+    /**
+     * Where each child at [parent] that would come back by the clock this round lands, as an
+     * effective position in ticks of its own grid: its position now plus the shift [moveReturners]
+     * would add. Changes nothing; [preSeatRaise] reads it, because a returner does not land at the
+     * front the other joiners are seated at or clamped to.
+     */
+    private fun returnerLandings(parent: GroupId, edges: List<PolicyEdge>): Map<AttachmentId, Int128> {
+        val returners = edges.filter { isWaker(it) && it.record.id in departures }
+        if (returners.isEmpty()) return emptyMap()
+        val clock = (clocks[parent] ?: Int128.ZERO) + clockStep(parent, edges)
+        return returners.associate { edge -> edge.record.id to HeddlePolicy.effectiveTicksWide(edge) + shiftOf(edge, clock) }
+    }
+
+    /** How far [edge] comes back moved: the clock's run from its departure to [clock], on its own grid, never below zero. */
+    private fun shiftOf(edge: PolicyEdge, clock: Int128): Int128 {
+        val left = checkNotNull(departures[edge.record.id]) { "a returner with no departure: ${edge.record.id.value}" }
+        val w = edge.record.weight
+        return maxOf(Int128.ZERO, clockOnGrid(clock, w) - clockOnGrid(left, w))
     }
 
     /**
@@ -984,10 +1018,8 @@ public class FairShareAllocator(
         for (edge in edges) {
             val id = edge.record.id
             if (id !in returners) continue
-            val left = checkNotNull(departures.remove(id)) { "a returner with no departure: ${id.value}" }
-            val w = edge.record.weight
-            val shift = maxOf(Int128.ZERO, clockOnGrid(clock, w) - clockOnGrid(left, w))
-            wakeOffsets[id] = edge.offsetTicks + shift
+            wakeOffsets[id] = edge.offsetTicks + shiftOf(edge, clock)
+            departures.remove(id)
         }
     }
 
