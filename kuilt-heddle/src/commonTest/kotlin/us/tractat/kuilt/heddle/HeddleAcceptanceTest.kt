@@ -413,49 +413,146 @@ class HeddleAcceptanceTest {
     }
 
     /**
-     * A scheduler crashes mid-run and restarts with no wake memory. Before the crash only its
-     * lightest child, weight 1, ran, in bursts, past a rebase; the heaviest, weight 60, idled
-     * throughout, so it sits far behind the origin on its own grid, and it is demanding from the
-     * restarted scheduler's first call. The fresh allocator has never observed it, and a seated
-     * child it never observed that comes back demanding below zero is clamped as a waker, to the
-     * front: so the parent does not wedge at the ceiling, which the peak effective position read
-     * after every call pins on both schedulers, and the child comes back level with the runner rather
-     * than behind it, which [assertLevel] pins. The run then carries on past the old
-     * ceiling, and the cluster converges and conserves, with the §8.2 pieces ordered.
+     * A scheduler crashes mid-run and restarts with no wake memory, and the child that idled through
+     * the whole run comes back level with the one that ran (design §7.2, the restart rule). Before
+     * the crash only the lightest child, weight 1, ran, in bursts; the heaviest, weight 60, idled
+     * throughout, so it sits far behind the runner, and it is demanding from the restarted
+     * scheduler's first call. The fresh allocator has observed no child, and a seated child it has
+     * never observed that it finds demanding is a waker: every child is joining, so each is clamped
+     * level with the furthest-ahead one. Without the rule the idle child would keep the whole run as
+     * credit and take every slot it is eligible for until it caught up.
+     *
+     * The rebase is off on every peer, so no child ever stands below its parent's origin. The
+     * below-zero arm of the old first-sighting rule cannot fire here, and only the restart rule can
+     * level the idle child: the rig asserts both, and that the idle child read far behind the runner
+     * before the boot call, which is what makes "level" mean something. The runs are shorter than
+     * the rebasing row's, so every position stays inside the window the public reads hold it in.
+     * [aRestartedSchedulerWithALongIdleChildBelowZeroComesBackLevel] is the same run with the rebase on.
      */
     @Test
-    fun aRestartedSchedulerWithALongIdleChildDemandingAtBootDoesNotWedge() = runTest(
+    fun aRestartedSchedulerWithALongIdleChildDemandingAtBootComesBackLevel() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
+        val run = restartRun(rebase = false, callsBefore = UNREBASED_CALLS_BEFORE_RESTART, callsAfter = UNREBASED_CALLS_AFTER_RESTART)
+        assertAll(
+            *run.levelAndConserved(),
+            { assertEquals(0, run.rebasesBefore, "the rig: nothing rebased before the crash") },
+            { assertEquals(0, run.rebasesAfter, "…nor after it") },
+            {
+                assertTrue(
+                    run.idleAtRestart >= Rational.ZERO,
+                    "the rig: the idle child never stood below zero, so only the restart rule moves it: ${run.idleAtRestart}",
+                )
+            },
+        )
+    }
+
+    /**
+     * [aRestartedSchedulerWithALongIdleChildDemandingAtBootComesBackLevel] with the rebase on: the
+     * light child's run raises the origin past the idle child, which therefore stands below zero
+     * when the scheduler restarts. The restart rule clamps it level all the same, as the old
+     * below-zero arm did, which the rule takes in. Retired with the rebase.
+     */
+    @Test
+    fun aRestartedSchedulerWithALongIdleChildBelowZeroComesBackLevel() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val run = restartRun(rebase = true, callsBefore = BEFORE_RESTART_CALLS, callsAfter = AFTER_RESTART_CALLS)
+        assertAll(
+            *run.levelAndConserved(),
+            { assertTrue(run.rebasesBefore > 0, "the rig: the scheduler rebased before it crashed") },
+            {
+                assertTrue(
+                    run.idleAtRestart < Rational.ZERO,
+                    "the rig: the idle child stood below zero when the scheduler restarted: ${run.idleAtRestart}",
+                )
+            },
+        )
+    }
+
+    /** What [restartRun] measured: the rig's witnesses and the level the idle child came back at. */
+    private class RestartRun(
+        val plannedBefore: Int,
+        val plannedAfter: Int,
+        val callsBefore: Int,
+        val callsAfter: Int,
+        val idleIssuedBefore: Long,
+        val freshReplica: Boolean,
+        val rebasesBefore: Int,
+        val rebasesAfter: Int,
+        /** The idle child's effective virtual service on the restarted scheduler, before its first call. */
+        val idleAtRestart: Rational,
+        /** The runner's, read the same way. */
+        val lightAtRestart: Rational,
+        val atBoot: ScheduleOutcome,
+        val idleLevel: Rational,
+        val lightLevel: Rational,
+        val boundAtBoot: BoundMetrics,
+        val boundAfter: BoundMetrics,
+        val converged: () -> Unit,
+        val shortfall: String?,
+    ) {
+        /** The assertions both restart rows make: the rig ran, and the idle child came back level. */
+        fun levelAndConserved(): Array<() -> Unit> = arrayOf(
+            { assertEquals(plannedBefore, callsBefore, "the run before the restart made every call") },
+            { assertEquals(plannedAfter + 1, callsAfter, "and the run after it made every call") },
+            { assertEquals(0L, idleIssuedBefore, "the rig: the heavy child idled through the whole run before the crash") },
+            { assertTrue(freshReplica, "the rig: the restarted process is a fresh replica") },
+            {
+                assertTrue(
+                    lightAtRestart - idleAtRestart > Rational.of(LEVEL_SLACK),
+                    "the rig: before the boot call the idle child read far behind the runner: $idleAtRestart against $lightAtRestart",
+                )
+            },
+            { assertIs<ScheduleOutcome.Delegated>(atBoot, "the boot call, with the long-idle child demanding, delegates") },
+            { assertLevel(idleLevel, lightLevel, "the long-idle child came back level with the runner, not behind it") },
+            { assertTrue(boundAtBoot.isConsistent, "the §8.2 pieces are ordered after the boot call: $boundAtBoot") },
+            { assertTrue(boundAfter.isConsistent, "and after the run: $boundAfter") },
+            converged,
+            { assertNull(shortfall, "every minted unit is accounted for") },
+        )
+    }
+
+    /**
+     * The restart run, with [rebase] on or off on every peer: light bursts on one scheduler, which
+     * then crashes with its demand withdrawn; the restarted process mints, catches up on the ledger,
+     * and makes its boot call with every lane waiting, the long-idle one included; then a run of
+     * random calls, and gossip to settle.
+     */
+    private suspend fun TestScope.restartRun(rebase: Boolean, callsBefore: Int, callsAfter: Int): RestartRun {
         val started = TimeSource.Monotonic.markNow()
         val cluster = bootedCluster(mint = mapOf(1 to SUPPLY), lanes = spreadLanes)
+        for (peer in cluster.peers) peer.node.rebaseForTest = rebase
         val idle = spreadLanes.single { it.weight == Weight.of(60L) }
         val light = spreadLanes.single { it.weight == Weight.ONE }
         val before = MixedWeightRun(root, spreadLanes, MAX_GRANT, Random(21), drawFrom = listOf(light), grantsPerCall = BURST_GRANTS)
         val first = cluster.peers[1].node.asSchedulingPeer()
-        var peakBefore = 0.0
-        repeat(BEFORE_RESTART_CALLS) { call ->
+        repeat(callsBefore) { call ->
             before.step(first)
-            peakBefore = maxOf(peakBefore, first.boundMetrics(root).peakPositionFraction)
             if (call % PUMP_EVERY == 0) cluster.pump(1L)
         }
         // Its demand goes with it: the restarted process advertises its own.
         for (lane in spreadLanes) first.advertise(lane.id, Demand.NONE)
         cluster.pump()
-        val originBefore = cluster.peers[0].node.ledger.value.origin(root)
+        val settledBefore = cluster.peers[0].node.ledger.value
         val rebasesBefore = first.rebases()
         val idleIssuedBefore = first.ledger.value.edge(idle.id)?.issued ?: 0L
 
         cluster.restart(1)
         val restarted = cluster.peers[1]
+        restarted.node.rebaseForTest = rebase
         cluster.applied("mint to the restarted scheduler") { restarted.node.mint(restarted.replica, SUPPLY) }
         var catchUpPumps = 0
-        while (restarted.node.ledger.value.origin(root) < originBefore && catchUpPumps < CATCH_UP_PUMPS) {
+        while (!restarted.node.ledger.value.caughtUpWith(settledBefore, light) && catchUpPumps < CATCH_UP_PUMPS) {
             cluster.pump()
             catchUpPumps++
         }
-        val originAtRestart = restarted.node.ledger.value.origin(root)
+        check(restarted.node.ledger.value.caughtUpWith(settledBefore, light)) { "the restarted scheduler caught up within $CATCH_UP_PUMPS pumps" }
+        // Read before any call, so with no wake memory: each child's raw position.
+        val idleAtRestart = restarted.node.effectiveVirtualService(idle, spreadLanes)
+        val lightAtRestart = restarted.node.effectiveVirtualService(light, spreadLanes)
 
         val after = MixedWeightRun(root, spreadLanes, MAX_GRANT, Random(22))
         val second = restarted.node.asSchedulingPeer()
@@ -466,35 +563,41 @@ class HeddleAcceptanceTest {
         val boundAtBoot = second.boundMetrics(root)
         val idleLevel = restarted.node.effectiveVirtualService(idle, spreadLanes)
         val lightLevel = restarted.node.effectiveVirtualService(light, spreadLanes)
-        var peakAfter = boundAtBoot.peakPositionFraction
-        repeat(AFTER_RESTART_CALLS) { call ->
+        repeat(callsAfter) { call ->
             after.step(second)
-            peakAfter = maxOf(peakAfter, second.boundMetrics(root).peakPositionFraction)
             if (call % PUMP_EVERY == 0) cluster.pump(1L)
         }
         cluster.pump(800)
         cluster.pump(800)
         val merged = cluster.peers[0].node.ledger.value
-        println("[${started.elapsedNow()}] restart: ${before.grants} grants before, ${after.grants} after, rebases $rebasesBefore then ${second.rebases()}, at boot $atBoot, peak $peakBefore then $peakAfter")
-        assertAll(
-            { assertEquals(BEFORE_RESTART_CALLS, before.calls, "the run before the restart made every call") },
-            { assertTrue(peakBefore > 0.0 && peakBefore < 1.0, "the peak effective position before the restart stayed below the ceiling: $peakBefore") },
-            { assertEquals(AFTER_RESTART_CALLS + 1, after.calls, "and the run after it made every call") },
-            { assertTrue(rebasesBefore > 0, "the rig: the scheduler rebased before it crashed") },
-            { assertEquals(0L, idleIssuedBefore, "the rig: the heavy child idled through the whole run before the crash") },
-            { assertTrue(restarted.replica != first.self, "the rig: the restarted process is a fresh replica") },
-            { assertEquals(originBefore, originAtRestart, "the rig: the restarted scheduler caught up on the origin before it scheduled") },
-            { assertIs<ScheduleOutcome.Delegated>(atBoot, "the boot call, with the long-idle child demanding, delegates") },
-            { assertLevel(idleLevel, lightLevel, "the long-idle child came back level with the runner, not behind it") },
-            { assertTrue(boundAtBoot.isConsistent, "the §8.2 pieces are ordered after the boot call: $boundAtBoot") },
-            { assertTrue(second.boundMetrics(root).isConsistent, "and after the run: ${second.boundMetrics(root)}") },
-            { assertTrue(peakAfter > 0.0 && peakAfter < 1.0, "and after it, from the boot call on: $peakAfter") },
-            { assertTrue(second.rebases() > 0, "the restarted scheduler rebased in its turn") },
-            { assertTrue(before.grants + after.grants >= LONG_RUN_GRANTS, "the run went far past the old ceiling") },
-            { assertConverged(cluster) },
-            { assertNull(merged.conservationShortfall(root, cluster.everyReplica), "every minted unit is accounted for") },
+        println(
+            "[${started.elapsedNow()}] restart, rebase $rebase: ${before.grants} grants before, ${after.grants} after, " +
+                "rebases $rebasesBefore then ${second.rebases()}, idle at $idleAtRestart against $lightAtRestart, then $idleLevel against $lightLevel",
+        )
+        return RestartRun(
+            plannedBefore = callsBefore,
+            plannedAfter = callsAfter,
+            callsBefore = before.calls,
+            callsAfter = after.calls,
+            idleIssuedBefore = idleIssuedBefore,
+            freshReplica = restarted.replica != first.self,
+            rebasesBefore = rebasesBefore,
+            rebasesAfter = second.rebases(),
+            idleAtRestart = idleAtRestart,
+            lightAtRestart = lightAtRestart,
+            atBoot = atBoot,
+            idleLevel = idleLevel,
+            lightLevel = lightLevel,
+            boundAtBoot = boundAtBoot,
+            boundAfter = second.boundMetrics(root),
+            converged = { assertConverged(cluster) },
+            shortfall = merged.conservationShortfall(root, cluster.everyReplica),
         )
     }
+
+    /** Whether this ledger holds [settled]'s origin at [root] and [light]'s whole run. */
+    private fun EntitlementLedger.caughtUpWith(settled: EntitlementLedger, light: AttachmentRecord): Boolean =
+        origin(root) >= settled.origin(root) && (edge(light.id)?.issued ?: 0L) >= (settled.edge(light.id)?.issued ?: 0L)
 
     // ─────────────────────────────────────────────────────────────────────────────
     // harness
@@ -521,18 +624,18 @@ class HeddleAcceptanceTest {
         return checkNotNull(parentVirtualTime(root)) { "the parent has active children, so it has a front" }
     }
 
-    /** [a] and [b] within two of the largest grants of virtual time, either way. */
-    private fun assertLevel(a: Rational, b: Rational, message: String) {
-        val slack = Rational.of(2L * MAX_GRANT)
-        assertTrue(a - b <= slack && b - a <= slack, "$message: $a against $b")
-    }
-
     private fun assertConverged(cluster: GovernedCluster) {
         val ledgers = cluster.peers.map { it.node.ledger.value }
         assertEquals(1, ledgers.distinct().size, "every peer holds the same ledger")
     }
 
     private companion object {
+        /** [a] and [b] within [LEVEL_SLACK] of virtual time, either way. */
+        fun assertLevel(a: Rational, b: Rational, message: String) {
+            val slack = Rational.of(LEVEL_SLACK)
+            assertTrue(a - b <= slack && b - a <= slack, "$message: $a against $b")
+        }
+
         /** The largest grant: [LocalHeddle.MAX_RESERVATION], the deadline headroom a position keeps. */
         const val MAX_GRANT: Long = LocalHeddle.MAX_RESERVATION
 
@@ -564,11 +667,20 @@ class HeddleAcceptanceTest {
 
         /**
          * Calls the restart run makes before the crash, light bursts only, and after the boot call.
-         * The run after is long enough that, with the rebase off, its peak passes the ceiling (it
-         * read 52% after 500 calls, JVM), so the peak arm can red.
+         * The run before is long enough to rebase when the rebase is on, so the idle child stands
+         * below zero at the restart in that row; the run after carries the restarted scheduler on
+         * far enough for convergence and conservation to mean something.
          */
         const val BEFORE_RESTART_CALLS: Int = 300
         const val AFTER_RESTART_CALLS: Int = 1_200
+
+        /**
+         * The same with the rebase off. With no origin to pull the runner back, its 256 grants put it
+         * about `2⁵²` units of virtual time ahead, under the `2⁶³ / (60 · 16)` ticks the heavy child's
+         * public read is held at, so the level the boot call clamps it to reads exactly.
+         */
+        const val UNREBASED_CALLS_BEFORE_RESTART: Int = 32
+        const val UNREBASED_CALLS_AFTER_RESTART: Int = 100
 
         /**
          * The light runner's calls alone, at [RUNNER_GRANTS] each: 1,600 grants, past a `Long` on the
@@ -591,6 +703,9 @@ class HeddleAcceptanceTest {
         const val BURST_CALLS: Int = 100
         const val BURST_GRANTS: Int = 8
         const val MIX_CALLS: Int = 100
+
+        /** How far apart two children may read and still be level: two of the largest grants of virtual time. */
+        const val LEVEL_SLACK: Long = 2L * MAX_GRANT
 
         /** Every so many calls, a run lets gossip move. */
         const val PUMP_EVERY: Int = 16
