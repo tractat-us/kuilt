@@ -547,13 +547,13 @@ public class WarpLogRecordExporter(
 
     /**
      * Whether [log] may hold a merged remote's ops that no segment on disk carries. Guarded by
-     * [lock]; read and written only inside [mergeTurn].
+     * [lock]; set only inside [mergeTurn], and read and cleared there and in [exportTurn].
      *
      * A merge joins the remote into [log] before its adopted segment is written, so a merge whose
      * turn then failed leaves those ops in memory alone. A retry of that same merge, the usual
      * next step for gossip, changes nothing in memory, and without this it would be skipped as
-     * a no-op and return `Success` for ops no key holds (#3317). An export does not carry them,
-     * since it writes only the active segment.
+     * a no-op and return `Success` for ops no key holds (#3317). An export's active-segment write
+     * does not carry them.
      *
      * A merge turn sets it before it changes [log]. A turn that finds it set adopts the **whole**
      * merged [log] rather than its own remote, so whichever merge comes next, a retry of the failed
@@ -561,6 +561,12 @@ public class WarpLogRecordExporter(
      * refused merge therefore costs one extra adopt of the whole log, which is pinned on disk if
      * the log carries an `RgaOp.Compact`. It no longer costs an adopt per merge until restart, as
      * it did when only a turn that had found the flag clear could clear it (#3349).
+     *
+     * **An export turn with a dedup hit adopts the whole log too.** The stranded ops' ids are in
+     * [seenIds], so a local export of one of those records is a dedup hit, and a dedup hit is a
+     * claim that the record is on disk. While this is set that claim may be false, so the turn
+     * carries the whole log and its success clears the flag (#3384). Dropping the ids from
+     * [seenIds] instead would re-admit the record beside the merged copy, two records with one id.
      */
     private var logHoldsUncarriedMerge: Boolean = false
 
@@ -1446,6 +1452,7 @@ public class WarpLogRecordExporter(
         var consumed = 0
         var accepted = 0
         var applied: List<RgaOp<LogRecord>> = emptyList()
+        var carriesMerge = false
         val actions = runCatchingCancellable {
             lock.withLock {
                 val admitted = ArrayList<LogRecord>()
@@ -1454,10 +1461,15 @@ public class WarpLogRecordExporter(
                 // inside a single batch would otherwise both be admitted.
                 val pending = HashSet<ByteString>()
                 var evictions = 0
+                var dedupedAgainstLog = false
                 while (from + consumed < records.size && fitsInTurn(consumed, evictions)) {
                     val record = records[from + consumed]
                     consumed++
-                    if (record.recordId in seenIds || !pending.add(record.recordId)) continue
+                    if (record.recordId in seenIds) {
+                        dedupedAgainstLog = true
+                        continue
+                    }
+                    if (!pending.add(record.recordId)) continue
                     if (visibleCount + admitted.size - evictions < maxRecords) {
                         admitted += record
                         continue
@@ -1486,6 +1498,11 @@ public class WarpLogRecordExporter(
                 }
                 accepted = admitted.size
                 applied = applyTurn(admitted, evictions)
+                // A dedup hit may be on an id a refused merge left in `log` alone, so while the
+                // flag is set the turn carries the whole log, as the next merge would (#3384).
+                // Built before the pass, in the order [mergeTurn] builds its own adopt.
+                carriesMerge = logHoldsUncarriedMerge && dedupedAgainstLog
+                val adopting = if (carriesMerge) adoptRemoteSegment(log) else null
                 // Before pendingWrites(), never after: a pass rewrites `activeSegment`,
                 // and the active-segment write pendingWrites() already owes is what
                 // carries the resulting floor to disk.
@@ -1502,10 +1519,11 @@ public class WarpLogRecordExporter(
                 // "Changed nothing" is about the store, not this turn, though. A dedup hit is
                 // usually the retry of a turn whose write never landed, and its record is then in
                 // `activeSegment` alone; returning Success without writing it is #3350.
-                if (admitted.isEmpty() && evictions == 0 && !windowed && !activeSegmentUnwritten()) {
-                    emptyList()
-                } else {
-                    pendingWrites(retire = windowed)
+                when {
+                    // The adopt's leading index write stands in for pendingWrites()' own.
+                    adopting != null -> adopting.actions + flushActiveSegment(retire = windowed, adopting = adopting)
+                    admitted.isEmpty() && evictions == 0 && !windowed && !activeSegmentUnwritten() -> emptyList()
+                    else -> pendingWrites(retire = windowed)
                 }
             }
         }.getOrElse { cause ->
@@ -1528,6 +1546,8 @@ public class WarpLogRecordExporter(
                 "WarpLogRecordExporter: durable write failed for a batch of $accepted record(s)"
             }
         }
+        // The whole log landed, so every op a merge put in it is on disk.
+        if (carriesMerge && result is ExportResult.Success) lock.withLock { logHoldsUncarriedMerge = false }
         return TurnOutcome(
             consumed = consumed,
             result = if (result is ExportResult.Success) success(accepted) else result,
@@ -2208,9 +2228,9 @@ public class WarpLogRecordExporter(
      * written and one key growing without bound, which is what [segmentOps] exists to rule out.
      * A key count stays flat throughout, so only a byte measurement sees it.
      *
-     * [adopting] describes the segment a merge earlier in this same turn has staged but not yet
+     * [adopting] describes the segment an adopt earlier in this same turn has staged but not yet
      * sealed ([StoreAction.CommitAdopt]); every index write emitted here projects it as sealed.
-     * Null on the export path, which adopts nothing.
+     * Null on an export turn that adopts nothing, which is almost every one.
      */
     private fun flushActiveSegment(retire: Boolean, adopting: PendingAdopt?): List<StoreAction> {
         val actions = mutableListOf<StoreAction>()
@@ -2323,8 +2343,8 @@ public class WarpLogRecordExporter(
     /**
      * Persist [remote]'s op-log as a sealed segment of its own. Must hold [lock].
      *
-     * [remote] is the peer's log, or this exporter's whole merged log when an earlier merge left
-     * ops in memory alone; see [logHoldsUncarriedMerge].
+     * [remote] is the peer's log, or this exporter's whole log when an earlier merge left ops in
+     * memory alone and a merge or a deduplicating export now carries them; see [logHoldsUncarriedMerge].
      *
      * A merge is the one path that cannot append incrementally — remote ops land
      * anywhere in the sequence — so it pays O(remote) once, which is what it already
