@@ -369,8 +369,8 @@ public class HeddleNode internal constructor(
      * not seen the raise still seats and checkpoints correctly, since both write absolute positions.
      * [boundMetrics] reports the peak effective position as a fraction of its ceiling.
      *
-     * The ceiling can still be met one way: a demanding child that is never served holds the step
-     * at zero. A long-idle child that comes back demanding to a node that never saw it idle, after a
+     * The ceiling can still be met: a demanding child that is never served holds the step at zero,
+     * and a weight set fine-grained enough that one step spans a child's threshold cannot step. A long-idle child that comes back demanding to a node that never saw it idle, after a
      * restart, is clamped as a waker rather than read from far below the origin.
      * A pick that would have to order a position at its ceiling is refused, and the rounds stop at
      * that parent: a call that granted first answers [ScheduleOutcome.Delegated], and every call

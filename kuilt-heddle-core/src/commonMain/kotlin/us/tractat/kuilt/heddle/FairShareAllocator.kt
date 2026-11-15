@@ -433,7 +433,13 @@ public class FairShareAllocator(
         }
     }
 
-    /** The least `Δ` that moves every one of [edges] by whole ticks: the lcm of `d / gcd(d, G · n)`. */
+    /**
+     * The least `Δ` that moves every one of [edges] by whole ticks: the lcm of `d / gcd(d, G · n)`.
+     *
+     * Never `null` under the weight budget: each `d / gcd(d, G · n)` divides `d`, so their lcm
+     * divides `L`, the lcm of the denominators, which [weightsFitTheBudget] keeps in `Long`. The
+     * `null` guards a set merged past the budget, which [schedule] refuses before it gets here.
+     */
     private fun gridStep(edges: List<PolicyEdge>): Long? {
         var step = 1L
         for (edge in edges) {
@@ -450,7 +456,14 @@ public class FairShareAllocator(
         return mulDiv(HeddlePolicy.effectiveTicksWide(edge), w.denominator, checkedMul(TICKS_PER_UNIT, w.numerator), Rounding.FLOOR)
     }
 
-    /** The largest whole multiple of [step] at or below [bound], or `null` when that is not above zero. */
+    /**
+     * The largest whole multiple of [step] at or below [bound], or `null` when that is not above zero:
+     * the furthest-behind demanding child is less than one step ahead of the origin. A child that is
+     * served climbs past it; one that is never served holds it there, the known limit (#3329). So does
+     * a weight set so fine-grained that one step, read on some child's grid, is past that child's
+     * [rebaseThreshold]: it is within the budget (`16 · S` ticks can reach 256 times `R`), but takes
+     * denominators whose lcm is near `Long`.
+     */
     private fun wholeSteps(bound: Int128, step: Long): Int128? {
         val steps = mulDiv(bound, 1L, step, Rounding.FLOOR) ?: return null
         if (steps <= Int128.ZERO) return null

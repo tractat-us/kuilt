@@ -899,11 +899,17 @@ the rebase: a lowered offset kept without its raised folds would be credit. A
 delegation that is not a pick (`admit`, `extend`, an overrun at `complete`)
 never rebases, so a parent only ever charged that way is never rebased.
 
-**Where the ceiling is still reached.** Two ways, and `PositionCeiling` answers
-both:
+**Where the ceiling is still reached.** These ways, and `PositionCeiling` answers
+each:
 
-- A demanding child that is never served holds `Δ` at zero.
+- A demanding child that is never served holds `Δ` at zero: it sits less than
+  one step ahead of the origin, so no whole step fits below it.
   `LocalHeddlePositionCeilingTest` rigs it.
+- A weight set so fine-grained that one step, read on some child's grid, spans
+  more than that child's `R`. The step's lcm always fits `Long` under the weight
+  budget, since it divides the denominators' lcm `L`. But `16 · S` ticks can be up
+  to 256 times `R`, so this needs denominators whose lcm is near `Long`, and no
+  test reaches it.
 - A `LocalHeddle` parent only ever charged through `admit`, `extend` or an
   overrun, and never picked at, is never rebased. Every `HeddleNode` delegation
   is a pick, so this one is `LocalHeddle`'s alone.
