@@ -145,15 +145,17 @@ hands over. `KuiltMetricExporter`, in `kuilt-otel-sdk`, is the bridge between th
 **durably written** to its `DurableStore`. That is the whole contract. It says
 nothing about the collector, which hears about the update on a later drain.
 
-A `Failure` from a refused write means "not yet on disk", not "not counted". The
-change stays in memory and the next successful write of that metric kind carries it,
-so retrying a failed increment counts it twice.
+The result says what a retry may send. A `Refused` is an overflow: the whole call
+was refused before anything was applied, and the same call is refused again. A
+`Partial` lists in `uncounted` exactly the updates of a metric kind the store would
+not let it read. Those were not applied, so recording just that list again counts
+each once. Every other update of a `Partial` was counted. A refused write means
+"not yet on disk", not "not counted": the change stays in memory and the next
+successful write of that kind carries it, so retrying it counts it twice.
 
-Two causes mean the opposite, and a `Failure` lists them first. Both are a
-`MetricNotCountedException`. A `MetricOverflowException` refused the whole call
-before anything was applied. A `MetricKindUnreadException` names one metric kind
-the store would not let it read: that kind's updates were not applied, and
-`carries(update)` picks them out, so recording just those again counts each once.
+A `merge*` call or `clear()` returns a plain `MetricWriteResult`, `Success` or
+`Failure(cause)`. A merge is a join and a clear a delete, so calling either again is
+always safe.
 
 The promise has a price. Each write re-encodes every series of its kind. A single
 call such as `incrementSum` is one write. Hand many changes over at once with
@@ -228,8 +230,8 @@ so send them as cumulative.
 | `MetricKey` | Identity of one metric time series (name + kind + label set). |
 | `MetricKind` | SUM / GAUGE / CARDINALITY / EXPONENTIAL_HISTOGRAM. |
 | `ExportResult` | Typed result of span/log `export()` / `merge()`. |
-| `MetricExportResult` | Typed result of metric mutations. A `Failure` carries every kind's verdict in `causes`. |
-| `MetricNotCountedException` | A `Failure` cause whose updates were never applied: `MetricOverflowException` or `MetricKindUnreadException`. Listed first. |
+| `MetricExportResult` | Typed result of `record` and the single-point metric mutators: `Success`, `Refused` (an overflow; nothing applied), or `Partial`, whose `uncounted` is exactly the updates a retry may send again. |
+| `MetricWriteResult` | Typed result of the idempotent `merge*` calls and metric `clear()`: `Success` or `Failure(cause)`. |
 | `BufferPolicy` | Span/log bounded-buffer eviction strategy (spans log each drop; log records count them on `ExporterHealth`). |
 | `MetricBufferPolicy` | Metric bounded-buffer eviction strategy (always logs what it drops). |
 

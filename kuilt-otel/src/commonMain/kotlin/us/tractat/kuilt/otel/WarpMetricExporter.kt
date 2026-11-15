@@ -1257,7 +1257,7 @@ public class WarpMetricExporter(
             Result.success(Unit)
         } catch (cause: Throwable) {
             // Only this coroutine's own cancellation propagates. One the store minted from its own
-            // `withTimeout` is a refused write, so the caller gets a Failure it can retry (#3388).
+            // `withTimeout` is a refused write, which the caller is told of rather than cancelled by (#3388).
             currentCoroutineContext().ensureActive()
             Result.failure(cause)
         }
