@@ -1184,8 +1184,6 @@ public class FairShareAllocator(
             // sides are on the waker's grid, and the result is stored on it, so a stored offset
             // never carries a front's denominator into the next one (#3313).
             wakeOffsets[edge.record.id] = maxOf(edge.offsetTicks, computed)
-            // A clamp puts it at the front, so its shifts' rounding starts over from there.
-            shiftRemainders.remove(edge.record.id)
         }
     }
 
