@@ -213,4 +213,35 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
             { assertTrue("foreign1" in durable, "export reported $exported for a record no key holds: $durable") },
         )
     }
+
+    @Test
+    fun anExportWithNoDedupHitLeavesTheRefusedMergeToTheNextMerge() = runTest {
+        // Only a dedup hit claims a merged record is durable, so only it pays for the whole-log
+        // adopt. A store that refuses large writes and takes small ones keeps taking new records.
+        val backing = RecordingStore()
+        val store = segmentRefusing(backing)
+        val exporter = exporterFor(store)
+        repeat(3) { exporter.export(record(it)) }
+        val remote = foreignLog(ReplicaId("B"), firstId = 500, label = "foreign")
+
+        store.refuseWrites()
+        val refused = exporter.merge(remote)
+        val refusals = store.refusedWrites()
+        store.allowWrites()
+
+        val exported = exporter.export(record(9, "local9"))
+        val afterExport = bodiesAfterRestart(backing)
+        val merged = exporter.merge(remote)
+        val afterMerge = bodiesAfterRestart(backing)
+
+        assertAll(
+            { assertEquals(1, refusals, "the rig refused $refusals writes, not exactly the adopted segment's") },
+            { assertTrue(refused is ExportResult.Failure, "the refused merge reported $refused") },
+            { assertEquals(ExportResult.Success, exported) },
+            { assertTrue("local9" in afterExport, "the exported record was lost: $afterExport") },
+            { assertTrue("foreign0" !in afterExport, "an export with no dedup hit adopted the whole log: $afterExport") },
+            { assertEquals(ExportResult.Success, merged) },
+            { assertTrue((0 until 6).all { "foreign$it" in afterMerge }, "the refused merge's records were lost: $afterMerge") },
+        )
+    }
 }
