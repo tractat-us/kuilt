@@ -95,4 +95,10 @@ class HeddleSamplesRunTest {
 
     @Test
     fun templateCeilingHolds() = sampleTemplateCeiling()
+
+    @Test
+    fun queueStatusHolds() = sampleQueueStatus()
+
+    @Test
+    fun waitReasonHolds() = sampleWaitReason()
 }

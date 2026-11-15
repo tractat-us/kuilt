@@ -597,5 +597,118 @@ internal fun sampleTemplateCeiling() {
     check((heddle.acquire(all, all, startedAt = 1L) as AcquireOutcome.Acquired).lease.leaf == nightly)
 }
 
+/**
+ * A status line for the person whose build is waiting: where their next builds sit in line, why
+ * another team goes first, and what share they are owed. Every answer is a read, so asking moves
+ * nothing, and a preview finishes no build, so a lane under a ceiling shows up no more often than
+ * its ceiling allows.
+ */
+@Suppress("unused")
+internal fun sampleQueueStatus() {
+    val farm = draft("farm") {
+        group("web", Weight.of(3)) { lane("builds") }
+        group("mobile") { lane("builds") }
+    }
+    val web = farm.groupId("web", "builds")
+    val mobile = farm.groupId("mobile", "builds")
+    val heddle = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 4L)
+
+    // The names a person knows each part of the tree by.
+    val names = mapOf(
+        farm.groupId() to "the farm",
+        farm.groupId("web") to "Web",
+        web to "Web",
+        farm.groupId("mobile") to "Mobile",
+        mobile to "Mobile",
+    )
+
+    // One sentence for each answer explain can give. The compiler checks that none is missing.
+    fun why(lane: GroupId, waiting: Set<GroupId>, eligible: Set<GroupId>): String =
+        when (val answer = heddle.explain(lane, waiting, eligible)) {
+            WaitExplanation.WouldBePickedNext -> "Next up."
+            WaitExplanation.NotWaiting -> "Nothing queued."
+            WaitExplanation.NotEligible -> "This agent cannot run it."
+            WaitExplanation.SupplyExhausted -> "No agent time is free yet."
+            is WaitExplanation.NoLiveLineage -> "Its part of the tree is being changed."
+            is WaitExplanation.AtCeiling -> "${names.getValue(answer.group)} already runs ${answer.limit} at once, its limit."
+            is WaitExplanation.PositionCeiling -> "Scheduling is stuck at ${names.getValue(answer.parent)}."
+            is WaitExplanation.BehindAtLevel -> "${names.getValue(answer.nextChild)} goes first at ${names.getValue(answer.parent)}."
+        }
+
+    val both = setOf(web, mobile)
+    // Where do mobile's next builds sit in line? Second and sixth.
+    val line = heddle.previewPicks(mapOf(web to 8, mobile to 8), both, List(8) { 3L })
+    check(line.withIndex().filter { it.value == mobile }.map { it.index + 1 } == listOf(2, 6))
+    check(why(mobile, waiting = both, eligible = both) == "Web goes first at the farm.")
+    // Of the four agents, mobile is owed one while both teams have builds queued.
+    check(heddle.entitlement(mobile, waiting = both, totalSlots = 4L) == Rational.ONE)
+    // With web's queue empty, mobile is owed all four.
+    check(heddle.entitlement(mobile, waiting = setOf(mobile), totalSlots = 4L) == Rational.of(4L))
+    // The answers change only when something real happens. Web takes the next agent:
+    check((heddle.acquire(both, both, startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf == web)
+    check(why(mobile, waiting = both, eligible = both) == "Next up.")
+    check(why(mobile, waiting = setOf(web), eligible = setOf(web)) == "Nothing queued.")
+    check(why(mobile, waiting = both, eligible = setOf(web)) == "This agent cannot run it.")
+
+    // A preview finishes no build, so deploys, capped at one at a time, appear once.
+    val pool = draft("pool") {
+        lane("deploys", Weight.of(3), maxConcurrent = 1)
+        lane("builds")
+    }
+    val deploys = pool.groupId("deploys")
+    val builds = pool.groupId("builds")
+    val capped = LocalHeddle.fromTopology(pool, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    capped.reconcileCapacity(totalSlots = 4L)
+    val queued = mapOf(deploys to 3, builds to 3)
+    check(capped.previewPicks(queued, queued.keys, List(6) { 1L }) == listOf(deploys, builds, builds, builds))
+}
+
+/**
+ * A hold reason a status page or a metric can compare from one moment to the next: the answer's
+ * kind and its group ids. The numbers a `BehindAtLevel` carries move on every pick, so comparing
+ * whole answers would report a new reason every time.
+ */
+@Suppress("unused")
+internal fun sampleWaitReason() {
+    val farm = draft("farm") {
+        group("web", Weight.of(3)) { lane("builds") }
+        group("mobile") { lane("builds") }
+    }
+    val web = farm.groupId("web", "builds")
+    val mobile = farm.groupId("mobile", "builds")
+    val heddle = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    val both = setOf(web, mobile)
+
+    // Until the engine knows how many agents there are, nobody goes next.
+    check(heddle.explain(mobile, waiting = both, eligible = both) == WaitExplanation.SupplyExhausted)
+    heddle.reconcileCapacity(totalSlots = 4L)
+
+    // The reason, without the numbers: the kind, and every group id the answer names.
+    fun reason(answer: WaitExplanation): Pair<WaitExplanation.Kind, List<GroupId>> =
+        answer.kind to when (answer) {
+            WaitExplanation.NotWaiting, WaitExplanation.NotEligible, WaitExplanation.SupplyExhausted,
+            WaitExplanation.WouldBePickedNext -> emptyList()
+            is WaitExplanation.NoLiveLineage -> listOf(answer.at)
+            is WaitExplanation.AtCeiling -> listOf(answer.group)
+            is WaitExplanation.PositionCeiling -> listOf(answer.parent)
+            is WaitExplanation.BehindAtLevel -> listOf(answer.parent, answer.nextChild)
+        }
+
+    fun build() {
+        val out = heddle.acquire(both, both, startedAt = 0L)
+        check(out is AcquireOutcome.Acquired)
+        heddle.complete(out.lease.id, actualCost = 3L)
+    }
+    repeat(2) { build() } // web, then mobile
+    val before = heddle.explain(mobile, waiting = both, eligible = both)
+    build() // web again
+    val after = heddle.explain(mobile, waiting = both, eligible = both)
+    // The numbers moved, so the whole answers differ. The reason did not: web is still ahead at the farm.
+    check(before != after)
+    check(reason(before) == reason(after))
+    check(reason(after) == (WaitExplanation.Kind.BEHIND_AT_LEVEL to listOf(farm.groupId(), farm.groupId("web"))))
+}
+
 /** Two lanes under `pool`, `heavy` at weight 2 beside `light`. */
 private fun twoLanes(): Topology = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light")))

@@ -154,6 +154,8 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [Fair share with Heddle](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle.md)
 - [Inside Heddle](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle-accounting.md): Fair share with Heddle
 - [Fair share in one program](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle-local.md): Fair share with Heddle
+- [Showing who goes next](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle-local-preview.md): Fair share with Heddle › Fair share in one program
+- [Explaining a wait](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle-local-explain.md): Fair share with Heddle › Fair share in one program
 - [How the next turn is chosen](https://raw.githubusercontent.com/tractat-us/kuilt/main/Writerside/topics/heddle-local-turns.md): Fair share with Heddle › Fair share in one program
 
 ## Modules: Contract & core
