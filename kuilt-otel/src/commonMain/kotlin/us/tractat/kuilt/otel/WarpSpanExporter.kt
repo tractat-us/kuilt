@@ -594,7 +594,11 @@ public class WarpSpanExporter(
         var stamped: Stamping? = try {
             lock.withLock { if (readState == SpanReadState.Recovered) insert(span, clock) else null }
         } catch (refused: CeilingRefusal) {
-            // Nothing moved: not the set, not the clock, not the store (#3441).
+            // Nothing moved: not the set, not the clock, not the store (#3441). The turn's reads are
+            // done, so a skip of the clock's read is spent here, as the section below spends it: a set
+            // at the ceiling refuses every export, and one that never spent would skip the clock's read
+            // for good (#3436).
+            spendClockSkip(causalClock, clockRead)
             return refusedAtCeiling(refused.ceiling)
         }
         val addedEarly = stamped != null
