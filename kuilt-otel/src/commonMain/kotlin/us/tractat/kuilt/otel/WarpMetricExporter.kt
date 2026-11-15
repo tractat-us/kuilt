@@ -80,9 +80,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * Two Failures mean "not counted". One is a refusal, before anything is applied, of a sum
  * increment or histogram update that would carry one of this replica's counts past
  * [Long.MAX_VALUE]: its cause is a [MetricOverflowException] (#3318, #3354), and nothing was
- * applied or written. The other is a kind whose persisted series [recover] could not read: until a
- * read lands, that kind's updates are not applied and its key is not written, and the cause is the
- * store's refusal of the read (#3390). See [recover].
+ * applied or written. The other is a kind whose persisted series no read has joined yet: its
+ * updates are not applied and its key is not written until one does, and the cause is the store's
+ * refusal of the read (#3390). A kind is read by [recover], or by its own first turn on an
+ * exporter that skipped [recover], and again by every turn while the store refuses. See [recover].
  *
  * ## Batches
  *
@@ -349,14 +350,28 @@ public class WarpMetricExporter(
         /** Read, absent, or undecodable and started fresh. Turns of this kind write. */
         data object Settled : PersistedRead
 
-        /** The last read was [KindRead.Refused]. Every turn of this kind reads again first. */
-        class Owed(val cause: Throwable) : PersistedRead
+        /**
+         * The read was [KindRead.Refused]. Every turn of this kind reads again first. [first] is
+         * whether this refusal is the kind's first since a read last landed, the one that is logged.
+         */
+        class Owed(val cause: Throwable, val first: Boolean) : PersistedRead
+    }
+
+    /** Why a kind still owes a read of its persisted series. */
+    private enum class OwedRead {
+        /** Nothing has read it yet: the exporter was just built, and [recover] has not run. */
+        UNREAD,
+
+        /** A read of it was refused, and no read has landed since. */
+        REFUSED,
     }
 
     /**
-     * The kinds whose last read was refused, with the cause; a kind absent here is
-     * [PersistedRead.Settled]. Every kind is settled at construction, so an exporter over a fresh
-     * store that never calls [recover] writes as it always has.
+     * The kinds whose persisted series no read has yet joined into memory; a kind absent here is
+     * [PersistedRead.Settled]. **Every kind starts owed**, as [OwedRead.UNREAD]: an exporter that
+     * never calls [recover] holds the same fresh map a refused read leaves, so its first write of a
+     * kind would replace every series a previous process made durable (#3390). Its first turn of
+     * each kind reads first instead, and joins what it finds, exactly as after a refused read.
      *
      * Guarded by [lock] and changed only under [writeMutex], by [settle], in the same [lock]
      * section that installs what the read found, and by a [clear] that deleted every key. So no
@@ -371,11 +386,13 @@ public class WarpMetricExporter(
      * `15`). Admitting nothing keeps memory on the store's own history, so the join on heal is
      * exact, and it is idempotent, so a repeated read cannot double-count either.
      */
-    private var owedReads: Map<StoredKind, Throwable> = emptyMap()
+    private var owedReads: Map<StoredKind, OwedRead> = StoredKind.entries.associateWith { OwedRead.UNREAD }
 
     /**
      * Reload persisted metric state from [store]. Call once at startup before any
-     * calls to the mutating methods. Idempotent: a second call re-reads the same bytes and joins
+     * calls to the mutating methods, so the readers see the persisted series from the start. A
+     * mutating call made first reads its kind itself before it writes, so skipping this never
+     * overwrites what is on disk. Idempotent: a second call re-reads the same bytes and joins
      * them into memory, so a series memory already holds ahead of the store, an increment a refused
      * write left there say, is kept.
      *
@@ -399,9 +416,25 @@ public class WarpMetricExporter(
             val read = readKind(kind)
             if (read is PersistedRead.Owed) {
                 persistence.recoveryFailed(read.cause)
-                logger.error(read.cause) {
-                    "${kind.storeKey.name}: store read failed; this kind's writes are refused until a read succeeds"
-                }
+                logRefusal(kind, read)
+            }
+        }
+    }
+
+    /**
+     * Log a refused read of [kind]: at ERROR the first time, at DEBUG after that, as a store that
+     * stays unreadable is refused again on every turn of the kind and would otherwise log a stack
+     * trace per write.
+     */
+    private fun logRefusal(kind: StoredKind, read: PersistedRead.Owed) {
+        if (read.first) {
+            logger.error(read.cause) {
+                "${kind.storeKey.name}: store read failed; this kind's writes are refused until a read succeeds"
+            }
+        } else {
+            logger.debug {
+                "${kind.storeKey.name}: persisted series still unreadable, so this turn admits and writes " +
+                    "nothing of the kind: ${read.cause}"
             }
         }
     }
@@ -449,18 +482,20 @@ public class WarpMetricExporter(
             persistence.recoveryFailed(read.cause)
             logger.warn(read.cause) { "${kind.storeKey.name}: corrupt store entry, starting fresh" }
         }
-        val outcome = if (read is KindRead.Refused) PersistedRead.Owed(read.cause) else PersistedRead.Settled
-        lock.withLock {
+        return lock.withLock {
             if (read is KindRead.Found) {
                 read.series.forEach { (key, persisted) -> series[key] = series[key]?.piece(persisted) ?: persisted }
                 while (totalCount() > maxMetrics) evictOne()
             }
-            owedReads = when (outcome) {
-                is PersistedRead.Owed -> owedReads + (kind to outcome.cause)
-                PersistedRead.Settled -> owedReads - kind
+            if (read is KindRead.Refused) {
+                val first = owedReads[kind] != OwedRead.REFUSED
+                owedReads = owedReads + (kind to OwedRead.REFUSED)
+                PersistedRead.Owed(read.cause, first)
+            } else {
+                owedReads = owedReads - kind
+                PersistedRead.Settled
             }
         }
-        return outcome
     }
 
     /**
@@ -485,8 +520,8 @@ public class WarpMetricExporter(
      * still refused with their causes. Must hold [writeMutex].
      *
      * A turn of a kind returned here admits nothing of it and writes nothing of it; it counts as a
-     * failed turn of that kind on [health]. The refusal was logged once by [recover], so a refused
-     * turn logs at debug, as a store that stays unreadable would otherwise log once per write.
+     * failed turn of that kind on [health]. Only the kind's first refusal is logged as an error,
+     * whether [recover] or a turn met it; see [logRefusal].
      */
     private suspend fun refusedReads(kinds: Set<StoredKind>): Map<StoredKind, Throwable> {
         val owed = lock.withLock { owedReads.keys }
@@ -497,12 +532,9 @@ public class WarpMetricExporter(
                 is PersistedRead.Owed -> {
                     refused[kind] = read.cause
                     persistence.failed(setOf(kind.storeKey), read.cause)
-                    logger.debug {
-                        "${kind.storeKey.name}: persisted series still unreadable, so this turn admits and writes " +
-                            "nothing of the kind: ${read.cause}"
-                    }
+                    logRefusal(kind, read)
                 }
-                PersistedRead.Settled -> logger.info { "${kind.storeKey.name}: persisted series read after a refusal; writes resume" }
+                PersistedRead.Settled -> logger.debug { "${kind.storeKey.name}: persisted series read; writes of the kind go ahead" }
             }
         }
         return refused
@@ -614,8 +646,8 @@ public class WarpMetricExporter(
      *   [MetricExportResult.Failure] (in the fixed kind order sums, double sums, gauges,
      *   cardinalities, histograms) is returned. Stopping at the first refusal would leave the later
      *   kinds off disk, which applying the updates one by one never does.
-     * - A kind whose persisted series is still unread after a refused [recover] read is read again
-     *   first. While that read is refused, the batch's updates **of that kind** are not applied and
+     * - A kind whose persisted series no read has joined yet — [recover] was refused, or never
+     *   called — is read first. While that read is refused, the batch's updates **of that kind** are not applied and
      *   the kind is not written, and its Failure is the read's cause; the other kinds go ahead.
      * - A [MetricExportResult.Failure] from a write means "not yet durable", not "not counted"
      *   (an unread kind, above, and a refused batch, below, are the Failures that mean "not
@@ -1302,8 +1334,8 @@ public sealed interface MetricExportResult {
      *
      * Two exceptions mean nothing was counted. A [cause] that is a [MetricOverflowException]: the
      * call was refused before anything was applied, and retrying it is refused the same way. And
-     * a call to a kind whose persisted series is still unread after a refused recovery read: its
-     * updates of that kind were not applied, and [cause] is the store's refusal of the read; see
+     * a call to a kind whose persisted series no read has joined yet, because the store refused the
+     * read: its updates of that kind were not applied, and [cause] is the store's refusal of the read; see
      * [WarpMetricExporter.recover].
      */
     public data class Failure(public val cause: Throwable) : MetricExportResult

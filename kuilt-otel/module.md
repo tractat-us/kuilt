@@ -91,7 +91,10 @@ makes every log or span turn fail, and write nothing, until a later read succeed
 keeps the records and spans on disk the read would have found. Log turns retry the read
 on a window that doubles up to 63 turns, so a long outage costs one store read per 64 log
 turns; `recover()` always reads. A span turn that read
-stops counts in `failed`, and the first span write that lands resolves it.
+stops counts in `failed`, and the first span write that lands resolves it. Metrics do the
+same for each metric kind on its own: a refused read of the histograms fails the
+histogram turns, and a batch's sums still write. A metric exporter nobody recovered reads
+each kind before its first write.
 A failed turn may still have saved its data, and a cancelled turn counts as neither
 acknowledged nor failed; a cancelled metric batch keeps the turns of the kinds it had
 already written. "Cancelled" means the caller was cancelled. When the store cancels
