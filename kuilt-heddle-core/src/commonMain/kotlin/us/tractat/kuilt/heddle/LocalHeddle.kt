@@ -243,8 +243,9 @@ public sealed interface LeaseOutcome {
  * the tree and reserves an estimated cost for it. When the work finishes, [complete] charges what
  * it really cost and hands back what it did not use. Cost is time, by convention, in whatever unit
  * the caller counts in. A lease that runs long is [extend]ed, or charged its overrun at the end;
- * a charge is never refused. Work another scheduler already started is [admit]ted, with no pick;
- * pass the waiting set to [admit] and the wake memory observes it as the pick would have.
+ * a charge is never refused. Work another scheduler already started is [admit]ted, with no pick.
+ * Every call that charges, [admit], [extend] and [complete], takes the waiting set, and the wake
+ * memory observes it as a pick would have before the charge lands (#3471).
  *
  * Start one with [fromTopology], and change the tree while it runs with [apply]: a reload is one
  * unit, a reweight moves the leases open under it onto the new edge, and a removal drains (see
@@ -415,14 +416,12 @@ public sealed interface LeaseOutcome {
  * front is below its floor is seated at the floor instead, which costs it a turn and never gives it
  * one. The ceiling is measured net of
  * returns, so returned service never reaches it (#3360). A charging call, [admit], [extend] or an
- * overrun at [complete], runs the same step at every parent on its path, so a parent driven only
- * that way is rebased too. A busy parent still climbs past the ceiling where no whole step fits.
- * The rebase aims at the weighted mean of the children it counts as demanding, so one that is
- * never served drags that mean down with it until it sits less than one step above the origin, and
- * the rebase stops; a child counted demanding that is in fact idle does the same, which is what a
- * charging call with no waiting set does with a child a pick last saw demanding, a plain [admit],
- * an [extend] or an overrunning [complete] alike. Either way the picks are unaffected: they go on
- * ordering the wide positions exactly. A weight set so fine that one step or one full lease could
+ * overrun at [complete], runs the same step at every parent on its path, bounded by the call's own
+ * waiting set, so a parent driven only that way is rebased too. A busy parent still climbs past the
+ * ceiling where no whole step fits. The rebase aims at the weighted mean of the children that are
+ * demanding, so one that is never served drags that mean down with it until it sits less than one
+ * step above the origin, and the rebase stops. The picks are unaffected: they go on ordering the
+ * wide positions exactly. A weight set so fine that one step or one full lease could
  * carry a child past its ceiling is refused at [apply] instead (#3353).
  *
  * Nothing is narrowed on the way to a pick, a seat or a wake clamp, so each is taken against the

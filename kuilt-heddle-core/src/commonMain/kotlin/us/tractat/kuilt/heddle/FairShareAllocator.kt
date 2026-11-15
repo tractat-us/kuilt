@@ -488,12 +488,9 @@ public class FairShareAllocator(
      * The origin step after a **charging** call lands at [parent] in [ledger]: `admit`, `extend` or a
      * `complete` that overran (#3353 review, item I). A parent a consumer drives only through those
      * is never picked at, so without this it never rebases. The rule is the pick's, `Δ` aimed at the
-     * front of the demanding children [waiting] names and held inside each one's window. A call with
-     * no waiting set takes that set to be [charged], the child it charged, and every child this
-     * allocator last saw demanding: a child it saw idle, or never saw, may go below its floor. When
-     * it next competes it comes back by its parent's clock, which reads no position, if this
-     * allocator saw it leave, and is clamped as a waker if not (#3376); either way it lands no lower
-     * than its floor. An origin raise moves every child alike, so it changes no pick.
+     * front of the demanding children [waiting] names and held inside each one's window. [waiting] is
+     * the call's own, observed on the way down, so the set is who is demanding now, never who was
+     * last seen demanding (#3471). An origin raise moves every child alike, so it changes no pick.
      *
      * A charging call never refuses, so this never throws: `null` when no step is possible, or when
      * the arithmetic would leave 128 bits.
@@ -501,17 +498,12 @@ public class FairShareAllocator(
     internal fun chargeRebase(
         parent: GroupId,
         ledger: EntitlementLedger,
-        waiting: ((AttachmentId) -> Demand)?,
-        charged: AttachmentId,
+        waiting: (AttachmentId) -> Demand,
     ): Rebase? {
         if (!rebaseEnabled) return null
         return try {
-            val edges = policyEdges(ledger, parent, waiting ?: { Demand.NONE })
-            val bound = if (waiting != null) {
-                edges.filter { it.gauge != null && HeddlePolicy.isDemanding(it) }
-            } else {
-                edges.filter { it.gauge != null && (it.record.id == charged || demandingObserved[it.record.id] == true) }
-            }
+            val edges = policyEdges(ledger, parent, waiting)
+            val bound = edges.filter { it.gauge != null && HeddlePolicy.isDemanding(it) }
             val delta = originStep(edges, bound) ?: return null
             val patch = ledger.raiseOrigin(parent, ledger.origin(parent) + delta) ?: return null
             Rebase(ledger.piece(patch.delta))
@@ -1328,7 +1320,9 @@ public class FairShareAllocator(
      * clamp on an idle→demand *event* this peer has actually observed, and a window that opens and
      * closes between two samples is not seen. Single-peer, a child that stops partway through a
      * call is seen at the grant that stopped it, and an idle interval between calls is seen at the
-     * next entry, so neither banks anything. Two windows escape. One is multi-peer: a child may
+     * next entry that observes: a pick, or a `LocalHeddle` charging call, which observes its own
+     * waiting set before its charge lands (#3471), so a charge in the interval is not banked by the
+     * child that idled through it. Two windows escape. One is multi-peer: a child may
      * idle and re-demand between this peer's rounds while *another* peer's grants advance its
      * siblings, so this peer sees demanding→demanding and moves nothing. Accepted by design: the
      * resulting catch-up burst is capped by this peer's holdings and the §8.2 caps, any peer that

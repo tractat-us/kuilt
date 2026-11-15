@@ -126,7 +126,10 @@ public class LocalHeddleView internal constructor(
             val out = scratch.acquire(waitingNow, eligibleNow, startedAt = 0L, reservation = reservation)
             if (out !is AcquireOutcome.Acquired) break
             val head = remaining.getValue(out.lease.leaf).removeFirst()
-            if (head > reservation && scratch.extend(out.lease.id, head - reservation) !is LeaseOutcome.Done) break
+            if (head > reservation) {
+                val stillWaiting = remaining.filterValues { it.isNotEmpty() }.keys
+                if (scratch.extend(out.lease.id, head - reservation, stillWaiting) !is LeaseOutcome.Done) break
+            }
             picks += out.lease.leaf
         }
         return picks
