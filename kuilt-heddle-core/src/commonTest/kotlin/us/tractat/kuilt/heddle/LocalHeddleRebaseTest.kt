@@ -9,8 +9,9 @@ import kotlin.test.assertTrue
 
 /**
  * How far one rebase moves a parent's children (#3329): every child by the same virtual time `Δ`,
- * as far as the demanding child furthest behind allows and no further, and an idle child only as
- * far as keeps it at `−R`, where `R` is a sixteenth of its ceiling.
+ * as far as the demanding child furthest behind allows and no further, an idle child included:
+ * since #3353 the rebase raises the root's origin, so an idle child goes as far below zero as `Δ`
+ * takes it. `R` is a sixteenth of a lane's ceiling.
  *
  * Positions are planted by raising a lane's gauge floor ([pushTo]), a write any peer could make.
  * Every lane weighs 1, so `Δ` in ticks is the same number on every lane. Each arm asserts first
@@ -52,12 +53,12 @@ class LocalHeddleRebaseTest {
     private fun LocalHeddle.edgeOf(lane: GroupId): AttachmentId =
         checkNotNull(snapshot().ledger.lineageOf(lane)?.last()) { "${lane.value} has no lineage" }
 
-    /** [lane]'s raw position in ticks: gross, less what it returned. */
+    /** [lane]'s raw position in ticks: gross, less what it returned, relative to the root's origin. */
     private fun LocalHeddle.ticks(lane: GroupId): Long {
         val ledger = snapshot().ledger
         val edge = edgeOf(lane)
-        val gross = ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge), Weight.ONE)
-        return saturated(gross - (ledger.edge(edge)?.returned ?: 0L) * TICKS_PER_UNIT, Weight.ONE)
+        val raw = ledger.gauge(edge).rawTicksAt(ledger.baseIssuance(edge), ledger.edge(edge)?.returned ?: 0L, Weight.ONE, ledger.origin(root))
+        return checkNotNull(raw.toLongOrNull()) { "${lane.value} reads $raw ticks, past Long" }
     }
 
     /** Put [lane]'s position at exactly [ticks] by raising its gauge floor at its current fold. */
@@ -66,7 +67,8 @@ class LocalHeddleRebaseTest {
         reshapeForTest { ledger ->
             val gauge = checkNotNull(ledger.gauge(edge)) { "${lane.value} is seated" }
             val issued = ledger.baseIssuance(edge)
-            val floorTicks = ticks - (issued - gauge.folded) * TICKS_PER_UNIT
+            val origin = checkNotNull(originTicks(ledger.origin(root), Weight.ONE).toLongOrNull())
+            val floorTicks = ticks + origin - (issued - gauge.folded) * TICKS_PER_UNIT
             ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to Gauge(ticksToVirtual(floorTicks, Weight.ONE), gauge.folded))))
         }
         check(ticks(lane) == ticks) { "the rig put ${lane.value} at ${ticks(lane)}, not $ticks" }
@@ -122,13 +124,13 @@ class LocalHeddleRebaseTest {
 
     /**
      * `a` and `b` both wait, `b` the lower at `2R`, so `Δ` is about `2R`; `c` is idle a few ticks
-     * above its origin, and moving it the whole way would put it near `−R` below `−R`. It moves only
-     * to `−R` instead: credit the wake clamp takes back. And it does take it back. When `c` wakes
-     * beside `a` it is clamped to `a`'s front and served, and the engine picks exactly as a twin
-     * that never rebased.
+     * above its origin and moves the whole `Δ`, to about `−2R` (#3353). The fold rebase this replaced
+     * stopped it at `−R`. The wake clamp takes all of it back, since it is taken wide: when `c` wakes
+     * beside `a` it is clamped to `a`'s front and served, and the engine picks exactly as a twin that
+     * never rebased.
      */
     @Test
-    fun anIdleChildFarBehindIsLiftedOnlyToMinusR() {
+    fun anIdleChildFarBehindMovesTheWholeShiftAndItsWakeTakesItBack() {
         val engine = engine()
         val twin = engine(rebase = false)
         for (e in listOf(engine, twin)) {
@@ -154,8 +156,8 @@ class LocalHeddleRebaseTest {
         assertAll(
             { assertEquals(b, (out as AcquireOutcome.Acquired).lease.leaf) },
             { assertTrue(shift > 2 * threshold - TICKS_PER_UNIT && shift <= 2 * threshold, "Δ is b's position in whole units: $shift") },
-            { assertTrue(afterRebase >= -threshold && afterRebase < -threshold + TICKS_PER_UNIT, "c lands at −R, not ${afterRebase + threshold} ticks from it") },
-            { assertTrue(cBefore - afterRebase < shift, "c moved less than Δ") },
+            { assertEquals(shift, cBefore - afterRebase, "c moved the whole Δ, past −R") },
+            { assertTrue(afterRebase < -threshold, "the rig: c is below −R, at $afterRebase") },
             { assertEquals(pickedAfterWake.map { it[1] }, pickedAfterWake.map { it[0] }, "once c wakes, every pick is the twin's") },
             { assertTrue(pickedAfterWake.any { it[0] == c }, "and c was picked, so the wake was reached") },
         )
@@ -208,7 +210,7 @@ class LocalHeddleRebaseTest {
 
     /**
      * Every active child a joiner: the busy lane is reweighted, so its new edge is a newborn, while
-     * the two idle lanes wake far behind it, lifted to `−R` in the rebasing engine. With no one left
+     * the two idle lanes wake far behind it, below `−R` in the rebasing engine. With no one left
      * to be level with, the wakers are clamped to the one furthest ahead and the newborn is seated
      * there too (#3329 review): seating it at its own origin instead would leave it about `R` ahead
      * of the lifted wakers, and they would take every pick until they caught up.
@@ -217,9 +219,9 @@ class LocalHeddleRebaseTest {
     fun aNewbornAmongWakersMeetsTheWakerFurthestAhead() = assertNewbornJoinsLevel(waking = setOf(b, c))
 
     /**
-     * The same, with `c` left idle at `−R` in the rebasing engine. No child outside the joiners is
+     * The same, with `c` left idle below `−R` in the rebasing engine. No child outside the joiners is
      * demanding, so the front is the furthest-ahead child at the parent, the newborn counted at its
-     * own origin (§7.2, #3353): the waker `b` is clamped level with the newborn, not left at `−R`
+     * own origin (§7.2, #3353): the waker `b` is clamped level with the newborn, not left below `−R`
      * beside the idle `c`, `R` behind it (#3329 re-review).
      */
     @Test
@@ -234,7 +236,7 @@ class LocalHeddleRebaseTest {
         for (e in both) e.pushTo(a, 3 * threshold)
         pickOnEach(both, setOf(a), at = 2L)
         val lifted = engine.ticks(b)
-        check(lifted >= -threshold && lifted < -threshold + TICKS_PER_UNIT) { "the rig: b was lifted to −R, not $lifted" }
+        check(lifted < -threshold) { "the rig: b moved the whole Δ, below −R, not to $lifted" }
         check(twin.ticks(b) >= 0L) { "the twin's b is where it was" }
 
         val oldEdge = engine.edgeOf(a)
