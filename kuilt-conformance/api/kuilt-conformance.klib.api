@@ -109,7 +109,7 @@ sealed interface us.tractat.kuilt.conformance/DeviceKeyStoreFixture { // us.trac
     }
 
     final class Durable : us.tractat.kuilt.conformance/DeviceKeyStoreFixture { // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable|null[0]
-        constructor <init>(kotlin.coroutines/SuspendFunction1<kotlin.coroutines/SuspendFunction0<kotlin/Unit>, us.tractat.kuilt.identity/DeviceKeyStore>, kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.identity/DidKey>, kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/DeviceKeyStoreFixture.KeyWriteInterruption>, kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableKey>) // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.<init>|<init>(kotlin.coroutines.SuspendFunction1<kotlin.coroutines.SuspendFunction0<kotlin.Unit>,us.tractat.kuilt.identity.DeviceKeyStore>;kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.identity.DidKey>;kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.conformance.DeviceKeyStoreFixture.KeyWriteInterruption>;kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.conformance.DeviceKeyStoreFixture.UnreadableKey>){}[0]
+        constructor <init>(kotlin.coroutines/SuspendFunction1<kotlin.coroutines/SuspendFunction0<kotlin/Unit>, us.tractat.kuilt.identity/DeviceKeyStore>, kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.identity/DidKey>, kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/DeviceKeyStoreFixture.KeyWriteInterruption>, kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableKey>, kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants>) // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.<init>|<init>(kotlin.coroutines.SuspendFunction1<kotlin.coroutines.SuspendFunction0<kotlin.Unit>,us.tractat.kuilt.identity.DeviceKeyStore>;kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.identity.DidKey>;kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.conformance.DeviceKeyStoreFixture.KeyWriteInterruption>;kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.conformance.DeviceKeyStoreFixture.UnreadableKey>;kotlin.coroutines.SuspendFunction0<us.tractat.kuilt.conformance.DeviceKeyStoreFixture.UnreadableGrants>){}[0]
 
         final val clearKey // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.clearKey|{}clearKey[0]
             final fun <get-clearKey>(): kotlin.coroutines/SuspendFunction0<kotlin/Unit> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.clearKey.<get-clearKey>|<get-clearKey>(){}[0]
@@ -119,6 +119,8 @@ sealed interface us.tractat.kuilt.conformance/DeviceKeyStoreFixture { // us.trac
             final fun <get-corruptKey>(): kotlin.coroutines/SuspendFunction0<kotlin/Unit> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.corruptKey.<get-corruptKey>|<get-corruptKey>(){}[0]
         final val interruptKeyWrite // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.interruptKeyWrite|{}interruptKeyWrite[0]
             final fun <get-interruptKeyWrite>(): kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/DeviceKeyStoreFixture.KeyWriteInterruption> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.interruptKeyWrite.<get-interruptKeyWrite>|<get-interruptKeyWrite>(){}[0]
+        final val makeGrantsUnreadable // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.makeGrantsUnreadable|{}makeGrantsUnreadable[0]
+            final fun <get-makeGrantsUnreadable>(): kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.makeGrantsUnreadable.<get-makeGrantsUnreadable>|<get-makeGrantsUnreadable>(){}[0]
         final val makeKeyUnreadable // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.makeKeyUnreadable|{}makeKeyUnreadable[0]
             final fun <get-makeKeyUnreadable>(): kotlin.coroutines/SuspendFunction0<us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableKey> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.makeKeyUnreadable.<get-makeKeyUnreadable>|<get-makeKeyUnreadable>(){}[0]
         final val plantMismatchedKey // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.Durable.plantMismatchedKey|{}plantMismatchedKey[0]
@@ -131,6 +133,15 @@ sealed interface us.tractat.kuilt.conformance/DeviceKeyStoreFixture { // us.trac
         constructor <init>(kotlin.coroutines/SuspendFunction1<kotlin.coroutines/SuspendFunction0<kotlin/Unit>, us.tractat.kuilt.identity/DeviceKeyStore>) // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.KeepsNothing.<init>|<init>(kotlin.coroutines.SuspendFunction1<kotlin.coroutines.SuspendFunction0<kotlin.Unit>,us.tractat.kuilt.identity.DeviceKeyStore>){}[0]
 
         final suspend fun open(kotlin.coroutines/SuspendFunction0<kotlin/Unit>): us.tractat.kuilt.identity/DeviceKeyStore // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.KeepsNothing.open|open(kotlin.coroutines.SuspendFunction0<kotlin.Unit>){}[0]
+    }
+
+    final class UnreadableGrants { // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants|null[0]
+        constructor <init>(kotlin.coroutines/SuspendFunction0<kotlin/Unit>, kotlin.coroutines/SuspendFunction0<kotlin/Boolean>) // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.<init>|<init>(kotlin.coroutines.SuspendFunction0<kotlin.Unit>;kotlin.coroutines.SuspendFunction0<kotlin.Boolean>){}[0]
+
+        final val probe // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.probe|{}probe[0]
+            final fun <get-probe>(): kotlin.coroutines/SuspendFunction0<kotlin/Unit> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.probe.<get-probe>|<get-probe>(){}[0]
+        final val restore // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.restore|{}restore[0]
+            final fun <get-restore>(): kotlin.coroutines/SuspendFunction0<kotlin/Boolean> // us.tractat.kuilt.conformance/DeviceKeyStoreFixture.UnreadableGrants.restore.<get-restore>|<get-restore>(){}[0]
     }
 }
 
@@ -499,6 +510,9 @@ abstract class us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite { // 
     // Targets: [apple]
     final fun twoStoresOverOneMediumAreOneDevice() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.twoStoresOverOneMediumAreOneDevice|twoStoresOverOneMediumAreOneDevice(){}[0]
 
+    // Targets: [apple]
+    final fun unreadableGrantsAreRefusedNotRewritten() // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.unreadableGrantsAreRefusedNotRewritten|unreadableGrantsAreRefusedNotRewritten(){}[0]
+
     // Targets: [wasmJs]
     final fun aClearedKeyStartsAsANewDevice(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.aClearedKeyStartsAsANewDevice|aClearedKeyStartsAsANewDevice(){}[0]
 
@@ -537,6 +551,9 @@ abstract class us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite { // 
 
     // Targets: [wasmJs]
     final fun twoStoresOverOneMediumAreOneDevice(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.twoStoresOverOneMediumAreOneDevice|twoStoresOverOneMediumAreOneDevice(){}[0]
+
+    // Targets: [wasmJs]
+    final fun unreadableGrantsAreRefusedNotRewritten(): kotlinx.coroutines.test.internal/JsPromiseInterfaceForTesting // us.tractat.kuilt.conformance/DeviceKeyStoreConformanceSuite.unreadableGrantsAreRefusedNotRewritten|unreadableGrantsAreRefusedNotRewritten(){}[0]
 }
 
 abstract class us.tractat.kuilt.conformance/DiscoverySourceConformanceSuite { // us.tractat.kuilt.conformance/DiscoverySourceConformanceSuite|null[0]
