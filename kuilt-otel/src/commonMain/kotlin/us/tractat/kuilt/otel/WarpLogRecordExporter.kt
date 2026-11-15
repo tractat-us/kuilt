@@ -1533,6 +1533,12 @@ public class WarpLogRecordExporter(
      * caller on the logging path cannot handle a thrown exception: it would surface
      * inside an application's own logging call (#1860).
      *
+     * **A turn the insert refuses changes nothing.** Past the Lamport clock ceiling, which a
+     * [merge] of a peer's clock near [Long.MAX_VALUE] can bring within reach, the insert throws
+     * `ArithmeticException`. The turn then evicts, counts, writes and publishes nothing, and
+     * returns that exception as the [ExportResult.Failure]'s cause (#3431). The clock never moves
+     * back, so once it is at the ceiling every turn that would insert is refused this way.
+     *
      * @sample us.tractat.kuilt.otel.sampleBulkExport
      */
     public suspend fun export(records: List<LogRecord>): ExportResult {
@@ -1577,6 +1583,9 @@ public class WarpLogRecordExporter(
                 // inside a single batch would otherwise both be admitted.
                 val pending = HashSet<ByteString>()
                 var evictions = 0
+                // Counted here and committed by applyTurn, with the rest of the turn: a turn the
+                // insert refuses must not have counted anything (#3431).
+                var refusals = 0
                 // A dedup hit on an insert the active segment holds is carried by the
                 // active-segment write: a merge never puts an insert there, so only a hit outside
                 // it can be on a record a refused merge left in `log` alone. Read only while the
@@ -1609,7 +1618,7 @@ public class WarpLogRecordExporter(
                         // [visibleCount] past [maxRecords], after which this gate simply keeps
                         // refusing.
                         BufferPolicy.DROP_NEWEST -> {
-                            recordRefusal()
+                            refusals++
                             pending.remove(record.recordId)
                         }
                         BufferPolicy.DROP_OLDEST -> {
@@ -1619,7 +1628,7 @@ public class WarpLogRecordExporter(
                     }
                 }
                 accepted = admitted.size
-                applied = applyTurn(admitted, evictions)
+                applied = applyTurn(admitted, evictions, refusals)
                 // A dedup hit outside the active segment may be on an id a refused merge left in
                 // `log` alone, so the turn carries the whole log, as the next merge would (#3384).
                 // Built before the pass, in the order [mergeTurn] builds its own adopt.
@@ -1711,11 +1720,28 @@ public class WarpLogRecordExporter(
      * Apply one turn's decisions to [log] in **two** CRDT mutations — the whole point
      * of the batch. Must hold [lock].
      *
-     * Eviction runs first and always removes a prefix of what the buffer already held,
-     * so nothing this turn inserts can be evicted by it ([fitsInTurn] caps the turn at
-     * [maxRecords]). Both halves go through [Rga]'s bulk mutators, so each pays one
-     * `ops + newOps` copy and one cache build for the run instead of one per record,
-     * and the RGA sequence is materialised once rather than once per eviction.
+     * ## Build both, then commit both
+     *
+     * Both mutations are built on locals ([planEviction], then [Rga.insertAllAfter] over its
+     * result), and **no field is written until both have returned**. That is what makes a turn the
+     * insert refuses change nothing. Since #3429 the insert throws `ArithmeticException` rather
+     * than carry the Lamport clock or seq past [Long.MAX_VALUE], and a log reaches the ceiling
+     * through [merge], whose join takes the larger clock, so one peer op near it is enough. In the
+     * old order (evict, commit, insert) a refused `DROP_OLDEST` turn had already dropped records in
+     * memory, counted them on [health], put their tombstones in [activeSegment] and freed their
+     * [seenIds], then returned [ExportResult.Failure] without publishing any of it (#3431). The
+     * order is the guarantee, rather than a ceiling check ahead of the eviction, because a check
+     * covers only the failure it names. Everything after the insert is field writes that cannot
+     * throw; keep it that way.
+     *
+     * Eviction always removes a prefix of what the buffer already held, so nothing this turn
+     * inserts can be evicted by it ([fitsInTurn] caps the turn at [maxRecords]). Both halves go
+     * through [Rga]'s bulk mutators, so each pays one `ops + newOps` copy and one cache build for
+     * the run instead of one per record, and the RGA sequence is materialised once rather than
+     * once per eviction.
+     *
+     * [refusals] is the turn's `DROP_NEWEST` cap refusals, counted here with the rest for the same
+     * reason: a refused turn counts nothing, and its retry counts them once.
      *
      * ## Two ways this is not *bit*-identical to the per-record loop
      *
@@ -1724,11 +1750,10 @@ public class WarpLogRecordExporter(
      * the [Rga] level and only *observationally* exact here, so they are written down.
      *
      * - **Evictions that empty the buffer re-root the run.** When a turn's evictions
-     *   take the whole pre-turn buffer, [evictLeading] sets `tail = RgaId.HEAD` before
-     *   the inserts, so the run chains after HEAD where the loop would have chained
-     *   after the tombstoned predecessor. Same visible order, different `after` links in
-     *   the op-log. Reachable only when a turn is as large as the buffer, i.e.
-     *   `maxRecords` at or below a turn's size — test-scale configuration, not the
+     *   take the whole pre-turn buffer, the run chains after `RgaId.HEAD`, where the loop
+     *   would have chained after the tombstoned predecessor. Same visible order, different
+     *   `after` links in the op-log. Reachable only when a turn is as large as the buffer,
+     *   i.e. `maxRecords` at or below a turn's size — test-scale configuration, not the
      *   10,000-record default.
      * - **A record re-arriving in the same turn that evicts it is skipped.** [seenIds]
      *   is read at admission time, before this function runs, so a batch containing a
@@ -1741,10 +1766,18 @@ public class WarpLogRecordExporter(
      * concatenation is per *turn*, not per record, and is noise beside the CBOR encode of the
      * active segment the same turn performs.
      */
-    private fun applyTurn(admitted: List<LogRecord>, evictions: Int): List<RgaOp<LogRecord>> {
-        val removes = if (evictions > 0) evictLeading(evictions) else emptyList()
-        if (admitted.isEmpty()) return removes
-        val (newLog, inserts) = log.insertAllAfter(replica = replica, after = tail, values = admitted)
+    private fun applyTurn(admitted: List<LogRecord>, evictions: Int, refusals: Int): List<RgaOp<LogRecord>> {
+        val eviction = planEviction(evictions)
+        // DROP_OLDEST removes a leading prefix of the visible sequence. With at least one element
+        // still standing the first and last visible elements are distinct, so `tail` stands; at
+        // zero there is nothing left to append after.
+        val after = if (eviction != null && eviction.count == visibleCount) RgaId.HEAD else tail
+        // The one call that can refuse, with nothing committed yet.
+        val (newLog, inserts) = (eviction?.log ?: log).insertAllAfter(replica = replica, after = after, values = admitted)
+        if (eviction != null) commitEviction(eviction)
+        if (refusals > 0) recordRefusals(refusals)
+        val removes = eviction?.removes ?: emptyList()
+        if (inserts.isEmpty()) return removes
         log = newLog
         tail = inserts.last().id
         visibleCount += inserts.size
@@ -1753,26 +1786,24 @@ public class WarpLogRecordExporter(
         return removes + inserts
     }
 
+    /** The oldest visible records tombstoned on a copy of [log], with nothing committed. */
+    private class Eviction(
+        val log: Rga<LogRecord>,
+        val removes: List<RgaOp<LogRecord>>,
+        val evicted: List<LogRecord>,
+    ) {
+        val count: Int get() = evicted.size
+    }
+
     /**
-     * Tombstone the [count] oldest visible records, counting each. Must hold [lock].
-     *
-     * Every drop is **counted** on [ExporterHealth.dropped] — exactly, per record, with a
-     * rate-limited summary line for a reader who never polls health ([reportDropsPeriodically]).
-     * It is no longer logged individually, and the per-record `recordId`/`body` correlation
-     * against a backend's log index is deliberately gone with it: at [DEFAULT_MAX_LOG_RECORDS]
-     * the buffer is full permanently, so *every* exported record evicts one and that line was a
-     * per-record narration of a ring buffer doing what it is configured to do — on the export
-     * hot path, where it was measured (#2218).
+     * Tombstone the [count] oldest visible records on a copy of [log], writing no field. `null`
+     * when [count] is zero. Must hold [lock]; [commitEviction] applies the result.
      *
      * The ids are read **before** the removal, off the instance whose [Rga.sequence]
      * `removeFirst` is about to walk, so the lazy is computed once for both.
-     *
-     * Returns the tombstones it minted, so [applyTurn] can publish them. A tombstone is content —
-     * a record of a record having been *removed*, which any consumer replaying the operation
-     * stream needs to see the same removal the live replica saw. It is a compaction record, which
-     * this never mints, that says something was *forgotten*.
      */
-    private fun evictLeading(count: Int): List<RgaOp<LogRecord>> {
+    private fun planEviction(count: Int): Eviction? {
+        if (count <= 0) return null
         // The leading `count` VISIBLE ids, taken off `sequence` LAZILY. [Rga.entries] would
         // build two eager Θ(N) lists here and then discard all but `count` of them — ≈0.18 ms
         // per record at [DEFAULT_MAX_LOG_RECORDS], measured on an iPhone XS (#2219). `sequence`
@@ -1790,23 +1821,41 @@ public class WarpLogRecordExporter(
             .take(count)
             .map { id -> log.valueAt(id) }
             .toList()
+        val (newLog, removes) = log.removeFirst(count)
+        return Eviction(newLog, removes, evicted)
+    }
+
+    /**
+     * Commit a [planEviction], counting each drop. Must hold [lock]. It writes fields and throws
+     * nothing, and [applyTurn] calls it only once the insert it pairs with has been built.
+     *
+     * Every drop is **counted** on [ExporterHealth.dropped] — exactly, per record, with a
+     * rate-limited summary line for a reader who never polls health ([reportDropsPeriodically]).
+     * It is no longer logged individually, and the per-record `recordId`/`body` correlation
+     * against a backend's log index is deliberately gone with it: at [DEFAULT_MAX_LOG_RECORDS]
+     * the buffer is full permanently, so *every* exported record evicts one and that line was a
+     * per-record narration of a ring buffer doing what it is configured to do — on the export
+     * hot path, where it was measured (#2218).
+     *
+     * [applyTurn] publishes the tombstones. A tombstone is content — a record of a record having
+     * been *removed*, which any consumer replaying the operation stream needs to see the same
+     * removal the live replica saw. It is a compaction record, which this never mints, that says
+     * something was *forgotten*.
+     */
+    private fun commitEviction(eviction: Eviction) {
+        val count = eviction.count
         healthState.update { it.copy(dropped = it.dropped + count) }
         reportDropsPeriodically()
-        val (newLog, removes) = log.removeFirst(count)
-        log = newLog
+        log = eviction.log
         // The tombstones are ops like any other, so they ride in the active segment.
         // They hide the records; they reclaim nothing by themselves. Each evicted
         // record's own `Insert` — body and all — stays in whichever segment it landed
         // in until a window pass suppresses it and that segment is retired.
-        appendToActiveSegment(removes)
-        evicted.forEach { record -> seenIds.remove(record.recordId) }
+        appendToActiveSegment(eviction.removes)
+        eviction.evicted.forEach { record -> seenIds.remove(record.recordId) }
         visibleCount -= count
         evictionsSincePass += count
-        // DROP_OLDEST removes a leading prefix of the visible sequence. With at least
-        // one element still standing the first and last visible elements are distinct,
-        // so `tail` is untouched; at zero there is nothing left to append after.
         if (visibleCount == 0) tail = RgaId.HEAD
-        return removes
     }
 
     /**
@@ -1836,15 +1885,15 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * Count a [BufferPolicy.DROP_NEWEST] refusal. Must hold [lock].
+     * Count [count] [BufferPolicy.DROP_NEWEST] refusals. Must hold [lock].
      *
      * Named for what it *does* rather than for the decision it records: it no longer logs, and a
      * name like `refuse` reads as the refusal itself and invites a log line back onto the path
      * this exists to keep quiet. The count lands on [ExporterHealth.refused]; the periodic
      * summary is shared with eviction because both are the same cap doing the same job.
      */
-    private fun recordRefusal() {
-        healthState.update { it.copy(refused = it.refused + 1) }
+    private fun recordRefusals(count: Int) {
+        healthState.update { it.copy(refused = it.refused + count) }
         reportDropsPeriodically()
     }
 
