@@ -782,6 +782,8 @@ final class us.tractat.kuilt.otel/MetricKey { // us.tractat.kuilt.otel/MetricKey
 }
 
 final class us.tractat.kuilt.otel/MetricKindUnreadException : us.tractat.kuilt.otel/MetricNotCountedException { // us.tractat.kuilt.otel/MetricKindUnreadException|null[0]
+    final val cause // us.tractat.kuilt.otel/MetricKindUnreadException.cause|{}cause[0]
+        final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.otel/MetricKindUnreadException.cause.<get-cause>|<get-cause>(){}[0]
     final val storeKey // us.tractat.kuilt.otel/MetricKindUnreadException.storeKey|{}storeKey[0]
         final fun <get-storeKey>(): us.tractat.kuilt.store/StoreKey // us.tractat.kuilt.otel/MetricKindUnreadException.storeKey.<get-storeKey>|<get-storeKey>(){}[0]
 

@@ -142,7 +142,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  *
  * @param replica Stable unique identity for this device/process (use a UUID).
  * @param store Durable persistence backend. [InMemoryDurableStore] in tests.
- * @param maxMetrics Maximum number of distinct [MetricKey]s across all kinds.
+ * @param maxMetrics Maximum number of distinct [MetricKey]s across all kinds; at least 1.
  * @param bufferPolicy Eviction strategy when [maxMetrics] is exceeded.
  * @param histogramPrototype The empty [DDSketch] every new histogram series starts
  *   from — its `(relativeAccuracy, minIndexedValue, maxIndexedValue)` is the
@@ -160,8 +160,9 @@ public class WarpMetricExporter(
         DDSketch.empty(relativeAccuracy = alphaForOtlpScale(DEFAULT_OTLP_HISTOGRAM_SCALE)),
 ) {
     init {
-        // A negative cap is over by one even when the exporter is empty, so nothing could satisfy it.
-        require(maxMetrics >= 0) { "maxMetrics must not be negative, was $maxMetrics" }
+        // Below one, a cap cannot be met the same way twice: a recover evicts to nothing, while a
+        // write of a new series finds nothing to evict for it and keeps it.
+        require(maxMetrics >= 1) { "maxMetrics must be at least 1, was $maxMetrics" }
         require(histogramPrototype.count == 0L) {
             "histogramPrototype must be an empty sketch, had count ${histogramPrototype.count}"
         }
@@ -501,9 +502,7 @@ public class WarpMetricExporter(
         return lock.withLock {
             if (read is KindRead.Found) {
                 read.series.forEach { (key, persisted) -> series[key] = series[key]?.piece(persisted) ?: persisted }
-                while (totalCount() > maxMetrics) {
-                    if (!evictOne()) break
-                }
+                while (totalCount() > maxMetrics) evictOne()
             }
             if (read is KindRead.Refused) {
                 val first = owedReads[kind] != OwedRead.REFUSED
@@ -561,7 +560,7 @@ public class WarpMetricExporter(
 
     /** Count each turn [refusedReads] refused as a failed turn of its kind, with the store's cause. */
     private fun countRefused(refused: Map<StoredKind, MetricKindUnreadException>) {
-        refused.forEach { (kind, unread) -> persistence.failed(setOf(kind.storeKey), unread.cause ?: unread) }
+        refused.forEach { (kind, unread) -> persistence.failed(setOf(kind.storeKey), unread.cause) }
     }
 
     /**
@@ -601,9 +600,12 @@ public class WarpMetricExporter(
      * preserve here, so deleting reclaims the bytes and [recover] treats an absent key as empty.
      *
      * **Never throws.** A refused delete returns [MetricExportResult.Failure]; the in-memory
-     * maps are cleared either way, so a retry converges. A kind whose delete was refused is not
-     * read back either: no kind owes a read after a clear, so the kind's next write replaces what
-     * the delete left, which finishes the clear for that kind.
+     * maps are cleared either way, so a retry converges. No kind owes a read after a clear, so a
+     * kind whose delete was refused is not read back by its own next write, which replaces what
+     * the delete left and so finishes the clear for that kind. Until that write lands the dropped
+     * series are still on disk, though: a [recover] called before it reads them back into memory,
+     * where the kind's next write persists them again, and so does the first [recover] after a
+     * restart. Retrying the clear until it returns [MetricExportResult.Success] is what removes them.
      *
      * Its failure line is **not** deduplicated against the durable-write outage latch, and that is
      * deliberate on both arms: a `clear` is caller-initiated rather than retried, so it cannot
@@ -1292,19 +1294,23 @@ public class WarpMetricExporter(
     private fun totalCount(): Int =
         sums.size + sumsDouble.size + gauges.size + cardinalities.size + histograms.size
 
-    /** Evict one series under [bufferPolicy]; `false` when there was none to evict. */
-    private fun evictOne(): Boolean {
-        val victim = when (bufferPolicy) {
-            MetricBufferPolicy.DROP_OLDEST -> pickDropOldestVictim()
-            MetricBufferPolicy.DROP_NEWEST -> pickDropNewestVictim()
-        } ?: return false
+    /**
+     * Evict one series under [bufferPolicy]. Called only at or over [maxMetrics], which is at least
+     * 1, so there is always a series to evict.
+     */
+    private fun evictOne() {
+        val victim = checkNotNull(
+            when (bufferPolicy) {
+                MetricBufferPolicy.DROP_OLDEST -> pickDropOldestVictim()
+                MetricBufferPolicy.DROP_NEWEST -> pickDropNewestVictim()
+            },
+        ) { "the buffer is at its cap of $maxMetrics, yet holds no series to evict" }
         logEviction(victim)
         sums.remove(victim)
         sumsDouble.remove(victim)
         gauges.remove(victim)
         cardinalities.remove(victim)
         histograms.remove(victim)
-        return true
     }
 
     /**
@@ -1405,7 +1411,8 @@ public sealed class MetricNotCountedException(message: String, cause: Throwable?
  */
 public class MetricKindUnreadException internal constructor(
     private val kind: StoredKind,
-    cause: Throwable,
+    /** The store's refusal of the read. */
+    override val cause: Throwable,
 ) : MetricNotCountedException("${kind.storeKey.name}: the store refused the read of this kind, so none of its updates were counted", cause) {
     public val storeKey: StoreKey get() = kind.storeKey
 

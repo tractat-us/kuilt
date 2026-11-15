@@ -46,7 +46,7 @@ import us.tractat.kuilt.store.InMemoryDurableStore
  *   a platform-specific WAL in production.
  * @param maxSpans Maximum number of spans buffered in memory.
  * @param maxLogRecords Maximum number of log records buffered in memory.
- * @param maxMetrics Maximum number of distinct metric series buffered in memory.
+ * @param maxMetrics Maximum number of distinct metric series buffered in memory; at least 1.
  * @param bufferPolicy Eviction strategy when [maxSpans] or [maxLogRecords] is exceeded.
  * @param metricBufferPolicy Eviction strategy when [maxMetrics] is exceeded.
  *

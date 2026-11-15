@@ -403,6 +403,7 @@ public final class us/tractat/kuilt/otel/MetricKind$Companion {
 
 public final class us/tractat/kuilt/otel/MetricKindUnreadException : us/tractat/kuilt/otel/MetricNotCountedException {
 	public final fun carries (Lus/tractat/kuilt/otel/MetricUpdate;)Z
+	public fun getCause ()Ljava/lang/Throwable;
 	public final fun getStoreKey-V7ECK2g ()Ljava/lang/String;
 }
 
