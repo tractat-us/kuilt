@@ -45,7 +45,7 @@ import kotlin.time.Instant
  * `HostLost`.
  *
  * A test dispatcher cannot split the ack handler, which has no suspension point, so these tests play
- * its two halves by hand: [JoinerResumeMachine.takePendingFlight] is the ack taking the flight, and
+ * its two halves by hand: [JoinerResumeMachine.takeFlightForAck] is the ack taking the flight, and
  * completing the taken deferred with [ResumeResult.Success] is the ack finishing. The tear or the
  * deadline is forced between them.
  */
@@ -159,7 +159,7 @@ class ResumeFlightOwnershipTest {
             advanceTimeBy(bound / 2 + 20) // past join + bound, short of send + bound
             runCurrent()
             val stillPending = machine.hasPendingFlight()
-            machine.takePendingFlight()?.complete(ResumeResult.Success)
+            machine.takeFlightForAck()?.first?.complete(ResumeResult.Success)
             runCurrent()
             val ownerResult = owner.await()
             val joinedResult = joined.await()
@@ -191,7 +191,9 @@ class ResumeFlightOwnershipTest {
                 { assertEquals(1, seam.resumesSent, "precondition: the first Resume went out") },
                 { assertTrue(machine.hasPendingFlight(), "precondition: the first Resume is in flight") },
             )
-            return checkNotNull(machine.takePendingFlight()) { "the flight vanished before the ack took it" }
+            val (flight, resumes) = checkNotNull(machine.takeFlightForAck()) { "the flight vanished before the ack took it" }
+            check(resumes) { "precondition: the ack found a live room and resumes it" }
+            return flight
         }
 
         fun assertResumedOnce() = assertAll(
