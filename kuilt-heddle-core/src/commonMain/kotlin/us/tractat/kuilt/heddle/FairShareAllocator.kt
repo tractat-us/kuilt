@@ -1298,8 +1298,8 @@ public class FairShareAllocator(
      * the clock ([moveReturners]), which only adds to the offset. A departure clears only on that
      * return, which sees the child asking again, or with the edge forgotten, which drops the offset
      * too. A refused first round keeps none of it. A waker holding an offset and no departure is a
-     * memory no allocator writes: the format 1 v0.7.4 wrote carried one, and this release does not
-     * read it (#3353).
+     * memory no allocator writes: the snapshots v0.7.4 wrote carried one, and this release does not
+     * read them (#3353).
      *
      * Two things lower a stored offset, and neither returns a turn. An edge is forgotten when it
      * leaves the active set, which [EntitlementLedger.activate][EntitlementLedger.activate] makes

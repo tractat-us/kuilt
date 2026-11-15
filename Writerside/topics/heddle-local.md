@@ -512,9 +512,11 @@ object so that a store that reorders an object's keys, as Postgres `jsonb` does,
 cannot move `state` ahead of the version. Equal snapshots encode to equal bytes.
 
 `LocalHeddleSnapshot.FORMAT_VERSION` is the format this release writes, and
-`SUPPORTED_FORMAT_VERSIONS` lists the formats it reads. 0.7.5 reads only
-snapshots it wrote itself; a consumer coming from 0.7.4 starts from its
-topology again.
+`SUPPORTED_FORMAT_VERSIONS` lists the formats it reads. 0.7.5 writes and reads
+format 1 alone. It is the first frozen format: a later release that changes what
+it means ships a reader for it. A consumer coming from 0.7.4 starts from its
+topology again. 0.7.4's snapshots also say format 1, in an older layout, and
+are not read: they fail to decode, so do not keep them across the upgrade.
 
 `decode` reads the version first and never throws for what the bytes hold.
 It gives one of three answers:
@@ -522,7 +524,8 @@ It gives one of three answers:
 - **`Restored`** holds the snapshot, ready for `restore`.
 - **`UnsupportedVersion`** means this release does not read the format the
   bytes were written in. It names the format it found and the formats it reads.
-  Either a newer release wrote them, or an older one did, such as 0.7.4.
+  Either a newer release wrote them, or a development build of 0.7.5 did, in
+  format 2.
   The engine reads nothing past the version, so nothing is half-loaded.
 - **`Corrupt`** means the bytes are not a snapshot, or hold one that does not add
   up, such as a lease on a part of the tree the books do not hold. Its `reason`

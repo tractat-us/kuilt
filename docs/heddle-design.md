@@ -626,11 +626,11 @@ is the type's rule rather than a `validate()` arm: `ForgottenEdges` refuses a
 negative entry when it is built, so a hand-built or corrupt snapshot that
 carries one fails to decode.
 
-**The format.** `forgotten` is encoded under snapshot format 2 on `main`
-today. Step B's slice 4 restarts the format at 1, the one 0.7.5 ships
-(§7.1, "Snapshot"). v0.7.4 wrote format 1, which 0.7.5 refuses by name: a
-consumer coming from 0.7.4 starts from its topology again. Every encoded change
-for the next release goes under that one bump.
+**The format.** `forgotten` is encoded under snapshot format 1, the one 0.7.5
+ships and the first frozen format (§7.1, "Snapshot"). A snapshot v0.7.4 wrote
+also says format 1, in a layout 0.7.5 does not read, so a consumer coming from
+0.7.4 starts from its topology again. Every encoded change for 0.7.5 lands under
+format 1 before it ships.
 
 #### As built: the engine forgets
 
@@ -666,8 +666,8 @@ of adopting the old one.
   there is no new API (#3192).
 - Leaving the allocator's wake memory to prune itself later: its pruning needs
   the record that forgetting removes (#3192).
-- A snapshot format bump per encoded change: one bump, format 2, per release
-  (#3192).
+- A snapshot format bump per encoded change: one number per release, and 0.7.5's
+  is format 1 (#3192, #3489).
 - Any coupling to the position ceiling. `LocalHeddle` keeps positions down by a
   rebase that retires no child (§7.1, #3329), so this forgetting is not its
   prerequisite. Generation turnover, which would have made it one, was not
@@ -1249,8 +1249,8 @@ weight budget it applies does, so a log written under the old budget replays
 under the new one: the standing rule, that peers of different releases never
 share a cluster, covers it.
 
-**Snapshot.** `LocalHeddleSnapshot.FORMAT_VERSION` restarts at 1, and 1 is the
-only format read. It is the first frozen format: no later release changes it
+**Snapshot.** Built (#3489's restart). `LocalHeddleSnapshot.FORMAT_VERSION`
+restarts at 1, and 1 is the only format read. It is the first frozen format: no later release changes it
 without shipping a reader for it. Format 2, written only by development builds
 of 0.7.5, is refused by name, as `RestoreResult.UnsupportedVersion(found, [1])`,
 before anything else is read. A snapshot v0.7.4 wrote also says format 1, and
@@ -1334,9 +1334,10 @@ unambiguous would guard state that nobody holds (@keddie, 2026-11-15).
    `LocalHeddleRebasePropertyTest`. Retargets `LocalHeddleWindowRuleTest` and
    the long-run rows to "never refused, and fair". Docs: this section, §10.9,
    `kuilt-heddle-core/module.md`, `kuilt-heddle/module.md`.
-4. **The origin leaves the ledger and the wire; the snapshot format restarts at 1.**
-   `ParentRecord`, `PolicyEdge.origin`, the canonical-encoding arm, the
-   snapshot golden. Docs: §7.1, §10.5, both `module.md`s,
+4. **The origin leaves the ledger and the wire.** The snapshot format already
+   restarted at 1, ahead of the slices, so this changes format 1's layout before
+   0.7.5 ships it. `ParentRecord`, `PolicyEdge.origin`, the canonical-encoding
+   arm, the snapshot golden. Docs: §7.1, §10.5, both `module.md`s,
    `Writerside/topics/heddle-local.md`.
 5. **The weight budget: W1 for P1′.** `weightsFitTheBudget`, then the last of
    `VirtualPosition.kt`'s ceiling constants. Retargets
@@ -1706,7 +1707,7 @@ against this peer's own record of a departure, and that record is one peer's
 sighting of a transition, with no lattice to join under. Two peers that saw
 different departures compute different offsets, which reorders their grants and
 never creates entitlement, as wake offsets already do. `LocalHeddle` persists it
-in its snapshot, format 2, as `AllocatorMemory`'s `clocks`, `served`,
+in its snapshot, format 1, as `AllocatorMemory`'s `clocks`, `served`,
 `departures` and `shiftRemainders`; `HeddleNode` keeps it in memory, so a restart forgets it and
 every child it sees asking afterwards is a first sighting.
 
