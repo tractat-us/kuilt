@@ -13,6 +13,7 @@ import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -489,7 +490,14 @@ class WarpMetricExporterRefusedRecoveryTest {
         )
     }
 
-    /** The series a heal reads back are held to [WarpMetricExporter]'s `maxMetrics` like any other. */
+    /**
+     * The series a heal reads back are held to [WarpMetricExporter]'s `maxMetrics` like any other,
+     * and the arm names exactly what survives. The read brings back `sum` and `otherSum` beside the
+     * gauge already in memory: three series against a cap of two. `DROP_OLDEST` takes the first sum
+     * series, `sum`, and the healing increment lands on the `otherSum` the read brought back, so it
+     * holds the stored `1` plus the healing `1`. A heal that skipped the join to stay under the cap
+     * would leave `otherSum` at `1`; one that joined without evicting would keep `sum`.
+     */
     @Test
     fun theSeriesAHealReadsBackRespectTheBufferCap() = runTest {
         val backing = RecordingStore()
@@ -501,15 +509,70 @@ class WarpMetricExporterRefusedRecoveryTest {
         store.refuse(sumsKey)
         val exporter = WarpMetricExporter(replica, store, maxMetrics = 2).also { it.recover() }
         exporter.setGauge(gauge, 1.0, 1L)
-        val beforeHeal = exporter.metricCount()
+        val beforeHeal = exporter.snapshotAll()
         store.heal(sumsKey)
 
-        exporter.incrementSum(sum, 1L)
+        val healed = exporter.incrementSum(otherSum, 1L)
+        val afterHeal = exporter.snapshotAll()
+        val afterRestart = restarted(backing).snapshotAll()
 
         assertAll(
             { assertEquals(1, store.refusalsOf(sumsKey), "the rig did not refuse recover's read of the sums") },
-            { assertEquals(1, beforeHeal, "only the gauge should be in memory before the heal") },
-            { assertTrue(exporter.metricCount() <= 2, "the heal took the exporter to ${exporter.metricCount()} series past a cap of 2") },
+            { assertEquals(emptySet(), beforeHeal.sums.keys, "no sum series should be in memory before the heal") },
+            { assertEquals(setOf(gauge), beforeHeal.gauges.keys, "only the gauge should be in memory before the heal") },
+            { assertEquals(MetricExportResult.Success, healed) },
+            { assertEquals(setOf(otherSum), afterHeal.sums.keys, "the sum series the capped heal kept") },
+            { assertEquals(setOf(gauge), afterHeal.gauges.keys, "the gauge did not survive the capped heal") },
+            { assertEquals(2L, exporter.sumValue(otherSum), "otherSum: the stored 1 + the healing 1") },
+            { assertEquals(mapOf(otherSum to 2L), afterRestart.sums.mapValues { it.value.value }, "the sums on disk") },
+        )
+    }
+
+    /**
+     * A cap below zero has no meaning, and the heal's eviction loop would spin on it forever, under
+     * both locks, since an empty exporter is still over a cap of `-1`. A cap of zero is allowed: the
+     * heal evicts until the exporter is empty, and stops.
+     */
+    @Test
+    fun aNegativeBufferCapIsRefusedAndACapOfZeroStillHeals() = runTest {
+        val backing = RecordingStore()
+        seed(backing)
+        val zero = WarpMetricExporter(replica, backing, maxMetrics = 0).also { it.recover() }
+
+        assertAll(
+            { assertFailsWith<IllegalArgumentException>("a cap of -1 was accepted") { WarpMetricExporter(replica, backing, maxMetrics = -1) } },
+            { assertEquals(0, zero.metricCount(), "a cap of zero kept ${zero.metricCount()} series") },
+        )
+    }
+
+    /**
+     * A clear whose last delete is refused, on an exporter nobody recovered. The histograms key it
+     * could not delete still holds the series the caller asked to drop. Memory is empty, so what is
+     * on disk is unwanted rather than unseen: the next histogram write must not read it back in, and
+     * writing over it finishes the clear, as it did before kinds started owed a read.
+     */
+    @Test
+    fun aClearWhoseDeleteWasRefusedNeverReadsBackTheSeriesItDropped() = runTest {
+        val backing = RecordingStore()
+        seed(backing)
+        val store = KeyDeleteRefusingStore(backing, histogramsKey)
+        val exporter = WarpMetricExporter(replica, store)
+
+        val cleared = exporter.clear()
+        val survived = backing.read(histogramsKey) != null
+        val readsBefore = backing.operations().count { it.kind == StoreOpKind.READ && it.key == histogramsKey }
+        val written = exporter.recordHistogram(otherHistogram, 1.0)
+        val turnReads = backing.operations().count { it.kind == StoreOpKind.READ && it.key == histogramsKey } - readsBefore
+        val afterRestart = restarted(backing).snapshotAll()
+
+        assertAll(
+            { assertEquals(1, store.refusedDeletes(), "the rig refused ${store.refusedDeletes()} deletes, not the histograms' one") },
+            { assertIs<MetricExportResult.Failure>(cleared, "the clear with a refused delete reported $cleared") },
+            { assertTrue(survived, "the rig: the refused delete did not leave the histograms on disk") },
+            { assertEquals(MetricExportResult.Success, written) },
+            { assertEquals(0, turnReads, "the write after the clear read the histograms $turnReads times") },
+            { assertEquals(setOf(otherHistogram), afterRestart.histograms.keys, "the cleared histogram series came back") },
+            { assertEquals(emptySet(), afterRestart.sums.keys, "the sums' delete did not land") },
         )
     }
 
@@ -630,4 +693,24 @@ private class KindReadRefusingStore(private val backing: DurableStore) : Durable
     override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = backing.write(key, bytes)
 
     override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
+}
+
+/** Delegates to [backing], refusing every delete of [refused] and counting the refusals. */
+private class KeyDeleteRefusingStore(private val backing: DurableStore, private val refused: StoreKey) : DurableStore {
+    private val lock = reentrantLock()
+    private var refusals = 0
+
+    fun refusedDeletes(): Int = lock.withLock { refusals }
+
+    override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+
+    override suspend fun write(key: StoreKey, bytes: ByteArray): Unit = backing.write(key, bytes)
+
+    override suspend fun delete(key: StoreKey) {
+        if (key == refused) {
+            lock.withLock { refusals++ }
+            throw IllegalStateException("simulated refused delete of ${key.name}")
+        }
+        backing.delete(key)
+    }
 }
