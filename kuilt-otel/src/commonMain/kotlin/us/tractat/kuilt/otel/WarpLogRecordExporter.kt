@@ -967,7 +967,9 @@ public class WarpLogRecordExporter(
      * and while that read is still refused return [refused] of the turn's [ExportResult.Failure]
      * without running the turn. Must hold [writeMutex].
      *
-     * The turn never starts, so a refused read writes, deletes and mutates nothing. That is what
+     * The turn never starts, and a refused read returns before recovery deletes anything, so a
+     * refused read writes, deletes and mutates nothing. (A refused *migration* write is the one
+     * shape that writes: each retry rewrites its idempotent copy of the legacy blob.) That is what
      * lets the read that heals install the persisted log wholesale: nothing in memory is newer.
      * The refusal is logged once, by [recover]; each refused turn counts on [health] and logs at
      * debug, as a store that stays unreadable would otherwise log once per export.
@@ -1022,7 +1024,10 @@ public class WarpLogRecordExporter(
      *
      * A refused index read is [Load.Refused], and a refused **sealed** segment read is not: the
      * index names a segment it could not read, so the segment stays named and the next start
-     * reads it. Nothing names the index.
+     * reads it. Nothing names the index. **That does not keep every record:** a sealed segment
+     * holding this replica's newest ids — the one just sealed, at a roll, while the new active
+     * key is still unwritten — has those ids minted again by the next export, and the next
+     * start's union keeps one record of each pair (#3410).
      *
      * A refused **active** segment read is [Load.Refused] too. The active segment is the key the
      * next export writes, so installing it as empty wrote over its records. Sealing it and opening
@@ -1032,8 +1037,9 @@ public class WarpLogRecordExporter(
      * stops log writes. An **undecodable** active segment is written over, since nothing in it was
      * readable.
      *
-     * Every retry re-runs this whole function: the deletes of [LogSegmentIndex.retired] keys and of
-     * the legacy key run again, and are safe to, since the index that names them was read.
+     * Both refusals return before any delete, which is what keeps a refused turn from mutating
+     * anything; see [afterPersistedRead]. The active segment is therefore read first, ahead of the
+     * legacy and ledger sweeps and the sealed segments.
      *
      * Every store call here must classify its own failure where it is made. Anything that
      * reaches [readPersistedState]'s outer catch is treated as [Load.Undecodable] and starts fresh.
@@ -1049,6 +1055,21 @@ public class WarpLogRecordExporter(
         if (indexBytes == null) return migrateLegacyBlob()
         val index = runCatchingCancellable { cbor.decodeFromByteArray(indexSerializer, indexBytes) }
             .getOrElse { cause -> return Load.Undecodable(cause) }
+        // The active segment before anything else, so a refusal returns having deleted nothing
+        // and costs a refused turn two reads, not one per segment.
+        val active = when (val read = readSegment(index.active)) {
+            is SegmentRead.Read -> read.segment
+            SegmentRead.Absent -> Rga.empty()
+            // Written over by the next export, which costs nothing readable here: no record in it
+            // could be read. A peer that merged those records still holds their ids.
+            is SegmentRead.Undecodable -> {
+                logger.warn(read.cause) { "otel.logs: active segment ${index.active} does not decode; writing over it" }
+                Rga.empty()
+            }
+            // The next export would write over it, and a fresh active segment beside it would
+            // mint the very ids it holds. So the turns wait for it, as they do for the index.
+            is SegmentRead.Refused -> return Load.Refused(read.cause)
+        }
         // Only after the index has been read; see sweepLegacyKey for what its presence proves.
         sweepLegacyKey()
         // Finish any retirement a crash interrupted between the ledger write and the delete.
@@ -1084,18 +1105,6 @@ public class WarpLogRecordExporter(
                 contentOf(segment, number)
             }
             if (absorbed != null) merged = absorbed
-        }
-        val active = when (val read = readSegment(index.active)) {
-            is SegmentRead.Read -> read.segment
-            SegmentRead.Absent -> Rga.empty()
-            // Written over by the next export, which loses nothing: no record in it was readable.
-            is SegmentRead.Undecodable -> {
-                logger.warn(read.cause) { "otel.logs: active segment ${index.active} does not decode; writing over it" }
-                Rga.empty()
-            }
-            // The next export would write over it, and a fresh active segment beside it would
-            // mint the very ids it holds. So the turns wait for it, as they do for the index.
-            is SegmentRead.Refused -> return Load.Refused(read.cause)
         }
         return Load.Found(
             RecoveredState(
@@ -1175,8 +1184,9 @@ public class WarpLogRecordExporter(
      * recovery leaves the numbering at its construction defaults, so the next export
      * would write an index naming only segment 0 and overwrite it, orphaning every
      * other segment permanently in a format with no key-enumeration API to sweep them.
-     * One bad read of a sealed segment must cost that segment's records for this run, which is
-     * what this KDoc has always promised.
+     * One bad read of a sealed segment is meant to cost that segment's records for this run
+     * alone. It can cost more: when the segment holds this replica's newest ids, the next export
+     * mints them again and the next start loses one record of each pair (#3410).
      *
      * The same holds for a `CancellationException` the store mints at this live caller: the
      * remaining segments follow, so `ensureActive` lets only this coroutine's own cancellation
