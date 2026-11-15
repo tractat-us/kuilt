@@ -155,6 +155,8 @@ public class WarpMetricExporter(
         DDSketch.empty(relativeAccuracy = alphaForOtlpScale(DEFAULT_OTLP_HISTOGRAM_SCALE)),
 ) {
     init {
+        // A negative cap is over by one even when the exporter is empty, so nothing could satisfy it.
+        require(maxMetrics >= 0) { "maxMetrics must not be negative, was $maxMetrics" }
         require(histogramPrototype.count == 0L) {
             "histogramPrototype must be an empty sketch, had count ${histogramPrototype.count}"
         }
@@ -485,7 +487,7 @@ public class WarpMetricExporter(
         return lock.withLock {
             if (read is KindRead.Found) {
                 read.series.forEach { (key, persisted) -> series[key] = series[key]?.piece(persisted) ?: persisted }
-                while (totalCount() > maxMetrics) evictOne()
+                while (totalCount() > maxMetrics && evictOne()) Unit
             }
             if (read is KindRead.Refused) {
                 val first = owedReads[kind] != OwedRead.REFUSED
@@ -575,7 +577,9 @@ public class WarpMetricExporter(
      * preserve here, so deleting reclaims the bytes and [recover] treats an absent key as empty.
      *
      * **Never throws.** A refused delete returns [MetricExportResult.Failure]; the in-memory
-     * maps are cleared either way, so a retry converges.
+     * maps are cleared either way, so a retry converges. A kind whose delete was refused is not
+     * read back either: no kind owes a read after a clear, so the kind's next write replaces what
+     * the delete left, which finishes the clear for that kind.
      *
      * Its failure line is **not** deduplicated against the durable-write outage latch, and that is
      * deliberate on both arms: a `clear` is caller-initiated rather than retried, so it cannot
@@ -595,6 +599,9 @@ public class WarpMetricExporter(
             gauges.clear()
             cardinalities.clear()
             histograms.clear()
+            // Whatever is on disk now is unwanted, not unseen, so no kind owes a read of it, even
+            // if a delete below is refused: a read would bring back the series this call drops.
+            owedReads = emptyMap()
         }
         val deleted = try {
             store.delete(SUM_STORE_KEY)
@@ -611,8 +618,6 @@ public class WarpMetricExporter(
         }
         deleted.fold(
             onSuccess = {
-                // Every key is now known absent and memory is empty, so no kind still owes a read.
-                lock.withLock { owedReads = emptyMap() }
                 persistence.acknowledged(CLEAR_WORK)
                 MetricExportResult.Success
             },
@@ -1278,17 +1283,19 @@ public class WarpMetricExporter(
     private fun totalCount(): Int =
         sums.size + sumsDouble.size + gauges.size + cardinalities.size + histograms.size
 
-    private fun evictOne() {
+    /** Evict one series under [bufferPolicy]; `false` when there was none to evict. */
+    private fun evictOne(): Boolean {
         val victim = when (bufferPolicy) {
             MetricBufferPolicy.DROP_OLDEST -> pickDropOldestVictim()
             MetricBufferPolicy.DROP_NEWEST -> pickDropNewestVictim()
-        } ?: return
+        } ?: return false
         logEviction(victim)
         sums.remove(victim)
         sumsDouble.remove(victim)
         gauges.remove(victim)
         cardinalities.remove(victim)
         histograms.remove(victim)
+        return true
     }
 
     /**
