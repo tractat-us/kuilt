@@ -48,6 +48,76 @@ public final class us/tractat/kuilt/otel/CausalStamp$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public abstract interface class us/tractat/kuilt/otel/ClockPersist {
+}
+
+public final class us/tractat/kuilt/otel/ClockPersist$Persisted : us/tractat/kuilt/otel/ClockPersist {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/ClockPersist$Persisted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/ClockPersist$Unrecovered : us/tractat/kuilt/otel/ClockPersist {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/ClockPersist$Unrecovered;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/otel/ClockRecovery {
+}
+
+public final class us/tractat/kuilt/otel/ClockRecovery$Recovered : us/tractat/kuilt/otel/ClockRecovery {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/ClockRecovery$Recovered;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/ClockRecovery$Refused : us/tractat/kuilt/otel/ClockRecovery {
+	public fun <init> (Ljava/lang/Throwable;)V
+	public final fun component1 ()Ljava/lang/Throwable;
+	public final fun copy (Ljava/lang/Throwable;)Lus/tractat/kuilt/otel/ClockRecovery$Refused;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/ClockRecovery$Refused;Ljava/lang/Throwable;ILjava/lang/Object;)Lus/tractat/kuilt/otel/ClockRecovery$Refused;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCause ()Ljava/lang/Throwable;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/ClockRecovery$Undecodable : us/tractat/kuilt/otel/ClockRecovery {
+	public fun <init> (Ljava/lang/Throwable;)V
+	public final fun component1 ()Ljava/lang/Throwable;
+	public final fun copy (Ljava/lang/Throwable;)Lus/tractat/kuilt/otel/ClockRecovery$Undecodable;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/ClockRecovery$Undecodable;Ljava/lang/Throwable;ILjava/lang/Object;)Lus/tractat/kuilt/otel/ClockRecovery$Undecodable;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCause ()Ljava/lang/Throwable;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class us/tractat/kuilt/otel/ClockTick {
+}
+
+public final class us/tractat/kuilt/otel/ClockTick$Minted : us/tractat/kuilt/otel/ClockTick {
+	public fun <init> (Lus/tractat/kuilt/otel/CausalStamp;)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/CausalStamp;
+	public final fun copy (Lus/tractat/kuilt/otel/CausalStamp;)Lus/tractat/kuilt/otel/ClockTick$Minted;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/ClockTick$Minted;Lus/tractat/kuilt/otel/CausalStamp;ILjava/lang/Object;)Lus/tractat/kuilt/otel/ClockTick$Minted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getStamp ()Lus/tractat/kuilt/otel/CausalStamp;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/ClockTick$Unrecovered : us/tractat/kuilt/otel/ClockTick {
+	public static final field INSTANCE Lus/tractat/kuilt/otel/ClockTick$Unrecovered;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface class us/tractat/kuilt/otel/DrainResult {
 }
 
@@ -757,7 +827,7 @@ public final class us/tractat/kuilt/otel/WarpCausalClock {
 	public final fun observe (Ljava/util/Set;)V
 	public final fun persist (Lus/tractat/kuilt/store/DurableStore;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun recover (Lus/tractat/kuilt/store/DurableStore;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun tick ()Lus/tractat/kuilt/otel/CausalStamp;
+	public final fun tick ()Lus/tractat/kuilt/otel/ClockTick;
 }
 
 public final class us/tractat/kuilt/otel/WarpLogRecordExporter {

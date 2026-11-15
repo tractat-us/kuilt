@@ -18,9 +18,9 @@ class WarpCausalClockTest {
     @Test
     fun tickMintsMonotonicDotsWithFrontierPredecessors() {
         val clock = WarpCausalClock(replicaA)
-        val first = clock.tick()
-        val second = clock.tick()
-        val third = clock.tick()
+        val first = clock.mint()
+        val second = clock.mint()
+        val third = clock.mint()
         assertAll(
             { assertEquals(emptySet(), first.predecessors, "first tick has empty frontier") },
             { assertEquals(1L, first.dot.seq) },
@@ -36,7 +36,7 @@ class WarpCausalClockTest {
     fun frontierReflectsMostRecentTick() {
         val clock = WarpCausalClock(replicaA)
         assertEquals(emptySet(), clock.frontier())
-        val stamp = clock.tick()
+        val stamp = clock.mint()
         assertEquals(setOf(stamp.dot), clock.frontier())
     }
 
@@ -45,14 +45,14 @@ class WarpCausalClockTest {
     fun recoverDoesNotReissueUsedSeq() = runTest(StandardTestDispatcher()) {
         val store = InMemoryDurableStore()
         val clock1 = WarpCausalClock(replicaA)
-        clock1.tick()
-        val second = clock1.tick()
+        clock1.mint()
+        val second = clock1.mint()
         clock1.persist(store)
 
         // Fresh clock — simulates a process restart that would otherwise reset seq to 0.
         val clock2 = WarpCausalClock(replicaA)
         clock2.recover(store)
-        val third = clock2.tick()
+        val third = clock2.mint()
 
         assertAll(
             { assertEquals(3L, third.dot.seq, "next tick must continue past the persisted seq") },
@@ -65,17 +65,17 @@ class WarpCausalClockTest {
     fun recoverOnEmptyStoreStartsFresh() = runTest(StandardTestDispatcher()) {
         val clock = WarpCausalClock(replicaA)
         clock.recover(InMemoryDurableStore())
-        val first = clock.tick()
+        val first = clock.mint()
         assertEquals(1L, first.dot.seq)
     }
 
     @Test
     fun observeFoldsRemoteFrontierIntoNextTick() {
         val clock = WarpCausalClock(replicaA)
-        val local = clock.tick()
+        val local = clock.mint()
         val remote = Dot(replicaB, 7L)
         clock.observe(setOf(remote))
-        val next = clock.tick()
+        val next = clock.mint()
         assertEquals(setOf(local.dot, remote), next.predecessors)
     }
 }

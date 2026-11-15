@@ -96,6 +96,75 @@ abstract interface us.tractat.kuilt.otel/OtlpEdge { // us.tractat.kuilt.otel/Otl
     open suspend fun sendMetrics(kotlin.collections/Set<us.tractat.kuilt.otel/MetricPoint>) // us.tractat.kuilt.otel/OtlpEdge.sendMetrics|sendMetrics(kotlin.collections.Set<us.tractat.kuilt.otel.MetricPoint>){}[0]
 }
 
+sealed interface us.tractat.kuilt.otel/ClockPersist { // us.tractat.kuilt.otel/ClockPersist|null[0]
+    final object Persisted : us.tractat.kuilt.otel/ClockPersist { // us.tractat.kuilt.otel/ClockPersist.Persisted|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ClockPersist.Persisted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ClockPersist.Persisted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/ClockPersist.Persisted.toString|toString(){}[0]
+    }
+
+    final object Unrecovered : us.tractat.kuilt.otel/ClockPersist { // us.tractat.kuilt.otel/ClockPersist.Unrecovered|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ClockPersist.Unrecovered.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ClockPersist.Unrecovered.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/ClockPersist.Unrecovered.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.otel/ClockRecovery { // us.tractat.kuilt.otel/ClockRecovery|null[0]
+    final class Refused : us.tractat.kuilt.otel/ClockRecovery { // us.tractat.kuilt.otel/ClockRecovery.Refused|null[0]
+        constructor <init>(kotlin/Throwable) // us.tractat.kuilt.otel/ClockRecovery.Refused.<init>|<init>(kotlin.Throwable){}[0]
+
+        final val cause // us.tractat.kuilt.otel/ClockRecovery.Refused.cause|{}cause[0]
+            final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.otel/ClockRecovery.Refused.cause.<get-cause>|<get-cause>(){}[0]
+
+        final fun component1(): kotlin/Throwable // us.tractat.kuilt.otel/ClockRecovery.Refused.component1|component1(){}[0]
+        final fun copy(kotlin/Throwable = ...): us.tractat.kuilt.otel/ClockRecovery.Refused // us.tractat.kuilt.otel/ClockRecovery.Refused.copy|copy(kotlin.Throwable){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ClockRecovery.Refused.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ClockRecovery.Refused.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/ClockRecovery.Refused.toString|toString(){}[0]
+    }
+
+    final class Undecodable : us.tractat.kuilt.otel/ClockRecovery { // us.tractat.kuilt.otel/ClockRecovery.Undecodable|null[0]
+        constructor <init>(kotlin/Throwable) // us.tractat.kuilt.otel/ClockRecovery.Undecodable.<init>|<init>(kotlin.Throwable){}[0]
+
+        final val cause // us.tractat.kuilt.otel/ClockRecovery.Undecodable.cause|{}cause[0]
+            final fun <get-cause>(): kotlin/Throwable // us.tractat.kuilt.otel/ClockRecovery.Undecodable.cause.<get-cause>|<get-cause>(){}[0]
+
+        final fun component1(): kotlin/Throwable // us.tractat.kuilt.otel/ClockRecovery.Undecodable.component1|component1(){}[0]
+        final fun copy(kotlin/Throwable = ...): us.tractat.kuilt.otel/ClockRecovery.Undecodable // us.tractat.kuilt.otel/ClockRecovery.Undecodable.copy|copy(kotlin.Throwable){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ClockRecovery.Undecodable.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ClockRecovery.Undecodable.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/ClockRecovery.Undecodable.toString|toString(){}[0]
+    }
+
+    final object Recovered : us.tractat.kuilt.otel/ClockRecovery { // us.tractat.kuilt.otel/ClockRecovery.Recovered|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ClockRecovery.Recovered.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ClockRecovery.Recovered.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/ClockRecovery.Recovered.toString|toString(){}[0]
+    }
+}
+
+sealed interface us.tractat.kuilt.otel/ClockTick { // us.tractat.kuilt.otel/ClockTick|null[0]
+    final class Minted : us.tractat.kuilt.otel/ClockTick { // us.tractat.kuilt.otel/ClockTick.Minted|null[0]
+        constructor <init>(us.tractat.kuilt.otel/CausalStamp) // us.tractat.kuilt.otel/ClockTick.Minted.<init>|<init>(us.tractat.kuilt.otel.CausalStamp){}[0]
+
+        final val stamp // us.tractat.kuilt.otel/ClockTick.Minted.stamp|{}stamp[0]
+            final fun <get-stamp>(): us.tractat.kuilt.otel/CausalStamp // us.tractat.kuilt.otel/ClockTick.Minted.stamp.<get-stamp>|<get-stamp>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/CausalStamp // us.tractat.kuilt.otel/ClockTick.Minted.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.otel/CausalStamp = ...): us.tractat.kuilt.otel/ClockTick.Minted // us.tractat.kuilt.otel/ClockTick.Minted.copy|copy(us.tractat.kuilt.otel.CausalStamp){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ClockTick.Minted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ClockTick.Minted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/ClockTick.Minted.toString|toString(){}[0]
+    }
+
+    final object Unrecovered : us.tractat.kuilt.otel/ClockTick { // us.tractat.kuilt.otel/ClockTick.Unrecovered|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ClockTick.Unrecovered.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ClockTick.Unrecovered.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/ClockTick.Unrecovered.toString|toString(){}[0]
+    }
+}
+
 sealed interface us.tractat.kuilt.otel/DrainResult { // us.tractat.kuilt.otel/DrainResult|null[0]
     final class Failure : us.tractat.kuilt.otel/DrainResult { // us.tractat.kuilt.otel/DrainResult.Failure|null[0]
         constructor <init>(kotlin.collections/List<us.tractat.kuilt.otel/SignalFailure>) // us.tractat.kuilt.otel/DrainResult.Failure.<init>|<init>(kotlin.collections.List<us.tractat.kuilt.otel.SignalFailure>){}[0]
@@ -861,9 +930,9 @@ final class us.tractat.kuilt.otel/WarpCausalClock { // us.tractat.kuilt.otel/War
 
     final fun frontier(): kotlin.collections/Set<us.tractat.kuilt.crdt/Dot> // us.tractat.kuilt.otel/WarpCausalClock.frontier|frontier(){}[0]
     final fun observe(kotlin.collections/Set<us.tractat.kuilt.crdt/Dot>) // us.tractat.kuilt.otel/WarpCausalClock.observe|observe(kotlin.collections.Set<us.tractat.kuilt.crdt.Dot>){}[0]
-    final fun tick(): us.tractat.kuilt.otel/CausalStamp // us.tractat.kuilt.otel/WarpCausalClock.tick|tick(){}[0]
-    final suspend fun persist(us.tractat.kuilt.store/DurableStore) // us.tractat.kuilt.otel/WarpCausalClock.persist|persist(us.tractat.kuilt.store.DurableStore){}[0]
-    final suspend fun recover(us.tractat.kuilt.store/DurableStore) // us.tractat.kuilt.otel/WarpCausalClock.recover|recover(us.tractat.kuilt.store.DurableStore){}[0]
+    final fun tick(): us.tractat.kuilt.otel/ClockTick // us.tractat.kuilt.otel/WarpCausalClock.tick|tick(){}[0]
+    final suspend fun persist(us.tractat.kuilt.store/DurableStore): us.tractat.kuilt.otel/ClockPersist // us.tractat.kuilt.otel/WarpCausalClock.persist|persist(us.tractat.kuilt.store.DurableStore){}[0]
+    final suspend fun recover(us.tractat.kuilt.store/DurableStore): us.tractat.kuilt.otel/ClockRecovery // us.tractat.kuilt.otel/WarpCausalClock.recover|recover(us.tractat.kuilt.store.DurableStore){}[0]
 }
 
 final class us.tractat.kuilt.otel/WarpLogRecordExporter { // us.tractat.kuilt.otel/WarpLogRecordExporter|null[0]

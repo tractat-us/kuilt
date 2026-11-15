@@ -74,7 +74,7 @@ class WarpSpanExporterCrashWindowTest {
         val maxDurableSpanSeq = exp2.snapshot().elements
             .mapNotNull { it.causalStamp?.dot?.seq }
             .maxOrNull() ?: 0L
-        val nextDot = clock2.tick().dot
+        val nextDot = clock2.mint().dot
 
         assertTrue(
             nextDot.seq > maxDurableSpanSeq,

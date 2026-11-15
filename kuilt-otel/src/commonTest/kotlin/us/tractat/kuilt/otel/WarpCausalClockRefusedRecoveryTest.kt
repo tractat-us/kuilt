@@ -3,8 +3,6 @@ package us.tractat.kuilt.otel
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -17,6 +15,7 @@ import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -44,27 +43,19 @@ class WarpCausalClockRefusedRecoveryTest {
     /** A clock that minted `seq=1` and `seq=2` and persisted them, as a previous process did. */
     private suspend fun durableClockAtTwo(store: DurableStore): List<Dot> {
         val previous = WarpCausalClock(replica)
-        val used = listOf(previous.tick().dot, previous.tick().dot)
+        val used = listOf(previous.mint().dot, previous.mint().dot)
         previous.persist(store)
         return used
     }
 
     /** What the next healthy restart mints first: the durable high-water mark plus one. */
     private suspend fun nextDotAfterRestart(store: DurableStore): Dot =
-        WarpCausalClock(replica).also { it.recover(store) }.tick().dot
+        WarpCausalClock(replica).also { it.recover(store) }.mint().dot
 
-    private fun WarpCausalClock.tickUnlessRefused(): Dot? = try {
-        tick().dot
-    } catch (_: IllegalStateException) { // ALLOW-ise: nothing in the try can suspend — tick() is not `suspend`
-        null
-    }
-
-    private suspend fun WarpCausalClock.persistUnlessRefused(store: DurableStore): Boolean = try {
-        persist(store)
-        true
-    } catch (_: IllegalStateException) {
-        currentCoroutineContext().ensureActive()
-        false
+    /** The dot [WarpCausalClock.tick] minted, or `null` when it answered unrecovered. */
+    private fun WarpCausalClock.mintedDot(): Dot? = when (val tick = tick()) {
+        is ClockTick.Minted -> tick.stamp.dot
+        ClockTick.Unrecovered -> null
     }
 
     // ---- The clock on its own ----
@@ -76,16 +67,17 @@ class WarpCausalClockRefusedRecoveryTest {
         val store = ReadRefusingStore(backing, clockKey)
 
         val restarted = WarpCausalClock(replica)
-        restarted.recover(store)
+        val recovery = restarted.recover(store)
         val refusedReads = store.refusals
-        restarted.tickUnlessRefused()?.let { used += it }
-        val persisted = restarted.persistUnlessRefused(store)
+        restarted.mintedDot()?.let { used += it }
+        val persisted = restarted.persist(store)
         used += nextDotAfterRestart(backing)
 
         assertAll(
             { assertEquals(1, refusedReads, "the rig did not refuse the recovery read") },
+            { assertIs<ClockRecovery.Refused>(recovery, "the refused read was reported as $recovery") },
             { assertEquals(used.size, used.toSet().size, "a dot was minted twice: $used") },
-            { assertTrue(!persisted, "an unrecovered clock persisted over the durable high-water mark") },
+            { assertEquals(ClockPersist.Unrecovered, persisted, "an unrecovered clock persisted over the durable high-water mark") },
             { assertEquals(3L, used.last().seq, "the next healthy restart did not resume after seq=2") },
         )
     }
@@ -103,7 +95,7 @@ class WarpCausalClockRefusedRecoveryTest {
         clock.observe(setOf(remote))
         store.heal()
         clock.recover(store)
-        val stamp = clock.tick()
+        val stamp = clock.mint()
 
         assertAll(
             { assertEquals(1, refusedReads, "the rig did not refuse the first recovery read") },
@@ -123,9 +115,9 @@ class WarpCausalClockRefusedRecoveryTest {
         val clock = WarpCausalClock(replica)
 
         clock.recover(store)
-        val minted = listOf(clock.tick().dot, clock.tick().dot)
+        val minted = listOf(clock.mint().dot, clock.mint().dot)
         clock.recover(store)
-        val next = clock.tick().dot
+        val next = clock.mint().dot
         val used = durable + minted + next
 
         assertAll(
@@ -138,17 +130,16 @@ class WarpCausalClockRefusedRecoveryTest {
     fun aCorruptEntryStillStartsTheClockFresh() = runTest {
         val store = InMemoryDurableStore()
         store.write(clockKey, byteArrayOf(0x7f, 0x00, 0x13))
-        val failures = mutableListOf<Throwable>()
 
         val clock = WarpCausalClock(replica)
-        clock.recover(store) { failures += it }
-        val first = clock.tickUnlessRefused()
-        val persisted = clock.persistUnlessRefused(store)
+        val recovery = clock.recover(store)
+        val first = clock.mintedDot()
+        val persisted = clock.persist(store)
 
         assertAll(
-            { assertEquals(1, failures.size, "the rig: the corrupt entry was not reported as a failed recovery") },
+            { assertIs<ClockRecovery.Undecodable>(recovery, "the rig: the corrupt entry was reported as $recovery") },
             { assertEquals(Dot(replica, 1L), first, "a clock over a corrupt entry is dead instead of fresh") },
-            { assertTrue(persisted, "a clock over a corrupt entry cannot repair it") },
+            { assertEquals(ClockPersist.Persisted, persisted, "a clock over a corrupt entry cannot repair it") },
         )
     }
 
@@ -243,7 +234,7 @@ class WarpCausalClockRefusedRecoveryTest {
             { assertEquals(1, store.minted, "the rig never minted on the clock's recovery read") },
             { assertEquals(ExportResult.Success, cleared) },
             { assertEquals(emptySet(), persisted.frontier(), "the clear left the pre-clear frontier durable") },
-            { assertEquals(Dot(replica, 3L), persisted.tick().dot, "the clear overwrote the durable seq") },
+            { assertEquals(Dot(replica, 3L), persisted.mint().dot, "the clear overwrote the durable seq") },
         )
     }
 

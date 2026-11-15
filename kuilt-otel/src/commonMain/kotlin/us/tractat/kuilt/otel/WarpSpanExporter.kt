@@ -104,7 +104,14 @@ public class WarpSpanExporter(
      */
     public val health: StateFlow<PersistenceHealth> = persistence.health
 
-    internal fun recoveryFailed(cause: Throwable): Unit = persistence.recoveryFailed(cause)
+    /** Count a clock recovery that did not land cleanly as this exporter's recovery failure. */
+    internal fun clockRecovered(outcome: ClockRecovery) {
+        when (outcome) {
+            ClockRecovery.Recovered -> Unit
+            is ClockRecovery.Undecodable -> persistence.recoveryFailed(outcome.cause)
+            is ClockRecovery.Refused -> persistence.recoveryFailed(outcome.cause)
+        }
+    }
 
     /**
      * Whether a durable-write outage is currently **open** — i.e. a refused store write has already
@@ -274,7 +281,10 @@ public class WarpSpanExporter(
             causalClock == null -> span
             span.causalStamp != null -> span
             // An unrecovered clock mints nothing (#3390): the span is saved unstamped.
-            else -> stampFrom(causalClock)?.let { span.copy(causalStamp = it) } ?: span
+            else -> when (val tick = tickFrom(causalClock)) {
+                is ClockTick.Minted -> span.copy(causalStamp = tick.stamp)
+                ClockTick.Unrecovered -> span
+            }
         }
         // A fresh dot was minted only when copy() produced a new instance; an explicit
         // or absent stamp returns `span` itself. Only a minted stamp needs rollback —
@@ -298,7 +308,7 @@ public class WarpSpanExporter(
                     // every durable span's dot — a crash between the two writes can only lose
                     // the span, never re-mint its dot on recover (#1053). An unrecovered clock
                     // writes nothing, and no dot in this snapshot came from it (#3390).
-                    if (causalClock?.persistIfArmed(store) == false) work = spanWork
+                    if (causalClock?.persist(store) == ClockPersist.Unrecovered) work = spanWork
                     store.write(STORE_KEY, encoded)
                     Result.success(Unit)
                 } catch (cause: Throwable) {
@@ -336,11 +346,12 @@ public class WarpSpanExporter(
     /**
      * Mint a stamp from [clock], first retrying its recovery read if that was refused (#3390). The
      * retry holds [ioMutex], the section every clock persist runs in, so it never reads past a write
-     * this exporter is making. `null` while the read is still refused: the span goes out unstamped.
+     * this exporter is making. [ClockTick.Unrecovered] while the read is still refused: the span goes
+     * out unstamped.
      */
-    private suspend fun stampFrom(clock: WarpCausalClock): CausalStamp? {
-        if (clock.isUnrecovered) ioMutex.withLock { clock.retryRecovery(store, persistence::recoveryFailed) }
-        return clock.tickIfArmed()
+    private suspend fun tickFrom(clock: WarpCausalClock): ClockTick {
+        if (clock.isUnrecovered) ioMutex.withLock { clockRecovered(clock.retryRecovery(store)) }
+        return clock.tick()
     }
 
     /**
@@ -449,7 +460,7 @@ public class WarpSpanExporter(
         // A clock whose recovery read was refused gets that read retried here too, so a clear is
         // not the turn that writes a `seq` below the durable one (#3390). Still refused, the clear
         // writes the spans and leaves the clock's entry alone.
-        causalClock?.retryRecovery(store, persistence::recoveryFailed)
+        causalClock?.let { clockRecovered(it.retryRecovery(store)) }
         var work = clockAndSpanWork
         val written = try {
             val encoded = lock.withLock {
@@ -463,7 +474,7 @@ public class WarpSpanExporter(
             // `seq` is deliberately untouched; see WarpCausalClock.clearFrontier.
             causalClock?.clearFrontier()
             // Clock before spans, the same order and for the same reason as export() (#1053).
-            if (causalClock?.persistIfArmed(store) == false) work = spanWork
+            if (causalClock?.persist(store) == ClockPersist.Unrecovered) work = spanWork
             store.write(STORE_KEY, encoded)
             Result.success(Unit)
         } catch (cause: Throwable) {

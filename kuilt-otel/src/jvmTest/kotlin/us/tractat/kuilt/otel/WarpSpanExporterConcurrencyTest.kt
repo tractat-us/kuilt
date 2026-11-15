@@ -92,7 +92,7 @@ class WarpSpanExporterConcurrencyTest {
                     val maxDurableDotSeq = durable
                         .mapNotNull { it.causalStamp?.dot?.seq }
                         .maxOrNull() ?: 0L
-                    val nextSeq = clock2.tick().dot.seq
+                    val nextSeq = clock2.mint().dot.seq
 
                     assertTrue(
                         nextSeq > maxDurableDotSeq,

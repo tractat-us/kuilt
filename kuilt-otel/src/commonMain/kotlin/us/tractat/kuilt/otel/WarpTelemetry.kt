@@ -128,7 +128,7 @@ public class WarpTelemetry(
      * Idempotent: a second call simply re-reads and re-decodes the same bytes.
      */
     public suspend fun recover() {
-        causalClock.recover(store, spans::recoveryFailed)
+        spans.clockRecovered(causalClock.recover(store))
         spans.recover()
         metrics.recover()
         logs.recover()

@@ -201,11 +201,11 @@ class IndeterminateWriteAuditTest {
         for (mode in listOf(CommitMode.FAIL, CommitMode.MINT_CANCEL)) {
             val store = CommitThenFailStore(WarpCausalClock.STORE_KEY, mode)
             val clock = WarpCausalClock(replica)
-            val minted = clock.tick().dot
+            val minted = clock.mint().dot
             assertFailsWith<Exception> { clock.persist(store) }
             val recovered = WarpCausalClock(replica).also { it.recover(store) }
             val frontier = recovered.frontier()
-            val next = recovered.tick().dot
+            val next = recovered.mint().dot
             assertAll(
                 { assertEquals(1, store.injections, "clock commit-before-failure injection must fire") },
                 { assertEquals(setOf(minted), frontier) },
