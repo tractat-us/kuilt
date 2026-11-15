@@ -16,10 +16,12 @@ import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -61,6 +63,8 @@ import kotlin.test.assertTrue
  *   returns a two-armed answer — [DeviceKeyStoreFixture.UnreadableKey] and
  *   [DeviceKeyStoreFixture.KeyWriteInterruption] — and the arm that claims the state was reached
  *   carries a probe the property checks, so a hook that does nothing reds instead of passing.
+ *   [DeviceKeyStoreFixture.UnreadableGrants] has one arm, since every durable medium can fail a
+ *   read, and its probe must throw for the property to pass.
  *
  * ## Replace damage, refuse a medium that cannot answer
  *
@@ -70,6 +74,12 @@ import kotlin.test.assertTrue
  * permission it lacks, a file system loop, a Keychain locked before the first unlock — is not damage,
  * and the store throws: replacing it would turn a passing condition into a new identity on every
  * launch it lasts for. [anUnreadableKeyIsRefusedNotReplaced] is the second half.
+ *
+ * Grants get the same split. A record that was read and does not decode is dropped
+ * ([corruptGrantsAreDroppedNotFatal]); a record the medium cannot read right now is refused, and is
+ * never rewritten while it is out of reach ([unreadableGrantsAreRefusedNotRewritten]). Reading that
+ * failure as "no grants" would let the next [DeviceKeyStore.keepGrant] write a record holding only
+ * the new grant over every grant the device had.
  *
  * ## What it deliberately does not require
  *
@@ -487,6 +497,82 @@ public abstract class DeviceKeyStoreConformanceSuite {
         }
     }
 
+    /**
+     * A grants record the medium cannot read *right now* is refused, not read as "no grants":
+     * [DeviceKeyStore.grants] and [DeviceKeyStore.keepGrant] throw an [Exception], nothing writes the
+     * record while it is out of reach, and once the medium can read again the held grant is intact.
+     *
+     * The other half of [corruptGrantsAreDroppedNotFatal]. An iPhone reaches it after a restart, before
+     * its first unlock, when the grants file's protection class keeps it closed; a permission the
+     * process lacks reaches it on any platform. Where the medium refuses the read but would still take
+     * a new record, a store that answered "no grants" for a failed read would keep a new grant by
+     * writing a record holding only that grant, over every grant the device held.
+     *
+     * The rig must fire: its probe reads the record straight off the medium, bypassing the store, and
+     * the property requires that read to fail. It must also leave the medium writable: its write probe
+     * keeps a sibling record through the same backend, in the same place, and the property requires
+     * that write to succeed, since a medium that refused it would refuse the mistaken rewrite too. The
+     * grant offered during the fault is newer than the held one, so a store that wrote it anyway leaves
+     * a different record behind, and the read after the restore reds as well as the rig's own count of
+     * writes.
+     */
+    @Test
+    public fun unreadableGrantsAreRefusedNotRewritten(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        when (val fixture = newFixture()) {
+            is DeviceKeyStoreFixture.KeepsNothing -> assertForgets(fixture)
+            is DeviceKeyStoreFixture.Durable -> {
+                val store = fixture.open { }
+                val me = store.deviceKey().id
+                val host = DeviceKey.generate()
+                val held = grant(host, me, T)
+                store.keepGrant(held)
+                val control = fixture.open { }.grants()
+                val newer = grant(host, me, T + 1_000)
+
+                val rig = fixture.makeGrantsUnreadable()
+                var probeFailure: Throwable? = null
+                var writeFailure: Throwable? = null
+                var readFailure: Throwable? = null
+                var keepFailure: Throwable? = null
+                val rewritten: Boolean
+                try {
+                    probeFailure = thrownBy { rig.probe() }
+                    writeFailure = thrownBy { rig.probeWrite() }
+                    readFailure = thrownBy { fixture.open { }.grants() }
+                    keepFailure = thrownBy { fixture.open { }.keepGrant(newer) }
+                } finally {
+                    rewritten = rig.restore()
+                }
+                val afterRestore = fixture.open { }.grants()
+
+                assertAll(
+                    { assertEquals(listOf(held), control, "precondition: the grant was kept before the fault") },
+                    { assertNotNull(probeFailure, "rig: a read straight off the medium fails while the grants are unreadable") },
+                    {
+                        assertNull(
+                            writeFailure,
+                            "rig: the medium still takes a new record while the grants are unreadable, or a mistaken rewrite could not land",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            readFailure is Exception,
+                            "a grants record the medium cannot read throws an Exception, not an empty list; got $readFailure",
+                        )
+                    },
+                    {
+                        assertTrue(
+                            keepFailure is Exception,
+                            "keeping a grant over a record that cannot be read throws an Exception; got $keepFailure",
+                        )
+                    },
+                    { assertFalse(rewritten, "no grant write happens while the record is unreadable") },
+                    { assertEquals(listOf(held), afterRestore, "once the medium can read again, the held grant is intact") },
+                )
+            }
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /**
@@ -547,6 +633,20 @@ public abstract class DeviceKeyStoreConformanceSuite {
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
+        e
+    }
+
+    /**
+     * What [block] threw — any [Throwable], so a failure that is not an [Exception] is seen and named
+     * rather than escaping the property — or `null` if it returned. Cancellation of this test is never
+     * a verdict.
+     */
+    private suspend fun thrownBy(block: suspend () -> Unit): Throwable? = try {
+        block()
+        null
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
         e
     }
 
@@ -640,6 +740,10 @@ public sealed interface DeviceKeyStoreFixture {
      * @param makeKeyUnreadable puts the held key out of the store's reach without damaging it — a
      *   permission it lacks, a file system loop, a Keychain locked before first unlock — and says how
      *   to put it back; see [UnreadableKey].
+     * @param makeGrantsUnreadable puts the stored grants record out of the store's reach without
+     *   damaging it — a file the process may not open, as an iPhone's grants file is after a restart
+     *   until the first unlock — while the medium still takes a new record, and says how to probe and
+     *   undo it; see [UnreadableGrants].
      */
     public class Durable(
         private val reopen: suspend (beforeKeyIsMade: suspend () -> Unit) -> DeviceKeyStore,
@@ -649,6 +753,7 @@ public sealed interface DeviceKeyStoreFixture {
         public val interruptKeyWrite: suspend () -> KeyWriteInterruption,
         public val corruptGrants: suspend () -> Unit,
         public val makeKeyUnreadable: suspend () -> UnreadableKey,
+        public val makeGrantsUnreadable: suspend () -> UnreadableGrants,
     ) : DeviceKeyStoreFixture {
         override suspend fun open(beforeKeyIsMade: suspend () -> Unit): DeviceKeyStore = reopen(beforeKeyIsMade)
     }
@@ -678,6 +783,44 @@ public sealed interface DeviceKeyStoreFixture {
             }
         }
     }
+
+    /**
+     * What [Durable.makeGrantsUnreadable] did: the grants record is out of reach until [restore] runs.
+     *
+     * **One arm, and non-nullable.** Unlike [UnreadableKey] there is no `CannotOccur`: a store that
+     * keeps its grants across a restart keeps them in a medium, and every medium can fail a read — a
+     * permission, a protection class, a closing connection. The store with nothing to fault is the one
+     * that keeps nothing, which is the fixture's [KeepsNothing] arm, and the property checks that it
+     * forgets. A nullable hook, or a `CannotOccur` arm here, would let the store this property exists
+     * to catch — one that reads a failed read as "no grants" — opt out by declaring it.
+     *
+     * The rig leaves the medium able to take a **new** record, because that is the case that loses
+     * data: a medium that refused every write as well would refuse the mistaken rewrite on the store's
+     * behalf, and the property would pass a store that tried it. [probeWrite] is how the property
+     * checks it: a rig that faulted the whole directory instead of the one record would fail it.
+     *
+     * ## What it cannot detect
+     *
+     * Only the fault the rig produces: a store that refuses a permission failure correctly and reads
+     * an I/O error as "no grants" passes. And [restore]'s answer is the fixture's own witness, so a
+     * fixture that always answered `false` would blind the write check. The read after the restore
+     * still catches a write that changed the record, but not one that rewrote the same grants.
+     *
+     * @param probe reads the grants record straight off the medium, bypassing the store; while the
+     *   record is unreadable it must throw. The property requires that it does, so a rig that broke
+     *   nothing reds rather than passes.
+     * @param probeWrite writes a sibling record — never the grants record — straight to the medium
+     *   through the same backend, in the same place, while the grants record is unreadable; it must
+     *   return. The property requires that it does, so a rig that faulted the whole medium reds rather
+     *   than leaves the rewrite check with nothing to catch.
+     * @param restore puts the record back within reach, and answers whether anything wrote, replaced
+     *   or removed the record while it was unreadable. The suite calls it exactly once, in a `finally`.
+     */
+    public class UnreadableGrants(
+        public val probe: suspend () -> Unit,
+        public val probeWrite: suspend () -> Unit,
+        public val restore: suspend () -> Boolean,
+    )
 
     /**
      * What [Durable.interruptKeyWrite] left behind: residue a crash would leave, or a statement that
