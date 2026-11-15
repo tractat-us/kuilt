@@ -86,7 +86,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  *
  * ## Thread-safety
  *
- * `seq` and the frontier are one sealed state guarded by an explicit reentrant lock, so the
+ * `seq`, the frontier and the read's backoff window are one sealed state guarded by an explicit reentrant lock, so the
  * clock is correct under a real multi-threaded dispatcher — not merely under a test dispatcher.
  * `limitedParallelism(1)` confinement is BANNED (see CLAUDE.md).
  *
@@ -96,14 +96,6 @@ public class WarpCausalClock(private val replica: ReplicaId) {
 
     private val lock = reentrantLock()
     private var state: ClockState = ClockState.initial
-
-    /**
-     * The backoff on re-reading a refused entry, guarded by [lock] (#3436): `null` until a read is
-     * refused, and again once one lands. Every refused read, [recover]'s included, lengthens it. A
-     * [WarpSpanExporter] consults it through [owedReadSkip] and spends it through [spendSkip]; this
-     * class never skips a read itself, so [recover] always reads.
-     */
-    private var readBackoff: RefusedReadBackoff? = null
 
     internal companion object {
         /** The durable-store key this clock persists under. Exposed `internal` so a
@@ -199,38 +191,35 @@ public class WarpCausalClock(private val replica: ReplicaId) {
     public suspend fun recover(store: DurableStore): ClockRecovery = when (val read = read(store)) {
         is ClockRead.Refused -> {
             logger.error(read.cause) { "otel.causal.clock: store read failed; minting nothing until a read lands" }
-            lock.withLock { refusedLocked(read.cause) }
+            lock.withLock { state = state.refused(read.cause) }
             ClockRecovery.Refused(read.cause)
         }
         is ClockRead.Landed -> arm(read)
     }
 
     /**
-     * A refused read: [Unread][ClockState.Unread] becomes unrecovered, an armed clock is left alone,
-     * and an unarmed one's backoff grows by one refusal. Must be called with [lock] held.
-     */
-    private fun refusedLocked(cause: Throwable) {
-        state = state.refused()
-        if (state !is ClockState.Armed) readBackoff = RefusedReadBackoff.after(readBackoff, cause)
-    }
-
-    /**
      * The backoff window a turn of [WarpSpanExporter] should skip this clock's read inside, or `null`
-     * when it should read: the clock is armed, or no read has been refused, or the window is spent
-     * (#3436). A turn that skips reports the window's cause as its refusal, and spends one turn of
-     * the window through [spendSkip] once its reads are done.
+     * when it should read: no read has been refused, or one has landed, or the window is spent
+     * (#3436). The window lives in [ClockState.Unrecovered], so an armed clock has none to answer. A
+     * turn that skips reports the window's cause as its refusal, and spends one turn of the window
+     * through [spendSkip] once its reads are done.
      */
     internal fun owedReadSkip(): RefusedReadBackoff? = lock.withLock {
-        readBackoff?.takeIf { state !is ClockState.Armed && it.skipTurns > 0 }
+        (state as? ClockState.Unrecovered)?.backoff?.takeIf { it.skipTurns > 0 }
     }
 
     /**
-     * Spend one turn of [seen], the window [owedReadSkip] answered. Nothing is spent when the window
-     * was replaced since: a read landed, or was refused and opened a longer one, both by a [recover]
-     * the exporter does not serialize with its turns. The turn that raced it then spends nothing.
+     * Spend one turn of [seen], the window [owedReadSkip] answered, by an identity compare under
+     * [lock]. Nothing is spent when the window was replaced since the turn decided on it. The usual
+     * replacer is another turn's spend: an export decides before its span read and spends after it,
+     * so a concurrent export can decide on the same window in between, and only the first of the two
+     * spends it. The others are a refused read, which opens a longer window, and a landed one, which
+     * arms the clock and drops the window with [ClockState.Unrecovered]; a [recover] makes either, and
+     * the exporter does not serialize it with its turns. The turn that lost the race spends nothing.
      */
     internal fun spendSkip(seen: RefusedReadBackoff): Unit = lock.withLock {
-        if (readBackoff === seen) readBackoff = seen.skipped()
+        val current = state
+        if (current is ClockState.Unrecovered && current.backoff === seen) state = current.copy(backoff = seen.skipped())
     }
 
     /**
@@ -244,7 +233,7 @@ public class WarpCausalClock(private val replica: ReplicaId) {
         if (isArmed) return ClockRecovery.Recovered
         return when (val read = read(store)) {
             is ClockRead.Refused -> {
-                val first = lock.withLock { (state is ClockState.Unread).also { refusedLocked(read.cause) } }
+                val first = lock.withLock { (state is ClockState.Unread).also { state = state.refused(read.cause) } }
                 if (first) {
                     logger.error(read.cause) { "otel.causal.clock: store read failed; minting nothing until a read lands" }
                 } else {
@@ -273,7 +262,6 @@ public class WarpCausalClock(private val replica: ReplicaId) {
 
     private fun arm(read: ClockRead.Landed): ClockRecovery {
         lock.withLock {
-            readBackoff = null
             state = when (read) {
                 is ClockRead.Found -> state.joinedWith(read.entry)
                 ClockRead.Absent, is ClockRead.Undecodable -> state.withoutEntry()
@@ -364,7 +352,8 @@ public sealed interface ClockPersist {
  * `seq` has read the durable one and minted only above it, and as the only writer of the clock's
  * key it is at least as high as the store. A refused read then teaches it nothing, and demoting it
  * would strand a dot already handed to a span whose turn is still waiting to persist. [Unread] and
- * [Unrecovered] behave alike; they differ only in whether a refusal has been reported yet.
+ * [Unrecovered] behave alike; they differ only in whether a refusal has been reported yet, and so in
+ * whether there is a backoff window to skip the next read inside.
  */
 private sealed interface ClockState {
     val frontier: Set<Dot>
@@ -382,8 +371,16 @@ private sealed interface ClockState {
         is Armed -> copy(frontier = emptySet())
     }
 
-    /** A refused read moves [Unread] to [Unrecovered] and leaves an [Armed] clock alone. */
-    fun refused(): ClockState = if (this is Unread) Unrecovered(frontier, frontierCleared, floor) else this
+    /**
+     * A refused read, whose [cause] the window's skipped turns report: [Unread] becomes [Unrecovered]
+     * with a first window, [Unrecovered] lengthens its window by one refusal, and an [Armed] clock is
+     * left alone, since it holds no window to lengthen.
+     */
+    fun refused(cause: Throwable): ClockState = when (this) {
+        is Unread -> Unrecovered(frontier, frontierCleared, floor, RefusedReadBackoff.after(null, cause))
+        is Unrecovered -> copy(backoff = RefusedReadBackoff.after(backoff, cause))
+        is Armed -> this
+    }
 
     /** Every dot up to [usedSeq] is used. Raises, never lowers: `max`, on every arm. */
     fun floored(usedSeq: Long): ClockState = when (this) {
@@ -420,8 +417,19 @@ private sealed interface ClockState {
      * A read was refused before any landed, so the durable high-water mark is unknown and nothing may
      * be minted or persisted. [frontier] collects what [WarpCausalClock.observe] saw meanwhile, and
      * [floor] what a read of the stored spans found used.
+     *
+     * [backoff] is the window a [WarpSpanExporter]'s turns skip this clock's read inside (#3436).
+     * Only a refused read reaches this state, so it always has one. Every refused read lengthens it,
+     * [WarpCausalClock.recover]'s included, and the read that lands drops it with this state. An
+     * [Armed] clock has no window, so none can outlive a landed read. This class never skips a read
+     * itself, so [WarpCausalClock.recover] always reads.
      */
-    data class Unrecovered(override val frontier: Set<Dot>, val frontierCleared: Boolean, val floor: Long) : ClockState
+    data class Unrecovered(
+        override val frontier: Set<Dot>,
+        val frontierCleared: Boolean,
+        val floor: Long,
+        val backoff: RefusedReadBackoff,
+    ) : ClockState
 
     /** Every dot up to [seq] is used and nothing above it is: the next one minted is `seq + 1`. */
     data class Armed(val seq: Long, override val frontier: Set<Dot>) : ClockState
