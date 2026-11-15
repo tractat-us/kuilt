@@ -10,3 +10,8 @@
 
 # The carrier itself, including `generateKuiltVersion`, which writes the version into its source.
 :kuilt-base:*
+
+# `writeBinaryenCoordinates` packs the module's own published coordinates (version included) into
+# its main jar, so the runtime can fetch the classified wasm-opt jars of the same version. Only
+# the resource and the tests that load it change per snapshot; no compile does.
+:kuilt-warp-compiler:jvmTest
