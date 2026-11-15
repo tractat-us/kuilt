@@ -259,6 +259,9 @@ public class FairShareAllocator(
             val applied = ledger.mutateOrSkip { s ->
                 // Again on each round's state: a merge between two rounds can bring the set over.
                 if (!childWeightsFit(s, parent)) return@mutateOrSkip null
+                // Before each pick, on the state it lands on: the clock over the last grant, and any
+                // child that grant filled seen leaving at it, not at the next call (#3416 review).
+                markDepartures(parent, policyEdges(s, parent, demand))
                 try {
                     val grant = pickOne(s, parent, earmarked, demand) ?: return@mutateOrSkip null
                     val cell = ValueCell(s)
@@ -844,15 +847,11 @@ public class FairShareAllocator(
             return
         }
 
-        // The clock first, over what was kept since the last round, then the departures it marks (#3376).
-        val clock = runClock(parent, first)
-        for (edge in first) {
-            if (wasAsking(edge) && !HeddlePolicy.isDemanding(edge)) departures[edge.record.id] = clock
-        }
+        val clock = markDepartures(parent, first)
         val unseated = first.filter { it.gauge == null }.mapTo(HashSet()) { it.record.id }
         val wakers = first.filter { isWaker(it) }.mapTo(HashSet()) { it.record.id }
         // A waker this peer saw leave comes back by the clock; one it never saw leave is clamped.
-        val returners = wakers.filterTo(HashSet()) { it in departures }
+        val returners = first.filter { isReturner(it) }.mapTo(HashSet()) { it.record.id }
         val joiners = HashSet(unseated).apply { addAll(wakers) }
         // A pre-seat rebase ([preSeatRaise]) lands first, and everything after reads through it.
         if (raise != null) ledger.mutateOrSkip { it.raiseOrigin(parent, it.origin(parent) + raise) }
@@ -947,8 +946,37 @@ public class FairShareAllocator(
         departures.keys.removeAll(departed)
     }
 
-    /** Whether this peer saw [edge] asking last round, and it is seated: a child its parent's clock counts. */
+    /** Whether this peer last saw [edge] asking, and it is seated: a child its parent's clock counts. */
     private fun wasAsking(edge: PolicyEdge): Boolean = demandingObserved[edge.record.id] == true && edge.gauge != null
+
+    /**
+     * Whether [edge] is a **returner**: a waker ([isWaker]) this peer saw stop asking, so it holds a
+     * departure against its parent's clock. A returner comes back moved by that clock ([moveReturners]);
+     * every other waker is clamped ([clampWakers]). The one definition [settleJoiners] and
+     * [returnerLandings] both read (#3376).
+     */
+    private fun isReturner(edge: PolicyEdge): Boolean = isWaker(edge) && edge.record.id in departures
+
+    /**
+     * Run [parent]'s clock over [edges] ([runClock]), then mark every child this peer last saw asking
+     * that no longer is as gone at the clock it returns: a departure, and an observation that it is
+     * not asking (#3376). [settleJoiners] calls it at a call's entry and [schedule] before each later
+     * pick, so a child that a grant fills is seen leaving at that grant, and its siblings' grants
+     * after it run the clock at their weight alone (#3416 review). A departure is the clock's reading
+     * when this peer saw the child stop, so seeing it sooner changes only what it is measured from.
+     *
+     * Only the demand→idle edge is observed here. A child that asks again partway through a call is
+     * left for the next call's entry, where [settleJoiners] moves it.
+     */
+    private fun markDepartures(parent: GroupId, edges: List<PolicyEdge>): Int128 {
+        val clock = runClock(parent, edges)
+        for (edge in edges) {
+            if (!wasAsking(edge) || HeddlePolicy.isDemanding(edge)) continue
+            departures[edge.record.id] = clock
+            demandingObserved[edge.record.id] = false
+        }
+        return clock
+    }
 
     /**
      * Run [parent]'s net-service clock over what its children kept since it last ran, and return
@@ -998,7 +1026,7 @@ public class FairShareAllocator(
      * front the other joiners are seated at or clamped to.
      */
     private fun returnerLandings(parent: GroupId, edges: List<PolicyEdge>): Map<AttachmentId, Int128> {
-        val returners = edges.filter { isWaker(it) && it.record.id in departures }
+        val returners = edges.filter { isReturner(it) }
         if (returners.isEmpty()) return emptyMap()
         val clock = (clocks[parent] ?: Int128.ZERO) + clockStep(parent, edges)
         return returners.associate { edge -> edge.record.id to HeddlePolicy.effectiveTicksWide(edge) + shiftOf(edge, clock) }
