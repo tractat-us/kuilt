@@ -6,6 +6,8 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.InMemoryLoom
@@ -108,6 +110,11 @@ class HeddleNodeRefusesAFloorTest {
     private companion object {
         private const val INDEFINITE_MAP = 0xBF
         private const val SMALL_MAP_MIN = 0xA0
+
+        /** A v0.7.4 `floor` on the wire: the shape `:kuilt-heddle-core`'s internal serializer reads. */
+        @Serializable
+        @SerialName("us.tractat.kuilt.heddle.Rational")
+        private data class LegacyRational(val numerator: Long, val denominator: Long)
         private const val SMALL_MAP_MAX = 0xB7
 
         /**
@@ -119,7 +126,7 @@ class HeddleNodeRefusesAFloorTest {
         fun withLegacyFloor(cbor: ByteArray, floor: Long = 70L): ByteArray {
             val folded = Cbor.encodeToByteArray(String.serializer(), "folded")
             val entry = Cbor.encodeToByteArray(String.serializer(), "floor") +
-                Cbor.encodeToByteArray(RationalSerializer, Rational.of(floor))
+                Cbor.encodeToByteArray(LegacyRational.serializer(), LegacyRational(floor, 1L))
             val out = ArrayList<Byte>(cbor.size + 32)
             var spliced = 0
             for (i in cbor.indices) {

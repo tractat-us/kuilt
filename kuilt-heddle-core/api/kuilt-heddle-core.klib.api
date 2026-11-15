@@ -1990,14 +1990,6 @@ final object us.tractat.kuilt.heddle/HeddlePolicy { // us.tractat.kuilt.heddle/H
     final fun wakeOffset(us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Weight, kotlin/Long): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.heddle/HeddlePolicy.wakeOffset|wakeOffset(us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Weight;kotlin.Long){}[0]
 }
 
-final object us.tractat.kuilt.heddle/RationalSerializer : kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Rational> { // us.tractat.kuilt.heddle/RationalSerializer|null[0]
-    final val descriptor // us.tractat.kuilt.heddle/RationalSerializer.descriptor|{}descriptor[0]
-        final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/RationalSerializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
-
-    final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/RationalSerializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
-    final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.heddle/Rational) // us.tractat.kuilt.heddle/RationalSerializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.heddle.Rational){}[0]
-}
-
 final object us.tractat.kuilt.heddle/TopologyWeightSerializer : kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Weight> { // us.tractat.kuilt.heddle/TopologyWeightSerializer|null[0]
     final val descriptor // us.tractat.kuilt.heddle/TopologyWeightSerializer.descriptor|{}descriptor[0]
         final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.heddle/TopologyWeightSerializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
