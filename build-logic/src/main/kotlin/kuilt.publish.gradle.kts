@@ -151,8 +151,9 @@ fun moduleDescription(module: String): String = when (module) {
         "Fair-share scheduling of one pooled resource across peers with no central referee, " +
             "and it keeps working while the network is partitioned."
     "kuilt-heddle-core" ->
-        "The fair-share policy and entitlement ledger behind kuilt-heddle, on their own: decide " +
-            "who gets the next slice of a shared resource, with no network, Raft or coroutines."
+        "A whole fair-share scheduler in one process (LocalHeddle): weighted groups from a config " +
+            "file, a lease per free slot charged at its real cost, and a snapshot across restarts, " +
+            "with no network, Raft or coroutines."
     "kuilt-liveness" ->
         "Peer-liveness detection over a kuilt Seam: heartbeats, partition events and reachability."
     "kuilt-session" ->

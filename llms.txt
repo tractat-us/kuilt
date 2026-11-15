@@ -37,7 +37,21 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [A seam's terminal state](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#a-seams-terminal-state)
 - [Durable storage](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/fabrics.md#durable-storage)
 - [Heddle](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md)
-- [Fair share & placement](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#fair-share--placement)
+- [Which engine: one process or many peers](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#which-engine-one-process-or-many-peers)
+- [A fair-share queue in one process](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#a-fair-share-queue-in-one-process)
+- [Loading the tree from a config file](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#loading-the-tree-from-a-config-file)
+- [Changing the tree while work runs](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#changing-the-tree-while-work-runs)
+- [Children your app attaches while running](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#children-your-app-attaches-while-running)
+- [Capping and pausing a group](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#capping-and-pausing-a-group)
+- [Who goes next, and why not me](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#who-goes-next-and-why-not-me)
+- [Charging work started elsewhere](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#charging-work-started-elsewhere)
+- [Surviving a restart](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#surviving-a-restart)
+- [Refusals and limits](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#refusals-and-limits)
+- [Fair share across peers](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#fair-share-across-peers)
+- [Telling an idle scheduler from a stuck one](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#telling-an-idle-scheduler-from-a-stuck-one)
+- [Minting quota and reshaping with agreement](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#minting-quota-and-reshaping-with-agreement)
+- [Weighted lanes over warp](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#weighted-lanes-over-warp)
+- [The bare policy and allocator](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/heddle.md#the-bare-policy-and-allocator)
 - [Otel](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/otel.md)
 - [Telemetry & log capture](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/otel.md#telemetry--log-capture)
 - [Reporting a failure that will be retried](https://raw.githubusercontent.com/tractat-us/kuilt/main/docs/agent-cookbook/otel.md#reporting-a-failure-that-will-be-retried)
@@ -162,7 +176,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 - [kuilt-deal](https://tractat-us.github.io/kuilt/api/kuilt-deal/index.html): Cryptographically fair card dealing and dealer-less random seed agreement over a kuilt Seam.
 - [kuilt-gossip](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-gossip/module.md): Partial-mesh overlay for a kuilt Seam: broadcast floods to a few neighbours rather than everyone, so large sessions scale.
 - [kuilt-heddle](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-heddle/module.md): Fair-share scheduling of one pooled resource across peers with no central referee, and it keeps working while the network is partitioned.
-- [kuilt-heddle-core](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-heddle-core/module.md): The fair-share policy and entitlement ledger behind kuilt-heddle, on their own: decide who gets the next slice of a shared resource, with no network, Raft or coroutines.
+- [kuilt-heddle-core](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-heddle-core/module.md): A whole fair-share scheduler in one process (LocalHeddle): weighted groups from a config file, a lease per free slot charged at its real cost, and a snapshot across restarts, with no network, Raft or coroutines.
 - [kuilt-liveness](https://tractat-us.github.io/kuilt/api/kuilt-liveness/index.html): Peer-liveness detection over a kuilt Seam: heartbeats, partition events and reachability.
 - [kuilt-session](https://tractat-us.github.io/kuilt/api/kuilt-session/index.html): Membership-aware Room over a kuilt Loom: admit/identify handshake, roster, reconnect tokens and partition detection.
 - [kuilt-stream](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-stream/module.md): Wraps a byte stream as a kuilt Connection, with length-prefix framing and oversize protection.
