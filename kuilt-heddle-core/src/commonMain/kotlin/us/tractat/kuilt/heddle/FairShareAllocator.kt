@@ -79,7 +79,11 @@ public class FairShareAllocator(
     private val self: ReplicaId,
     private val policy: PolicyConfig,
 ) {
-    /** The wake clamps this peer computed, wide, in ticks of each edge's own grid (#3353). */
+    /**
+     * The wake clamps this peer computed, wide, in ticks of each edge's own grid (#3353). A zero
+     * offset is absent: an edge reads an absent one as zero, so storing it would spell one state
+     * two ways. Written only through [writeWakeOffset].
+     */
     private val wakeOffsets = HashMap<AttachmentId, Int128>()
     private val demandingObserved = HashMap<AttachmentId, Boolean>()
 
@@ -138,7 +142,7 @@ public class FairShareAllocator(
      * throwaway that picks exactly as the live one would next.
      */
     public constructor(self: ReplicaId, policy: PolicyConfig, memory: AllocatorMemory) : this(self, policy) {
-        wakeOffsets.putAll(memory.wakeOffsets)
+        for ((edge, offset) in memory.wakeOffsets) writeWakeOffset(edge, offset)
         demandingObserved.putAll(memory.demandingObserved)
         clocks.putAll(memory.clocks)
         served.putAll(memory.served)
@@ -1254,7 +1258,7 @@ public class FairShareAllocator(
         for (edge in edges) {
             val id = edge.record.id
             val shift = shifts[id] ?: continue
-            wakeOffsets[id] = edge.offsetTicks + shift.ticks
+            writeWakeOffset(id, edge.offsetTicks + shift.ticks)
             departures.remove(id)
             val remainder = shift.remainder
             if (remainder == null) shiftRemainders.remove(id) else shiftRemainders[id] = remainder
@@ -1349,8 +1353,13 @@ public class FairShareAllocator(
             // Written, not joined: a seated waker with no departure holds no offset (see above).
             // Both sides are on the waker's grid, and the result is stored on it, so a stored offset
             // never carries a front's denominator into the next one (#3313).
-            wakeOffsets[edge.record.id] = computed
+            writeWakeOffset(edge.record.id, computed)
         }
+    }
+
+    /** Store [offset] as [edge]'s wake offset, or drop the entry when it is zero, the value an absent one reads as. */
+    private fun writeWakeOffset(edge: AttachmentId, offset: Int128) {
+        if (offset == Int128.ZERO) wakeOffsets.remove(edge) else wakeOffsets[edge] = offset
     }
 
     /**
