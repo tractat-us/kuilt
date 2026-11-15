@@ -1271,8 +1271,8 @@ the grid rounded up, errs by where those ends fall between ticks, and that does
 not telescope: a repeating pattern of bursts locks the ends into one phase, and
 the same error comes back every return. On `BurstLagTest`'s off-grid rigs, where
 the clock runs `16/13` and `32/10` of the returner's ticks while it is back, it
-drifted the returner from +3.9 units over fair after 300 bursts to +4.8 after
-600, credit that §10.5 forbids, and on a second pattern from −16 to −33. One
+held the returner 4 to 5 units over fair from 300 bursts to 1,200, credit that
+§10.5 forbids, and on a second pattern drifted it from −16 to −66. One
 rounded-up run would never fall short, but it rounds every return the same way,
 and on the 3:1 rigs that cost the light child 9 of its fair 75 over 300 bursts.
 
