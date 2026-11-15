@@ -37,13 +37,10 @@ class W3461BootProbeTest {
     @Test
     fun probe() {
         for ((name, t) in cases) {
-            val threw = try {
-                LocalHeddle.fromTopology(t, policy, epoch = 0L); "no"
-            } catch (e: IllegalStateException) {
-                "ISE"
-            }
-            val engine = LocalHeddle.over(EntitlementLedger.ZERO, t.groupId(), policy, 0L, Leasable.ByTopology(t))
-            val result = engine.apply(t, generation = 0L)
+            val threw = "no"
+            val boot = LocalHeddle.fromTopology(t, policy, epoch = 0L)
+            val engine = boot.heddle
+            val result = boot.result
             val ledger = engine.snapshot().ledger
             val states = groups(t).joinToString(" ") { g ->
                 val edges = ledger.inboundEdges(g).map { ledger.lifecycle(it) }
@@ -66,7 +63,7 @@ class W3461BootProbeTest {
     @Test
     fun reloadProbe() {
         for ((name, before, after) in reloads) {
-            val engine = LocalHeddle.fromTopology(before, policy, epoch = 0L)
+            val engine = LocalHeddle.fromTopology(before, policy, epoch = 0L).heddle
             val result = engine.apply(after, generation = 1L)
             val ledger = engine.snapshot().ledger
             val states = groups(after).joinToString(" ") { g ->
