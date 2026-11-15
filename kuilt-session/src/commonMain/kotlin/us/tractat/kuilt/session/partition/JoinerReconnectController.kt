@@ -240,10 +240,11 @@ public sealed interface ResumeResult {
      * Terminal — no later attempt with these credentials can succeed. Distinct from
      * [WindowNotYetOpen], which looks identical from the outside but is transient (#1572).
      *
-     * As a [JoinerOutcome] it is a purely **local** answer, and the host said nothing at all: the
-     * room is already terminal (it was left, or the host was lost), or the `Resume` frame could not
-     * be sent. A host's refusal — including one that says the window elapsed — arrives as
-     * [Refused] instead (#2364), so this value never carries a reason the host gave.
+     * As a [JoinerOutcome] it is a **local** answer: the room is already terminal (it was left, or
+     * the host was lost), or the `Resume` frame could not be sent. A `ResumeAck` handled once the
+     * room is terminal is moot and settles as this (#3094). A host's refusal — including one that
+     * says the window elapsed — arrives as [Refused] instead (#2364), so this value never carries a
+     * reason the host gave.
      * Either way the remedy is the same: re-join fresh.
      */
     public data object WindowClosed : HostVerdict, JoinerOutcome

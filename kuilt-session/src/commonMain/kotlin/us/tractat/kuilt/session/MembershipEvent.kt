@@ -126,9 +126,9 @@ public sealed interface MembershipEvent {
      *
      * Treat it as the last word, even though it may not arrive last. An event racing it on another
      * thread can land just after it, so ignore everything that follows: a [Partitioned] or
-     * [WindowOpened] would start a countdown no event ends, and a [Resumed] would claim a recovery
-     * the room cannot use. Stop any countdown already running too, since no [Recovered] or [Left]
-     * will come for it.
+     * [WindowOpened] would start a countdown no event ends. Stop any countdown already running too,
+     * since no [Recovered] or [Left] will come for it. A [Resumed] never follows it: a `ResumeAck`
+     * that arrives once the host is lost settles [Room.resume] as `WindowClosed` and emits nothing.
      *
      * The room then ends itself as [Room.leave] does: [Room.roster] empties and every
      * [Room.incomingFrom] flow completes. The event comes first and the room does not wait for a

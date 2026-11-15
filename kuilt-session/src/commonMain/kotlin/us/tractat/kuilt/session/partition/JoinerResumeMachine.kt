@@ -91,9 +91,17 @@ internal interface JoinerResumeHost {
     fun onNoOpResume(hostId: PeerId, at: Instant)
 
     /**
+     * Mark the room host-lost now, and return whether this call did it (`false` when it already
+     * was). The machine calls it inside the critical section that decides an episode failed, so a
+     * `ResumeAck` handled after that decision finds the room terminal (#3094).
+     */
+    fun claimHostLost(): Boolean
+
+    /**
      * The reconnect failed terminally (no credentials, window expired, or a non-conforming
-     * loom): the room marks the host lost and tears down. [reason] classifies the failure —
-     * see [FailureReason].
+     * loom), and [claimHostLost] has already marked the room host-lost: the room announces
+     * `HostLost` and tears down. Called at most once, and only after [claimHostLost] returned
+     * `true`. [reason] classifies the failure — see [FailureReason].
      */
     suspend fun onReconnectFailed(at: Instant, reason: FailureReason)
 }
@@ -157,8 +165,8 @@ internal data class ResumeRefusal(
  * - [resumeToken] — the credential minted at admit time ([mintTokenIfAbsent]) and presented
  *   to the host on [resume];
  * - the **single-flight resume slot** (`pendingResume`) — concurrent [resume] calls coalesce
- *   onto one in-flight attempt (#1280), resolved by the host's ResumeAck ([takePendingFlight])
- *   or Reject ([rejectFlight]), or abandoned at teardown;
+ *   onto one in-flight attempt (#1280), resolved by the host's ResumeAck ([takeFlightForAck])
+ *   or Reject ([rejectFlight]), or abandoned at teardown ([takePendingFlight]);
  * - the **reconnect guard** (`reconnecting`) — the two racing tear-detection paths (transport
  *   `Torn` and heartbeat `TransportClosed`) both call [attemptReconnect]; exactly one wins;
  * - the **auto-reconnect loop** ([runReconnect], #1037) — re-weave the base, await `Woven`,
@@ -213,8 +221,8 @@ internal class JoinerResumeMachine(
      *
      * When the joiner sends [AdmitMessage.Resume], it parks a [CompletableDeferred] here.
      * The host replies with [AdmitMessage.ResumeAck] (success) or [AdmitMessage.Reject]
-     * (failure); the room's admit-frame handler resolves it via [takePendingFlight] /
-     * [rejectFlight].
+     * (failure); the room's admit-frame handler resolves it via [takeFlightForAck] /
+     * [rejectFlight]. The room's `leave()` takes whatever is left with [takePendingFlight].
      */
     private var pendingResume: CompletableDeferred<ResumeResult.JoinerOutcome>? = null
 
@@ -333,15 +341,46 @@ internal class JoinerResumeMachine(
     /**
      * Takes the pending resume flight (clearing the slot), or null when none is in flight.
      *
-     * Two callers: the room's ResumeAck handler (which completes it as
-     * [ResumeResult.Success] after emitting `Resumed`) and the room's `leave()` (which
-     * completes it as [ResumeResult.WindowClosed] — the room is terminal, so its reply can
-     * never arrive; without this, every caller awaiting the flight (#1280) hangs forever).
+     * The room's `leave()` calls this and completes the flight as [ResumeResult.WindowClosed]: the
+     * room is terminal, so its reply can never arrive, and without this every caller awaiting the
+     * flight (#1280) hangs forever. The room's ResumeAck handler takes it through [takeFlightForAck]
+     * instead.
      */
     fun takePendingFlight(): CompletableDeferred<ResumeResult.JoinerOutcome>? = lock.withLock {
         val d = pendingResume
         pendingResume = null
         d
+    }
+
+    /**
+     * Guarded by [lock]: a `ResumeAck` resumed the room during the current reconnect episode. Set by
+     * [takeFlightForAck], and cleared at both ends of an episode: when it starts, and in the critical
+     * section in [runReconnect] that reads it to decide how the episode ended. Every ack-resumed
+     * episode sets it, so a value carried into the next episode would resume that one on a lost
+     * window.
+     */
+    private var ackResumed = false
+
+    /**
+     * The ResumeAck handler's take: the pending flight, and whether this ack resumes the room, or
+     * null when no flight is pending. Called inside the room's critical section, which emits
+     * `Resumed` there when it does resume; the handler completes the flight after it releases the
+     * lock.
+     *
+     * **Whoever takes the lock first wins (#3094).** An ack resumes the room unless the room is
+     * already terminal, and a resuming ack marks the episode resumed. [runReconnect] decides the
+     * episode in one critical section: if an ack resumed it, the room is resumed even when the
+     * window's timer has already fired, and otherwise it marks the room host-lost
+     * ([JoinerResumeHost.claimHostLost]) before releasing the lock. So an ack handled after that
+     * decision finds the room terminal, settles the flight as [ResumeResult.WindowClosed], and
+     * emits nothing.
+     */
+    fun takeFlightForAck(): Pair<CompletableDeferred<ResumeResult.JoinerOutcome>, Boolean>? = lock.withLock {
+        val d = pendingResume ?: return null
+        pendingResume = null
+        val resumes = !host.isTerminal()
+        if (resumes) ackResumed = true
+        d to resumes
     }
 
     /**
@@ -416,8 +455,11 @@ internal class JoinerResumeMachine(
      * re-weaves the base, waits for [SeamState.Woven], restarts the room's incoming collect on
      * the fresh generation, and calls [resume]. On [ResumeResult.Success] the room stays live
      * (its ResumeAck handler already emitted `Resumed`); on timeout / re-weave failure / a
-     * non-Success resume it falls to [JoinerResumeHost.onReconnectFailed]. Transient
-     * re-weave/resume failures are retried until the window deadline.
+     * non-Success resume it marks the room host-lost ([JoinerResumeHost.claimHostLost]) and falls
+     * to [JoinerResumeHost.onReconnectFailed]. Transient re-weave/resume failures are retried
+     * until the window deadline. One exception to the timeout rule: an ack that resumed the room
+     * after the window's timer fired but before the episode was decided resumes the episode too
+     * ([takeFlightForAck], #3094).
      *
      * **A blip the host never observed (#1637).** When only *our* side of the link tore, the host's
      * detector never fires, it opens no reconnect window, and it answers every `Resume` with the
@@ -470,16 +512,18 @@ internal class JoinerResumeMachine(
             }
             // Clear reconnectJob FIRST (this coroutine IS it) so onReconnectFailed → leave()
             // doesn't cancel its own coroutine mid-teardown. See the failure branch below.
-            lock.withLock { reconnectJob = null }
-            host.onReconnectFailed(at, FailureReason.Unrecoverable)
+            if (lock.withLock { reconnectJob = null; host.claimHostLost() }) {
+                host.onReconnectFailed(at, FailureReason.Unrecoverable)
+            }
             return
         }
 
         // Fresh episode: forget any reject recorded by a prior reconnect on this machine, and the
-        // refusal record that described it (attempt numbers are per-episode).
+        // refusal record that described it (attempt numbers are per-episode), and any earlier ack.
         lock.withLock {
             refusal = null
             lastRefusal = null
+            ackResumed = false
         }
 
         // Silence the host-liveness detector: for the reconnect's duration WE decide
@@ -688,39 +732,67 @@ internal class JoinerResumeMachine(
             lock.withLock { refusal }?.let { failureReason = FailureReason.Refused(it.message, it.code) }
         }
 
-        if (resumed) {
-            // Re-arm: clear the guard and restart host-liveness monitoring on the healed
-            // generation. The restarted detector both keeps the resumed room monitored and,
-            // on a LATER tear, re-fires TransportClosed → a fresh [attemptReconnect]: with
-            // the guard cleared, a subsequent in-session drop auto-resumes again (repeated
-            // episodes). One critical section (the host callback nests the reentrant lock),
-            // so the guard-clear and the detector restart are atomic.
-            lock.withLock {
-                reconnecting = false
-                reconnectJob = null
-                refusal = null
-                host.restoreHostDetector(hostId)
+        // One critical section decides how the episode ended, so the room's ResumeAck handler
+        // ([takeFlightForAck]) and this decision are ordered by the lock: whichever takes it first
+        // wins (#3094). An ack that resumed the room first resumes the episode, even when the
+        // window's timer has already fired, since the host has taken us back and the room has said
+        // `Resumed`. A failed episode marks the room host-lost here, not later in onReconnectFailed,
+        // so an ack handled after this decision finds the room terminal and resumes nothing.
+        // reconnectJob is cleared FIRST on every branch (this coroutine IS it): onReconnectFailed →
+        // leave() must not cancel its own coroutine, or leave()'s seam.close() would be cancelled
+        // mid-teardown.
+        val (end, lateAck) = lock.withLock {
+            reconnectJob = null
+            // Consume the episode's ack here as well as at the episode's start. Every ack-resumed
+            // episode sets it, so a flag carried into the next episode would resume that one even
+            // though its window was lost: no HostLost, and a detector restored on a dead link.
+            val lateAck = !resumed && ackResumed
+            ackResumed = false
+            val end = when {
+                resumed || lateAck -> {
+                    // Re-arm: clear the guard and restart host-liveness monitoring on the healed
+                    // generation. The restarted detector both keeps the resumed room monitored and,
+                    // on a LATER tear, re-fires TransportClosed → a fresh [attemptReconnect]: with
+                    // the guard cleared, a subsequent in-session drop auto-resumes again (repeated
+                    // episodes). The host callback nests the reentrant lock, so the guard-clear and
+                    // the detector restart are atomic.
+                    reconnecting = false
+                    refusal = null
+                    host.restoreHostDetector(hostId)
+                    EpisodeEnd.Resumed
+                }
+                // leave() already owns teardown; don't emit a spurious HostLost.
+                host.isClosed() -> EpisodeEnd.AlreadyEnded
+                host.claimHostLost() -> EpisodeEnd.Lost
+                else -> EpisodeEnd.AlreadyEnded
             }
+            end to lateAck
+        }
+        if (lateAck) {
+            // #1618 evidence capture, as the in-loop success line: the episode resumed through an
+            // ack the loop itself never saw, because the window's timer fired first (#3094).
+            logger.info { "resume.ok host=$hostId roomId=${token.roomId.value} via=late-ack" }
+        }
+        when (end) {
             // #1637: the dwell path emits nothing of its own — no ResumeAck arrives, so the room's
             // ack handler (which restores the host's liveness and emits the closing edge on a real
             // resume) never runs. Close the arc here instead, once the detector is back so the room
             // is monitored again before it is announced live.
-            if (noOpResume) host.onNoOpResume(hostId, clock())
-        } else if (!lock.withLock { reconnectJob = null; host.isClosed() }) {
-            // Not resumed and not already tearing down via leave() — the reconnect genuinely
-            // failed, so go terminal. Clear reconnectJob FIRST (this coroutine IS it):
-            // onReconnectFailed → leave() must not cancel its own coroutine, or leave()'s
-            // seam.close() would be cancelled mid-teardown. (If closed, leave() already owns
-            // teardown; don't emit a spurious HostLost.)
-            host.onReconnectFailed(clock(), failureReason)
+            EpisodeEnd.Resumed -> if (noOpResume) host.onNoOpResume(hostId, clock())
+            EpisodeEnd.Lost -> host.onReconnectFailed(clock(), failureReason)
+            EpisodeEnd.AlreadyEnded -> Unit
         }
     }
+
+    /** How [runReconnect]'s deciding critical section ended an episode. */
+    private enum class EpisodeEnd { Resumed, Lost, AlreadyEnded }
 
     /**
      * Attempt to resume from [token] after a transport drop: send [AdmitMessage.Resume] to
      * the host — to the host alone, since it carries the member's secret ([sendToHost]) — and await
-     * the reply. The host replies [AdmitMessage.ResumeAck] →
-     * [ResumeResult.Success], or [AdmitMessage.Reject] → [ResumeResult.WindowClosed].
+     * the reply. The host replies [AdmitMessage.ResumeAck] → [ResumeResult.Success], unless the room
+     * has gone terminal by the time the ack is handled, which gives [ResumeResult.WindowClosed]
+     * ([takeFlightForAck]); or [AdmitMessage.Reject] → [ResumeResult.Refused].
      *
      * **Concurrent calls coalesce (#1280).** A room has one reconnect credential and one host,
      * so all concurrent resume attempts target the same outcome: when a resume is already in
@@ -728,7 +800,7 @@ internal class JoinerResumeMachine(
      * [AdmitMessage.Resume]. Joining (rather than re-sending) matters twice over: a second
      * Resume would consume nothing on the host (the token is single-use per window), and its
      * [AdmitMessage.Reject] could race the first attempt's ResumeAck into falsely resolving
-     * the shared reply as [ResumeResult.WindowClosed]. It also keeps the internal
+     * the shared reply as [ResumeResult.Refused] ([rejectFlight], #2364). It also keeps the internal
      * auto-reconnect ([runReconnect]) and an app-level retry from stealing each other's reply
      * slot — the pre-fix failure mode where the orphaned internal attempt timed out into
      * host-lost *after* a successful resume. Callers that want a retry after a non-Success
@@ -852,7 +924,7 @@ internal class JoinerResumeMachine(
      *
      * Both caller kinds route through here — the owner (after sending) and a joined caller
      * (the `!ownsFlight` early return) — so neither can hang. A late-arriving ResumeAck/Reject
-     * after the slot was cleared is a no-op: [takePendingFlight]/[rejectFlight] find no pending
+     * after the slot was cleared is a no-op: [takeFlightForAck]/[rejectFlight] find no pending
      * flight (or a *later* flight, which the host's single-use-per-window token still resolves
      * honestly).
      *
@@ -919,9 +991,11 @@ internal class JoinerResumeMachine(
      * slot**, deciding that under [lock]; otherwise leave it alone.
      *
      * A flight that has left the slot was taken by whoever settles it: the room's ResumeAck handler
-     * ([takePendingFlight], which emits `Resumed` and then completes [ResumeResult.Success] outside
-     * the lock), [rejectFlight], or `leave()` ([takePendingFlight] again, completing
-     * [ResumeResult.WindowClosed]). Every one of them completes synchronously after taking, so a
+     * ([takeFlightForAck], which takes the flight and checks for a terminal room in one critical
+     * section, where it either emits `Resumed` and settles on [ResumeResult.Success] or settles on
+     * [ResumeResult.WindowClosed], then completes the flight once the lock is released),
+     * [rejectFlight], or `leave()` ([takePendingFlight], completing [ResumeResult.WindowClosed]).
+     * Every one of them completes synchronously after taking, so a
      * caller that finds the slot gone only has to await. Completing regardless — as this did before
      * the #3155 review — let a tear or a deadline land between the ack's take and its completion and
      * report `TimedOut` for a room that had already announced `Resumed`; the reconnect loop then

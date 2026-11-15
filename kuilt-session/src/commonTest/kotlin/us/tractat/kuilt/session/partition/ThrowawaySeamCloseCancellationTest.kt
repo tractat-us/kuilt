@@ -99,6 +99,7 @@ private class RecordingResumeHost(private val hostPeer: PeerId) : JoinerResumeHo
     override fun restartIncomingCollect() = Unit
     override fun onReconnectStarted(hostId: PeerId, at: Instant, windowDeadline: Instant) = Unit
     override fun onNoOpResume(hostId: PeerId, at: Instant) = Unit
+    override fun claimHostLost(): Boolean = true
     override suspend fun onReconnectFailed(at: Instant, reason: FailureReason) {
         failures += reason
     }

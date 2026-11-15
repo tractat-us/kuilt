@@ -1138,8 +1138,10 @@ internal class SeamRoom(
                         markRecovered(hostId, at)
                     }
 
+                    override fun claimHostLost(): Boolean = this@SeamRoom.claimHostLost()
+
                     override suspend fun onReconnectFailed(at: Instant, reason: FailureReason) =
-                        markHostLost(at, reason)
+                        announceHostLost(at, reason)
                 },
             )
         } else {
@@ -1578,7 +1580,7 @@ internal class SeamRoom(
             is AdmitMessage.Reject -> {
                 if (_role.value == SessionRole.Joiner) {
                     // A Reject means one of two things depending on where we are:
-                    //  - resume in flight  → resolve the parked resume as WindowClosed (existing behavior);
+                    //  - resume in flight  → resolve the parked resume as Refused, carrying the host's code (#2364);
                     //  - initial join      → the host refused admission; fail loudly (#1178) instead of
                     //                         swallowing it and leaving join()'s consumer hanging.
                     val hadPendingResume = resumeMachine?.rejectFlight(msg.reason, msg.code) ?: false
@@ -1882,27 +1884,38 @@ internal class SeamRoom(
      *
      * The host's [JoinerReconnectController] validated the token and the reconnect
      * window was still open. Update liveness, emit [MembershipEvent.Resumed], and
-     * resolve the pending resume flight ([JoinerResumeMachine.takePendingFlight]) so
-     * [resume] returns [ResumeResult.Success].
+     * resolve the pending resume flight ([JoinerResumeMachine.takeFlightForAck]) so
+     * [resume] returns [ResumeResult.Success], unless the room has gone terminal.
      *
      * **Host-authoritative gate + idempotence latch:** mirroring [handleFarewell],
      * only a ResumeAck from the identified host ([hostPeerId]) is honored — a forged
      * ack from another admitted peer, or one arriving before the host is identified,
      * is dropped. The pending resume flight is the idempotence latch: a genuine ack
      * takes it and fires exactly one [MembershipEvent.Resumed]; a duplicate or stray
-     * host ack finds no pending flight ([JoinerResumeMachine.takePendingFlight]
+     * host ack finds no pending flight ([JoinerResumeMachine.takeFlightForAck]
      * returns `null`) and emits nothing.
+     *
+     * **A terminal room resumes nothing (#3094).** A reconnect window that expires leaves its
+     * flight installed until [leave] takes it. The ack and the window's verdict are ordered by
+     * [lock], and whichever takes it first wins: an ack handled before the verdict resumes the room,
+     * and the episode with it, while a verdict that the window was lost marks the room [hostLost]
+     * before it releases the lock. An ack handled after that finds the room terminal, settles the
+     * flight as [ResumeResult.WindowClosed], which is what [resume] returns on a terminal room, and
+     * emits no `Resumed`. The take, the check and the `Resumed` share one critical section, so no
+     * `Resumed` can follow `HostLost`.
      */
     private fun handleResumeAck(sender: PeerId) {
-        val deferred = lock.withLock {
+        val (flight, resumes) = lock.withLock {
             val host = hostPeerId
             if (host == null || sender != host) return
-            val flight = resumeMachine?.takePendingFlight() ?: return
-            updateMemberLiveness(sender, Liveness.Connected)
-            flight
+            val (flight, resumes) = resumeMachine?.takeFlightForAck() ?: return
+            if (resumes) {
+                updateMemberLiveness(sender, Liveness.Connected)
+                emitEvent(MembershipEvent.Resumed(selfId))
+            }
+            flight to resumes
         }
-        emitEvent(MembershipEvent.Resumed(selfId))
-        deferred.complete(ResumeResult.Success)
+        flight.complete(if (resumes) ResumeResult.Success else ResumeResult.WindowClosed)
     }
 
     /**
@@ -2123,6 +2136,12 @@ internal class SeamRoom(
      * internal auto-reconnect's own resume (#1280). No production caller reads this.
      */
     internal fun hasPendingResume(): Boolean = resumeMachine?.hasPendingFlight() ?: false
+
+    /**
+     * Test-visibility: is a reconnect episode still undecided? Its job is recorded while it runs and
+     * cleared in the critical section that decides how the episode ended (#3094).
+     */
+    internal fun hasReconnectInFlight(): Boolean = resumeMachine?.inFlightReconnectJob() != null
 
     /** Test-visibility: how many resume flights this joiner has started (#3165). */
     internal fun resumeFlightsStarted(): Int = resumeMachine?.flightsStarted() ?: 0
@@ -3501,12 +3520,18 @@ internal class SeamRoom(
     }
 
     private suspend fun markHostLost(at: Instant, reason: FailureReason) {
-        val alreadyLost = lock.withLock {
-            val was = hostLost
-            hostLost = true
-            was
-        }
-        if (alreadyLost) return
+        if (claimHostLost()) announceHostLost(at, reason)
+    }
+
+    /** Sets [hostLost] and returns whether this call set it: the one place the flag is raised. */
+    private fun claimHostLost(): Boolean = lock.withLock {
+        val was = hostLost
+        hostLost = true
+        !was
+    }
+
+    /** The second half of [markHostLost], for a caller whose [claimHostLost] returned `true`. */
+    private suspend fun announceHostLost(at: Instant, reason: FailureReason) {
         emitEvent(MembershipEvent.HostLost(at, reason, localFabric = localFabric.value))
         leave(LeaveReason.Error("host lost"))
     }
@@ -3910,6 +3935,8 @@ internal class SeamRoom(
      * **Joiner only.** The host's [JoinerReconnectController] holds the reconnect window;
      * this method sends [AdmitMessage.Resume] to the host and awaits the reply:
      * - Host replies [AdmitMessage.ResumeAck] → [ResumeResult.Success]; [MembershipEvent.Resumed] fires.
+     *   Unless the room has gone terminal before the ack is handled: then → [ResumeResult.WindowClosed]
+     *   and no event (#3094; see [handleResumeAck]).
      * - Host replies [AdmitMessage.Reject] → [ResumeResult.Refused], carrying the host's
      *   [RejectCode] so the caller can tell an elapsed window from an invalid token from a window
      *   the host has not opened yet (#2364).
