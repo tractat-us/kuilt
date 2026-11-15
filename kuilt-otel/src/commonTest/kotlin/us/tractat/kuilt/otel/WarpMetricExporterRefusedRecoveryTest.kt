@@ -135,17 +135,26 @@ class WarpMetricExporterRefusedRecoveryTest {
         val seeded: Map<MetricKey, Any>,
         val afterRestart: Map<MetricKey, Any>,
         val writesOfTheKind: Int,
+        val readsOfTheKind: Int,
     )
 
-    /** For each kind: refuse its reads, recover, run [write], and read back what a restart sees. */
-    private suspend fun overwriteArms(write: suspend (WarpMetricExporter, Kind) -> MetricExportResult): List<Overwrite> =
+    /**
+     * For each kind: refuse its reads, [recover] unless told not to, run [write], and read back what
+     * a restart sees. With [refuse] off the reads land, so the arm asks only whether [write] joined
+     * the durable series rather than overwriting them.
+     */
+    private suspend fun overwriteArms(
+        recover: Boolean = true,
+        refuse: Boolean = true,
+        write: suspend (WarpMetricExporter, Kind) -> MetricExportResult,
+    ): List<Overwrite> =
         kinds().map { kind ->
             val backing = RecordingStore()
             seed(backing)
             val seeded = kind.seriesOf(restarted(backing).snapshotAll())
             val store = KindReadRefusingStore(backing)
-            store.refuse(kind.storeKey)
-            val exporter = WarpMetricExporter(replica, store).also { it.recover() }
+            if (refuse) store.refuse(kind.storeKey)
+            val exporter = WarpMetricExporter(replica, store).also { if (recover) it.recover() }
             val writesBefore = backing.operations().count { it.kind == StoreOpKind.WRITE && it.key == kind.storeKey }
             val result = write(exporter, kind)
             val writes = backing.operations().count { it.kind == StoreOpKind.WRITE && it.key == kind.storeKey } - writesBefore
@@ -156,13 +165,14 @@ class WarpMetricExporterRefusedRecoveryTest {
                 seeded = seeded,
                 afterRestart = kind.seriesOf(restarted(backing).snapshotAll()),
                 writesOfTheKind = writes,
+                readsOfTheKind = store.readsOf(kind.storeKey),
             )
         }
 
-    private fun assertDurableIntact(arms: List<Overwrite>, path: String) = assertAll(
+    private fun assertDurableIntact(arms: List<Overwrite>, path: String, refusals: Int = 2) = assertAll(
         *arms.flatMap { o ->
             listOf<() -> Unit>(
-                { assertEquals(2, o.refusals, "${o.name}: the rig refused ${o.refusals} reads, not recover's and the turn's") },
+                { assertEquals(refusals, o.refusals, "${o.name}: the rig refused ${o.refusals} reads, not $refusals") },
                 { assertEquals(1, o.seeded.size, "${o.name}: the fixture did not seed one durable series") },
                 { assertIs<MetricExportResult.Failure>(o.result, "${o.name}: $path over an unread kind reported ${o.result}") },
                 { assertEquals(0, o.writesOfTheKind, "${o.name}: $path wrote the kind while its read was refused") },
@@ -181,6 +191,42 @@ class WarpMetricExporterRefusedRecoveryTest {
     @Test
     fun aMergeOverAKindWhoseReadWasRefusedLeavesItsDurableSeriesIntact() = runTest {
         assertDurableIntact(overwriteArms { exporter, kind -> kind.merge(exporter) }, "merge")
+    }
+
+    // ---- An exporter nobody recovered ----
+
+    /**
+     * [WarpMetricExporter.recover] is the documented first call, but nothing enforces it, and an
+     * exporter that skipped it held the same fresh map a refused read leaves: its first write of a
+     * kind replaced every series a previous process had made durable. So a kind nobody has read is
+     * owed a read exactly as a refused one is, and the first turn of it reads first.
+     */
+    @Test
+    fun aFirstWriteOfAKindNobodyRecoveredJoinsTheDurableSeriesRatherThanReplacingThem() = runTest {
+        val arms = overwriteArms(recover = false, refuse = false) { exporter, kind -> exporter.record(listOf(kind.update)) } +
+            overwriteArms(recover = false, refuse = false) { exporter, kind -> kind.merge(exporter) }
+        assertAll(
+            *arms.flatMap { o ->
+                listOf<() -> Unit>(
+                    { assertEquals(1, o.seeded.size, "${o.name}: the fixture did not seed one durable series") },
+                    { assertEquals(MetricExportResult.Success, o.result, "${o.name}: the first write reported ${o.result}") },
+                    { assertEquals(1, o.writesOfTheKind, "${o.name}: the rig never reached the write") },
+                    { assertEquals(1, o.readsOfTheKind, "${o.name}: the first turn read the kind ${o.readsOfTheKind} times, not once") },
+                    { assertEquals(o.seeded, o.afterRestart.filterKeys { it in o.seeded }, "${o.name}: the first write replaced the durable series") },
+                    { assertEquals(2, o.afterRestart.size, "${o.name}: a restart holds ${o.afterRestart.keys}, not the seeded series and the new one") },
+                )
+            }.toTypedArray(),
+        )
+    }
+
+    @Test
+    fun aFirstWriteOfAKindNobodyRecoveredOverARefusingStoreWritesNothing() = runTest {
+        assertDurableIntact(
+            overwriteArms(recover = false) { exporter, kind -> exporter.record(listOf(kind.update)) } +
+                overwriteArms(recover = false) { exporter, kind -> kind.merge(exporter) },
+            "an unrecovered first write",
+            refusals = 1,
+        )
     }
 
     // ---- The read that heals ----
@@ -239,8 +285,53 @@ class WarpMetricExporterRefusedRecoveryTest {
     }
 
     /**
-     * The merge on heal must happen exactly once: a second turn after the heal must not read and
-     * merge again. Two turns race the heal; the first parks inside the read, the second waits.
+     * The heal's read lands, then the store refuses the write; the next turn writes, a second
+     * [WarpMetricExporter.recover] runs over memory that is ahead of the store, and the process
+     * restarts. The persisted series must be counted exactly once through all of it: a histogram
+     * of three seeded values and two recorded ones holds five, and a sum of a seeded `5` and
+     * increments of `2` and `1` holds `8`.
+     *
+     * Every join here is a per-replica maximum (a `DDSketch`'s bucket cells are `GCounter`s), so
+     * joining the persisted series into memory a second time cannot add it twice. What this pins is
+     * the other direction: nothing of the kind reached memory before the read, so the maximum the
+     * join keeps is the whole history and not one of two rival ones.
+     */
+    @Test
+    fun aHealedReadWhoseWriteIsRefusedCountsThePersistedSeriesOnceThroughRetryRecoverAndRestart() = runTest {
+        val backing = RecordingStore()
+        seed(backing)
+        val reads = KindReadRefusingStore(backing)
+        val store = WriteRefusingStore(reads) { it == sumsKey || it == histogramsKey }
+        reads.refuse(sumsKey)
+        reads.refuse(histogramsKey)
+        val exporter = WarpMetricExporter(replica, store).also { it.recover() }
+
+        reads.heal(sumsKey)
+        reads.heal(histogramsKey)
+        store.refuseWrites()
+        val refusedWrite = exporter.record(listOf(MetricUpdate.IncrementSum(sum, 2L), MetricUpdate.RecordHistogram(histogram, 4.0)))
+        store.allowWrites()
+        val retried = exporter.record(listOf(MetricUpdate.IncrementSum(sum, 1L), MetricUpdate.RecordHistogram(histogram, 5.0)))
+        exporter.recover()
+        val afterRestart = restarted(backing)
+
+        assertAll(
+            { assertEquals(1, reads.refusalsOf(sumsKey), "the rig did not refuse recover's read of the sums") },
+            { assertEquals(1, reads.refusalsOf(histogramsKey), "the rig did not refuse recover's read of the histograms") },
+            { assertEquals(2, store.refusedWrites(), "the rig refused ${store.refusedWrites()} writes, not the healing turn's two") },
+            { assertIs<MetricExportResult.Failure>(refusedWrite, "the turn whose writes were refused reported $refusedWrite") },
+            { assertEquals(MetricExportResult.Success, retried) },
+            { assertEquals(5L, exporter.histogramSnapshot(histogram).count, "histogram in memory: three seeded + two recorded") },
+            { assertEquals(5L, afterRestart.histogramSnapshot(histogram).count, "histogram after restart: three seeded + two recorded") },
+            { assertEquals(8L, exporter.sumValue(sum), "sum in memory: seeded 5 + 2 + 1") },
+            { assertEquals(8L, afterRestart.sumValue(sum), "sum after restart: seeded 5 + 2 + 1") },
+        )
+    }
+
+    /**
+     * Once a read of the kind lands, later turns do not read it again. Two turns race the heal; the
+     * first parks inside the read, the second waits. A second read would be wasted work rather than a
+     * double count, since the join is idempotent; the counts below pin that each update lands once.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
