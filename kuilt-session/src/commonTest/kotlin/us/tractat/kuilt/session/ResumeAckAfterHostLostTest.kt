@@ -183,10 +183,10 @@ class ResumeAckAfterHostLostTest {
             }
 
             val result = expireWindow(room, seam, token)
-            // A resumed episode re-arms the reconnect guard, so a later tear reconnects again.
-            seam.tear()
+            // The room is live: a fresh resume() goes to the host rather than answering WindowClosed.
+            backgroundScope.launch { room.resume(token) }
             runCurrent()
-            val resumesAfterSecondTear = seam.resumesSent
+            val resumesAfterAnotherCall = seam.resumesSent
 
             val fired = assertNotNull(rig, "precondition: the rig fired after the timer and before the verdict")
             assertAll(
@@ -196,7 +196,7 @@ class ResumeAckAfterHostLostTest {
                 { assertEquals(ResumeResult.Success, result, "an ack that wins the lock resumes the room") },
                 { assertEquals(1, events.count { it is MembershipEvent.Resumed }, "one Resumed (events: $events)") },
                 { assertFalse(events.any { it is MembershipEvent.HostLost }, "a resumed room is not host-lost (events: $events)") },
-                { assertEquals(2, resumesAfterSecondTear, "the episode re-armed the guard: a second tear sends a second Resume") },
+                { assertEquals(2, resumesAfterAnotherCall, "the room is live: another resume() sends another Resume") },
             )
         }
 
