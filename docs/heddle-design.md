@@ -1221,7 +1221,7 @@ on return" moved. A deploy lane at its ceiling sat out the next pick while build
 took it, and it comes back as far ahead of builds as it was, not level with
 them. A team that went quiet owing a sibling's overrun is still owed it when it
 returns. `LocalHeddleFairnessTest`'s churn arm, against waiting-set GPS, went
-from 0.0157 to 0.0112 overall and from 0.089 to 0.073 over its worst window.
+from 0.0157 to 0.0113 overall and from 0.089 to 0.073 over its worst window.
 
 **What it does not close.**
 
