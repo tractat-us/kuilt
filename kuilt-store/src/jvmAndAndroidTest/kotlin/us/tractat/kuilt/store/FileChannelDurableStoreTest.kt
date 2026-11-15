@@ -2,8 +2,11 @@ package us.tractat.kuilt.store
 
 import us.tractat.kuilt.conformance.DurableStoreConformanceSuite
 import us.tractat.kuilt.conformance.DurableStoreFilenameConformanceSuite
+import us.tractat.kuilt.conformance.MediumFault
 import us.tractat.kuilt.conformance.RestartFixture
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermission
 
 /**
  * Verifies [FileChannelDurableStore] satisfies the whole [DurableStoreConformanceSuite], **on both
@@ -55,4 +58,31 @@ class FileChannelDurableStoreTest : DurableStoreConformanceSuite() {
                 requireNotNull(directories[store]) { "restart() was handed a store this fixture did not create" },
             ),
         )
+
+    /**
+     * Take every permission off the store's directory, so nothing in it can be found, opened, created
+     * or unlinked — the shape a store meets when its directory's ownership or mode is changed under it.
+     *
+     * The rig checks that it took. Run as root, a mode of `000` is not enforced and the directory stays
+     * searchable, so this throws rather than handing the suite a medium that still works.
+     */
+    override suspend fun faultMedium(store: DurableStore): MediumFault {
+        val dir = requireNotNull(directories[store]) { "faultMedium() was handed a store this fixture did not create" }
+            .toPath()
+        Files.setPosixFilePermissions(dir, emptySet())
+        check(!Files.isExecutable(dir)) {
+            "rig: $dir is still searchable after chmod 000 — running as root? The fault did not take"
+        }
+        return MediumFault.Broken {
+            Files.setPosixFilePermissions(dir, OWNER_ALL)
+            store
+        }
+    }
 }
+
+/** `rwx------`: restores the directory so the store, and the temp-dir cleanup, can use it again. */
+private val OWNER_ALL = setOf(
+    PosixFilePermission.OWNER_READ,
+    PosixFilePermission.OWNER_WRITE,
+    PosixFilePermission.OWNER_EXECUTE,
+)

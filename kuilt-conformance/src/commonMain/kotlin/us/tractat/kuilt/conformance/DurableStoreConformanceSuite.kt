@@ -1,5 +1,7 @@
 package us.tractat.kuilt.conformance
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.store.DurableStore
@@ -13,6 +15,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * Reusable contract test suite for [DurableStore] implementations.
@@ -214,6 +218,49 @@ public abstract class DurableStoreConformanceSuite {
      * belongs in a TCK the durable backends also run rather than in one backend's own tests.
      */
     protected abstract suspend fun restart(store: DurableStore): RestartFixture
+
+    /**
+     * Break the medium under [store], so that every [DurableStore.read], [DurableStore.write] and
+     * [DurableStore.delete] through it **must fail**, and say how to undo it.
+     *
+     * Whatever a real device does to a store that cannot reach its own bytes: a directory the process
+     * can no longer search (an iOS file under Data Protection while the phone is locked reads exactly
+     * like this), an IndexedDB connection that is closing. The entries already written stay where they
+     * are — the fault is between the store and its medium, never a deletion — and
+     * [MediumFault.Broken.heal] puts the medium back.
+     *
+     * The fixture must check that its own fault took — a permission rig run as root does not, and it
+     * must say so rather than hand back a medium that still works. A rig that silently fails to break
+     * anything turns every property it drives into a red for the wrong reason, which is better than a
+     * green, but not by much.
+     *
+     * ## Why this is two-armed and not nullable
+     *
+     * The properties it drives — [aReadThatFailsIsNotAnAbsence], [aWriteThatFailsThrowsAnException],
+     * [aDeleteThatFailsThrowsAnException] — are about what a backend does when its medium fails, and
+     * `InMemoryDurableStore`, the reference, has no medium: a map lookup cannot fail. That is the shape
+     * AGENTS.md warns about — a property the reference cannot reach is a property nobody writes — and it
+     * is how two backends shipped a read error that answered "no such key" (#3327) and a third shipped
+     * failures that are not `Exception`s at all (#3143), with this suite green on all of them.
+     *
+     * A `faultMedium(): MediumFault?` returning `null` for "I cannot break this" would let a durable
+     * backend opt out the moment its rig got awkward. So the decision is a sealed pair, and **neither
+     * arm is a way out**:
+     *
+     * - [MediumFault.Broken] — the three properties run, and each asserts the failure was reported.
+     * - [MediumFault.NoMediumToBreak] — legal only for a backend that keeps nothing across a restart,
+     *   and checked: the suite calls [restart] and requires [RestartFixture.KeepsNothing]. A backend
+     *   that persists has a medium, so declaring this arm reds.
+     *
+     * ## What this cannot detect
+     *
+     * On [MediumFault.NoMediumToBreak], anything about failure reporting: there is no failure to
+     * report. And on [MediumFault.Broken], only the faults the fixture's one rig produces. A backend
+     * that reports a permission error correctly and maps `EIO` to absence passes here, because no
+     * fixture in this tree can make a disk return `EIO`. The property is "a fault is not an absence",
+     * measured on one fault per backend.
+     */
+    protected abstract suspend fun faultMedium(store: DurableStore): MediumFault
 
     // ── Presence and absence ─────────────────────────────────────────────────
 
@@ -792,10 +839,227 @@ public abstract class DurableStoreConformanceSuite {
             )
         }
 
+    // ── Failure is not absence ───────────────────────────────────────────────
+
+    /**
+     * A read that **fails** must throw, never answer `null`.
+     *
+     * `null` is the contract's word for *"there is no entry"*, and a caller acts on it: it builds a
+     * fresh value and writes it, over the real one it could not read. So a backend that reports a read
+     * error as absence does not lose a read — it hands the caller a reason to destroy the data. That is
+     * #3327: `NSFileManagerDurableStore` read a file it was not allowed to open as "nothing stored",
+     * and `FileChannelDurableStore` did the same for a directory it could not search, because
+     * `File.exists()` answers `false` for a file it cannot `stat`.
+     *
+     * The value is written **before** the fault, and read again **after** [MediumFault.Broken.heal].
+     * That second read is what makes the first one mean anything: it proves the entry was there all
+     * along, so the rig broke the medium rather than deleting the entry — and a `null` from the broken
+     * read was a lie about bytes that exist, not a correct answer about bytes that do not.
+     */
+    @Test
+    public fun aReadThatFailsIsNotAnAbsence(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val store = newStore()
+        val key = StoreKey("unreadable")
+        val value = byteArrayOf(1, 2, 3)
+        store.write(key, value)
+
+        when (val fault = faultMedium(store)) {
+            is MediumFault.Broken -> {
+                val (outcome, healed) = fault.whileBroken { outcomeOf { store.read(key) } }
+                val afterHeal = healed.read(key)
+                assertAll(
+                    { assertReportedAsAnException(outcome, "a read of an entry its medium cannot reach") },
+                    {
+                        assertContentEquals(
+                            value, afterHeal,
+                            "once the medium is healed the entry must still be there — so the fault broke the " +
+                                "medium rather than deleting the entry, and a null above was a lie about bytes " +
+                                "that exist",
+                        )
+                    },
+                )
+            }
+
+            MediumFault.NoMediumToBreak -> assertDeclaredNoMediumHonestly(store, key, value)
+        }
+    }
+
+    /**
+     * A write to a broken medium must throw an [Exception].
+     *
+     * [DurableStore.write] already promises never to return before the bytes are committed, so a
+     * write that returns here is a lie about durability. The type matters as much as the throw: on
+     * Kotlin/Wasm a JavaScript exception crossing the bridge is a `JsException`, which extends
+     * [Throwable] and **not** [Exception], so a caller's `catch (e: Exception)` misses it and it lands
+     * in the page's crash handler instead (#3143).
+     */
+    @Test
+    public fun aWriteThatFailsThrowsAnException(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val store = newStore()
+        val key = StoreKey("unwritable")
+        val value = byteArrayOf(4, 5, 6)
+        store.write(key, value)
+
+        when (val fault = faultMedium(store)) {
+            is MediumFault.Broken -> {
+                val (outcome, _) = fault.whileBroken { outcomeOf { store.write(key, byteArrayOf(7)) } }
+                assertReportedAsAnException(outcome, "a write to a medium that cannot take it")
+            }
+
+            MediumFault.NoMediumToBreak -> assertDeclaredNoMediumHonestly(store, key, value)
+        }
+    }
+
+    /**
+     * A delete that cannot reach the medium must throw an [Exception], not return as if it had worked.
+     *
+     * [DurableStore.delete] is a no-op for an **absent** key, which makes "returned normally" easy to
+     * reach by accident: a backend that passes the error out-parameter as `null` reports every
+     * failure as the absent case. The caller then believes the entry is gone, and it comes back the
+     * next time the medium does.
+     */
+    @Test
+    public fun aDeleteThatFailsThrowsAnException(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val store = newStore()
+        val key = StoreKey("undeletable")
+        val value = byteArrayOf(8, 9)
+        store.write(key, value)
+
+        when (val fault = faultMedium(store)) {
+            is MediumFault.Broken -> {
+                val (outcome, _) = fault.whileBroken { outcomeOf { store.delete(key) } }
+                assertReportedAsAnException(outcome, "a delete the medium refuses")
+            }
+
+            MediumFault.NoMediumToBreak -> assertDeclaredNoMediumHonestly(store, key, value)
+        }
+    }
+
     // ── Fixtures ─────────────────────────────────────────────────────────────
 
     /** The payload [aLargeValueRoundTripsWhole] and [aSecondWriteReplacesTheFirstWhole] share. */
     private fun largeValue(): ByteArray = Random(LARGE_VALUE_SEED).nextBytes(LARGE_VALUE_BYTES)
+
+    /**
+     * The [MediumFault.NoMediumToBreak] arm's check: the backend must really have no medium, which is
+     * the same claim [RestartFixture.KeepsNothing] makes. A durable backend declaring this arm reds
+     * here, so the arm cannot be used to skip the three failure properties.
+     */
+    private suspend fun assertDeclaredNoMediumHonestly(store: DurableStore, key: StoreKey, value: ByteArray) {
+        val restarted = restart(store)
+        val readBack = store.read(key)
+        assertAll(
+            {
+                assertTrue(
+                    restarted is RestartFixture.KeepsNothing,
+                    "this backend declared it has no medium to break, but its restart fixture says it is " +
+                        "Durable — a store that persists has a medium, and must break it here",
+                )
+            },
+            { assertContentEquals(value, readBack, "and with no fault injected the value is still readable") },
+        )
+    }
+}
+
+/**
+ * What [DurableStoreConformanceSuite.faultMedium] hands back: a broken medium and how to heal it, or
+ * an honest declaration that this backend has none.
+ *
+ * Sealed for the same reason [RestartFixture] is: a nullable hook would be an opt-out, and each arm
+ * here is checked. See [DurableStoreConformanceSuite.faultMedium] for what each arm can and cannot
+ * detect.
+ */
+public sealed interface MediumFault {
+
+    /**
+     * The medium under the store is broken until [heal] is called: every read, write and delete
+     * through the store must fail.
+     *
+     * [heal] undoes the fault and returns a store over the **same medium**, holding everything that
+     * was written before the fault. That is the store passed in when the fault was outside it (a
+     * permission, a mount), and a new handle when the fault used the old one up — a closed IndexedDB
+     * connection cannot be reopened in place. The suite calls it exactly once, in a `finally`, so a
+     * fixture that changes the host (a `chmod`) always puts it back.
+     */
+    public class Broken(private val undo: suspend () -> DurableStore) : MediumFault {
+        /** Undo the fault, and return a store over the healed medium. The suite calls it exactly once. */
+        public suspend fun heal(): DurableStore = undo()
+    }
+
+    /**
+     * This backend has no medium for a read, write or delete to fail against —
+     * `InMemoryDurableStore`. Checked: the suite requires [DurableStoreConformanceSuite.restart] to
+     * answer [RestartFixture.KeepsNothing] for it, so a durable backend cannot take this arm.
+     *
+     * It proves nothing about failure reporting; there is no failure to report. That is why the
+     * three properties it skips live in a TCK every durable backend also runs.
+     */
+    public data object NoMediumToBreak : MediumFault
+}
+
+/**
+ * Run [block] against the broken medium, then heal it — in a `finally`, so a fixture that changed the
+ * host (a `chmod`) always puts it back — and hand back both [block]'s result and the healed store.
+ */
+private suspend fun <T> MediumFault.Broken.whileBroken(block: suspend () -> T): Pair<T, DurableStore> {
+    var healed: DurableStore? = null
+    val result = try {
+        block()
+    } finally {
+        healed = heal()
+    }
+    return result to checkNotNull(healed) { "heal() ran in the finally above" }
+}
+
+/** What one call did: returned a value, or threw. */
+private sealed interface Outcome<out T> {
+    data class Returned<out T>(val value: T) : Outcome<T>
+    data class Threw(val failure: Throwable) : Outcome<Nothing>
+}
+
+/**
+ * Run [block] and record whether it returned or threw — **anything** it threw, [Throwable] and not
+ * only [Exception], because a non-`Exception` throwable escaping a store is one of the defects this
+ * records (#3143). The caller's own cancellation still propagates: `ensureActive()` rethrows only a
+ * cancellation of this job.
+ */
+private suspend fun <T> outcomeOf(block: suspend () -> T): Outcome<T> =
+    try {
+        Outcome.Returned(block())
+    } catch (failure: Throwable) {
+        currentCoroutineContext().ensureActive()
+        Outcome.Threw(failure)
+    }
+
+/**
+ * The verdict the three failure properties share: [outcome] must be a thrown [Exception]. Each wrong
+ * shape gets its own message, because "returned null", "returned normally" and "threw a `JsException`"
+ * are three different defects.
+ */
+private fun assertReportedAsAnException(outcome: Outcome<*>, what: String) {
+    when (outcome) {
+        is Outcome.Returned -> fail(
+            if (outcome.value == null) {
+                "$what returned null — a failure reported as ABSENCE, and a caller that sees null writes a " +
+                    "fresh value over the one it could not read"
+            } else {
+                "$what returned normally (${outcome.value.describe()}) — either the failure was swallowed, or " +
+                    "the fixture's fault never took"
+            },
+        )
+
+        is Outcome.Threw -> assertTrue(
+            outcome.failure is Exception,
+            "$what threw ${outcome.failure::class.simpleName}, which is not an Exception — a caller's " +
+                "catch (e: Exception) cannot see it: ${outcome.failure}",
+        )
+    }
+}
+
+private fun Any?.describe(): String = when (this) {
+    is ByteArray -> "${size} bytes"
+    Unit -> "Unit"
+    else -> toString()
 }
 
 /**

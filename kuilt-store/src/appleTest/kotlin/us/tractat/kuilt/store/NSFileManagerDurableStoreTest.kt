@@ -7,9 +7,12 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.runTest
 import platform.Foundation.NSFileManager
+import platform.posix.X_OK
+import platform.posix.access
 import platform.posix.chmod
 import us.tractat.kuilt.conformance.DurableStoreConformanceSuite
 import us.tractat.kuilt.conformance.DurableStoreFilenameConformanceSuite
+import us.tractat.kuilt.conformance.MediumFault
 import us.tractat.kuilt.conformance.RestartFixture
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
@@ -58,6 +61,26 @@ class NSFileManagerDurableStoreTest : DurableStoreConformanceSuite() {
                 requireNotNull(directories[store]) { "restart() was handed a store this fixture did not create" },
             ),
         )
+
+    /**
+     * Take every permission off the store's directory, so nothing in it can be found, opened, created
+     * or unlinked. Reading through it fails with `EACCES` — what an app with the Data Protection
+     * entitlement meets on a file it touches while the phone is locked (#3327).
+     *
+     * The rig checks that it took. Run as root, a mode of `000` is not enforced and the directory stays
+     * searchable, so this throws rather than handing the suite a medium that still works.
+     */
+    override suspend fun faultMedium(store: DurableStore): MediumFault {
+        val dir = requireNotNull(directories[store]) { "faultMedium() was handed a store this fixture did not create" }
+        check(chmod(dir, NO_PERMISSIONS.convert()) == 0) { "rig: could not chmod $dir" }
+        check(access(dir, X_OK) != 0) {
+            "rig: $dir is still searchable after chmod 000 — running as root? The fault did not take"
+        }
+        return MediumFault.Broken {
+            check(chmod(dir, OWNER_ALL.convert()) == 0) { "rig: could not restore $dir" }
+            store
+        }
+    }
 
     /**
      * Run a [DurableStore.write] and hand back the failure it reported, or `null`
@@ -209,6 +232,9 @@ class NSFileManagerDurableStoreTest : DurableStoreConformanceSuite() {
 
 /** `r-x------`: the owner may list and traverse the directory but not create entries in it. */
 private const val READ_AND_TRAVERSE_ONLY = 0x140
+
+/** `---------`: nothing may be listed, traversed, created or removed — [faultMedium]'s rig. */
+private const val NO_PERMISSIONS = 0
 
 /** `rwx------`: restores the directory so the next run's [freshTempPath] can remove it. */
 private const val OWNER_ALL = 0x1C0

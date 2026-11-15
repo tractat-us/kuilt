@@ -3,9 +3,18 @@
 package us.tractat.kuilt.store
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.conformance.DurableStoreConformanceSuite
+import us.tractat.kuilt.conformance.MediumFault
 import us.tractat.kuilt.conformance.RestartFixture
+import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
+import us.tractat.kuilt.test.assertAll
 import kotlin.JsFun
+import kotlin.test.Test
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * Verifies [IndexedDbDurableStore] satisfies the whole [DurableStoreConformanceSuite] — in a real
@@ -40,7 +49,99 @@ class IndexedDbDurableStoreTest : DurableStoreConformanceSuite() {
         (store as IndexedDbDurableStore).close()
         return RestartFixture.Durable(IndexedDbDurableStore.open(name))
     }
+
+    /**
+     * Close the store's connection. Every later `db.transaction(…)` on it throws `InvalidStateError`
+     * **synchronously**, inside the bridge — the throw #3143 is about, which used to escape as a
+     * `JsException` that no `catch (e: Exception)` sees. The database itself is untouched, so healing
+     * is opening a fresh connection onto it.
+     *
+     * This rig has no separate check that it took: a closed connection cannot be probed without the
+     * very call under test. It needs none, because a rig that failed to break anything leaves the
+     * suite's three properties RED (the read returns the value, the write and delete return normally),
+     * never green.
+     */
+    override suspend fun faultMedium(store: DurableStore): MediumFault {
+        val name = requireNotNull(databases[store]) { "faultMedium() was handed a store this fixture did not create" }
+        (store as IndexedDbDurableStore).close()
+        return MediumFault.Broken { IndexedDbDurableStore.open(name) }
+    }
+
+    /**
+     * Opening a store where the page has no IndexedDB must throw an [Exception] (#3143).
+     *
+     * `indexedDB.open` throws **synchronously** — a `TypeError` when `indexedDB` is undefined, a
+     * `SecurityError` on an opaque origin or with storage blocked — and that throw used to escape the
+     * bridge as a `JsException`, which extends [Throwable] and not [Exception]. A page whose
+     * `catch (e: Exception)` was meant to fall back to an empty board crashed instead.
+     *
+     * The rig hides `indexedDB` behind an own property of `undefined` on the global object, checks
+     * that it took, and puts the original back in a `finally`. `SecurityError` cannot be produced from
+     * inside a test page; the `TypeError` takes the same path through the bridge.
+     */
+    @Test
+    fun openWhereIndexedDbIsMissingThrowsAnException() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        hideIndexedDb()
+        val failure = try {
+            check(!indexedDbVisible()) { "rig: indexedDB is still visible after hiding it" }
+            try {
+                IndexedDbDurableStore.open("kuilt-store-no-indexeddb")
+                null
+            } catch (thrown: Throwable) {
+                currentCoroutineContext().ensureActive()
+                thrown
+            }
+        } finally {
+            restoreIndexedDb()
+        }
+
+        assertAll(
+            { assertTrue(indexedDbVisible(), "rig: indexedDB is visible again once restored") },
+            { assertNotNull(failure, "open must fail when the page has no IndexedDB") },
+            {
+                assertTrue(
+                    failure is Exception,
+                    "open threw ${failure?.let { it::class.simpleName }}, which is not an Exception — a " +
+                        "caller's catch (e: Exception) cannot see it: $failure",
+                )
+            },
+        )
+    }
 }
+
+/**
+ * Shadow the global `indexedDB` with an own property holding `undefined`, keeping the original
+ * descriptor (if it was an own property) for [restoreIndexedDb].
+ */
+@JsFun(
+    """
+    () => {
+        globalThis.__kuiltHiddenIndexedDb = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+        Object.defineProperty(globalThis, 'indexedDB', { value: undefined, configurable: true, writable: true });
+    }
+    """,
+)
+private external fun hideIndexedDb()
+
+/** Undo [hideIndexedDb]: put the original own property back, or drop the shadow if there was none. */
+@JsFun(
+    """
+    () => {
+        const original = globalThis.__kuiltHiddenIndexedDb;
+        if (original) {
+            Object.defineProperty(globalThis, 'indexedDB', original);
+        } else {
+            delete globalThis.indexedDB;
+        }
+        delete globalThis.__kuiltHiddenIndexedDb;
+    }
+    """,
+)
+private external fun restoreIndexedDb()
+
+/** Whether a bare `indexedDB` reference, as the store's bridge makes, sees an IndexedDB factory. */
+@JsFun("() => typeof indexedDB !== 'undefined'")
+private external fun indexedDbVisible(): Boolean
 
 /**
  * Drop the whole database at [name], whether or not it exists.
