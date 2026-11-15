@@ -1697,6 +1697,22 @@ public class LocalHeddle private constructor(
         public const val LIFETIME_HEADROOM: Long = 1L shl 58
 
         /**
+         * The largest overrun [complete] records: 2^57 cost units, half of [LIFETIME_HEADROOM]. An
+         * overrun above it is recorded on no edge and minted nowhere. It is reported whole in
+         * [LeaseOutcome.Done.unrecorded], the reservation is charged at the leaf as for a
+         * completion at it, and nothing else changes, the wake memory included (see "The lifetime
+         * limit" in the class KDoc).
+         *
+         * It exists so that one absurd cost cannot end an engine. Recorded, an overrun moves an
+         * edge's issuance and the root's minted supply by its whole size, and a counter left past
+         * the watermark refuses every later [acquire] for good. An overrun within the cap leaves a
+         * counter past the watermark only when that counter was already within the cap of it, and
+         * the headroom holds two of them. [admit] and [extend] amounts are bounded by
+         * [MAX_RESERVATION], far below it, so the cap bites only at [complete].
+         */
+        public const val MAX_RECORDED_OVERRUN: Long = LIFETIME_HEADROOM / 2
+
+        /**
          * The target every wanted edge advertises, `Long.MAX_VALUE / 4` (just under 2^61): far above
          * any outstanding a run reaches (see [MAX_RESERVATION]), and far enough below `Long.MAX_VALUE`
          * that [HeddlePolicy]'s `targetOutstanding − outstanding`, which is not overflow-checked, cannot

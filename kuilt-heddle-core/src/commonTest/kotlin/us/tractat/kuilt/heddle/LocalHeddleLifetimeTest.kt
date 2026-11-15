@@ -348,9 +348,9 @@ class LocalHeddleLifetimeTest {
     }
 
     /**
-     * `complete(lease, Long.MAX_VALUE)` on an engine that has served one other lease: the overrun
-     * cannot be funded within `Long`, so it is recorded nowhere, the lease closes, and the next
-     * acquire leases. The engine carries on.
+     * `complete(lease, Long.MAX_VALUE)` on an engine that has served one other lease: the overrun is
+     * above [LocalHeddle.MAX_RECORDED_OVERRUN], and could not be funded within `Long` either, so it is
+     * recorded nowhere, the lease closes, and the next acquire leases. The engine carries on.
      */
     @Test
     fun completeAtLongMaxReportsTheOverrunAndTheNextAcquireLeases() {
@@ -370,23 +370,67 @@ class LocalHeddleLifetimeTest {
     }
 
     /**
-     * The boundary of the row above, pinned as it is rather than as the design text reads (#3475): on
-     * an engine whose only service is the one lease, `complete(lease, Long.MAX_VALUE)` fits exactly,
-     * since the edge and the root's supply each have exactly the overrun's room left under
-     * `Long.MAX_VALUE`. It is recorded in full, the supply is filled to the brim, and every later
-     * acquire is refused at the root.
+     * One absurd cost cannot end an engine (@keddie, #3475). On an engine whose only service is the
+     * one lease, `complete(lease, Long.MAX_VALUE)` would fit whole, since the edge and the root's
+     * supply each have exactly the overrun's room left under `Long.MAX_VALUE`, and recorded it would
+     * leave the supply past the watermark, refusing every later acquire. The overrun is above
+     * [LocalHeddle.MAX_RECORDED_OVERRUN], so it is recorded nowhere, and the next acquire leases.
      */
     @Test
-    fun completeAtLongMaxOnAFreshEngineFitsExactlyAndFillsTheSupply() {
+    fun completeAtLongMaxOnAFreshEngineIsUnrecordedAndTheNextAcquireLeases() {
         val h = LocalHeddle.bootWhole(topology, policy, epoch = 1L).apply { reconcileCapacity(1L) }
         val lease = h.lease(setOf(a), reservation = R)
+        val overrun = Long.MAX_VALUE - R
+        val edgeBefore = h.issued(h.path(a).single())
+        val mintedBefore = h.minted()
+        val heldBefore = h.state().ledger.holdings(root, LOCAL)
         val done = h.complete(lease.id, actualCost = Long.MAX_VALUE, waiting = emptySet())
         val next = h.acquire(setOf(b), setOf(b), startedAt = 0L)
         assertAll(
-            { assertEquals(LeaseOutcome.Done(charged = Long.MAX_VALUE, overrun = Long.MAX_VALUE - R, unrecorded = 0L), done) },
-            { assertEquals(Long.MAX_VALUE, h.minted(), "the supply is filled to Long.MAX_VALUE") },
-            { assertEquals(AcquireOutcome.LifetimeExhausted(root), next) },
+            { assertTrue(chargeFits(edgeBefore, overrun), "the rig: a's edge has room for the whole overrun: $edgeBefore") },
+            { assertTrue(chargeFits(mintedBefore, overrun - heldBefore), "the rig: and the root could mint it: $mintedBefore, holding $heldBefore") },
+            { assertEquals(LeaseOutcome.Done(charged = R, overrun = overrun, unrecorded = overrun), done) },
+            { assertEquals(mintedBefore, h.minted(), "nothing was minted for it") },
+            { assertEquals(edgeBefore, h.issued(h.path(a).single()), "and a's edge did not move") },
+            { assertIs<AcquireOutcome.Acquired>(next, "the engine carries on") },
             { assertEquals(emptyList(), h.state().ledger.validate()) },
+        )
+    }
+
+    /**
+     * The per-charge cap's boundary (@keddie, #3475). An overrun of exactly
+     * [LocalHeddle.MAX_RECORDED_OVERRUN] is recorded in full. One unit more is recorded nowhere,
+     * reported whole as unrecorded, and leaves the engine exactly as a completion at the reservation
+     * leaves its twin: ledger, lease and wake memory. Every edge and the root have room for both, so
+     * only the cap tells them apart.
+     */
+    @Test
+    fun anOverrunAtTheCapIsRecordedAndOneUnitMoreIsNot() {
+        val cap = LocalHeddle.MAX_RECORDED_OVERRUN
+        class Run(val done: LeaseOutcome, val h: LocalHeddle, val edgeBefore: Long, val mintedBefore: Long)
+        fun completed(actualCost: Long): Run {
+            val h = engine()
+            val lease = h.lease(setOf(a), reservation = R)
+            val edgeBefore = h.issued(h.path(a).single())
+            val mintedBefore = h.minted()
+            return Run(h.complete(lease.id, actualCost, waiting = setOf(a, b)), h, edgeBefore, mintedBefore)
+        }
+        val atCap = completed(R + cap)
+        val over = completed(R + cap + 1L)
+        val control = completed(R)
+        assertAll(
+            { assertEquals(1L shl 57, cap, "the cap is half the headroom") },
+            { assertTrue(chargeFits(over.edgeBefore, cap + 1L), "the rig: a's edge has room for one unit past the cap") },
+            { assertTrue(chargeFits(over.mintedBefore, cap + 1L), "the rig: and the root can mint it") },
+            { assertEquals(LeaseOutcome.Done(charged = R + cap, overrun = cap, unrecorded = 0L), atCap.done, "at the cap, recorded in full") },
+            { assertEquals(atCap.edgeBefore + cap, atCap.h.issued(atCap.h.path(a).single()), "the overrun crossed a's edge") },
+            { assertEquals(LeaseOutcome.Done(charged = R, overrun = cap + 1L, unrecorded = cap + 1L), over.done, "one unit more, recorded nowhere") },
+            { assertEquals(control.h.state(), over.h.state(), "and the engine is as a completion at the reservation leaves it") },
+            { assertEquals(over.mintedBefore, over.h.minted(), "nothing was minted for it") },
+            { assertIs<AcquireOutcome.Acquired>(atCap.h.acquire(setOf(a), setOf(a), startedAt = 1L), "after a recorded cap, the engine leases") },
+            { assertIs<AcquireOutcome.Acquired>(over.h.acquire(setOf(a), setOf(a), startedAt = 1L), "and after an unrecorded one") },
+            { assertEquals(emptyList(), atCap.h.state().ledger.validate()) },
+            { assertEquals(emptyList(), over.h.state().ledger.validate()) },
         )
     }
 
@@ -414,6 +458,53 @@ class LocalHeddleLifetimeTest {
             { assertEquals(Long.MAX_VALUE, h.issued(edge)) },
             { assertEquals(2 * R - 1L, h.state().leases.single { it.id == lease.id }.reserved) },
             { assertEquals(emptyList(), h.state().ledger.validate()) },
+        )
+    }
+
+    /**
+     * An extend the root must mint for, with capacity reconciled and the root holding nothing. With
+     * the minted supply a unit past the watermark less the amount, a pick there is refused, but an
+     * extend is a charge: its mint uses the headroom up to `Long.MAX_VALUE`, and it lands. A unit past
+     * `Long.MAX_VALUE` less the amount, the mint cannot be made in whole, so the extend answers `Done`
+     * with the amount unrecorded, not `SupplyExhausted`, and the ledger, the lease and the wake memory
+     * are as they were.
+     */
+    @Test
+    fun anExtendTheRootMintsForUsesTheHeadroomAndAUnitPastLongIsUnrecorded() {
+        fun rigged(minted: Long): Pair<LocalHeddle, Lease> {
+            val h = engine().apply { reconcileCapacity(1L) }
+            val lease = h.lease(setOf(a), reservation = R)
+            // Spend what the root holds, then mint up to the supply asked for and spend that too.
+            h.spendHeld(b, h.state().ledger.holdings(root, LOCAL))
+            h.spendAway(minted - h.minted(), lanes = b to y)
+            return h to lease
+        }
+        val (lands, landsLease) = rigged(LIFETIME_WATERMARK - R + 1L)
+        val (full, fullLease) = rigged(Long.MAX_VALUE - R + 1L)
+        val landsMinted = lands.minted()
+        val landsHeld = lands.state().ledger.holdings(root, LOCAL)
+        val fullHeld = full.state().ledger.holdings(root, LOCAL)
+        val pickThere = lands.acquire(setOf(a), setOf(a), startedAt = 0L)
+        val landed = lands.extend(landsLease.id, R, waiting = setOf(a))
+        val before = full.state()
+        val refused = full.extend(fullLease.id, R, waiting = setOf(a, b))
+        val after = full.state()
+        assertAll(
+            { assertEquals(LIFETIME_WATERMARK - R + 1L, landsMinted, "the rig: the supply is a unit past room for a pick of R") },
+            { assertEquals(Long.MAX_VALUE - R + 1L, before.ledger.mintedSupply(root, LOCAL), "the rig: and a unit past room for a charge of R") },
+            { assertEquals(0L, landsHeld, "the rig: the root holds nothing, so the extend must mint") },
+            { assertEquals(0L, fullHeld, "the rig: in both") },
+            { assertTrue(chargeFits(full.issued(full.path(a).single()), R), "the rig: a's edge has room, so only the supply refuses") },
+            { assertEquals(AcquireOutcome.LifetimeExhausted(root), pickThere, "the rig: a pick there is refused") },
+            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L), landed, "an extend there lands") },
+            { assertEquals(landsMinted + R, lands.minted(), "minting the shortfall past the watermark, and no float") },
+            { assertEquals(2 * R, lands.state().leases.single { it.id == landsLease.id }.reserved) },
+            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = R), refused, "a unit past Long, nothing is recorded") },
+            { assertEquals(before.ledger, after.ledger, "the ledger is as it was") },
+            { assertEquals(before.leases, after.leases, "and the lease") },
+            { assertEquals(before.allocatorMemory, after.allocatorMemory, "and the wake memory") },
+            { assertEquals(emptyList(), lands.state().ledger.validate()) },
+            { assertEquals(emptyList(), after.ledger.validate()) },
         )
     }
 
