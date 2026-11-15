@@ -292,13 +292,17 @@ public class FairShareAllocator(
                 // child that grant filled seen leaving at it, not at the next call (#3416 review).
                 markDepartures(parent, policyEdges(s, parent, demand))
                 try {
-                    val grant = pickOne(s, parent, earmarked, demand) ?: return@mutateOrSkip null
                     val cell = ValueCell(s)
+                    // Before the pick, so a child a merge carried to its ceiling is repaired rather
+                    // than refused by the pick it would stop (#3353).
+                    val preRaised = raiseBeforePick(parent, cell, earmarked, demand)
+                    val grant = pickOne(cell.current, parent, earmarked, demand) ?: return@mutateOrSkip null
+                    if (preRaised) checkRaiseChangedNoPick(s, parent, earmarked, demand, grant)
                     val raised = raiseOriginBeneath(parent, cell, earmarked, demand, grant)
                     if (!cell.mutateOrSkip { it.delegate(self, grant.attachment, grant.amount) }) return@mutateOrSkip null
                     // The delegation would carry the child to its ceiling: not made (#3353).
                     if (cell.current.isAtPositionCeiling(grant.attachment)) return@mutateOrSkip null
-                    rebasedThisRound = raised
+                    rebasedThisRound = raised || preRaised
                     cell.written?.let(::Patch)
                 } catch (_: PositionCeilingException) {
                     // The pick would have to order a position at its ceiling (#3313): grant nothing
@@ -375,6 +379,55 @@ public class FairShareAllocator(
         val again = pickOne(s.piece(patch.delta), parent, earmarked, eligible)
         check(again == grant) { "the origin rebase at ${parent.value} changed the pick from $grant to $again" }
         return cell.mutateOrSkip { patch }
+    }
+
+    /**
+     * Raise [parent]'s origin in [cell] **before** a pick, when a child there is past its
+     * [rebaseThreshold], and say whether it did (#3353). [schedule] runs it ahead of each pick with
+     * no joiners, the seat-and-wake step's own raise ([preSeatRaise]) covering a round with them.
+     * A raise after the pick cannot repair a child that a merge or a delegation carried to its
+     * ceiling, since the pick over it refuses first; this one can, and it changes no pick, which
+     * [checkRaiseChangedNoPick] checks.
+     */
+    private fun raiseBeforePick(parent: GroupId, cell: ValueCell, earmarked: Long, demand: (AttachmentId) -> Demand): Boolean {
+        val delta = prePickRaise(cell.current, parent, demand) ?: return false
+        val s = cell.current
+        val patch = s.raiseOrigin(parent, s.origin(parent) + delta) ?: return false
+        return cell.mutateOrSkip { patch }
+    }
+
+    /**
+     * The `Δ` to raise [parent]'s origin by before a pick in [s] that seats and clamps nobody, or
+     * `null`: [originStep] over [parent]'s children. A round with joiners leaves it to [preSeatRaise],
+     * which reads the front they will land at.
+     */
+    private fun prePickRaise(s: EntitlementLedger, parent: GroupId, demand: (AttachmentId) -> Demand): Int128? {
+        if (!rebaseEnabled) return null
+        val edges = policyEdges(s, parent, demand)
+        if (joinersOf(edges).isNotEmpty()) return null
+        return originStep(edges)
+    }
+
+    /**
+     * That a raise before the pick changed no pick: the pick on [s], unraised, is [grant] too, or it
+     * refuses at the ceiling, which is what the raise is for. A bug detector, as
+     * [checkPreSeatRaiseChangedNoPick] is.
+     *
+     * @throws IllegalStateException if it picks anything else, a bug in the rule.
+     */
+    private fun checkRaiseChangedNoPick(
+        s: EntitlementLedger,
+        parent: GroupId,
+        earmarked: Long,
+        demand: (AttachmentId) -> Demand,
+        grant: Grant,
+    ) {
+        val unraised = try {
+            pickOne(s, parent, earmarked, demand)
+        } catch (_: PositionCeilingException) {
+            return
+        }
+        check(unraised == grant) { "the pre-pick rebase at ${parent.value} changed the pick from $unraised to $grant" }
     }
 
     /**
@@ -617,11 +670,16 @@ public class FairShareAllocator(
         val cell = ValueCell(s)
         // A rebase before the seat and wake step too, so no joiner is seated or clamped past its own
         // ceiling at a front a light runner holds up (#3353 review, item A).
-        val preSeat = fork.preSeatRaise(s, parent, demand)
+        // With none, the raise still runs before the pick, so a child at its ceiling is repaired (#3353).
+        val preSeat = fork.preSeatRaise(s, parent, demand) ?: fork.prePickRaise(s, parent, demand)
+        val floorsBefore = fork.floorLandingsForTest
         fork.settleJoiners(parent, cell, demand, preSeat)
+        // A joiner held at its floor by the raise lands higher than it would have without it, so
+        // the unraised twin may pick it where the raised step does not: that is the floor's penalty.
+        val floored = fork.floorLandingsForTest > floorsBefore
         val delegated = try {
             fork.pickOne(cell.current, parent, earmarked, demand)?.let { grant ->
-                if (preSeat != null) fork().checkPreSeatRaiseChangedNoPick(s, parent, earmarked, demand, demand, grant)
+                if (preSeat != null && !floored) fork().checkPreSeatRaiseChangedNoPick(s, parent, earmarked, demand, demand, grant)
                 // The rebase after the seat and wake step, before the grant, in the same patch (#3353).
                 val raised = fork.raiseOriginBeneath(parent, cell, earmarked, demand, grant)
                 val landed = cell.mutateOrSkip { it.delegate(fork.self, grant.attachment, grant.amount) }
@@ -734,9 +792,11 @@ public class FairShareAllocator(
         val preSeat = preSeatRaise(ledger, parent, waiting)
         val unraised = if (preSeat != null) fork() else null
         val cell = ValueCell(ledger)
+        val floorsBefore = floorLandingsForTest
         settleJoiners(parent, cell, waiting, preSeat)
         val grant = pickOne(cell.current, parent, earmarked = 0L, eligible) ?: return null
-        unraised?.checkPreSeatRaiseChangedNoPick(ledger, parent, earmarked = 0L, waiting, eligible, grant)
+        // Not when a joiner was held at its floor: see [schedule]'s first round.
+        if (floorLandingsForTest == floorsBefore) unraised?.checkPreSeatRaiseChangedNoPick(ledger, parent, earmarked = 0L, waiting, eligible, grant)
         val settled = cell.current
         val raised = raiseOriginBeneath(parent, cell, earmarked = 0L, waiting, grant, eligible)
         val rebase = if (raised || preSeat != null) Rebase(cell.current) else null
