@@ -152,8 +152,8 @@ class LocalHeddleForgetTest {
     }
 
     /**
-     * A ledger written by an engine that kept every retired edge, as v0.7.4's did, compacts in the
-     * first swap after it is restored, with its books unchanged.
+     * A ledger written by an engine that kept every retired edge compacts in the first swap after it
+     * is restored, with its books unchanged.
      */
     @Test
     fun aRestoredLedgerThatKeptItsRetiredEdgesCompactsInItsFirstSwap() {

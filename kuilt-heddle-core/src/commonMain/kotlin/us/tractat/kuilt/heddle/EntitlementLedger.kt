@@ -181,7 +181,7 @@ import kotlinx.serialization.Transient
  * field must too, and it needs its own arm in `EntitlementLedgerCanonicalEncodingTest`, since no
  * test reds on a field it never writes.
  *
- * Its encoded shape is also part of [LocalHeddleSnapshot]'s formats 1 and 2: a field added here
+ * Its encoded shape is also part of [LocalHeddleSnapshot]'s format 2: a field added here
  * takes a default, and any other change needs a frozen surrogate there first.
  *
  * ## Forgetting (#3192, design §5.5)

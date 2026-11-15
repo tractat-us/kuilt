@@ -235,6 +235,10 @@ public class FairShareAllocator(
      *   refusal stopped it after them; otherwise [AllocationOutcome.PositionCeiling] or
      *   [AllocationOutcome.WeightBudget] when [parent] cannot be ordered, and
      *   [AllocationOutcome.NothingToDelegate] when it simply had nothing to grant.
+     * @throws IllegalStateException when this allocator was built from an [AllocatorMemory] no
+     *   allocator wrote, one holding a child's shift remainder at a denominator other than its
+     *   weight's (#3416 review), and that child returns: a remainder is always on its edge's own
+     *   grid, since a reweight is a new edge.
      */
     public fun schedule(
         parent: GroupId,
