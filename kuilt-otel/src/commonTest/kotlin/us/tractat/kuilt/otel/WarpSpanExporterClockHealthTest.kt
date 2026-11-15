@@ -47,20 +47,23 @@ class WarpSpanExporterClockHealthTest {
     @Test
     fun aClockWhoseReadIsRefusedStaysOutstandingUntilItsWriteLands() = runTest {
         val turns = 3
+        val windowAfterTwoRefusals = 3
         val backing = InMemoryDurableStore()
         val store = ReadRefusingStore(backing, clockKey)
         val clock = WarpCausalClock(replica)
         val exporter = WarpSpanExporter(replica, store, causalClock = clock)
 
+        // Refused, skipped inside that refusal's window, refused again (#3436): a window of three.
         val refused = (1..turns).map { exporter.export(span(it.toByte())) }
         val whileRefused = exporter.health.value
         store.heal()
+        exporter.skipClockWindow(windowAfterTwoRefusals, span(8))
         val healed = exporter.export(span(9))
         val afterHeal = exporter.health.value
         val clockEntry = backing.read(clockKey)
 
         assertAll(
-            { assertEquals(turns, store.refusals, "the rig: the clock's read was not refused once per turn") },
+            { assertEquals(2, store.refusals, "the rig: the clock's read was not refused on the first and third turns") },
             { assertEquals(List(turns) { ExportResult.Success }, refused, "the rig: a refused clock read refused the span turn") },
             { assertTrue(exporter.snapshot().elements.filter { it.spanId != span(9).spanId }.all { it.causalStamp == null }, "the rig: an unrecovered clock stamped") },
             { assertEquals(turns.toLong(), whileRefused.acknowledged, "the span work that landed was not acknowledged") },
@@ -69,7 +72,7 @@ class WarpSpanExporterClockHealthTest {
             { assertEquals(ExportResult.Success, healed) },
             { assertNotNull(clockEntry, "the rig: the healed turn did not write the clock") },
             { assertEquals(0L, afterHeal.outstandingFailures, "the clock write that landed did not resolve its failures") },
-            { assertEquals(turns.toLong(), afterHeal.failed, "failed is cumulative") },
+            { assertEquals(turns.toLong() + windowAfterTwoRefusals, afterHeal.failed, "failed is cumulative") },
         )
     }
 
@@ -144,6 +147,9 @@ class WarpSpanExporterClockHealthTest {
         val whileRefused = exporter.health.value
         val spanEntry = backing.read(spanKey)
         store.heal()
+        // The refused read opened a window of one turn (#3436): this clear skips the clock's read.
+        val skipped = exporter.clear()
+        val clockAfterSkip = backing.read(clockKey)
         val healed = exporter.clear()
 
         assertAll(
@@ -152,6 +158,8 @@ class WarpSpanExporterClockHealthTest {
             { assertNotNull(spanEntry, "the rig: the clear did not write the spans") },
             { assertEquals(1L, whileRefused.acknowledged, "the clear's span work was not acknowledged") },
             { assertEquals(1L, whileRefused.outstandingFailures, "the clear's skipped clock write was not outstanding") },
+            { assertEquals(ExportResult.Success, skipped) },
+            { assertNull(clockAfterSkip, "the rig: the clear inside the window read and wrote the clock") },
             { assertEquals(ExportResult.Success, healed) },
             { assertEquals(0L, exporter.health.value.outstandingFailures, "the healed clear's clock write did not resolve it") },
         )

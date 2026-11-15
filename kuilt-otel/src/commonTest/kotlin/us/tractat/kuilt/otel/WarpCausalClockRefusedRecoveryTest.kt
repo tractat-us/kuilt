@@ -187,6 +187,8 @@ class WarpCausalClockRefusedRecoveryTest {
 
         val restarted = WarpTelemetry(replica, store).also { it.recover() }
         val refusedRecovery = store.refusals
+        // The refusal opens a window of one export that skips the clock's read (#3436).
+        restarted.spans.skipClockWindow(1, span(9)) { store.refusals }
         val result = restarted.spans.export(span(3))
         val unstamped = restarted.spans.snapshot().elements.single { it.spanId == span(3).spanId }.causalStamp
         store.heal()
@@ -199,7 +201,8 @@ class WarpCausalClockRefusedRecoveryTest {
             { assertTrue(store.refusals > refusedRecovery, "the export did not retry the refused read") },
             { assertEquals(ExportResult.Success, result, "an unrecovered clock stopped the span itself being saved") },
             { assertNull(unstamped, "an unrecovered clock stamped a span") },
-            { assertEquals(4, durable.size, "a durable span was lost: ${durable.map { it.name }}") },
+            // Spans 1 to 4, and the window's filler.
+            { assertEquals(5, durable.size, "a durable span was lost: ${durable.map { it.name }}") },
             { assertEquals(dots.size, dots.toSet().size, "two durable spans share a dot: $dots") },
         )
     }
@@ -242,7 +245,7 @@ class WarpCausalClockRefusedRecoveryTest {
     }
 
     @Test
-    fun theNextExportRetriesARefusedClockReadAndStampsAfterTheDurableSeq() = runTest {
+    fun theFirstExportPastTheWindowRetriesARefusedClockReadAndStampsAfterTheDurableSeq() = runTest {
         val backing = InMemoryDurableStore()
         WarpTelemetry(replica, backing).also { it.recover() }.spans.apply {
             export(span(1))
@@ -252,6 +255,8 @@ class WarpCausalClockRefusedRecoveryTest {
         store.arm(StoreCall.READ, StoreAct.MINT) { it == clockKey }
 
         val restarted = WarpTelemetry(replica, store).also { it.recover() }
+        // The refusal opens a window of one export that skips the clock's read (#3436).
+        restarted.spans.skipClockWindow(1, span(9))
         val result = restarted.spans.export(span(3))
         val stamp = restarted.spans.snapshot().elements.single { it.spanId == span(3).spanId }.causalStamp
 
@@ -295,11 +300,17 @@ class WarpCausalClockRefusedRecoveryTest {
         val exporter = WarpSpanExporter(replica, store, causalClock = clock)
 
         clock.recover(store)
+        // The refusal opens a window of one turn that skips the clock's read (#3436): a clear, here,
+        // which leaves the durable clock alone.
+        val skipped = exporter.clear()
+        val skippedLeftTheClock = WarpCausalClock(replica).also { it.recover(backing) }.frontier()
         val cleared = exporter.clear()
         val persisted = WarpCausalClock(replica).also { it.recover(backing) }
 
         assertAll(
             { assertEquals(1, store.minted, "the rig never minted on the clock's recovery read") },
+            { assertEquals(ExportResult.Success, skipped, "the rig: the clear inside the window failed") },
+            { assertTrue(skippedLeftTheClock.isNotEmpty(), "the rig: the clear inside the window wrote the clock") },
             { assertEquals(ExportResult.Success, cleared) },
             { assertEquals(emptySet(), persisted.frontier(), "the clear left the pre-clear frontier durable") },
             { assertEquals(Dot(replica, 3L), persisted.mint().dot, "the clear overwrote the durable seq") },
@@ -358,13 +369,20 @@ class WarpCausalClockRefusedRecoveryTest {
         val exporter = WarpSpanExporter(replica, store, causalClock = clock)
 
         clock.recover(store)
+        // The refusal opens a window of one turn that skips the clock's read (#3436): a clear, here.
+        val skipped = exporter.clear()
+        val refusalsAfterSkip = store.refusals
         val cleared = exporter.clear()
         val refusedReads = store.refusals
         store.heal()
+        // The clear's refusal opened a window of three turns (#3436); the export after it reads.
+        exporter.skipClockWindow(3, span(9))
         exporter.export(span(1))
-        val stamp = exporter.snapshot().elements.single().causalStamp
+        val stamp = exporter.snapshot().elements.single { it.spanId == span(1).spanId }.causalStamp
 
         assertAll(
+            { assertEquals(ExportResult.Success, skipped, "the rig: the clear inside the window failed") },
+            { assertEquals(1, refusalsAfterSkip, "the rig: the clear inside the window read the clock") },
             { assertEquals(2, refusedReads, "the rig did not refuse both the recovery and the clear's retry") },
             { assertEquals(ExportResult.Success, cleared) },
             { assertEquals(Dot(replica, 3L), stamp?.dot, "the export did not re-arm the clock") },

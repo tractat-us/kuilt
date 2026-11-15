@@ -51,7 +51,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * mint a dot that may already be used or write a `seq` below the durable one (#3390). [observe]
  * and [frontier] still work. The next [recover] whose read lands arms the clock and keeps what it
  * observed meanwhile. A [WarpSpanExporter] retries that read on each export and clear and saves
- * unstamped spans until it lands: causal edges are lost, a dot is never re-minted.
+ * unstamped spans until it lands: causal edges are lost, a dot is never re-minted. Those retries back
+ * off as the exporter's own span read does (#3436): after `k` refused reads in a row the next
+ * `2^k − 1` turns that would read the clock skip it, `k` capped at 6. [recover] always reads.
  *
  * A clock whose read has landed is never demoted by a refusal. This process is the only writer of
  * the clock's entry, and it has minted only above the `seq` it read, so its own `seq` is at least
@@ -94,6 +96,14 @@ public class WarpCausalClock(private val replica: ReplicaId) {
 
     private val lock = reentrantLock()
     private var state: ClockState = ClockState.initial
+
+    /**
+     * The backoff on re-reading a refused entry, guarded by [lock] (#3436): `null` until a read is
+     * refused, and again once one lands. Every refused read, [recover]'s included, lengthens it. A
+     * [WarpSpanExporter] consults it through [owedReadSkip] and spends it through [spendSkip]; this
+     * class never skips a read itself, so [recover] always reads.
+     */
+    private var readBackoff: RefusedReadBackoff? = null
 
     internal companion object {
         /** The durable-store key this clock persists under. Exposed `internal` so a
@@ -189,10 +199,38 @@ public class WarpCausalClock(private val replica: ReplicaId) {
     public suspend fun recover(store: DurableStore): ClockRecovery = when (val read = read(store)) {
         is ClockRead.Refused -> {
             logger.error(read.cause) { "otel.causal.clock: store read failed; minting nothing until a read lands" }
-            lock.withLock { state = state.refused() }
+            lock.withLock { refusedLocked(read.cause) }
             ClockRecovery.Refused(read.cause)
         }
         is ClockRead.Landed -> arm(read)
+    }
+
+    /**
+     * A refused read: [Unread][ClockState.Unread] becomes unrecovered, an armed clock is left alone,
+     * and an unarmed one's backoff grows by one refusal. Must be called with [lock] held.
+     */
+    private fun refusedLocked(cause: Throwable) {
+        state = state.refused()
+        if (state !is ClockState.Armed) readBackoff = RefusedReadBackoff.after(readBackoff, cause)
+    }
+
+    /**
+     * The backoff window a turn of [WarpSpanExporter] should skip this clock's read inside, or `null`
+     * when it should read: the clock is armed, or no read has been refused, or the window is spent
+     * (#3436). A turn that skips reports the window's cause as its refusal, and spends one turn of
+     * the window through [spendSkip] once its reads are done.
+     */
+    internal fun owedReadSkip(): RefusedReadBackoff? = lock.withLock {
+        readBackoff?.takeIf { state !is ClockState.Armed && it.skipTurns > 0 }
+    }
+
+    /**
+     * Spend one turn of [seen], the window [owedReadSkip] answered. Nothing is spent when the window
+     * was replaced since: a read landed, or was refused and opened a longer one, both by a [recover]
+     * the exporter does not serialize with its turns. The turn that raced it then spends nothing.
+     */
+    internal fun spendSkip(seen: RefusedReadBackoff): Unit = lock.withLock {
+        if (readBackoff === seen) readBackoff = seen.skipped()
     }
 
     /**
@@ -206,7 +244,7 @@ public class WarpCausalClock(private val replica: ReplicaId) {
         if (isArmed) return ClockRecovery.Recovered
         return when (val read = read(store)) {
             is ClockRead.Refused -> {
-                val first = lock.withLock { (state is ClockState.Unread).also { state = state.refused() } }
+                val first = lock.withLock { (state is ClockState.Unread).also { refusedLocked(read.cause) } }
                 if (first) {
                     logger.error(read.cause) { "otel.causal.clock: store read failed; minting nothing until a read lands" }
                 } else {
@@ -235,6 +273,7 @@ public class WarpCausalClock(private val replica: ReplicaId) {
 
     private fun arm(read: ClockRead.Landed): ClockRecovery {
         lock.withLock {
+            readBackoff = null
             state = when (read) {
                 is ClockRead.Found -> state.joinedWith(read.entry)
                 ClockRead.Absent, is ClockRead.Undecodable -> state.withoutEntry()

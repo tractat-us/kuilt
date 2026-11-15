@@ -52,3 +52,21 @@ internal suspend fun WarpSpanExporter.skipReadWindow(turns: Int, filler: SpanRec
         check(refusals() == before) { "the rig: turn $turn of the read window read the spans" }
     }
 }
+
+/**
+ * Spend [turns] turns of the causal clock's backoff window (#3436) with exports of [filler], each
+ * checked to have skipped the clock's read: the span is saved, and saved unstamped, so no read landed
+ * and armed the clock, and [refusals] did not move, so none was refused either. Unlike a skipped span
+ * read, a skipped clock read still saves the span, so [filler] is durable afterwards.
+ */
+internal suspend fun WarpSpanExporter.skipClockWindow(turns: Int, filler: SpanRecord, refusals: () -> Int = { 0 }) {
+    repeat(turns) { turn ->
+        val before = refusals()
+        val saved = export(filler)
+        check(saved == ExportResult.Success) { "the rig: turn $turn of the clock's window did not save its span: $saved" }
+        check(snapshot().elements.none { it.spanId == filler.spanId && it.causalStamp != null }) {
+            "the rig: turn $turn of the clock's window read the clock and stamped"
+        }
+        check(refusals() == before) { "the rig: turn $turn of the clock's window read the clock" }
+    }
+}

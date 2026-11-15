@@ -448,8 +448,9 @@ class WarpSpanExporterRefusedRecoveryTest {
 
         assertAll(
             { assertIs<ClockRecovery.Refused>(clockRecovery, "the rig: the clock's read was not refused") },
-            // recover, then each of the six exports: the skipped ones read the clock too.
-            { assertEquals(7, clockRefusals, "the rig: the exports did not retry the clock's read") },
+            // recover, then the two retries: the clock's window (#3436) falls on the same turns as the
+            // spans', so each skipped turn skipped the clock's read too.
+            { assertEquals(3, clockRefusals, "the rig: the exports did not retry the clock's read") },
             { refused.forEach { assertIs<ExportResult.Failure>(it, "the rig: a retry was not refused") } },
             { assertEquals(ExportResult.Success, retried) },
             { assertEquals(1, copies.size, "the retries left ${copies.size} copies of one span: $copies") },

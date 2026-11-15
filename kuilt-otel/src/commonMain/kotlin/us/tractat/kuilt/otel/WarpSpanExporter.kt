@@ -163,11 +163,32 @@ public class WarpSpanExporter(
         }
     }
 
-    /** Make the read [clock] still needs, and return its refusal, or `null` when it landed or was not needed. */
-    private suspend fun retryClockRead(clock: WarpCausalClock): Throwable? {
+    /**
+     * Make the read [clock] still needs, or skip it inside the clock's backoff window (#3436), and
+     * return what the turn met. A skip is reported as the refused read it stands for, with the last
+     * refusal's cause, and makes no store call; the turn spends it through [spendClockSkip] once its
+     * reads are done.
+     */
+    private suspend fun retryClockRead(clock: WarpCausalClock): ClockReadTurn {
+        clock.owedReadSkip()?.let { window ->
+            persistence.recoveryFailed(window.cause)
+            logger.debug { "otel.causal.clock: store read was refused; this turn skips it and the clock: ${window.cause}" }
+            return ClockReadTurn(window.cause, window)
+        }
         val outcome = clock.retryRecovery(store)
         clockRecovered(outcome)
-        return (outcome as? ClockRecovery.Refused)?.cause
+        return ClockReadTurn((outcome as? ClockRecovery.Refused)?.cause, skipped = null)
+    }
+
+    /**
+     * Spend the turn of the clock's window that [turn] skipped, if it skipped one. Called once the
+     * turn's reads are done, so a caller cancelled in a later read spends nothing; and a skip makes no
+     * store call, so it asks `ensureActive` first, as a read's own `ensureActive` would.
+     */
+    private suspend fun spendClockSkip(clock: WarpCausalClock?, turn: ClockReadTurn?) {
+        val window = turn?.skipped ?: return
+        currentCoroutineContext().ensureActive()
+        checkNotNull(clock).spendSkip(window)
     }
 
     /**
@@ -176,7 +197,8 @@ public class WarpSpanExporter(
      * lands. A refused write throws.
      *
      * [refusal] is this turn's retry of the clock's read, which every turn makes while the clock is
-     * unarmed. So a skip always has one: a read that lands arms the clock, nothing disarms it, and a
+     * unarmed, or the last refusal's cause when the turn skipped that read inside its window (#3436).
+     * So a skipped write always has one: a read that lands arms the clock, nothing disarms it, and a
      * clock the retry found armed was armed already. A skip without one would be a bug here, and it
      * throws, which fails the whole turn closed.
      */
@@ -476,7 +498,8 @@ public class WarpSpanExporter(
      * If a [WarpCausalClock] was supplied, an **unstamped** span is auto-stamped with
      * causal context before insert (#846) — an explicit [SpanRecord.causalStamp]
      * always wins. Until the clock's recovery read has landed (refused, or never made), each
-     * export makes that read first; until it lands the span is saved **unstamped** and the
+     * export makes that read first, or skips it inside the clock's backoff window as the span read
+     * backs off (see [recover]); until it lands the span is saved **unstamped** and the
      * clock's entry is not written, so no dot already in the store is minted again (#3390). The
      * turn then counts in [health] per work key: the span's write as it went, and the skipped clock
      * write as a failed turn the first clock write that lands resolves (#3426).
@@ -558,7 +581,10 @@ public class WarpSpanExporter(
         // stamped span that skipped the read would count a clock failure its turn never retried (#3426).
         // The read holds ioMutex, the section every clock persist runs in, so it never reads past a
         // write this exporter is making.
-        val clockRefusal = causalClock?.takeIf { !it.isArmed }?.let { ioMutex.withLock { retryClockRead(it) } }
+        // Inside the clock's backoff window that read is skipped, and the skip is spent after the span
+        // read below (#3436).
+        val clockRead = causalClock?.takeIf { !it.isArmed }?.let { ioMutex.withLock { retryClockRead(it) } }
+        val clockRefusal = clockRead?.refusal
         // A recovered exporter stamps and adds before the write section, as it always has, in one hold
         // of `lock`: the read that made it recovered raised the clock's floor under that lock first, so
         // the stamp is above every stamp the stored spans carry (#3407). One whose read has not landed
@@ -577,8 +603,11 @@ public class WarpSpanExporter(
         return try {
             ioMutex.withLock {
                 // Never write over spans a refused read missed (#3390). A refusal leaves nothing to
-                // undo: the span was neither stamped nor added.
-                readBeforeWrite()?.let { return@withLock it }
+                // undo: the span was neither stamped nor added. The span read is the turn's last, so
+                // a skip of the clock's read is spent after it, refused or not (#3436).
+                val unread = readBeforeWrite()
+                spendClockSkip(causalClock, clockRead)
+                unread?.let { return@withLock it }
                 // Why this turn's clock work failed though its writes ran, or `null` when it did not.
                 var clockFailure: Throwable? = null
                 val written = try {
@@ -806,7 +835,9 @@ public class WarpSpanExporter(
         // A clock whose recovery read has not landed (refused, or never made) is read here too, so a
         // clear is not the turn that writes a `seq` below the durable one (#3390). Still refused,
         // the clear writes the spans and leaves the clock's entry alone, a failed clock turn (#3426).
-        val clockRefusal = causalClock?.let { retryClockRead(it) }
+        val clockRead = causalClock?.let { retryClockRead(it) }
+        spendClockSkip(causalClock, clockRead)
+        val clockRefusal = clockRead?.refusal
         var clockFailure: Throwable? = null
         val written = try {
             val encoded = lock.withLock {
@@ -975,6 +1006,13 @@ public sealed interface ExportResult {
  * that refusal, and never a store's or an encoder's exception of the same type.
  */
 private class CeilingRefusal(val ceiling: ArithmeticException) : Exception(ceiling.message, ceiling)
+
+/**
+ * What one turn met at a [WarpCausalClock] whose read is owed: [refusal], the cause of a refused or
+ * skipped read, `null` when the read landed or was not needed; and [skipped], the backoff window the
+ * turn skipped inside, still to be spent (#3436).
+ */
+private class ClockReadTurn(val refusal: Throwable?, val skipped: RefusedReadBackoff?)
 
 /**
  * The span one export saves, and whether it wanted a dot from an exhausted clock and so saves it
