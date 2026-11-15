@@ -12,6 +12,7 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
 import us.tractat.kuilt.crdt.Dot
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.StoreKey
 
@@ -97,13 +98,16 @@ public class WarpCausalClock(private val replica: ReplicaId) {
      * new dot.
      *
      * Answers [ClockTick.Unrecovered], minting nothing, until a [recover] read has landed: the
-     * clock does not know which dots are already used.
+     * clock does not know which dots are already used. Answers [ClockTick.Exhausted], minting
+     * nothing and leaving the clock as it was, once `seq` is `Long.MAX_VALUE`: there is no dot left,
+     * and wrapping would re-mint one.
      */
     public fun tick(): ClockTick = lock.withLock {
         when (val current = state) {
             is ClockState.Unread, is ClockState.Unrecovered -> ClockTick.Unrecovered
             is ClockState.Armed -> {
-                val newDot = Dot(replica, current.seq + 1)
+                val next = current.seq.plusOrNull(1L) ?: return@withLock ClockTick.Exhausted
+                val newDot = Dot(replica, next)
                 state = ClockState.Armed(newDot.seq, setOf(newDot))
                 ClockTick.Minted(CausalStamp(dot = newDot, predecessors = current.frontier))
             }
@@ -276,6 +280,13 @@ public sealed interface ClockTick {
 
     /** No recovery read has landed, because it was refused or never made, so it minted nothing. */
     public data object Unrecovered : ClockTick
+
+    /**
+     * Every dot is used: `seq` is `Long.MAX_VALUE`, so it minted nothing. An honest clock never gets
+     * here. A floor raised from a stored span that claims this replica's last dot does (#3407), and
+     * the clock then stays exhausted, so a [WarpSpanExporter] saves every later span unstamped.
+     */
+    public data object Exhausted : ClockTick
 }
 
 /** What [WarpCausalClock.persist] did. */

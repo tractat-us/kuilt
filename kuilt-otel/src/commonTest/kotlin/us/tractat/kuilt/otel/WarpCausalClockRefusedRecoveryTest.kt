@@ -55,7 +55,7 @@ class WarpCausalClockRefusedRecoveryTest {
     /** The dot [WarpCausalClock.tick] minted, or `null` when it answered unrecovered. */
     private fun WarpCausalClock.mintedDot(): Dot? = when (val tick = tick()) {
         is ClockTick.Minted -> tick.stamp.dot
-        ClockTick.Unrecovered -> null
+        ClockTick.Unrecovered, ClockTick.Exhausted -> null
     }
 
     // ---- The clock on its own ----

@@ -158,6 +158,12 @@ sealed interface us.tractat.kuilt.otel/ClockTick { // us.tractat.kuilt.otel/Cloc
         final fun toString(): kotlin/String // us.tractat.kuilt.otel/ClockTick.Minted.toString|toString(){}[0]
     }
 
+    final object Exhausted : us.tractat.kuilt.otel/ClockTick { // us.tractat.kuilt.otel/ClockTick.Exhausted|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ClockTick.Exhausted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ClockTick.Exhausted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/ClockTick.Exhausted.toString|toString(){}[0]
+    }
+
     final object Unrecovered : us.tractat.kuilt.otel/ClockTick { // us.tractat.kuilt.otel/ClockTick.Unrecovered|null[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/ClockTick.Unrecovered.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/ClockTick.Unrecovered.hashCode|hashCode(){}[0]

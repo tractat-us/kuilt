@@ -478,13 +478,13 @@ public class WarpSpanExporter(
 
     /**
      * [span] stamped by [clock], or [span] itself when there is no clock to stamp it (none
-     * configured, or the span's explicit stamp wins), or when [clock] is unrecovered and mints
+     * configured, or the span's explicit stamp wins), or when [clock] is unrecovered or exhausted and mints
      * nothing, so the span is saved unstamped (#3390). Called with [lock] held, so a recovered
      * exporter mints only above the floor its landing read raised (#3407).
      */
     private fun stampOf(span: SpanRecord, clock: WarpCausalClock?): SpanRecord = when (val tick = clock?.tick()) {
         is ClockTick.Minted -> span.copy(causalStamp = tick.stamp)
-        ClockTick.Unrecovered, null -> span
+        ClockTick.Unrecovered, ClockTick.Exhausted, null -> span
     }
 
     /**

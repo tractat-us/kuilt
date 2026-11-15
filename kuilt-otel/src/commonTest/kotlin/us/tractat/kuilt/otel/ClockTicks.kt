@@ -9,6 +9,7 @@ import us.tractat.kuilt.store.InMemoryDurableStore
 internal fun WarpCausalClock.mint(): CausalStamp = when (val tick = tick()) {
     is ClockTick.Minted -> tick.stamp
     ClockTick.Unrecovered -> throw AssertionError("the clock is unrecovered, so it minted nothing")
+    ClockTick.Exhausted -> throw AssertionError("the clock is exhausted, so it minted nothing")
 }
 
 /**
