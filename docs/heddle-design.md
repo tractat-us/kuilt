@@ -873,6 +873,10 @@ each:
   only makes a rebase late. Past `16R`, its ceiling, it wedges the parent while that
   child demands. That takes a spread near 10¹², `2⁴²/1023` beside `1/1021` say, and
   about 2⁴⁹ units of service, and no test reaches it.
+- In a `LocalHeddle` parent driven by both picks and plain `admit`s, a child a
+  pick last saw demanding, and idle since, still bounds a charging call's `Δ`
+  near its own position until a pick sees it again. Until then it holds the
+  step back as a never-served child does.
 
 A child that is not demanding can sit as far below zero as the origin has
 risen, past `Long`. A pick never orders it: if it comes back demanding to an

@@ -361,6 +361,8 @@ public class FairShareAllocator(
             val patch = ledger.raiseOrigin(parent, ledger.origin(parent) + delta) ?: return null
             Rebase(ledger.piece(patch.delta))
         } catch (_: ArithmeticException) {
+            // Only a 128-bit result can leave here, a front or a time read on a far-flung grid, not a
+            // bug: every other step returns null. A charging call must land, so it lands unrebased.
             null
         }
     }
@@ -427,9 +429,11 @@ public class FairShareAllocator(
 
     /**
      * Whether [edge] wakes: demanding now, and last observed not demanding. Or, never observed at
-     * all, seated, demanding and below zero (#3353 review, item B). A rebase never takes a child that
-     * kept demanding below zero, so one there has been idle while this allocator was not watching it,
-     * a restarted `HeddleNode` say, and clamping it costs it at most turns, never credit (§10.6).
+     * all, seated, demanding and below zero (#3353 review, item B). A pick's rebase never takes a
+     * child it saw demanding below zero. One there was idle while this allocator was not watching
+     * it, a restarted `HeddleNode` say, or was carried down by a `LocalHeddle` charging call's rebase
+     * while nobody had observed it at all. Clamping it costs it at most turns, the lag it had,
+     * never credit (§10.6).
      */
     private fun isWaker(edge: PolicyEdge): Boolean {
         if (!HeddlePolicy.isDemanding(edge)) return false

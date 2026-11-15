@@ -400,7 +400,9 @@ public sealed interface LeaseOutcome {
  * (#3360). A charging call, [admit], [extend] or an overrun at [complete], runs the same step at
  * every parent on its path, so a parent driven only that way is rebased too. It is still reachable
  * where no whole step fits: a demanding child sits at zero and is never served, which holds the
- * rebase at nothing, or a weight set is so fine-grained that one step spans a child's threshold.
+ * rebase at nothing; a child a pick last saw demanding, idle since, does the same for a plain
+ * [admit]'s rebase until a pick sees it again; or a weight set is so fine-grained that one step
+ * spans 16 times a child's threshold.
  *
  * Nothing is narrowed before the effective position a pick orders, so a seat or a wake clamp
  * taken against a front that includes a position at its ceiling is taken against the exact front,
@@ -579,7 +581,7 @@ public class LocalHeddle private constructor(
         if (!rebaseForTest) return ledger
         var local = ledger
         for (edge in path) {
-            val parent = local.record(edge)?.parent ?: continue
+            val parent = checkNotNull(local.record(edge)) { "charged path edge ${edge.value} has no record" }.parent
             val rebase = allocator.chargeRebase(parent, local, waiting, charged = edge) ?: continue
             allocator.adopt(rebase)
             local = rebase.ledger

@@ -232,10 +232,11 @@ public object HeddlePolicy {
      * gauge to a pick (#3353).
      *
      * The low end saturates on the **penalty** side, raising the position, and never refuses. A
-     * demanding child the allocator has watched is never below zero: no rebase takes it there, and a
-     * wake clamps it to the front. One it has not watched, seated and below zero, is clamped as a
-     * waker too ([FairShareAllocator]). So only a child that is not demanding, which no pick orders,
-     * can be down there, and a position raised for a child that cannot win costs nothing.
+     * demanding child a pick saw is never below zero: no pick's rebase takes it there, and a wake
+     * clamps it to the front. One the allocator never saw, seated and below zero, whether idle or
+     * carried down by a `LocalHeddle` charging call's rebase, is clamped as a waker
+     * ([FairShareAllocator]). So only a child that is not demanding, which no pick orders, can be down
+     * there, and a position raised for a child that cannot win costs nothing.
      */
     internal fun effectiveTicks(edge: PolicyEdge): Long {
         val wide = effectiveTicksWide(edge)
