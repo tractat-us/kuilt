@@ -31,6 +31,14 @@ import kotlin.test.assertTrue
  * it was taken from keeps running beside the restored one for [RESTORE_WINDOW] picks, which must
  * match: a raised fold and an absorbed offset survive the round trip.
  *
+ * The twin is also the step B engine (design §7.1, *Future: positions with no origin*, slice 1):
+ * with the rebase off it never raises an origin. So every driver here that rebases runs one, and
+ * asserts beside the picks that the twin raised no origin, that the rebasing side landed no joiner
+ * at its floor and clamped no never-observed child below zero, the only two causes the design lets
+ * the two differ by, and, where the run is long enough, that the twin's positions passed `2⁶³`
+ * ticks. The returned-lane driver has no twin: one lane asks and nets one unit a pick, so it never
+ * rebases and a twin would run the same code.
+ *
  * The generator walks only [List]s it built itself, in declaration order, so the same seed takes
  * the same trajectory on every target.
  */
@@ -61,9 +69,13 @@ class LocalHeddleRebasePropertyTest {
         var besidePicks = 0
         val divergences = ArrayList<String>()
         var highestShare = 0.0
+        var floorLandings = 0
+        var unobservedBelowZero = 0
+        var twinPeak = Int128.ZERO
 
         for (step in 0 until PICKS) {
             val waiting = leaves.filter { random.nextBoolean() }.ifEmpty { listOf(leaves[random.nextInt(leaves.size)]) }.toSet()
+            unobservedBelowZero += neverObservedBelowZero(engine, waiting)
             val partial = step % PARTIAL_EVERY == 0
             val askUnreachable = step % UNREACHABLE_EVERY == 0
             val running = listOfNotNull(engine, beside, twin)
@@ -105,6 +117,7 @@ class LocalHeddleRebasePropertyTest {
 
             if (step % SAMPLE_EVERY == 0) {
                 highestShare = maxOf(highestShare, highestCeilingShare(engine))
+                twinPeak = maxOf(twinPeak, peakEffectiveTicksAnywhere(twin))
                 if (twinPassedAt < 0 && highestCeilingShare(twin) >= 1.0) {
                     twinPassedAt = step
                     rebasesBeforeTwinPassed = rebases + engine.rebasesForTest
@@ -112,6 +125,7 @@ class LocalHeddleRebasePropertyTest {
             }
             if (step == PICKS / 2) {
                 rebases += engine.rebasesForTest
+                floorLandings += engine.floorLandingsForTest
                 val bytes = Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), engine.persist())
                 val decoded = LocalHeddle.decode(bytes, Cbor)
                 check(decoded is RestoreResult.Restored) { "the snapshot did not decode: $decoded" }
@@ -121,6 +135,7 @@ class LocalHeddleRebasePropertyTest {
             }
         }
         rebases += engine.rebasesForTest
+        floorLandings += engine.floorLandingsForTest
         highestShare = maxOf(highestShare, highestCeilingShare(engine))
 
         assertAll(
@@ -136,6 +151,12 @@ class LocalHeddleRebasePropertyTest {
             { assertTrue(rebases > rebasesBeforeTwinPassed, "and kept rebasing after: $rebases in all") },
             { assertEquals(PICKS, twinPicks, "the twin picked every step, past its ceiling too") },
             { assertEquals(emptyList<String>(), divergences, "every pick matched the twin's, and the restored engine's its origin's") },
+            // The step B twin (#3472, slice 1): the twin never raised an origin and its positions
+            // passed 2⁶³ ticks, and the rebasing side met neither cause the design lets it differ by.
+            { assertEquals(emptyMap(), raisedOrigins(twin.snapshot().ledger), "the twin never raised an origin") },
+            { assertTrue(twinPeak >= LONG_LIMIT_TICKS, "the rig: the twin's positions passed 2⁶³ ticks ($twinPeak)") },
+            { assertEquals(0, floorLandings, "the rebasing side landed no joiner at its floor") },
+            { assertEquals(0, unobservedBelowZero, "the rebasing side clamped no never-observed child below zero") },
             // Rebased at a sixteenth of the ceiling, a position stays far below it.
             { assertTrue(highestShare < MAX_SHARE, "the highest effective position reached ${highestShare * 100}% of its ceiling") },
         )
@@ -158,9 +179,13 @@ class LocalHeddleRebasePropertyTest {
         var picks = 0
         var twinPicks = 0
         val divergences = ArrayList<String>()
+        var unobservedBelowZero = 0
+        var twinPeak = Int128.ZERO
 
         for (step in 0 until RETURN_PICKS) {
             val waiting = lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }.toSet()
+            unobservedBelowZero += neverObservedBelowZero(engine, waiting)
+            if (step % SAMPLE_EVERY == 0) twinPeak = maxOf(twinPeak, peakEffectiveTicksAnywhere(twin))
             val cancel = step % 4 == 0
             val running = listOf(engine, twin)
             val outcomes = running.map { e ->
@@ -185,6 +210,12 @@ class LocalHeddleRebasePropertyTest {
             { assertTrue(engine.rebasesForTest >= 1, "the run rebased: ${engine.rebasesForTest}") },
             { assertEquals(RETURN_PICKS, twinPicks, "and so did the twin") },
             { assertEquals(emptyList<String>(), divergences, "every pick matched the twin's") },
+            { assertEquals(emptyMap(), raisedOrigins(twin.snapshot().ledger), "the twin never raised an origin") },
+            // Not long enough for the twin to pass 2⁶³ ticks: its leases are a quarter of the largest
+            // and half of each comes back, so its peak reaches about 1.4 · 10¹⁸ (JVM). Read, not asserted.
+            { assertTrue(twinPeak > Int128.ZERO, "the twin climbed ($twinPeak)") },
+            { assertEquals(0, engine.floorLandingsForTest, "the rebasing side landed no joiner at its floor") },
+            { assertEquals(0, unobservedBelowZero, "the rebasing side clamped no never-observed child below zero") },
         )
     }
 
@@ -243,24 +274,41 @@ class LocalHeddleRebasePropertyTest {
             lane("w10", Weight.of(10L))
             lane("w1", Weight.ONE)
         }
-        val engine = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply { reconcileCapacity(1L) }
+        fun boot() = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply { reconcileCapacity(1L) }
+        val engine = boot()
+        // The step B twin (#3472, slice 1): the same calls, the rebase off.
+        val twin = boot().apply { rebaseForTest = false }
         val lanes = listOf("w60", "w30", "w10", "w1").map { topology.groupId(it) }
         val random = Random(3313)
         var picks = 0
         var peak = 0.0
+        var twinPeak = Int128.ZERO
+        var unobservedBelowZero = 0
+        val divergences = ArrayList<String>()
         repeat(WIDE_PICKS) { step ->
             // The light lane alone first, long enough to climb toward its own threshold; then any set.
             val waiting = if (step < WIDE_ALONE) setOf(lanes[3]) else lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }.toSet()
-            val outcome = engine.acquire(waiting, waiting, startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
-            check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
-            if (step % 4 == 0) engine.cancel(outcome.lease.id) else engine.complete(outcome.lease.id, actualCost = LocalHeddle.MAX_RESERVATION / 2, waiting = emptySet())
+            unobservedBelowZero += neverObservedBelowZero(engine, waiting)
+            val leaves = listOf(engine, twin).map { e ->
+                val outcome = e.acquire(waiting, waiting, startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
+                check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
+                if (step % 4 == 0) e.cancel(outcome.lease.id) else e.complete(outcome.lease.id, actualCost = LocalHeddle.MAX_RESERVATION / 2, waiting = emptySet())
+                outcome.lease.leaf
+            }
+            if (leaves[0] != leaves[1] && divergences.size < MAX_REPORTED) divergences += "pick ${step + 1}: ${leaves[0].value} against the twin's ${leaves[1].value}"
             picks++
             peak = maxOf(peak, peakShare(engine))
+            if (step % SAMPLE_EVERY == 0) twinPeak = maxOf(twinPeak, peakEffectiveTicksAnywhere(twin))
         }
         assertAll(
             { assertEquals(WIDE_PICKS, picks, "every step made one pick") },
             { assertTrue(engine.rebasesForTest >= 1, "the rig: the run rebased (${engine.rebasesForTest})") },
             { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
+            { assertEquals(emptyList<String>(), divergences, "every pick matched the twin's") },
+            { assertEquals(emptyMap(), raisedOrigins(twin.snapshot().ledger), "the twin never raised an origin") },
+            { assertTrue(twinPeak >= LONG_LIMIT_TICKS, "the rig: the twin's positions passed 2⁶³ ticks ($twinPeak)") },
+            { assertEquals(0, engine.floorLandingsForTest, "the rebasing side landed no joiner at its floor") },
+            { assertEquals(0, unobservedBelowZero, "the rebasing side clamped no never-observed child below zero") },
         )
     }
 
@@ -277,28 +325,54 @@ class LocalHeddleRebasePropertyTest {
             lane("a", Weight.ONE)
             lane("b", Weight.ONE)
         }
-        val engine = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply { reconcileCapacity(1L) }
+        fun boot() = LocalHeddle.bootWhole(topology, LocalPolicy(defaultReservation = 1L), epoch = 1L).apply { reconcileCapacity(1L) }
+        val engine = boot()
+        // The step B twin (#3472, slice 1): the same calls, the rebase off. Nothing here picks, so
+        // the two are compared on what a pick would do next: a preview of [PREVIEWED] picks with
+        // both lanes waiting, after every lease.
+        val twin = boot().apply { rebaseForTest = false }
         val a = topology.groupId("a")
+        val both = setOf(a, topology.groupId("b"))
         var leases = 0
         var extended = 0
         var peak = 0.0
+        var twinPeak = Int128.ZERO
+        var unobservedBelowZero = 0
+        var previewed = 0
+        val divergences = ArrayList<String>()
         repeat(CHARGED_LEASES) { step ->
-            val admitted = engine.admit(a, waiting = setOf(a), startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
-            check(admitted is AcquireOutcome.Acquired) { "lease ${step + 1}: expected a lease, got $admitted" }
-            if (step % 3 == 0) {
-                val out = engine.extend(admitted.lease.id, LocalHeddle.MAX_RESERVATION, waiting = emptySet())
-                check(out is LeaseOutcome.Done) { "lease ${step + 1}: extend answered $out" }
-                extended++
+            unobservedBelowZero += neverObservedBelowZero(engine, setOf(a))
+            for (e in listOf(engine, twin)) {
+                val admitted = e.admit(a, waiting = setOf(a), startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
+                check(admitted is AcquireOutcome.Acquired) { "lease ${step + 1}: expected a lease, got $admitted" }
+                if (step % 3 == 0) {
+                    val out = e.extend(admitted.lease.id, LocalHeddle.MAX_RESERVATION, waiting = emptySet())
+                    check(out is LeaseOutcome.Done) { "lease ${step + 1}: extend answered $out" }
+                    if (e === engine) extended++
+                }
+                e.complete(admitted.lease.id, actualCost = LocalHeddle.MAX_RESERVATION, waiting = emptySet())
             }
-            engine.complete(admitted.lease.id, actualCost = LocalHeddle.MAX_RESERVATION, waiting = emptySet())
             leases++
             peak = maxOf(peak, peakShare(engine))
+            if (step % SAMPLE_EVERY == 0) {
+                val next = listOf(engine, twin).map { it.previewPicks(both.associateWith { PREVIEWED }, both, List(PREVIEWED) { LocalHeddle.MAX_RESERVATION }) }
+                previewed += next[0].size
+                if (next[0] != next[1] && divergences.size < MAX_REPORTED) divergences += "after lease ${step + 1}: ${next[0]} against the twin's ${next[1]}"
+                twinPeak = maxOf(twinPeak, peakEffectiveTicksAnywhere(twin))
+            }
         }
+        twinPeak = maxOf(twinPeak, peakEffectiveTicksAnywhere(twin))
         assertAll(
             { assertEquals(CHARGED_LEASES, leases, "every step admitted and completed one lease") },
             { assertTrue(extended > 0, "the rig: leases were extended") },
             { assertTrue(engine.rebasesForTest >= 1, "the rig: the parent rebased (${engine.rebasesForTest})") },
             { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
+            { assertEquals(PREVIEWED * (CHARGED_LEASES / SAMPLE_EVERY), previewed, "the rig: every preview picked its full count") },
+            { assertEquals(emptyList<String>(), divergences, "every preview matched the twin's") },
+            { assertEquals(emptyMap(), raisedOrigins(twin.snapshot().ledger), "the twin never raised an origin") },
+            { assertTrue(twinPeak >= LONG_LIMIT_TICKS, "the rig: the twin's positions passed 2⁶³ ticks ($twinPeak)") },
+            { assertEquals(0, engine.floorLandingsForTest, "the rebasing side landed no joiner at its floor") },
+            { assertEquals(0, unobservedBelowZero, "the rebasing side clamped no never-observed child below zero") },
         )
     }
 
@@ -358,6 +432,9 @@ class LocalHeddleRebasePropertyTest {
 
         /** Leases the charge-only run admits: past the 2¹⁵ that took a weight-1 lane to its ceiling. */
         const val CHARGED_LEASES = 40_000
+
+        /** Picks each preview of the charge-only run looks ahead. */
+        const val PREVIEWED = 4
 
         /** Picks the 60/30/10/1 run makes, and the first of them its light lane makes alone. */
         const val WIDE_PICKS = 30_000

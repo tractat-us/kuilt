@@ -25,6 +25,25 @@ internal fun peakEffectiveTicks(ledger: EntitlementLedger, wakeOffsets: Map<Atta
         effectiveTicks(ledger, wakeOffsets, child.attachment)
     }.maxOrNull()
 
+/** [peakEffectiveTicks] under every parent in [ledger]: the highest effective position anywhere, or zero. */
+internal fun peakEffectiveTicksAnywhere(ledger: EntitlementLedger, wakeOffsets: Map<AttachmentId, Int128>): Int128 =
+    ledger.allEdges().mapNotNull { ledger.record(it)?.parent }.toSet()
+        .mapNotNull { peakEffectiveTicks(ledger, wakeOffsets, it) }.maxOrNull() ?: Int128.ZERO
+
+/** [peakEffectiveTicksAnywhere] on [engine]'s current state. */
+internal fun peakEffectiveTicksAnywhere(engine: LocalHeddle): Int128 =
+    peakEffectiveTicksAnywhere(engine.snapshot().ledger, engine.allocator.memory.wakeOffsets)
+
+/**
+ * [neverObservedBelowZero] on [engine] before a call whose waiting set is [waiting]: an edge is
+ * demanding when a waiting group sits at or beneath its child.
+ */
+internal fun neverObservedBelowZero(engine: LocalHeddle, waiting: Set<GroupId>): Int {
+    val ledger = engine.snapshot().ledger
+    val demanding = waiting.flatMapTo(HashSet()) { leaf -> ledger.lineageOf(leaf).orEmpty().mapNotNull { ledger.record(it)?.child } }
+    return neverObservedBelowZero(ledger, engine.allocator) { it.child in demanding }.size
+}
+
 /** [edge]'s effective position in ticks, or `null` when it is not seated. */
 private fun effectiveTicks(ledger: EntitlementLedger, wakeOffsets: Map<AttachmentId, Int128>, edge: AttachmentId): Int128? {
     val gauge = ledger.gauge(edge) ?: return null
