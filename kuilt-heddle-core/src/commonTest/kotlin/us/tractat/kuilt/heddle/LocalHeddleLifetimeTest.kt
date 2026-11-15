@@ -334,6 +334,28 @@ class LocalHeddleLifetimeTest {
     }
 
     /**
+     * An overrun every edge has room for, which the root cannot fund in whole within `Long`: it is
+     * recorded nowhere, not minted in part, and the minted supply does not move.
+     */
+    @Test
+    fun anOverrunTheRootCannotFundInWholeIsUnrecorded() {
+        val h = engine()
+        val overrun = 1L shl 21
+        h.spendAway(Long.MAX_VALUE - (1L shl 20) - h.minted(), lanes = b to y)
+        val lease = h.lease(setOf(a), reservation = R)
+        val minted = h.minted()
+        val held = h.state().ledger.holdings(root, LOCAL)
+        val done = h.complete(lease.id, actualCost = R + overrun, waiting = emptySet())
+        assertAll(
+            { assertTrue(chargeFits(h.issued(h.path(a).single()), overrun), "the rig: a's edge has room") },
+            { assertTrue(!chargeFits(minted, overrun - held), "the rig: the root cannot mint the shortfall: $minted, holding $held") },
+            { assertEquals(LeaseOutcome.Done(charged = R, overrun = overrun, unrecorded = overrun), done) },
+            { assertEquals(minted, h.minted(), "nothing was minted") },
+            { assertEquals(emptyList(), h.state().ledger.validate()) },
+        )
+    }
+
+    /**
      * `complete(lease, Long.MAX_VALUE)` on an engine that has served one other lease: the overrun
      * cannot be funded within `Long`, so it is recorded nowhere, the lease closes, and the next
      * acquire leases. The engine carries on.
