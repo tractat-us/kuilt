@@ -22,9 +22,12 @@ name: apple-nightly
 #   standard runners (macos-latest included) are free at every size; there is no
 #   billing multiplier to appeal to, and an earlier version of this comment claiming
 #   "~10x Linux" was simply wrong. The real ceiling is that GitHub caps a plan at
-#   FIVE concurrent macOS jobs regardless of visibility. ci.yml fires ~25 runs/hour
-#   and this job takes ~11.5 min, so putting the Apple lane on every PR would sit
-#   permanently at that cap and queue every merge behind it.
+#   FIVE concurrent macOS jobs regardless of visibility. ci.yml fires ~25 runs/hour.
+#   On green scheduled `main` runs from Oct 26 to Nov 13 2026 the Apple tests took
+#   15-54 min as one job, and on Nov 14 and 15 they hit its 60-min limit (#3115).
+#   Putting that lane on every PR would sit permanently at the cap and queue every
+#   merge behind it. A scheduled run fills the cap on its own: the two `apple`
+#   targets, `apple-extras`, `abi` and `webkit` are five macOS jobs at 07:00.
 #
 #   The same reasoning makes this lane the home for the `:spike` compile (#1796):
 #   :spike is Apple-only and depends on the cinterop-bearing :kuilt-nw, so it needs
@@ -67,11 +70,28 @@ jobs:
   # Compiles and RUNS the Apple K/N test targets on a real macOS arm64 runner —
   # the executions ci.yml's ubuntu build-native can only skip. Standalone: no
   # dependency on ci.yml, not referenced by ci-required.
+  #
+  # ONE JOB PER TARGET (#3115). Until Nov 15 2026 both targets ran one after the other in one job,
+  # with the stamp-invariance, :spike and bridge steps behind them, under a single 60-min limit.
+  # Three scheduled runs in a row then timed out. The cause was test growth in one module:
+  # :kuilt-heddle-core's K/N tests went from 0 to 32 min per target (601 tests, macosArm64,
+  # run 43688308596) between Nov 13 and 15. On this 3-vCPU runner at --max-workers=2 that left
+  # the test step needing an estimated 75-85 min. Split per target, each leg pays for one target's
+  # compile and tests, and gets its own 60 minutes. The steps that are not tests moved to
+  # `apple-extras`, so they no longer eat into a test budget either.
+  #
+  # `fail-fast: false` and `--continue` for the same reason: one red must not hide the rest. In
+  # run 43736319946 a single macOS failure stopped Gradle, and iosSimulatorArm64Test never ran.
   apple:
     # A dispatch with update_abi wants the dumps, not the tests, so this job sits it out.
     if: ${{ !inputs.update_abi && !inputs.webkit_only }}
+    name: apple (${{ matrix.target }})
     runs-on: macos-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [macosArm64, iosSimulatorArm64]
     steps:
       - uses: actions/checkout@v7
 
@@ -100,6 +120,12 @@ jobs:
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
           restore-keys: konan-${{ runner.os }}-
 
+      # The load sample comes before the tests, so a run that times out mid-test still carries it.
+      - name: Runner sample
+        run: >-
+          echo "Runner: $(sysctl -n hw.ncpu 2>/dev/null || echo '?') vCPU,
+          $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 )) GB — $(uptime || true)"
+
       # Resource caps — the arm64 macos-latest runner is the SMALLEST in the fleet
       # (3 vCPU / 7 GB), and without these this lane has never been green (#1299).
       # gradle.properties is tuned for a workstation: org.gradle.workers.max=16 and
@@ -115,9 +141,67 @@ jobs:
       # ci.yml's 2-on-4 ratio) and CI-only daemon-heap caps drop the resident floor
       # (2g+3g = 5 GB, leaving headroom for the OS, test binaries, and simulator on
       # 7 GB; the Kotlin daemon keeps the larger share — K/N compilation lives there).
-      - name: macOS + iOS-sim K/N tests
+      - name: ${{ matrix.target }} K/N tests
         run: >-
-          ./gradlew macosArm64Test iosSimulatorArm64Test --max-workers=2
+          ./gradlew ${{ matrix.target }}Test --continue --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      # Per-module wall time for every test task, in the run's summary, with a warning on any task
+      # over 15 min. One module's tests reached 32 min per target without a word until the job
+      # timed out (#3115). `always()` so a red or timed-out run reports too; it never fails.
+      - name: Test-task durations
+        if: always()
+        run: python3 .github/scripts/test-durations.py --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-apple-${{ matrix.target }}
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+
+  # ── apple-extras ─────────────────────────────────────────────────────────
+  # The macOS checks that are not the K/N test runs: stamp invariance on the Apple targets, the
+  # :spike compile and the JVM bridge tests. Until #3115 they ran behind both test targets in
+  # `apple` and shared its 60 minutes. Here they have their own, and a slow test task cannot
+  # starve them. Same runner and the same resource caps as `apple`.
+  apple-extras:
+    if: ${{ !inputs.update_abi && !inputs.webkit_only }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      # JDK 25 floor on aarch64, as in the `apple` job (#1597).
+      - name: Set up JDK 25
+        uses: actions/setup-java@v6
+        with:
+          java-version: '25.0.5+8.0.LTS'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      - name: Cache Kotlin/Native (~/.konan)
+        uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      # The stamp-invariance check needs a first pass at the default version, so that every task it
+      # selects has history to be up to date against. In `apple` that pass was the test run. Here
+      # it is the selection itself: every macosArm64 and iosSimulatorArm64 compilation, main and
+      # test, and no links or test runs.
+      - name: Compile the Apple targets (stamp-invariance first pass)
+        run: >-
+          ./gradlew stampProbeTargets -Pkuilt.stampProbe.family=apple --continue --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
@@ -126,7 +210,7 @@ jobs:
       # different -Pversion, failing on any that re-ran outside the allowlist. A klib carries every
       # literal, so on native a dependency on :kuilt-base recompiles on every snapshot. Same daemon
       # arguments as above so the warm daemon is reused. `!cancelled()`, like the spike step: a
-      # test failure above must not hide a leak.
+      # compile failure above must not hide a leak.
       - name: Stamp invariance on Apple native (#3464)
         if: ${{ !cancelled() }}
         run: >-
@@ -147,15 +231,15 @@ jobs:
       # the case where kuilt code changes and spike/ does not. That case lands here,
       # within 24 h, and the alert step below turns a red run into a tracking issue.
       #
-      # Marginal cost is near zero: this runner is already up with a warm konan cache,
-      # and the macosArm64/iosSimulatorArm64 dependency klibs are already built by the
-      # step above. Compile only — no tests (there are none), no framework link, no
-      # Xcode app target (that one genuinely needs signing, which is why :spike was
-      # excluded in the first place).
+      # Marginal cost is small: this runner is already up with a warm konan cache, and
+      # the macosArm64/iosSimulatorArm64 dependency klibs are already built by the
+      # first-pass compile above. Compile only — no tests (there are none), no framework
+      # link, no Xcode app target (that one genuinely needs signing, which is why :spike
+      # was excluded in the first place).
       #
-      # `!cancelled()` rather than the default success(): a K/N test failure above must
-      # not hide a spike break, and a spike break must not hide the test results. Both
-      # signals are independent and both feed the same failure alert.
+      # `!cancelled()` rather than the default success(): a compile or stamp failure above
+      # must not hide a spike break. The signals are independent and all feed the same
+      # failure alert.
       - name: Compile :spike for its Apple targets (#1796)
         if: ${{ !cancelled() }}
         run: >-
@@ -182,12 +266,22 @@ jobs:
       # verified from the task graph, not assumed, because a dylib that never reaches the test
       # classpath would make this step skip on macOS too and re-buy the same false green.
       #
-      # LAST among the work steps deliberately. The K/N *release* shared link is the one cost this
-      # lane has never paid, so if it ever threatens the 60-minute timeout it must starve neither
-      # the K/N test executions nor the :spike compile — both established signals, both above.
-      # `!cancelled()` for the same reason those two carry it: the three signals are independent.
-      # Non-gating like everything here (5-concurrent-macOS-job cap, see the header); the alert
-      # step below turns a red scheduled run into a tracking issue.
+      # LAST among this job's work steps deliberately. The K/N *release* shared link is the one
+      # cost it adds, so if it ever threatens the 60-minute timeout it must not starve the stamp
+      # check or the :spike compile above. `!cancelled()` for the same reason those carry it: the
+      # signals are independent. Non-gating like everything here (5-concurrent-macOS-job cap, see
+      # the header); the alert job below turns a red scheduled run into a tracking issue.
+      #
+      # #2466's interim rule: a :kuilt-nw conformance verdict without a load sample is
+      # uninterpretable. This suite's whole subject is a real socket on real GCD queues, and this
+      # runner is measured 10-20x slower than a dev Mac. So the sample is taken just before the
+      # suite runs, and a failing or timed-out run carries it. Never fatal.
+      - name: Runner sample before the bridge tests
+        if: ${{ !cancelled() }}
+        run: >-
+          echo "Runner: $(sysctl -n hw.ncpu 2>/dev/null || echo '?') vCPU,
+          $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 )) GB — $(uptime || true)"
+
       - name: JVM bridge tests on a real macOS host (#2487)
         if: ${{ !cancelled() }}
         run: >-
@@ -205,13 +299,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          # #2466's interim rule: a :kuilt-nw conformance verdict without a load sample is
-          # uninterpretable — this suite's whole subject is a real socket + real GCD queues, and
-          # this lane's header records a measured 10-20x wall-clock slowdown on this runner. Emit
-          # it BEFORE the assertions so a FAILING run carries it too, which is when it is needed.
-          # Never fatal: a missing sample must not be what turns the lane red.
-          echo "Runner: $(sysctl -n hw.ncpu 2>/dev/null || echo '?') vCPU, \
-          $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 )) GB — $(uptime || true)"
           XML=kuilt-nw/build/test-results/jvmTest/TEST-us.tractat.kuilt.nw.NwBridgeLoopbackConformanceTest.xml
           if [ ! -f "$XML" ]; then
             echo "::error::$XML is absent — the bridge conformance suite did not run at all."
@@ -235,10 +322,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: test-reports-apple
+          name: test-reports-apple-extras
           path: |
-            **/build/reports/tests/
-            **/build/test-results/
+            build/stamp-probe/
+            kuilt-nw/build/reports/tests/
+            kuilt-nw/build/test-results/
 
   # ── abi ──────────────────────────────────────────────────────────────────
   # The macOS half of the ABI gate (#2684). ci.yml's build-jvm runs `checkKotlinAbi` on every PR
@@ -250,8 +338,8 @@ jobs:
   # target, JVM and Android included: here, so their drift surfaces within 24 h of the merge that
   # caused it.
   #
-  # A separate job, not a step of `apple`: that job already spends 25-55 min of its 60-min budget,
-  # and the dump compiles every target of every module. Out of band like the rest of this file.
+  # A separate job, not a step of `apple`: the dump compiles every target of every module, and an
+  # `apple` leg has its own tests to fit in 60 min. Out of band like the rest of this file.
   #
   # On a red check, or on a dispatch with update_abi, it runs `updateKotlinAbi` and uploads the
   # result as the `abi-dumps` artifact. To refresh: download that artifact over the repo root, read
@@ -316,7 +404,7 @@ jobs:
   #
   # Why here and not ci.yml: the task exists only under -Pidentity.webkit.tests=true, and it runs on
   # macOS because that is the WebKit build #3232 measured against real Safari. Its own job, not a
-  # step of `apple`, because it needs no Kotlin/Native and `apple` already spends most of its hour.
+  # step of `apple`, because it needs no Kotlin/Native and each `apple` leg has its own tests to fit.
   # Out of band like the rest of this file; the alert job below turns a red scheduled run into an
   # issue.
   webkit:
@@ -392,8 +480,8 @@ jobs:
   # Idempotent by exact title; best-effort — the failed jobs are the signal
   # that matters, so the alert never fails the run further. Scheduled runs
   # only: a red workflow_dispatch on a topic branch is the dispatcher's
-  # business, not a main-lane breakage. Its own job, so a red `apple`, a red
-  # `abi` and a red `webkit` each raise it.
+  # business, not a main-lane breakage. Its own job, so a red `apple` leg, a red
+  # `apple-extras`, a red `abi` and a red `webkit` each raise it.
   #
   # A job that hits its `timeout-minutes` ends `cancelled`, not `failure`, and `failure()` is false
   # for it — so under `if: failure()` the three timed-out `apple` runs of Nov 14-15 skipped this job
@@ -401,7 +489,7 @@ jobs:
   # `always()` so the implicit `success()` does not gate it. The cost: a human cancelling a scheduled
   # run also raises the issue, which is cheap to close and far rarer than a timeout.
   alert:
-    needs: [apple, abi, webkit]
+    needs: [apple, apple-extras, abi, webkit]
     if: >-
       ${{ always() && github.event_name == 'schedule'
       && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
@@ -420,6 +508,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMIT_SHA: ${{ github.sha }}
           APPLE_RESULT: ${{ needs.apple.result }}
+          EXTRAS_RESULT: ${{ needs.apple-extras.result }}
           ABI_RESULT: ${{ needs.abi.result }}
           WEBKIT_RESULT: ${{ needs.webkit.result }}
         run: |
@@ -430,11 +519,13 @@ jobs:
 
           - Failing run: ${RUN_URL}
           - Commit: ${COMMIT_SHA}
-          - Jobs: apple=${APPLE_RESULT}, abi=${ABI_RESULT}, webkit=${WEBKIT_RESULT}
+          - Jobs: apple=${APPLE_RESULT}, apple-extras=${EXTRAS_RESULT}, abi=${ABI_RESULT}, webkit=${WEBKIT_RESULT}
 
           A \`cancelled\` job on a scheduled run almost always hit its \`timeout-minutes\`, so its tests never finished: no verdict, not a pass.
 
-          A red \`apple\` job means the Apple K/N tests failed. This is the ONLY lane that executes them (ci-required's ubuntu build skips them), so Apple-target regressions are invisible until this is green again. Its test reports are attached to the run as the \`test-reports-apple\` artifact.
+          A red \`apple\` job means the Apple K/N tests failed in at least one of its two legs, \`macosArm64\` and \`iosSimulatorArm64\`; the run page says which. This is the ONLY lane that executes them (ci-required's ubuntu build skips them), so Apple-target regressions are invisible until this is green again. Each leg's reports are attached as \`test-reports-apple-<target>\`, and its run summary has a per-module duration table.
+
+          A red \`apple-extras\` job means stamp invariance on the Apple targets (#3464), the \`:spike\` compile (#1796) or the JVM bridge tests on macOS (#2487) failed. The step that failed says which. Its reports are in \`test-reports-apple-extras\`.
 
           A red \`abi\` job means the public ABI on macOS no longer matches the committed dumps (#2684). The run carries the regenerated dumps as the \`abi-dumps\` artifact: unpack it over the repo root, read the diff, and commit it if the change was meant.
 
