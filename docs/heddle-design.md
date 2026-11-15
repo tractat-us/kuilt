@@ -1164,7 +1164,7 @@ position does not show. That is credit, the favour side, and it cannot be
 spent on a pick: the only way to spend it is an `acquire` across the full
 edge, which is refused. It reaches one place, the parent's net-service clock,
 which runs short by the overrun, so a sibling returning there comes back that
-much less moved. A draining path has the same effect today.
+much less moved. Slice 7 measures that, and the same read on a draining path.
 
 *What the headroom promises.* Unconditionally: no call throws or wraps at a
 lifetime counter, an `acquire` never leaves one past the watermark, and
@@ -1274,6 +1274,39 @@ that means two layouts is how a snapshot gets misread, so it is refused.
   dropped, and a returner's shift removed.
 - **The pick goldens do not move.** `HeddlePolicyGoldenVectorTest` and
   `HeddlePolicyOracleTest` pass unchanged through every slice.
+- **The lifetime limit (slice 7).** Every row rigs a counter and asserts the
+  value it rigged before it acts, so a rig that missed fails. On JVM,
+  `macosArm64` and `wasmJs`, read as a union.
+  - Both sides of the watermark, for an edge and for the root's supply: one
+    unit under it `acquire` leases, at it `acquire` answers
+    `LifetimeExhausted`, and the ledger and the open leases are equal before
+    and after. The supply row holds its total in two epochs' records.
+  - A leaf edge rigged full under a parent with room: the refusal names that
+    parent, and its sibling is leased when it alone is eligible.
+  - In the headroom, `admit`, `extend` and an overrunning `complete` land in
+    full: `unrecorded` is zero and the counter is past the watermark after.
+  - A charge that does not fit. An overrun above a full edge is charged at
+    the group above it, that edge's issuance does not move, and `validate()`
+    is empty. `complete(lease, Long.MAX_VALUE)` on a fresh engine closes the
+    lease, reports the overrun as `unrecorded`, and the next `acquire` leases.
+    An `extend` reserves nothing and says so. An `admit` opens at zero and
+    completes.
+  - A seeded driver near both limits, with overruns up to `Long.MAX_VALUE`:
+    no call throws, `validate()` is empty after each, and what was recorded
+    plus what was reported adds up to what was charged. It sorts what it
+    walks (#2592).
+  - `HeddleNode.schedule` at the watermark answers `LifetimeExhausted` and
+    publishes nothing, and after grants answers `Delegated` and then the
+    refusal. Two peers that each grant under their own view merge past the
+    watermark, and every read still answers.
+  - The run measured above, two lanes at the largest lease, ends in the typed
+    refusal at the count the watermark gives, and never throws.
+  - Mutations that must red: the check comparing the counter and not the
+    counter plus the reservation; reading base issuance, not effective, on a
+    relocated edge; reading this epoch's mint and not the sum; the check
+    applied to a charging call; a charge tested against the watermark and not
+    `Long.MAX_VALUE`; a charge recorded in part; the room test dropped for the
+    edges above the leaf; `unrecorded` reported as zero.
 
 **Slices,** in order, one behaviour move each. Each carries its own docs.
 
@@ -1302,11 +1335,17 @@ that means two layouts is how a snapshot gets misread, so it is refused.
 6. **`VirtualTime` is the public read.** Deletes `inWindow`, `readVirtual`,
    `ticksToVirtual` and `peakPositionFraction`. Docs: §11,
    `docs/agent-cookbook/heddle.md`, `Writerside/topics/heddle-local-turns.md`.
-7. **`LifetimeExhausted` for `PositionCeiling`.** The typed arm and its one
-   pre-check, asked where the ceiling was asked. Retires
-   `LocalHeddlePositionCeilingTest` for its lifetime twin. Docs: §7.1, §10.12,
-   the cookbook, both `module.md`s, `Writerside/topics/heddle-local-turns.md`.
-   #3458 is then no longer a limit.
+7. **The lifetime limit (#3475).** `LIFETIME_HEADROOM` and the watermark
+   check on `acquire` and `schedule`; the whole-or-nothing rule on `admit`,
+   `extend` and `complete`; `LeaseOutcome.Done.unrecorded`. Three
+   `PositionCeiling` arms are renamed `LifetimeExhausted` (`AcquireOutcome`,
+   `WaitExplanation`, and `AllocationOutcome` with `ScheduleOutcome`), and
+   `LeaseOutcome`'s is deleted. The types hold the ruling: with no lifetime arm
+   on `LeaseOutcome` or `AdmitOutcome`, a charging call cannot refuse for it,
+   and `unrecorded` has no default. Retires `LocalHeddlePositionCeilingTest`
+   for its lifetime twin. Docs: §7.1, §10.12, the cookbook, both `module.md`s,
+   `Writerside/topics/heddle-local-turns.md`. #3458 is then a use of the
+   headroom, not a limit of its own.
 
 Slice 2 goes first so that slice 3 leaves the restarted scheduler's row green.
 Slice 4 follows 3. Slices 5, 6 and 7 follow 3 and do
@@ -1343,11 +1382,38 @@ not depend on each other.
 - W1 in place of P1′'s lease clause, `LifetimeExhausted` in place of
   `PositionCeiling`, and `VirtualTime` as the public read type: each costs less
   than the alternative it replaces. Ruled by @keddie, 2026-11-15 (#3472).
+- The lifetime arm on `extend`, and a charging call that throws at the limit:
+  a refusal is for work not yet started, where it means "leave it queued". At
+  `complete` the time is spent, and a throw leaves the lease open and the
+  caller's settlement broken. `acquire` and `schedule` refuse with headroom;
+  `admit`, `extend` and `complete` never refuse for it and never throw there.
+  Ruled by @keddie, 2026-11-15 (#3475).
+- A headroom of `2⁶²`: it halves the leases a caller with large reservations
+  gets, for room no caller needs (#3475).
+- A headroom sized from the edge's outstanding: it moves with every
+  completion, and it bounds no overrun (#3475).
+- A counter that saturates at `Long.MAX_VALUE`: the edges of one path stop
+  agreeing on what crossed them, which breaks conservation, and a replicated
+  slot written that way is joined as if it were true (#3475).
+- Trimming a whole charge to the tightest edge of its path: the groups above
+  that edge are then undercharged, and they can spend it (#3475).
+- Skipping a full lane and picking its sibling in its place: the lane would
+  starve with no answer anywhere saying why (#3475).
 
 #### Open
 
 - **The constants of W1.** The clause is reasoned from the counters' range, not
   measured. Slice 5 owes the proof.
+- **Whether a charge that does not fit is recorded in part (#3475).** The
+  ruling's words were "clamped at the limit". This entry records such a charge
+  whole or not at all, for the reasons under "The lifetime limit", the
+  `complete(lease, Long.MAX_VALUE)` case above all. If the fill is wanted
+  after all, only the root's supply can take it soundly: the last sentence of
+  that rule changes, and one proof row.
+- **Whether a pick should also refuse on the leases open under an edge.** The
+  headroom covers 16,384 charges of the largest size after the last `acquire`.
+  A caller with more open leases than that, each overrunning in full, passes
+  it. None is known (#3475).
 - **Whether boot attribution should narrow** once W1 lands. Today
   `LocalHeddle.Boot` (#3462) leaves out the whole subtree of a parent whose
   children's weights do not fit together, even when one child fails on its
@@ -1948,6 +2014,10 @@ Carried over from the source intact; each is a named property test (§13).
     on the least common multiple of their denominators. Everything before it is 128-bit:
     a gauge's stored position, a parent's origin, the raw position, the front and
     a wake clamp, and arithmetic that would leave 128 bits throws (#3353).
+    Step B changes what the `Long` lifetime counters do here: a pick refuses
+    with headroom, and a charge that does not fit is reported, not thrown.
+    Nothing wraps or saturates under either (§7.1, "The lifetime limit";
+    not built yet).
 13. **Consensus only at the embroidery.** Mint, overlapping reshape, and
     fencing use `:kuilt-raft`; nothing else coordinates, at any frequency.
 
