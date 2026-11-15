@@ -135,12 +135,13 @@ class FairShareAllocatorWindowRuleTest {
     /**
      * The same child at its ceiling, waking: seen idle, asking now. A waker's own position past `R`
      * triggers the raise before the seat and wake step (#3353), as any seated child's does; the
-     * clamp only ever raises a waker, so one past `R` before it stays past `R` after.
+     * clamp only ever raises a waker, so one past `R` before it stays past `R` after. `e2` sits at
+     * `R / 2`, and the front with it, so nothing but the waker's own position calls for the raise.
      */
     @Test
     fun aWakerAtItsCeilingIsRebasedBeforeItIsClamped() {
         val c = positionCeiling(Weight.ONE)
-        val cell = pair(Weight.ONE, mint = 100L, ticks = mapOf(e1 to Int128.of(c), e2 to Int128.of(2 * rebaseThreshold(Weight.ONE))))
+        val cell = pair(Weight.ONE, mint = 100L, ticks = mapOf(e1 to Int128.of(c), e2 to Int128.of(rebaseThreshold(Weight.ONE) / 2)))
         val allocator = FairShareAllocator(self, PolicyConfig(quantum = 10L), seen(e1 to false, e2 to true))
         val outcome = allocator.schedule(root, cell, earmarked = 0L) { hungry }
         assertAll(
