@@ -1,6 +1,7 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.timesWide
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -122,6 +123,44 @@ class LocalHeddleRebaseTest {
             { assertTrue(engine.ticks(b) < -threshold / 2, "b went about R below zero: ${engine.ticks(b)}") },
             { assertTrue(engine.ticks(b) > positionFloor(Weight.ONE), "and stayed inside its window") },
             { assertEquals(cBefore - shift, engine.ticks(c), "idle c moved by Δ too") },
+        )
+    }
+
+    /**
+     * A joiner seated where the front is below its floor lands at the floor (#3353, the window rule).
+     * The rig of [aDemandingChildFarBehindGoesBelowZeroInsideItsWindow] leaves `b` about `R` below
+     * zero; then `a` stops asking and a fresh lane `n` at weight 2²⁰ joins beside `b` alone. The
+     * front is `b`'s, which on `n`'s grid is 2²⁰ times as far below zero: far past `n`'s floor. `n`
+     * is seated at its floor instead, above the front, so it is not credited the difference; it
+     * waits its turn behind `b`, the penalty side.
+     */
+    @Test
+    fun aHeavyNewbornBesideARunnerBelowZeroLandsAtItsFloor() {
+        val engine = engine()
+        engine.pushTo(a, 2 * threshold)
+        engine.pushTo(b, 16_005L)
+        engine.acquire(setOf(a, b), setOf(b), startedAt = 1L)
+        val bAt = engine.ticks(b)
+        check(bAt < -threshold / 2) { "the rig: b sits about R below zero, at $bAt" }
+        val heavy = Weight.of(1L shl 20)
+        val withHeavy = draft("rebase") {
+            lane("a", Weight.ONE)
+            lane("b", Weight.ONE)
+            lane("c", Weight.ONE)
+            lane("n", heavy)
+        }
+        check(engine.apply(withHeavy, generation = 1L).refusals.isEmpty()) { "the rig: n landed" }
+        val n = withHeavy.groupId("n")
+        val landingsBefore = engine.floorLandingsForTest
+        val out = engine.acquire(setOf(b, n), setOf(b, n), startedAt = 2L)
+        val ledger = engine.snapshot().ledger
+        val nEdge = engine.edgeOf(n)
+        val nAt = ledger.gauge(nEdge).rawTicksAt(ledger.baseIssuance(nEdge), ledger.edge(nEdge)?.returned ?: 0L, heavy, ledger.origin(root))
+        assertAll(
+            { assertEquals(landingsBefore + 1, engine.floorLandingsForTest, "the rig: one joiner landed at its floor") },
+            { assertEquals(Int128.of(positionFloor(heavy)), nAt, "n sits at its floor") },
+            { assertTrue(nAt > bAt.timesWide(1L shl 20), "above the front on its grid, so it is owed nothing") },
+            { assertEquals(b, (out as AcquireOutcome.Acquired).lease.leaf, "and b, behind it, is served first") },
         )
     }
 
