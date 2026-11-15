@@ -8754,17 +8754,16 @@ fun stampProbeSelection(p: Project, family: String): List<Any> {
     val kmp = p.extensions.findByType(org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension::class.java)
     val targets = kmp?.targets?.toList()
         ?: listOfNotNull(p.extensions.findByType(org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension::class.java)?.target)
-    val type = org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType::class.java.enumConstants.associateBy { it.name }
     val selected = mutableListOf<Any>()
     for (target in targets) {
         for (compilation in target.compilations) {
             val keep = when (family) {
-                "apple" -> target.platformType == type.getValue("native")
+                "apple" -> target.platformType == org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.native
                 else -> when (target.platformType) {
-                    type.getValue("jvm"), type.getValue("androidJvm") ->
+                    org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.jvm, org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.androidJvm ->
                         !compilation.name.contains("AndroidTest", ignoreCase = true)
-                    type.getValue("common") -> true
-                    type.getValue("wasm"), type.getValue("js") -> compilation.name == "main"
+                    org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.common -> true
+                    org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.wasm, org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.js -> compilation.name == "main"
                     else -> false
                 }
             }

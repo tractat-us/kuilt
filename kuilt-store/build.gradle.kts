@@ -13,6 +13,12 @@ kotlin {
             // for by every consumer of every implementation, so add nothing that only one needs.
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.atomicfu)
+            // The positive control for the stamp-invariance check (#3464; see the root build): an
+            // edge onto the module that carries the version must make the check red, naming this
+            // module and everything above it.
+            if (providers.gradleProperty("kuilt.stampProbe.plantBaseEdge").orNull == "true") {
+                api(project(":kuilt-base"))
+            }
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
