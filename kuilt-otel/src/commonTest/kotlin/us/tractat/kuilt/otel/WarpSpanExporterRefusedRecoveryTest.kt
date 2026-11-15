@@ -19,9 +19,11 @@ import kotlin.test.assertTrue
  * write replaced the stored set with the live one, so a restart lost every span written before it.
  *
  * The rule is fail closed. Every write turn makes the read first, until one lands. While it is
- * refused the turn writes nothing and returns [ExportResult.Failure], and the live adds stay in
- * memory. The read that lands joins the stored set with the live one, evicts to the cap, and the
- * write carries both. A *decode* failure still starts fresh.
+ * refused the turn returns [ExportResult.Failure] and changes nothing: a refused export adds its span
+ * nowhere, and the caller's retry is the only copy. The read that lands joins the stored set with
+ * memory (remote merges made meanwhile), evicts any excess, and the turn then takes the live path.
+ * So once the store heals, the exporter holds exactly what one that never had an outage would after
+ * the same successful calls. A *decode* failure still starts fresh.
  *
  * Every arm asserts its rig fired, so a store that never refused cannot pass it by absence.
  */
@@ -49,6 +51,30 @@ class WarpSpanExporterRefusedRecoveryTest {
 
     private fun WarpSpanExporter.liveIds(): Set<ByteString> = snapshot().elements.map { it.spanId }.toSet()
 
+    /** A remote replica's set holding the spans [ids]. */
+    private suspend fun remoteWith(vararg ids: Byte) =
+        WarpSpanExporter(ReplicaId("b"), InMemoryDurableStore()).also { remote ->
+            remote.recover()
+            ids.forEach { remote.export(span(it)) }
+        }.snapshot()
+
+    /**
+     * What an exporter that never had an outage holds: [stored] left by a previous process, then
+     * `recover`, then [exports] — the calls the outage run saw succeed.
+     */
+    private suspend fun idsWithoutAnOutage(
+        stored: ByteArray,
+        maxSpans: Int,
+        policy: BufferPolicy,
+        vararg exports: Byte,
+    ): Set<ByteString> {
+        val store = InMemoryDurableStore()
+        durableSpans(store, *stored)
+        val exporter = WarpSpanExporter(replica, store, maxSpans = maxSpans, bufferPolicy = policy).also { it.recover() }
+        exports.forEach { assertEquals(ExportResult.Success, exporter.export(span(it)), "the control: span $it was not saved") }
+        return idsAfterRestart(store)
+    }
+
     // ---- Fail closed ----
 
     @Test
@@ -71,13 +97,14 @@ class WarpSpanExporterRefusedRecoveryTest {
     }
 
     @Test
-    fun theReadThatLandsKeepsBothTheDurableAndTheLiveSpans() = runTest {
+    fun theReadThatLandsKeepsTheDurableSpansAndARefusedExportLeavesNothingBehind() = runTest {
         val backing = InMemoryDurableStore()
         durableSpans(backing, 1, 2)
         val store = ReadRefusingStore(backing, spansKey)
 
         val restarted = WarpSpanExporter(replica, store).also { it.recover() }
-        restarted.export(span(3))
+        val refused = restarted.export(span(3))
+        val liveWhileRefused = restarted.liveIds()
         val refusals = store.refusals
         store.heal()
         val healed = restarted.export(span(4))
@@ -85,9 +112,11 @@ class WarpSpanExporterRefusedRecoveryTest {
 
         assertAll(
             { assertEquals(2, refusals, "the rig did not refuse the recovery read and the export's retry") },
+            { assertIs<ExportResult.Failure>(refused, "the rig: the export was not refused") },
+            { assertEquals(emptySet(), liveWhileRefused, "the refused export added its span to memory") },
             { assertEquals(ExportResult.Success, healed) },
-            { assertEquals(ids(1, 2, 3, 4), restarted.liveIds(), "the healed exporter lost a span from memory") },
-            { assertEquals(ids(1, 2, 3, 4), durable, "the healed write lost a span") },
+            { assertEquals(ids(1, 2, 4), restarted.liveIds(), "the healed exporter holds the wrong spans") },
+            { assertEquals(ids(1, 2, 4), durable, "the healed write lost a span, or wrote a refused one") },
         )
     }
 
@@ -150,7 +179,7 @@ class WarpSpanExporterRefusedRecoveryTest {
         val store = ReadRefusingStore(backing, spansKey)
 
         val restarted = WarpSpanExporter(replica, store).also { it.recover() }
-        restarted.export(span(3))
+        restarted.merge(remoteWith(9))
         val refused = restarted.clear()
         val durableAfterRefused = idsAfterRestart(backing)
         store.heal()
@@ -163,32 +192,98 @@ class WarpSpanExporterRefusedRecoveryTest {
             { assertTrue(store.refusals >= 3, "the rig did not refuse the reads before the clear") },
             { assertIs<ExportResult.Failure>(refused, "a clear over an unread store reported $refused") },
             { assertEquals(ids(1, 2), durableAfterRefused, "the refused clear overwrote the durable spans") },
-            { assertEquals(ids(1, 2, 3, 4), durableAfterHeal, "the refused clear dropped a live span") },
+            { assertEquals(ids(1, 2, 4, 9), durableAfterHeal, "the refused clear dropped a merged span") },
             { assertEquals(ExportResult.Success, healed) },
             { assertEquals(emptySet(), durableAfterHealed, "the healed clear left a durable span behind") },
         )
     }
 
-    // ---- The join respects the cap ----
+    // ---- The healed turn takes the live path ----
 
+    /**
+     * The healing export keeps its own span, as a live export always does. Under `DROP_NEWEST` at the
+     * cap the live path evicts the newest *stored* span before inserting, so the store holds 1 and 4.
+     * Adding the export after the join and then evicting the excess evicts 4 itself instead, writes
+     * {1, 2}, and returns Success for a span that exists nowhere.
+     */
     @Test
-    fun theHealingJoinEvictsToMaxSpans() = runTest {
+    fun underDropNewestTheHealingExportKeepsItsSpanAtTheCap() = runTest {
         val backing = InMemoryDurableStore()
-        durableSpans(backing, 1, 2, 3, maxSpans = 4)
+        durableSpans(backing, 1, 2)
         val store = ReadRefusingStore(backing, spansKey)
 
-        val restarted = WarpSpanExporter(replica, store, maxSpans = 4).also { it.recover() }
-        restarted.export(span(4))
-        restarted.export(span(5))
+        val restarted = WarpSpanExporter(replica, store, maxSpans = 2, bufferPolicy = BufferPolicy.DROP_NEWEST)
+        restarted.recover()
+        val refused = restarted.export(span(3))
+        val refusals = store.refusals
         store.heal()
-        val healed = restarted.export(span(6))
+        val healed = restarted.export(span(4))
         val durable = idsAfterRestart(backing)
+        val control = idsWithoutAnOutage(byteArrayOf(1, 2), 2, BufferPolicy.DROP_NEWEST, 4)
 
         assertAll(
-            { assertTrue(store.refusals >= 3, "the rig did not refuse the reads before healing") },
+            { assertEquals(2, refusals, "the rig did not refuse the recovery read and the export's retry") },
+            { assertIs<ExportResult.Failure>(refused, "the rig: the export was not refused") },
+            { assertEquals(ids(1, 4), control, "the control: the live path did not keep the incoming span") },
             { assertEquals(ExportResult.Success, healed) },
-            { assertEquals(ids(3, 4, 5, 6), restarted.liveIds(), "the join kept more than the cap, or the wrong spans") },
-            { assertEquals(ids(3, 4, 5, 6), durable, "the healed write kept more than the cap, or lost a span") },
+            { assertTrue(span(4).spanId in durable, "Success for span 4, which is not durable: $durable") },
+            { assertEquals(control, durable, "the healed store differs from one that never had an outage") },
+            { assertEquals(control, restarted.liveIds(), "memory differs from one that never had an outage") },
+        )
+    }
+
+    /**
+     * The same under `DROP_OLDEST`, for a healing span that started before every stored one, as a
+     * long-lived parent span does. The live path evicts the oldest stored span and keeps the parent.
+     */
+    @Test
+    fun underDropOldestAHealingSpanThatStartedFirstIsKeptAtTheCap() = runTest {
+        val backing = InMemoryDurableStore()
+        durableSpans(backing, 2, 3)
+        val store = ReadRefusingStore(backing, spansKey)
+
+        val restarted = WarpSpanExporter(replica, store, maxSpans = 2, bufferPolicy = BufferPolicy.DROP_OLDEST)
+        restarted.recover()
+        val refused = restarted.export(span(4))
+        val refusals = store.refusals
+        store.heal()
+        val healed = restarted.export(span(1))
+        val durable = idsAfterRestart(backing)
+        val control = idsWithoutAnOutage(byteArrayOf(2, 3), 2, BufferPolicy.DROP_OLDEST, 1)
+
+        assertAll(
+            { assertEquals(2, refusals, "the rig did not refuse the recovery read and the export's retry") },
+            { assertIs<ExportResult.Failure>(refused, "the rig: the export was not refused") },
+            { assertEquals(ids(1, 3), control, "the control: the live path did not keep the incoming span") },
+            { assertEquals(ExportResult.Success, healed) },
+            { assertTrue(span(1).spanId in durable, "Success for span 1, which is not durable: $durable") },
+            { assertEquals(control, durable, "the healed store differs from one that never had an outage") },
+            { assertEquals(control, restarted.liveIds(), "memory differs from one that never had an outage") },
+        )
+    }
+
+    /**
+     * A join that brings in more than the cap, here a store a previous process wrote under a larger
+     * one, is evicted to the cap before the healing export's own live eviction, as `recover` does.
+     */
+    @Test
+    fun theHealingJoinEvictsItsExcessBeforeTheExport() = runTest {
+        val backing = InMemoryDurableStore()
+        durableSpans(backing, 1, 2, 3, 4)
+        val store = ReadRefusingStore(backing, spansKey)
+
+        val restarted = WarpSpanExporter(replica, store, maxSpans = 2).also { it.recover() }
+        store.heal()
+        val healed = restarted.export(span(5))
+        val durable = idsAfterRestart(backing)
+        val control = idsWithoutAnOutage(byteArrayOf(1, 2, 3, 4), 2, BufferPolicy.DROP_OLDEST, 5)
+
+        assertAll(
+            { assertEquals(1, store.refusals, "the rig did not refuse the recovery read") },
+            { assertEquals(ids(4, 5), control, "the control: recover did not evict to the cap") },
+            { assertEquals(ExportResult.Success, healed) },
+            { assertEquals(control, restarted.liveIds(), "the join kept more than the cap, or the wrong spans") },
+            { assertEquals(control, durable, "the healed write kept more than the cap, or lost a span") },
         )
     }
 
@@ -213,36 +308,11 @@ class WarpSpanExporterRefusedRecoveryTest {
     }
 
     /**
-     * While the read is refused the pending adds keep the cap with the live set's policy, so an
-     * outage neither grows memory past [WarpSpanExporter]'s `maxSpans` nor changes which spans survive.
-     * Under `DROP_NEWEST` the live set keeps 1 and the latest add; an uncapped buffer evicted after the
-     * join would keep 1 and 2 instead.
+     * A refused export adds its freshly stamped span nowhere, so the caller's retry of the same
+     * unstamped span leaves one stamped copy rather than two.
      */
     @Test
-    fun whileTheReadIsRefusedThePendingAddsKeepTheLiveSetsCap() = runTest {
-        val backing = InMemoryDurableStore()
-        val store = ReadRefusingStore(backing, spansKey)
-
-        val exporter = WarpSpanExporter(replica, store, maxSpans = 2, bufferPolicy = BufferPolicy.DROP_NEWEST)
-        exporter.recover()
-        (1..3).forEach { exporter.export(span(it.toByte())) }
-        val refusals = store.refusals
-        store.heal()
-        exporter.export(span(4))
-        val durable = idsAfterRestart(backing)
-
-        assertAll(
-            { assertEquals(4, refusals, "the rig did not refuse the recovery read and each export's retry") },
-            { assertEquals(ids(1, 4), durable, "the pending adds did not keep the live set's cap and policy") },
-        )
-    }
-
-    /**
-     * A refused export rolls its freshly minted stamp back, as a refused write does, so the caller's
-     * retry of the same unstamped span leaves one stamped copy rather than two.
-     */
-    @Test
-    fun aRefusedExportRollsItsMintedStampBack() = runTest {
+    fun aRefusedExportLeavesNoStampedCopyForItsRetryToDuplicate() = runTest {
         val backing = InMemoryDurableStore()
         durableSpans(backing, 1, 2)
         val store = ReadRefusingStore(backing, spansKey)
@@ -262,6 +332,79 @@ class WarpSpanExporterRefusedRecoveryTest {
             { assertIs<ExportResult.Failure>(refused, "the rig: the export was not refused") },
             { assertEquals(ExportResult.Success, retried) },
             { assertEquals(1, copies.size, "the retry left ${copies.size} stamped copies of one span") },
+        )
+    }
+
+    /**
+     * Retries made while both reads are refused go out unstamped, because the clock cannot read
+     * either. Kept anywhere until the heal, those copies would join the stamped one the healed retry
+     * mints: two values, one span id.
+     */
+    @Test
+    fun retriesOfARefusedExportLeaveOneCopyOnceTheStoreHeals() = runTest {
+        val backing = InMemoryDurableStore()
+        durableSpans(backing, 1, 2)
+        val spanReads = ReadRefusingStore(backing, spansKey)
+        val store = ReadRefusingStore(spanReads, WarpCausalClock.STORE_KEY)
+        val clock = WarpCausalClock(replica)
+        val exporter = WarpSpanExporter(replica, store, causalClock = clock)
+
+        val clockRecovery = clock.recover(store)
+        exporter.recover()
+        val refused = (1..2).map { exporter.export(span(3)) }
+        val clockRefusals = store.refusals
+        spanReads.heal()
+        store.heal()
+        val retried = exporter.export(span(3))
+        val copies = WarpSpanExporter(replica, backing).also { it.recover() }.snapshot().elements
+            .filter { it.spanId == span(3).spanId }
+
+        assertAll(
+            { assertIs<ClockRecovery.Refused>(clockRecovery, "the rig: the clock's read was not refused") },
+            { assertEquals(3, clockRefusals, "the rig: the exports did not retry the clock's read") },
+            { refused.forEach { assertIs<ExportResult.Failure>(it, "the rig: a retry was not refused") } },
+            { assertEquals(ExportResult.Success, retried) },
+            { assertEquals(1, copies.size, "the retries left ${copies.size} copies of one span: $copies") },
+            { assertTrue(copies.single().causalStamp != null, "the surviving copy is not the stamped one") },
+        )
+    }
+
+    // ---- Health ----
+
+    /**
+     * A turn the refused read stops is a failed turn, as the log exporter counts it, and the write
+     * that lands once the store heals resolves it. Otherwise an exporter refusing every turn forever
+     * reports `failed = 0, outstandingFailures = 0`. The refused `recover` is a recovery failure, not
+     * a turn.
+     */
+    @Test
+    fun aRefusedTurnIsAFailedTurnAndTheHealedWriteResolvesIt() = runTest {
+        val backing = InMemoryDurableStore()
+        durableSpans(backing, 1, 2)
+        val store = ReadRefusingStore(backing, spansKey)
+        val remote = remoteWith(9)
+
+        val restarted = WarpSpanExporter(replica, store).also { it.recover() }
+        val afterRecover = restarted.health.value
+        restarted.export(span(3))
+        restarted.merge(remote)
+        restarted.clear()
+        val whileRefused = restarted.health.value
+        val refusals = store.refusals
+        store.heal()
+        val healed = restarted.export(span(4))
+        val afterHeal = restarted.health.value
+
+        assertAll(
+            { assertEquals(4, refusals, "the rig did not refuse the recovery read and each turn's retry") },
+            { assertTrue(afterRecover.recoveryFailed, "the refused recovery was not reported") },
+            { assertEquals(0L, afterRecover.failed, "the refused recovery was counted as a turn") },
+            { assertEquals(3L, whileRefused.failed, "the refused export, merge and clear were not all counted") },
+            { assertEquals(3L, whileRefused.outstandingFailures, "the refused turns are not outstanding") },
+            { assertEquals(ExportResult.Success, healed) },
+            { assertEquals(3L, afterHeal.failed) },
+            { assertEquals(1L, afterHeal.acknowledged) },
+            { assertEquals(0L, afterHeal.outstandingFailures, "the healed write did not resolve the refused turns") },
         )
     }
 
