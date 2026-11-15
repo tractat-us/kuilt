@@ -165,8 +165,8 @@ internal data class ResumeRefusal(
  * - [resumeToken] — the credential minted at admit time ([mintTokenIfAbsent]) and presented
  *   to the host on [resume];
  * - the **single-flight resume slot** (`pendingResume`) — concurrent [resume] calls coalesce
- *   onto one in-flight attempt (#1280), resolved by the host's ResumeAck ([takePendingFlight])
- *   or Reject ([rejectFlight]), or abandoned at teardown;
+ *   onto one in-flight attempt (#1280), resolved by the host's ResumeAck ([takeFlightForAck])
+ *   or Reject ([rejectFlight]), or abandoned at teardown ([takePendingFlight]);
  * - the **reconnect guard** (`reconnecting`) — the two racing tear-detection paths (transport
  *   `Torn` and heartbeat `TransportClosed`) both call [attemptReconnect]; exactly one wins;
  * - the **auto-reconnect loop** ([runReconnect], #1037) — re-weave the base, await `Woven`,
@@ -221,8 +221,8 @@ internal class JoinerResumeMachine(
      *
      * When the joiner sends [AdmitMessage.Resume], it parks a [CompletableDeferred] here.
      * The host replies with [AdmitMessage.ResumeAck] (success) or [AdmitMessage.Reject]
-     * (failure); the room's admit-frame handler resolves it via [takePendingFlight] /
-     * [rejectFlight].
+     * (failure); the room's admit-frame handler resolves it via [takeFlightForAck] /
+     * [rejectFlight]. The room's `leave()` takes whatever is left with [takePendingFlight].
      */
     private var pendingResume: CompletableDeferred<ResumeResult.JoinerOutcome>? = null
 
@@ -924,7 +924,7 @@ internal class JoinerResumeMachine(
      *
      * Both caller kinds route through here — the owner (after sending) and a joined caller
      * (the `!ownsFlight` early return) — so neither can hang. A late-arriving ResumeAck/Reject
-     * after the slot was cleared is a no-op: [takePendingFlight]/[rejectFlight] find no pending
+     * after the slot was cleared is a no-op: [takeFlightForAck]/[rejectFlight] find no pending
      * flight (or a *later* flight, which the host's single-use-per-window token still resolves
      * honestly).
      *
