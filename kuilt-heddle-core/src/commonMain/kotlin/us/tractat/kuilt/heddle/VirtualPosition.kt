@@ -65,8 +65,8 @@ internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS
 internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADROOM) / w.denominator
 
 /**
- * The position, in ticks, past which a parent is rebased: a sixteenth of [w]'s [positionCeiling]
- * ([LocalHeddle] by its folds, #3329; `HeddleNode` by its origin, #3353). Far enough below the ceiling that the spread of a busy parent's
+ * The position, in ticks, past which a parent is rebased by raising its origin: a sixteenth of
+ * [w]'s [positionCeiling] (#3329, #3353). Far enough below the ceiling that the spread of a busy parent's
  * children above the rebased one never reaches it, and far enough above zero that a rebase is rare.
  */
 internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16

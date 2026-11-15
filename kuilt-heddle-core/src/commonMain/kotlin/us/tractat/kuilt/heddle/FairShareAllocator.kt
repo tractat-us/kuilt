@@ -678,12 +678,10 @@ public class FairShareAllocator(
      * its sibling: with `a` at 100 and `b` at 0 both waking beside `c` idle at 10, `b` was clamped
      * to 10 and took 95 of the next 100.
      *
-     * The third is gone from the competing case too, so that case did change. With a demanding
-     * runner below zero, the mean sits below a newborn's origin; the newborn is seated at its origin
-     * (a seat cannot go below it) and waits behind the runner, where the old raise clamped the
-     * wakers up to it instead. Nothing but `LocalHeddle`'s fold rebase puts a demanding child below
-     * zero, and per-parent origins replace that rebase in a later slice of #3353; until then
-     * `aNewbornBehindASubZeroRunnerWaitsUntilOrigins` pins the wait.
+     * The third is gone from the competing case too. With a demanding runner below zero, which only
+     * a rebase leaves there, the newborn is seated level with it: the seat is absolute, the parent's
+     * origin added back, so it follows the runner below zero (#3353).
+     * `aNewbornBesideASubZeroRunnerAndAWakerStartsLevel` pins it.
      *
      * Either way the front is wide and exact (#3353): a child past its ceiling moves it exactly as
      * far as it should, and the pick that follows refuses.

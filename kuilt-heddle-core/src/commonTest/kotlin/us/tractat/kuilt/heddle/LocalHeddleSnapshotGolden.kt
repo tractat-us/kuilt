@@ -38,8 +38,9 @@ internal const val GOLDEN_FORMAT_1_RICH_GRID: String = """[1,{"epoch":1,"totalSl
 
 /**
  * Format 2 of a [LocalHeddleSnapshot], encoded with a default `Json`: [GOLDEN_FORMAT_1]'s waker
- * scenario as this release writes it. Format 2 adds nothing that scenario writes, so only the
- * version differs.
+ * scenario as this release writes it. It differs from format 1 where format 2 changed in place:
+ * gauges in ticks, and wake clamps in ticks of their edge's grid as two words, `b`'s 50 units as
+ * `{"low":800}` (#3353).
  *
  * Editable until format 2 ships, and then frozen under the same rule as [GOLDEN_FORMAT_1].
  */
