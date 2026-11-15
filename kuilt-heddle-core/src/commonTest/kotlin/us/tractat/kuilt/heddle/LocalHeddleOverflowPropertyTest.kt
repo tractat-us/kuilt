@@ -3,6 +3,10 @@ package us.tractat.kuilt.heddle
 import us.tractat.kuilt.math.Int128
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import us.tractat.kuilt.math.timesWide
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
@@ -178,7 +182,12 @@ class LocalHeddleOverflowPropertyTest {
     fun aSnapshotThatWedgedOnTheOldArithmeticRestoresAndPicksOn() {
         val decoded = LocalHeddle.decode(WEDGED_AT_0_7_4, Json)
         val snapshot = assertIs<RestoreResult.Restored>(decoded, "decode: $decoded").snapshot
-        val fatBefore = offGrid(snapshot)
+        // Read off the bytes: since #3353 a restore puts every clamp in whole ticks, so the fat
+        // denominators exist only in what v0.7.4 wrote.
+        val fatBefore = Json.parseToJsonElement(WEDGED_AT_0_7_4).jsonArray[1].jsonObject.getValue("allocatorMemory")
+            .jsonObject.getValue("wakeOffsets").jsonObject.values
+            .map { it.jsonObject.getValue("denominator").jsonPrimitive.long }
+            .filter { it > 1_000L }
         val engine = LocalHeddle.restore(snapshot, LocalPolicy(defaultReservation = 1L), epoch = 2L)
         val lanes = listOf("fs/l0", "fs/l1", "fs/l2", "fs/l3").map(::GroupId)
         val random = Random(3231)
@@ -196,7 +205,7 @@ class LocalHeddleOverflowPropertyTest {
         }
         assertAll(
             // The rig: the snapshot really does carry the four fat wake offsets that wedged v0.7.4.
-            { assertEquals(4, fatBefore.count { it.startsWith("offset") }, "the checked-in offsets are off the grid: $fatBefore") },
+            { assertEquals(4, fatBefore.size, "the checked-in offsets carry fat denominators: $fatBefore") },
             { assertEquals(WEDGED_PICKS, picks, "every step made one pick") },
         )
     }

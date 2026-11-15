@@ -680,7 +680,12 @@ class LocalHeddlePersistenceTest {
     /** Format 1 predates the fold, so a format-1 snapshot that carries one is corrupt. */
     @Test
     fun aFormatOneSnapshotCannotCarryAFold() {
-        val text = GOLDEN_FORMAT_2_RICH.replaceFirst("[2,", "[1,")
+        // Format 1 wrote each wake clamp as a virtual time, so the clamps go back to that shape too (#3353).
+        val wide = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{},\"root/acme/batch@1:1#0\":{\"low\":32},\"root/tenants@1:1#0\":{\"low\":96}}"
+        val virtual = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{\"numerator\":0,\"denominator\":1}," +
+            "\"root/acme/batch@1:1#0\":{\"numerator\":2,\"denominator\":1},\"root/tenants@1:1#0\":{\"numerator\":6,\"denominator\":1}}"
+        check(wide in GOLDEN_FORMAT_2_RICH) { "the rig: format 2's clamps are where this test expects them" }
+        val text = GOLDEN_FORMAT_2_RICH.replaceFirst("[2,", "[1,").replace(wide, virtual)
         val out = LocalHeddle.decode(text, Json)
         assertAll(
             { assertTrue(text.startsWith("[1,") && "\"forgotten\":" in text, "the rig: format 1 with a fold") },
