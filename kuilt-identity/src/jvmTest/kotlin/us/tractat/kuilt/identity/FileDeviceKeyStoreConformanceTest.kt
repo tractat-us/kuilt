@@ -3,6 +3,7 @@ package us.tractat.kuilt.identity
 import us.tractat.kuilt.conformance.DeviceKeyStoreConformanceSuite
 import us.tractat.kuilt.conformance.DeviceKeyStoreFixture
 import us.tractat.kuilt.store.FileChannelDurableStore
+import us.tractat.kuilt.store.StoreKey
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -49,9 +50,11 @@ class FileDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() {
             makeKeyUnreadable = { loopKeyFile(keyFile) },
             makeGrantsUnreadable = {
                 // `grants` needs no escaping, so the record's filename is the key's name.
-                unreadableGrantsRecord(directory.resolve(FileDeviceKeyStore.GRANTS.name)) {
-                    FileChannelDurableStore(directory.toFile()).read(FileDeviceKeyStore.GRANTS)
-                }
+                unreadableGrantsRecord(
+                    record = directory.resolve(FileDeviceKeyStore.GRANTS.name),
+                    readDirectly = { FileChannelDurableStore(directory.toFile()).read(FileDeviceKeyStore.GRANTS) },
+                    writeSiblingDirectly = { FileChannelDurableStore(directory.toFile()).write(PROBE_WRITE, byteArrayOf(1)) },
+                )
             },
         )
     }
@@ -93,25 +96,30 @@ class FileDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() {
 }
 
 /**
- * Every permission taken off [record], so opening it fails with `EACCES` — a file under Data Protection
- * on a locked phone fails the same way — while its directory still takes a new file, so a store that
- * read the failure as "no grants" could still write a new record over it.
+ * Every permission taken off [record], so opening it fails with `EACCES`, while its directory still
+ * takes a new file, so a store that read the failure as "no grants" could still write a new record over
+ * it. The store throws on any failed read but a missing file, so the errno is not what the property
+ * turns on.
  *
  * The rig checks that it took: run as root, a mode of `000` is not enforced. Restoring answers whether
  * the record was written while it was unreadable: a write renames a new, readable file into place,
  * and a delete leaves none, while the faulted file stays unreadable until the restore.
  *
  * @param readDirectly the record read straight off the medium through the store's own backend.
+ * @param writeSiblingDirectly a record other than [record] written through the same backend, into the
+ *   same directory: the witness that the fault left the directory writable.
  */
 private fun unreadableGrantsRecord(
     record: Path,
     readDirectly: suspend () -> ByteArray?,
+    writeSiblingDirectly: suspend () -> Unit,
 ): DeviceKeyStoreFixture.UnreadableGrants {
     check(Files.exists(record, LinkOption.NOFOLLOW_LINKS)) { "precondition: a grants record at $record to fault" }
     Files.setPosixFilePermissions(record, emptySet())
     check(!Files.isReadable(record)) { "rig: $record is still readable after chmod 000 — running as root? The fault did not take" }
     return DeviceKeyStoreFixture.UnreadableGrants(
         probe = { readDirectly() },
+        probeWrite = writeSiblingDirectly,
         restore = {
             val rewritten = !Files.exists(record, LinkOption.NOFOLLOW_LINKS) || Files.isReadable(record)
             if (Files.exists(record, LinkOption.NOFOLLOW_LINKS)) {
@@ -121,3 +129,6 @@ private fun unreadableGrantsRecord(
         },
     )
 }
+
+/** A record beside the grants, written only by the unreadable-grants rig's write probe. */
+private val PROBE_WRITE = StoreKey("probe-write")
