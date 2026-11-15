@@ -685,11 +685,15 @@ class LocalHeddlePersistenceTest {
     @Test
     fun aFormatOneSnapshotCannotCarryAFold() {
         // Format 1 wrote each wake clamp as a virtual time, so the clamps go back to that shape too (#3353).
-        val wide = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{},\"root/acme/batch@1:1#0\":{\"low\":32},\"root/tenants@1:1#0\":{\"low\":96}}"
+        val wide = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{},\"root/acme/batch@1:1#0\":{\"low\":32},\"root/tenants@1:1#0\":{\"low\":83}}"
         val virtual = "\"wakeOffsets\":{\"root/acme/batch/y@2:1#0\":{\"numerator\":0,\"denominator\":1}," +
-            "\"root/acme/batch@1:1#0\":{\"numerator\":2,\"denominator\":1},\"root/tenants@1:1#0\":{\"numerator\":6,\"denominator\":1}}"
+            "\"root/acme/batch@1:1#0\":{\"numerator\":2,\"denominator\":1},\"root/tenants@1:1#0\":{\"numerator\":83,\"denominator\":16}}"
         check(wide in GOLDEN_FORMAT_2_RICH) { "the rig: format 2's clamps are where this test expects them" }
-        val text = GOLDEN_FORMAT_2_RICH.replaceFirst("[2,", "[1,").replace(wide, virtual)
+        // Format 1 predates the net-service clock (#3376) too: its maps, the memory's last three, go.
+        val clockStart = GOLDEN_FORMAT_2_RICH.indexOf(",\"clocks\":")
+        val memoryEnd = GOLDEN_FORMAT_2_RICH.indexOf("},\"leases\":")
+        check(clockStart in 0 until memoryEnd) { "the rig: format 2's clock is where this test expects it" }
+        val text = GOLDEN_FORMAT_2_RICH.removeRange(clockStart, memoryEnd).replaceFirst("[2,", "[1,").replace(wide, virtual)
         val out = LocalHeddle.decode(text, Json)
         assertAll(
             { assertTrue(text.startsWith("[1,") && "\"forgotten\":" in text, "the rig: format 1 with a fold") },
