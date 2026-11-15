@@ -192,6 +192,79 @@ class WarpSpanExporterRefusedRecoveryTest {
         )
     }
 
+    /** A remote set merged while the read is refused is real state: the landing read joins it. */
+    @Test
+    fun aRemoteMergeMadeWhileTheReadIsRefusedSurvivesTheLandingRead() = runTest {
+        val backing = InMemoryDurableStore()
+        durableSpans(backing, 1, 2)
+        val store = ReadRefusingStore(backing, spansKey)
+        val remote = WarpSpanExporter(ReplicaId("b"), InMemoryDurableStore()).also { it.recover(); it.export(span(9)) }.snapshot()
+
+        val restarted = WarpSpanExporter(replica, store).also { it.recover() }
+        val merged = restarted.merge(remote)
+        store.heal()
+        restarted.export(span(3))
+        val durable = idsAfterRestart(backing)
+
+        assertAll(
+            { assertIs<ExportResult.Failure>(merged, "the rig: the merge was not refused") },
+            { assertEquals(ids(1, 2, 3, 9), durable, "the landing read dropped the stored or the merged spans") },
+        )
+    }
+
+    /**
+     * While the read is refused the pending adds keep the cap with the live set's policy, so an
+     * outage neither grows memory past [WarpSpanExporter]'s `maxSpans` nor changes which spans survive.
+     * Under `DROP_NEWEST` the live set keeps 1 and the latest add; an uncapped buffer evicted after the
+     * join would keep 1 and 2 instead.
+     */
+    @Test
+    fun whileTheReadIsRefusedThePendingAddsKeepTheLiveSetsCap() = runTest {
+        val backing = InMemoryDurableStore()
+        val store = ReadRefusingStore(backing, spansKey)
+
+        val exporter = WarpSpanExporter(replica, store, maxSpans = 2, bufferPolicy = BufferPolicy.DROP_NEWEST)
+        exporter.recover()
+        (1..3).forEach { exporter.export(span(it.toByte())) }
+        val refusals = store.refusals
+        store.heal()
+        exporter.export(span(4))
+        val durable = idsAfterRestart(backing)
+
+        assertAll(
+            { assertEquals(4, refusals, "the rig did not refuse the recovery read and each export's retry") },
+            { assertEquals(ids(1, 4), durable, "the pending adds did not keep the live set's cap and policy") },
+        )
+    }
+
+    /**
+     * A refused export rolls its freshly minted stamp back, as a refused write does, so the caller's
+     * retry of the same unstamped span leaves one stamped copy rather than two.
+     */
+    @Test
+    fun aRefusedExportRollsItsMintedStampBack() = runTest {
+        val backing = InMemoryDurableStore()
+        durableSpans(backing, 1, 2)
+        val store = ReadRefusingStore(backing, spansKey)
+        val clock = WarpCausalClock(replica)
+        val exporter = WarpSpanExporter(replica, store, causalClock = clock)
+
+        val clockRecovery = clock.recover(store)
+        exporter.recover()
+        val refused = exporter.export(span(3))
+        store.heal()
+        val retried = exporter.export(span(3))
+        val copies = WarpSpanExporter(replica, backing).also { it.recover() }.snapshot().elements
+            .filter { it.spanId == span(3).spanId }
+
+        assertAll(
+            { assertEquals(ClockRecovery.Recovered, clockRecovery, "the rig: the clock could not read") },
+            { assertIs<ExportResult.Failure>(refused, "the rig: the export was not refused") },
+            { assertEquals(ExportResult.Success, retried) },
+            { assertEquals(1, copies.size, "the retry left ${copies.size} stamped copies of one span") },
+        )
+    }
+
     // ---- Cancellation ----
 
     @Test
