@@ -835,18 +835,25 @@ public class FairShareAllocator(
         parent: GroupId,
         demand: (AttachmentId) -> Demand,
     ): Rational? =
-        if (childWeightsFit(ledger, parent)) HeddlePolicy.front(policyEdges(ledger, parent, demand).map(::heldInWindow)) else null
+        if (childWeightsFit(ledger, parent)) heldFront(policyEdges(ledger, parent, demand)) else null
 
     /**
-     * [edge] read inside its window, for a diagnostic (#3353), as the public reads hold it
-     * ([inWindow]): a child a `cancel` walked back past its floor reads at the floor, the penalty
-     * side, and one past its ceiling at the ceiling, so the front over them cannot throw on how far
-     * a child is from its origin.
+     * [HeddlePolicy.front] over [edges], each position read inside its window, for a diagnostic
+     * (#3353), as the public reads hold it ([inWindow]): a child a `cancel` walked back past its
+     * floor reads at the floor, the penalty side, and one past its ceiling at the ceiling, so the
+     * front cannot throw on how far a child has climbed. `null` when [edges] is empty.
+     *
+     * It reads the held positions directly. Holding an edge by lowering its wake offset, as this
+     * once did, makes a negative offset, which [PolicyEdge] refuses: a busy child past its ceiling
+     * beside a demanding sibling that is never served then threw out of every read of its parent's
+     * front (#3485).
      */
-    private fun heldInWindow(edge: PolicyEdge): PolicyEdge {
-        val effective = HeddlePolicy.effectiveTicksWide(edge)
-        val held = Int128.of(inWindow(effective, edge.record.weight))
-        return if (held == effective) edge else edge.copy(offsetTicks = edge.offsetTicks + (held - effective))
+    private fun heldFront(edges: List<PolicyEdge>): Rational? {
+        if (edges.isEmpty()) return null
+        val demanding = edges.filter { HeddlePolicy.isDemanding(it) }
+        if (demanding.isEmpty()) return edges.maxOf { readVirtual(HeddlePolicy.effectiveTicksWide(it), it.record.weight) }
+        val held = demanding.map { Int128.of(inWindow(HeddlePolicy.effectiveTicksWide(it), it.record.weight)) }
+        return VirtualTime.mean(held, demanding.map { it.record.weight }).toRational()
     }
 
     /**
