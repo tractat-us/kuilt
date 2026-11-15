@@ -423,9 +423,11 @@ public class FairShareAllocator(
      * item A). Only when there are joiners: the front they are about to be seated at or clamped to
      * ([joinFront]) is past some child's [rebaseThreshold] on that child's own grid, a child that
      * is not joining is past its own, or a returner is about to land past its own
-     * ([returnerLandings]): it comes back where its parent's clock puts it, not at the front (#3376),
-     * so one that left near its ceiling can come back past it. Without it a heavy newborn or waker joining a busy light runner
-     * lands about `k · R` up its own grid, `k` the weight ratio, which is past its ceiling for `k > 16`.
+     * ([previewShifts]): it comes back where its parent's clock puts it, not at the front (#3376),
+     * so one that left near its ceiling can come back past it. The front counts each returner where
+     * it lands, as [settleJoiners] will (#3446). Without it a heavy newborn or waker joining a busy
+     * light runner lands about `k · R` up its own grid, `k` the weight ratio, which is past its
+     * ceiling for `k > 16`.
      *
      * `Δ` is bounded by the smallest effective virtual time among the demanding children that are
      * not joining, or, with none, by the front itself: every newborn and clamped waker lands at the
@@ -823,8 +825,9 @@ public class FairShareAllocator(
      * Seat the **newborns** and clamp the **wakers** under [parent] — the two kinds of joiner —
      * against a single front, [joinFront]. A waker this peer saw stop asking is a **returner**: it
      * is moved by how far its parent's net-service clock ran while it was away ([runClock],
-     * [moveReturners], #3376) rather than clamped, and it is still a joiner, so it stays out of
-     * the front the others are seated at.
+     * [moveReturners], #3376) rather than clamped. It is counted in the front the others are seated
+     * at or clamped to, where it lands ([landed], #3446): that is where it competes from, so it is
+     * not reading from further back the way the joiners below are.
      *
      * **One front, one exclusion set, and that is the whole point** (issue #1752). Both joiners are
      * measured against "where the competing set is right now", and each is, in its own way, reading
@@ -968,7 +971,7 @@ public class FairShareAllocator(
      * Whether [edge] is a **returner**: a waker ([isWaker]) this peer saw stop asking, so it holds a
      * departure against its parent's clock. A returner comes back moved by that clock ([moveReturners]);
      * every other waker is clamped ([clampWakers]). The one definition [settleJoiners] and
-     * [returnerLandings] both read (#3376).
+     * [previewShifts] both read (#3376).
      */
     private fun isReturner(edge: PolicyEdge): Boolean = isWaker(edge) && edge.record.id in departures
 
@@ -1307,7 +1310,8 @@ internal class RebasingPick(val settled: EntitlementLedger, val pick: ChildPick,
  * Clock ticks to one tick of a weight-1 child's grid: the least common multiple of 1 to 16. A clock
  * step divides by the asking children's total weight, so this makes a step exact for every total
  * whose factors divide it. Not every total: one with a prime factor above 13, or a prime power past
- * this one's, rounds each step up by under one clock tick, the penalty side. A shift read on a
+ * the clock's own grid's, `16 · CLOCK_GRID` (27, say), rounds each step up by under one clock tick,
+ * the penalty side. A shift read on a
  * child's grid is a whole number of its ticks, and the fraction it rounds up by is carried to its
  * next return ([ShiftRemainder]), so a child's shifts never run more than one tick past the clock.
  */
