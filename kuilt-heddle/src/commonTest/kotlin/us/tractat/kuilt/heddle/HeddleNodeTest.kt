@@ -1375,8 +1375,9 @@ class HeddleNodeTest {
 
     /**
      * The rebase changes no pick (#3353): a twin node with rebasing switched off, fed the same
-     * waiting sets, makes exactly the same grants call for call until it refuses at its ceiling,
-     * and the rebasing node carries on past that point.
+     * waiting sets, makes exactly the same grants call for call until the call where it refuses at
+     * its ceiling. That call can stop partway, so there its grants are a prefix of the rebasing
+     * node's, and its next call names the refusal. The rebasing node carries on past that point.
      */
     @Test
     fun aTwinThatNeverRebasesMakesTheSamePicksUntilItRefuses() = runTest(
