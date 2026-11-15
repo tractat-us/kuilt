@@ -151,7 +151,8 @@ public class LocalHeddleView internal constructor(
      *   [eligible] not a subset of [waiting].
      * @throws ArithmeticException when a [WaitExplanation.BehindAtLevel] front does not fit an exact
      *   [Rational], which can happen well below the position ceiling (see "Failure surface" on
-     *   [LocalHeddle]).
+     *   [LocalHeddle]). Never on how far a child is from its parent's origin: a child a `cancel`
+     *   walked back below its floor reads at its floor, the penalty side (#3353).
      * @sample us.tractat.kuilt.heddle.sampleExplainWait
      */
     public fun explain(

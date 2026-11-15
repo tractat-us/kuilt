@@ -1628,7 +1628,10 @@ public class EntitlementLedger private constructor(
      *
      * Absolute is what makes it safe under replication. Two peers that seat one newborn against
      * different origins write the same position, give or take a tick, so the join's `max` adds no
-     * rebase to it (#3329 hazard (a)).
+     * rebase to it (#3329 hazard (a)). The one exception is a seat held at the newborn's floor
+     * (#3353, the window rule): each peer's floor sits under its own origin, so two such seats can
+     * differ by up to the gap between the two origins on the newborn's grid. The join keeps the
+     * higher, so that difference is always penalty, never credit.
      */
     internal fun seatAtWide(edge: AttachmentId, ticks: Int128): Patch<EntitlementLedger>? {
         if (recordOf(edge) == null) return null

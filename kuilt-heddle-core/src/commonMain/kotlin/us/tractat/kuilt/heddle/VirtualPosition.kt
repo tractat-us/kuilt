@@ -87,8 +87,9 @@ internal fun positionFloor(w: Weight): Long = -positionCeiling(w)
  * parent's children above the rebased one never reaches it, and far enough above zero that a rebase
  * is rare. Each child is measured against its own threshold, and the front too, read on every
  * child's grid, so a heavy child joining a light runner's front is never seated past its ceiling
- * (#3353 review, item A). What still reaches the ceiling is a demanding child that is never served,
- * which holds `Δ` at zero. A weight set so fine that one full lease from just under this threshold
+ * (#3353 review, item A). What still reaches the ceiling is a demanding child that is never served:
+ * each rebase carries it further below zero, until it sits at its [positionFloor] and holds `Δ` at
+ * zero. A weight set so fine that one full lease from just under this threshold
  * passes the ceiling is refused when it is applied ([weightsFitTheBudget], P1′).
  */
 internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16

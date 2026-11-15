@@ -398,17 +398,21 @@ public sealed interface LeaseOutcome {
  *
  * A running engine rarely gets there, because a pick **rebases** its parent first (#3329,
  * #3353). Once a child's effective position passes a sixteenth of its ceiling, or the front does,
- * read on any child's grid, the pick raises the parent's origin by one virtual time, as far as the
- * demanding child furthest behind allows: before the seat and wake step when there are joiners, so
- * a heavy one joining a light runner is not seated past its own ceiling, and after the grant. Every
- * child reads that much lower, an idle one included, so no pick changes, and no gauge or wake clamp
- * is rewritten. The ceiling is measured net of returns, so returned service never reaches it
- * (#3360). A charging call, [admit], [extend] or an overrun at [complete], runs the same step at
- * every parent on its path, so a parent driven only that way is rebased too. It is still reachable
- * where no whole step fits: a demanding child sits at zero and is never served, which holds the
- * rebase at nothing; a child a pick last saw demanding, idle since, does the same for a plain
- * [admit]'s rebase until a pick sees it again. A weight set so fine that one step or one full
- * lease could carry a child past its ceiling is refused at [apply] instead (#3353).
+ * read on the grid of a child that is demanding or joining, the pick raises the parent's origin by
+ * one virtual time: to where its demanding children stand on average, unless that would carry one
+ * of them below its **floor**, the mirror of its ceiling (the window rule). It runs before the seat
+ * and wake step when there are joiners, so a heavy one joining light runners is not seated past
+ * its own ceiling, and after the grant. Every child reads that much lower, an idle one included, so
+ * no pick changes, and no gauge or wake clamp is rewritten; a child behind the average reads below
+ * zero, inside its window. A joiner seated where the front is below its floor is seated at the
+ * floor instead, which costs it a turn and never gives it one. The ceiling is measured net of
+ * returns, so returned service never reaches it (#3360). A charging call, [admit], [extend] or an
+ * overrun at [complete], runs the same step at every parent on its path, so a parent driven only
+ * that way is rebased too. It is still reachable where no whole step fits: a demanding child that
+ * is never served is carried down to its floor, and there holds the rebase at nothing; a child a
+ * pick last saw demanding, idle since, counts the same way for a plain [admit]'s rebase until a pick
+ * sees it again. A weight set so fine that one step or one full lease could carry a child past its
+ * ceiling is refused at [apply] instead (#3353).
  *
  * Nothing is narrowed before the effective position a pick orders, so a seat or a wake clamp
  * taken against a front that includes a position at its ceiling is taken against the exact front,
