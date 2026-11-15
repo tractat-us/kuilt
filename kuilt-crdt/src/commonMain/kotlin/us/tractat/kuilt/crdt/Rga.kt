@@ -489,6 +489,10 @@ public class Rga<V> private constructor(
      * new [RgaId] on behalf of [replica].
      *
      * Returns the new [Rga] state and the [RgaOp.Insert] op to broadcast.
+     *
+     * @throws ArithmeticException if the Lamport clock or [replica]'s seq is already at
+     *   [Long.MAX_VALUE], as a decoded op-log or a peer's op can leave it (#3417). The next value
+     *   would wrap to [Long.MIN_VALUE], the Lamport time of [RgaId.HEAD].
      */
     public fun insertAfter(
         replica: ReplicaId,
@@ -509,7 +513,7 @@ public class Rga<V> private constructor(
         value: V,
         base: List<RgaId>?,
     ): Pair<Rga<V>, RgaOp.Insert<V>> {
-        val newLamport = lamport + 1L
+        val newLamport = lamport.nextTick { "Rga Lamport clock" }
         val seq = nextSeqFor(replica)
         val id = RgaId(lamport = newLamport, replicaId = replica, seq = seq)
         val op = RgaOp.Insert(id = id, value = value, after = after)
@@ -530,7 +534,9 @@ public class Rga<V> private constructor(
      * incrementally-maintained [maxSeqByReplica] map: O(1) lookup instead of
      * scanning the entire op-log.
      */
-    private fun nextSeqFor(replica: ReplicaId): Long = (maxSeqByReplica[replica] ?: 0L) + 1L
+    private fun nextSeqFor(replica: ReplicaId): Long = currentSeqFor(replica).nextTick { "Rga seq for $replica" }
+
+    private fun currentSeqFor(replica: ReplicaId): Long = maxSeqByReplica[replica] ?: 0L
 
     /**
      * Insert [value] at visible position [index] (0 = prepend before first
@@ -543,6 +549,9 @@ public class Rga<V> private constructor(
      * mid-sequence insert fails the guard and the next call recomputes, exactly as before.
      *
      * @throws IndexOutOfBoundsException if [index] is outside `0..size`.
+     * @throws ArithmeticException if the Lamport clock or [replica]'s seq is already at
+     *   [Long.MAX_VALUE], as a decoded op-log or a peer's op can leave it (#3417). The next value
+     *   would wrap to [Long.MIN_VALUE], the Lamport time of [RgaId.HEAD].
      */
     public fun insertAt(
         replica: ReplicaId,
@@ -613,6 +622,8 @@ public class Rga<V> private constructor(
      * An empty [values] returns `this` — the same instance, not a copy.
      *
      * @return the new state, and the ops to broadcast **in append order**.
+     * @throws ArithmeticException if the run would carry the Lamport clock or [replica]'s seq past
+     *   [Long.MAX_VALUE] (#3417). The whole run is refused; no prefix of it is minted.
      */
     public fun insertAllAfter(
         replica: ReplicaId,
@@ -621,12 +632,14 @@ public class Rga<V> private constructor(
     ): Pair<Rga<V>, List<RgaOp.Insert<V>>> {
         if (values.isEmpty()) return this to emptyList()
         var newLamport = lamport
-        var seq = nextSeqFor(replica) - 1L
+        var seq = currentSeqFor(replica)
         var predecessor = after
         val minted = ArrayList<RgaOp.Insert<V>>(values.size)
         values.forEach { value ->
-            newLamport += 1L
-            seq += 1L
+            // Checked per value: a run that starts below the ceiling can cross it part-way, and the
+            // throw comes before anything is built, so the whole run is refused (#3417).
+            newLamport = newLamport.nextTick { "Rga Lamport clock" }
+            seq = seq.nextTick { "Rga seq for $replica" }
             val id = RgaId(lamport = newLamport, replicaId = replica, seq = seq)
             minted += RgaOp.Insert(id = id, value = value, after = predecessor)
             predecessor = id
