@@ -240,6 +240,40 @@ class WarpSpanExporterClockHighWaterTest {
     }
 
     /**
+     * A peer hands back a dot of this replica's after the span read has landed, with the clock unarmed
+     * for the whole process, and an export at the cap then evicts it. The merge is the only thing that
+     * saw the dot: the clock has no `seq` to carry, and the landing read came before the merge.
+     */
+    @Test
+    fun anEvictedOwnDotMergedWhileTheClockIsUnrecoveredIsCovered() = runTest {
+        val backing = InMemoryDurableStore()
+        val store = ReadRefusingStore(backing, clockKey)
+        val previous = restart(store, maxSpans = 1)
+        val handedBack = span(1).copy(causalStamp = CausalStamp(Dot(replica, 1_000L), emptySet()))
+        val merged = previous.exporter.merge(ORSet.empty<SpanRecord>().piece { it.add(peer, handedBack) })
+        val ownAfterMerge = ownSeqs(previous.exporter)
+        val evicting = previous.exporter.export(peerSpan(2))
+        store.heal()
+        val corrupt = corruptTheClock(backing)
+
+        val restarted = restart(backing, maxSpans = 1)
+        val heldAfterRestart = ownSeqs(restarted.exporter)
+        restarted.exporter.export(span(99))
+        val next = dotOf(restarted.exporter, 99)
+
+        assertAll(
+            { assertIs<ClockRecovery.Refused>(previous.clockRecovery, "the rig: the clock read was not refused") },
+            { assertEquals(2, store.refusals, "the rig: recover and the export did not both meet a refused clock read") },
+            { assertEquals(ExportResult.Success, merged, "the rig: the merge was not saved") },
+            { assertEquals(setOf(1_000L), ownAfterMerge, "the rig: the merge did not bring this replica's dot") },
+            { assertEquals(ExportResult.Success, evicting, "the rig: the evicting span was not saved") },
+            { assertIs<ClockRecovery.Undecodable>(corrupt, "the rig: the clock entry decoded as $corrupt") },
+            { assertEquals(emptySet(), heldAfterRestart, "the rig: the merged span was not evicted") },
+            { assertTrue(next.seq > 1_000L, "the corrupt clock minted $next under a merged dot an unarmed clock saw") },
+        )
+    }
+
+    /**
      * The clock's entry is ahead of every span: it minted ten dots no stored span holds, as a stamp
      * rolled back from a refused write leaves one. A write that mints nothing, a merge here, still
      * carries the clock's `seq`, so a later corrupt entry floors above all ten.
