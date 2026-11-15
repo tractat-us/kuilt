@@ -16,17 +16,15 @@ task downstream re-runs and is caught there. Each selected task that EXECUTED is
 Gradle's own reasons, never from its name:
 
 - allowlisted        — matches a line of the allowlist (the carrier, `:kuilt-base`).
-- only a path moved  — every reason is KGP's `friendPathsSet` value: a JVM test compile is keyed on
-                       its main jar's PATH, and the jar's file name carries the version. The content
-                       of its inputs is unchanged, so its output is too. Publishing compiles no tests.
-                       Gradle reports a changed input VALUE before any changed file, so this reason
-                       can hide a classpath change; the JVM `Test` task that runs the compile's
-                       output is selected too, and it re-runs whenever the test classpath's content
-                       changes, so such a leak still reds there (measured with the positive control).
 - unmeasured         — "No history is available": the first pass never ran it, so this run cannot
                        say whether the stamp reached it. That is a selection bug, and it fails too,
                        so the probe cannot quietly grow into a second build.
-- leak               — anything else.
+- leak               — anything else. That includes a JVM test compile re-run only by KGP's
+                       `friendPathsSet`: by default its friend set names the main jar by path, and
+                       the jar's file name carries the version. `gradle.properties` turns that off
+                       (`kotlin.build.archivesTaskOutputAsFriendModule=false`), so if that reason
+                       comes back the flag was removed or the Kotlin plugin changed how it keys
+                       friends, and every snapshot is recompiling every JVM test compile again.
 
 Two preconditions are asserted first, because a clean report proves nothing without them:
 `:kuilt-base:generateKuiltVersion` EXECUTED (so the stamp really changed), and every selected task
@@ -54,8 +52,6 @@ def load_lines(path: Path) -> list[str]:
 def classify(reasons: list[str]) -> str:
     if any("No history is available" in r for r in reasons):
         return "unmeasured"
-    if reasons and all("input property 'friendPathsSet" in r for r in reasons):
-        return "only a path moved"
     return "leak"
 
 
@@ -130,7 +126,7 @@ def main(argv: list[str]) -> int:
         f"stamp-invariance: {len(rows)} tasks recorded ({summary}); {len(selected)} selected and "
         f"judged; {helpers} unselected helpers re-ran and are not judged."
     )
-    for kind in ("allowlisted", "only a path moved"):
+    for kind in ("allowlisted",):
         tasks = buckets.get(kind, [])
         if tasks:
             print(f"  re-ran, {kind} ({len(tasks)}): " + ", ".join(p for p, _ in tasks))
