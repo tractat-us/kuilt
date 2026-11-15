@@ -212,6 +212,11 @@ class ResumeAckAfterHostLostTest {
             val seam = ScriptedSeam(joinerId, hostId)
             val (room, _) = admittedJoiner(seam)
             val events = recordEvents(room)
+            // The host introduces itself, so the joiner monitors it: a later tear reaches the room only
+            // through that detector, since the tear watcher fires for the first tear alone.
+            seam.deliver(AdmitMessage.Welcome(assignedPeerId = hostId.value, displayName = "host", sessionId = hostId.value))
+            runCurrent()
+            val monitoredAtStart = room.hasDetector(hostId)
 
             // Episode one: the host answers the Resume, and its ack resumes the room.
             seam.tear()
@@ -220,11 +225,11 @@ class ResumeAckAfterHostLostTest {
             seam.deliver(AdmitMessage.ResumeAck)
             runCurrent()
             val firstEnded = !room.hasReconnectInFlight()
+            val monitoredAfterFirst = room.hasDetector(hostId)
             val resumedByFirst = events.count { it is MembershipEvent.Resumed }
 
-            // Episode two: the host never answers, and the window expires. The tear watcher fires for
-            // the first tear only; a later one reaches the room through the restored host detector,
-            // which sees the host leave the seam's peers.
+            // Episode two: the host never answers, and the window expires. The restored detector sees
+            // the host leave the seam's peers and starts the episode.
             seam.dropHost()
             seam.tear()
             runCurrent()
@@ -233,9 +238,11 @@ class ResumeAckAfterHostLostTest {
             runCurrent()
 
             assertAll(
+                { assertTrue(monitoredAtStart, "precondition: the joiner monitors its host") },
                 { assertTrue(firstResumeSent, "precondition: episode one sent a Resume and awaited its verdict") },
                 { assertEquals(1, resumedByFirst, "precondition: the ack resumed episode one (events: $events)") },
                 { assertTrue(firstEnded, "precondition: episode one ended before the next tear") },
+                { assertTrue(monitoredAfterFirst, "precondition: episode one restored the host detector") },
                 { assertTrue(secondResumeSent, "precondition: episode two sent a Resume and awaited its verdict") },
                 {
                     assertTrue(
