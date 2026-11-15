@@ -191,11 +191,11 @@ internal object ControlLogVectors {
         "Close" to ControlCommand.Close(EDGE),
         "Retire" to ControlCommand.Retire(EDGE),
         // What `GovernedHeddleNode.retire` actually sends: it always carries a witness, which brings
-        // the ledger, the gauge, `Rational` and `GCounter` into this format. One counter and one gauge
-        // on one edge, so no map here has two entries and key order cannot move these bytes. The
-        // gauge is the shape a seat or checkpoint writes since #3353: no floor, and the position in
-        // ticks, here past 2⁶⁴ so both of its words are in the bytes. Changed in place, with no
-        // version bump: nothing deployed reads the replicated wire of an earlier build.
+        // the ledger, the gauge and `GCounter` into this format. One counter and one gauge on one
+        // edge, so no map here has two entries and key order cannot move these bytes. The gauge is
+        // the shape a seat or checkpoint writes since #3353: the position in ticks, here past 2⁶⁴ so
+        // both of its words are in the bytes. Changed in place, with no version bump: nothing
+        // deployed reads the replicated wire of an earlier build.
         "RetireWithWitness" to ControlCommand.Retire(
             EDGE,
             EntitlementLedger.of(

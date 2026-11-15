@@ -838,8 +838,8 @@ class HeddleControlPlaneTest {
     // #1752: the scheduler's seat bump, end to end, and the policy actually reading
     // what it wrote. The first generation under a parent that has never run is seated
     // at the origin, which IS that parent's virtual-time origin. A LATER joiner is
-    // seated at the front it is joining — as an exact Rational, since a Gauge floor
-    // never has to be rounded to ⌈V⌉ (§7.2, #1688) — and is then *scheduled* from
+    // seated at the front it is joining — on its own grid of ticks, rounded up once
+    // (§7.2, #1688, #3313) — and is then *scheduled* from
     // there, which is the half a gauge-blind read path would get wrong.
     // ═══════════════════════════════════════════════════════════════════════════
     @Test
