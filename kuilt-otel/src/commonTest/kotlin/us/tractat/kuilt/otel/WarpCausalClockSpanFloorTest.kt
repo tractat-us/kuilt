@@ -147,6 +147,40 @@ class WarpCausalClockSpanFloorTest {
         )
     }
 
+    /**
+     * A remote span names one of this replica's dots as a predecessor, and no span of this replica's
+     * carries it any more: here this replica stored no span at all, only the one peer `b` gossiped.
+     * The predecessor is then the only evidence that `(a, 7)` was minted. A corrupt clock that re-minted
+     * it would let [inferCausalLinks] resolve `b`'s old predecessor to the new span, an edge that never
+     * happened.
+     */
+    @Test
+    fun aCorruptClockMintsAboveAnOwnDotOnlyARemotePredecessorNames() = runTest {
+        val store = InMemoryDurableStore()
+        val peer = ReplicaId("b")
+        val remote = WarpSpanExporter(peer, InMemoryDurableStore()).apply {
+            export(span(42).copy(causalStamp = CausalStamp(Dot(peer, 1L), setOf(Dot(replica, 7L)))))
+        }.snapshot()
+        val previous = WarpTelemetry(replica, store).also { it.recover() }
+        val merged = previous.spans.merge(remote)
+        val corrupt = corruptTheClock(store)
+
+        val restarted = WarpTelemetry(replica, store).also { it.recover() }
+        val recovered = restarted.spans.snapshot().elements
+        val ownStamps = recovered.count { it.causalStamp?.dot?.replica == replica }
+        val predecessors = recovered.flatMap { it.causalStamp?.predecessors.orEmpty() }.toSet()
+        restarted.spans.export(span(99))
+        val next = restarted.dotOf(99)
+
+        assertAll(
+            { assertEquals(ExportResult.Success, merged, "the rig: the remote span was not stored") },
+            { assertIs<ClockRecovery.Undecodable>(corrupt, "the rig: the clock entry decoded as $corrupt") },
+            { assertEquals(0, ownStamps, "the rig: the recovered set holds a stamp of this replica's") },
+            { assertEquals(setOf(Dot(replica, 7L)), predecessors, "the rig: the remote predecessor did not survive") },
+            { assertTrue(next.seq > 7, "the corrupt clock re-minted $next, a dot a remote predecessor names") },
+        )
+    }
+
     @Test
     fun aCleanClockAheadOfTheSpansIsNotWoundBack() = runTest {
         val store = InMemoryDurableStore()
