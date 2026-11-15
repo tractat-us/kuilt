@@ -14,7 +14,8 @@ package us.tractat.kuilt.otel
  * spends nothing of it.
  *
  * [WarpLogRecordExporter] keeps its own copy of these few lines, the shape this type was taken
- * from; [WarpMetricExporter] holds one of these per metric kind.
+ * from; [WarpMetricExporter] holds one of these per metric kind, and [WarpSpanExporter] one for
+ * its stored spans.
  *
  * @property cause The last refusal's cause, which a skipped turn reports as its own.
  * @property refusals `k`: refused reads in a row, capped at [SATURATED_REFUSALS].

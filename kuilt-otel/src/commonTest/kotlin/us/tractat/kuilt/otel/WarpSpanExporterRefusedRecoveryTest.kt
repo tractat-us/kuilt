@@ -51,6 +51,14 @@ class WarpSpanExporterRefusedRecoveryTest {
 
     private fun WarpSpanExporter.liveIds(): Set<ByteString> = snapshot().elements.map { it.spanId }.toSet()
 
+    /**
+     * Spend [turns] turns of the read's backoff window (#3436), so the arm's next turn reads. A
+     * refused read opens a window of 1, the next one 3, then 7: an arm that means a turn which reads
+     * the store, refused or healed, steps through the window first. The filler span is never saved.
+     */
+    private suspend fun WarpSpanExporter.skip(turns: Int, store: ReadRefusingStore? = null) =
+        skipReadWindow(turns, span(99)) { store?.refusals ?: 0 }
+
     /** A remote replica's set holding the spans [ids]. */
     private suspend fun remoteWith(vararg ids: Byte) =
         WarpSpanExporter(ReplicaId("b"), InMemoryDurableStore()).also { remote ->
@@ -85,6 +93,7 @@ class WarpSpanExporterRefusedRecoveryTest {
 
         val restarted = WarpSpanExporter(replica, store).also { it.recover() }
         val refusedRecovery = store.refusals
+        restarted.skip(1, store)
         val result = restarted.export(span(3))
         val durable = idsAfterRestart(backing)
 
@@ -103,10 +112,12 @@ class WarpSpanExporterRefusedRecoveryTest {
         val store = ReadRefusingStore(backing, spansKey)
 
         val restarted = WarpSpanExporter(replica, store).also { it.recover() }
+        restarted.skip(1, store)
         val refused = restarted.export(span(3))
         val liveWhileRefused = restarted.liveIds()
         val refusals = store.refusals
         store.heal()
+        restarted.skip(3)
         val healed = restarted.export(span(4))
         val durable = idsAfterRestart(backing)
 
@@ -120,14 +131,16 @@ class WarpSpanExporterRefusedRecoveryTest {
         )
     }
 
+    /** Healed by the next export that reads: the first, of a window of one, skips the read. */
     @Test
-    fun aCancellationTheStoreMintsOnTheRecoveryReadIsHealedByTheNextExport() = runTest {
+    fun aCancellationTheStoreMintsOnTheRecoveryReadIsHealedByTheNextRead() = runTest {
         val backing = InMemoryDurableStore()
         durableSpans(backing, 1, 2)
         val store = CancellationScriptedStore(backing)
         store.arm(StoreCall.READ, StoreAct.MINT) { it == spansKey }
 
         val restarted = WarpSpanExporter(replica, store).also { it.recover() }
+        restarted.skip(1)
         val result = restarted.export(span(3))
         val durable = idsAfterRestart(backing)
 
@@ -162,6 +175,7 @@ class WarpSpanExporterRefusedRecoveryTest {
         val remote = WarpSpanExporter(ReplicaId("b"), InMemoryDurableStore()).also { it.recover(); it.export(span(9)) }.snapshot()
 
         val restarted = WarpSpanExporter(replica, store).also { it.recover() }
+        restarted.skip(1, store)
         val result = restarted.merge(remote)
         val durable = idsAfterRestart(backing)
 
@@ -179,17 +193,20 @@ class WarpSpanExporterRefusedRecoveryTest {
         val store = ReadRefusingStore(backing, spansKey)
 
         val restarted = WarpSpanExporter(replica, store).also { it.recover() }
-        restarted.merge(remoteWith(9))
+        restarted.skip(1, store)
+        restarted.merge(remoteWith(9)) // refused 2: a window of 3
+        restarted.skip(3, store)
         val refused = restarted.clear()
         val durableAfterRefused = idsAfterRestart(backing)
         store.heal()
+        restarted.skip(7)
         restarted.export(span(4))
         val durableAfterHeal = idsAfterRestart(backing)
         val healed = restarted.clear()
         val durableAfterHealed = idsAfterRestart(backing)
 
         assertAll(
-            { assertTrue(store.refusals >= 3, "the rig did not refuse the reads before the clear") },
+            { assertEquals(3, store.refusals, "the rig did not refuse the recovery read, the merge's and the clear's") },
             { assertIs<ExportResult.Failure>(refused, "a clear over an unread store reported $refused") },
             { assertEquals(ids(1, 2), durableAfterRefused, "the refused clear overwrote the durable spans") },
             { assertEquals(ids(1, 2, 4, 9), durableAfterHeal, "the refused clear dropped a merged span") },
@@ -214,9 +231,11 @@ class WarpSpanExporterRefusedRecoveryTest {
 
         val restarted = WarpSpanExporter(replica, store, maxSpans = 2, bufferPolicy = BufferPolicy.DROP_NEWEST)
         restarted.recover()
+        restarted.skip(1, store)
         val refused = restarted.export(span(3))
         val refusals = store.refusals
         store.heal()
+        restarted.skip(3)
         val healed = restarted.export(span(4))
         val durable = idsAfterRestart(backing)
         val control = idsWithoutAnOutage(byteArrayOf(1, 2), 2, BufferPolicy.DROP_NEWEST, 4)
@@ -244,9 +263,11 @@ class WarpSpanExporterRefusedRecoveryTest {
 
         val restarted = WarpSpanExporter(replica, store, maxSpans = 2, bufferPolicy = BufferPolicy.DROP_OLDEST)
         restarted.recover()
+        restarted.skip(1, store)
         val refused = restarted.export(span(4))
         val refusals = store.refusals
         store.heal()
+        restarted.skip(3)
         val healed = restarted.export(span(1))
         val durable = idsAfterRestart(backing)
         val control = idsWithoutAnOutage(byteArrayOf(2, 3), 2, BufferPolicy.DROP_OLDEST, 1)
@@ -274,6 +295,7 @@ class WarpSpanExporterRefusedRecoveryTest {
 
         val restarted = WarpSpanExporter(replica, store, maxSpans = 2).also { it.recover() }
         store.heal()
+        restarted.skip(1)
         val healed = restarted.export(span(5))
         val durable = idsAfterRestart(backing)
         val control = idsWithoutAnOutage(byteArrayOf(1, 2, 3, 4), 2, BufferPolicy.DROP_OLDEST, 5)
@@ -302,6 +324,7 @@ class WarpSpanExporterRefusedRecoveryTest {
         val restarted = WarpSpanExporter(replica, store, maxSpans = 2, bufferPolicy = BufferPolicy.DROP_NEWEST)
         restarted.recover()
         store.heal()
+        restarted.skip(1)
         val healed = restarted.export(span(5))
         val durable = idsAfterRestart(backing)
         val control = idsWithoutAnOutage(byteArrayOf(1, 2, 3, 4), 2, BufferPolicy.DROP_NEWEST, 5)
@@ -329,6 +352,7 @@ class WarpSpanExporterRefusedRecoveryTest {
         val restarted = WarpSpanExporter(replica, store, maxSpans = 2, bufferPolicy = BufferPolicy.DROP_OLDEST)
         restarted.recover()
         store.heal()
+        restarted.skip(1)
         val healed = restarted.export(span(0))
         val durable = idsAfterRestart(backing)
         val control = idsWithoutAnOutage(byteArrayOf(1, 2, 3, 4), 2, BufferPolicy.DROP_OLDEST, 0)
@@ -351,8 +375,10 @@ class WarpSpanExporterRefusedRecoveryTest {
         val remote = WarpSpanExporter(ReplicaId("b"), InMemoryDurableStore()).also { it.recover(); it.export(span(9)) }.snapshot()
 
         val restarted = WarpSpanExporter(replica, store).also { it.recover() }
-        val merged = restarted.merge(remote)
+        restarted.skip(1, store)
+        val merged = restarted.merge(remote) // refused 2: a window of 3
         store.heal()
+        restarted.skip(3)
         restarted.export(span(3))
         val durable = idsAfterRestart(backing)
 
@@ -376,8 +402,10 @@ class WarpSpanExporterRefusedRecoveryTest {
 
         val clockRecovery = clock.recover(store)
         exporter.recover()
+        exporter.skip(1, store)
         val refused = exporter.export(span(3))
         store.heal()
+        exporter.skip(3)
         val retried = exporter.export(span(3))
         val copies = WarpSpanExporter(replica, backing).also { it.recover() }.snapshot().elements
             .filter { it.spanId == span(3).spanId }
@@ -406,17 +434,22 @@ class WarpSpanExporterRefusedRecoveryTest {
 
         val clockRecovery = clock.recover(store)
         exporter.recover()
-        val refused = (1..2).map { exporter.export(span(3)) }
+        val refused = listOf(1, 3).map { window ->
+            exporter.skip(window, spanReads)
+            exporter.export(span(3))
+        }
         val clockRefusals = store.refusals
         spanReads.heal()
         store.heal()
+        exporter.skip(7)
         val retried = exporter.export(span(3))
         val copies = WarpSpanExporter(replica, backing).also { it.recover() }.snapshot().elements
             .filter { it.spanId == span(3).spanId }
 
         assertAll(
             { assertIs<ClockRecovery.Refused>(clockRecovery, "the rig: the clock's read was not refused") },
-            { assertEquals(3, clockRefusals, "the rig: the exports did not retry the clock's read") },
+            // recover, then each of the six exports: the skipped ones read the clock too.
+            { assertEquals(7, clockRefusals, "the rig: the exports did not retry the clock's read") },
             { refused.forEach { assertIs<ExportResult.Failure>(it, "the rig: a retry was not refused") } },
             { assertEquals(ExportResult.Success, retried) },
             { assertEquals(1, copies.size, "the retries left ${copies.size} copies of one span: $copies") },
@@ -441,12 +474,16 @@ class WarpSpanExporterRefusedRecoveryTest {
 
         val restarted = WarpSpanExporter(replica, store).also { it.recover() }
         val afterRecover = restarted.health.value
-        restarted.export(span(3))
-        restarted.merge(remote)
-        restarted.clear()
+        restarted.skip(1, store)
+        restarted.export(span(3)) // refused 2: a window of 3
+        restarted.skip(3, store)
+        restarted.merge(remote) // refused 3: a window of 7
+        restarted.skip(7, store)
+        restarted.clear() // refused 4: a window of 15
         val whileRefused = restarted.health.value
         val refusals = store.refusals
         store.heal()
+        restarted.skip(15)
         val healed = restarted.export(span(4))
         val afterHeal = restarted.health.value
 
@@ -454,10 +491,10 @@ class WarpSpanExporterRefusedRecoveryTest {
             { assertEquals(4, refusals, "the rig did not refuse the recovery read and each turn's retry") },
             { assertTrue(afterRecover.recoveryFailed, "the refused recovery was not reported") },
             { assertEquals(0L, afterRecover.failed, "the refused recovery was counted as a turn") },
-            { assertEquals(3L, whileRefused.failed, "the refused export, merge and clear were not all counted") },
-            { assertEquals(3L, whileRefused.outstandingFailures, "the refused turns are not outstanding") },
+            { assertEquals(3L + 11L, whileRefused.failed, "the refused export, merge and clear and the skips were not all counted") },
+            { assertEquals(3L + 11L, whileRefused.outstandingFailures, "the refused turns are not outstanding") },
             { assertEquals(ExportResult.Success, healed) },
-            { assertEquals(3L, afterHeal.failed) },
+            { assertEquals(3L + 11L + 15, afterHeal.failed) },
             { assertEquals(1L, afterHeal.acknowledged) },
             { assertEquals(0L, afterHeal.outstandingFailures, "the healed write did not resolve the refused turns") },
         )
@@ -472,6 +509,7 @@ class WarpSpanExporterRefusedRecoveryTest {
         val store = CancellationScriptedStore(backing)
         store.arm(StoreCall.READ, StoreAct.MINT) { it == spansKey }
         val restarted = WarpSpanExporter(replica, store).also { it.recover() }
+        restarted.skip(1)
 
         store.arm(StoreCall.READ, StoreAct.PARK) { it == spansKey }
         val returned = cancelInside(store) { restarted.export(span(3)) }

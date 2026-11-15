@@ -92,6 +92,8 @@ class WarpCausalClockSpanFloorTest {
         val restarted = WarpTelemetry(replica, store).also { it.recover() }
         val refusedAtRecover = store.refusals
         store.heal()
+        // recover's refusal opens a window of one turn (#3436), so the healing turn is the next.
+        restarted.spans.skipReadWindow(1, span(98))
         val result = restarted.spans.export(span(99))
         val next = restarted.dotOf(99)
 

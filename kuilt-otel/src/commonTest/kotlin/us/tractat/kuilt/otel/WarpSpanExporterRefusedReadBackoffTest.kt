@@ -123,11 +123,16 @@ class WarpSpanExporterRefusedReadBackoffTest {
 
         val turns = 150
         val read = mutableListOf<Boolean>()
+        // One remote replica's set, grown per merge, so each remote span has its own dot.
+        var remoteSet = ORSet.empty<SpanRecord>()
         val results = (0 until turns).map { turn ->
             val before = store.readsOf(spansKey)
             when (turn % 3) {
                 0 -> exporter.export(span(10 + turn))
-                1 -> exporter.merge(remote(100 + turn))
+                1 -> {
+                    remoteSet = remoteSet.piece { it.add(ReplicaId("b"), span(100 + turn)) }
+                    exporter.merge(remoteSet)
+                }
                 else -> exporter.clear()
             }.also { read += store.readsOf(spansKey) > before }
         }
