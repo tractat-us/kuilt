@@ -39,8 +39,8 @@ import us.tractat.kuilt.math.Int128
  * It encodes as its two words, like a [Gauge]'s ticks ([WideTicksSerializer]).
  *
  * The clock is the virtual time a parent's asking children have kept, issued less refunded, per
- * unit of their weight, in clock ticks, 720,720 to one tick of a weight-1 child (a run that does
- * not divide evenly rounds up, by under a tick); `served` is where each child's
+ * unit of their weight, in clock ticks, 720,720 to one tick of a weight-1 child (a step that does
+ * not divide evenly rounds up, by under a clock tick); `served` is where each child's
  * `baseIssued − returned` stood when its parent's clock last ran; and `departures` is where the clock
  * stood when this peer saw a child stop asking. A clock can run backward on a round whose refunds
  * outweigh its grants, so it, and a departure read off it, are signed ([SignedWideTicksSerializer]).

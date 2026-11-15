@@ -320,43 +320,6 @@ class BurstLagTest {
     }
 
     /**
-     * The wake offset a lone weight-1 returner comes back with, its departure at [left] and its
-     * parent's clock at [clock], both in clock ticks: the shift, in ticks of its own grid.
-     */
-    private fun shiftFor(left: Long, clock: Long): Int128? {
-        val b = edgeOf(root, GroupId("p/b"), 1L)
-        val ledger = shapedLedger(root, listOf(b)).piece(EntitlementLedger.of(gauges = mapOf(b.id to gaugeAt(Int128.ZERO, 0L))))
-        val memory = AllocatorMemory(
-            wakeOffsets = emptyMap(),
-            demandingObserved = mapOf(b.id to false),
-            clocks = mapOf(root to Int128.of(clock)),
-            departures = mapOf(b.id to Int128.of(left)),
-        )
-        val allocator = FairShareAllocator(LOCAL, PolicyConfig(quantum = 1L), memory)
-        allocator.settle(root, ledger) { want() }
-        check(allocator.lastObservedDemanding(b.id) == true && b.id !in allocator.memory.departures) { "the rig: b came back" }
-        return allocator.memory.wakeOffsets[b.id]
-    }
-
-    /**
-     * A returner's shift is one ceiling of the clock's run, never a difference of two ceilings,
-     * which comes out up to a tick short: credit (#3416 review). A weight-1 child's tick is
-     * 720,720 clock ticks. A run of 720,719 from 1 to 720,720 is a tick rounded up, where
-     * `⌈720,720 / 720,720⌉ − ⌈1 / 720,720⌉` is none.
-     */
-    @Test
-    fun aReturnersShiftRoundsTheClocksRunUpOnce() {
-        val tick = 720_720L
-        assertAll(
-            { assertEquals(Int128.of(1L), shiftFor(left = 1L, clock = tick), "under a tick of run rounds up to one") },
-            { assertEquals(Int128.of(1L), shiftFor(left = 0L, clock = tick), "control: exactly one tick") },
-            { assertEquals(Int128.of(2L), shiftFor(left = 1L, clock = tick + 2L), "just over a tick rounds up to two") },
-            { assertEquals(Int128.ZERO, shiftFor(left = tick, clock = tick), "control: a clock that has not run moves nothing") },
-            { assertEquals(Int128.ZERO, shiftFor(left = tick, clock = 1L), "a clock that ran backward moves nothing") },
-        )
-    }
-
-    /**
      * a and b equal. A burst of [first] units both want, then b sits out [idle] rounds in which a
      * takes 2 units alone, then a burst of [last] both want: b's take of that last burst.
      */

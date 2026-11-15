@@ -1012,10 +1012,21 @@ public class FairShareAllocator(
         return returners.associate { edge -> edge.record.id to HeddlePolicy.effectiveTicksWide(edge) + shiftOf(edge, clock) }
     }
 
-    /** How far [edge] comes back moved: the clock's run from its departure to [clock], on its own grid ([runOnGrid]). */
+    /**
+     * How far [edge] comes back moved: the clock's run from its departure to [clock], on its own
+     * grid, never below zero. Each end is read on that grid rounded up ([clockOnGrid]) and the shift
+     * is their difference, so where the run does not land on the grid it is off by under one of the
+     * child's ticks, either way.
+     *
+     * Not one ceiling of the run, `⌈(clock − left) / tick⌉`, which can never fall short but rounds
+     * every return up. That error has a sign, so it adds up: about half a tick a return, measured
+     * on `BurstLagTest`'s 3:1 rigs as 66 units of a fair 75 to the light child over 300 bursts. The
+     * difference of two readings errs both ways, and its sum stayed within the rigs' tolerance.
+     */
     private fun shiftOf(edge: PolicyEdge, clock: Int128): Int128 {
         val left = checkNotNull(departures[edge.record.id]) { "a returner with no departure: ${edge.record.id.value}" }
-        return runOnGrid(clock - left, edge.record.weight)
+        val w = edge.record.weight
+        return maxOf(Int128.ZERO, clockOnGrid(clock, w) - clockOnGrid(left, w))
     }
 
     /**
@@ -1033,19 +1044,14 @@ public class FairShareAllocator(
     }
 
     /**
-     * A clock [run] on the grid of a child of weight [w] = `n / d`, rounded up and never below zero:
-     * `⌈run · n / (CLOCK_GRID · d)⌉` ticks, since a clock tick is `1 / CLOCK_GRID` of a weight-1
-     * child's. One ceiling of the run, taken in two exact steps, `⌈⌈run · n / CLOCK_GRID⌉ / d⌉`,
-     * so no product leaves 128 bits for a denominator that would. A difference of two ceilings,
-     * one at each end of the run, comes out up to a tick short of this, which is credit
-     * (#3416 review).
+     * [clock] on the grid of a child of weight [w] = `n / d`, rounded up: `⌈clock · n / (CLOCK_GRID · d)⌉`
+     * ticks, since a clock tick is `1 / CLOCK_GRID` of a weight-1 child's, taken in two exact steps.
      */
-    private fun runOnGrid(run: Int128, w: Weight): Int128 {
-        if (run <= Int128.ZERO) return Int128.ZERO
-        val scaled = mulDiv(run, w.numerator, CLOCK_GRID, Rounding.CEILING)
-            ?: throw ArithmeticException("Int128 overflow: a clock run of $run read at weight $w")
+    private fun clockOnGrid(clock: Int128, w: Weight): Int128 {
+        val scaled = mulDiv(clock, w.numerator, CLOCK_GRID, Rounding.CEILING)
+            ?: throw ArithmeticException("Int128 overflow: a clock of $clock read at weight $w")
         return mulDiv(scaled, 1L, w.denominator, Rounding.CEILING)
-            ?: throw ArithmeticException("Int128 overflow: a clock run of $run read at weight $w")
+            ?: throw ArithmeticException("Int128 overflow: a clock of $clock read at weight $w")
     }
 
     /**
@@ -1151,8 +1157,9 @@ public class FairShareAllocator(
          * Clock ticks to one tick of a weight-1 child's grid: the least common multiple of 1 to 16.
          * A clock step divides by the asking children's total weight, so this makes a step exact for
          * every total whose factors divide it. Not every total: one with a prime factor above 13, or
-         * a prime power past this one's, rounds each step up by under one clock tick. A shift read
-         * on a child's grid rounds up by under one of that child's ticks. Both are the penalty side.
+         * a prime power past this one's, rounds each step up by under one clock tick, the penalty
+         * side. A shift read on a child's grid is off by under one of that child's ticks, either way
+         * ([shiftOf]).
          */
         const val CLOCK_GRID: Long = 720_720L
 
