@@ -796,7 +796,10 @@ public class FairShareAllocator(
 
     /**
      * Seat the **newborns** and clamp the **wakers** under [parent] — the two kinds of joiner —
-     * against a single front, [joinFront].
+     * against a single front, [joinFront]. A waker this peer saw stop asking is a **returner**: it
+     * is moved by how far its parent's net-service clock ran while it was away ([runClock],
+     * [moveReturners], #3376) rather than clamped, and it is still a joiner, so it stays out of
+     * the front the others are seated at.
      *
      * **One front, one exclusion set, and that is the whole point** (issue #1752). Both joiners are
      * measured against "where the competing set is right now", and each is, in its own way, reading
@@ -1000,10 +1003,13 @@ public class FairShareAllocator(
      * Enforce §10.6 — "no unlimited idle credit" — for [edges] (issue #1695).
      *
      * Every child that this peer has previously observed **not** competing and that competes now
-     * has crossed the idle→demand edge the design §7.2 clamp is defined on. Each such waker is
-     * clamped forward to [HeddlePolicy.front] — the front of the set it is rejoining — so it
-     * re-enters level with the children that kept running instead of spending the whole idle
-     * interval in one burst. The clamp is a *forward* offset only: it can never advance a child's
+     * has crossed the idle→demand edge the design §7.2 clamp is defined on. [settleJoiners] hands
+     * this only the wakers it holds no departure for, the ones it never saw stop asking: a child it
+     * first saw idle, or one whose memory was restored without the clock. A waker it saw stop comes back by its
+     * parent's clock instead ([moveReturners], #3376), which keeps the lag a short burst leaves
+     * where the clamp would forgive it. Each waker here is clamped forward to [HeddlePolicy.front]
+     * — the front of the set it is rejoining — so it re-enters level with the children that kept
+     * running instead of spending the whole idle interval in one burst. The clamp is a *forward* offset only: it can never advance a child's
      * turn, only give one up.
      *
      * All wakers are excluded from the front together, not just each from its own: two siblings

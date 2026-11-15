@@ -259,8 +259,10 @@ public sealed interface LeaseOutcome {
  * a different case and counts as **idle**, even if the caller lists it as waiting: a leaf whose
  * only route crosses a closing edge, or a named group that has gained an ACTIVE child. A subtree
  * holding only such work is observed idle, so it banks no credit through the reshape window
- * (design §10.5): when it can be reached again, say because a new child under it activates, it is
- * clamped as a waker rather than owed the slots it could not have used.
+ * (design §10.5): when it can be reached again, say because a new child under it activates, it
+ * comes back by its parent's clock, as far ahead or behind as it was when it was cut off, rather
+ * than owed the slots it could not have used (§7.2, #3376). One this engine never saw leave is
+ * clamped as a waker.
  *
  * ## What a lease ends at
  *
@@ -278,7 +280,8 @@ public sealed interface LeaseOutcome {
  * beneath it at once. A lease counts at every group its path passes through, a draining one
  * included. Before a pick builds its demand views, every leaf beneath a group at its ceiling is
  * dropped from both sets, so the pick goes to a sibling, and the capped group counts as idle at its
- * parent: it banks no credit while it waits, and wakes clamped once a lease beneath it closes. A
+ * parent: it banks no credit while it waits, and once a lease beneath it closes it comes back as
+ * far ahead or behind its siblings as it was when it reached the ceiling (#3376). A
  * ceiling of `0` pauses everything beneath it. When every eligible leaf is capped, [acquire]
  * returns [AcquireOutcome.NothingEligible]. [previewPicks] filters the same way, counting the
  * leases already open and the ones a preview opens; [explain] tells a capped leaf
@@ -707,7 +710,7 @@ public class LocalHeddle private constructor(
      * [admit], observing [waiting] on the way: charge work another scheduler already started at
      * [leaf], and leave the wake memory as `acquire(waiting, eligible = {leaf})` would have (#3320).
      * For a caller whose work is always started elsewhere: the plain [admit] observes nothing, so
-     * a group it saw idle that comes back is never clamped as a waker.
+     * a group it saw idle that comes back is never treated as a waker.
      *
      * At each group down [leaf]'s lineage it seats the newborns and clamps the wakers against
      * [waiting], as that pick does, then delegates [reservation] down the lineage without picking.
