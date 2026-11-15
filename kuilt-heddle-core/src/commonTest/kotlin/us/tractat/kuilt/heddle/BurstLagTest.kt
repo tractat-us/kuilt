@@ -450,10 +450,12 @@ class BurstLagTest {
      * not a whole number of its ticks (#3416 review). x has weight 1. The stretches it is present
      * for run the clock by `16/13` and `32/10` of x's ticks, so each return's ideal shift is a
      * fraction, and a shift taken as the difference of two rounded readings errs by a fraction
-     * that, in a repeating pattern, locks into one phase and adds up: toward **credit** on the first
-     * rig, which §10.5 forbids, and toward penalty on the second. A shift that carries its own
-     * rounding forward keeps x's total over-shift under one tick, so its stray from fair is the same
-     * after 1,200 bursts as after 300, and within a unit of fair.
+     * that, in a repeating pattern, locks into one phase and comes back every return. Measured with
+     * that rule: the first rig held x in **credit**, which §10.5 forbids, 51/13 units over fair at
+     * 300 bursts and 61/13 at 1,200 (its siblings return too, and their own errors absorb some of
+     * x's); the second drifted toward penalty without bound, −16 at 300 and −66 at 1,200. A shift
+     * that carries its own rounding forward keeps x's total over-shift under one tick, so its stray
+     * from fair is the same after 1,200 bursts as after 300, and within a unit of fair.
      */
     @Test
     fun aReturnerShiftThatDoesNotLandOnItsGridDoesNotDrift() {
