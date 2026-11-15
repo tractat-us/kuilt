@@ -249,10 +249,18 @@ class HeddleAcceptanceTest {
 
         val both = MixedWeightRun(root, listOf(light, heavy), MAX_GRANT, Random(2))
         val refusals = ArrayList<String>()
+        var heavyLevel = Rational.ZERO
+        var lightLevel = Rational.ZERO
         repeat(JOINED_CALLS) {
             both.advertise(node, listOf(light, heavy))
             if (both.schedule(node) is ScheduleOutcome.PositionCeiling) refusals += "call ${both.calls}"
             both.chargeBelowReservation(node)
+            // Right after the seat: later calls give both one grant each, which the light lane's
+            // virtual time feels sixty times as much, so only the first call says where the seat was.
+            if (both.calls == 1) {
+                heavyLevel = peer.node.effectiveVirtualService(heavy, listOf(light, heavy))
+                lightLevel = peer.node.effectiveVirtualService(light, listOf(light, heavy))
+            }
             if (both.calls % PUMP_EVERY == 0) cluster.pump(1L)
         }
         cluster.pump()
@@ -270,6 +278,7 @@ class HeddleAcceptanceTest {
             { assertEquals(emptyList<String>(), refusals.take(MAX_REPORTED), "no call met the ceiling (${refusals.size} did)") },
             { assertEquals(JOINED_CALLS * MAX_GRANT, heavyIssued, "the newborn was granted on every call") },
             { assertEquals(JOINED_CALLS * MAX_GRANT, lightSince, "and so was the runner") },
+            { assertLevel(heavyLevel, lightLevel, "the newborn was seated level with the runner, not behind it") },
             { assertConverged(cluster) },
         )
     }
@@ -385,6 +394,8 @@ class HeddleAcceptanceTest {
         after.advertise(second, spreadLanes)
         val atBoot = after.schedule(second)
         after.chargeBelowReservation(second)
+        val idleLevel = restarted.node.effectiveVirtualService(idle, spreadLanes)
+        val lightLevel = restarted.node.effectiveVirtualService(light, spreadLanes)
         val refusals = ArrayList<String>()
         repeat(AFTER_RESTART_CALLS) { call ->
             if (after.step(second) is ScheduleOutcome.PositionCeiling) refusals += "call ${call + 2}"
@@ -403,6 +414,7 @@ class HeddleAcceptanceTest {
             { assertTrue(restarted.replica != first.self, "the rig: the restarted process is a fresh replica") },
             { assertEquals(originBefore, originAtRestart, "the rig: the restarted scheduler caught up on the origin before it scheduled") },
             { assertIs<ScheduleOutcome.Delegated>(atBoot, "the boot call, with the long-idle child demanding, delegates") },
+            { assertLevel(idleLevel, lightLevel, "the long-idle child came back level with the runner, not behind it") },
             { assertEquals(emptyList<String>(), refusals.take(MAX_REPORTED), "no call after the restart met the ceiling (${refusals.size} did)") },
             { assertTrue(second.rebases() > 0, "the restarted scheduler rebased in its turn") },
             { assertTrue(before.grants + after.grants >= LONG_RUN_GRANTS, "the run went far past the old ceiling") },
@@ -424,6 +436,22 @@ class HeddleAcceptanceTest {
         val cluster = governedCluster(size = 3, quantum = MAX_GRANT, cap = SUPPLY)
         cluster.bootstrap(lanes, mint)
         return cluster
+    }
+
+    /**
+     * [edge]'s effective virtual service, raw plus its wake clamp: with [edge] the only child of
+     * [lanes] demanding, the parent's front is exactly that. Demand is advisory and only `schedule`
+     * samples it, so the probe moves no wake memory; re-advertise before the next call.
+     */
+    private fun GovernedHeddleNode.effectiveVirtualService(edge: AttachmentRecord, lanes: List<AttachmentRecord>): Rational {
+        for (lane in lanes) advertise(lane.id, if (lane == edge) Demand(Long.MAX_VALUE / 4, MAX_GRANT) else Demand.NONE)
+        return checkNotNull(parentVirtualTime(root)) { "the parent has active children, so it has a front" }
+    }
+
+    /** [a] and [b] within two of the largest grants of virtual time, either way. */
+    private fun assertLevel(a: Rational, b: Rational, message: String) {
+        val slack = Rational.of(2L * MAX_GRANT)
+        assertTrue(a - b <= slack && b - a <= slack, "$message: $a against $b")
     }
 
     private fun assertConverged(cluster: GovernedCluster) {
