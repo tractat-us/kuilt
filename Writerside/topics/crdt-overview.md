@@ -14,7 +14,7 @@ Use replication when you want convergence without a central coordinator. If your
 
 `kuilt-crdt` provides more than twenty types, grouped by what they model.
 
-**`kuilt-crdt` does not depend on `kuilt-core`.** Its only kuilt dependencies are two small modules that depend on nothing: `kuilt-math`, and `kuilt-base`, which tells you which kuilt is running. Add it to any project on its own and replicate over whatever transport you already have. Live replication over a `Seam` (via [`Quilter`](crdt-quilter.md)) is opt-in, not required.
+**`kuilt-crdt` does not depend on `kuilt-core`.** Its only kuilt dependency is `kuilt-math`, a small module that depends on nothing. Add it to any project on its own and replicate over whatever transport you already have. Live replication over a `Seam` (via [`Quilter`](crdt-quilter.md)) is opt-in, not required.
 
 ## Pick by what you're building
 
@@ -60,7 +60,7 @@ Use replication when you want convergence without a central coordinator. If your
 
 ## Using the types without kuilt
 
-These types are plain serializable value objects, and **`kuilt-crdt` declares no dependency on `kuilt-core`**. Its only kuilt dependencies are `kuilt-math`, a small module for counting without wrapping, and `kuilt-base`, which carries the running kuilt's version. Neither depends on anything itself, so you can add it to a project entirely on its own. You do not need a `Seam`, a `Loom`, or any other kuilt module to use them. Apply updates by calling `.piece()` directly; serialize with `kotlinx.serialization`; ship the bytes over any transport you already have.
+These types are plain serializable value objects, and **`kuilt-crdt` declares no dependency on `kuilt-core`**. Its only kuilt dependency is `kuilt-math`, a small module for counting without wrapping. That depends on nothing itself, so you can add it to a project entirely on its own. You do not need a `Seam`, a `Loom`, or any other kuilt module to use them. Apply updates by calling `.piece()` directly; serialize with `kotlinx.serialization`; ship the bytes over any transport you already have.
 
 ```kotlin
 var counter = GCounter.ZERO
