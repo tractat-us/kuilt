@@ -8671,3 +8671,129 @@ allprojects {
         dependsOn(rootProject.tasks.named("forbidDemotedFieldTrail"))
     }
 }
+
+// ── Stamp invariance: changing the version stamp re-runs only what reads it (#3464) ──────────────
+//
+// Every snapshot publishes at `-Pversion=<line>.0-dev.<run>`, so the version is the one input that
+// differs between any two publish runs. When it reached the compile tasks of every module through
+// `:kuilt-base` (an `api` edge from five roots, and a `const` the JVM classpath snapshot records),
+// the publish job lost its build cache and grew from 2 to 30+ minutes, and nothing said why.
+//
+// This measures the property itself rather than any one route to breaking it, so it is not a source
+// scan: after a normal build, `.github/scripts/stamp-invariance.sh` runs `stampProbeTargets` again
+// at a different `-Pversion`, records every task outcome with Gradle's own reasons, and fails
+// unless every selected task that actually executed is allowlisted in
+// `.github/stamp-invariance-allowlist.txt` (`.github/scripts/stamp-invariance.py` has the rules). A new `api`/`implementation`
+// edge, a `const`, a test runtime classpath, a generated resource, or a build-logic change that puts
+// the version into a task input all show up the same way: a task that re-ran.
+//
+// What it selects (`kuilt.stampProbe.family`): `linux` takes every JVM/Android compilation (main
+// and test), every metadata compilation, every wasm/js MAIN compilation and every JVM `Test` task;
+// `apple` takes every `macosArm64` and `iosSimulatorArm64` compilation, main and test. Each is meant to be a subset of what
+// the job's first pass already ran, because a task the first pass never ran has no history to be
+// up to date against. The script fails on such a task too ("unmeasured"), so the selection cannot
+// silently grow into a second build.
+//
+// What it does not see: anything outside the selection. Publish-only tasks (POMs, Gradle module
+// metadata, sources and javadoc jars) legitimately carry the version and are not selected; the
+// native/wasm test LINK tasks are not selected either, because a link re-runs only when a klib it
+// reads changed, and that klib's compile task is selected.
+//
+// Positive control: `-Pkuilt.stampProbe.plantBaseEdge=true` gives `:kuilt-store` an
+// `api(project(":kuilt-base"))` edge (see its build script). Both passes must carry the flag; the
+// check must then red naming `:kuilt-store`'s tasks and the tasks of every module above it.
+abstract class StampProbeRecorder :
+    BuildService<StampProbeRecorder.Params>,
+    org.gradle.tooling.events.OperationCompletionListener,
+    AutoCloseable {
+    interface Params : BuildServiceParameters {
+        val report: RegularFileProperty
+    }
+
+    private val rows = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+    override fun onFinish(event: org.gradle.tooling.events.FinishEvent) {
+        if (event !is org.gradle.tooling.events.task.TaskFinishEvent) return
+        val result = event.result
+        val outcome = when (result) {
+            is org.gradle.tooling.events.task.TaskSkippedResult -> "SKIPPED"
+            is org.gradle.tooling.events.task.TaskFailureResult -> "FAILED"
+            is org.gradle.tooling.events.task.TaskSuccessResult -> when {
+                result.isFromCache -> "FROM-CACHE"
+                result.isUpToDate -> "UP-TO-DATE"
+                else -> "EXECUTED"
+            }
+            else -> "UNKNOWN"
+        }
+        val reasons = (result as? org.gradle.tooling.events.task.TaskExecutionResult)
+            ?.executionReasons.orEmpty()
+            .joinToString(" | ") { it.replace(Regex("""\s+"""), " ").trim() }
+        rows += "${event.descriptor.taskPath}\t$outcome\t$reasons"
+    }
+
+    override fun close() {
+        parameters.report.get().asFile.apply { parentFile.mkdirs() }
+            .writeText(rows.sorted().joinToString("\n", postfix = "\n"))
+    }
+}
+
+abstract class StampProbeHook @Inject constructor(val registry: BuildEventsListenerRegistry)
+
+providers.gradleProperty("kuilt.stampProbe.report").orNull?.let { report ->
+    val recorder = gradle.sharedServices.registerIfAbsent("stampProbeRecorder", StampProbeRecorder::class.java) {
+        parameters.report.set(layout.projectDirectory.file(report))
+    }
+    objects.newInstance(StampProbeHook::class.java).registry.onTaskCompletion(recorder)
+}
+
+val stampProbeFamily: String = providers.gradleProperty("kuilt.stampProbe.family").getOrElse("linux")
+check(stampProbeFamily in setOf("linux", "apple")) {
+    "-Pkuilt.stampProbe.family=$stampProbeFamily: expected `linux` or `apple`."
+}
+
+fun stampProbeSelection(p: Project, family: String): List<Task> {
+    val kmp = p.extensions.findByType(org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension::class.java)
+    val targets = kmp?.targets?.toList()
+        ?: listOfNotNull(p.extensions.findByType(org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension::class.java)?.target)
+    val selected = mutableListOf<Task>()
+    for (target in targets) {
+        for (compilation in target.compilations) {
+            val keep = when (family) {
+                // The two targets apple-nightly's first pass runs tests on; their compile
+                // classpaths are the same klibs iosArm64's would be, so a leak shows on both.
+                "apple" -> target.name == "macosArm64" || target.name == "iosSimulatorArm64"
+                else -> when (target.platformType) {
+                    org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.jvm, org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.androidJvm ->
+                        !compilation.name.contains("AndroidTest", ignoreCase = true)
+                    org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.common -> true
+                    org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.wasm, org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType.js -> compilation.name == "main"
+                    else -> false
+                }
+            }
+            if (keep) selected += compilation.compileTaskProvider.get()
+        }
+    }
+    if (family == "linux") selected += p.tasks.withType(Test::class.java).toList()
+    return selected
+}
+
+// Each project's `stampProbeTargets` writes the paths it selected, so the checker judges exactly the
+// selection: compile and test tasks. A helper that re-runs only because a file NAME carries the
+// version (every jar, KGP's metadata transforms) is an input to a selected task; if its content
+// changed, the selected task re-runs and is caught there, and if only its name changed, nothing
+// downstream notices, which is the correct verdict.
+allprojects {
+    val owner = this
+    val selection = provider { stampProbeSelection(owner, stampProbeFamily) }
+    val selectedPaths = selection.map { tasks -> tasks.map { it.path }.sorted() }
+    val record = rootProject.layout.buildDirectory.file("stamp-probe/selected/${path.replace(':', '_')}.txt")
+    tasks.register("stampProbeTargets") {
+        group = "verification"
+        description = "The tasks .github/scripts/stamp-invariance.sh re-runs at a changed version (#3464)."
+        dependsOn(selection)
+        doLast {
+            record.get().asFile.apply { parentFile.mkdirs() }
+                .writeText(selectedPaths.get().joinToString("\n", postfix = "\n"))
+        }
+    }
+}

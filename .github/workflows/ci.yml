@@ -350,6 +350,18 @@ jobs:
           -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
+      - name: Stamp invariance — a changed version re-runs only what reads it (#3464)
+        # The second pass over the build above: the same compile and JVM test tasks again at a
+        # different -Pversion, failing on any task outside .github/stamp-invariance-allowlist.txt
+        # that re-ran. Every snapshot publish changes the version, so a task that re-runs here
+        # re-runs on every snapshot. Same daemon arguments as the build step, so the warm daemon
+        # is reused rather than a second one started beside it. Apple native is checked by
+        # apple-nightly.yml, which has the first pass for it. See the root build.gradle.kts.
+        run: >-
+          .github/scripts/stamp-invariance.sh linux --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+
       - name: Kill jstack heartbeat
         # Stop the background watchdog. Runs if: always() so the orphaned loop is
         # cleaned up even when the build step fails.

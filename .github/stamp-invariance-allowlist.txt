@@ -1,0 +1,17 @@
+# Tasks allowed to re-run when ONLY the version stamp changes (#3464).
+#
+# Read by .github/scripts/stamp-invariance.py. One Gradle task path per line; a trailing `*` matches
+# every task in that project. Everything else that re-runs under a changed `-Pversion` is a leak.
+#
+# Adding a line here is the visible cost of reading KuiltVersion. A module that starts depending on
+# `:kuilt-base` adds its own tasks here IN THE SAME PR, and says so in the PR body: on native and
+# wasm every snapshot recompiles that module, and everything above it, because the version is
+# compiled into `:kuilt-base`'s klib on every run.
+
+# The carrier itself, including `generateKuiltVersion`, which writes the version into its source.
+:kuilt-base:*
+
+# `writeBinaryenCoordinates` packs the module's own published coordinates (version included) into
+# its main jar, so the runtime can fetch the classified wasm-opt jars of the same version. Only
+# the resource and the tests that load it change per snapshot; no compile does.
+:kuilt-warp-compiler:jvmTest

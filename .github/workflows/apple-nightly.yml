@@ -121,6 +121,19 @@ jobs:
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
+      # The Apple-native half of ci.yml's stamp-invariance step (#3464): the step above is the
+      # first pass, and this re-runs its macosArm64 and iosSimulatorArm64 compilations at a
+      # different -Pversion, failing on any that re-ran outside the allowlist. A klib carries every
+      # literal, so on native a dependency on :kuilt-base recompiles on every snapshot. Same daemon
+      # arguments as above so the warm daemon is reused. `!cancelled()`, like the spike step: a
+      # test failure above must not hide a leak.
+      - name: Stamp invariance on Apple native (#3464)
+        if: ${{ !cancelled() }}
+        run: >-
+          .github/scripts/stamp-invariance.sh apple --max-workers=2
+          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+
       # #1796: `:spike` is the two-iPhone hardware-validation harness for #1712, and
       # until now NOTHING in CI compiled it — it is excluded from the root Gradle graph
       # unless `-PincludeSpike` is passed, and no workflow passed it. It depends on

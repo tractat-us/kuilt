@@ -242,6 +242,15 @@ the evidence, which is the fifth shape applied to itself.
   The index derives its module list from exactly the branches of
   `moduleDescription()`, so that missing fallback is also what keeps the index
   complete rather than merely current.
+- **A per-build value lives in a module that only its readers depend on, and it is never a
+  `const` (#3464).** Every snapshot publishes at a new `-Pversion`, so whatever the version
+  reaches recompiles on every snapshot. Through five `api` edges onto `:kuilt-base` it reached
+  nearly every compile, and the publish job grew from 2 to 30+ minutes. A klib carries every
+  literal, so on native and wasm only staying off the module helps. The stamp-invariance step
+  enforces it: `.github/scripts/stamp-invariance.sh`, in `build-jvm` and in `apple-nightly`,
+  re-runs the compile and JVM test tasks at a changed version and fails on any that re-ran outside
+  `.github/stamp-invariance-allowlist.txt`. A module that starts reading `KuiltVersion` adds
+  itself there in the same PR.
 - **Spec-critical refactors get a spec-conformance review, not just a behavior-preservation
   review** — see `.claude/rules/consensus.md`.
 - **A conformance property is only as strong as the weakest failure the REFERENCE implementation can
