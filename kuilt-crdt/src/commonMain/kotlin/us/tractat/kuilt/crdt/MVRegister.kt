@@ -22,7 +22,12 @@ public class MVRegister<V> private constructor(
     /** The current value(s): one normally, several if concurrent writes are unresolved, none if never written. */
     public val values: Set<V> get() = causal.store.values.values.toSet()
 
-    /** Write [value] on behalf of [replica], superseding every value this register has observed. */
+    /**
+     * Write [value] on behalf of [replica], superseding every value this register has observed.
+     *
+     * @throws ArithmeticException if [replica]'s seq in this register's context is already at
+     *   [Long.MAX_VALUE], as a decoded context can leave it (#3417). The next dot would wrap.
+     */
     public fun set(replica: ReplicaId, value: V): MVRegister<V> {
         val dot = causal.context.nextDot(replica)
         return MVRegister(Causal(DotFun(mapOf(dot to value)), causal.context.add(dot)))
