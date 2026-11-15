@@ -1138,8 +1138,10 @@ internal class SeamRoom(
                         markRecovered(hostId, at)
                     }
 
+                    override fun claimHostLost(): Boolean = this@SeamRoom.claimHostLost()
+
                     override suspend fun onReconnectFailed(at: Instant, reason: FailureReason) =
-                        markHostLost(at, reason)
+                        announceHostLost(at, reason)
                 },
             )
         } else {
@@ -1882,39 +1884,38 @@ internal class SeamRoom(
      *
      * The host's [JoinerReconnectController] validated the token and the reconnect
      * window was still open. Update liveness, emit [MembershipEvent.Resumed], and
-     * resolve the pending resume flight ([JoinerResumeMachine.takePendingFlight]) so
-     * [resume] returns [ResumeResult.Success].
+     * resolve the pending resume flight ([JoinerResumeMachine.takeFlightForAck]) so
+     * [resume] returns [ResumeResult.Success], unless the room has gone terminal.
      *
      * **Host-authoritative gate + idempotence latch:** mirroring [handleFarewell],
      * only a ResumeAck from the identified host ([hostPeerId]) is honored — a forged
      * ack from another admitted peer, or one arriving before the host is identified,
      * is dropped. The pending resume flight is the idempotence latch: a genuine ack
      * takes it and fires exactly one [MembershipEvent.Resumed]; a duplicate or stray
-     * host ack finds no pending flight ([JoinerResumeMachine.takePendingFlight]
+     * host ack finds no pending flight ([JoinerResumeMachine.takeFlightForAck]
      * returns `null`) and emits nothing.
      *
      * **A terminal room resumes nothing (#3094).** A reconnect window that expires leaves its
-     * flight installed until [leave] takes it, and [markHostLost] announces `HostLost` before that.
-     * An ack handled in between settles the flight as [ResumeResult.WindowClosed], which is what
-     * [resume] returns on a terminal room, and emits no `Resumed`. The check and the `Resumed`
-     * share one critical section with the take, so an ack that saw the room live emitted its
-     * `Resumed` before [markHostLost] could set [hostLost]: no `Resumed` can follow `HostLost`.
+     * flight installed until [leave] takes it. The ack and the window's verdict are ordered by
+     * [lock], and whichever takes it first wins: an ack handled before the verdict resumes the room,
+     * and the episode with it, while a verdict that the window was lost marks the room [hostLost]
+     * before it releases the lock. An ack handled after that finds the room terminal, settles the
+     * flight as [ResumeResult.WindowClosed], which is what [resume] returns on a terminal room, and
+     * emits no `Resumed`. The take, the check and the `Resumed` share one critical section, so no
+     * `Resumed` can follow `HostLost`.
      */
     private fun handleResumeAck(sender: PeerId) {
-        val (flight, verdict) = lock.withLock {
+        val (flight, resumes) = lock.withLock {
             val host = hostPeerId
             if (host == null || sender != host) return
-            val flight = resumeMachine?.takePendingFlight() ?: return
-            val verdict: ResumeResult.JoinerOutcome = if (closed || hostLost) {
-                ResumeResult.WindowClosed
-            } else {
+            val (flight, resumes) = resumeMachine?.takeFlightForAck() ?: return
+            if (resumes) {
                 updateMemberLiveness(sender, Liveness.Connected)
                 emitEvent(MembershipEvent.Resumed(selfId))
-                ResumeResult.Success
             }
-            flight to verdict
+            flight to resumes
         }
-        flight.complete(verdict)
+        flight.complete(if (resumes) ResumeResult.Success else ResumeResult.WindowClosed)
     }
 
     /**
@@ -3519,12 +3520,18 @@ internal class SeamRoom(
     }
 
     private suspend fun markHostLost(at: Instant, reason: FailureReason) {
-        val alreadyLost = lock.withLock {
-            val was = hostLost
-            hostLost = true
-            was
-        }
-        if (alreadyLost) return
+        if (claimHostLost()) announceHostLost(at, reason)
+    }
+
+    /** Sets [hostLost] and returns whether this call set it: the one place the flag is raised. */
+    private fun claimHostLost(): Boolean = lock.withLock {
+        val was = hostLost
+        hostLost = true
+        !was
+    }
+
+    /** The second half of [markHostLost], for a caller whose [claimHostLost] returned `true`. */
+    private suspend fun announceHostLost(at: Instant, reason: FailureReason) {
         emitEvent(MembershipEvent.HostLost(at, reason, localFabric = localFabric.value))
         leave(LeaveReason.Error("host lost"))
     }
