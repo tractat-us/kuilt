@@ -568,6 +568,43 @@ stays in step over the wire on its own.
     }
 ```
 
+### Telling an idle scheduler from a stuck one
+
+**Intent:** a node stopped handing out entitlement, and you need to know whether the tree is
+idle or something at a parent is wrong, without reading the ledger by hand.
+**Primitive:** the `ScheduleOutcome` that `HeddleNode.schedule(parent)` returns, on a static node
+and a governed one alike. `NothingToDelegate` is the idle answer. `PositionCeiling(parent)` and
+`WeightBudget(parent)` say the parent's children cannot be ordered, and why. A busy parent never
+reaches the first by itself: `schedule` rebases it by raising a replicated origin, so a long run
+keeps granting (#3353). It is reached when a child that waits is never served. The second comes
+from weights gossip merged that a pick cannot sum in `Long`, and clears when one child closes.
+
+**A refusal writes nothing.** The first round of a call, with the newborns it seats before that
+pick, lands as one patch or not at all, so a refused call leaves the ledger and the wake clamps as
+they were. A call with nothing to grant writes nothing either. A call that granted and then met a
+refusal answers `Delegated`, and the next call answers the refusal.
+
+<!-- verbatim from kuilt-heddle/src/commonSamples/kotlin/us/tractat/kuilt/heddle/EntitlementLedgerSamples.kt#sampleScheduleOutcomes -->
+```kotlin
+internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
+    when (val outcome = schedule(root)) {
+        // Granted this many rounds. A call that granted and then met a refusal answers this; the next call answers the refusal.
+        is ScheduleOutcome.Delegated -> "delegated ${outcome.grants}"
+        // Nothing to move toward any advertised demand: an idle tree, or no holdings at the root.
+        ScheduleOutcome.NothingToDelegate -> "idle"
+        // A child's position is at its ceiling, so no pick orders exactly. A busy parent rebases long
+        // before this; it is reached when a demanding child is never served and holds the rebase at zero.
+        is ScheduleOutcome.PositionCeiling -> "stuck at ${outcome.parent.value}: serve or close the child that waits"
+        // The active children's weights put a pick's sums out of Long, as gossip can merge. Close one of them.
+        is ScheduleOutcome.WeightBudget -> "stuck at ${outcome.parent.value}: close a child, its weights cannot be summed"
+        // Only a governed node has a write gate; a static node never answers this.
+        is GateClosed -> "gate closed: ${outcome.reason}"
+    }
+```
+
+`BoundMetrics.peakPositionFraction` from `boundMetrics(parent)` says how close the parent is: the
+highest child position as a fraction of its ceiling, held well below one by the rebase.
+
 ### Creating quota or reshaping the tree at runtime (with agreement)
 
 **Intent:** mint new entitlement or re-parent a group *while the system runs*, and need
