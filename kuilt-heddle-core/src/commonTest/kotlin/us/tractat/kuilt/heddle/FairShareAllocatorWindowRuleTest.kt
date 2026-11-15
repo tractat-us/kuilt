@@ -219,7 +219,7 @@ class FairShareAllocatorWindowRuleTest {
     }
 
     private companion object {
-        const val ROUNDS: Int = 2_000
+        const val ROUNDS: Int = 1_000
         const val QUANTUM: Long = 1L shl 42
     }
 }

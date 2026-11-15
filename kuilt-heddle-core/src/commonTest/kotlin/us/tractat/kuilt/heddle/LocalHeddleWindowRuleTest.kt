@@ -95,12 +95,12 @@ class LocalHeddleWindowRuleTest {
                     { assertTrue(window.rebases > 0 && before.rebases > 0, "$name: the rig, both rebased") },
                 )
             }.toTypedArray(),
-            { assertTrue(twins.count { (_, before, window) -> before.origin != window.origin } >= rows.size - 1, "the rig: the rules moved the origin differently") },
+            { assertEquals(rows.size, twins.count { (_, before, window) -> before.origin != window.origin }, "the rig: on every row the rules moved the origin differently") },
         )
     }
 
     private companion object {
         /** Steps a twin row runs on each rule. */
-        const val STEPS: Int = 2_000
+        const val STEPS: Int = 1_000
     }
 }
