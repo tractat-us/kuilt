@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -162,7 +163,7 @@ class LocalHeddleAdmitWaitingTest {
             { assertIs<AcquireOutcome.Acquired>(returned) },
             { assertEquals(false, before.demandingObserved[sEdge], "the rig: s was observed idle before it returned") },
             // a has been charged 6 units at weight 1, so the front s rejoins is 6, and s sits at 0.
-            { assertEquals(Rational.of(6L), after.wakeOffsets[sEdge], "s was clamped up to the front") },
+            { assertEquals(Int128.of(6L * TICKS_PER_UNIT), after.wakeOffsets[sEdge], "s was clamped up to the front") },
             { assertEquals(true, after.demandingObserved[sEdge], "s is observed waiting") },
         )
     }

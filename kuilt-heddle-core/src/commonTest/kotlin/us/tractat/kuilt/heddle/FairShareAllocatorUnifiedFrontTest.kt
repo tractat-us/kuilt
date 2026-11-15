@@ -86,7 +86,7 @@ class FairShareAllocatorUnifiedFrontTest {
         val run = wake(mapOf(a to 1_600L, b to 0L, c to 160L), idle = setOf(c), supply = 100L)
         assertAll(
             { assertEquals(AllocationOutcome.Delegated(100), run.outcome, "the rig: all 100 units went out") },
-            { assertEquals(ticksToVirtual(1_600L, Weight.ONE), run.memory.wakeOffsets[b.id], "b is clamped to a, not to the bystander") },
+            { assertEquals(Int128.of(1_600L), run.memory.wakeOffsets[b.id], "b is clamped to a, not to the bystander") },
             { assertEquals(50, run.granted[a], "a takes half") },
             { assertEquals(50, run.granted[b], "and so does b") },
             { assertEquals(null, run.granted[c], "the idle bystander takes none") },
@@ -128,8 +128,8 @@ class FairShareAllocatorUnifiedFrontTest {
             { assertEquals(AllocationOutcome.Delegated(150), run.outcome, "the rig: all 150 units went out") },
             {
                 assertEquals(
-                    Rational.ZERO,
-                    run.memory.wakeOffsets[a.id] ?: Rational.ZERO,
+                    Int128.ZERO,
+                    run.memory.wakeOffsets[a.id] ?: Int128.ZERO,
                     "a is clamped to the runner's −100, which moves it nothing; the old raise moved it 100",
                 )
             },
