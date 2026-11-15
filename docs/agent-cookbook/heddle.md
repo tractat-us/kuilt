@@ -724,7 +724,8 @@ and `entitlement`. `IllegalStateException` is left for a ledger conflict the eng
 create, such as two live edges into one group, a split record or a cycle on a lease's path, and
 for one call a consumer can reach: `LocalHeddle.fromTopology` over a tree whose boot `apply`
 refuses a child, such as a weight with a denominator above 30,719. To get that refusal as a value
-instead, boot from a coarser tree and `apply` the finer one.
+instead, boot from a coarser tree and `apply` the finer one. A typed answer at boot is tracked
+by [#3461](https://github.com/tractat-us/kuilt/issues/3461).
 
 **The position ceiling.** Each child's progress is a count of sixteenths of a unit, stored exactly
 in 128 bits and read for a pick, net of what it returned, as a `Long` with a ceiling. A busy
