@@ -727,33 +727,49 @@ internal class JoinerResumeMachine(
             lock.withLock { refusal }?.let { failureReason = FailureReason.Refused(it.message, it.code) }
         }
 
-        if (resumed) {
-            // Re-arm: clear the guard and restart host-liveness monitoring on the healed
-            // generation. The restarted detector both keeps the resumed room monitored and,
-            // on a LATER tear, re-fires TransportClosed → a fresh [attemptReconnect]: with
-            // the guard cleared, a subsequent in-session drop auto-resumes again (repeated
-            // episodes). One critical section (the host callback nests the reentrant lock),
-            // so the guard-clear and the detector restart are atomic.
-            lock.withLock {
-                reconnecting = false
-                reconnectJob = null
-                refusal = null
-                host.restoreHostDetector(hostId)
+        // One critical section decides how the episode ended, so the room's ResumeAck handler
+        // ([takeFlightForAck]) and this decision are ordered by the lock: whichever takes it first
+        // wins (#3094). An ack that resumed the room first resumes the episode, even when the
+        // window's timer has already fired, since the host has taken us back and the room has said
+        // `Resumed`. A failed episode marks the room host-lost here, not later in onReconnectFailed,
+        // so an ack handled after this decision finds the room terminal and resumes nothing.
+        // reconnectJob is cleared FIRST on every branch (this coroutine IS it): onReconnectFailed →
+        // leave() must not cancel its own coroutine, or leave()'s seam.close() would be cancelled
+        // mid-teardown.
+        val end = lock.withLock {
+            reconnectJob = null
+            when {
+                resumed || ackResumed -> {
+                    // Re-arm: clear the guard and restart host-liveness monitoring on the healed
+                    // generation. The restarted detector both keeps the resumed room monitored and,
+                    // on a LATER tear, re-fires TransportClosed → a fresh [attemptReconnect]: with
+                    // the guard cleared, a subsequent in-session drop auto-resumes again (repeated
+                    // episodes). The host callback nests the reentrant lock, so the guard-clear and
+                    // the detector restart are atomic.
+                    reconnecting = false
+                    refusal = null
+                    host.restoreHostDetector(hostId)
+                    EpisodeEnd.Resumed
+                }
+                // leave() already owns teardown; don't emit a spurious HostLost.
+                host.isClosed() -> EpisodeEnd.AlreadyEnded
+                host.claimHostLost() -> EpisodeEnd.Lost
+                else -> EpisodeEnd.AlreadyEnded
             }
+        }
+        when (end) {
             // #1637: the dwell path emits nothing of its own — no ResumeAck arrives, so the room's
             // ack handler (which restores the host's liveness and emits the closing edge on a real
             // resume) never runs. Close the arc here instead, once the detector is back so the room
             // is monitored again before it is announced live.
-            if (noOpResume) host.onNoOpResume(hostId, clock())
-        } else if (!lock.withLock { reconnectJob = null; host.isClosed() }) {
-            // Not resumed and not already tearing down via leave() — the reconnect genuinely
-            // failed, so go terminal. Clear reconnectJob FIRST (this coroutine IS it):
-            // onReconnectFailed → leave() must not cancel its own coroutine, or leave()'s
-            // seam.close() would be cancelled mid-teardown. (If closed, leave() already owns
-            // teardown; don't emit a spurious HostLost.)
-            host.onReconnectFailed(clock(), failureReason)
+            EpisodeEnd.Resumed -> if (noOpResume) host.onNoOpResume(hostId, clock())
+            EpisodeEnd.Lost -> host.onReconnectFailed(clock(), failureReason)
+            EpisodeEnd.AlreadyEnded -> Unit
         }
     }
+
+    /** How [runReconnect]'s deciding critical section ended an episode. */
+    private enum class EpisodeEnd { Resumed, Lost, AlreadyEnded }
 
     /**
      * Attempt to resume from [token] after a transport drop: send [AdmitMessage.Resume] to
