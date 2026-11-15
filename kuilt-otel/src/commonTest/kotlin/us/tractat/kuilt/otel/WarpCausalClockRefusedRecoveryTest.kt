@@ -42,7 +42,7 @@ class WarpCausalClockRefusedRecoveryTest {
 
     /** A clock that minted `seq=1` and `seq=2` and persisted them, as a previous process did. */
     private suspend fun durableClockAtTwo(store: DurableStore): List<Dot> {
-        val previous = WarpCausalClock(replica)
+        val previous = WarpCausalClock(replica).armed()
         val used = listOf(previous.mint().dot, previous.mint().dot)
         previous.persist(store)
         return used
@@ -79,6 +79,35 @@ class WarpCausalClockRefusedRecoveryTest {
             { assertEquals(used.size, used.toSet().size, "a dot was minted twice: $used") },
             { assertEquals(ClockPersist.Unrecovered, persisted, "an unrecovered clock persisted over the durable high-water mark") },
             { assertEquals(3L, used.last().seq, "the next healthy restart did not resume after seq=2") },
+        )
+    }
+
+    /**
+     * The round-2 review's case: a clock that ticks before any read lands does not know the durable
+     * `seq` either. Minting there took it to `Armed(1)`, which a refused read then left alone, and the
+     * next persist wrote 1 over the durable 2.
+     */
+    @Test
+    fun aClockThatTicksBeforeAnyReadMintsAndPersistsNothing() = runTest {
+        val backing = InMemoryDurableStore()
+        val used = durableClockAtTwo(backing).toMutableList()
+        val store = ReadRefusingStore(backing, clockKey)
+
+        val fresh = WarpCausalClock(replica)
+        val early = fresh.tick()
+        (early as? ClockTick.Minted)?.let { used += it.stamp.dot }
+        val recovery = fresh.recover(store)
+        val persisted = fresh.persist(store)
+        val next = nextDotAfterRestart(backing)
+        used += next
+
+        assertAll(
+            { assertEquals(1, store.refusals, "the rig did not refuse the recovery read") },
+            { assertIs<ClockRecovery.Refused>(recovery, "the refused read was reported as $recovery") },
+            { assertEquals(ClockTick.Unrecovered, early, "a clock with no landed read minted") },
+            { assertEquals(ClockPersist.Unrecovered, persisted, "a clock with no landed read persisted") },
+            { assertEquals(used.size, used.toSet().size, "a dot was minted twice: $used") },
+            { assertTrue(next.seq >= 3L, "the next restart did not resume after seq=2: $next") },
         )
     }
 
@@ -170,6 +199,43 @@ class WarpCausalClockRefusedRecoveryTest {
             { assertNull(unstamped, "an unrecovered clock stamped a span") },
             { assertEquals(4, durable.size, "a durable span was lost: ${durable.map { it.name }}") },
             { assertEquals(dots.size, dots.toSet().size, "two durable spans share a dot: $dots") },
+        )
+    }
+
+    /**
+     * An export that stamps nothing still persists the clock. A clock that was never recovered must be
+     * read first, or that turn writes `seq=0` over the durable mark.
+     */
+    @Test
+    fun anExportThatDoesNotTickReadsTheClockBeforeWritingIt() = runTest {
+        val store = InMemoryDurableStore()
+        durableClockAtTwo(store)
+        val exporter = WarpSpanExporter(replica, store, causalClock = WarpCausalClock(replica))
+        val stamped = span(1).copy(causalStamp = CausalStamp(Dot(ReplicaId("b"), 1L), emptySet()))
+
+        val result = exporter.export(stamped)
+        val next = nextDotAfterRestart(store)
+
+        assertAll(
+            { assertEquals(ExportResult.Success, result) },
+            { assertEquals(stamped.causalStamp, exporter.snapshot().elements.single().causalStamp, "the rig: the export restamped") },
+            { assertEquals(Dot(replica, 3L), next, "the export wrote over the durable seq") },
+        )
+    }
+
+    /** The same for a clear, whose write section persists the clock without ticking it. */
+    @Test
+    fun aClearReadsANeverRecoveredClockBeforeWritingIt() = runTest {
+        val store = InMemoryDurableStore()
+        durableClockAtTwo(store)
+        val exporter = WarpSpanExporter(replica, store, causalClock = WarpCausalClock(replica))
+
+        val result = exporter.clear()
+        val next = nextDotAfterRestart(store)
+
+        assertAll(
+            { assertEquals(ExportResult.Success, result) },
+            { assertEquals(Dot(replica, 3L), next, "the clear wrote over the durable seq") },
         )
     }
 
