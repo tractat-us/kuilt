@@ -37,7 +37,9 @@ and a snapshot to survive a restart, and no `Seam` or Raft underneath.
   `Reserved` or `NoHoldings`; `schedule` answers `Delegated` or `NothingToDelegate`, or
   `PositionCeiling` or `WeightBudget` when the parent's children cannot be ordered at all. A busy
   parent rebases by raising its replicated origin in the same patch as a grant, long before the
-  ceiling, and `boundMetrics` reports how close its peak child is (#3353). Only a
+  ceiling, and `boundMetrics` reports how close its peak child is (#3353). A grant whose
+  delegation would carry its child to the ceiling is not made, and `schedule` answers
+  `PositionCeiling` with nothing written. Only a
   governed node adds `GateClosed`, with a `Reason`, when this peer may not author entitlement at
   all.
 - `HeddleNode` / `heddleStatic` — the node that runs the tally, demand board, reservations,
@@ -102,8 +104,12 @@ and nothing else does:
   touch the same child don't wait on each other at all.
 - **A weight the scheduler cannot do sums on is turned away.** Each pick multiplies the weights
   of a parent's children together, so a big enough weight, or a big enough mix of them, leaves a
-  64-bit number and every pick there would fail. `prepare` refuses such a weight on its own, and
-  `activate` refuses one that only overflows beside its siblings, each answering
+  64-bit number and every pick there would fail. A weight set too fine for one full lease is
+  turned away too: with leases up to `MAX_RESERVATION`, keep every weight's denominator at or
+  below 30,719; a finer weight set is refused when it is applied. Past that, one lease charged a
+  little under its size can leave a child where no rebase is due and the next lease overflows,
+  and the parent stops for good. `prepare` refuses such a weight on its own, and `activate`
+  refuses one that only fails beside its siblings, each answering
   `ControlConflict.WeightBudget`. Every peer decides it from the same log, so every peer refuses.
   `heddleStatic` checks the same weights in its starting tree and in `prepare` and `activate`,
   which answer `false`. But a static peer checks only what it can see itself, so two peers

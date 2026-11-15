@@ -867,12 +867,9 @@ each:
 - A demanding child that is never served holds `Δ` at zero: it sits less than
   one step ahead of the origin, so no whole step fits below it.
   `LocalHeddlePositionCeilingTest` rigs it.
-- A weight set so fine-grained that one step, read on some child's grid, is
-  large there. The step's lcm always fits `Long` under the weight budget, since it
-  divides the denominators' lcm `L`. Past that child's `R` but under `16R` the step
-  only makes a rebase late. Past `16R`, its ceiling, it wedges the parent while that
-  child demands. That takes a spread near 10¹², `2⁴²/1023` beside `1/1021` say, and
-  about 2⁴⁹ units of service, and no test reaches it.
+- With `k` schedulers granting one child concurrently before their writes merge,
+  the margin a child needs is `C − R ≥ k · H`. That is huge for coarse weights and
+  slim near the edge of the weight budget below. It is documented, not enforced.
 - In a `LocalHeddle` parent driven by both picks and plain `admit`s, a child a
   pick last saw demanding, and idle since, still bounds a charging call's `Δ`
   near its own position until a pick sees it again. Until then it holds the
@@ -891,11 +888,36 @@ and it grew by every returned unit as well as every charged one: at the largest
 reservation charged 1 unit, a weight of `3/7` refused after 4,681 leases. It now
 makes 100,000 with no refusal.
 
-Where `HeddleNode` still meets the ceiling, its `schedule` answers `ScheduleOutcome.PositionCeiling(parent)`. A call
-that granted before meeting the ceiling answers `Delegated`, and the next call
-answers the ceiling. `apply` keeps the weight products in range the same way: an
-activation whose weights would put its parent's `L`, `S`, `G · S` or `S · d` out
-of `Long` is refused with a `StepRefusal`. Where a topology act enters a
+**A weight set too fine for one full lease is refused when it is applied
+(#3353, P1′).** With leases up to `MAX_RESERVATION`, keep every weight's
+denominator at or below 30,719; a finer weight set is refused when it is applied.
+The rebase fires only once a child passes its `R`, so a child that an
+under-charged `complete` parks between `C − H` and `R` (`H = MAX_RESERVATION · G`)
+is never rebased, yet its next full lease passes `C`. `acquire` refuses and
+keeps nothing, so the parent wedges. The review measured `{1/30,721, 1/30,722}`:
+one lease charged `1.172 · 10¹²` and every later acquire refused, while
+`1.1715 · 10¹²` ran. So the budget also asks, for every child `i` of the set,
+
+```
+C_i − R_i > H + gridStep(S) · G · n_i / d_i
+```
+
+in 128 bits. The step term is the whole set's, so activating one child can
+refuse on behalf of another: `1/3` beside a weight of `1.85 · 10¹⁷` triples the
+heavy child's step past its window. The same term refuses `{1, k}` for `k` above
+about `0.94 · 2⁵⁹`, and a set of several fine weights whose denominators share no
+factor, since the step grows with their lcm. A spread like `2⁴²/1023` beside
+`1/1021`, which once wedged a parent by quantisation alone, is refused this way.
+At the edge, `{1/30,718, 1/30,719}` runs at full leases and `{1/30,719, 1/30,720}`
+is refused.
+
+Where `HeddleNode` still meets the ceiling, its `schedule` answers `ScheduleOutcome.PositionCeiling(parent)`. It
+checks the ceiling after it delegates, as `LocalHeddle` does: a grant whose
+delegation would carry its child to the ceiling is not made, and the round writes
+nothing. A call that granted before meeting the ceiling answers `Delegated`, and
+the next call answers the ceiling. `apply` keeps the weight products in range the
+same way: an activation whose weights would put its parent's `L`, `S`, `G · S` or
+`S · d` out of `Long`, or fail P1′, is refused with a `StepRefusal`. Where a topology act enters a
 replicated ledger the same rule is checked. The control log refuses a `Prepare`
 whose own weight fails it and an `Activate` that fails it beside the parent's
 active children, on its log-pure projection (§9). `heddleStatic` checks its

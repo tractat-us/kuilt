@@ -603,10 +603,12 @@ quantifies over (`enrolledReplicas()` reads it back); only a peer may depart its
 enrolled can no longer pass for an idle one. Nor can a parent whose children cannot be ordered:
 `schedule` rebases a busy parent by raising its replicated origin long before a child's position
 nears its ceiling, so no pick changes (#3353); it answers `PositionCeiling(parent)` only where no
-whole step fits, a demanding child that is never served holding the rebase at zero or weights so
-fine-grained that one step spans a child's ceiling, and
-`WeightBudget(parent)` when gossip merged an active set whose weights a pick cannot sum in `Long`,
-both on a static node too. **A peer that cannot read a log entry stops there**:
+whole step fits, a demanding child that is never served holding the rebase at zero, and it makes
+no grant whose own delegation would reach the ceiling. It answers
+`WeightBudget(parent)` when gossip merged an active set whose weights a pick cannot sum in `Long`
+or that is too fine for one full lease, both on a static node too. With leases up to
+`MAX_RESERVATION`, keep every weight's denominator at or below 30,719; a finer weight set is
+refused when it is applied, at `prepare`/`activate` with `ControlConflict.WeightBudget`. **A peer that cannot read a log entry stops there**:
 `GateClosed.Reason.UnreadableControlEntry` names the log index and format version, `enroll` is
 refused, and a restart stops at the same entry, so it takes a build that can read the entry or a
 fresh log. The same bytes stop every peer on that build, and one peer on a newer build stops older
