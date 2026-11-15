@@ -272,6 +272,16 @@ public class GovernedHeddleNode internal constructor(
      */
     public fun parentVirtualTime(parent: GroupId): Rational? = node.parentVirtualTime(parent)
 
+    /** [HeddleNode.rebaseForTest]: a test switches the origin rebase off to run a twin that never rebases. */
+    internal var rebaseForTest: Boolean
+        get() = node.rebaseForTest
+        set(value) {
+            node.rebaseForTest = value
+        }
+
+    /** [HeddleNode.rebasesForTest]: how many origin raises this peer's [schedule] has landed. */
+    internal val rebasesForTest: Int get() = node.rebasesForTest
+
     // ── control plane (design §9 — serialized through the Raft log) ──────────────────
 
     /**
