@@ -98,4 +98,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun queueStatusHolds() = sampleQueueStatus()
+
+    @Test
+    fun waitReasonHolds() = sampleWaitReason()
 }
