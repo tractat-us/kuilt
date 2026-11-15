@@ -595,7 +595,7 @@ internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
         // Nothing to move toward any advertised demand: an idle tree, or no holdings at the root.
         ScheduleOutcome.NothingToDelegate -> "idle"
         // A child's position is at its ceiling, so no pick orders exactly. A busy parent rebases long
-        // before this; it is reached when a demanding child is never served and holds the rebase at zero.
+        // before this. A demanding child that is never served still reaches it, as do weights so fine that one step spans a ceiling.
         is ScheduleOutcome.PositionCeiling -> "stuck at ${outcome.parent.value}: serve or close the child that waits"
         // The active children's weights put a pick's sums out of Long, as gossip can merge. Close one of them.
         is ScheduleOutcome.WeightBudget -> "stuck at ${outcome.parent.value}: close a child, its weights cannot be summed"
