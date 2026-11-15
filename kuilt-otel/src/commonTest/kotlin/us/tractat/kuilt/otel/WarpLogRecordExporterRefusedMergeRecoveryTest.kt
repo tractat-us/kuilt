@@ -305,4 +305,51 @@ class WarpLogRecordExporterRefusedMergeRecoveryTest {
             { assertTrue((0 until 6).all { "foreign$it" in afterMerge }, "the refused merge's records were lost: $afterMerge") },
         )
     }
+
+    @Test
+    fun aRetryOfThisExportersOwnRefusedExportWritesItsActiveSegmentAlone() = runTest {
+        // A dedup hit is usually the retry of a turn whose write never landed, and its record is
+        // then in the active segment, which the active-segment write carries (#3350). That claim
+        // does not need the whole-log adopt, and a store that takes small writes and refuses large
+        // ones refuses every adopt, burning a segment number onto the ledger each time.
+        val backing = RecordingStore()
+        val sized = RefuseLargeWritesStore(backing, maxBytes = 1_024)
+        val store = segmentRefusing(sized)
+        val exporter = exporterFor(store)
+        exporter.export(record(0))
+        // Long bodies, so the whole log is far past the cap and the active segment far below it.
+        val remote = foreignLog(ReplicaId("B"), firstId = 500, label = "foreign".repeat(40))
+
+        store.refuseWrites()
+        val refusedMerge = exporter.merge(remote)
+        val refusedExport = exporter.export(record(9, "local9"))
+        val refusals = store.refusedWrites()
+        store.allowWrites()
+        sized.refuseLargeWrites()
+        val indexBefore = indexOf(backing)
+        val operationsBefore = backing.operations().size
+
+        val retried = exporter.export(record(9, "local9"))
+        val segmentWrites = backing.operations().drop(operationsBefore)
+            .filter { it.kind == StoreOpKind.WRITE && it.key.name.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }
+        val refusedDuringRetry = sized.refusedWrites()
+        // An export that owes an index write, so a number the retry burned would be named on disk.
+        val next = exporter.export(record(10, "local10"))
+        val indexAfter = indexOf(backing)
+        val durable = bodiesAfterRestart(backing)
+
+        assertAll(
+            { assertEquals(2, refusals, "the rig refused $refusals writes, not the merge's adopt and the export's segment") },
+            { assertTrue(refusedMerge is ExportResult.Failure, "the refused merge reported $refusedMerge") },
+            { assertTrue(refusedExport is ExportResult.Failure, "the refused export reported $refusedExport") },
+            { assertEquals(ExportResult.Success, retried, "the retry of this exporter's own export failed") },
+            { assertEquals(0, refusedDuringRetry, "the retry attempted a write larger than the active segment") },
+            { assertEquals(1, segmentWrites.size, "the retry wrote ${segmentWrites.map { it.key.name }}, not one segment") },
+            { assertEquals(indexBefore.retired, indexAfter.retired, "the retry put a burnt segment number on the ledger") },
+            { assertEquals(ExportResult.Success, next) },
+            { assertTrue("local9" in durable && "local10" in durable, "an exported record was lost: $durable") },
+            // The flag is still set: the merged records are the next merge's to carry, not this one's.
+            { assertTrue((0 until 6).none { "foreign".repeat(40) + it in durable }, "the retry carried the merge: $durable") },
+        )
+    }
 }

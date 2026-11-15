@@ -269,6 +269,40 @@ internal class RefuseSegmentWritesStore(private val backing: DurableStore) : Dur
 }
 
 /**
+ * Delegates to [backing], but once [refuseLargeWrites] is called it throws on every write of more
+ * than [maxBytes] bytes and accepts every smaller one.
+ *
+ * [RefuseSegmentWritesStore] splits by key, which is the size split while every segment is about
+ * `segmentOps`-sized. A whole-log adopt is not: it is a segment key holding the whole log, so
+ * telling it apart from the active-segment write takes its size. That is the shape
+ * `IndexedDbDurableStore` under quota pressure has, refusing the large write and taking the small.
+ */
+internal class RefuseLargeWritesStore(private val backing: DurableStore, private val maxBytes: Int) : DurableStore {
+    private val lock = reentrantLock()
+    private var refusing = false
+    private var refused = 0
+
+    fun refuseLargeWrites(): Unit = lock.withLock { refusing = true }
+
+    /** How many writes have been refused — a precondition guard, never an assertion. */
+    fun refusedWrites(): Int = lock.withLock { refused }
+
+    override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+
+    override suspend fun write(key: StoreKey, bytes: ByteArray) {
+        val refuse = lock.withLock {
+            val refuse = refusing && bytes.size > maxBytes
+            if (refuse) refused++
+            refuse
+        }
+        if (refuse) throw IllegalStateException("simulated quota refusal of a ${bytes.size}-byte write to $key")
+        backing.write(key, bytes)
+    }
+
+    override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
+}
+
+/**
  * Delegates to [backing], but once [arm] is called the **next** segment-key write parks until its
  * caller is cancelled — after the bytes landed ([landFirst] `= true`) or before they did.
  *
