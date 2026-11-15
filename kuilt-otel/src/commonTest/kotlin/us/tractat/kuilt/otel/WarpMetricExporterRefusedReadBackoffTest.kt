@@ -2,8 +2,11 @@ package us.tractat.kuilt.otel
 
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.store.DurableStore
@@ -329,6 +332,7 @@ class WarpMetricExporterRefusedReadBackoffTest {
         )
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun theCallersOwnCancellationSpendsNoTurnOfTheWindow() = runTest {
         // A read turn under a cancelled caller ends in that cancellation: the store throws, and
@@ -354,15 +358,19 @@ class WarpMetricExporterRefusedReadBackoffTest {
             store.readsOf(histogramsKey) == before
         }
 
-        // The histograms now owe a read and the sums are still inside their window. A cancelled
-        // batch of both reads the histograms, and the cancellation ends it there: the sums' skip,
-        // which comes first in kind order, must not be spent by it.
+        // The histograms now owe a read and the sums are still inside their window. A batch of both
+        // parks in the histograms' read and is cancelled there: the sums' skip, which comes first in
+        // kind order, must not be spent by it. Cancelled inside the read rather than before the
+        // call, so a turn that asks `ensureActive` up front and spends its skips before reading
+        // cannot pass by never reaching the read.
         var mixedReturned: MetricExportResult? = null
         val histogramReadsBeforeMixed = store.readsOf(histogramsKey)
-        launch {
-            coroutineContext.job.cancel()
-            mixedReturned = exporter.record(listOf(MetricUpdate.IncrementSum(sum, 1L), histogramUpdate(0)))
-        }.join()
+        store.parkNextRead(histogramsKey)
+        val mixed = launch { mixedReturned = exporter.record(listOf(MetricUpdate.IncrementSum(sum, 1L), histogramUpdate(0))) }
+        runCurrent()
+        val parkedInTheRead = store.parkedOn(histogramsKey)
+        mixed.cancel()
+        mixed.join()
         val histogramReadsInMixed = store.readsOf(histogramsKey) - histogramReadsBeforeMixed
         val sumsStillSkip = store.readsOf(sumsKey).let { before ->
             exporter.incrementSum(sum, 1L)
@@ -378,6 +386,7 @@ class WarpMetricExporterRefusedReadBackoffTest {
             { assertEquals(0, readsInCancelledSkip, "a cancelled skipped turn touched the store") },
             { assertTrue(stillSkips, "a cancelled skipped turn used up the window") },
             { assertNull(mixedReturned, "a cancelled batch returned into its caller: $mixedReturned") },
+            { assertEquals(1, parkedInTheRead, "precondition: the batch did not park in the histograms' read") },
             { assertEquals(1, histogramReadsInMixed, "precondition: the cancelled batch did not attempt the histograms' read") },
             { assertTrue(sumsStillSkip, "a cancelled batch spent the sums' skip") },
             { assertTrue(histogramsStillRead, "a cancelled read counted as a refusal and opened a window") },
@@ -388,13 +397,16 @@ class WarpMetricExporterRefusedReadBackoffTest {
 
 /**
  * Delegates to [backing], refusing every read of a key in the refused set until it is healed.
- * Counts every read it is asked for, refused or not, and the refusals, per key.
+ * Counts every read it is asked for, refused or not, and the refusals, per key. Can park the next
+ * read of one key until its caller is cancelled, to cancel a turn inside a read.
  */
 private class PerKeyRefusingStore(private val backing: DurableStore) : DurableStore {
     private val lock = reentrantLock()
     private val refusing = mutableSetOf<StoreKey>()
     private val reads = mutableMapOf<StoreKey, Int>()
     private val refusals = mutableMapOf<StoreKey, Int>()
+    private val parkNext = mutableSetOf<StoreKey>()
+    private val parks = mutableMapOf<StoreKey, Int>()
 
     fun refuse(key: StoreKey): Unit = lock.withLock { refusing += key }
 
@@ -404,11 +416,18 @@ private class PerKeyRefusingStore(private val backing: DurableStore) : DurableSt
 
     fun refusalsOf(key: StoreKey): Int = lock.withLock { refusals[key] ?: 0 }
 
+    fun parkedOn(key: StoreKey): Int = lock.withLock { parks[key] ?: 0 }
+
+    /** Park the next read of [key] until its caller is cancelled; it never completes otherwise. */
+    fun parkNextRead(key: StoreKey): Unit = lock.withLock { parkNext += key }
+
     override suspend fun read(key: StoreKey): ByteArray? {
-        val refuse = lock.withLock {
+        val park = lock.withLock {
             reads[key] = (reads[key] ?: 0) + 1
-            (key in refusing).also { if (it) refusals[key] = (refusals[key] ?: 0) + 1 }
+            parkNext.remove(key).also { if (it) parks[key] = (parks[key] ?: 0) + 1 }
         }
+        if (park) awaitCancellation()
+        val refuse = lock.withLock { (key in refusing).also { if (it) refusals[key] = (refusals[key] ?: 0) + 1 } }
         if (refuse) throw IllegalStateException("simulated refused read of ${key.name}")
         return backing.read(key)
     }
