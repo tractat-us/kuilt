@@ -239,7 +239,8 @@ so send them as cumulative.
   duration (a counter compresses losslessly).
 - **For logs, the total settles on the export path and still grows on the gossip path.**
   `WarpLogRecordExporter` persists its op-log in segments of `DEFAULT_LOG_SEGMENT_OPS`
-  operations, so one export rewrites one segment rather than the whole log; it then
+  operations, so one export rewrites one segment rather than the whole log (the exception
+  follows a refused merge, below); it then
   periodically drops everything outside the retained window from memory and deletes any
   sealed segment that durably written suppression state fully covers. A device fed only by its own
   `WarpLogRecordExporter.export` calls therefore holds O(`DEFAULT_MAX_LOG_RECORDS`) ops and
@@ -259,7 +260,9 @@ so send them as cumulative.
   so merging from a peer that has itself windowed a foreign author's records — which is any
   peer in a steady-state mesh — pins that peer's whole log: megabytes per merge at the
   default `DEFAULT_MAX_LOG_RECORDS`. And the first merge after a failed one persists this
-  replica's whole merged log instead of the remote's, so the stranded ops reach disk. So the gossip path is growth, not a bound, and a replica
+  replica's whole merged log instead of the remote's, so the stranded ops reach disk. Until
+  that merge lands, a local export of one of the stranded records persists the same whole log
+  first, pinned on the same terms. So the gossip path is growth, not a bound, and a replica
   that gossips accumulates it for as long as the process lives. Bounding it needs the same
   causal-stability argument tombstone collection does; consolidation — rewriting a pinned
   segment's compaction record forward so the segment can go — was considered and declined,
