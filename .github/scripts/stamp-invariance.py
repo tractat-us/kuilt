@@ -19,6 +19,10 @@ Gradle's own reasons, never from its name:
 - only a path moved  — every reason is KGP's `friendPathsSet` value: a JVM test compile is keyed on
                        its main jar's PATH, and the jar's file name carries the version. The content
                        of its inputs is unchanged, so its output is too. Publishing compiles no tests.
+                       Gradle reports a changed input VALUE before any changed file, so this reason
+                       can hide a classpath change; the JVM `Test` task that runs the compile's
+                       output is selected too, and it re-runs whenever the test classpath's content
+                       changes, so such a leak still reds there (measured with the positive control).
 - unmeasured         — "No history is available": the first pass never ran it, so this run cannot
                        say whether the stamp reached it. That is a selection bug, and it fails too,
                        so the probe cannot quietly grow into a second build.
