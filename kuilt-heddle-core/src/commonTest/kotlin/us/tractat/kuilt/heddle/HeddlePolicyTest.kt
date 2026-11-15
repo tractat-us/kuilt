@@ -578,9 +578,13 @@ class HeddlePolicyTest {
         // y's virtual time, 10^13 · 1000 / 16, is above x's ceiling read, C / (16 · 1000), yet y is
         // nowhere near its own ceiling.
         val top = Sim("y", light, seat = ticksToVirtual(10_000_000_000_000L, light), demand = idle)
-        check(!HeddlePolicy.isAtCeiling(top.edge()) && HeddlePolicy.isAtCeiling(saturated.edge())) { "the rig: only x is saturated" }
+        check(!atCeiling(top.edge()) && atCeiling(saturated.edge())) { "the rig: only x is saturated" }
         val front = checkNotNull(HeddlePolicy.frontTime(listOf(saturated.edge(), top.edge())))
         // y's virtual time, 10¹³ · 1000 / 16, on weight 1's grid: 10¹⁶ ticks.
         assertEquals(Int128.of(10_000_000_000_000_000L), front.ticksForWide(Weight.ONE))
     }
+
+    /** Whether [edge]'s effective position is at or past its ceiling, where the public reads saturate. */
+    private fun atCeiling(edge: PolicyEdge): Boolean =
+        HeddlePolicy.effectiveTicksWide(edge) >= Int128.of(positionCeiling(edge.record.weight))
 }
