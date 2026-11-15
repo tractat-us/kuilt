@@ -567,8 +567,10 @@ public class FairShareAllocator(
         } else {
             edges
         }
+        // A child's own position past `R` triggers it for every seated child, a waker included: a
+        // clamp only ever raises one, so a waker already past `R` stays there (#3353).
         val past = frontGrids.any { front.ticksForWide(it.record.weight) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
-            stayers.any { HeddlePolicy.effectiveTicksWide(it) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
+            edges.any { (it.gauge != null || it.record.id !in joiners) && HeddlePolicy.effectiveTicksWide(it) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
             edges.any { edge ->
                 shifts[edge.record.id]?.let { HeddlePolicy.effectiveTicksWide(edge) + it.ticks >= Int128.of(rebaseThreshold(edge.record.weight)) } == true
             }
