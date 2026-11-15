@@ -65,7 +65,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
 public class WarpCausalClock(private val replica: ReplicaId) {
 
     private val lock = reentrantLock()
-    private var state: ClockState = ClockState.Armed(seq = 0L, frontier = emptySet())
+    private var state: ClockState = ClockState.initial
 
     internal companion object {
         /** The durable-store key this clock persists under. Exposed `internal` so a
@@ -88,14 +88,15 @@ public class WarpCausalClock(private val replica: ReplicaId) {
 
     /** [tick], or `null` while the clock is unrecovered: the span exporter's unstamped path. */
     internal fun tickIfArmed(): CausalStamp? = lock.withLock {
-        when (val current = state) {
-            is ClockState.Unrecovered -> null
-            is ClockState.Armed -> {
-                val newDot = Dot(replica, current.seq + 1)
-                state = ClockState.Armed(newDot.seq, setOf(newDot))
-                CausalStamp(dot = newDot, predecessors = current.frontier)
-            }
+        val current = state
+        val next = when (current) {
+            is ClockState.Unrecovered -> return@withLock null
+            is ClockState.Unread -> 1L
+            is ClockState.Armed -> current.seq + 1
         }
+        val newDot = Dot(replica, next)
+        state = ClockState.Armed(next, setOf(newDot))
+        CausalStamp(dot = newDot, predecessors = current.frontier)
     }
 
     /** Whether the last [recover] was refused, so the clock mints and persists nothing. */
@@ -107,7 +108,7 @@ public class WarpCausalClock(private val replica: ReplicaId) {
      * predecessors — the cross-replica causal path.
      */
     public fun observe(remote: Set<Dot>): Unit = lock.withLock {
-        state = state.withFrontier(state.frontier + remote)
+        state = state.observed(remote)
     }
 
     /** A snapshot of the current causal frontier. */
@@ -128,7 +129,7 @@ public class WarpCausalClock(private val replica: ReplicaId) {
      *
      * The caller persists — [persist] is this class's explicit step, not an implicit one.
      */
-    internal fun clearFrontier(): Unit = lock.withLock { state = state.withFrontier(emptySet()) }
+    internal fun clearFrontier(): Unit = lock.withLock { state = state.cleared() }
 
     /**
      * Reload `(seq, frontier)` from [store]. Call once at startup before any [tick];
@@ -149,7 +150,7 @@ public class WarpCausalClock(private val replica: ReplicaId) {
             is ClockRead.Refused -> {
                 onFailure(read.cause)
                 logger.error(read.cause) { "otel.causal.clock: store read failed; minting nothing until a read lands" }
-                lock.withLock { state = ClockState.Unrecovered(state.seq, state.frontier) }
+                lock.withLock { state = state.refused() }
             }
             is ClockRead.Reached -> arm(read)
         }
@@ -217,6 +218,8 @@ public class WarpCausalClock(private val replica: ReplicaId) {
         val snapshot = lock.withLock {
             when (val current = state) {
                 is ClockState.Unrecovered -> null
+                // Never recovered and never minted: what this has always written, `seq=0`.
+                is ClockState.Unread -> PersistedClock(0L, current.frontier)
                 is ClockState.Armed -> PersistedClock(current.seq, current.frontier)
             }
         } ?: return false
@@ -227,36 +230,66 @@ public class WarpCausalClock(private val replica: ReplicaId) {
 
 /**
  * What the clock knows about the dots already used. A sealed type rather than a flag beside `seq`,
- * so every path that mints or persists has to say what it does when the high-water mark is unknown.
+ * so every path that mints, persists or meets a refused read has to say what it does in each case.
+ *
+ * Only [Unread] can become [Unrecovered]. Once a read has landed or a dot was minted, this process
+ * holds a `seq` at least as high as the durable one, because it is the only writer of the clock's
+ * key. A refused read then teaches it nothing, and demoting it would strand a dot already handed to
+ * a span whose turn is still waiting to persist (the #3399 review's interleaving).
  */
 private sealed interface ClockState {
-    /** The highest `seq` this clock has minted or read. */
-    val seq: Long
     val frontier: Set<Dot>
 
-    fun withFrontier(frontier: Set<Dot>): ClockState = when (this) {
-        is Armed -> copy(frontier = frontier)
-        is Unrecovered -> copy(frontier = frontier)
+    fun observed(remote: Set<Dot>): ClockState = when (this) {
+        is Unread -> copy(frontier = frontier + remote)
+        is Unrecovered -> copy(frontier = frontier + remote)
+        is Armed -> copy(frontier = frontier + remote)
     }
+
+    /** The frontier is dropped, and so is the durable one a later read would bring back. */
+    fun cleared(): ClockState = when (this) {
+        is Unread -> Unread(emptySet(), frontierCleared = true)
+        is Unrecovered -> Unrecovered(emptySet(), frontierCleared = true)
+        is Armed -> copy(frontier = emptySet())
+    }
+
+    /** A refused read demotes only a clock that has neither read nor minted. */
+    fun refused(): ClockState = if (this is Unread) Unrecovered(frontier, frontierCleared) else this
 
     /**
      * Fold in a read that reached the store: [durable] is its entry, `null` when there was none or it
-     * would not decode, which arms a fresh clock at the [seq] held here. Never moves [seq]
-     * backwards, so a stale or racing read cannot re-arm a clock below a dot it already minted. When the entry is newer, its frontier joins the one held here,
-     * which keeps what [WarpCausalClock.observe] saw while the clock was unrecovered.
+     * would not decode. An [Armed] clock never moves backwards, so a stale or racing read cannot wind
+     * it below a dot it already minted. A clock that has not read yet takes the entry's `seq`, and its
+     * frontier joins the one held here, unless a clear dropped the frontier since.
      */
-    fun joinedWith(durable: PersistedClock?): Armed =
-        if (durable == null || durable.seq <= seq) Armed(seq, frontier)
-        else Armed(durable.seq, durable.frontier + frontier)
+    fun joinedWith(durable: PersistedClock?): Armed = when (this) {
+        is Armed -> if (durable == null || durable.seq <= seq) this else Armed(durable.seq, durable.frontier + frontier)
+        is Unread -> firstRead(durable, frontier, frontierCleared)
+        is Unrecovered -> firstRead(durable, frontier, frontierCleared)
+    }
 
-    /** Every dot up to [seq] is used and nothing above it is: the next one minted is `seq + 1`. */
-    data class Armed(override val seq: Long, override val frontier: Set<Dot>) : ClockState
+    /** No read has landed and nothing was minted: the state a clock is constructed in. */
+    data class Unread(override val frontier: Set<Dot>, val frontierCleared: Boolean) : ClockState
 
     /**
-     * A recovery read was refused, so [seq] is only a lower bound on the durable high-water mark and
-     * nothing may be minted or persisted. [frontier] collects what [WarpCausalClock.observe] saw.
+     * A read was refused before any landed, so the durable high-water mark is unknown and nothing may
+     * be minted or persisted. [frontier] collects what [WarpCausalClock.observe] saw meanwhile.
      */
-    data class Unrecovered(override val seq: Long, override val frontier: Set<Dot>) : ClockState
+    data class Unrecovered(override val frontier: Set<Dot>, val frontierCleared: Boolean) : ClockState
+
+    /** Every dot up to [seq] is used and nothing above it is: the next one minted is `seq + 1`. */
+    data class Armed(val seq: Long, override val frontier: Set<Dot>) : ClockState
+
+    companion object {
+        val initial: ClockState = Unread(emptySet(), frontierCleared = false)
+
+        private fun firstRead(durable: PersistedClock?, frontier: Set<Dot>, frontierCleared: Boolean): Armed =
+            when {
+                durable == null -> Armed(0L, frontier)
+                frontierCleared -> Armed(durable.seq, frontier)
+                else -> Armed(durable.seq, durable.frontier + frontier)
+            }
+    }
 }
 
 /** One recovery read: refused, so worth retrying, or it reached what the store holds. */
