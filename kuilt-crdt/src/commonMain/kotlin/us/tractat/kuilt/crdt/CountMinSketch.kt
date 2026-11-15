@@ -65,8 +65,12 @@ public data class CellDelta(val row: Int, val col: Int, val value: Long)
  * incremental deltas are sparse.
  *
  * The type enforces the wire shape, decoding included: every cell is non-negative, a full-state
- * matrix is exactly `depth × width`, and every sparse cell lies inside it. A sparse delta is for
- * [piece] only; [estimate] and [add] refuse one.
+ * matrix is exactly `depth × width`, and every sparse cell lies inside it.
+ *
+ * A sparse delta is a readable state like any other: [estimate] and [add] read its cells, with
+ * every cell it does not carry at zero. That matters because a delta reaches readers: an [ORMap]
+ * key with one contribution hands that contribution back as its value, and a put of
+ * `add(…).delta` stores the delta itself (#3414).
  *
  * ## Use
  *
@@ -92,9 +96,6 @@ public class CountMinSketch private constructor(
      *
      * Full-state sketches (produced by [empty] or [piece]) have `sparseCells = null`
      * and carry the complete `depth × width` count matrix in [cells].
-     *
-     * A delta is something to [piece] into a full-state sketch, not something to read: [estimate]
-     * and [add] refuse one.
      */
     public val sparseCells: List<CellDelta>? = null,
 ) : Quilted<CountMinSketch> {
@@ -141,15 +142,12 @@ public class CountMinSketch private constructor(
      * @throws ArithmeticException if any of the item's cells is already at [Long.MAX_VALUE]. A
      *   wrapped cell would be negative, and [piece], a max, would discard it, so the occurrence
      *   would be lost on every replica with nothing to say so (#3397).
-     * @throws IllegalStateException if this sketch is a sparse delta (#3414). A delta's matrix is
-     *   a stub of zeros, so the add would count from zero whatever the delta carries.
      */
     public fun add(encodedItem: ByteArray): Patch<CountMinSketch> {
-        checkFullState("add to")
         val sparse = buildList(depth) {
             for (row in 0 until depth) {
                 val col = columnFor(encodedItem, row, width)
-                val raised = cells[row][col].plusOrNull(1L)
+                val raised = cellAt(row, col).plusOrNull(1L)
                     ?: throw ArithmeticException(
                         "CountMinSketch cell ($row, $col) is at Long.MAX_VALUE and cannot count another occurrence",
                     )
@@ -168,7 +166,6 @@ public class CountMinSketch private constructor(
      * prefer [add(ByteArray)][add] with a cached encoding to avoid per-call allocation.
      *
      * @throws ArithmeticException if any of the item's cells is already at [Long.MAX_VALUE] (#3397).
-     * @throws IllegalStateException if this sketch is a sparse delta (#3414).
      */
     public fun add(item: String): Patch<CountMinSketch> = add(item.encodeToByteArray())
 
@@ -184,16 +181,12 @@ public class CountMinSketch private constructor(
      * replicas. The estimate is always ≥ the true count seen by any single
      * merged replica, and within the Count-Min error bound with high probability.
      *
-     * @throws IllegalStateException if this sketch is a sparse delta (#3414). A delta's matrix is
-     *   a stub of zeros, so the answer would be `0` for an item the delta had just counted. Piece
-     *   the delta into a full-state sketch and ask that.
+     * A sparse delta answers as the state it pieces into: the cells it carries, zero elsewhere.
      */
-    public fun estimate(encodedItem: ByteArray): Long {
-        checkFullState("estimate from")
+    public fun estimate(encodedItem: ByteArray): Long =
         // `depth` is at least 1, so there is always a row to take the minimum over. A sentinel of
         // Long.MAX_VALUE for "no row seen" answered 0 for an item whose every cell was full (#3397).
-        return (0 until depth).minOf { row -> cells[row][columnFor(encodedItem, row, width)] }
-    }
+        (0 until depth).minOf { row -> cellAt(row, columnFor(encodedItem, row, width)) }
 
     /**
      * Estimate the number of times [item] has been added. Because replicas merge
@@ -204,8 +197,6 @@ public class CountMinSketch private constructor(
      *
      * For high-frequency hot paths where the same key is estimated many times,
      * prefer [estimate(ByteArray)][estimate] with a cached encoding to avoid per-call allocation.
-     *
-     * @throws IllegalStateException if this sketch is a sparse delta (#3414).
      */
     public fun estimate(item: String): Long = estimate(item.encodeToByteArray())
 
@@ -256,8 +247,20 @@ public class CountMinSketch private constructor(
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    private fun checkFullState(action: String) {
-        check(sparseCells == null) { "Cannot $action a sparse CountMinSketch delta; piece it into a full-state sketch first" }
+    /**
+     * The count at ([row], [col]) of the state this sketch stands for. A full-state sketch reads its
+     * matrix. A sparse delta reads its own cells, at zero where it carries none: its matrix is a
+     * one-wide stub of zeros, which answered `0` for an item the delta had just counted (#3414).
+     * A max over the matching cells rather than the first, so a delta carrying one cell twice reads
+     * the way [piece] would apply it.
+     */
+    private fun cellAt(row: Int, col: Int): Long {
+        val sparse = sparseCells ?: return cells[row][col]
+        var value = 0L
+        for (cell in sparse) {
+            if (cell.row == row && cell.col == col) value = maxOf(value, cell.value)
+        }
+        return value
     }
 
     /** Apply a list of sparse cell updates (element-wise max) to produce a full-state result. */
@@ -323,8 +326,8 @@ public class CountMinSketch private constructor(
 
         /**
          * A minimal stub cell array used for sparse deltas. The cells are all zeros
-         * and are never read: [estimate] and [add] refuse a delta, and [piece] reads only
-         * [sparseCells] from one.
+         * and are never read: [estimate], [add] and [piece] all read a delta through
+         * [sparseCells].
          */
         private fun stubCells(depth: Int): Array<LongArray> = Array(depth) { LongArray(1) }
     }
