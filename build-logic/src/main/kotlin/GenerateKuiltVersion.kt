@@ -7,16 +7,20 @@ import org.gradle.api.tasks.TaskAction
 
 /**
  * Writes `GeneratedVersion.kt`, the `commonMain` source holding the version this build publishes as
- * `internal const val GENERATED_VERSION`, so a consumer that records which kuilt wrote something
+ * `internal fun generatedVersion()`, so a consumer that records which kuilt wrote something
  * reads it instead of hand-copying a string that drifts on every upgrade (#3323).
  *
- * The public face is hand-written: `public object KuiltVersion { public val VERSION = GENERATED_VERSION }`
+ * The public face is hand-written: `public object KuiltVersion { public val VERSION = generatedVersion() }`
  * in [CARRIER]'s `src/commonMain`, in [PACKAGE]. Only the string is generated, for two reasons.
  * The module then has declared source of its own, so `forbidSourcelessKmpTarget`, which ignores
  * anything under `build/` (#2374), sees a real target rather than a source-less one. And the KDoc
  * and its `@sample` sit in `src/`, where `verifySampleLinks` and Dokka read them directly. The
- * `const` is `internal`, so it is inlined only inside [CARRIER]; consumers read the non-`const`
- * `VERSION` at run time, and the value stays out of the ABI.
+ * literal is returned from a function, never held in a `const` (#3464). Kotlin's JVM classpath
+ * snapshot records `const` values, `internal` ones included, so a `const` here gave every
+ * JVM/Android/metadata compile that sees [CARRIER] a new cache key on every snapshot run, whose
+ * version differs by run number. A function body is not part of that snapshot. A klib still
+ * carries the body as IR, so on native and wasm the literal changes [CARRIER]'s klib on every run
+ * whatever its form: only a module that does not depend on [CARRIER] is spared that recompile.
  *
  * One module carries it. It depends on nothing, so every module that needs the value can `api` it —
  * including `:kuilt-heddle-core`, which bans the coroutines `:kuilt-core` would bring — and there is
@@ -64,7 +68,7 @@ abstract class GenerateKuiltVersion : DefaultTask() {
             |package $PACKAGE
             |
             |/** The version this build publishes. Read it through [KuiltVersion.VERSION]; see there for why that is not a `const`. */
-            |internal const val GENERATED_VERSION: String = "$version"
+            |internal fun generatedVersion(): String = "$version"
             |""".trimMargin()
     }
 }

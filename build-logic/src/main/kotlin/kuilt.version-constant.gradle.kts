@@ -24,7 +24,7 @@
 // hand below (kuilt.warp-ops has the same rule for its KSP output). Omitting it is loud, not
 // silent: Gradle refuses the graph with an implicit-dependency error naming both tasks. The IDE's
 // `prepareKotlinIdeaImport` gets the same edge, so a Gradle sync generates the file instead of
-// leaving `GENERATED_VERSION` unresolved in the editor until the first build.
+// leaving `generatedVersion()` unresolved in the editor until the first build.
 
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.gradle.process.CommandLineArgumentProvider
