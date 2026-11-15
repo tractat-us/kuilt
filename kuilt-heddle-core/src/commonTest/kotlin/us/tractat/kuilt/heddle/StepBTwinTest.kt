@@ -98,6 +98,13 @@ class StepBTwinTest {
             WindowRuleRig(lanes("a" to Weight.of(7L, 13L), "b" to Weight.of(5L, 11L), "c" to Weight.of(1L, 3L)), rebase = r)
                 .run(FINE_STEPS, waiting = WindowRuleRig.churn(Random(3353)))
         },
+        // Off the sweep: fine weights a lease apart in thirds, so two lanes' positions meet exactly
+        // and the id breaks the tie. A translation that is out by under a tick breaks such a tie the
+        // other way, which no other row here is sensitive enough to see.
+        Row("ties {1/3, 2/3, 1} churn") { r ->
+            WindowRuleRig(lanes("a" to Weight.of(1L, 3L), "b" to Weight.of(2L, 3L), "c" to Weight.ONE), rebase = r)
+                .run(FINE_STEPS, waiting = WindowRuleRig.churn(Random(3353)))
+        },
     )
 
     @Test
