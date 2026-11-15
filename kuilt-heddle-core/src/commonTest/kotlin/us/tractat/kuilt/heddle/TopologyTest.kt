@@ -401,8 +401,8 @@ class TopologyTest {
 
     /**
      * [Topology.Group.template] is stored as `template`, the key a config uses too (#3454 review),
-     * and a strict decode refuses `runtimeChildren`, the name v0.7.4 stored in the format 1 this
-     * release does not read. The snapshot goldens pin the same thing end to end; this pins it on the
+     * and a strict decode refuses `runtimeChildren`, the name v0.7.4 stored in a snapshot layout
+     * this release does not read. The snapshot goldens pin the same thing end to end; this pins it on the
      * topology alone.
      */
     @Test

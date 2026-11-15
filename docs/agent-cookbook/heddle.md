@@ -615,8 +615,10 @@ memory, the reconciled capacity and the topology last applied come back.
   included. **Not ProtoBuf**: it encodes a snapshot, but `decode` answers `Corrupt`, since it
   cannot read back the ledger's maps whose values are maps.
 - **Versions.** `LocalHeddleSnapshot.FORMAT_VERSION` is what this release writes and
-  `SUPPORTED_FORMAT_VERSIONS` what it reads: format 2, and only format 2. A snapshot an earlier
-  release stored decodes as `UnsupportedVersion`; boot from the topology again.
+  `SUPPORTED_FORMAT_VERSIONS` what it reads: format 1, and only format 1, the first frozen format.
+  Format 2, from a development build of 0.7.5, decodes as `UnsupportedVersion`. A snapshot 0.7.4
+  stored also says format 1, in an older layout this release does not tell apart: do not decode
+  it, boot from the topology again.
 - **What `decode` checks.** The envelope's shape and version, then consistency: every open lease
   has a positive reservation, an epoch no later than the snapshot's and a path that is its leaf's
   one live lineage from the root, over edges the ledger holds and none retired; leases in id

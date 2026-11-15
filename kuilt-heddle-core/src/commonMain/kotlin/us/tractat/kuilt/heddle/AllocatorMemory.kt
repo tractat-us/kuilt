@@ -50,7 +50,7 @@ import us.tractat.kuilt.math.timesWide
  * adds up (#3416 review). Each of the four is elided when empty, so a memory that has run no clock
  * encodes as before.
  *
- * Its encoded shape is part of [LocalHeddleSnapshot]'s format 2, which changed it in place for
+ * Its encoded shape is part of [LocalHeddleSnapshot]'s format 1, which changed it in place for
  * the wide clamps. A field added here takes a default, and any other change needs a frozen
  * surrogate first.
  */

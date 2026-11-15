@@ -60,9 +60,10 @@ The rest of the surface, by what you would ask it:
 - **The program restarts.** `persist` returns a `LocalHeddleSnapshot` to encode as
   JSON or CBOR; `LocalHeddle.decode` reads it back as a `RestoreResult`, and
   `LocalHeddle.restore` carries on from it under a later epoch, a boot counter
-  you persist and raise on every start. 0.7.5 reads
-  only snapshots it wrote itself (`SUPPORTED_FORMAT_VERSIONS`); a consumer coming
-  from 0.7.4 starts from its topology again.
+  you persist and raise on every start. 0.7.5 writes and
+  reads format 1 alone (`SUPPORTED_FORMAT_VERSIONS`), the first frozen format. A
+  consumer coming from 0.7.4 starts from its topology again: 0.7.4's snapshots are
+  not read.
 
 Every refusal is a typed outcome (`AcquireOutcome`, `AdmitOutcome`, `LeaseOutcome`)
 that changes nothing, and the engine is not thread-safe: one writer, under your own

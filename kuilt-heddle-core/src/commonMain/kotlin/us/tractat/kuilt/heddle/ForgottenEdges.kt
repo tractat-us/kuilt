@@ -24,7 +24,7 @@ import us.tractat.kuilt.crdt.ReplicaId
  * writer, the way §10 invariant 4's quiesced edge is. Every map goes through
  * [CanonicalMapSerializer], so equal folds encode to equal bytes. A ledger with nothing forgotten
  * holds [NONE], which a default `Json` or `Cbor` does not encode, so its bytes are what they were
- * before this component existed. It is carried by [LocalHeddleSnapshot] format 2.
+ * before this component existed. It is carried by [LocalHeddleSnapshot] format 1.
  */
 @Serializable
 internal data class ForgottenEdges(

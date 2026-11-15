@@ -40,10 +40,10 @@ import kotlinx.serialization.encoding.Encoder
  * children.
  *
  * Its encoded shape, [Node] and [ChildTemplate] included, is part of [LocalHeddleSnapshot]'s
- * format 2, which stores the topology an engine last applied: a field added here takes a default,
+ * format 1, which stores the topology an engine last applied: a field added here takes a default,
  * and any other change needs a frozen surrogate there first. [Group.template] is stored as
- * `template`, the key a config uses too (#3454 review); v0.7.4 stored `runtimeChildren`, in the
- * format 1 this release does not read.
+ * `template`, the key a config uses too (#3454 review); v0.7.4 stored `runtimeChildren`, in its
+ * own layout this release does not read.
  *
  * @property root the name of the group at the top of the tree.
  * @property children the root's children, in the order written.
