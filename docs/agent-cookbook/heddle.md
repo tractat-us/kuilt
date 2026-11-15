@@ -710,7 +710,8 @@ group still reached through live edges.
 
 `PositionCeiling` is not in the sample, and not faked: a busy parent is rebased long before a
 child nears its ceiling, so no short honest run reaches it. Branch on it like the others; it
-means a demanding child is never served, so serve or close it.
+means a demanding child is never served, or that a plain `admit` rebased over a child last seen
+demanding and now idle, so serve or close the child that waits.
 
 **What throws.** A bad argument throws `IllegalArgumentException`: a reservation or extension
 outside `1..LocalHeddle.MAX_RESERVATION` (2^44 cost units), an `eligible` set that is not a
