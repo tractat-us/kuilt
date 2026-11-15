@@ -83,24 +83,30 @@ class LocalHeddleFineWeightTest {
     /**
      * Why the set is refused, on an engine handed it past [LocalHeddle.apply]: one lease charged
      * [BAND_COST] parks `a` between `C − H` and `R`. No rebase is due there, and the next full lease
-     * passes `C`, so every acquire after the first is refused. A cost a hair lower does not reach the
-     * band, and the parent runs, which is what puts the edge at `C − R` rather than `C`.
+     * carries `a` past `C`, where the public reads saturate. The parent still runs, since a pick
+     * orders the wide position; it used to refuse every acquire after the first. A cost a hair lower
+     * does not reach the band, and `a` stays inside its window, the control.
      */
     @Test
-    fun aBandSetHandedPastApplyWedgesAfterOneUnderChargedLease() {
+    fun aBandSetHandedPastApplyRunsPastItsCeilingAfterOneUnderChargedLease() {
         val root = GroupId("band")
         val a = GroupId("band/a")
         val b = GroupId("band/b")
+        val edge = AttachmentId("a")
         fun engine(): LocalHeddle {
-            val ledger = shapedLedger(root, listOf(AttachmentRecord(AttachmentId("a"), root, a, Weight.of(1, 30_721)), AttachmentRecord(AttachmentId("b"), root, b, Weight.of(1, 30_722))))
+            val ledger = shapedLedger(root, listOf(AttachmentRecord(edge, root, a, Weight.of(1, 30_721)), AttachmentRecord(AttachmentId("b"), root, b, Weight.of(1, 30_722))))
             return engineOver(ledger, root, supply = 0L).apply { reconcileCapacity(1L) }
         }
-        val wedged = run(engine(), setOf(a), BAND_COST)
-        val clear = run(engine(), setOf(a), BELOW_THE_BAND)
+        val banded = engine()
+        val belowBand = engine()
+        val crossed = run(banded, setOf(a), BAND_COST)
+        val clear = run(belowBand, setOf(a), BELOW_THE_BAND)
         assertAll(
             { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, 30_721), Weight.of(1, 30_722))), "rig: apply would refuse this set") },
-            { assertEquals(Run(acquired = 1, refused = 199), wedged, "one lease, then refused for good") },
+            { assertEquals(Run(acquired = 200, refused = 0), crossed, "every acquire leased, past the ceiling too") },
+            { assertTrue(banded.snapshot().ledger.isAtPositionCeiling(edge), "the rig: a went past its ceiling") },
             { assertEquals(Run(acquired = 200, refused = 0), clear, "the control: a cost below the band runs") },
+            { assertTrue(!belowBand.snapshot().ledger.isAtPositionCeiling(edge), "the control: and stays inside its window") },
         )
     }
 
