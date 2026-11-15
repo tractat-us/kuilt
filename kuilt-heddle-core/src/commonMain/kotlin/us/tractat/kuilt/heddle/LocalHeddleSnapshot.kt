@@ -14,6 +14,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.encoding.encodeCollection
+import us.tractat.kuilt.crdt.CanonicalMapSerializer
 
 /**
  * Everything a [LocalHeddle] needs to carry on after a restart, as one value you can encode, as
@@ -252,15 +253,37 @@ private class SnapshotFormat1(
     val epoch: Long,
     val totalSlots: Long,
     val ledger: EntitlementLedger,
-    val allocatorMemory: AllocatorMemory,
+    val allocatorMemory: AllocatorMemoryFormat1,
     val leases: List<LeaseFormat1>,
     val lastApplied: Topology,
 ) {
     /** The snapshot, and throws [IllegalArgumentException] when the ledger carries a fold, which format 1 predates. */
     fun toSnapshot(): LocalHeddleSnapshot {
         require(!ledger.hasForgotten()) { "a format-1 snapshot carries forgotten edges, which format 1 predates" }
-        return LocalHeddleSnapshot(epoch, ledger, allocatorMemory, totalSlots, leases.map { it.toPersisted(ledger) }, lastApplied)
+        return LocalHeddleSnapshot(epoch, ledger, allocatorMemory.onGridsOf(ledger), totalSlots, leases.map { it.toPersisted(ledger) }, lastApplied)
     }
+}
+
+/**
+ * [AllocatorMemory] as format 1 wrote it, frozen: each wake clamp as the exact virtual time it stood
+ * for, before #3353 kept clamps wide in ticks of each edge's grid.
+ */
+@Serializable
+private class AllocatorMemoryFormat1(
+    @Serializable(with = CanonicalMapSerializer::class)
+    val wakeOffsets: Map<AttachmentId, @Serializable(with = RationalSerializer::class) Rational>,
+    @Serializable(with = CanonicalMapSerializer::class)
+    val demandingObserved: Map<AttachmentId, Boolean>,
+) {
+    /**
+     * The memory, each clamp read onto its edge's grid in [ledger]: exact, since format 1 wrote every
+     * clamp on that grid. A clamp whose edge [ledger] does not know, one record, is dropped, as an
+     * allocator forgets an edge its ledger no longer holds.
+     */
+    fun onGridsOf(ledger: EntitlementLedger): AllocatorMemory = AllocatorMemory(
+        wakeOffsets = wakeOffsets.mapNotNull { (id, v) -> ledger.record(id)?.let { id to wideTicksAt(v, it.weight) } }.toMap(),
+        demandingObserved = demandingObserved,
+    )
 }
 
 /**
