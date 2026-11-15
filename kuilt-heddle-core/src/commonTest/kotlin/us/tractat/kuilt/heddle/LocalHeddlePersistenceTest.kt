@@ -582,7 +582,7 @@ class LocalHeddlePersistenceTest {
         val (h, open) = richScenario(forgets)
         check(h.attach(listOf("tenants"), "t2", generation = 4L).refusals.isEmpty())
         val lease = h.lease(setOf(departed), reservation = 2L, startedAt = 30L)
-        check(h.complete(lease.id, 3L, waiting = emptySet()) is LeaseOutcome.Done)
+        check(h.complete(lease.id, 3L, waiting = setOf(departed)) is LeaseOutcome.Done)
         check(h.detach(listOf("tenants"), "t2").refusals.isEmpty())
         val ceilingsOnly = h.apply(richCapped, generation = 5L)
         check(ceilingsOnly.applied.isEmpty() && ceilingsOnly.refusals.all { it is StepRefusal.Draining }) { "a change of ceiling alone is no step: $ceilingsOnly" }

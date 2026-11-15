@@ -651,11 +651,11 @@ class LocalHeddleTest {
         val h = engineOver(shapedLedger(root, listOf(edgeOf(root, a)), prepared = listOf(rootC)), root, supply = 1_000)
         cycles(h, setOf(a), setOf(a), 50)
         h.reshapeForTest { it.piece(assertNotNull(it.activate(rootC.id)).delta) }
-        val out = h.admit(c, waiting = setOf(c), startedAt = 11L, reservation = 2L)
+        val out = h.admit(c, waiting = setOf(a, c), startedAt = 11L, reservation = 2L)
         val l = h.snapshot().ledger
         assertAll(
             { assertEquals(AcquireOutcome.Acquired(Lease(LeaseId(0L, 50L), c, 2L, 11L)), out) },
-            { assertEquals(null, h.snapshot().allocatorMemory.demandingObserved[rootC.id], "admit observed nothing") },
+            { assertEquals(true, h.snapshot().allocatorMemory.demandingObserved[rootC.id], "admit observed c waiting, as every charging call observes its set") },
             // Seated at a's front of 50, then advanced by its own 2 units. Unseated it would read 2.
             { assertEquals(Rational.of(52L), l.virtualService(rootC.id), "c starts at the front, not at its origin") },
             { assertEquals(2L, l.holdings(c, LOCAL)) },

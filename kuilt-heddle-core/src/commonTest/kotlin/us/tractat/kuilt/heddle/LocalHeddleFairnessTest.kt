@@ -133,14 +133,19 @@ class LocalHeddleFairnessTest {
                     // (§7.2, #3416 review): 4 picks moved to a and 1 to c, off b, and the overall error
                     // rose from 0.011151 to 0.011287, the window's unmoved. The two-reading shift it
                     // replaces erred both ways, and here happened to err toward the reference.
-                    "a=6662 b=2958 c=3182 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
-                        "exhaustedAcquires=0 exhaustedExtends=0 inlineOverruns=878 filtered=1489 seesExtended=1994 wakes=1030 " +
+                    // Re-pinned for charging calls that observe their waiting set (#3471): an extend or
+                    // an overrun sees an idle leaf leave before it lands, so 19 picks moved off a and 27
+                    // off b, all 46 to c, the overall error fell from 0.011287 to 0.009803 and the window
+                    // error from 0.073276 to 0.068865. Fewer wakes, since a leaf seen leaving at a charge
+                    // comes back by the clock rather than as a waker.
+                    "a=6643 b=2931 c=3228 acquires=3216 extends=1943 completes=3209 nothingEligible=1632 " +
+                        "exhaustedAcquires=0 exhaustedExtends=0 inlineOverruns=878 filtered=1489 seesExtended=1994 wakes=849 " +
                         "mints=322 forcedMints=0 minUnspent=33",
                     run.fingerprint(),
                 )
             },
-            { assertEquals(0.011287, overall, PIN_TOLERANCE, "pinned overall error") },
-            { assertEquals(0.073276, window, PIN_TOLERANCE, "pinned window error") },
+            { assertEquals(0.009803, overall, PIN_TOLERANCE, "pinned overall error") },
+            { assertEquals(0.068865, window, PIN_TOLERANCE, "pinned window error") },
         )
     }
 
@@ -161,9 +166,10 @@ class LocalHeddleFairnessTest {
                     // again for the UNIFIED joiner front (§7.2, #3353): 3 picks moved from a to b. Re-pinned
                     // for the net-service clock (§7.2, #3376): 31 picks moved to a and 42 to c, off b.
                     // Re-pinned for the carried shift remainder (#3416 review): 1 pick moved off a and
-                    // 2 off b, all 3 to c.
-                    "a=4061 b=1760 c=1919 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
-                        "exhaustedAcquires=2403 exhaustedExtends=40 inlineOverruns=737 filtered=914 seesExtended=1325 wakes=857 " +
+                    // 2 off b, all 3 to c. Re-pinned for charging calls that observe their waiting set
+                    // (#3471): 27 picks moved to a, 13 off b and 14 off c.
+                    "a=4088 b=1747 c=1905 acquires=1964 extends=1929 completes=1959 nothingEligible=1705 " +
+                        "exhaustedAcquires=2403 exhaustedExtends=40 inlineOverruns=737 filtered=914 seesExtended=1325 wakes=712 " +
                         "mints=3316 forcedMints=460 minUnspent=0",
                     run.fingerprint(),
                 )
