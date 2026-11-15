@@ -217,6 +217,9 @@ origin.
 
 ### 4.1 The newborn discriminator — dissolved, not solved
 
+> **SUPERSEDED in part:** the wake clamp now *does* clamp on first sight, for a seated child
+> found demanding. See the restart rule in `docs/heddle-design.md` §7.2 (#3472).
+
 #1713 names the discriminator as A's open sub-problem, and it is genuinely hard:
 the wake clamp deliberately declines to clamp on first sight (`FairShareAllocator.settleJoiners`
 counts only an id it has seen idle as a waker, and the class KDoc gives the reason — an id

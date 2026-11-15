@@ -921,13 +921,11 @@ exactly in each; only the public reads saturate:
 A child that is not demanding can sit as far below zero as the origin has
 risen, past `Long`. A pick never orders it: if it comes back demanding to an
 allocator that never saw it idle, a restarted `HeddleNode` say, it is clamped as
-a waker, since anything below zero and demanding that the allocator never
-watched may have idled there. That threshold stays at zero, not at the floor: a
-watched demanding child can now sit in `[−C, 0)`, and clamping one costs it at
-most its lag, once, while a threshold at the floor would leave an unwatched idle
-child up to a window of credit. The narrowing a pick reads saturates there on
-the penalty side rather than refusing, and so do the public reads, which hold a
-child a `cancel` walked back past its floor at the floor rather than throwing.
+a waker by the restart rule (§7.2), which clamps every seated child an allocator
+has never observed and finds demanding, wherever it stands. The narrowing a pick
+reads saturates there on the penalty side rather than refusing, and so do the
+public reads, which hold a child a `cancel` walked back past its floor at the
+floor rather than throwing.
 
 **Returns no longer reach it** (#3360). The ceiling is measured on the raw
 position, net of returns and relative to the origin, and the gross position
@@ -1030,7 +1028,7 @@ an edge has had, counted from its start, and it only ever goes up.
 | The ceiling (`positionCeiling`, `rebaseThreshold`, `POSITION_HEADROOM`, `inWindow`, `readVirtual`, `peakPositionFraction`) | The largest position a `Long` pick orders | Unreachable | Deleted |
 | P1′'s lease clause of the weight budget (denominators at most 30,719) | One full lease from just under `R` stays below `C` | No `R` and no `C` | Replaced by the wide-range clause below. It does not shrink to nothing |
 | The multi-scheduler margin (#3458, denominator × schedulers under about 30,000) | `k` peers granting one child at once stay under `C − R` | No `C` | Gone. `k` concurrent grants only add to the edge's issuance |
-| The below-zero arm of the first-sighting rule (§7.2) | A child a fresh allocator never watched, sitting below the origin, is clamped | Only a rebase puts a child below zero | Replaced by the restart rule below: it was the only thing a restarted `HeddleNode` had |
+| The below-zero arm of the first-sighting rule (§7.2) | A child a fresh allocator never watched, sitting below the origin, is clamped | Only a rebase puts a child below zero | Done in slice 2: the restart rule (§7.2) replaced it |
 
 **What stays, and why.**
 
@@ -1218,20 +1216,11 @@ for a virtual time: comparable, exact, with a `toDouble()` for display.
 `EntitlementLedger.seat` and `HeddlePolicy.wakeOffset` take it. No read
 saturates and none throws on how much service an edge has had.
 
-**The restart rule.** The origin did one job nobody gave it: it told an
-allocator with no memory that a child had been idle. A restarted `HeddleNode`
-keeps no wake memory, so every child it sees asking is a first sighting, and a
-first sighting is clamped only when it sits below the origin (§7.2). That fires
-only for a child idle across a rebase, and no rebase happens before a child
-has had about `2⁵⁵ / d` units. In any shorter run a child that idled before the
-restart already keeps all of that as credit. With no origin the arm never
-fires. Step B replaces it with a rule that does not depend on run length: **a
-seated child an allocator has never observed, and finds demanding, is a
-waker.** It is clamped to the front of the children that are not joining, or
-level with the furthest-ahead child when all of them are, as any waker is.
-That costs a child its lag, once per allocator that first sees it, the penalty
-side (§10.5, §10.6). `LocalHeddle` persists its observations, so it meets the
-rule only for a child a plain `admit` charged and no pick has seen.
+**The restart rule** is built (slice 2) and now lives in §7.2. The origin did
+one job nobody gave it: it told an allocator with no memory that a child had
+been idle, since a first sighting was clamped only below the origin. The rule
+that replaced it does not read the origin, so slice 3 can remove the rebase
+without leaving a restarted scheduler's idle children their whole gap as credit.
 
 **Replication.** The ledger is a product of join-semilattices, one per field,
 and step B removes one factor, the per-parent origin. What is left is still a
@@ -1322,10 +1311,12 @@ unambiguous would guard state that nobody holds (@keddie, 2026-11-15).
 **Slices,** in order, one behaviour move each. Each carries its own docs.
 
 1. **The twin proof.** Tests only. §13.
-2. **The restart rule.** A never-observed seated demanding child is a waker,
-   which takes in the below-zero arm while the rebase still runs.
-   `aRestartedSchedulerWithALongIdleChildDemandingAtBootDoesNotWedge` is its
-   pin, retargeted from "does not wedge" to "comes back level". §7.2, §10.6.
+2. **The restart rule.** Built (#3490). A never-observed seated demanding
+   child is a waker, which takes in the below-zero arm while the rebase still
+   runs. Its pin, once "does not wedge", is two "comes back level" rows of
+   `HeddleAcceptanceTest`: one with the rebase off, where only the rule can
+   level the idle child, and one with it on, which slice 3 retires. It inverted
+   the two first-observation tests, which pinned the old rule. §7.2, §10.6.
 3. **Nothing rebases.** Delete the raise sites, the floor arms and the window
    in `FairShareAllocator` and `LocalHeddle`. The origin
    field stays, read as zero. Retires `FairShareAllocatorOriginTest`,
@@ -1498,13 +1489,43 @@ not depend on each other.
 
   Default `sleeperCredit = 0`. `parentVirtualTime` here is the front defined
   just below, with the waker itself — and every sibling waking in the same
-  round — excluded from its mean. The clamp fires only on a transition this peer has
-  actually *observed*: an edge seen for the first time is recorded as it
-  stands, never clamped on arrival, because a first sighting is not evidence
-  that anyone slept. The offset is scheduler-local policy state — deliberately
-  *not* replicated, so divergent offsets can reorder locally but can never
-  touch conservation.
-- **Which children define the front.** Both bullets above turn on one phrase,
+  round — excluded from its mean. The offset is scheduler-local policy state —
+  deliberately *not* replicated, so divergent offsets can reorder locally but
+  can never touch conservation. A zero offset is not stored: an edge reads a
+  missing one as zero.
+- **The restart rule: a seated child this peer has never observed, and finds
+  demanding, is a waker** (#3472). It is clamped as above, to the front of the
+  children that are not joining, or level with the furthest-ahead child when
+  all of them are. A first sighting says nothing about how long the child
+  idled, and keeping its raw position would let a child that idled under
+  another peer's scheduling, or before a restart, keep the whole gap as credit
+  and take every slot it is eligible for until it caught up. Clamping costs it
+  its lag instead, once per allocator that first sees it: the penalty side
+  (§10.5, §10.6). An unseated child is a newborn, which the seat puts at the
+  front, so the rule is about seated ones.
+
+  Who meets it. A restarted `HeddleNode` keeps no wake memory, so every seated
+  child it finds asking at its first call is clamped, and all of them are
+  joining, so all come back level with the furthest-ahead one
+  (`HeddleAcceptanceTest`'s two restart rows). A peer meeting a child another
+  peer seated and ran is the same case (`aFirstObservationOfASeatedDemandingEdgeIsAWake`).
+  `LocalHeddle` persists its observations, and every pick and every charging
+  call observes its waiting set (#3471), so it meets the rule in two places
+  only: a generation a reload seated to carry an open lease it moved, which
+  no call has observed yet, and a restore from a snapshot whose memory was
+  dropped. The second is a restart, and costs what a restart costs: every
+  seated child the engine finds demanding is clamped, and since all of them
+  are joining, each comes back level with the furthest-ahead one. A clamped
+  waker lands where the memory had it, but a child that was owed service loses
+  it, and a returner is clamped rather than moved by its parent's clock
+  (`LocalHeddlePersistenceTest`). So the snapshot still keeps the memory.
+
+  The rule replaced an older one, under which a first sighting was recorded as
+  it stood and clamped only when it sat below its parent's origin, where only
+  a rebase could put it. In any run too short to rebase, a child that idled
+  before a restart kept all of that as credit, and with no origin (step B,
+  §7.1) that arm would never fire at all.
+- **Which children define the front.** The bullets above turn on one phrase,
   "the parent's current virtual time", and it means one thing: the front of
   the set the joiner is about to compete in. Concretely, the weighted mean of
   `effectiveVirtualService` over the children that are **demanding right
@@ -1648,10 +1669,9 @@ while it was away.
   that writes the offset sees it asking. So its next stop is recorded as a
   leaving and its next wake is a return. The clamp is therefore written, not
   joined with a stored offset (#3416 review).
-- **A child first seen already asking** is neither moved nor clamped. That
-  covers every child of a restarted `HeddleNode`, which keeps no clock. It
-  keeps its raw position, and is clamped only if that is below zero. This
-  predates the clock: it is the first-sighting rule above.
+- **A seated child first seen already asking** has no departure, so it is not
+  moved by the clock. It is clamped to the front, by the restart rule above.
+  That covers every child of a restarted `HeddleNode`, which keeps no clock.
 
 `FairShareAllocator` runs the clock in its seat-and-wake step, `settleJoiners`,
 which every pick, every `LocalHeddle.admit` with a waiting set and the first
@@ -1709,7 +1729,7 @@ different departures compute different offsets, which reorders their grants and
 never creates entitlement, as wake offsets already do. `LocalHeddle` persists it
 in its snapshot, format 1, as `AllocatorMemory`'s `clocks`, `served`,
 `departures` and `shiftRemainders`; `HeddleNode` keeps it in memory, so a restart forgets it and
-every child it sees asking afterwards is a first sighting.
+every seated child it sees asking afterwards is a first sighting, clamped by the restart rule.
 
 The clock is kept wide, on a grid of `16 · 720,720` ticks to a unit of virtual
 time. `720,720` is the least common multiple of 1 to 16, so a parent whose
@@ -2002,9 +2022,11 @@ Carried over from the source intact; each is a named property test (§13).
 6. **No unlimited idle credit.** A child that stops competing comes back moved
    by how far its parent's net-service clock ran while it was away, and gains
    nothing for the time it was idle. A child seen idle but never seen to stop
-   is clamped to the front, and one first seen asking keeps its position
-   unless that is below zero. Default sleeper credit is zero, and applies only
-   to a clamped waker (§7.2, #3376).
+   is clamped to the front, and so is a seated child first seen asking, the
+   restart rule: an allocator with no memory of a child, a restarted one say,
+   gives it no credit for a gap it did not watch, at the cost of its lag, once
+   per allocator. Default sleeper credit is zero, and applies only to a
+   clamped waker (§7.2, #3376, #3472).
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
    post-heal convergence restores a single agreed ledger.
 8. **Projection homomorphism.**

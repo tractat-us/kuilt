@@ -15,10 +15,11 @@ import us.tractat.kuilt.math.timesWide
  * #1714), and each parent's net-service clock with the departures read against it (#3376).
  *
  * A scheduler that runs in one process and outlives a restart needs this. Without it a restarted
- * allocator has observed nothing, so it treats no child as a waker: a group that went idle just
- * before the restart and is busy just after keeps the idle credit the clamp exists to deny, and a
- * child that paused just before it comes back clamped to the front, not moved by its parent's
- * clock, so the lag a short burst left is forgiven. So the allocator exports its memory through
+ * allocator has observed nothing, so every seated child it finds asking is a waker it clamps to
+ * the front (the restart rule, design §7.2). That denies idle credit, but it costs every such
+ * child its lag: a child that paused just before the restart comes back clamped to the front, not
+ * moved by its parent's clock, so the lag a short burst left is forgiven, and a child that was owed
+ * service loses what it was owed. So the allocator exports its memory through
  * [FairShareAllocator.memory] and takes it back through its constructor, and a caller that persists
  * its ledger persists this beside it.
  *
@@ -37,7 +38,8 @@ import us.tractat.kuilt.math.timesWide
  *
  * Each wake clamp is kept in ticks of its edge's own grid, wide (#3353): a waker idle since long
  * before its parent's origin was raised is clamped the whole way up, and that can be past `Long`.
- * It encodes as its two words, like a [Gauge]'s ticks ([WideTicksSerializer]).
+ * It encodes as its two words, like a [Gauge]'s ticks ([WideTicksSerializer]). A clamp of zero is
+ * absent, since an edge reads a missing one as zero, and a memory holding one is refused.
  *
  * The clock is the virtual time a parent's asking children have kept, issued less refunded, per
  * unit of their weight, in clock ticks, 720,720 to one tick of a weight-1 child (a step that does
@@ -69,6 +71,14 @@ public class AllocatorMemory internal constructor(
     @Serializable(with = CanonicalMapSerializer::class)
     internal val shiftRemainders: Map<AttachmentId, ShiftRemainder> = emptyMap(),
 ) {
+    init {
+        // An edge reads a missing offset as zero, so a stored zero would spell one state two ways.
+        // Decoding it is refused as corrupt, as a zero shift remainder is.
+        require(wakeOffsets.values.none { it == Int128.ZERO }) {
+            "a wake offset is positive, or absent, was zero on ${wakeOffsets.filterValues { it == Int128.ZERO }.keys.map { it.value }}"
+        }
+    }
+
     override fun equals(other: Any?): Boolean =
         other is AllocatorMemory &&
             wakeOffsets == other.wakeOffsets &&

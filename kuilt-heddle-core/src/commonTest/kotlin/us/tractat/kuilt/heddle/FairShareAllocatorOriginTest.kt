@@ -161,8 +161,9 @@ class FairShareAllocatorOriginTest {
      * A restarted allocator meets a long-idle child demanding again (#3353 review, item B). It has
      * observed nothing, so the child is not a waker by observation. It sits about 2⁶⁸ ticks below
      * the origin on its own grid, past `Long`, and the pick that ordered it refused with
-     * `PositionCeiling` on every call. A seated, demanding child below zero that this allocator never
-     * saw is clamped as a waker now: no rebase takes a child that kept demanding below zero.
+     * `PositionCeiling` on every call. A seated, demanding child that this allocator never saw is
+     * clamped as a waker now, below zero or not (the restart rule, design §7.2): no rebase takes a
+     * child that kept demanding below zero.
      */
     @Test
     fun aNeverObservedChildFarBelowTheOriginIsClampedNotRefused() {

@@ -48,9 +48,10 @@ public interface LedgerCell {
  *
  * The demanding state is what makes the clamp an *edge* detector rather than a level one: `false`
  * means this peer has seen the child not competing, so the next round in which it competes is a
- * wake. An id that is *absent* has never been observed and is therefore never treated as a wake: a
- * first observation carries no evidence the child was ever idle, and forfeiting a deficit accrued
- * under some other peer's scheduling would be a penalty this peer has no standing to impose.
+ * wake. An id that is *absent* has never been observed, and a seated one found competing is a wake
+ * too, the restart rule (design §7.2, #3472): a first sighting says nothing about how long the
+ * child idled, so this peer gives it no credit for a gap it did not watch, at the cost of its lag,
+ * once. That is every child of a restarted `HeddleNode`, and a child another peer seated and ran.
  * Seating a genuinely new generation is the seat bump's job ([schedule]), not the clamp's.
  *
  * That memory is a value too: [memory] exports it as an [AllocatorMemory] and the secondary
@@ -79,7 +80,12 @@ public class FairShareAllocator(
     private val self: ReplicaId,
     private val policy: PolicyConfig,
 ) {
-    /** The wake clamps this peer computed, wide, in ticks of each edge's own grid (#3353). */
+    /**
+     * The wake clamps this peer computed, wide, in ticks of each edge's own grid (#3353). A zero
+     * offset is absent: an edge reads an absent one as zero, so storing it would spell one state
+     * two ways. [AllocatorMemory] refuses one, so a loaded memory holds none, and every write
+     * goes through [writeWakeOffset].
+     */
     private val wakeOffsets = HashMap<AttachmentId, Int128>()
     private val demandingObserved = HashMap<AttachmentId, Boolean>()
 
@@ -607,19 +613,18 @@ public class FairShareAllocator(
 
     /**
      * Whether [edge] wakes: demanding now, and last observed not demanding. Or, never observed at
-     * all, seated, demanding and below zero (#3353 review, item B). The threshold stays at zero
-     * under the window rule, whose rebase leaves a watched demanding child anywhere in `[−C, 0)`:
-     * one this allocator never saw there may be such a child, a restarted `HeddleNode`'s say, and
-     * clamping it costs it at most its lag, once, the penalty side. A threshold at the floor would
-     * leave a child idle while nobody watched below zero with up to a window of credit, which is the
-     * side §10.5 forbids. Clamping costs turns, never credit (§10.6).
+     * all, seated and demanding: the restart rule (design §7.2, #3472). This allocator did not
+     * watch the gap before it first saw the child, so it gives it no credit for it, wherever the
+     * child stands. Clamping it costs it at most its lag, once, the penalty side: clamping costs
+     * turns, never credit (§10.6). The rule took in the arm it replaced, which clamped a
+     * never-observed child only below zero, where only a rebase could put it.
      */
     private fun isWaker(edge: PolicyEdge): Boolean {
         if (!HeddlePolicy.isDemanding(edge)) return false
         return when (demandingObserved[edge.record.id]) {
             false -> true
             true -> false
-            null -> edge.gauge != null && HeddlePolicy.effectiveTicksWide(edge) < Int128.ZERO
+            null -> edge.gauge != null
         }
     }
 
@@ -1254,7 +1259,7 @@ public class FairShareAllocator(
         for (edge in edges) {
             val id = edge.record.id
             val shift = shifts[id] ?: continue
-            wakeOffsets[id] = edge.offsetTicks + shift.ticks
+            writeWakeOffset(id, edge.offsetTicks + shift.ticks)
             departures.remove(id)
             val remainder = shift.remainder
             if (remainder == null) shiftRemainders.remove(id) else shiftRemainders[id] = remainder
@@ -1349,8 +1354,13 @@ public class FairShareAllocator(
             // Written, not joined: a seated waker with no departure holds no offset (see above).
             // Both sides are on the waker's grid, and the result is stored on it, so a stored offset
             // never carries a front's denominator into the next one (#3313).
-            wakeOffsets[edge.record.id] = computed
+            writeWakeOffset(edge.record.id, computed)
         }
+    }
+
+    /** Store [offset] as [edge]'s wake offset, or drop the entry when it is zero, the value an absent one reads as. */
+    private fun writeWakeOffset(edge: AttachmentId, offset: Int128) {
+        if (offset == Int128.ZERO) wakeOffsets.remove(edge) else wakeOffsets[edge] = offset
     }
 
     /**
