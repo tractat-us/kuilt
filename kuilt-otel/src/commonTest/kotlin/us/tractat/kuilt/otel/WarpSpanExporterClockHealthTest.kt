@@ -145,4 +145,35 @@ class WarpSpanExporterClockHealthTest {
             { assertEquals(0L, exporter.health.value.outstandingFailures, "the clock write that landed did not resolve it") },
         )
     }
+
+    /**
+     * A clock at `Long.MAX_VALUE` can mint no more (#3432), so every later span is saved unstamped,
+     * and nothing the clock writes changes that: `seq` never moves down, a clear included, and a
+     * restart reads the same `seq` back. So every turn counts its clock work as failed, and a clear
+     * that writes the exhausted clock's entry resolves none of it.
+     */
+    @Test
+    fun anExhaustedClockStaysOutstandingWhateverItWrites() = runTest {
+        val backing = InMemoryDurableStore()
+        val clock = WarpCausalClock(replica).armed().also { it.raiseFloor(Long.MAX_VALUE) }
+        val exporter = WarpSpanExporter(replica, backing, causalClock = clock)
+
+        val tick = clock.tick()
+        val exported = exporter.export(span(1))
+        val saved = exporter.snapshot().elements.single()
+        val afterExport = exporter.health.value
+        val cleared = exporter.clear()
+        val clockEntry = backing.read(clockKey)
+
+        assertAll(
+            { assertEquals(ClockTick.Exhausted, tick, "the rig: the clock still mints") },
+            { assertEquals(ExportResult.Success, exported) },
+            { assertNull(saved.causalStamp, "the rig: an exhausted clock stamped") },
+            { assertEquals(1L, afterExport.acknowledged, "the export's span work was not acknowledged") },
+            { assertEquals(1L, afterExport.outstandingFailures, "an exhausted clock was not outstanding") },
+            { assertEquals(ExportResult.Success, cleared) },
+            { assertNotNull(clockEntry, "the rig: the clear did not write the clock") },
+            { assertEquals(2L, exporter.health.value.outstandingFailures, "writing an exhausted clock resolved it") },
+        )
+    }
 }
