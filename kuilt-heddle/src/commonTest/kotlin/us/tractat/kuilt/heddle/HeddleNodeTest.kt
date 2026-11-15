@@ -1213,7 +1213,7 @@ class HeddleNodeTest {
         val scheduling = peer.node.asSchedulingPeer()
         val target = 10 * GRANTS_BEFORE_THE_CEILING
         var peak = 0.0
-        while (run.grants < target) {
+        while (run.grants < target && run.calls < LONG_RUN_CALL_LIMIT) {
             val outcome = run.step(scheduling)
             assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${run.grants} grants")
             if (run.calls % 64 == 0) {
@@ -1253,7 +1253,7 @@ class HeddleNodeTest {
         val peer = h.peers[0]
         val run = MixedWeightRun(root, wideLanes, MAX_GRANT, Random(3313)) { call -> if (call <= WIDE_RUN_ALONE) listOf(wideLanes[3]) else null }
         val scheduling = peer.node.asSchedulingPeer()
-        while (run.grants < WIDE_RUN_GRANTS) {
+        while (run.grants < WIDE_RUN_GRANTS && run.calls < LONG_RUN_CALL_LIMIT) {
             val outcome = run.step(scheduling)
             assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${run.grants} grants")
             if (run.calls % 64 == 0) h.pump(1L)
@@ -1527,12 +1527,8 @@ class HeddleNodeTest {
         /** Enough root supply for every long run here, and two peers' fit a `Long`: 2⁶¹, about 130,000 grants of [MAX_GRANT]. */
         const val LONG_RUN_MINT: Long = 1L shl 61
 
-        /**
-         * Grants the mixed-weight long run made before it refused at the ceiling, before the origin
-         * rebase: 145, at call 70, measured on the slice 2–4 base with #3386 merged, JVM. The twin's
-         * seed refused there at 131 grants, call 66, exactly where its no-rebase twin here does.
-         */
-        const val GRANTS_BEFORE_THE_CEILING: Int = 145
+        /** The most calls a long run here makes: far past its grant target, so a run that stalls reds instead of hanging. */
+        const val LONG_RUN_CALL_LIMIT: Int = 20_000
 
         /** The lagging-peer scenario's grant, and how many a call makes: 12 calls of 256 pass a weight-1 lane's threshold. */
         const val LAG_GRANT: Long = LocalHeddle.MAX_RESERVATION

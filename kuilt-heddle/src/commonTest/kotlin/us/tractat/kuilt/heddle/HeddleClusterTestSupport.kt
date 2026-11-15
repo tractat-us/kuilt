@@ -157,6 +157,14 @@ internal fun EntitlementLedger.conservationShortfall(root: GroupId, replicas: Co
     return if (accounted == mintedTotal()) null else "held $held + spent ${leafSpentTotal()} != minted ${mintedTotal()}"
 }
 
+/**
+ * Grants the mixed-weight long run in `HeddleNodeTest` made before it refused at the ceiling, before
+ * the origin rebase: 145, at call 70, measured on the slice 2–4 base with #3386 merged, JVM. That
+ * seed's twin refused at 131 grants, call 66, exactly where its no-rebase twin does. The long runs
+ * here go ten times as far.
+ */
+internal const val GRANTS_BEFORE_THE_CEILING: Int = 145
+
 /** The root every governed rig here bootstraps under. */
 internal val ACCEPTANCE_ROOT: GroupId = GroupId("root")
 
