@@ -1197,6 +1197,43 @@ if the restart rule is not wanted (Open, below), slice 3 retires that row's
 "level" assertion instead. Slice 4 follows 3. Slices 5, 6 and 7 follow 3 and do
 not depend on each other.
 
+#### Settled — don't reopen
+
+- Keeping the origin as an optimisation that keeps numbers small: it buys
+  nothing a pick reads, and it costs a replicated register, a rebase rule and a
+  window (#3472).
+- Deleting P1′'s lease clause with no replacement: its denominator cap is what
+  keeps the net-service clock inside 128 bits (#3472).
+- A typed refusal at 128 bits in place of W1: a limit the budget can rule out
+  when a weight is applied should not be met at a pick (#3472).
+- Deleting `PositionCeiling` and letting the lifetime counters throw from
+  `acquire`: measured at 524,287 largest leases, which a consumer can reach
+  (#3472).
+- Keeping the public reads as `Rational` and saturating them: with no origin
+  they stick at the bound for good, and `explain` reports equal numbers (#3472).
+- Reading the public virtual times relative to a front taken at read time: the
+  ledger's own reads hold no demand, so they have no front to take (#3472).
+- Keeping the below-zero first-sighting arm: nothing is below zero (#3472).
+- Reading snapshot format 2 by dropping its origins: no pick would change, but
+  one format number would then mean two layouts (#3472).
+- Persisting `HeddleNode`'s wake memory in place of the restart rule: it is
+  scheduler-local by design, and a second store for it is a larger change than
+  the gap it closes (#3472).
+
+#### Open
+
+- **Whether the restart rule is wanted.** It is a behaviour change on its own
+  slice, so it can be dropped without touching the rest. Without it, a
+  restarted `HeddleNode` hands a child that idled before the crash its whole
+  idle time as credit, in a run of any length. Today that is true of every run
+  short of a rebase. With it, a restart costs every child its lag once, and a
+  second scheduler's first sight of a child costs that child its lag in that
+  scheduler's view. Not ruled.
+- **The constants of W1.** The clause is reasoned from the counters' range, not
+  measured. Slice 5 owes the proof.
+- **A typed boot result for a weight the budget refuses** stays open under
+  #3461.
+
 ### 7.2 Neutral creation and no idle credit
 
 - **Neutral creation:** a new generation is seated at the parent's current
