@@ -216,11 +216,19 @@ jobs:
           java-version: '25.0.5+8.0.LTS'
           distribution: 'temurin'
 
+      # Only `main` writes the Actions cache; a PR reads `main`'s (#3115). The repo's 10 GB of Actions
+      # cache was full, and PR jobs wrote over half of it, so an entry lived about 10-20 minutes
+      # before eviction. `main`'s macOS and konan entries were gone by the time apple-nightly ran
+      # at 07:00, and that cost it 7-13 min of cold compile. No job in this file reads a cache
+      # entry another job in the same run wrote; they pass results by artifact. The cost is that a
+      # PR's second push no longer reads what its first push wrote, and falls back to `main`'s
+      # entries plus the S3 build cache. Every setup-gradle step below that writes uses this same
+      # expression, which is also setup-gradle's own default.
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: wrapper
-          cache-read-only: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # Kotlin/Native toolchain + dependencies. setup-gradle caches ~/.gradle but
       # not ~/.konan, so without this every run re-downloads konan and recompiles
@@ -412,7 +420,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: wrapper
-          cache-read-only: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Cache Kotlin/Native (~/.konan)
         uses: actions/cache@v6
@@ -559,7 +567,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: wrapper
-          cache-read-only: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # Dokka analyses every target's main sources (incl. the native source sets),
       # so it needs the Kotlin/Native toolchain — same konan cache as the build jobs.
@@ -849,7 +857,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: wrapper
-          cache-read-only: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Run deterministic capability probes (isolated runner, GATING)
         # Checks the manifest and policy fixtures, supplies exact Gradle selectors,
@@ -951,7 +959,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: wrapper
-          cache-read-only: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Run real-threaded concurrency probes (isolated runner, NON-BLOCKING)
         # -Pconcurrency.stress.tests=true un-gates the *ConcurrencyTest classes
@@ -1119,7 +1127,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: wrapper
-          cache-read-only: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # Configuring :kuilt-nw's Android library variant needs an SDK.
       - name: Setup Android SDK
@@ -1208,7 +1216,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: wrapper
-          cache-read-only: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # Shares the `konan-macOS-*` cache key with apple-nightly.yml's job, so a PR
       # here normally restores a toolchain the nightly already warmed. No Android SDK
