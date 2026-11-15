@@ -58,14 +58,16 @@ class HeddleAcceptanceTest {
     }.lower()
 
     /**
-     * The rig, proved: a governed cluster with the rebase switched off makes the same picks as one
-     * with it on, call for call, until it answers [ScheduleOutcome.PositionCeiling]; it answers it
-     * again on the next call, while every lane still waits, so the stop is typed, not silent. The
-     * rebasing cluster then runs on to ten times the twin's grants without one refusal, and the
-     * other two peers converge on its ledger.
+     * A governed cluster with the rebase switched off passes its position ceiling and still makes
+     * the same picks as one with it on, call for call, through the whole supply: a pick orders the
+     * full 128-bit position, and a rebase moves every child alike, so neither changes the order. The
+     * twin used to answer [ScheduleOutcome.PositionCeiling] part-way through, and the rebasing
+     * cluster then ran on alone to ten times its grants; now neither refuses, the twin's peak
+     * effective position passes its ceiling while the rebasing cluster's stays far below, and the
+     * other two peers converge on the rebasing cluster's ledger.
      */
     @Test
-    fun aGovernedClusterRunsTenTimesPastWhereANoRebaseTwinRefuses() = runTest(
+    fun aNoRebaseTwinPassesItsCeilingAndPicksAsTheRebasingClusterCallForCall() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
@@ -78,23 +80,17 @@ class HeddleAcceptanceTest {
         val a = MixedWeightRun(root, lanes, MAX_GRANT, Random(3353))
         val b = MixedWeightRun(root, lanes, MAX_GRANT, Random(3353))
 
-        var twinRefusal: ScheduleOutcome? = null
-        while (twinRefusal == null && a.calls < TWIN_CALL_LIMIT) {
-            a.step(node)
-            when (val outcome = b.step(twinNode)) {
-                is ScheduleOutcome.PositionCeiling -> twinRefusal = outcome
-                else -> assertEquals(b.issuedByLane(twinNode), a.issuedByLane(node), "call ${a.calls}: the two made different picks")
-            }
-        }
-        val twinGrants = b.grants
-        // Every lane waits, and the twin answers the same refusal again rather than going quiet.
-        b.advertise(twinNode, lanes)
-        val again = b.schedule(twinNode)
-
         var peak = 0.0
-        while (a.grants < 10 * twinGrants && a.calls < LONG_RUN_CALL_LIMIT) {
+        var twinPeak = 0.0
+        var twinPassedAtGrant = -1
+        while (a.calls < TWIN_CALL_LIMIT) {
             val outcome = a.step(node)
+            val twinOutcome = b.step(twinNode)
             assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${a.grants} grants")
+            assertTrue(twinOutcome !is ScheduleOutcome.PositionCeiling, "the twin refused at the ceiling after ${b.grants} grants")
+            assertEquals(b.issuedByLane(twinNode), a.issuedByLane(node), "call ${a.calls}: the two made different picks")
+            twinPeak = maxOf(twinPeak, twinNode.boundMetrics(root).peakPositionFraction)
+            if (twinPassedAtGrant < 0 && twinPeak >= 1.0) twinPassedAtGrant = b.grants
             if (a.calls % PUMP_EVERY == 0) {
                 rebasing.pump(1L)
                 peak = maxOf(peak, node.boundMetrics(root).peakPositionFraction)
@@ -104,15 +100,14 @@ class HeddleAcceptanceTest {
         rebasing.pump()
         val merged = rebasing.peers[0].node.ledger.value
         println(
-            "[${started.elapsedNow()}] acceptance: twin refused at call ${b.calls} after $twinGrants grants; the rebasing cluster made " +
-                "${a.grants} grants in ${a.calls} calls with ${node.rebases()} rebases, peak $peak",
+            "[${started.elapsedNow()}] acceptance: the twin passed its ceiling at grant $twinPassedAtGrant, peak $twinPeak; both made " +
+                "${a.grants} grants in ${a.calls} calls, the rebasing cluster with ${node.rebases()} rebases, peak $peak",
         )
         assertAll(
-            { assertEquals(ScheduleOutcome.PositionCeiling(root), twinRefusal, "the rig: the twin reached its ceiling, and said so") },
-            { assertTrue(twinGrants > 0, "the rig: the twin granted before it refused ($twinGrants)") },
-            { assertEquals(ScheduleOutcome.PositionCeiling(root), again, "the twin's stop is typed on every call, not a silent stall") },
+            { assertTrue(twinPassedAtGrant in 1 until a.grants, "the rig: the twin passed its ceiling with grants still to come ($twinPassedAtGrant of ${a.grants})") },
+            { assertEquals(a.grants, b.grants, "the twin granted every grant the rebasing cluster did") },
+            { assertEquals(SUPPLY / MAX_GRANT, a.grants.toLong(), "the rig: the whole supply was granted") },
             { assertEquals(0, twinNode.rebases(), "the rig: the twin never rebased") },
-            { assertTrue(a.grants >= 10 * twinGrants, "the rebasing cluster made its own ${a.grants} grants") },
             { assertTrue(node.rebases() > 0, "the rig: the rebasing cluster rebased (${node.rebases()} times)") },
             { assertTrue(merged.origin(root) > Int128.ZERO, "the origin rose, to ${merged.origin(root)}") },
             { assertTrue(a.chargedBelowReservation > 0, "the rig: leases were charged below their reservation") },
