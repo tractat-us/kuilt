@@ -2136,6 +2136,12 @@ internal class SeamRoom(
      */
     internal fun hasPendingResume(): Boolean = resumeMachine?.hasPendingFlight() ?: false
 
+    /**
+     * Test-visibility: is a reconnect episode still undecided? Its job is recorded while it runs and
+     * cleared in the critical section that decides how the episode ended (#3094).
+     */
+    internal fun hasReconnectInFlight(): Boolean = resumeMachine?.inFlightReconnectJob() != null
+
     /** Test-visibility: how many resume flights this joiner has started (#3165). */
     internal fun resumeFlightsStarted(): Int = resumeMachine?.flightsStarted() ?: 0
 
