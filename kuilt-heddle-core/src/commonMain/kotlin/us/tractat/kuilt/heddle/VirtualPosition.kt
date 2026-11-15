@@ -40,27 +40,24 @@ import us.tractat.kuilt.math.timesWide
 internal const val TICKS_PER_UNIT: Long = 16L
 
 /**
- * The room left above a position at its ceiling for one deadline: the largest reservation,
- * [LocalHeddle.MAX_RESERVATION], in ticks. A pick reads `p + q · G`, so with this much spare, a
- * deadline over a position below the ceiling never leaves `Long`.
+ * The room left above a position at [positionCeiling] for one lease: the largest reservation,
+ * [LocalHeddle.MAX_RESERVATION], in ticks. Only the weight budget's P1′ reads it
+ * ([weightsFitTheBudget]); a pick forms its deadline `p + q · G` in 128 bits.
  */
 internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS_PER_UNIT
 
 /**
- * The highest position, in ticks, an edge of weight [w] can hold exactly: `(Long.MAX_VALUE −`
- * [POSITION_HEADROOM]`) / w.denominator`.
+ * The highest position, in ticks, the public virtual-time reads of an edge of weight [w] report
+ * exactly: `(Long.MAX_VALUE −` [POSITION_HEADROOM]`) / w.denominator`. A position read as a virtual
+ * time is `ticks / (G · w)`, whose numerator is at most `ticks · w.denominator` ([ticksToVirtual]),
+ * so dividing by the denominator keeps it a [Rational]. Past it a read reports the ceiling
+ * ([inWindow]), the penalty side.
  *
- * The bound has two jobs. Divided by the weight's denominator, it keeps the position's own virtual
- * time representable: a position read as a virtual time by the public reads is `ticks / (G · w)`,
- * whose numerator is at most `ticks · w.denominator` ([ticksToVirtual]). Short of `Long.MAX_VALUE`
- * by [POSITION_HEADROOM], it leaves a deadline room.
- *
- * It bounds only the **effective** position a pick orders, relative to the parent's origin
- * (#3353). A gauge's stored position, the origin, the raw position, the front and a wake clamp are
- * all 128-bit and held nowhere. An effective position that would pass the ceiling **saturates**
- * here instead of throwing (#3313): it no longer orders exactly, so a pick that would have to
- * order it is refused with [AcquireOutcome.PositionCeiling], while a charge, which may not be
- * refused, lands.
+ * **No pick reads it.** A pick orders the full 128-bit effective position, relative to the parent's
+ * origin, so a child past its ceiling is ordered exactly and nothing is refused there. A gauge's
+ * stored position, the origin, the raw position, the front and a wake clamp are all 128-bit too.
+ * What the ceiling still sizes is the rebase that keeps positions near zero ([rebaseThreshold], the
+ * window rule, P1′), so that the reads stay exact on a busy parent.
  */
 internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADROOM) / w.denominator
 
@@ -77,8 +74,8 @@ internal fun positionCeiling(w: Weight): Long = (Long.MAX_VALUE - POSITION_HEADR
  *
  * A child can still go below it by its own returns: a lease cancelled from the floor walks its
  * holder back by the lease, and a child still waiting is still demanding there. A pick orders it
- * all the same, exactly, since the narrowing it reads holds down to `Long.MIN_VALUE`, and the public
- * reads hold it at the floor ([inWindow]). More than `2⁴⁸ / d` ticks below its floor, for a weight
+ * all the same, exactly, since it reads the wide position, and the public reads hold it at the
+ * floor ([inWindow]). More than `2⁴⁸ / d` ticks below its floor, for a weight
  * `n / d`, `ticks · d` leaves `Long`, which is why the reads saturate rather than convert.
  */
 internal fun positionFloor(w: Weight): Long = -positionCeiling(w)
@@ -89,31 +86,15 @@ internal fun positionFloor(w: Weight): Long = -positionCeiling(w)
  * parent's children above the rebased one never reaches it, and far enough above zero that a rebase
  * is rare. Each child is measured against its own threshold, and the front too, read on every
  * child's grid, so a heavy child joining a light runner's front is never seated past its ceiling
- * (#3353 review, item A). What still reaches the ceiling is a demanding child that is never served:
- * each rebase carries it further below zero, until it sits at its [positionFloor] and holds `Δ` at
- * zero. A weight set so fine that one full lease from just under this threshold
- * passes the ceiling is refused when it is applied ([weightsFitTheBudget], P1′).
+ * (#3353 review, item A). What still climbs past the ceiling is a busy parent beside a demanding
+ * child that is never served: each rebase carries that child further below zero, and since the
+ * rebase aims at the demanding children's weighted mean, the child drags the mean down with it until
+ * no whole step fits beneath it and `Δ` is held at zero. Its siblings then climb on, and a pick goes
+ * on ordering them exactly; only the public reads saturate. A weight set so fine that one full lease
+ * from just under this threshold passes the ceiling is refused when it is applied
+ * ([weightsFitTheBudget], P1′).
  */
 internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16
-
-/**
- * [ticks] held at [w]'s [positionCeiling]: the one place a position saturates rather than throws.
- *
- * @throws ArithmeticException if [ticks] is below `Long.MIN_VALUE`, a position no service reaches.
- */
-internal fun saturated(ticks: Int128, w: Weight): Long {
-    val ceiling = positionCeiling(w)
-    if (ticks >= Int128.of(ceiling)) return ceiling
-    return ticks.toLongOrNull() ?: throw ArithmeticException("Long overflow: a position of $ticks ticks")
-}
-
-/**
- * Thrown where a pick would have to order a position at its ceiling, or where a deadline leaves
- * `Long` (#3313). It is an [ArithmeticException], as the overflow it replaces was, so a caller of
- * [HeddlePolicy.pick] or [FairShareAllocator.pickChild] sees the same type; the engine catches this
- * subtype and answers a choosing call with a typed refusal instead.
- */
-internal class PositionCeilingException(message: String) : ArithmeticException(message)
 
 /**
  * Whether one parent's children, of [weights], fit the weight budget: every product a pick forms
@@ -124,11 +105,11 @@ internal class PositionCeilingException(message: String) : ArithmeticException(m
  *
  * ## The `Long` products
  *
- * Four checks cover them all ([VirtualTime.mean], [VirtualTime.ticksFor], [compareVirtual]):
+ * Four checks cover them all ([VirtualTime.mean], [VirtualTime.ticksForWide], [compareVirtualWide]):
  * - `L`, the least common multiple of the denominators;
  * - `S = Σ n · L/d`, the weights' sum over `L`;
  * - `G · S`, the front's denominator in ticks;
- * - `S · d` for every weight, the divisor [VirtualTime.ticksFor] forms.
+ * - `S · d` for every weight, the divisor [VirtualTime.ticksForWide] forms.
  *
  * The other products follow. `L · n = (n · L/d) · d ≤ S · d`, since `n · L/d` is one term of `S`.
  * And `d_a · n_b ≤ L · n_b ≤ S · d_b`, since `d_a` divides `L`.
@@ -322,8 +303,9 @@ internal class VirtualTime(
 
     /**
      * This time on the grid of an edge of weight [w], exactly: `⌈V · w · G⌉` ticks, in 128 bits.
-     * Where a newborn of weight [w] is seated, relative to its parent's origin, and where a waker
-     * is clamped to. Nothing caps it (#3353).
+     * Where a newborn of weight [w] is seated, relative to its parent's origin, where a waker is
+     * clamped to, and the highest position at which an edge of weight [w] is still eligible for a
+     * pick (design §7.3 step 3, read at grid resolution). Nothing caps it (#3353).
      *
      * `V · w · G = ticks · (wDen · w.num) / (wNum · w.den)`, formed by [mulDiv] in 192 bits so only
      * the result has to fit.
@@ -337,18 +319,6 @@ internal class VirtualTime(
         val divisor = checkedMul(weightNumerator, w.denominator)
         return mulDiv(ticks, multiplier, divisor, Rounding.CEILING)
             ?: throw ArithmeticException("Int128 overflow: $ticks · $multiplier / $divisor")
-    }
-
-    /**
-     * [ticksForWide] narrowed to a position a pick orders, held at [w]'s [positionCeiling]
-     * ([saturated]): the highest position at which an edge of weight [w] is still eligible (design
-     * §7.3 step 3, read at grid resolution). A bound at the ceiling admits every position below it,
-     * as the exact bound would.
-     */
-    fun ticksFor(w: Weight): Long {
-        val wide = ticksForWide(w)
-        // Below Long, held at its least value: the same penalty-side floor a pick's positions take.
-        return if (wide < Int128.of(Long.MIN_VALUE)) Long.MIN_VALUE else saturated(wide, w)
     }
 
     /** This time in whole units of virtual time, rounded down: `⌊ticks / (G · w)⌋`. */
@@ -395,17 +365,9 @@ internal class VirtualTime(
 }
 
 /**
- * Compare `a / wa` with `b / wb` for two positions on their own edges' grids: the order of the two
- * virtual times they stand for. Cross-multiplied in 128 bits, so it never throws on the positions;
- * it throws only if a weight product `wa.den · wb.num` leaves `Long`.
- */
-internal fun compareVirtual(a: Long, wa: Weight, b: Long, wb: Weight): Int =
-    a.timesWide(checkedMul(wa.denominator, wb.numerator))
-        .compareTo(b.timesWide(checkedMul(wb.denominator, wa.numerator)))
-
-/**
- * [compareVirtual] for two wide positions: the sign of `a · ka − b · kb` with `ka = wa.den · wb.num`
- * and `kb = wb.den · wa.num`, both positive. Exact for every pair (#3353): it compares
+ * Compare `a / wa` with `b / wb`, two positions on their own edges' grids, the order of the two
+ * virtual times they stand for: the sign of `a · ka − b · kb` with `ka = wa.den · wb.num` and
+ * `kb = wb.den · wa.num`, both positive. Exact for every pair (#3353): it compares
  * `⌊a · ka / kb⌋` with `b`, which decides the order unless they are equal, and then the remainder
  * does. A quotient past 128 bits is past every `b`, so its sign decides.
  */

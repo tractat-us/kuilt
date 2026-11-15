@@ -90,3 +90,13 @@ internal fun LocalHeddleSnapshot.withoutNetClocks(): LocalHeddleSnapshot = Local
  */
 internal fun ticksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILING): Long =
     saturated(wideTicksAt(v, w, rounding), w)
+
+/**
+ * [ticks] held at [w]'s [positionCeiling], as a `Long`. Test support only: nothing in the engine
+ * narrows a position (#3353).
+ */
+internal fun saturated(ticks: Int128, w: Weight): Long {
+    val ceiling = positionCeiling(w)
+    if (ticks >= Int128.of(ceiling)) return ceiling
+    return checkNotNull(ticks.toLongOrNull()) { "a position of $ticks ticks is below Long" }
+}
