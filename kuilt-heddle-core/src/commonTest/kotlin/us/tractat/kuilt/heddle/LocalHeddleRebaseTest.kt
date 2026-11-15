@@ -61,6 +61,29 @@ class LocalHeddleRebaseTest {
         return checkNotNull(raw.toLongOrNull()) { "${lane.value} reads $raw ticks, past Long" }
     }
 
+    /** Raise the root's origin by [units], every lane coming down by as many units. */
+    private fun LocalHeddle.raiseOriginBy(units: Int128) {
+        reshapeForTest { ledger -> ledger.piece(EntitlementLedger.of(origins = mapOf(root to ledger.origin(root) + units))) }
+    }
+
+    /** [lane]'s raw position, wide: gross, less what it returned, relative to the root's origin. */
+    private fun LocalHeddle.wideTicks(lane: GroupId): Int128 {
+        val ledger = snapshot().ledger
+        val edge = edgeOf(lane)
+        return ledger.gauge(edge).rawTicksAt(ledger.baseIssuance(edge), ledger.edge(edge)?.returned ?: 0L, Weight.ONE, ledger.origin(root))
+    }
+
+    /** [pushTo] for a position any distance from a raised origin: the gauge's ticks, wide, at the current issuance. */
+    private fun LocalHeddle.pushToWide(lane: GroupId, ticks: Int128) {
+        val edge = edgeOf(lane)
+        reshapeForTest { ledger ->
+            val returned = Int128.of((ledger.edge(edge)?.returned ?: 0L) * TICKS_PER_UNIT)
+            val stored = ticks + returned + originTicks(ledger.origin(root), Weight.ONE)
+            ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to gaugeAt(stored, folded = ledger.baseIssuance(edge)))))
+        }
+        check(wideTicks(lane) == ticks) { "the rig put ${lane.value} at ${wideTicks(lane)}, not $ticks" }
+    }
+
     /** Put [lane]'s position at exactly [ticks] by raising its gauge floor at its current fold. */
     private fun LocalHeddle.pushTo(lane: GroupId, ticks: Long) {
         val edge = edgeOf(lane)
@@ -76,12 +99,13 @@ class LocalHeddleRebaseTest {
 
     /**
      * `a` is past the threshold and `b`, also waiting, sits 1,000 units and 5 ticks above its
-     * origin. `Δ` is 1,000 units: the most that keeps `b` at or above zero. Every lane moves by it,
-     * `c` too although it is idle, since 1,000 units is nowhere near `−R`. Then `b` is picked and
-     * delegated one unit.
+     * origin. `Δ` is the pair's mean in whole units, `⌊(2R + 16,005) / 32⌋` (#3353, the window rule):
+     * the rule before it stopped at `b`, 1,000 units, and held `b` at or above zero. So `b` goes below
+     * zero, by about `R`, which is far inside its window. Every lane moves by `Δ`, `c` too although it
+     * is idle. Then `b` is picked and delegated one unit.
      */
     @Test
-    fun aDemandingChildFarBehindHoldsTheShiftBack() {
+    fun aDemandingChildFarBehindGoesBelowZeroInsideItsWindow() {
         val engine = engine()
         engine.pushTo(a, 2 * threshold)
         engine.pushTo(b, 16_005L)
@@ -89,20 +113,42 @@ class LocalHeddleRebaseTest {
         val rebasesBefore = engine.rebasesForTest
 
         val out = engine.acquire(setOf(a, b), setOf(b), startedAt = 1L)
-        val shift = 1_000L * TICKS_PER_UNIT
+        val shift = (2 * threshold + 16_005L) / (2 * TICKS_PER_UNIT) * TICKS_PER_UNIT
         assertAll(
             { assertEquals(b, (out as AcquireOutcome.Acquired).lease.leaf) },
             { assertEquals(rebasesBefore + 1, engine.rebasesForTest, "one rebase") },
             { assertEquals(2 * threshold - shift, engine.ticks(a), "a moved by Δ") },
-            { assertEquals(5L + TICKS_PER_UNIT, engine.ticks(b), "b moved by Δ, to 5 ticks, then took its unit") },
-            { assertEquals(cBefore - shift, engine.ticks(c), "idle c moved by Δ too: it is far above −R") },
+            { assertEquals(16_005L - shift + TICKS_PER_UNIT, engine.ticks(b), "b moved by Δ, below zero, then took its unit") },
+            { assertTrue(engine.ticks(b) < -threshold + 2 * TICKS_PER_UNIT, "b went about R below zero: ${engine.ticks(b)}") },
+            { assertTrue(engine.ticks(b) > positionFloor(Weight.ONE), "and stayed inside its window") },
+            { assertEquals(cBefore - shift, engine.ticks(c), "idle c moved by Δ too") },
         )
     }
 
     /**
+     * The window's own bound (#3353): `a` and `c` wait at their ceilings and `b` waits ten units above
+     * its floor, `−C`. Their mean is far up, so the front does not bind; `b`'s room does, and `Δ` is
+     * ten units exactly, which lands `b` on its floor. The rule before it bounded `Δ` by `b`'s
+     * position, below zero, so it did not move at all.
+     */
+    @Test
+    fun aDemandingChildNearItsFloorBoundsTheShiftByItsRoom() {
+        val engine = engine()
+        engine.raiseOriginBy(FLOOR_ORIGIN)
+        engine.pushToWide(a, Int128.of(positionCeiling(Weight.ONE)))
+        engine.pushToWide(c, Int128.of(positionCeiling(Weight.ONE)))
+        engine.pushToWide(b, Int128.of(positionFloor(Weight.ONE) + 10L * TICKS_PER_UNIT))
+        val wants = Demand(targetOutstanding = Long.MAX_VALUE, maximumUsefulGrant = 1L)
+        val allocator = FairShareAllocator(LocalHeddle.SELF, PolicyConfig(quantum = 1L))
+        val rebase = allocator.originRebase(engine.root, engine.snapshot().ledger) { wants }
+        assertEquals(Int128.of(10L), rebase, "Δ is b's room, ten units, which lands it on its floor")
+    }
+
+    /**
      * A `LocalHeddle` rebase raises the parent's origin and rewrites no gauge (#3353, slice 7). The
-     * rig is [aDemandingChildFarBehindHoldsTheShiftBack]'s: `Δ` is 1,000 units. The fold rebase it
-     * replaces raised `a`'s and `c`'s folds by 1,000 and left the origin at zero.
+     * rig is [aDemandingChildFarBehindGoesBelowZeroInsideItsWindow]'s: `Δ` is the pair's mean in
+     * whole units. The fold rebase it replaces raised `a`'s and `c`'s folds by `Δ` and left the
+     * origin at zero.
      */
     @Test
     fun aLocalRebaseRaisesTheOriginAndNoFold() {
@@ -116,7 +162,7 @@ class LocalHeddleRebaseTest {
         val after = engine.snapshot().ledger
         assertAll(
             { assertEquals(rebasesBefore + 1, engine.rebasesForTest, "the rig: one rebase") },
-            { assertEquals(us.tractat.kuilt.math.Int128.of(1_000L), after.origin(engine.root), "the origin rose by Δ") },
+            { assertEquals(Int128.of((2 * threshold + 16_005L) / (2 * TICKS_PER_UNIT)), after.origin(engine.root), "the origin rose by Δ") },
             { assertEquals(before.gauge(engine.edgeOf(a)), after.gauge(engine.edgeOf(a)), "a's gauge is as it was") },
             { assertEquals(before.gauge(engine.edgeOf(c)), after.gauge(engine.edgeOf(c)), "and so is c's") },
         )
@@ -190,9 +236,9 @@ class LocalHeddleRebaseTest {
     }
 
     /**
-     * `a` and `b` both wait, `b` the lower at `2R`, so `Δ` is about `2R`; `c` is idle a few ticks
-     * above its origin and moves the whole `Δ`, to about `−2R` (#3353). The fold rebase this replaced
-     * stopped it at `−R`. The wake clamp takes all of it back, since it is taken wide: when `c` wakes
+     * `a` and `b` both wait, at `3R` and `2R`, so `Δ` is their mean, about `2.5R` (#3353, the window
+     * rule); `c` is idle a few ticks above its origin and moves the whole `Δ`, to about `−2.5R`. The
+     * fold rebase this replaced stopped it at `−R`. The wake clamp takes all of it back, since it is taken wide: when `c` wakes
      * beside `a` it is clamped to `a`'s front and served, and the engine picks exactly as a twin that
      * never rebased.
      */
@@ -222,7 +268,7 @@ class LocalHeddleRebaseTest {
         }
         assertAll(
             { assertEquals(b, (out as AcquireOutcome.Acquired).lease.leaf) },
-            { assertTrue(shift > 2 * threshold - TICKS_PER_UNIT && shift <= 2 * threshold, "Δ is b's position in whole units: $shift") },
+            { assertTrue(shift > 5 * threshold / 2 - TICKS_PER_UNIT && shift <= 5 * threshold / 2, "Δ is a and b's mean in whole units: $shift") },
             { assertEquals(shift, cBefore - afterRebase, "c moved the whole Δ, past −R") },
             { assertTrue(afterRebase < -threshold, "the rig: c is below −R, at $afterRebase") },
             { assertEquals(pickedAfterWake.map { it[1] }, pickedAfterWake.map { it[0] }, "once c wakes, every pick is the twin's") },
@@ -340,5 +386,10 @@ class LocalHeddleRebaseTest {
         val allocator = FairShareAllocator(LocalHeddle.SELF, PolicyConfig(quantum = 1L))
         val rebase = allocator.originRebase(engine.root, engine.snapshot().ledger) { wants }
         assertTrue(rebase != null && rebase > us.tractat.kuilt.math.Int128.ZERO, "the parent is rebased: $rebase")
+    }
+
+    private companion object {
+        /** An origin at which a lane at zero reads one tick below its floor: `16 · O = C + 1`. */
+        val FLOOR_ORIGIN: Int128 = Int128.of(positionCeiling(Weight.ONE) / TICKS_PER_UNIT + 1L)
     }
 }
