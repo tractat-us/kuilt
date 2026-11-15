@@ -31,8 +31,9 @@ import us.tractat.kuilt.store.NSFileManagerDurableStore
  *   untouched (`Rigged`);
  * - **interrupted write:** `AtomicMedium`, for the reason the hook gives below;
  * - **unreadable grants:** every permission taken off the grants record, so opening it fails with
- *   `EACCES` — what Data Protection does to the file on a locked phone — while the directory still
- *   takes a new file ([unreadableGrantsRecord]).
+ *   `EACCES`, while the directory still takes a new file ([unreadableGrantsRecord]). It stands in for
+ *   the file's protection class keeping it closed after a restart until the first unlock; the store
+ *   throws on any failed read but a missing file, so the errno is not what the property turns on.
  */
 class KeychainDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() {
     override suspend fun newFixture(): DeviceKeyStoreFixture {
