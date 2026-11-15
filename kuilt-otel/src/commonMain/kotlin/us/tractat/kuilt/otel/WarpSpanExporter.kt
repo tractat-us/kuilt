@@ -441,6 +441,15 @@ public class WarpSpanExporter(
      * turn then counts in [health] per work key: the span's write as it went, and the skipped clock
      * write as a failed turn the first clock write that lands resolves (#3426).
      *
+     * An explicit stamp of this replica's, its own dot or a predecessor it names, raises the clock's
+     * floor when the span is added, so the clock never mints that dot itself (#3435). Its `seq` is
+     * taken as given: a stamp claiming [Long.MAX_VALUE] leaves the clock [ClockTick.Exhausted].
+     *
+     * Every write carries this replica's high-water mark in the span bytes, at least every dot the
+     * clock has minted and every own dot the set has held. A restart whose clock entry is corrupt
+     * floors the clock above it, so a dot whose span was since evicted or cleared is not minted again
+     * (#3435).
+     *
      * ## Crash-window invariant (#1053)
      *
      * The clock is persisted **before** the span's durable write, establishing the
@@ -645,8 +654,10 @@ public class WarpSpanExporter(
      *
      * The clock's floor is raised too, to the highest dot of this replica's the remote set carries
      * or names, in the same hold of `lock` as the join (#3407). A peer can hand back spans this
-     * replica minted and then lost (evicted, cleared, or behind a corrupt clock entry), and a stamp
-     * minted after they land must not collide with one. A stamp minted before the merge still can.
+     * replica minted and then lost, and a stamp minted after they land must not collide with one. The
+     * high-water mark the span bytes carry (#3435) already covers every own dot that was in memory
+     * when a span write was encoded, so a stamp minted before the merge collides only with a dot that
+     * reached the peer from [snapshot] before any write carrying it landed, and the crash came first.
      * The raise takes the peer's `seq` as given: a dot at `Long.MAX_VALUE` leaves the clock
      * [ClockTick.Exhausted], so later spans are saved unstamped. Whether a merge should refuse such
      * a dot is #3432.
@@ -836,7 +847,7 @@ public class WarpSpanExporter(
      *
      * The eviction and the real add are then built on locals, and [spans] is written once, after
      * both have returned, as `WarpLogRecordExporter.applyTurn` builds its turn. Everything after the
-     * add is a log line and a field write that cannot throw; keep it that way.
+     * add is a log line, field writes and floor raises (`maxOf`), none of which can throw; keep it that way.
      */
     private fun insert(span: SpanRecord, clock: WarpCausalClock?): Stamping {
         val victim = if (spans.elements.size >= maxSpans) victimOf(spans.elements) else null

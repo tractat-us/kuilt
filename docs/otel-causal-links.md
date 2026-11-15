@@ -80,13 +80,21 @@ Starting fresh is not starting unused: the stored spans still carry this device'
 So when the span exporter's read of its stored spans lands, at startup or on the first export
 after the store heals, it raises the clock above the highest dot of this device's it found,
 before that export stamps anything. It counts a span's own dot and the earlier dots the span
-names. A merge raises the clock the same way, from the spans a peer sends.
+names. A merge raises the clock the same way, from the spans a peer sends, and so does a span
+the caller stamped with one of this device's dots.
 
-Two gaps remain. A dot whose span left the store before the restart (evicted from the buffer,
-or cleared) can be minted again after a corrupt clock entry, until a peer sends that span back.
-A span stamped before that merge keeps the clash. And the clock trusts every dot it reads or
-merges, so a buggy peer's dot at the largest possible number stops it stamping at all: later
-spans are saved without a stamp.
+The stored spans cannot name a dot whose span has left: evicted from the buffer, or cleared. So
+every span write also saves this device's high-water mark: the clock's number when the write was
+made, and every dot of this device's the spans have held. The floor is the larger of that mark
+and the highest dot the stored spans carry. The mark is read from the running clock as the write
+is made, so it covers every dot minted before that write.
+
+What is still uncovered is narrow. If both saved entries are corrupt, the floor starts at zero. A
+corrupt span entry starts fresh and loses its mark, though a sound clock entry still covers it. A
+span the device minted can reach a peer before any span write carries it; if the device then
+crashes and its clock entry is corrupt, a new span can take that dot until the peer sends it
+back. And the clock trusts every dot it reads, merges or is handed, so a buggy peer's dot at the
+largest possible number stops it stamping at all: later spans are saved without a stamp.
 
 ### The cross-boundary rule
 
