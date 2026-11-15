@@ -160,7 +160,7 @@ This file is generated from the repository by `.github/scripts/llms-txt.py` — 
 
 ## Modules: Contract & core
 
-- [kuilt-base](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-base/module.md): The small base most kuilt modules stand on, with no dependencies of its own: KuiltVersion, the version of the kuilt that is running.
+- [kuilt-base](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-base/module.md): KuiltVersion, the version of the kuilt that is running, in a module with no dependencies of its own. Declare it directly: no other kuilt module brings it.
 - [kuilt-core](https://raw.githubusercontent.com/tractat-us/kuilt/main/kuilt-core/module.md): The kuilt contract — Loom, Seam and Swatch — with the InMemoryLoom reference fabric, MuxSeam channel multiplexing and CompositeLoom multipath bonding.
 
 ## Modules: Libraries layered on the contract

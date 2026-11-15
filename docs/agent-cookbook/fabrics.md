@@ -442,7 +442,7 @@ check(store.read(key) == null)
 **Intent:** record which kuilt release wrote something you keep, such as a snapshot, a saved ledger or a log header, so a later run can tell old data from new. Don't copy the version string into your own code: the copy goes stale on the next upgrade, and a snapshot build never matches it.
 **Primitive:** `us.tractat.kuilt.KuiltVersion.VERSION`, in `:kuilt-base` — a value generated from the version the build publishes: `<line>.0-dev` locally, `<line>.0-dev.<run>` in a snapshot, the tag's `x.y.z` in a release.
 
-`:kuilt-base` depends on nothing, and `:kuilt-core`, `:kuilt-crdt`, `:kuilt-store`, `:kuilt-seal` and `:kuilt-heddle-core` all bring it with them, so you can read it without declaring anything, including in a `LocalHeddle` app that keeps coroutines off its classpath. `:kuilt-math` does not bring it. `KuiltVersion.VERSION` is the version of `:kuilt-base`; import the BOM to keep every kuilt module at that version.
+Declare `us.tractat.kuilt:kuilt-base` yourself: no other kuilt module brings it with it, because every snapshot stamps a new version into it and anything compiled against it would recompile on every snapshot (#3464). It depends on nothing, so it brings nothing along, even to a `LocalHeddle` app that keeps coroutines off its classpath. Under the BOM it needs no version, and `KuiltVersion.VERSION` is the version of `:kuilt-base`, so the BOM keeps every kuilt module at that version.
 
 It is a plain `val`, not a `const`, so it names the kuilt actually running, not the one your code compiled against. A `const` would be copied into your code at compile time, and would make every kuilt release recompile everything built on `:kuilt-base`.
 
