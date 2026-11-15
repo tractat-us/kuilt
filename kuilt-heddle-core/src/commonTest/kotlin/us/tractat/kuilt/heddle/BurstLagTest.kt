@@ -413,6 +413,71 @@ class BurstLagTest {
         )
     }
 
+    /** One stretch of a [cycling] burst: the children at [asking] ask, and [units] are handed out among them. */
+    private class Stretch(val asking: Set<Int>, val units: Long)
+
+    /** [bursts] times, each of [stretches] in turn, with no idle round between them. */
+    private fun cycling(weights: List<Long>, stretches: List<Stretch>, bursts: Int): Rig {
+        val rig = rig(weights)
+        repeat(bursts) { i ->
+            stretches.forEachIndexed { j, stretch ->
+                rig.cell.mint("s$i.$j", stretch.units)
+                rig.ask { id -> rig.kids.indexOfFirst { it.id == id } in stretch.asking }
+            }
+        }
+        return rig
+    }
+
+    /** What a fluid scheduler gives child [i] over [bursts] of [stretches]: each stretch split by weight among its askers. */
+    private fun fluid(weights: List<Long>, stretches: List<Stretch>, bursts: Int, i: Int): Rational =
+        stretches.filter { i in it.asking }.fold(Rational.ZERO) { acc, s ->
+            acc + Rational.of(s.units * weights[i] * bursts, s.asking.sumOf { weights[it] })
+        }
+
+    /**
+     * How far child 0's take strays from its fluid share after [bursts] of [stretches], in units:
+     * positive when it got more than fair.
+     */
+    private fun strayOfX(weights: List<Long>, stretches: List<Stretch>, bursts: Int): Rational {
+        val rig = cycling(weights, stretches, bursts)
+        val delivered = rig.granted().getValue("p/b0")
+        check(rig.wakes >= bursts) { "the rig: x drove ${rig.wakes} wakes over $bursts bursts" }
+        return Rational.of(delivered) - fluid(weights, stretches, bursts, 0)
+    }
+
+    /**
+     * A returner's shift does not drift when its parent's clock, while it is back, runs a run that is
+     * not a whole number of its ticks (#3416 review). x has weight 1. The stretches it is present
+     * for run the clock by `16/13` and `32/10` of x's ticks, so each return's ideal shift is a
+     * fraction, and a shift taken as the difference of two rounded readings errs by a fraction
+     * that, in a repeating pattern, locks into one phase and adds up: toward **credit** on the first
+     * rig, which §10.5 forbids, and toward penalty on the second. A shift that carries its own
+     * rounding forward keeps x's total over-shift under one tick, so its stray from fair is the same
+     * after 600 bursts as after 300.
+     */
+    @Test
+    fun aReturnerShiftThatDoesNotLandOnItsGridDoesNotDrift() {
+        // x, a, b, c at 1, 7, 2, 3: {a} 2 units, {x, a, b, c} 1, {x, a, b} 2.
+        val credit = listOf(1L, 7L, 2L, 3L) to listOf(Stretch(setOf(1), 2L), Stretch(setOf(0, 1, 2, 3), 1L), Stretch(setOf(0, 1, 2), 2L))
+        // x, a, d, e at 1, 5, 10, 4: {a, d} 1 unit, {x, a, e} 1, {x, a} 2.
+        val penalty = listOf(1L, 5L, 10L, 4L) to listOf(Stretch(setOf(1, 2), 1L), Stretch(setOf(0, 1, 3), 1L), Stretch(setOf(0, 1), 2L))
+        val rows = listOf("credit" to credit, "penalty" to penalty).map { (label, rig) ->
+            val (weights, stretches) = rig
+            Triple(label, strayOfX(weights, stretches, 300), strayOfX(weights, stretches, 600))
+        }
+        println("stray of x from fair, at 300 and 600 bursts: ${rows.joinToString { (l, a, b) -> "$l $a, $b" }}")
+        assertAll(
+            *rows.map { (label, short, long) ->
+                { assertTrue(abs(long - short) < Rational.ONE, "$label: x strays $short from fair at 300 bursts and $long at 600") }
+            }.toTypedArray(),
+            *rows.map { (label, _, long) ->
+                { assertTrue(abs(long) < Rational.of(2L), "$label: x strays $long from fair at 600 bursts") }
+            }.toTypedArray(),
+        )
+    }
+
+    private fun abs(r: Rational): Rational = if (r < Rational.ZERO) Rational.ZERO - r else r
+
     private companion object {
         const val BURSTS = 300
 
