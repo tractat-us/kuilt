@@ -6,7 +6,9 @@ import kotlinx.serialization.Serializable
 // OTLP/JSON request envelopes and messages — the encode-side subset kuilt emits.
 // Byte fields (trace/span ids) are lowercase hex strings and 64-bit ints are strings;
 // the mappers in OtlpEncoding.kt produce those String values, so the DTO fields are
-// already String and need no custom serializers. A response body is never parsed.
+// already String and need no custom serializers. A `double` is the exception: it is declared
+// as OtlpJsonDouble, which writes a non-finite value as "NaN"/"Infinity"/"-Infinity" (#3309).
+// A response body is never parsed.
 
 // ── Envelope ─────────────────────────────────────────────────────────────────
 // The resource (who produced the telemetry) and the instrumentation scope (which library
@@ -123,7 +125,7 @@ internal data class NumberDataPoint(
     val startTimeUnixNano: String? = null,
     val timeUnixNano: String,
     val asInt: String? = null,
-    val asDouble: Double? = null,
+    val asDouble: OtlpJsonDouble? = null,
 )
 
 @Serializable
@@ -148,7 +150,7 @@ internal data class OtlpExponentialHistogramDataPoint(
     val zeroCount: String,
     val positive: OtlpExponentialHistogramBuckets? = null,
     val negative: OtlpExponentialHistogramBuckets? = null,
-    val zeroThreshold: Double,
+    val zeroThreshold: OtlpJsonDouble,
 )
 
 @Serializable
