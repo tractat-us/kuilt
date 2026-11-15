@@ -475,7 +475,7 @@ class HeddleAcceptanceTest {
         cluster.pump(800)
         cluster.pump(800)
         val merged = cluster.peers[0].node.ledger.value
-        println("[${started.elapsedNow()}] restart: ${before.grants} grants before, ${after.grants} after, rebases $rebasesBefore then ${second.rebases()}, at boot $atBoot")
+        println("[${started.elapsedNow()}] restart: ${before.grants} grants before, ${after.grants} after, rebases $rebasesBefore then ${second.rebases()}, at boot $atBoot, peak $peakBefore then $peakAfter")
         assertAll(
             { assertEquals(BEFORE_RESTART_CALLS, before.calls, "the run before the restart made every call") },
             { assertTrue(peakBefore > 0.0 && peakBefore < 1.0, "the peak effective position before the restart stayed below the ceiling: $peakBefore") },
@@ -562,9 +562,13 @@ class HeddleAcceptanceTest {
          */
         const val APART_CALLS: Int = 8
 
-        /** Calls the restart run makes before the crash, light bursts only, and after the boot call. */
+        /**
+         * Calls the restart run makes before the crash, light bursts only, and after the boot call.
+         * The run after is long enough that, with the rebase off, its peak passes the ceiling (it
+         * read 52% after 500 calls, JVM), so the peak arm can red.
+         */
         const val BEFORE_RESTART_CALLS: Int = 300
-        const val AFTER_RESTART_CALLS: Int = 500
+        const val AFTER_RESTART_CALLS: Int = 1_200
 
         /**
          * The light runner's calls alone, at [RUNNER_GRANTS] each: 1,600 grants, past a `Long` on the
