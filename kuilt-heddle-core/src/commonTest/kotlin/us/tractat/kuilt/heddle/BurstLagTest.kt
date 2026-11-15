@@ -321,18 +321,17 @@ class BurstLagTest {
     }
 
     /**
-     * The pre-seat rebase triggers on where a returner will land, not only on the front and the
-     * stayers (#3376). a is a stayer just under its rebase threshold `R`, so neither the front nor
-     * any stayer calls for a raise. b left near the same threshold, and its parent's clock has run
-     * far enough since that it lands half an `R` past its ceiling. Only a raise taken before b is
-     * moved brings it back under, and a's position bounds that raise at nearly `R`, which is enough.
-     * Without the landing trigger b lands past its ceiling and the first pick refuses.
+     * A returner its parent's clock lands past its ceiling is ordered exactly (#3376, #3472). a is a
+     * stayer at `R − 1` ticks; b left there too, and its parent's clock has run far enough since that
+     * it lands half an `R` past its ceiling. Nothing brings it back down, and nothing needs to: a
+     * pick orders the wide position, so a, far behind, takes every unit. This used to be the case
+     * the pre-seat rebase had to catch, or the first pick refused.
      *
      * The state is set directly: how a returner reaches it in a real run is the nested-group rig,
      * `aSaturatedNestedGroupRefusesOnlyPicksThatOrderIt`, which exercises much more besides.
      */
     @Test
-    fun aReturnerLandingPastItsCeilingIsRebasedBeforeItLands() {
+    fun aReturnerLandingPastItsCeilingIsOrderedExactly() {
         val r = rebaseThreshold(Weight.ONE)
         val ceiling = positionCeiling(Weight.ONE)
         val kids = listOf(edgeOf(root, GroupId("p/a")), edgeOf(root, GroupId("p/b")))
@@ -352,12 +351,10 @@ class BurstLagTest {
         val outcome = allocator.schedule(root, cell, 0L) { want() }
         val landed = allocator.effectiveVirtualService(cell.current, root, b.id)
         val aAt = allocator.effectiveVirtualService(cell.current, root, a.id)
-        // Read as a lead over a: the window rule lowers the origin to the pair's front, so b lands
-        // half way down and a below zero, as far apart as before (#3353).
+        // Read as a lead over a. The read holds b at its ceiling, so the lead is a floor on the true one.
         val lead = if (landed != null && aAt != null) landed - aAt else null
         assertAll(
             { assertEquals(AllocationOutcome.Delegated(10), outcome, "the pick is made, not refused at b's ceiling") },
-            { assertTrue(allocator.rebases > 0, "the rig: the parent rebased") },
             { assertEquals(10L, cell.granted.getValue("p/a"), "a, far behind b, takes every unit") },
             { assertTrue(lead != null && lead > Rational.of(14L * (r / 16L)), "the rig: b came back far ahead of a, by $lead") },
         )

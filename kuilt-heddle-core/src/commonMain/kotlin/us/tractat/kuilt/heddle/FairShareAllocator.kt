@@ -107,38 +107,6 @@ public class FairShareAllocator(
     private val shiftRemainders = HashMap<AttachmentId, ShiftRemainder>()
 
     /**
-     * Whether [schedule] rebases a busy parent by raising its origin (#3353). On by default. **Test
-     * only:** a test switches it off to run a twin that never rebases and compare the picks; a parent
-     * with it off climbs past its position ceiling and picks exactly as the rebasing one does.
-     */
-    @HeddleInternalApi
-    public var rebaseEnabled: Boolean = true
-
-    /**
-     * Whether a rebase keeps every child inside its window (#3353): on by default. **Test only:**
-     * off, the rebase runs the rule before it, `Δ` at most the least-served demanding child's
-     * position, a landing never held at its floor, and the front read on every child's grid. A test
-     * runs a twin with it off to show the two rules pick alike wherever the old one never refused.
-     */
-    internal var windowRuleForTest: Boolean = true
-
-    /**
-     * How many joiners this allocator has landed at their floor rather than at the front (#3353):
-     * seated or clamped; a returner held at its floor is not counted. The witness a test reads that its floor-landing rig fired. Not
-     * part of [memory].
-     */
-    internal var floorLandingsForTest: Int = 0
-        private set
-
-    /**
-     * How many rebases this allocator has made: the origin raises [schedule] landed, plus those it
-     * [adopt]ed for [LocalHeddle]. The witness a test reads that its rig fired. Not part
-     * of [memory], so an allocator built from one starts at zero.
-     */
-    @HeddleInternalApi
-    public val rebases: Int get() = rebasesForTest
-
-    /**
      * An allocator that resumes from [memory], as if it were the allocator [memory] was exported
      * from. Building one over a copy of a live allocator's [FairShareAllocator.memory] gives a
      * throwaway that picks exactly as the live one would next.
@@ -178,18 +146,7 @@ public class FairShareAllocator(
         it.served.putAll(served)
         it.departures.putAll(departures)
         it.shiftRemainders.putAll(shiftRemainders)
-        it.rebasesForTest = rebasesForTest
-        it.rebaseEnabled = rebaseEnabled
-        it.windowRuleForTest = windowRuleForTest
-        it.floorLandingsForTest = floorLandingsForTest
     }
-
-    /**
-     * How many rebases this allocator has [adopt]ed: the witness a test reads that its rig fired. Not
-     * part of [memory], so an allocator built from one starts at zero.
-     */
-    internal var rebasesForTest: Int = 0
-        private set
 
     /**
      * Drop everything this allocator remembers about [edges]: the ones its ledger has just
@@ -222,7 +179,7 @@ public class FairShareAllocator(
      * One state stops it, and it does not throw: active children whose weights fail
      * [weightsFitTheBudget] stop it before the seat step, since the replicated ledger can merge such
      * a set from writes that each fit (#3353). No position stops it: a pick orders the full 128-bit
-     * position, however far a child stands from its parent's origin.
+     * position, and a position only ever counts up from the edge's start (#3472).
      *
      * ## A refused or empty call writes nothing
      *
@@ -235,14 +192,6 @@ public class FairShareAllocator(
      *   [LocalHeddle] does, and it means an idle call writes nothing to a replicated ledger;
      * - the first pick **granted**: the seats and the delegation land as one patch, and the fork is
      *   kept.
-     *
-     * A first round may also raise [parent]'s origin, in the same patch, once a child there has
-     * climbed past its [rebaseThreshold]: before its pick ([preSeatRaise] with joiners,
-     * [raiseBeforePick] without), and after it ([raiseOriginBeneath]). So may each later round,
-     * inside its own write. That rebase keeps a busy parent's positions near zero, where the public
-     * virtual-time reads are exact, and it changes no pick (#3353): it moves every child alike, and no joiner seated,
-     * clamped or returned under it is held at its floor, which every raise before a pick checks. A
-     * joiner held at its floor with no raise is what the window rule changes ([landing]).
      *
      * The fork is adopted only once the write step has returned, so a cell that throws while writing
      * leaves this allocator as it was. Each later round is its own write, as before: a refusal there,
@@ -291,7 +240,6 @@ public class FairShareAllocator(
         }
         var grants = 1
         while (grants < MAX_ROUNDS_PER_CALL) {
-            var rebasedThisRound = false
             // One pick, inside the cell's write step, on the state the grant lands on. Nothing
             // delegable ⇒ mutateOrSkip writes nothing and answers false (#2090). Peeking on
             // `ledger.current` first would run the policy twice per grant, the peek deciding
@@ -302,19 +250,10 @@ public class FairShareAllocator(
                 // Before each pick, on the state it lands on: the clock over the last grant, and any
                 // child that grant filled seen leaving at it, not at the next call (#3416 review).
                 markDepartures(parent, policyEdges(s, parent, demand))
-                val cell = ValueCell(s)
-                // Before the pick, so a child a merge carried far from its origin is brought back
-                // down as soon as it is seen (#3353).
-                val preRaised = raiseBeforePick(parent, cell, earmarked, demand)
-                val grant = pickOne(cell.current, parent, earmarked, demand) ?: return@mutateOrSkip null
-                if (preRaised) checkRaiseChangedNoPick(s, parent, earmarked, demand, grant)
-                val raised = raiseOriginBeneath(parent, cell, earmarked, demand, grant)
-                if (!cell.mutateOrSkip { it.delegate(self, grant.attachment, grant.amount) }) return@mutateOrSkip null
-                rebasedThisRound = raised || preRaised
-                cell.written?.let(::Patch)
+                val grant = pickOne(s, parent, earmarked, demand) ?: return@mutateOrSkip null
+                s.delegate(self, grant.attachment, grant.amount)
             }
             if (!applied) break
-            if (rebasedThisRound) rebasesForTest++
             grants++
         }
         // Progress first: a refusal in a later round follows a grant, so this call reports the
@@ -340,284 +279,14 @@ public class FairShareAllocator(
         departures.putAll(fork.departures)
         shiftRemainders.clear()
         shiftRemainders.putAll(fork.shiftRemainders)
-        rebasesForTest = fork.rebasesForTest
-        floorLandingsForTest = fork.floorLandingsForTest
     }
-
-    /**
-     * After [grant] was picked at [parent] on [cell]'s state, and before it is delegated: raise
-     * [parent]'s origin if a child there has climbed past its [rebaseThreshold], and say whether it
-     * did (#3353). The raise lands in [cell], so it travels in the same patch as the grant.
-     *
-     * The rule is #3329's, as amended, moved from raising folds to raising the origin:
-     * - **measured on effective positions**, raw plus wake clamp, since that is what a pick orders;
-     * - **any child past `R`** triggers it, idle ones included;
-     * - **`Δ` is a whole multiple** of the least common multiple of `d / gcd(d, 16n)` over the children
-     *   this peer sees, so `Δ · w · G` is whole ticks on every one of their grids and each comes down
-     *   by exactly that;
-     * - **`Δ` aims at the front** of the seated children this peer sees demanding, their weighted
-     *   mean, and stops short wherever it would carry one of them below its [positionFloor]
-     *   ([windowBound], #3353): a child behind the front goes below zero, inside its window;
-     * - it runs **after the seat and wake step and only after a grant**, and the pick is checked
-     *   unchanged on the raised state before the raise is kept.
-     *
-     * It rewrites no gauge and no wake clamp. Every child's position reads `Δ · w · G` lower, so the
-     * mean over any set comes down by `Δ`, every `⌈V · w · G⌉` by exactly `Δ · w · G`, and every
-     * clamp `front − raw` is unchanged. An idle child goes below zero, as far as it must, past its
-     * floor too: its next wake clamp, taken wide, carries it back to the front.
-     *
-     * @throws IllegalStateException if the raised state would pick differently, a bug in the rule.
-     */
-    private fun raiseOriginBeneath(
-        parent: GroupId,
-        cell: ValueCell,
-        earmarked: Long,
-        demand: (AttachmentId) -> Demand,
-        grant: Grant,
-        eligible: (AttachmentId) -> Demand = demand,
-    ): Boolean {
-        if (!rebaseEnabled) return false
-        val s = cell.current
-        val delta = originStep(policyEdges(s, parent, demand)) ?: return false
-        val patch = s.raiseOrigin(parent, s.origin(parent) + delta) ?: return false
-        val again = pickOne(s.piece(patch.delta), parent, earmarked, eligible)
-        check(again == grant) { "the origin rebase at ${parent.value} changed the pick from $grant to $again" }
-        return cell.mutateOrSkip { patch }
-    }
-
-    /**
-     * Raise [parent]'s origin in [cell] **before** a pick, when a child there is past its
-     * [rebaseThreshold], and say whether it did (#3353). [schedule] runs it ahead of each pick with
-     * no joiners, the seat-and-wake step's own raise ([preSeatRaise]) covering a round with them.
-     * So a child that a merge or a delegation carried far from its origin is brought back down before
-     * the pick reads it, rather than one grant later. It changes no pick, which
-     * [checkRaiseChangedNoPick] checks.
-     */
-    private fun raiseBeforePick(parent: GroupId, cell: ValueCell, earmarked: Long, demand: (AttachmentId) -> Demand): Boolean {
-        val delta = prePickRaise(cell.current, parent, demand) ?: return false
-        val s = cell.current
-        val patch = s.raiseOrigin(parent, s.origin(parent) + delta) ?: return false
-        return cell.mutateOrSkip { patch }
-    }
-
-    /**
-     * The `Δ` to raise [parent]'s origin by before a pick in [s] that seats and clamps nobody, or
-     * `null`: [originStep] over [parent]'s children. A round with joiners leaves it to [preSeatRaise],
-     * which reads the front they will land at.
-     */
-    private fun prePickRaise(s: EntitlementLedger, parent: GroupId, demand: (AttachmentId) -> Demand): Int128? {
-        if (!rebaseEnabled) return null
-        val edges = policyEdges(s, parent, demand)
-        if (joinersOf(edges).isNotEmpty()) return null
-        return originStep(edges)
-    }
-
-    /**
-     * That a raise before the pick changed no pick: the pick on [s], unraised, is [grant] too. A bug
-     * detector, as [checkPreSeatRaiseChangedNoPick] is, and never vacuous: the unraised pick orders
-     * the same wide positions, so it always answers.
-     *
-     * @throws IllegalStateException if it picks anything else, a bug in the rule.
-     */
-    private fun checkRaiseChangedNoPick(
-        s: EntitlementLedger,
-        parent: GroupId,
-        earmarked: Long,
-        demand: (AttachmentId) -> Demand,
-        grant: Grant,
-    ) {
-        val unraised = pickOne(s, parent, earmarked, demand)
-        check(unraised == grant) { "the pre-pick rebase at ${parent.value} changed the pick from $unraised to $grant" }
-    }
-
-    /**
-     * The `Δ` [raiseOriginBeneath] raises [edges]' parent's origin by, or `null` when it should not
-     * move: no child is past its [rebaseThreshold], the step leaves `Long`, or a child in [boundBy] is
-     * below one step.
-     */
-    private fun originStep(
-        edges: List<PolicyEdge>,
-        boundBy: List<PolicyEdge> = edges.filter { it.gauge != null && HeddlePolicy.isDemanding(it) },
-    ): Int128? {
-        if (edges.isEmpty() || boundBy.isEmpty()) return null
-        // The front on the grid of every child it binds too: a light runner holding the front up
-        // would otherwise put a heavy child joining it past its own ceiling (#3353 review, item A).
-        // Only those: an idle child's grid is read again when it wakes, as a joiner (window rule).
-        // An id set, so the test is linear in the children.
-        val bound = if (windowRuleForTest) boundBy.mapTo(HashSet()) { it.record.id } else null
-        val front = HeddlePolicy.frontTime(edges)
-        val past = edges.any { edge ->
-            val r = Int128.of(rebaseThreshold(edge.record.weight))
-            HeddlePolicy.effectiveTicksWide(edge) >= r ||
-                (front != null && (bound == null || edge.record.id in bound) && front.ticksForWide(edge.record.weight) >= r)
-        }
-        if (!past) return null
-        // No guard at a child's ceiling: every read up to the effective position is wide and exact,
-        // so a raise there brings the child down like any other, and is the one repair for a heavy
-        // joiner seated past it by a delegation that is not a pick (#3353 round 2).
-        val step = gridStep(edges) ?: return null
-        if (!windowRuleForTest) return wholeSteps(boundBy.minOf { unitsOf(it) ?: return null }, step)
-        val anchor = VirtualTime.mean(boundBy.map { HeddlePolicy.effectiveTicksWide(it) }, boundBy.map { it.record.weight })
-        return wholeSteps(windowBound(anchor, boundBy) ?: return null, step)
-    }
-
-    /**
-     * How far, in whole units, the origin may rise beneath [bound] aiming at [anchor] (#3353, the
-     * window rule): `min(⌊A⌋, min over i of ⌊(p_i + C_i) / (w_i · G)⌋)`, with `A` the [anchor]. The
-     * second term is each child's **room**, how far it can come down before it reaches its
-     * [positionFloor]. So the origin goes to where the bound children stand on average, which is
-     * where a joiner is seated, unless that would carry one of them out of its window. `null` past
-     * 128 bits.
-     *
-     * The rule before it raised the origin only as far as the least-served child, `min ⌊p_i / (w_i · G)⌋`.
-     * Two light siblings a lease apart then held the front half a lease above the origin, and a heavy
-     * child joining it landed `k` times that far up its own grid: past its ceiling for `k` near
-     * `2¹⁶`. Aiming at the front leaves every child behind it below zero, inside its window, and it
-     * is the light ones whose windows are wide.
-     */
-    private fun windowBound(anchor: VirtualTime, bound: List<PolicyEdge>): Int128? {
-        var best = anchor.unitsFloor()
-        for (edge in bound) {
-            val w = edge.record.weight
-            val room = mulDiv(
-                HeddlePolicy.effectiveTicksWide(edge) + Int128.of(positionCeiling(w)),
-                w.denominator,
-                checkedMul(TICKS_PER_UNIT, w.numerator),
-                Rounding.FLOOR,
-            ) ?: return null
-            if (room < best) best = room
-        }
-        return best
-    }
-
-    /**
-     * The origin step after a **charging** call lands at [parent] in [ledger]: `admit`, `extend` or a
-     * `complete` that overran (#3353 review, item I). A parent a consumer drives only through those
-     * is never picked at, so without this it never rebases. The rule is the pick's, `Δ` aimed at the
-     * front of the demanding children [waiting] names and held inside each one's window. [waiting] is
-     * the call's own, observed on the way down, so the set is who is demanding now, never who was
-     * last seen demanding (#3471). An origin raise moves every child alike, so it changes no pick.
-     *
-     * A charging call never refuses, so this never throws: `null` when no step is possible, or when
-     * the arithmetic would leave 128 bits.
-     */
-    internal fun chargeRebase(
-        parent: GroupId,
-        ledger: EntitlementLedger,
-        waiting: (AttachmentId) -> Demand,
-    ): Rebase? {
-        if (!rebaseEnabled) return null
-        return try {
-            val edges = policyEdges(ledger, parent, waiting)
-            val bound = edges.filter { it.gauge != null && HeddlePolicy.isDemanding(it) }
-            val delta = originStep(edges, bound) ?: return null
-            val patch = ledger.raiseOrigin(parent, ledger.origin(parent) + delta) ?: return null
-            Rebase(ledger.piece(patch.delta))
-        } catch (_: ArithmeticException) {
-            // Only a 128-bit result can leave here, a front or a time read on a far-flung grid, not a
-            // bug: every other step returns null. A charging call must land, so it lands unrebased.
-            null
-        }
-    }
-
-    /**
-     * The `Δ` to raise [parent]'s origin by **before** the seat and wake step, or `null` (#3353 review,
-     * item A). Only when there are joiners: the front they are about to be seated at or clamped to
-     * ([joinFront]) is past the [rebaseThreshold] of a joiner or a demanding stayer on that child's
-     * own grid, a seated child is past its own, or a returner is about to land past its own
-     * ([previewShifts]): it comes back where its parent's clock puts it, not at the front (#3376),
-     * so one that left near its ceiling can come back past it. The front counts each returner where
-     * it lands, as [settleJoiners] will (#3446). Without it a heavy newborn or waker joining a busy
-     * light runner lands about `k · R` up its own grid, `k` the weight ratio, which is past its
-     * ceiling for `k > 16`.
-     *
-     * `Δ` aims at that front ([windowBound]): at most it, and short of carrying any demanding child
-     * that is not joining below its [positionFloor]. With none, it is the front itself. Every newborn
-     * and clamped waker then lands at the front, at or above zero. A returner moved by its parent's
-     * clock (#3376) lands as far behind its siblings as it left, so one that left owed can land below
-     * zero by that lag; it is served first. Each lands no lower than its own floor ([landing]).
-     * It is a multiple of the same step as the post-grant raise, over every child, unseated ones
-     * included, so every seat, clamp and return lands at exactly the absolute position it would have
-     * without the raise, unless the floor holds it higher.
-     */
-    private fun preSeatRaise(s: EntitlementLedger, parent: GroupId, demand: (AttachmentId) -> Demand): Int128? {
-        if (!rebaseEnabled) return null
-        val edges = policyEdges(s, parent, demand)
-        val joiners = joinersOf(edges)
-        if (joiners.isEmpty()) return null
-        val stayers = edges.filter { it.record.id !in joiners }
-        // A returner lands where its parent's clock puts it, not at the front (#3376), and counts in
-        // the front there (#3446).
-        val shifts = previewShifts(parent, edges)
-        val landedEdges = landed(edges, shifts)
-        val front = joinFront(landedEdges, joiners - shifts.keys)
-        val demanding = stayers.filter { it.gauge != null && HeddlePolicy.isDemanding(it) }
-        // The front is read on the grid of each child it will seat, clamp or order: the joiners and
-        // the demanding stayers (window rule). An idle stayer's grid is read again when it wakes.
-        val frontGrids = if (windowRuleForTest) {
-            val reads = HashSet(joiners).apply { demanding.mapTo(this) { it.record.id } }
-            edges.filter { it.record.id in reads }
-        } else {
-            edges
-        }
-        // A child's own position past `R` triggers it for every seated child, a waker included: a
-        // clamp only ever raises one, so a waker already past `R` stays there (#3353).
-        val past = frontGrids.any { front.ticksForWide(it.record.weight) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
-            edges.any { it.gauge != null && HeddlePolicy.effectiveTicksWide(it) >= Int128.of(rebaseThreshold(it.record.weight)) } ||
-            edges.any { edge ->
-                shifts[edge.record.id]?.let { HeddlePolicy.effectiveTicksWide(edge) + it.ticks >= Int128.of(rebaseThreshold(edge.record.weight)) } == true
-            }
-        if (!past) return null
-        val step = gridStep(edges) ?: return null
-        // A returner is demanding and counts in the front where it lands (#3446), so its room bounds
-        // `Δ` as a demanding stayer's does: no landing is then held at its floor under this raise,
-        // which is what keeps the raise a pure translation (#3353 review).
-        val bounded = if (windowRuleForTest) demanding + landedEdges.filter { it.record.id in shifts } else demanding
-        val bound = when {
-            bounded.isEmpty() -> front.unitsFloor()
-            windowRuleForTest -> windowBound(front, bounded) ?: return null
-            else -> demanding.minOf { unitsOf(it) ?: return null }
-        }
-        return wholeSteps(bound, step)
-    }
-
-    /**
-     * That a pre-seat raise changed no pick (#3353 review, item A): the same seat-and-wake step and
-     * pick without it, on this allocator, which the caller forked before the raised step ran, picks
-     * [grant] too. A bug detector, not a proof, but no longer a vacuous one: the twin orders the same
-     * wide positions, so it answers wherever the raised pick does. It runs whatever the raise: [preSeatRaise]
-     * bounds `Δ` by the room of every demanding child that is not a newborn or a clamped waker,
-     * returners included, so no landing under the raise is held at its floor, and the raise moves
-     * every child alike. A twin without it holds no landing at its floor either, since its floor sits
-     * lower beneath the same front.
-     *
-     * @throws IllegalStateException if it picks anything else, a bug in the rule.
-     */
-    private fun checkPreSeatRaiseChangedNoPick(
-        s: EntitlementLedger,
-        parent: GroupId,
-        earmarked: Long,
-        waiting: (AttachmentId) -> Demand,
-        eligible: (AttachmentId) -> Demand,
-        grant: Grant,
-    ) {
-        val cell = ValueCell(s)
-        settleJoiners(parent, cell, waiting, raise = null)
-        val unraised = pickOne(cell.current, parent, earmarked, eligible)
-        check(unraised == grant) { "the pre-seat rebase at ${parent.value} changed the pick from $unraised to $grant" }
-    }
-
-    /** The joiners at a parent: its unseated children, and the demanding ones this allocator last saw idle. */
-    private fun joinersOf(edges: List<PolicyEdge>): Set<AttachmentId> =
-        edges.filter { it.gauge == null || isWaker(it) }.mapTo(HashSet()) { it.record.id }
 
     /**
      * Whether [edge] wakes: demanding now, and last observed not demanding. Or, never observed at
      * all, seated and demanding: the restart rule (design §7.2, #3472). This allocator did not
      * watch the gap before it first saw the child, so it gives it no credit for it, wherever the
      * child stands. Clamping it costs it at most its lag, once, the penalty side: clamping costs
-     * turns, never credit (§10.6). The rule took in the arm it replaced, which clamped a
-     * never-observed child only below zero, where only a rebase could put it.
+     * turns, never credit (§10.6).
      */
     private fun isWaker(edge: PolicyEdge): Boolean {
         if (!HeddlePolicy.isDemanding(edge)) return false
@@ -626,32 +295,6 @@ public class FairShareAllocator(
             true -> false
             null -> edge.gauge != null
         }
-    }
-
-    /** The least `Δ` that moves every one of [edges] by whole ticks: [gridStepOf] over their weights. */
-    private fun gridStep(edges: List<PolicyEdge>): Long? = gridStepOf(edges.map { it.record.weight })
-
-    /** [edge]'s effective virtual time in whole units, rounded down, or `null` past 128 bits. */
-    private fun unitsOf(edge: PolicyEdge): Int128? {
-        val w = edge.record.weight
-        return mulDiv(HeddlePolicy.effectiveTicksWide(edge), w.denominator, checkedMul(TICKS_PER_UNIT, w.numerator), Rounding.FLOOR)
-    }
-
-    /**
-     * The largest whole multiple of [step] at or below [bound], or `null` when that is not above zero:
-     * the front is less than one step above the origin, or a demanding child is less than one step
-     * above its floor. A child that is served climbs away from its floor. One that is never served
-     * is carried further below zero by each rebase and drags the demanding children's mean down
-     * with it, until the mean is less than one step above the origin and the rebase stops (#3329,
-     * #3353); its siblings then climb on, and a pick orders them exactly. A
-     * weight set so fine-grained that one step, read on some child's grid, would carry it from its
-     * [rebaseThreshold] past its ceiling (`2⁴²/1023` beside `1/1021`, say) is refused when it is
-     * applied ([weightsFitTheBudget], P1′), so a step that is merely large only makes a rebase late.
-     */
-    private fun wholeSteps(bound: Int128, step: Long): Int128? {
-        val steps = mulDiv(bound, 1L, step, Rounding.FLOOR) ?: return null
-        if (steps <= Int128.ZERO) return null
-        return mulDiv(steps, step, 1L, Rounding.FLOOR)
     }
 
     /**
@@ -669,17 +312,9 @@ public class FairShareAllocator(
         // set no single write would have admitted (#3353), and a pick over it throws.
         if (!fork.childWeightsFit(s, parent)) return FirstRound.OverBudget
         val cell = ValueCell(s)
-        // A rebase before the seat and wake step too, so no joiner is seated or clamped far up its own
-        // grid at a front a light runner holds up (#3353 review, item A).
-        // With none, the raise still runs before the pick (#3353).
-        val preSeat = fork.preSeatRaise(s, parent, demand) ?: fork.prePickRaise(s, parent, demand)
-        fork.settleJoiners(parent, cell, demand, preSeat)
+        fork.settleJoiners(parent, cell, demand)
         val delegated = fork.pickOne(cell.current, parent, earmarked, demand)?.let { grant ->
-            if (preSeat != null) fork().checkPreSeatRaiseChangedNoPick(s, parent, earmarked, demand, demand, grant)
-            // The rebase after the seat and wake step, before the grant, in the same patch (#3353).
-            val raised = fork.raiseOriginBeneath(parent, cell, earmarked, demand, grant)
             cell.mutateOrSkip { it.delegate(fork.self, grant.attachment, grant.amount) }
-                .also { if (it && (raised || preSeat != null)) fork.rebasesForTest++ }
         } ?: false
         if (!delegated) return FirstRound.Empty(fork)
         val written = checkNotNull(cell.written) { "a delegation that landed wrote nothing" }
@@ -740,60 +375,6 @@ public class FairShareAllocator(
     }
 
     /**
-     * [pickChild], and then, only when it grants, [parent]'s origin raised on the settled ledger:
-     * the form [LocalHeddle] calls (#3329, #3353). The rule is [schedule]'s ([raiseOriginBeneath]),
-     * measured on who [waiting] says is demanding. The grant is the one [pickChild] made; the raise
-     * changes no pick, and that is checked, against [eligible], on the raised state before it is
-     * returned.
-     *
-     * The order is the point. The rebase runs after the seat-and-wake step, so every child already
-     * carries a gauge seated at a front that leaves the wakers out, and every waker its clamp: a
-     * rebase before that step would count a waker's stale position in a newborn's seat, the lifetime
-     * credit #1752 removed. And it runs only once there is a grant, so a pick that finds nothing
-     * rebases nothing.
-     *
-     * Nothing here changes this allocator beyond what [pickChild] observes. The raise is in
-     * [RebasingPick.pick]'s ledger alone, so a caller that drops that ledger, because a deeper level
-     * refused, say, drops the rebase with it. It rewrites no gauge and no wake clamp.
-     *
-     * @throws IllegalStateException if the rebased state would pick differently, a bug in the rebase.
-     */
-    internal fun pickChildRebasing(
-        parent: GroupId,
-        ledger: EntitlementLedger,
-        waiting: (AttachmentId) -> Demand,
-        eligible: (AttachmentId) -> Demand,
-    ): RebasingPick? {
-        if (!rebaseEnabled) return pickChild(parent, ledger, waiting, eligible)?.let { RebasingPick(it.ledger, it, rebase = null) }
-        // [schedule]'s two raises, before the seat and wake step and after the pick (#3353).
-        val preSeat = preSeatRaise(ledger, parent, waiting)
-        val unraised = if (preSeat != null) fork() else null
-        val cell = ValueCell(ledger)
-        settleJoiners(parent, cell, waiting, preSeat)
-        val grant = pickOne(cell.current, parent, earmarked = 0L, eligible) ?: return null
-        unraised?.checkPreSeatRaiseChangedNoPick(ledger, parent, earmarked = 0L, waiting, eligible, grant)
-        val settled = cell.current
-        val raised = raiseOriginBeneath(parent, cell, earmarked = 0L, waiting, grant, eligible)
-        val rebase = if (raised || preSeat != null) Rebase(cell.current) else null
-        return RebasingPick(settled = settled, pick = ChildPick(cell.current, grant), rebase = rebase)
-    }
-
-    /**
-     * Count [rebase] as one this allocator made. A rebase is all in its ledger, so there is nothing
-     * else to take: call it when the caller keeps that ledger, so the count is of rebases kept.
-     */
-    internal fun adopt(rebase: Rebase) {
-        rebasesForTest++
-    }
-
-    /**
-     * [parent]'s origin step in [ledger], measured on who [demand] says is demanding, or `null` when it
-     * would not move: [raiseOriginBeneath]'s rule, for a test that asks it directly.
-     */
-    internal fun originRebase(parent: GroupId, ledger: EntitlementLedger, demand: (AttachmentId) -> Demand): Int128? =
-        originStep(policyEdges(ledger, parent, demand))
-
-    /**
      * The step [pickChild] takes before it picks, and nothing more: seat the newborns and clamp the
      * wakers at [parent], reading [waiting], and observe who was waiting. For a delegation that is
      * not a pick but must leave the wake memory as the pick would have ([LocalHeddle.admit] with a
@@ -840,18 +421,24 @@ public class FairShareAllocator(
         parent: GroupId,
         demand: (AttachmentId) -> Demand,
     ): Rational? =
-        if (childWeightsFit(ledger, parent)) HeddlePolicy.front(policyEdges(ledger, parent, demand).map(::heldInWindow)) else null
+        if (childWeightsFit(ledger, parent)) heldFront(policyEdges(ledger, parent, demand)) else null
 
     /**
-     * [edge] read inside its window, for a diagnostic (#3353), as the public reads hold it
-     * ([inWindow]): a child a `cancel` walked back past its floor reads at the floor, the penalty
-     * side, and one past its ceiling at the ceiling, so the front over them cannot throw on how far
-     * a child is from its origin.
+     * [HeddlePolicy.front] over [edges], each position read inside its window, for a diagnostic
+     * (#3353), as the public reads hold it ([inWindow]): a child a `cancel` walked back past its
+     * floor reads at the floor, the penalty side, and one past its ceiling at the ceiling, so the
+     * front cannot throw on how far a child has climbed. `null` when [edges] is empty.
+     *
+     * It reads the held positions directly. Holding an edge by lowering its wake offset, as this
+     * once did, makes a negative offset, which [PolicyEdge] refuses: a child past its ceiling then
+     * threw out of every read of its parent's front, and with no rebase that is every busy parent.
      */
-    private fun heldInWindow(edge: PolicyEdge): PolicyEdge {
-        val effective = HeddlePolicy.effectiveTicksWide(edge)
-        val held = Int128.of(inWindow(effective, edge.record.weight))
-        return if (held == effective) edge else edge.copy(offsetTicks = edge.offsetTicks + (held - effective))
+    private fun heldFront(edges: List<PolicyEdge>): Rational? {
+        if (edges.isEmpty()) return null
+        val demanding = edges.filter { HeddlePolicy.isDemanding(it) }
+        if (demanding.isEmpty()) return edges.maxOf { readVirtual(HeddlePolicy.effectiveTicksWide(it), it.record.weight) }
+        val held = demanding.map { Int128.of(inWindow(HeddlePolicy.effectiveTicksWide(it), it.record.weight)) }
+        return VirtualTime.mean(held, demanding.map { it.record.weight }).toRational()
     }
 
     /**
@@ -866,9 +453,10 @@ public class FairShareAllocator(
 
     /**
      * The highest effective position among [parent]'s active children in [ledger], each as a
-     * fraction of its own [positionCeiling]: how far the rebase has let the parent climb (#3353).
-     * Past `1` the public virtual-time reads there saturate at the ceiling; no pick is affected,
-     * since a pick orders the wide position. Zero when [parent] has no active children. A diagnostic that reads this allocator's wake clamps,
+     * fraction of its own [positionCeiling]: how far the parent has climbed. Nothing rebases it
+     * back down (#3472), so a busy parent passes `1` in time, and the public virtual-time reads
+     * there saturate at the ceiling; no pick is affected, since a pick orders the wide position.
+     * Zero when [parent] has no active children. A diagnostic that reads this allocator's wake clamps,
      * so a caller sharing the allocator must hold whatever lock guards it.
      */
     @HeddleInternalApi
@@ -970,23 +558,20 @@ public class FairShareAllocator(
      *
      * Publishes at most one patch.
      */
-    private fun settleJoiners(parent: GroupId, ledger: LedgerCell, demand: (AttachmentId) -> Demand, raise: Int128? = null) {
-        val first = policyEdges(ledger.current, parent, demand)
-        forgetDepartedChildren(first, ledger.current, parent)
-        if (first.isEmpty()) {
+    private fun settleJoiners(parent: GroupId, ledger: LedgerCell, demand: (AttachmentId) -> Demand) {
+        val edges = policyEdges(ledger.current, parent, demand)
+        forgetDepartedChildren(edges, ledger.current, parent)
+        if (edges.isEmpty()) {
             clocks.remove(parent)
             return
         }
 
-        val clock = markDepartures(parent, first)
-        val unseated = first.filter { it.gauge == null }.mapTo(HashSet()) { it.record.id }
-        val wakers = first.filter { isWaker(it) }.mapTo(HashSet()) { it.record.id }
+        val clock = markDepartures(parent, edges)
+        val unseated = edges.filter { it.gauge == null }.mapTo(HashSet()) { it.record.id }
+        val wakers = edges.filter { isWaker(it) }.mapTo(HashSet()) { it.record.id }
         // A waker this peer saw leave comes back by the clock; one it never saw leave is clamped.
-        val returners = first.filter { isReturner(it) }.mapTo(HashSet()) { it.record.id }
+        val returners = edges.filter { isReturner(it) }.mapTo(HashSet()) { it.record.id }
         val joiners = HashSet(unseated).apply { addAll(wakers) }
-        // A pre-seat rebase ([preSeatRaise]) lands first, and everything after reads through it.
-        if (raise != null) ledger.mutateOrSkip { it.raiseOrigin(parent, it.origin(parent) + raise) }
-        val edges = if (raise != null) policyEdges(ledger.current, parent, demand) else first
         if (joiners.isNotEmpty()) {
             val shifts = edges.filter { it.record.id in returners }.associate { it.record.id to shiftOf(it, clock) }
             // A returner is counted in the front where it lands, not left out as a joiner (#3446).
@@ -1019,11 +604,8 @@ public class FairShareAllocator(
      * its sibling: with `a` at 100 and `b` at 0 both waking beside `c` idle at 10, `b` was clamped
      * to 10 and took 95 of the next 100.
      *
-     * The third is gone from the competing case too. With a demanding runner below zero, which only
-     * a rebase leaves there, the newborn is seated level with it: the seat is absolute, the parent's
-     * origin added back, so it follows the runner below zero (#3353), but no lower than its own
-     * floor ([landing]).
-     * `aNewbornBesideASubZeroRunnerAndAWakerStartsLevel` pins it.
+     * The third is gone from the competing case too: a newborn beside demanding runners is seated
+     * level with them, never raised to its own origin.
      *
      * Either way the front is wide and exact (#3353): a child past its ceiling moves it exactly as
      * far as it should, and the pick that follows orders it exactly.
@@ -1040,31 +622,7 @@ public class FairShareAllocator(
     }
 
     /**
-     * Where a joiner of weight [w] lands, relative to its parent's origin: [front] on its own grid,
-     * `⌈V · w · G⌉`, or its [positionFloor] when the front is below that (#3353, the window rule).
-     * The floor arm is never below the front, so it can only cost the joiner a turn. It is reached
-     * when the demanding children stand below the origin on average, which a rebase that aims at
-     * their front leaves behind once the one ahead stops asking; on a heavy child's grid the front
-     * is then far below zero.
-     * The penalty is how far the front stood below the joiner's floor, `max(0, −C/(w · G) − F)` in
-     * virtual time relative to the origin: a lost turn, never credit. No raise the joiner lands
-     * under causes one, since that raise is bounded by every demanding child's room, returners
-     * included, and a sleeper credit is at most one lease ([PolicyConfig.sleeperCredit]). It comes
-     * from siblings that stood below the origin when the joiner arrived, which in a parent driven by
-     * picks is within about a lease of it, the spread a fair pick leaves between them; charging calls
-     * can leave siblings about `R` apart.
-     */
-    private fun landing(front: VirtualTime, w: Weight): Int128 {
-        val at = front.ticksForWide(w)
-        if (!windowRuleForTest) return at
-        val floor = Int128.of(positionFloor(w))
-        if (at >= floor) return at
-        floorLandingsForTest++
-        return floor
-    }
-
-    /**
-     * One patch seating each of [unseated] at [front], each on its own grid ([landing]), written
+     * One patch seating each of [unseated] at [front], each on its own grid, `⌈V · w · G⌉`, written
      * absolute: `⌊O · w · G⌋ + ⌈V · w · G⌉` for the parent's origin `O` in [s], wide and exact (#3353). [EntitlementLedger.seatAtWide] refuses an edge that already carries a
      * gauge, so an id whose seat arrived between the front being read and this patch being built is
      * simply skipped rather than re-seated.
@@ -1081,9 +639,9 @@ public class FairShareAllocator(
         val gauges = LinkedHashMap<AttachmentId, Gauge>()
         for (id in unseated.sorted()) {
             val record = s.record(id) ?: continue
-            // Absolute: the origin this peer sees, plus the front, both on the newborn's own grid (#3353),
-            // the front held at the newborn's floor ([landing]).
-            val absolute = originTicks(s.origin(record.parent), record.weight) + landing(front, record.weight)
+            // Absolute: the origin this peer sees, plus the front, both on the newborn's own grid (#3353).
+            // Nothing raises an origin any more (#3472), so the first term reads zero.
+            val absolute = originTicks(s.origin(record.parent), record.weight) + front.ticksForWide(record.weight)
             val seat = s.seatAtWide(id, absolute) ?: continue
             gauges[id] = checkNotNull(seat.delta.gauge(id)) { "a seat patch for ${id.value} carries no gauge" }
         }
@@ -1113,8 +671,7 @@ public class FairShareAllocator(
     /**
      * Whether [edge] is a **returner**: a waker ([isWaker]) this peer saw stop asking, so it holds a
      * departure against its parent's clock. A returner comes back moved by that clock ([moveReturners]);
-     * every other waker is clamped ([clampWakers]). The one definition [settleJoiners] and
-     * [previewShifts] both read (#3376).
+     * every other waker is clamped ([clampWakers]) (#3376).
      */
     private fun isReturner(edge: PolicyEdge): Boolean = isWaker(edge) && edge.record.id in departures
 
@@ -1148,9 +705,8 @@ public class FairShareAllocator(
      * twice.
      *
      * Each step is rounded up, so the clock runs fast by under one of its ticks a run, and a
-     * returner is moved that sliver further: the penalty side. An origin rebase changes no issuance,
-     * so it moves no clock. A shift is a distance, and the origin moves a returner's raw position
-     * and its siblings' alike.
+     * returner is moved that sliver further: the penalty side. A shift is a distance, so no position
+     * enters it.
      */
     private fun runClock(parent: GroupId, edges: List<PolicyEdge>): Int128 {
         val step = clockStep(parent, edges.filter(::wasAsking), served)
@@ -1166,18 +722,6 @@ public class FairShareAllocator(
      * when the shift landed exactly.
      */
     private class Shift(val ticks: Int128, val remainder: ShiftRemainder?)
-
-    /**
-     * How far each child at [parent] that would come back by the clock this round would move
-     * ([shiftOf]), at the clock [markDepartures] would run it to. Changes nothing; [preSeatRaise]
-     * reads it, because a returner lands where its shift puts it, not at the front.
-     */
-    private fun previewShifts(parent: GroupId, edges: List<PolicyEdge>): Map<AttachmentId, Shift> {
-        val returners = edges.filter { isReturner(it) }
-        if (returners.isEmpty()) return emptyMap()
-        val clock = (clocks[parent] ?: Int128.ZERO) + clockStep(parent, edges.filter(::wasAsking), served)
-        return returners.associate { it.record.id to shiftOf(it, clock) }
-    }
 
     /**
      * [edges] with each child that [shifts] names moved by its shift: where every returner will
@@ -1236,14 +780,7 @@ public class FairShareAllocator(
         val ticks = wide(mulDiv(wide(mulDiv(owed, 1L, CLOCK_GRID, Rounding.CEILING), clock, w), 1L, d, Rounding.CEILING), clock, w)
         val past = wide(mulDiv(wide(mulDiv(ticks, CLOCK_GRID, 1L, Rounding.FLOOR), clock, w), d, 1L, Rounding.FLOOR), clock, w) - owed
         val remainder = if (past == Int128.ZERO) null else ShiftRemainder(past, d)
-        val clocked = maxOf(Int128.ZERO, ticks)
-        // A returner lands no lower than its floor, as a seat or a clamp does (#3353, the window rule).
-        // The remainder is the clock's alone: what the floor added is penalty, and is not carried.
-        if (windowRuleForTest) {
-            val toFloor = Int128.of(positionFloor(w)) - HeddlePolicy.effectiveTicksWide(edge)
-            if (toFloor > clocked) return Shift(toFloor, remainder)
-        }
-        return Shift(clocked, remainder)
+        return Shift(maxOf(Int128.ZERO, ticks), remainder)
     }
 
     /** [value], or an [ArithmeticException] naming the clock read when it overflowed 128 bits. */
@@ -1309,10 +846,9 @@ public class FairShareAllocator(
      * Two things lower a stored offset, and neither returns a turn. An edge is forgotten when it
      * leaves the active set, which [EntitlementLedger.activate][EntitlementLedger.activate] makes
      * permanent (closure dominance, §10.10), so a cleared clamp can never come back to an edge that
-     * will compete again. A rebase does not touch it (#3353): it raises the parent's origin, which
-     * lowers the front and the raw position alike, so no turn moves. A clamp is the front less the
-     * raw position at the wake, so for a child that idles while the origin rises it is larger by
-     * every stretch sat out; it is wide, so it can be, without nearing any ceiling.
+     * will compete again. Nothing else rewrites one: no rebase moves a parent's positions (#3472).
+     * A clamp is the front less the raw position at the wake, so for a child that idled long it is
+     * large; it is wide, so it can be, without nearing any ceiling.
      *
      * The two edges are sampled at different moments. **Idle→demand** is seen at a [schedule]
      * call's entry, before any grant lands, and only there. **Demand→idle** is seen there and again
@@ -1343,14 +879,10 @@ public class FairShareAllocator(
         for (edge in edges) {
             if (edge.record.id !in wakers) continue
             val weight = edge.record.weight
-            // Wide, both sides (#3353): a waker idle since long before the origin was raised sits far
-            // below its siblings, and a clamp narrowed before it is taken would leave it there.
+            // Wide, both sides (#3353): a waker idle for long sits far below its siblings, and a
+            // clamp narrowed before it is taken would leave it there.
             val raw = HeddlePolicy.rawTicks(edge)
-            val credited = HeddlePolicy.clampTicks(frontTicks = front.ticksForWide(weight), rawTicks = raw, sleeperCredit = policy.sleeperCredit)
-            // Held at the waker's floor after its sleeper credit, not before (#3353, the window rule):
-            // the credit is kept down to the floor and no further.
-            val toFloor = Int128.of(positionFloor(weight)) - raw
-            val computed = if (windowRuleForTest && toFloor > credited) toFloor.also { floorLandingsForTest++ } else credited
+            val computed = HeddlePolicy.clampTicks(frontTicks = front.ticksForWide(weight), rawTicks = raw, sleeperCredit = policy.sleeperCredit)
             // Written, not joined: a seated waker with no departure holds no offset (see above).
             // Both sides are on the waker's grid, and the result is stored on it, so a stored offset
             // never carries a front's denominator into the next one (#3313).
@@ -1465,19 +997,6 @@ public data class ChildPick(
     public val ledger: EntitlementLedger,
     public val grant: Grant,
 )
-
-/**
- * One rebase (#3329, #3353): [ledger] with the parent's origin raised. The whole change is in the
- * ledger, so a caller keeps it by keeping that ledger, and [FairShareAllocator.adopt] only counts it.
- */
-internal class Rebase(val ledger: EntitlementLedger)
-
-/**
- * One [FairShareAllocator.pickChildRebasing] result: [pick], whose ledger is rebased when [rebase]
- * is not `null`, and [settled], the same ledger before the rebase, which reads right against the
- * allocator's wake offsets until [rebase] is adopted.
- */
-internal class RebasingPick(val settled: EntitlementLedger, val pick: ChildPick, val rebase: Rebase?)
 
 /**
  * Clock ticks to one tick of a weight-1 child's grid: the least common multiple of 1 to 16. A clock

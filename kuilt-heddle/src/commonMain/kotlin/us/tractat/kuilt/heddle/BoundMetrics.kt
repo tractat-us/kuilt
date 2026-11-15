@@ -38,10 +38,10 @@ import us.tractat.kuilt.math.timesWide
  *   serving only the demanding child would read as a bound violation. Zero when the
  *   demanding children sit exactly on their weight ratio.
  * @property peakPositionFraction the highest effective position among [parent]'s active children,
- *   each as a fraction of its own position ceiling (#3353): how far the rebase has let the parent
- *   climb. Past one, the ledger's virtual-time reads there saturate at the ceiling; no pick is
- *   affected, since a pick orders the full position. A rebase keeps a busy parent's well below one; a child
- *   idle since many rebases ago reads below zero. Zero when [parent] has no active children. It
+ *   each as a fraction of its own position ceiling (#3353): how far the parent has climbed. Nothing
+ *   rebases it back down (#3472), so a long-running parent passes one, and the ledger's
+ *   virtual-time reads there saturate at the ceiling; no pick is affected, since a pick orders the
+ *   full position. Zero when [parent] has no active children. It
  *   reads the scheduler-local wake clamps, so it is this peer's reading, not a replicated value.
  */
 public data class BoundMetrics(

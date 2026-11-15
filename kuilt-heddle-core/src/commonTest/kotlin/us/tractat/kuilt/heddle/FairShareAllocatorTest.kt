@@ -372,4 +372,19 @@ class FairShareAllocatorTest {
         allocator.schedule(root, base, earmarked = 0L, demandOf(late.id to hungry))
         assertNotNull(base.current.gauge(late.id), "seated on the following round")
     }
+
+    /**
+     * A sleeper credit past one lease is refused by both configs (§10.6). The credit a clamped
+     * waker may keep is policy, and one lease, [LocalHeddle.MAX_RESERVATION], is its bound.
+     */
+    @Test
+    fun aSleeperCreditPastOneLeaseIsRefused() {
+        val max = LocalHeddle.MAX_RESERVATION
+        assertAll(
+            { assertEquals(max, PolicyConfig(quantum = 1L, sleeperCredit = max).sleeperCredit, "one lease is kept") },
+            { assertEquals(max, LocalPolicy(defaultReservation = 1L, sleeperCredit = max).sleeperCredit, "by both configs") },
+            { assertFailsWith<IllegalArgumentException> { PolicyConfig(quantum = 1L, sleeperCredit = max + 1L) } },
+            { assertFailsWith<IllegalArgumentException> { LocalPolicy(defaultReservation = 1L, sleeperCredit = max + 1L) } },
+        )
+    }
 }

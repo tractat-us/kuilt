@@ -63,14 +63,13 @@ internal class SchedulingPeer(
     val advertise: (AttachmentId, Demand) -> Unit,
     val schedule: (GroupId) -> ScheduleOutcome,
     val boundMetrics: (GroupId) -> BoundMetrics,
-    val rebases: () -> Int,
 )
 
 internal fun HeddleNode.asSchedulingPeer(): SchedulingPeer =
-    SchedulingPeer(self, ledger, this, ::advertise, ::schedule, ::boundMetrics) { rebasesForTest }
+    SchedulingPeer(self, ledger, this, ::advertise, ::schedule, ::boundMetrics)
 
 internal fun GovernedHeddleNode.asSchedulingPeer(): SchedulingPeer =
-    SchedulingPeer(self, ledger, this, ::advertise, ::schedule, ::boundMetrics) { rebasesForTest }
+    SchedulingPeer(self, ledger, this, ::advertise, ::schedule, ::boundMetrics)
 
 /**
  * A long scheduling workload at one parent's [lanes]: each call draws a fresh waiting set, gives
@@ -98,6 +97,10 @@ internal class MixedWeightRun(
     var chargedBelowReservation: Int = 0
         private set
 
+    /** Calls answered [ScheduleOutcome.PositionCeiling] or [ScheduleOutcome.WeightBudget]: a refusal. */
+    var refusals: Int = 0
+        private set
+
     /** The next waiting set: each lane with even odds, and never empty. */
     fun drawWaiting(): List<AttachmentRecord> = phase(calls + 1)
         ?: drawFrom.filter { random.nextBoolean() }.ifEmpty { listOf(drawFrom[random.nextInt(drawFrom.size)]) }
@@ -115,6 +118,7 @@ internal class MixedWeightRun(
         calls++
         val outcome = peer.schedule(root)
         if (outcome is ScheduleOutcome.Delegated) grants += outcome.grants
+        if (outcome is ScheduleOutcome.PositionCeiling || outcome is ScheduleOutcome.WeightBudget) refusals++
         return outcome
     }
 
