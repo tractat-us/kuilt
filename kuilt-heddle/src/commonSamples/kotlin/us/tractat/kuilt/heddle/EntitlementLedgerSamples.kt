@@ -87,3 +87,23 @@ internal suspend fun CoroutineScope.sampleHeddleGoverned(seam: Seam, raft: us.tr
         is GateClosed -> error("enrolled above, yet the write gate is closed: ${outcome.reason}")
     }
 }
+
+/**
+ * Read what one [HeddleNode.schedule] call did at [root]. Every arm but [ScheduleOutcome.Delegated]
+ * wrote nothing to the ledger: the newborns a call seats before its first pick land in the same
+ * patch as that pick, or not at all.
+ */
+internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
+    when (val outcome = schedule(root)) {
+        // Granted this many rounds. A call that granted and then met a refusal answers this; the next call answers the refusal.
+        is ScheduleOutcome.Delegated -> "delegated ${outcome.grants}"
+        // Nothing to move toward any advertised demand: an idle tree, or no holdings at the root.
+        ScheduleOutcome.NothingToDelegate -> "idle"
+        // A child's position is at its ceiling, so no pick orders exactly. A busy parent rebases long
+        // before this; it is reached when a demanding child is never served and holds the rebase at zero.
+        is ScheduleOutcome.PositionCeiling -> "stuck at ${outcome.parent.value}: serve or close the child that waits"
+        // The active children's weights put a pick's sums out of Long, as gossip can merge. Close one of them.
+        is ScheduleOutcome.WeightBudget -> "stuck at ${outcome.parent.value}: close a child, its weights cannot be summed"
+        // Only a governed node has a write gate; a static node never answers this.
+        is GateClosed -> "gate closed: ${outcome.reason}"
+    }
