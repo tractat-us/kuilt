@@ -42,7 +42,7 @@ Rows pair `;`-separated groups in order.
 |a hard-coded chunk size, a `FrameTooLargeException`|`Room`/`Seam.maxPayloadBytes`, then `PayloadTooLarge`|`fabrics.md#payload-limits`|
 |a `try` inside `onEach { … }.launchIn(scope)`, a pump that dies silently|`Flow.pumpIn` (`PumpFailure.ITEM`/`UPSTREAM`, `PumpVerdict`)|`fabrics.md#long-lived-pumps`|
 |a `MutableStateFlow<SeamState>` or a `closed` flag|`SeamStateGate`|`fabrics.md#a-seams-terminal-state`|
-|bytes outliving the process, an `fsync`-rename dance; which kuilt wrote them|`DurableStore` + `StoreKey` (`InMemoryDurableStore`, one per platform); `KuiltVersion.VERSION`|`fabrics.md#durable-storage`|
+|bytes outliving the process, an `fsync`-rename dance; which kuilt wrote them|`DurableStore` + `StoreKey` (`InMemoryDurableStore`, one per platform); `KuiltVersion.VERSION` (`:kuilt-base`)|`fabrics.md#durable-storage`|
 |encrypting to a public key, bytes only one recipient can open|`SealedBox.seal`/`open` + `SealPublicKey`/`SealPrivateKey`|`replication.md#sealed-boxes`|
 |fair-share scheduler, "3× the share", a lease per slot; config trees, reloads, attached children, N at once, why it waits, orphans, restart; quota ledger across peers, "reserve then charge once"; minting quota at runtime; gating a `WarpNode` by lane; the bare pick|`LocalHeddle`; `Topology.from`, `apply`/`attach`, `maxConcurrent`, `explain`, `reconcileLeases`, `persist`/`restore`; `HeddleNode.reserve`/`complete`; `heddleGoverned`; `HeddleAdmissionControl`; `HeddlePolicy.pick`, `FairShareAllocator`|`heddle.md#which-engine-one-process-or-many-peers`|
 |"only run on a GPU / in-region peer", a placement predicate|`Affinity` + `TaskDescriptor.where` + `CapSet`|`warp.md#where-a-task-may-run-location-eligibility`|

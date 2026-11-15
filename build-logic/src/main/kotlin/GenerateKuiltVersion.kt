@@ -22,9 +22,12 @@ import org.gradle.api.tasks.TaskAction
  * carries the body as IR, so on native and wasm the literal changes [CARRIER]'s klib on every run
  * whatever its form: only a module that does not depend on [CARRIER] is spared that recompile.
  *
- * One module carries it. It depends on nothing, so every module that needs the value can `api` it —
- * including `:kuilt-heddle-core`, which bans the coroutines `:kuilt-core` would bring — and there is
- * one class with one fully qualified name, never a split package.
+ * One module carries it, so there is one class with one fully qualified name, never a split
+ * package. No other kuilt module depends on it: a consumer that wants the value declares
+ * `us.tractat.kuilt:kuilt-base`, versionless under the BOM.
+ *
+ * **Warning:** every snapshot stamps a new version into [CARRIER], so on native and wasm a module
+ * that adds a dependency on it recompiles on every snapshot, and so does everything above it (#3464).
  *
  * [libraryVersion] is an `@Input`, so a `-Pversion=…` override reruns this task and the compile
  * tasks behind it rather than serving the previous version's source. The value is checked against

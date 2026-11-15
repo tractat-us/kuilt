@@ -766,13 +766,13 @@ kuilt-crdt           delta-state CRDT zoo — plain value types  → kuilt-math 
   ├── kuilt-bolt       write-only op archive kept beside a live replica  → kuilt-crdt
   └── kuilt-deal       fair card dealing + fair-random (SRA / commit-reveal)  → kuilt-crdt + kuilt-core
 
-kuilt-store          durable key→bytes storage (DurableStore) — depends on NO other kuilt module but kuilt-base
+kuilt-store          durable key→bytes storage (DurableStore) — depends on NO other kuilt module
   └── kuilt-identity  one key per device, named by a did:key; revocations and the key stores' grants kept in a DurableStore  → kuilt-store
 
-kuilt-seal           public-key sealed boxes (SealedBox) — depends on NO other kuilt module but kuilt-base
+kuilt-seal           public-key sealed boxes (SealedBox) — depends on NO other kuilt module
 
-kuilt-base           KuiltVersion, the running kuilt's version — depends on nothing; every root above
-                     and kuilt-heddle-core `api` it, and those arrows are left out of the tree
+kuilt-base           KuiltVersion, the running kuilt's version — depends on nothing, and NO kuilt
+                     module depends on it: a consumer declares it (#3464)
 
 kuilt-bom            Gradle/Maven platform constraining every module to one aligned version (not a code module)
 ```
@@ -781,8 +781,10 @@ Four roots, and that is the point. `kuilt-core` carries the networking contract;
 `kuilt-crdt` carries data types that need no network at all; `kuilt-store` carries
 "keep these bytes safe", and `kuilt-seal` "keep these bytes secret", and each knows
 about none of the others. Each can be used entirely on its own: none depends on
-another root, only on `kuilt-base`, which depends on nothing and carries one value
-(and `kuilt-crdt` on `kuilt-math`, likewise dependency-free). Everything else hangs off one of the four, and the arrow only ever points *down* — nothing points back into a root. Keeping `kuilt-core` free of fabric imports is what
+another root (`kuilt-crdt` depends only on `kuilt-math`, which is dependency-free).
+`kuilt-base` sits outside the tree on purpose. Every snapshot stamps a new version
+into it, so on native and wasm anything compiled against it would recompile on every
+snapshot; it is a leaf that only a consumer who reads the version declares. Everything else hangs off one of the four, and the arrow only ever points *down* — nothing points back into a root. Keeping `kuilt-core` free of fabric imports is what
 lets the whole boundary be build-enforced when consumed as a composite build or a
 published artifact.
 

@@ -7,9 +7,6 @@ plugins {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            // `api`, so a consumer of the zoo alone reads `us.tractat.kuilt.KuiltVersion`.
-            // `:kuilt-base` depends on nothing.
-            api(project(":kuilt-base"))
             api(libs.kotlinx.serialization.core)
             // Overflow-checked counting (#3318). Not `api`: no `:kuilt-math` type is on this
             // module's public surface. `:kuilt-math` itself depends on nothing.

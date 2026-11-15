@@ -44,9 +44,6 @@ tasks.withType<Test>().configureEach {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            // `api`, so every consumer reads `us.tractat.kuilt.KuiltVersion` without declaring
-            // `:kuilt-base` itself.
-            api(project(":kuilt-base"))
             implementation(libs.kotlinx.atomicfu)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.core)

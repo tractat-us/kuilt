@@ -19,12 +19,11 @@ val writtenByThisKuilt = snapshotHeader["writtenBy"] == KuiltVersion.VERSION
 check(writtenByThisKuilt)
 ```
 
-## You rarely declare it
+## Declare it yourself
 
-`:kuilt-core`, `:kuilt-crdt`, `:kuilt-store`, `:kuilt-seal` and `:kuilt-heddle-core` each bring this
-module with them, so anything built on one of them can read `us.tractat.kuilt.KuiltVersion`
-already. `:kuilt-math` does not. Import the BOM and every kuilt module, this one included, is at
-the same version.
+No other kuilt module brings this one with it, so add `us.tractat.kuilt:kuilt-base` next to the
+modules you already use. Under the BOM it needs no version, and it stays at the same version as
+every other kuilt module.
 
 ## What the value is
 
@@ -40,8 +39,9 @@ built on it.
 
 ## Why a module of its own
 
-It depends on nothing: no coroutines, no serialization, no other kuilt module. That is what lets
-every root of the module graph take it, including `:kuilt-heddle-core`, which keeps coroutines off
-its classpath, and `:kuilt-crdt`, `:kuilt-store` and `:kuilt-seal`, which promise to work with
-nothing else attached. Anything added here is inherited by almost every kuilt consumer, so it has
-to be worth that.
+It depends on nothing: no coroutines, no serialization, no other kuilt module. So adding it never
+brings anything else along, even to an app that keeps coroutines off its classpath.
+
+And nothing in kuilt depends on it, which is deliberate. Every snapshot build stamps a new version
+into this module, so on Kotlin/Native and wasm everything compiled against it has to be compiled
+again on every snapshot. Keeping it a leaf means only this module pays (#3464).

@@ -13,9 +13,6 @@ kotlin {
     compilerOptions { optIn.add("us.tractat.kuilt.heddle.HeddleInternalApi") }
     sourceSets {
         commonMain.dependencies {
-            // `api`, so a `LocalHeddle` app reads `us.tractat.kuilt.KuiltVersion` without declaring
-            // `:kuilt-base`. It depends on nothing, so the check below has nothing to object to.
-            api(project(":kuilt-base"))
             api(project(":kuilt-crdt"))
             // `api`: a policy input carries its wide positions and its parent's origin as `Int128` (#3353).
             api(project(":kuilt-math"))
