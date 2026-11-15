@@ -341,15 +341,44 @@ internal class JoinerResumeMachine(
     /**
      * Takes the pending resume flight (clearing the slot), or null when none is in flight.
      *
-     * Two callers: the room's ResumeAck handler (which completes it as
-     * [ResumeResult.Success] after emitting `Resumed`) and the room's `leave()` (which
-     * completes it as [ResumeResult.WindowClosed] — the room is terminal, so its reply can
-     * never arrive; without this, every caller awaiting the flight (#1280) hangs forever).
+     * The room's `leave()` calls this and completes the flight as [ResumeResult.WindowClosed]: the
+     * room is terminal, so its reply can never arrive, and without this every caller awaiting the
+     * flight (#1280) hangs forever. The room's ResumeAck handler takes it through [takeFlightForAck]
+     * instead.
      */
     fun takePendingFlight(): CompletableDeferred<ResumeResult.JoinerOutcome>? = lock.withLock {
         val d = pendingResume
         pendingResume = null
         d
+    }
+
+    /**
+     * Guarded by [lock]: a `ResumeAck` resumed the room during the current reconnect episode. Set by
+     * [takeFlightForAck], reset when an episode starts, and read by the critical section in
+     * [runReconnect] that decides how the episode ended.
+     */
+    private var ackResumed = false
+
+    /**
+     * The ResumeAck handler's take: the pending flight, and whether this ack resumes the room, or
+     * null when no flight is pending. Called inside the room's critical section, which emits
+     * `Resumed` there when it does resume; the handler completes the flight after it releases the
+     * lock.
+     *
+     * **Whoever takes the lock first wins (#3094).** An ack resumes the room unless the room is
+     * already terminal, and a resuming ack marks the episode resumed. [runReconnect] decides the
+     * episode in one critical section: if an ack resumed it, the room is resumed even when the
+     * window's timer has already fired, and otherwise it marks the room host-lost
+     * ([JoinerResumeHost.claimHostLost]) before releasing the lock. So an ack handled after that
+     * decision finds the room terminal, settles the flight as [ResumeResult.WindowClosed], and
+     * emits nothing.
+     */
+    fun takeFlightForAck(): Pair<CompletableDeferred<ResumeResult.JoinerOutcome>, Boolean>? = lock.withLock {
+        val d = pendingResume ?: return null
+        pendingResume = null
+        val resumes = !host.isTerminal()
+        if (resumes) ackResumed = true
+        d to resumes
     }
 
     /**
