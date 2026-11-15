@@ -89,7 +89,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  *   and its cause is a [MetricKindUnreadException].
  *
  * A kind is read by [recover], or by its own first turn on an exporter that skipped [recover], and
- * again by every turn while the store refuses. See [recover].
+ * again by its turns while the store refuses, on a window that backs off per kind. See [recover].
  *
  * ## Batches
  *
@@ -360,30 +360,36 @@ public class WarpMetricExporter(
         data object Settled : PersistedRead
 
         /**
-         * The read was [KindRead.Refused]. Every turn of this kind reads again first. [first] is
-         * whether this refusal is the kind's first since a read last landed, the one that is logged.
+         * The read was [KindRead.Refused]. A turn of this kind reads again first, or skips the read
+         * inside the kind's backoff window. [first] is whether this refusal is the kind's first since
+         * a read last landed, the one that is logged.
          */
         class Owed(val cause: Throwable, val first: Boolean) : PersistedRead
     }
 
     /** Why a kind still owes a read of its persisted series. */
-    private enum class OwedRead {
+    private sealed interface OwedRead {
         /** Nothing has read it yet: the exporter was just built, and [recover] has not run. */
-        UNREAD,
+        data object Unread : OwedRead
 
-        /** A read of it was refused, and no read has landed since. */
-        REFUSED,
+        /**
+         * A read of it was refused, and no read has landed since. The kind's turns skip the read
+         * while [backoff] has turns left, and each one spent is a [skipped] window (#3436).
+         */
+        class Refused(val backoff: RefusedReadBackoff) : OwedRead {
+            fun skipped(): Refused = Refused(backoff.skipped())
+        }
     }
 
     /**
      * The kinds whose persisted series no read has yet joined into memory; a kind absent here is
-     * [PersistedRead.Settled]. **Every kind starts owed**, as [OwedRead.UNREAD]: an exporter that
+     * [PersistedRead.Settled]. **Every kind starts owed**, as [OwedRead.Unread]: an exporter that
      * never calls [recover] holds the same fresh map a refused read leaves, so its first write of a
      * kind would replace every series a previous process made durable (#3390). Its first turn of
      * each kind reads first instead, and joins what it finds, exactly as after a refused read.
      *
-     * Changed only by [settle] and by [clear], and read only by [refusedReads] and [settle]. All
-     * of them hold [writeMutex], as every write turn does, and that is what keeps a turn from
+     * Changed only by [settle], by [clear], and by [refusedReads] spending a turn of a backoff
+     * window, and read only by [refusedReads] and [settle]. All of them hold [writeMutex], as every write turn does, and that is what keeps a turn from
      * seeing a kind settled whose series are not yet in memory: no turn runs between a read and
      * the [settle] that installs it. [lock] only makes the field itself safe to touch.
      *
@@ -399,7 +405,7 @@ public class WarpMetricExporter(
      * `15`). Admitting nothing keeps memory on the store's own history, so the join on heal is
      * exact, and it is idempotent, so a repeated read cannot double-count either.
      */
-    private var owedReads: Map<StoredKind, OwedRead> = StoredKind.entries.associateWith { OwedRead.UNREAD }
+    private var owedReads: Map<StoredKind, OwedRead> = StoredKind.entries.associateWith { OwedRead.Unread }
 
     /**
      * Reload persisted metric state from [store]. Call once at startup before any
@@ -413,9 +419,10 @@ public class WarpMetricExporter(
      * (a warning is logged). The other kinds are unaffected.
      *
      * A **refused** read, a `CancellationException` the [store] mints at this live caller from its
-     * own `withTimeout` included, costs its kind alone and **fails closed** (#3390): every later
-     * call that would write that kind, [record] and the `merge*` methods, reads it again first, and
-     * while the read is still refused admits **nothing** of that kind and writes nothing of it. A
+     * own `withTimeout` included, costs its kind alone and **fails closed** (#3390): a later call
+     * that would write that kind, [record] or a `merge*` method, reads it again first, or, inside
+     * the kind's backoff window below, refuses it without reading, and while the read is still
+     * refused or skipped admits **nothing** of that kind and writes nothing of it. A
      * [record] returns a [MetricExportResult.Partial] listing those updates as `uncounted`, and a
      * `merge*` a [MetricWriteResult.Failure]; either carries a [MetricKindUnreadException] for the
      * kind. Updates of the other kinds in the same batch go ahead. The read that lands joins the
@@ -424,6 +431,16 @@ public class WarpMetricExporter(
      * which case memory keeps that read's series and the refusal changes none of them. Starting
      * fresh here instead wrote a map naming only this run's series over the persisted one: a
      * durable sum of `5` read back as `1`.
+     *
+     * The re-reads back off **per kind**, counted in the kind's own turns: after `k` refused reads of
+     * a kind in a row, the next `2^k − 1` turns that touch the kind, `k` capped at 6 so at most 63,
+     * refuse it as a refused read does, without touching the store (#3436). A turn that does not
+     * touch the kind spends nothing of its window, and a refused histograms read backs off the
+     * histograms alone. A long outage of a kind then costs one store read per 64 of its turns rather
+     * than one per turn, each paying the store's timeout. This call is an explicit request, so it
+     * **always reads every kind**, window or not; a read of a kind that lands, here or in a turn,
+     * closes that kind's window and resets its `k`, and one refused here counts toward `k` like any
+     * other.
      *
      * Serialized with every write turn by the same mutex, so it may run concurrently with them.
      * A cancellation of the caller's own job still propagates (#3388).
@@ -507,10 +524,12 @@ public class WarpMetricExporter(
                 while (totalCount() > maxMetrics) evictOne()
             }
             if (read is KindRead.Refused) {
-                val first = owedReads[kind] != OwedRead.REFUSED
-                owedReads = owedReads + (kind to OwedRead.REFUSED)
-                PersistedRead.Owed(read.cause, first)
+                // One more refusal in a row, so a longer window; see RefusedReadBackoff.after.
+                val prior = (owedReads[kind] as? OwedRead.Refused)?.backoff
+                owedReads = owedReads + (kind to OwedRead.Refused(RefusedReadBackoff.after(prior, read.cause)))
+                PersistedRead.Owed(read.cause, first = prior == null)
             } else {
+                // Any read of the kind that lands closes its window and resets its count.
                 owedReads = owedReads - kind
                 PersistedRead.Settled
             }
@@ -536,19 +555,31 @@ public class WarpMetricExporter(
 
     /**
      * Read again each of [kinds] whose read is owed, in the fixed kind order, and return the ones
-     * still refused, in that order. Must hold [writeMutex].
+     * still refused, in that order. A kind inside its backoff window is not read: it is returned as
+     * refused, with the last refusal's cause, and one turn of its window is spent. Must hold
+     * [writeMutex].
      *
-     * A turn of a kind returned here admits nothing of it and writes nothing of it. The caller
-     * counts it as a failed turn of that kind on [health], through [countRefused], once it knows the
-     * turn is a turn: a [record] refused for an overflow applies nothing and is no turn of any kind.
-     * Only the kind's first refusal is logged as an error, whether [recover] or a turn met it; see
-     * [logRefusal].
+     * A turn of a kind returned here admits nothing of it and writes nothing of it, read or
+     * skipped. The caller counts it as a failed turn of that kind on [health], through
+     * [countRefused], once it knows the turn is a turn: a [record] refused for an overflow applies
+     * nothing and is no turn of any kind. Only the kind's first refusal is logged as an error,
+     * whether [recover] or a turn met it; see [logRefusal]. A skip logs at debug.
+     *
+     * Only a turn that would have read a kind spends its window: the kinds outside [kinds] are not
+     * touched. The skips are spent last, after every read this turn makes, and only once
+     * `ensureActive` has passed. A skip makes no store call, so without that check it would not
+     * notice its caller's own cancellation; and spent first, it would be lost to a cancellation that
+     * ends a later read of the same turn. A cancelled caller is cancelled here as a read's
+     * `ensureActive` cancels it, and spends no turn of any kind's window.
      */
     private suspend fun refusedReads(kinds: Set<StoredKind>): Map<StoredKind, MetricKindUnreadException> {
-        val owed = lock.withLock { owedReads.keys }
-        if (owed.none { it in kinds }) return emptyMap()
-        val refused = LinkedHashMap<StoredKind, MetricKindUnreadException>()
-        StoredKind.entries.filter { it in kinds && it in owed }.forEach { kind ->
+        val owed = lock.withLock { owedReads }.filterKeys { it in kinds }
+        if (owed.isEmpty()) return emptyMap()
+        val skips = owed.entries.mapNotNull { (kind, why) ->
+            (why as? OwedRead.Refused)?.takeIf { it.backoff.skipTurns > 0 }?.let { kind to it }
+        }.toMap()
+        val refused = HashMap<StoredKind, MetricKindUnreadException>()
+        StoredKind.entries.filter { it in owed && it !in skips }.forEach { kind ->
             when (val read = readKind(kind)) {
                 is PersistedRead.Owed -> {
                     refused[kind] = MetricKindUnreadException(kind.storeKey, read.cause)
@@ -557,7 +588,22 @@ public class WarpMetricExporter(
                 PersistedRead.Settled -> logger.debug { "${kind.storeKey.name}: persisted series read; writes of the kind go ahead" }
             }
         }
-        return refused
+        if (skips.isNotEmpty()) {
+            currentCoroutineContext().ensureActive()
+            lock.withLock {
+                // A compare, not a blind store: if anything replaced a kind's window since it was
+                // read above, this turn spends nothing of the new one.
+                skips.forEach { (kind, seen) -> if (owedReads[kind] === seen) owedReads = owedReads + (kind to seen.skipped()) }
+            }
+            skips.forEach { (kind, seen) ->
+                refused[kind] = MetricKindUnreadException(kind.storeKey, seen.backoff.cause)
+                logger.debug {
+                    "${kind.storeKey.name}: persisted series was refused; this turn skips the read and admits " +
+                        "and writes nothing of the kind: ${seen.backoff.cause}"
+                }
+            }
+        }
+        return StoredKind.entries.mapNotNull { kind -> refused[kind]?.let { kind to it } }.toMap(LinkedHashMap())
     }
 
     /** Count each turn [refusedReads] refused as a failed turn of its kind, with the store's cause. */
@@ -567,7 +613,8 @@ public class WarpMetricExporter(
 
     /**
      * Run [turn] under [writeMutex] once [kind]'s persisted series has been read; while that read is
-     * still refused, return a [MetricWriteResult.Failure] without running [turn]. The `merge*`
+     * still refused, or skipped inside the kind's backoff window, return a
+     * [MetricWriteResult.Failure] without running [turn]. The `merge*`
      * methods' turn; [record] reads per kind itself, since a batch spans kinds.
      */
     private suspend inline fun writeTurn(kind: StoredKind, turn: () -> MetricWriteResult): MetricWriteResult =
@@ -676,7 +723,8 @@ public class WarpMetricExporter(
      *   written. Nothing is held back waiting for more updates; the batch is whatever the caller
      *   had in hand, and it is on disk before this returns.
      * - A kind whose persisted series no read has joined yet — [recover] was refused, or never
-     *   called — is read first. While that read is refused, the batch's updates **of that kind**
+     *   called — is read first, or, inside the kind's backoff window (see [recover]), refused
+     *   without a read. While that read is refused or skipped, the batch's updates **of that kind**
      *   are not counted: not applied, and the kind's write is never attempted. The other kinds go
      *   ahead. The result is a [MetricExportResult.Partial] whose `uncounted` is exactly those
      *   updates, in batch order, so recording that list again counts each of them once; its
