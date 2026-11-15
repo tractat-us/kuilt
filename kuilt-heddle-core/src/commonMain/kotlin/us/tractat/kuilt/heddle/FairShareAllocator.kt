@@ -235,6 +235,10 @@ public class FairShareAllocator(
      *   refusal stopped it after them; otherwise [AllocationOutcome.PositionCeiling] or
      *   [AllocationOutcome.WeightBudget] when [parent] cannot be ordered, and
      *   [AllocationOutcome.NothingToDelegate] when it simply had nothing to grant.
+     * @throws IllegalStateException when this allocator was built from an [AllocatorMemory] no
+     *   allocator wrote, one holding a child's shift remainder at a denominator other than its
+     *   weight's (#3416 review), and that child returns: a remainder is always on its edge's own
+     *   grid, since a reweight is a new edge.
      */
     public fun schedule(
         parent: GroupId,
@@ -878,7 +882,9 @@ public class FairShareAllocator(
             if (unseated.isNotEmpty()) {
                 ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
             }
-            clampWakers(edges, wakers - returners, front)
+            // An unseated waker is a newborn: its seat puts it at the front, and a clamp would count
+            // the front twice (#3454 review).
+            clampWakers(edges, wakers - returners - unseated, front)
             moveReturners(edges, shifts)
         }
         for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
@@ -1072,15 +1078,21 @@ public class FairShareAllocator(
      *
      * A run that went backward, refunds outweighing grants while the child was away, moves it by
      * nothing, since a shift only ever gives a turn up. Its remainder is still carried, so what that
-     * drops is the backward run alone, the penalty side. A remainder taken at another weight
-     * denominator is dropped, by under one tick a reweighting, also the penalty side.
+     * drops is the backward run alone, the penalty side.
+     *
+     * A carried remainder is always on [edge]'s own grid: an edge's weight is part of its record,
+     * so a reweight is a new edge, which starts with no remainder. The denominator a remainder
+     * carries is therefore checked here, never compared, and one taken at another denominator is a
+     * memory no allocator wrote.
      */
     private fun shiftOf(edge: PolicyEdge, clock: Int128): Shift {
         val id = edge.record.id
         val left = checkNotNull(departures[id]) { "a returner with no departure: ${id.value}" }
         val w = edge.record.weight
         val d = w.denominator
-        val carried = shiftRemainders[id]?.takeIf { it.denominator == d }?.numerator ?: Int128.ZERO
+        val carried = shiftRemainders[id]?.also { r ->
+            check(r.denominator == d) { "a shift remainder on ${id.value} was taken at denominator ${r.denominator}, not its weight's $d" }
+        }?.numerator ?: Int128.ZERO
         // The run less the carry, in units of 1 / (CLOCK_GRID · d) of a tick, so it is a whole number.
         val owed = wide(mulDiv(clock - left, w.numerator, 1L, Rounding.FLOOR), clock, w) - carried
         // ⌈owed / (CLOCK_GRID · d)⌉ in two exact steps, since CLOCK_GRID · d can pass a Long.
@@ -1114,12 +1126,15 @@ public class FairShareAllocator(
      *
      * Every child that this peer has previously observed **not** competing and that competes now
      * has crossed the idle→demand edge the design §7.2 clamp is defined on. [settleJoiners] hands
-     * this only the wakers it holds no departure for, the ones it never saw stop asking: a child it
-     * first saw idle, or one whose memory was restored without the clock. A waker it saw stop comes back by its
-     * parent's clock instead ([moveReturners], #3376), which keeps the lag a short burst leaves
-     * where the clamp would forgive it. Each waker here is clamped forward to [HeddlePolicy.front]
-     * — the front of the set it is rejoining — so it re-enters level with the children that kept
-     * running instead of spending the whole idle interval in one burst. The clamp is a *forward* offset only: it can never advance a child's
+     * this only the **seated** wakers it holds no departure for, the ones it never saw stop asking: a
+     * child it first saw idle. An unseated waker is a newborn, and its seat is what puts it at the
+     * front; clamped as well, it would count the front twice, and land near double it once an empty
+     * first round had dropped the seat that call wrote and kept the clamp (#3454 review). A waker it
+     * saw stop comes back by its parent's clock instead ([moveReturners],
+     * #3376), which keeps the lag a short burst leaves where the clamp would forgive it. Each waker
+     * here is clamped forward to [HeddlePolicy.front] — the front of the set it is rejoining — so it
+     * re-enters level with the children that kept running instead of spending the whole idle
+     * interval in one burst. The clamp is a *forward* offset only: it can never advance a child's
      * turn, only give one up.
      *
      * All wakers are excluded from the front together, not just each from its own: two siblings
@@ -1129,24 +1144,30 @@ public class FairShareAllocator(
      * ([joinFront], §7.2), so the wakers are clamped level with each other, with any newborn, and
      * with the child that has had the most: the bound that can only ever give a turn up.
      *
-     * **The stored offset is joined with `max`, never replaced** (issue #1714). [HeddlePolicy.front]
-     * is a weighted mean over whoever is competing *right now*, and that mean is not monotone
-     * across wake cycles: a child that woke into a busy front, ran, and slept again can re-wake
-     * beside a starved sibling and compute a *smaller* offset than the one it is already carrying
-     * — handing back credit the earlier clamp forfeited and dropping its effective virtual service.
-     * Joining keeps the promise made two paragraphs up (a forward offset can only give a turn up)
-     * across every wake, and it is the same invariant CFS/EEVDF hold by materialising vruntime so
-     * it never decreases against the siblings'. The join is a high-water mark, not a sum, so a long-lived child cannot
-     * accumulate an unbounded penalty; and the one-directional stance of §10.5 — credit forbidden,
-     * a sliver of penalty merely undesirable — is what makes keeping the larger offset the safe
-     * side when the front genuinely regresses. Two other things lower a stored offset. An edge is
-     * forgotten when it leaves the active set, which
-     * [EntitlementLedger.activate][EntitlementLedger.activate] makes permanent (closure dominance,
-     * §10.10), so a cleared clamp can never come back to an edge that will compete again. A rebase
-     * does not touch it (#3353): it raises the parent's origin, which lowers the front and the raw
-     * position alike, so the next clamp's `max` is unchanged and no turn moves. The offset is the
-     * front less the raw position at the last wake, so for a child that idles while the origin rises
-     * it grows by every stretch sat out; it is wide, so it can, without nearing any ceiling.
+     * **The clamp is written, not joined with an offset already stored, because there is none**
+     * (#1714, #3416 review). #1714 was a second wake refunding the first one's clamp: the front is a
+     * weighted mean over whoever competes *now*, so a child clamped once, run and asleep again could
+     * re-wake beside a starved sibling into a lower front, and a replaced offset handed back the
+     * credit the first clamp took. A `max` join with the stored offset fixed it. The invariant that
+     * now makes the join `max(0, computed) = computed` is: **no waker handed here holds an offset.**
+     * It rests on three facts. An offset is only ever written on a seated child: a clamp skips an
+     * unseated one, and a return needs a departure, which [markDepartures] stamps only on a child
+     * with a gauge. A gauge, once a child has one, stays until the edge is forgotten. And the call
+     * that writes an offset ends seeing the child asking, a memory an empty first round keeps along
+     * with the offset. So that child's next stop stamps a departure, and its next wake is a return by
+     * the clock ([moveReturners]), which only adds to the offset. A departure clears only on that
+     * return, which sees the child asking again, or with the edge forgotten, which drops the offset
+     * too. A refused first round keeps none of it. A waker holding an offset and no departure is a
+     * memory no allocator writes: the format 1 v0.7.4 wrote carried one, and this release does not
+     * read it (#3353).
+     *
+     * Two things lower a stored offset, and neither returns a turn. An edge is forgotten when it
+     * leaves the active set, which [EntitlementLedger.activate][EntitlementLedger.activate] makes
+     * permanent (closure dominance, §10.10), so a cleared clamp can never come back to an edge that
+     * will compete again. A rebase does not touch it (#3353): it raises the parent's origin, which
+     * lowers the front and the raw position alike, so no turn moves. A clamp is the front less the
+     * raw position at the wake, so for a child that idles while the origin rises it is larger by
+     * every stretch sat out; it is wide, so it can be, without nearing any ceiling.
      *
      * The two edges are sampled at different moments. **Idle→demand** is seen at a [schedule]
      * call's entry, before any grant lands, and only there. **Demand→idle** is seen there and again
@@ -1180,10 +1201,10 @@ public class FairShareAllocator(
                 rawTicks = HeddlePolicy.rawTicks(edge),
                 sleeperCredit = policy.sleeperCredit,
             )
-            // Join, never replace: the front is not monotone across wake cycles (#1714). Both
-            // sides are on the waker's grid, and the result is stored on it, so a stored offset
+            // Written, not joined: a seated waker with no departure holds no offset (see above).
+            // Both sides are on the waker's grid, and the result is stored on it, so a stored offset
             // never carries a front's denominator into the next one (#3313).
-            wakeOffsets[edge.record.id] = maxOf(edge.offsetTicks, computed)
+            wakeOffsets[edge.record.id] = computed
         }
     }
 

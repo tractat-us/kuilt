@@ -841,7 +841,7 @@ class HeddleNodeTest {
      * grants ahead of the incumbent instead of level with it.
      *
      * The joining round holds everyone **competing but unservable** (`maximumUsefulGrant = 0`,
-     * this file's idiom from [aRewakeCannotLowerAnEffectiveVirtualService]) so the seat can be read
+     * this file's idiom from [aReturnerCountsWhereItLandsAndKeepsItsEarlierClamp]) so the seat can be read
      * back as the seat: [EntitlementLedger.delegate] writes its own checkpoint into the same gauge,
      * so a grant landing in the same round would leave the floor advanced past what was seated and
      * the assertion would be reading the wrong number.
@@ -1021,19 +1021,18 @@ class HeddleNodeTest {
     }
 
     /**
-     * A **second** wake can never hand back credit an earlier one forfeited (issue #1714). The
-     * clamp is documented as a *forward* offset — it "can never advance a child's turn, only give
-     * one up" — but the front it is measured against is the weighted mean over whoever is
-     * competing *now*, and that mean is not monotone across wake cycles. Storing the offset by
-     * replacement therefore lets a later, lower front refund the earlier clamp; the offset has to
-     * be joined with `max`.
+     * A returner counts in the front a waker is clamped to at where it lands (#3446), and a second
+     * wake keeps the first one's clamp (issue #1714), through a whole node.
      *
-     * The scenario, exactly: e2 sleeps through e1's run and wakes into a front of `100`, so it
-     * carries a `+100` clamp; it then runs `20` of its own, reaching an effective virtual service
-     * of `120`, and sleeps again. When it re-wakes the only child still competing is e3 — parked
-     * at `0` and permanently unservable — so the freshly computed offset is `max(0, 0 − 20) = 0`.
-     * Replacement drops e2 from `120` back to `20`, level with a starved sibling despite 120 units
-     * of effective history; a monotone join holds it at `120`.
+     * The scenario, exactly: e1 runs alone to `200` and is seen leaving at the grant that filled
+     * it. e2 wakes beside e1 returning and e3 parked at `0`, so its front is `mean(200, 0) = 100`
+     * and it carries a `+100` clamp; it then runs `20` of its own, reaching an effective virtual
+     * service of `120`, and sleeps again, seen leaving. Its re-wake is a return by its parent's
+     * clock, which nobody moved, so its shift is zero and it stays at `120`. Left out of e2's first
+     * front, e1 would leave it clamped to e3 alone, at `0`; a return that replaced the offset
+     * rather than adding to it would drop e2 to `20`. Before #3376 the re-wake was a second clamp,
+     * into a front of e3 alone, and a `max` join with the stored offset held it at `120`; that join
+     * is gone, since a clamped child's next wake is always a return (#3416 review).
      *
      * e1 and e3 are held **competing but unservable** via `maximumUsefulGrant = 0`, which trims
      * every quantum to nothing while leaving [HeddlePolicy.isDemanding] true — that is exactly the
@@ -1041,7 +1040,7 @@ class HeddleNodeTest {
      * letting a grant move anyone's raw virtual service.
      */
     @Test
-    fun aRewakeCannotLowerAnEffectiveVirtualService() = runTest(
+    fun aReturnerCountsWhereItLandsAndKeepsItsEarlierClamp() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
@@ -1064,7 +1063,7 @@ class HeddleNodeTest {
         h.pump()
         assertEquals(200L, node.ledger.value.edge(e1)!!.issued, "e1 runs alone to its target")
 
-        // Phase 2 — e2 wakes into a front of mean(e1 at 200, e3 at 0) = 100, then runs its 20.
+        // Phase 2 — e2 wakes into a front of mean(e1 landed at 200, e3 at 0) = 100, then runs its 20.
         node.advertise(e1, competingUnservable)
         node.advertise(e2, Demand(targetOutstanding = 20L, maximumUsefulGrant = 10L))
         node.advertise(starved.id, competingUnservable)
@@ -1088,8 +1087,8 @@ class HeddleNodeTest {
         node.schedule(root)
         h.pump()
 
-        // Phase 4 — e1 stops competing too, so e2 re-wakes into a front of just e3, at 0 —
-        // 100 units *behind* the clamp e2 is already carrying.
+        // Phase 4 — e1 stops competing too, and e2 returns by a clock nobody moved, carrying its
+        // clamp of 100.
         node.advertise(e1, Demand.NONE)
         node.advertise(e2, Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L))
         node.advertise(starved.id, competingUnservable)
@@ -1099,7 +1098,7 @@ class HeddleNodeTest {
         assertEquals(
             Rational.of(120L),
             node.probeEffectiveVirtualService(e2, others = listOf(e1, starved.id)),
-            "a re-wake into a lower front must not refund the earlier clamp (replacement gives 20)",
+            "a return adds its shift to the clamp e2 carries (replacing it gives 20)",
         )
     }
 

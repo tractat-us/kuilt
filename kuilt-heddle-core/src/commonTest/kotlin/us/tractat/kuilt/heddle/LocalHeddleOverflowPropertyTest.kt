@@ -2,17 +2,11 @@ package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.math.Int128
 import kotlinx.serialization.cbor.Cbor
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.long
 import us.tractat.kuilt.math.timesWide
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -170,46 +164,6 @@ class LocalHeddleOverflowPropertyTest {
         )
     }
 
-    /**
-     * A snapshot v0.7.4 wrote just before it wedged: four lanes `3/7, 2/5, 1, 3` after 30,723 picks
-     * under a changing waiting set, its wake offsets carrying denominators up to 72,557,275 and its
-     * next pick overflowing. It restores without migration, because every stored offset is read up
-     * to its edge's grid, and picks on. Its four floors are origin seats and already on the grid, so
-     * this arm proves the offsets' read; `VirtualPositionTest` covers a checkpoint over an off-grid
-     * floor.
-     */
-    @Test
-    fun aSnapshotThatWedgedOnTheOldArithmeticRestoresAndPicksOn() {
-        val decoded = LocalHeddle.decode(WEDGED_AT_0_7_4, Json)
-        val snapshot = assertIs<RestoreResult.Restored>(decoded, "decode: $decoded").snapshot
-        // Read off the bytes: since #3353 a restore puts every clamp in whole ticks, so the fat
-        // denominators exist only in what v0.7.4 wrote.
-        val fatBefore = Json.parseToJsonElement(WEDGED_AT_0_7_4).jsonArray[1].jsonObject.getValue("allocatorMemory")
-            .jsonObject.getValue("wakeOffsets").jsonObject.values
-            .map { it.jsonObject.getValue("denominator").jsonPrimitive.long }
-            .filter { it > 1_000L }
-        val engine = LocalHeddle.restore(snapshot, LocalPolicy(defaultReservation = 1L), epoch = 2L)
-        val lanes = listOf("fs/l0", "fs/l1", "fs/l2", "fs/l3").map(::GroupId)
-        val random = Random(3231)
-        var picks = 0
-        repeat(WEDGED_PICKS) { step ->
-            val waiting = lanes.shuffled(random).take(1 + random.nextInt(lanes.size)).toSet()
-            val outcome = try {
-                engine.acquire(waiting, waiting, startedAt = step.toLong(), reservation = 1L)
-            } catch (e: ArithmeticException) {
-                throw AssertionError("pick ${step + 1} after restore threw $e", e)
-            }
-            check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
-            engine.complete(outcome.lease.id, actualCost = 1L + random.nextInt(MAX_COST))
-            picks++
-        }
-        assertAll(
-            // The rig: the snapshot really does carry the four fat wake offsets that wedged v0.7.4.
-            { assertEquals(4, fatBefore.size, "the checked-in offsets carry fat denominators: $fatBefore") },
-            { assertEquals(WEDGED_PICKS, picks, "every step made one pick") },
-        )
-    }
-
     private fun assertNeverOverflows(seed: Long, startPath: Boolean) {
         val topology = draft("fs") {
             LANES.forEach { (name, weight) -> lane(name, weight) }
@@ -299,7 +253,6 @@ class LocalHeddleOverflowPropertyTest {
         const val OLD_SERVICE_CEILING = 4_995
         const val CHURN_SEATS = 5_000
         const val CHURN_WIDTH = 4
-        const val WEDGED_PICKS = 20_000
         const val MAX_COST = 3_600
 
         val LANES = listOf(

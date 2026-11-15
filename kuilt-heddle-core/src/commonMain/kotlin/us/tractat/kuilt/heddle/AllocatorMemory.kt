@@ -51,8 +51,8 @@ import us.tractat.kuilt.math.timesWide
  * encodes as before.
  *
  * Its encoded shape is part of [LocalHeddleSnapshot]'s format 2, which changed it in place for
- * the wide clamps; format 1 reads through a frozen surrogate of the virtual-time form it wrote. A
- * field added here takes a default, and any other change needs a frozen surrogate first.
+ * the wide clamps. A field added here takes a default, and any other change needs a frozen
+ * surrogate first.
  */
 @Serializable
 public class AllocatorMemory internal constructor(
@@ -122,7 +122,8 @@ internal object WideTicksSerializer : KSerializer<Int128> {
 /**
  * How far a child's shifts so far have run past its parent's net-service clock (#3416 review):
  * [numerator] over `CLOCK_GRID · `[denominator] of one of the child's ticks, in `(0, 1)`, where
- * [denominator] is its weight's denominator when the shift was taken. A shift is a whole number of
+ * [denominator] is its edge's weight's denominator: fixed for the edge, since a reweight is a new
+ * edge, and checked against it wherever a remainder is read. A shift is a whole number of
  * ticks and the clock's run since the child left can be a fraction of one, so a shift rounds up by
  * this much, and the next one takes it off before it rounds: the child's total over-shift stays
  * under one tick, never credit, however many times it returns. A remainder of zero is absent.

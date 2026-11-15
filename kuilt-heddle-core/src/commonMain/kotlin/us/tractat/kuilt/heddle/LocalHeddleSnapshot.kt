@@ -14,7 +14,6 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.encoding.encodeCollection
-import us.tractat.kuilt.crdt.CanonicalMapSerializer
 
 /**
  * Everything a [LocalHeddle] needs to carry on after a restart, as one value you can encode, as
@@ -58,11 +57,11 @@ import us.tractat.kuilt.crdt.CanonicalMapSerializer
  * Postgres `jsonb` does, cannot put `state` ahead of `formatVersion`. JSON and CBOR are both
  * checked. ProtoBuf is not: kotlinx ProtoBuf writes an [EntitlementLedger] but cannot read it back,
  * because it fails on the ledger's maps whose values are maps, such as `transfers`. `formatVersion` is
- * [FORMAT_VERSION] for every snapshot this release writes. Each release reads the format the one
- * before it wrote, as well as its own ([SUPPORTED_FORMAT_VERSIONS]), so storage written by the old
- * release survives one upgrade. [LocalHeddle.decode] reads `formatVersion` before it reads anything
- * else, so bytes from a newer release are refused by name, as [RestoreResult.UnsupportedVersion],
- * rather than half-read.
+ * [FORMAT_VERSION] for every snapshot this release writes, and it is the only format this release
+ * reads ([SUPPORTED_FORMAT_VERSIONS]): a snapshot v0.7.4 wrote, in format 1, is refused, and a
+ * consumer coming from v0.7.4 starts from its topology again (#3353). [LocalHeddle.decode] reads
+ * `formatVersion` before it reads anything else, so bytes in a format this release does not read,
+ * older or newer, are refused by name, as [RestoreResult.UnsupportedVersion], rather than half-read.
  *
  * Equal snapshots encode to equal bytes: every map inside goes through a canonical serializer and
  * every list is in id order.
@@ -102,6 +101,15 @@ public class LocalHeddleSnapshot internal constructor(
             require(folded <= issued) {
                 "the gauge on ${edge.value} is folded at $folded, above its base issuance $issued: a fold " +
                     "rebase from a development build, which this release does not restore"
+            }
+        }
+        // A shift remainder is on its edge's own grid (#3416 review): a reweight is a new edge, so an
+        // allocator never writes one at another denominator, and a restored one would throw at a pick.
+        for ((edge, remainder) in allocatorMemory.shiftRemainders) {
+            val weight = ledger.record(edge)?.weight ?: continue
+            require(remainder.denominator == weight.denominator) {
+                "the shift remainder on ${edge.value} is at denominator ${remainder.denominator}, not its " +
+                    "weight's ${weight.denominator}"
             }
         }
     }
@@ -168,15 +176,12 @@ public class LocalHeddleSnapshot internal constructor(
     public companion object {
         /**
          * The format this release writes. Format 2 adds the ledger's record of the edges it has
-         * forgotten (#3192); v0.7.4 wrote format 1.
+         * forgotten (#3192); v0.7.4 wrote format 1, which this release does not read.
          */
         public const val FORMAT_VERSION: Int = 2
 
-        /**
-         * Every format this release reads, oldest first: its own, and the one the release before it
-         * wrote.
-         */
-        public val SUPPORTED_FORMAT_VERSIONS: List<Int> = listOf(1, 2)
+        /** Every format this release reads, oldest first: only its own (#3353). */
+        public val SUPPORTED_FORMAT_VERSIONS: List<Int> = listOf(FORMAT_VERSION)
     }
 }
 
@@ -231,7 +236,7 @@ public sealed interface RestoreResult {
     /**
      * The bytes say they are format [found], which this release does not read; [supported] lists
      * the ones it does. Nothing past the version was read. A format newer than this release's own is
-     * from a later release; one older than every supported format skipped a release on the way.
+     * from a later release; an older one, such as the format 1 v0.7.4 wrote, from an earlier one.
      */
     public data class UnsupportedVersion(public val found: Int, public val supported: List<Int>) : RestoreResult
 
@@ -240,72 +245,20 @@ public sealed interface RestoreResult {
 }
 
 /**
- * Format 1, field for field and in wire order. Each format keeps its own surrogate, so changing
- * [LocalHeddleSnapshot] cannot change what an earlier format's bytes mean, and the next format adds
- * a surrogate beside this one rather than editing it. The ledger, the allocator memory and the
+ * Format 2, field for field and in wire order. Each format keeps its own surrogate, so changing
+ * [LocalHeddleSnapshot] cannot change what a format's bytes mean, and a later format adds a
+ * surrogate beside this one rather than editing it. The ledger, the allocator memory and the
  * topology are nested as one value each, through their own serializers.
  *
- * **Those nested serializers are part of format 1 too.** A new top-level format keeps format 1's
+ * **Those nested serializers are part of format 2 too.** A new top-level format keeps format 2's
  * own fields readable, but not what is nested in them: [EntitlementLedger], [AllocatorMemory] and
  * [Topology] are encoded through their live serializers, so a change to one of those types changes
- * what format 1's bytes mean. Once format 1 has shipped:
+ * what format 2's bytes mean. Once format 2 has shipped:
  * - a field added to any of them, at any depth, takes a default, so bytes written without it still
  *   decode, and so a value holding the default still encodes to the same bytes;
  * - a change that cannot be made that way (a rename, a removal, a new meaning for a field) needs a
- *   frozen surrogate of the nested type under this class, which format 1 then reads through, and
+ *   frozen surrogate of the nested type under this class, which format 2 then reads through, and
  *   only after that the change to the live type.
- *
- * This release reads format 1 and never writes it, so there is no way back from a snapshot to this
- * surrogate.
- */
-@Serializable
-private class SnapshotFormat1(
-    val epoch: Long,
-    val totalSlots: Long,
-    val ledger: EntitlementLedger,
-    val allocatorMemory: AllocatorMemoryFormat1,
-    val leases: List<LeaseFormat1>,
-    val lastApplied: Topology,
-) {
-    /** The snapshot, and throws [IllegalArgumentException] when the ledger carries a fold, which format 1 predates. */
-    fun toSnapshot(): LocalHeddleSnapshot {
-        require(!ledger.hasForgotten()) { "a format-1 snapshot carries forgotten edges, which format 1 predates" }
-        return LocalHeddleSnapshot(epoch, ledger, allocatorMemory.onGridsOf(ledger), totalSlots, leases.map { it.toPersisted(ledger) }, lastApplied)
-    }
-}
-
-/**
- * [AllocatorMemory] as format 1 wrote it, frozen: each wake clamp as the exact virtual time it stood
- * for, before #3353 kept clamps wide in ticks of each edge's grid.
- */
-@Serializable
-private class AllocatorMemoryFormat1(
-    @Serializable(with = CanonicalMapSerializer::class)
-    val wakeOffsets: Map<AttachmentId, @Serializable(with = RationalSerializer::class) Rational>,
-    @Serializable(with = CanonicalMapSerializer::class)
-    val demandingObserved: Map<AttachmentId, Boolean>,
-) {
-    /**
-     * The memory, each clamp read onto its edge's grid in [ledger], rounded up: exact for a clamp
-     * already on that grid, and the penalty side, a sliver more clamp, for one off it. v0.7.4 wrote
-     * clamps off the grid, with fat denominators. A clamp whose edge [ledger] does not know, one
-     * record, is dropped, as an allocator forgets an edge its ledger no longer holds.
-     */
-    fun onGridsOf(ledger: EntitlementLedger): AllocatorMemory = AllocatorMemory(
-        wakeOffsets = wakeOffsets.mapNotNull { (id, v) -> ledger.record(id)?.let { id to wideTicksAt(v, it.weight) } }.toMap(),
-        demandingObserved = demandingObserved,
-    )
-}
-
-/**
- * Format 2, field for field and in wire order: format 1's fields, unchanged. What format 2 adds is
- * nested in the ledger, where a format-1 reader cannot have looked for it: the record of the edges
- * the ledger has forgotten (#3192). It is a surrogate of its own, beside [SnapshotFormat1], so that
- * this one can change before format 2 ships while format 1's stays frozen.
- *
- * The open leases reuse [LeaseFormat1], which is frozen with format 1 and so cannot move under
- * this format either. The same rule as [SnapshotFormat1]'s applies to the nested serializers once
- * format 2 has shipped.
  */
 @Serializable
 private class SnapshotFormat2(
@@ -313,7 +266,7 @@ private class SnapshotFormat2(
     val totalSlots: Long,
     val ledger: EntitlementLedger,
     val allocatorMemory: AllocatorMemory,
-    val leases: List<LeaseFormat1>,
+    val leases: List<LeaseFormat2>,
     val lastApplied: Topology,
 ) {
     fun toSnapshot(): LocalHeddleSnapshot =
@@ -325,19 +278,19 @@ private class SnapshotFormat2(
             totalSlots = snapshot.totalSlots,
             ledger = snapshot.ledger,
             allocatorMemory = snapshot.allocatorMemory,
-            leases = snapshot.open.map(LeaseFormat1::of),
+            leases = snapshot.open.map(LeaseFormat2::of),
             lastApplied = snapshot.lastApplied,
         )
     }
 }
 
 /**
- * One open lease in format 1, and in format 2: its id, reservation so far, start time, and path,
+ * One open lease in format 2: its id, reservation so far, start time, and path,
  * root edge first. The leaf is not stored: it is the child of the path's last edge, so the two
  * cannot disagree.
  */
 @Serializable
-private class LeaseFormat1(
+private class LeaseFormat2(
     val epoch: Long,
     val seq: Long,
     val reserved: Long,
@@ -352,8 +305,8 @@ private class LeaseFormat1(
     }
 
     companion object {
-        fun of(persisted: PersistedLease): LeaseFormat1 = with(persisted.lease) {
-            LeaseFormat1(id.epoch, id.seq, reserved, startedAt, persisted.path)
+        fun of(persisted: PersistedLease): LeaseFormat2 = with(persisted.lease) {
+            LeaseFormat2(id.epoch, id.seq, reserved, startedAt, persisted.path)
         }
     }
 }
@@ -437,7 +390,6 @@ internal object LocalHeddleSnapshotSerializer : KSerializer<LocalHeddleSnapshot>
 
     /** `state` as format [version] wrote it. One arm per entry of [LocalHeddleSnapshot.SUPPORTED_FORMAT_VERSIONS]. */
     private fun decodeState(decoder: CompositeDecoder, version: Int): LocalHeddleSnapshot = when (version) {
-        1 -> decoder.decodeSerializableElement(descriptor, STATE, SnapshotFormat1.serializer()).toSnapshot()
         2 -> decoder.decodeSerializableElement(descriptor, STATE, SnapshotFormat2.serializer()).toSnapshot()
         else -> throw UnsupportedSnapshotFormat(version)
     }

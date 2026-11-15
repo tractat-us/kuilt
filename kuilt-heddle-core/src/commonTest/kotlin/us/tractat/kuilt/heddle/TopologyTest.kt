@@ -400,21 +400,25 @@ class TopologyTest {
     }
 
     /**
-     * [Topology.Group.template] keeps the serial name v0.7.4 stored, `runtimeChildren`, so the
-     * `lastApplied` a snapshot holds reads and writes the same bytes after the rename (#3368). The
-     * snapshot goldens pin the same thing end to end; this pins it on the topology alone.
+     * [Topology.Group.template] is stored as `template`, the key a config uses too (#3454 review),
+     * and a strict decode refuses `runtimeChildren`, the name v0.7.4 stored in the format 1 this
+     * release does not read. The snapshot goldens pin the same thing end to end; this pins it on the
+     * topology alone.
      */
     @Test
-    fun aTemplateKeepsItsStoredSerialName() {
+    fun aTemplateIsStoredUnderItsOwnName() {
         val topology = Topology(
             "root",
             listOf(Topology.Group("tenants", Weight.ONE, emptyList(), Topology.ChildTemplate(Weight.ONE, maxConcurrent = 2L))),
         )
-        val stored = """{"root":"root","children":[{"type":"group","name":"tenants","weight":"1","children":[],"runtimeChildren":{"weight":"1","maxConcurrent":2}}]}"""
+        val stored = """{"root":"root","children":[{"type":"group","name":"tenants","weight":"1","children":[],"template":{"weight":"1","maxConcurrent":2}}]}"""
+        val oldName = stored.replace("\"template\":", "\"runtimeChildren\":")
 
         assertAll(
             { assertEquals(stored, json.encodeToString(Topology.serializer(), topology)) },
             { assertEquals(topology, json.decodeFromString(Topology.serializer(), stored)) },
+            { assertTrue(oldName != stored, "the rig: the old name is in the text") },
+            { assertFailsWith<SerializationException> { json.decodeFromString(Topology.serializer(), oldName) } },
         )
     }
 
@@ -445,28 +449,6 @@ class TopologyTest {
             { assertEquals(TopologyParse.Valid(capped), Topology.from(document)) },
             // `problems` reads a Topology back through the document form; a ceiling it dropped would pass silently.
             { assertEquals(document, json.decodeFromString(TopologyDocument.serializer(), json.encodeToString(TopologyDocument.serializer(), document))) },
-        )
-    }
-
-    /**
-     * Format 1 of [LocalHeddleSnapshot] stores the topology last applied and predates the ceiling:
-     * the snapshot v0.7.4 wrote decodes with no ceiling on any node, the group's template included.
-     */
-    @Test
-    fun aFormatOneSnapshotDecodesWithNoCeiling() {
-        val restored = assertIs<RestoreResult.Restored>(LocalHeddle.decode(GOLDEN_FORMAT_1_RICH, Json))
-        val lastApplied = restored.snapshot.lastApplied
-        fun Topology.Node.ceilings(): List<Long?> = when (this) {
-            is Topology.Lane -> listOf(maxConcurrent)
-            is Topology.Group ->
-                listOf(maxConcurrent) + listOfNotNull(template).map { it.maxConcurrent } + children.flatMap { it.ceilings() }
-        }
-        val ceilings = lastApplied.children.flatMap { it.ceilings() }
-
-        assertAll(
-            { assertTrue(lastApplied.children.any { it is Topology.Group && it.template != null }, "the rig: a group with a template") },
-            { assertEquals(7, ceilings.size, "the rig: three groups, three lanes and a template were walked: $ceilings") },
-            { ceilings.forEach { assertNull(it) } },
         )
     }
 
