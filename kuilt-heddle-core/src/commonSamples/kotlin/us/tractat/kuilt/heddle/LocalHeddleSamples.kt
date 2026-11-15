@@ -663,7 +663,8 @@ internal fun sampleQueueStatus() {
     }
     val web = farm.groupId("web", "builds")
     val mobile = farm.groupId("mobile", "builds")
-    val heddle = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
     heddle.reconcileCapacity(totalSlots = 4L)
 
     // The names a person knows each part of the tree by.
@@ -710,7 +711,8 @@ internal fun sampleQueueStatus() {
     }
     val deploys = pool.groupId("deploys")
     val builds = pool.groupId("builds")
-    val capped = LocalHeddle.fromTopology(pool, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    val (capped, cappedBoot) = LocalHeddle.fromTopology(pool, LocalPolicy(defaultReservation = 1L), epoch = 0L)
+    check(cappedBoot.refusals.isEmpty())
     capped.reconcileCapacity(totalSlots = 4L)
     val queued = mapOf(deploys to 3, builds to 3)
     check(capped.previewPicks(queued, queued.keys, List(6) { 1L }) == listOf(deploys, builds, builds, builds))
@@ -729,7 +731,8 @@ internal fun sampleWaitReason() {
     }
     val web = farm.groupId("web", "builds")
     val mobile = farm.groupId("mobile", "builds")
-    val heddle = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    val (heddle, booted) = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
     val both = setOf(web, mobile)
 
     // Until the engine knows how many agents there are, nobody goes next.
