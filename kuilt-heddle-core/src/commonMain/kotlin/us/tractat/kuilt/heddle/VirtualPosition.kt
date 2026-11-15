@@ -252,6 +252,11 @@ internal class VirtualTime(
      */
     fun ticksFor(w: Weight): Long = saturated(ticksForWide(w), w)
 
+    /** This time in whole units of virtual time, rounded down: `⌊ticks / (G · w)⌋`. */
+    fun unitsFloor(): Int128 =
+        mulDiv(ticks, weightDenominator, checkedMul(TICKS_PER_UNIT, weightNumerator), Rounding.FLOOR)
+            ?: throw ArithmeticException("Int128 overflow: $ticks · $weightDenominator / (G · $weightNumerator)")
+
     /** This time as an exact [Rational], for diagnostics. Throws when it does not fit one. */
     fun toRational(): Rational {
         val denominator = checkedMul(TICKS_PER_UNIT, weightNumerator)
