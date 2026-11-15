@@ -725,6 +725,10 @@ public sealed interface DeviceKeyStoreFixture {
      * @param makeKeyUnreadable puts the held key out of the store's reach without damaging it — a
      *   permission it lacks, a file system loop, a Keychain locked before first unlock — and says how
      *   to put it back; see [UnreadableKey].
+     * @param makeGrantsUnreadable puts the stored grants record out of the store's reach without
+     *   damaging it — a file the process may not open, as Data Protection leaves one on a locked
+     *   iPhone — while the medium still takes a new record, and says how to probe and undo it; see
+     *   [UnreadableGrants].
      */
     public class Durable(
         private val reopen: suspend (beforeKeyIsMade: suspend () -> Unit) -> DeviceKeyStore,
@@ -734,6 +738,7 @@ public sealed interface DeviceKeyStoreFixture {
         public val interruptKeyWrite: suspend () -> KeyWriteInterruption,
         public val corruptGrants: suspend () -> Unit,
         public val makeKeyUnreadable: suspend () -> UnreadableKey,
+        public val makeGrantsUnreadable: suspend () -> UnreadableGrants,
     ) : DeviceKeyStoreFixture {
         override suspend fun open(beforeKeyIsMade: suspend () -> Unit): DeviceKeyStore = reopen(beforeKeyIsMade)
     }
@@ -763,6 +768,38 @@ public sealed interface DeviceKeyStoreFixture {
             }
         }
     }
+
+    /**
+     * What [Durable.makeGrantsUnreadable] did: the grants record is out of reach until [restore] runs.
+     *
+     * **One arm, and non-nullable.** Unlike [UnreadableKey] there is no `CannotOccur`: a store that
+     * keeps its grants across a restart keeps them in a medium, and every medium can fail a read — a
+     * permission, a protection class, a closing connection. The store with nothing to fault is the one
+     * that keeps nothing, which is the fixture's [KeepsNothing] arm, and the property checks that it
+     * forgets. A nullable hook, or a `CannotOccur` arm here, would let the store this property exists
+     * to catch — one that reads a failed read as "no grants" — opt out by declaring it.
+     *
+     * The rig leaves the medium able to take a **new** record, because that is the case that loses
+     * data: a medium that refused every write as well would refuse the mistaken rewrite on the store's
+     * behalf, and the property would pass a store that tried it.
+     *
+     * ## What it cannot detect
+     *
+     * Only the fault the rig produces: a store that refuses a permission failure correctly and reads
+     * an I/O error as "no grants" passes. And [restore]'s answer is the fixture's own witness, so a
+     * fixture that always answered `false` would blind the write check. The read after the restore
+     * still catches a write that changed the record, but not one that rewrote the same grants.
+     *
+     * @param probe reads the grants record straight off the medium, bypassing the store; while the
+     *   record is unreadable it must throw. The property requires that it does, so a rig that broke
+     *   nothing reds rather than passes.
+     * @param restore puts the record back within reach, and answers whether anything wrote, replaced
+     *   or removed the record while it was unreadable. The suite calls it exactly once, in a `finally`.
+     */
+    public class UnreadableGrants(
+        public val probe: suspend () -> Unit,
+        public val restore: suspend () -> Boolean,
+    )
 
     /**
      * What [Durable.interruptKeyWrite] left behind: residue a crash would leave, or a statement that
