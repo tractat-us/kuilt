@@ -1180,7 +1180,7 @@ public class LocalHeddle private constructor(
             val stepped = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
             // An activation whose weight would put its parent's weight products out of Long, or make
             // the set too fine for one full lease: the ledger would take it, and every pick at that
-            // parent would then throw, or one under-charged lease would wedge it (#3313, #3353).
+            // parent would then throw, or one under-charged lease could carry a child past its ceiling (#3313, #3353).
             val overBudget = stepped != null && step is TopologyStep.Activate && !stepped.activationFitsTheBudget(step.edge)
             val next = if (overBudget) null else stepped
             if (overBudget) unfit += checkNotNull(stepped.record(step.edge)) { "an activation the budget refused has no record" }.parent

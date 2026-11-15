@@ -122,8 +122,9 @@ internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16
  * rebased only once it passes `R`, and the origin moves by whole steps, so a child can sit up to
  * `R` plus one step on its own grid with no rebase due. Its next lease adds up to `H`, and that
  * must stay below `C`. Without the check a child that an under-charged `complete` parks between
- * `C − H` and `R` is never rebased, its next lease saturates, and the parent refuses every pick
- * there for good (#3353 review: `{1/30,721, 1/30,722}`, one lease charged `1.172 · 10¹²`).
+ * `C − H` and `R` is never rebased, and its next lease carries it past its ceiling, where the
+ * public reads saturate (#3353 review: `{1/30,721, 1/30,722}`, one lease charged `1.172 · 10¹²`;
+ * before picks were wide, the parent refused every pick there for good).
  *
  * The step is the whole set's, so activating one child can refuse on behalf of another:
  * activating `1/3` beside a heavy child triples that child's step. The rule keeps every
