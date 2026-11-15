@@ -90,3 +90,24 @@ internal fun LocalHeddleSnapshot.withoutNetClocks(): LocalHeddleSnapshot = Local
  */
 internal fun ticksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILING): Long =
     saturated(wideTicksAt(v, w, rounding), w)
+
+/**
+ * Whether [edge]'s raw position, relative to its parent's origin, is at or past its
+ * [positionCeiling], where the public virtual-time reads saturate. Test support only: no pick reads
+ * the ceiling. `false` for an edge this ledger does not know.
+ */
+internal fun EntitlementLedger.isAtPositionCeiling(edge: AttachmentId): Boolean {
+    val record = record(edge) ?: return false
+    val raw = gauge(edge).rawTicksAt(baseIssuance(edge), this.edge(edge)?.returned ?: 0L, record.weight, origin(record.parent))
+    return raw >= Int128.of(positionCeiling(record.weight))
+}
+
+/**
+ * [ticks] held at [w]'s [positionCeiling], as a `Long`. Test support only: nothing in the engine
+ * narrows a position (#3353).
+ */
+internal fun saturated(ticks: Int128, w: Weight): Long {
+    val ceiling = positionCeiling(w)
+    if (ticks >= Int128.of(ceiling)) return ceiling
+    return checkNotNull(ticks.toLongOrNull()) { "a position of $ticks ticks is below Long" }
+}

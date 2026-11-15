@@ -481,7 +481,7 @@ order. None of them changes anything, the wake memory included.
 `explain` runs the real pick on a throwaway copy, so it agrees with the next `acquire` on the
 same arguments. It answers one of `NotWaiting`, `NotEligible`, `NoLiveLineage(at)` (no pick can
 end there, the same test `acquire` applies), `AtCeiling(group, limit)`, `SupplyExhausted`,
-`PositionCeiling(parent)`, `BehindAtLevel(parent, nextChild, …)` at the first group where another
+`PositionCeiling(parent)` (not returned today), `BehindAtLevel(parent, nextChild, …)` at the first group where another
 child goes first, or `WouldBePickedNext`. `BehindAtLevel` carries the leaf side's virtual service
 beside two lines: `eligibleFront`, the line this pick drew over the children it could run (more
 than one sixteenth of a unit of the side's own service above it, the side was not a candidate; at
@@ -657,13 +657,13 @@ instead of catching exceptions, and know the few limits a caller can reach.
 **Primitive:** the outcome types. A refusal is a value, never an exception, and a refused step or call
 leaves the ledger and the leases as they were. Only the wake memory may move: a `NoLiveLineage`
 from `acquire`, or from the `admit` that takes a waiting set, keeps what its pick observed about
-who was waiting. A `PositionCeiling` keeps nothing at all.
+who was waiting.
 
 | Call | Answers | Never refused for |
 |---|---|---|
-| `acquire` | `AcquireOutcome`: `Acquired`, `NothingEligible` (empty eligible set, or every eligible leaf capped), `SupplyExhausted` (no capacity reconciled), `NoLiveLineage(root)`, `PositionCeiling(parent)` | — |
-| `admit` | `AdmitOutcome`: `Acquired`, `NoLiveLineage(leaf)` | supply, a concurrency ceiling, a position ceiling |
-| `extend` | `LeaseOutcome`: `Done`, `PathDraining(edge)` (a reload is closing the path), `SupplyExhausted`, `PositionCeiling(parent)`, `Unknown`, `Stale(currentEpoch)` | a concurrency ceiling |
+| `acquire` | `AcquireOutcome`: `Acquired`, `NothingEligible` (empty eligible set, or every eligible leaf capped), `SupplyExhausted` (no capacity reconciled), `NoLiveLineage(root)`; `PositionCeiling(parent)`, not returned today | — |
+| `admit` | `AdmitOutcome`: `Acquired`, `NoLiveLineage(leaf)` | supply, a concurrency ceiling |
+| `extend` | `LeaseOutcome`: `Done`, `PathDraining(edge)` (a reload is closing the path), `SupplyExhausted`, `Unknown`, `Stale(currentEpoch)`; `PositionCeiling(parent)`, not returned today | a concurrency ceiling |
 | `complete` | `LeaseOutcome`: `Done(charged, overrun)`, `Unknown`, `Stale(currentEpoch)` | anything: a draining path, an overrun, a ceiling |
 | `cancel` | `LeaseOutcome`: `Done`, `Unknown`, `Stale(currentEpoch)` | anything |
 | `fromTopology` | `LocalHeddle.Boot(heddle, result)`: the engine, and an `ApplyResult` naming every group the boot left out, each a `StepRefusal.Refused` | — |
@@ -734,10 +734,9 @@ are written. Apply a tree that fits to bring the left-out groups back.
     check(booted.refusals.all { it is StepRefusal.Refused })
 ```
 
-`PositionCeiling` is not in the sample, and not faked: a busy parent is rebased long before a
-child nears its ceiling, so no short honest run reaches it. Branch on it like the others; it
-means a demanding child is never served, or that a plain `admit` rebased over a child last seen
-demanding and now idle, so serve or close the child that waits.
+`PositionCeiling` is not in the sample, because nothing returns it today: a pick compares the
+full 128-bit position, so no position refuses one. The arm is kept for the limit a long-lived
+engine does reach, its `Long` counters, which throw for now.
 
 **What throws.** A bad argument throws `IllegalArgumentException`: a reservation or extension
 outside `1..LocalHeddle.MAX_RESERVATION` (2^44 cost units), an `eligible` set that is not a
@@ -753,16 +752,21 @@ weight set that does not fit is never one: a boot reports it in `Boot.result`, a
 its `ApplyResult`.
 
 **The position ceiling.** Each child's progress is a count of sixteenths of a unit, stored exactly
-in 128 bits and read for a pick, net of what it returned, as a `Long` with a ceiling. A busy
-parent never gets near it by itself: long before, a pick **rebases** the parent's children, all
-by the same virtual time, so no pick changes, and so does a charging call. The rebase aims at the
-demanding children's average and stops at each one's floor, the mirror of its ceiling (the
-window rule), so a heavy child joining lighter ones lands near zero, not past its ceiling. A
-parent still reaches the ceiling where no whole step fits, in two ways: a demanding child that is
-never served is carried down to its floor, and there holds the rebase at nothing; and a child a
-pick last saw demanding, idle since, counts as demanding for a plain `admit`'s rebase until a pick
-sees it again. At the ceiling, `acquire` and `extend` answer `PositionCeiling(parent)` and change
-nothing, while `admit` and `complete` still charge. Serve or close the child that waits.
+in 128 bits and compared by a pick in 128 bits too, so no position ever refuses a pick. It has a
+ceiling all the same, past which the public virtual-time reads (`virtualService` and its kin)
+report the ceiling, the penalty side. A busy parent never gets near it by itself: long before, a
+pick **rebases** the parent's children, all by the same virtual time, so no pick changes, and so
+does a charging call. The rebase aims at the demanding children's average and stops at each one's
+floor, the mirror of its ceiling (the window rule), so a heavy child joining lighter ones lands
+near zero, not past its ceiling. A parent still climbs past the ceiling where no whole step fits:
+a demanding child that is never served drags that average down with it until no step fits, and
+so does a child a charging call counts as demanding while it is idle. The picks carry on exactly
+there; only the reads saturate.
+
+**The lifetime limit.** What a long-lived engine meets first is the ledger's `Long` counters: an
+edge's issuance and an epoch's mint, about 9.2 × 10¹⁸ units each. The call that would pass one
+throws `ArithmeticException` and changes nothing. That is two weight-1 lanes running about half a
+million leases of the largest size.
 
 **The weight budget.** Keep every weight's denominator at or below 30,719. A weight set so fine
 that one step or one full lease could carry a child past its ceiling is refused when it is
@@ -820,15 +824,14 @@ answers a `ScheduleOutcome`; the next section reads it.
 **Intent:** a node stopped handing out entitlement, and you need to know whether the tree is
 idle or something at a parent is wrong, without reading the ledger by hand.
 **Primitive:** the `ScheduleOutcome` that `HeddleNode.schedule(parent)` returns, on a static node
-and a governed one alike. `NothingToDelegate` is the idle answer. `PositionCeiling(parent)` and
-`WeightBudget(parent)` say the parent's children cannot be ordered, and why. A busy parent never
-reaches the first by itself: `schedule` rebases it by raising a replicated origin, so a long run
-keeps granting, at weights as far apart as 60 to 1 and across a restart. It is reached when a
-child that waits is never served, or when several schedulers granting one child at once pass the
-margin a rebase keeps: keep denominator × schedulers under about 30,000
-([#3458](https://github.com/tractat-us/kuilt/issues/3458)). The second comes from weights gossip
-merged that a pick cannot sum in `Long`, or that are too fine for one full lease, and clears when
-one child closes.
+and a governed one alike. `NothingToDelegate` is the idle answer. `WeightBudget(parent)` says the
+parent's children cannot be ordered: weights gossip merged that a pick cannot sum in `Long`, or
+that are too fine for one full lease. It clears when one child closes. `PositionCeiling(parent)`
+is not returned today: a pick compares the full 128-bit position, so a long run keeps granting
+however far its children climb, at weights as far apart as 60 to 1, across a restart, and with
+several schedulers granting one child at once. What a long-running parent does meet is the
+lifetime limit: a grant that would carry an edge's issuance past `Long` throws
+`ArithmeticException`, and the rounds the call made before it stay landed (#3475).
 
 **A refusal writes nothing.** The first round of a call, with the newborns it seats before that
 pick, lands as one patch or not at all, so a refused call leaves the ledger and the wake clamps as
@@ -843,9 +846,8 @@ internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
         is ScheduleOutcome.Delegated -> "delegated ${outcome.grants}"
         // Nothing to move toward any advertised demand: an idle tree, or no holdings at the root.
         ScheduleOutcome.NothingToDelegate -> "idle"
-        // A child's position is at its ceiling, so no pick orders exactly. A busy parent rebases long
-        // before this. A demanding child that is never served still reaches it, and so can several schedulers granting one child at once.
-        is ScheduleOutcome.PositionCeiling -> "stuck at ${outcome.parent.value}: serve or close the child that waits"
+        // Not returned today: a pick orders the full position. Kept for the lifetime counters.
+        is ScheduleOutcome.PositionCeiling -> "stuck at ${outcome.parent.value}"
         // The active children's weights put a pick's sums out of Long, as gossip can merge. Close one of them.
         is ScheduleOutcome.WeightBudget -> "stuck at ${outcome.parent.value}: close a child, its weights cannot be summed"
         // Only a governed node has a write gate; a static node never answers this.
@@ -853,8 +855,9 @@ internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
     }
 ```
 
-`BoundMetrics.peakPositionFraction` from `boundMetrics(parent)` says how close the parent is: the
-highest child position as a fraction of its ceiling, held well below one by the rebase.
+`BoundMetrics.peakPositionFraction` from `boundMetrics(parent)` says how far the parent has
+climbed: the highest child position as a fraction of its ceiling, held well below one by the
+rebase. Past one the ledger's virtual-time reads saturate; the picks do not change.
 
 ## Minting quota and reshaping with agreement
 

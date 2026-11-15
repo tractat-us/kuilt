@@ -191,13 +191,15 @@ whole ledger inherits the three merge laws for free.
   They carry no stability promise and may change in any release.
 
 Arithmetic that would exceed `Long` throws rather than wrapping: a fair-share
-tally that silently overflowed would be worse than one that stopped. The one
-exception is a child's effective position as a pick reads it, which is held at a
-ceiling instead. A pick that would have to order a position there is refused with a
-typed `PositionCeiling` outcome, and a charge still lands. Everything before that
-read is 128-bit: the gauge stores the position exactly, past the ceiling if it gets
-there, and a parent's origin, the raw position, the front and a wake clamp are wide
-too (#3353). A busy parent is rebased long before its ceiling: both `HeddleNode`
+tally that silently overflowed would be worse than one that stopped. A child's
+position is 128-bit everywhere, and a pick compares the full value, so no position
+refuses a pick: the gauge stores it exactly, and a parent's origin, the raw
+position, the front, a wake clamp and the deadline a pick orders are wide too
+(#3353). What a long-lived engine reaches first is the ledger's `Long` counters,
+an edge's issuance and an epoch's mint, which throw. The `PositionCeiling` outcomes
+are kept for that limit and are not returned today. A position does still have a
+ceiling, past which the public virtual-time reads saturate, the penalty side. A
+busy parent is rebased long before its ceiling: both `HeddleNode`
 and `LocalHeddle` raise the parent's origin, and neither changes a pick or
 rewrites a gauge: a rebase moves every child alike, and no joiner landing under
 it is held at its floor. The origin goes to where the demanding children stand on
@@ -236,9 +238,8 @@ until nothing more can move. Before the first pick it seats any child that has n
 yet and clamps any child that just woke, both against one front, so neither joiner
 drags the front down to meet itself. When nobody else is competing, that front is the
 child that has had the most, so everyone joining starts level with it. It answers an `AllocationOutcome`: `Delegated`
-with the grant count, `NothingToDelegate`, or `PositionCeiling` or `WeightBudget`
-when the parent's children cannot be ordered at all. A grant whose delegation would carry
-its child to the position ceiling is not made, and the call answers `PositionCeiling`.
+with the grant count, `NothingToDelegate`, or `WeightBudget` when the parent's
+children cannot be ordered at all. Its `PositionCeiling` arm is not returned today.
 
 Weights have a budget, and it has two halves. A pick multiplies a parent's weights
 together, so a mix whose products leave a 64-bit number is refused. And a weight set too

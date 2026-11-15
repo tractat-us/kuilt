@@ -83,35 +83,43 @@ class LocalHeddleFineWeightTest {
     /**
      * Why the set is refused, on an engine handed it past [LocalHeddle.apply]: one lease charged
      * [BAND_COST] parks `a` between `C − H` and `R`. No rebase is due there, and the next full lease
-     * passes `C`, so every acquire after the first is refused. A cost a hair lower does not reach the
-     * band, and the parent runs, which is what puts the edge at `C − R` rather than `C`.
+     * carries `a` past `C`, where the public reads saturate. The parent still runs, since a pick
+     * orders the wide position; it used to refuse every acquire after the first. A cost a hair lower
+     * does not reach the band, and `a` stays inside its window, the control.
      */
     @Test
-    fun aBandSetHandedPastApplyWedgesAfterOneUnderChargedLease() {
+    fun aBandSetHandedPastApplyRunsPastItsCeilingAfterOneUnderChargedLease() {
         val root = GroupId("band")
         val a = GroupId("band/a")
         val b = GroupId("band/b")
+        val edge = AttachmentId("a")
         fun engine(): LocalHeddle {
-            val ledger = shapedLedger(root, listOf(AttachmentRecord(AttachmentId("a"), root, a, Weight.of(1, 30_721)), AttachmentRecord(AttachmentId("b"), root, b, Weight.of(1, 30_722))))
+            val ledger = shapedLedger(root, listOf(AttachmentRecord(edge, root, a, Weight.of(1, 30_721)), AttachmentRecord(AttachmentId("b"), root, b, Weight.of(1, 30_722))))
             return engineOver(ledger, root, supply = 0L).apply { reconcileCapacity(1L) }
         }
-        val wedged = run(engine(), setOf(a), BAND_COST)
-        val clear = run(engine(), setOf(a), BELOW_THE_BAND)
+        val banded = engine()
+        val belowBand = engine()
+        var pastCeiling = 0
+        var belowPast = 0
+        val crossed = run(banded, setOf(a), BAND_COST) { if (banded.snapshot().ledger.isAtPositionCeiling(edge)) pastCeiling++ }
+        val clear = run(belowBand, setOf(a), BELOW_THE_BAND) { if (belowBand.snapshot().ledger.isAtPositionCeiling(edge)) belowPast++ }
         assertAll(
             { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, 30_721), Weight.of(1, 30_722))), "rig: apply would refuse this set") },
-            { assertEquals(Run(acquired = 1, refused = 199), wedged, "one lease, then refused for good") },
+            { assertEquals(Run(acquired = 200, refused = 0), crossed, "every acquire leased, past the ceiling too") },
+            { assertTrue(pastCeiling > 0, "the rig: a lease carried a past its ceiling") },
             { assertEquals(Run(acquired = 200, refused = 0), clear, "the control: a cost below the band runs") },
+            { assertEquals(0, belowPast, "the control: and a stays inside its window") },
         )
     }
 
     private data class Run(val acquired: Int, val refused: Int)
 
-    /** 200 full-size acquires over [waiting], each completed at [cost]. */
-    private fun run(engine: LocalHeddle, waiting: Set<GroupId>, cost: Long): Run {
+    /** 200 full-size acquires over [waiting], each completed at [cost], with [afterAcquire] run after each acquire. */
+    private fun run(engine: LocalHeddle, waiting: Set<GroupId>, cost: Long, afterAcquire: () -> Unit = {}): Run {
         var acquired = 0
         var refused = 0
         for (step in 0 until 200) {
-            when (val out = engine.acquire(waiting, waiting, startedAt = step.toLong(), reservation = full)) {
+            when (val out = engine.acquire(waiting, waiting, startedAt = step.toLong(), reservation = full).also { afterAcquire() }) {
                 is AcquireOutcome.Acquired -> {
                     acquired++
                     engine.complete(out.lease.id, actualCost = cost)

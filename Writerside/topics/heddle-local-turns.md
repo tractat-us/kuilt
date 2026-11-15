@@ -212,16 +212,15 @@ the one web's overrun owed it, and then the three-to-one pattern resumes.
   [#3239](https://github.com/tractat-us/kuilt/issues/3239). The networked
   `HeddleNode` does not take either path: its `complete` keeps an unused
   reservation at the leaf instead of returning it up the path.
-- **A ceiling the engine stays clear of.** Each child's progress is a count of
-  sixteenths of a unit. It is stored exactly, in 128 bits, and a pick reads it
-  as a `Long` with a ceiling. Long before a busy fork
-  gets there, a pick moves all its children back down by the same amount, so
-  nobody's turn changes. A fork can still get there in two ways. One waiting
-  child is never served. Or the fork is only ever charged through `admit`,
-  `extend` or an overrun, and never picked at. Time a child reserved but did
-  not use no longer counts toward it.
-  At the ceiling, `acquire` and `extend` at that fork return `PositionCeiling`
-  and change nothing, while `admit` and `complete` still charge. Pick a coarse unit anyway, minutes or seconds rather than
+- **A ceiling that only the reports meet.** Each child's progress is a count of
+  sixteenths of a unit. It is stored exactly, in 128 bits, and a pick compares
+  it in 128 bits too, so no fork ever stops picking because a child went far.
+  Long before a busy fork's children pass the ceiling, a pick moves them all
+  back down by the same amount, so nobody's turn changes and the virtual-time
+  reports stay exact. A fork with one waiting child that is never served can
+  still pass it, and then only the reports read the ceiling. What a long-lived
+  engine meets first is its counters: about 9.2 × 10¹⁸ units of service per
+  child, and as many minted per run. Pick a coarse unit anyway, minutes or seconds rather than
   nanoseconds: one reservation can be at most 2⁴⁴ units.
 
 **Sizing estimates.** The estimate and sibling-refund effects both vanish for a
@@ -311,8 +310,9 @@ hand that to a status page or another thread instead of the engine.
 
 **Outcomes, not exceptions.** Nothing suspends and nothing times out. The usual
 "no" is a typed answer that changes nothing: `SupplyExhausted`, `NothingEligible`,
-`NoLiveLineage` or `PositionCeiling` from `acquire`, and `Unknown`, `Stale`,
-`PathDraining`, `SupplyExhausted` or `PositionCeiling` from a lease call.
+or `NoLiveLineage` from `acquire`, and `Unknown`, `Stale`, `PathDraining` or
+`SupplyExhausted` from a lease call. Both also have a `PositionCeiling` arm,
+which nothing returns today.
 `complete` and `admit` are never refused. Each call is all or nothing, with one
 exception: an `acquire` refused as `NoLiveLineage` still updates the engine's
 memory of who was waiting, because its pick saw them.

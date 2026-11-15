@@ -116,8 +116,9 @@ class FairShareAllocatorWindowRuleTest {
 
     /**
      * A child a merge carried to its ceiling is rebased **before** the pick (#3353), so the call
-     * repairs it instead of refusing. Both children were seen asking, so nobody joins, and `e2` at
-     * `2R` is far above its floor. The raise after the pick could never run: the pick refuses first.
+     * brings it back inside its window before it orders it. Both children were seen asking, so nobody
+     * joins, and `e2` at `2R` is far above its floor. Picks are wide, so this was once a repair of a
+     * refusal and is now only the reads' exactness.
      */
     @Test
     fun aChildAtItsCeilingIsRebasedBeforeThePick() {

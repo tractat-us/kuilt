@@ -11,11 +11,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * [FairShareAllocator.schedule]'s two refusals, driven over an in-memory ledger (#3353): a parent
- * whose children cannot be ordered answers which reason, rather than going quiet or throwing.
+ * [FairShareAllocator.schedule]'s refusal, driven over an in-memory ledger (#3353): a parent whose
+ * children cannot be ordered says so, rather than going quiet or throwing. And the position
+ * ceiling, which used to be a second refusal, now refuses nothing: a pick orders the wide position.
  *
- * - [AllocationOutcome.PositionCeiling]: a child holds a position at its ceiling (#3313), so no
- *   pick there orders exactly.
  * - [AllocationOutcome.WeightBudget]: the active children's weights put a pick's products out of
  *   `Long`. A replicated ledger can hold such a set even when every write was checked, because two
  *   peers can each add a child that fits beside what they see; the merge is what does not fit.
@@ -83,67 +82,64 @@ class FairShareAllocatorRefusalTest {
         ledger.gauge(edge).rawTicksAt(ledger.baseIssuance(edge), ledger.edge(edge)?.returned ?: 0L, Weight.ONE, ledger.origin(root))
 
     /**
-     * `e2` demanding at its floor, seen demanding, has no room to come down, so the rebase is held at
-     * nothing (#3353, the window rule). A child at zero no longer holds it: the origin aims at the
-     * front, and `e2` goes below zero inside its window. Seen demanding, since a child this allocator
-     * has never seen, below zero and demanding, is clamped up to the front as a waker.
+     * A child at its ceiling no longer stops its parent: the pick orders the wide positions, so the
+     * whole supply goes to `e2`, the child furthest behind. This used to answer `PositionCeiling`
+     * and grant nothing. `e2` demanding below its floor, seen demanding, has no room to come down,
+     * so the rebase is held at nothing (#3353, the window rule), and `e1` stays at its ceiling for
+     * every round. Seen demanding, since a child this allocator has never seen, below zero and
+     * demanding, is clamped up to the front as a waker.
      */
     @Test
-    fun aParentWithAChildAtItsCeilingAnswersPositionCeiling() {
+    fun aParentWithAChildAtItsCeilingGrantsTheChildBehind() {
         val cell = CountingCell(seatedAbove(seatedAt(flat(mint = 100L), e2, 0L), e1, positionCeiling(Weight.ONE)))
-        check(cell.current.isAtPositionCeiling(e1)) { "the rig: e1 sits at its ceiling" }
+        check(relative(cell.current, e1) == Int128.of(positionCeiling(Weight.ONE))) { "the rig: e1 sits at its ceiling" }
         check(relative(cell.current, e2) <= Int128.of(positionFloor(Weight.ONE))) { "the rig: e2 sits at its floor" }
         val seen = AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = mapOf(e1 to true, e2 to true))
         val outcome = FairShareAllocator(self, policy, seen).schedule(root, cell, earmarked = 0L) { hungry }
         assertAll(
-            { assertEquals(AllocationOutcome.PositionCeiling(root), outcome, "the parent says why it stopped") },
-            { assertEquals(0L, cell.current.edge(e2)?.issued, "and granted nothing") },
-            { assertEquals(100L, cell.current.holdings(root, self), "the root still holds its supply") },
+            { assertEquals(AllocationOutcome.Delegated(10), outcome, "every quantum of the supply was granted") },
+            { assertEquals(100L, cell.current.edge(e2)?.issued, "all of it to e2, the child behind") },
+            { assertEquals(0L, cell.current.holdings(root, self), "the root's supply is spent") },
         )
     }
 
     /**
-     * A grant whose delegation would carry its child to the ceiling is not made (#3353): the round
-     * answers the ceiling and writes nothing, as `LocalHeddle`'s acquire does. `e1` sits 100 ticks
-     * below its ceiling, and one grant of 10 units is 160 ticks, so the very first grant would
-     * saturate it. The rebase is off: it would bring `e1` back down first, which is what it is for.
+     * A first-round grant whose delegation carries its child past the ceiling is made, and the
+     * position goes past it exactly. `e1` sits 100 ticks below its ceiling, and one grant of 10 units
+     * is 160 ticks, so the very first grant crosses. The rebase is off: it would bring `e1` back down
+     * first. This used to answer `PositionCeiling` and write nothing.
      */
     @Test
-    fun aGrantWhoseDelegationWouldReachTheCeilingIsNotMadeAndWritesNothing() {
+    fun aGrantWhoseDelegationCrossesTheCeilingIsMadeExactly() {
         val start = seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 100L)
         val cell = CountingCell(start)
-        check(!cell.current.isAtPositionCeiling(e1)) { "the rig: e1 starts below its ceiling" }
+        check(relative(start, e1) == Int128.of(positionCeiling(Weight.ONE) - 100L)) { "the rig: e1 starts below its ceiling" }
         val allocator = FairShareAllocator(self, policy).apply { rebaseEnabled = false }
-        val memoryBefore = allocator.memory
         val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
         val outcome = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
         assertAll(
-            { assertEquals(AllocationOutcome.PositionCeiling(root), outcome, "the parent says why it stopped") },
-            { assertEquals(start, cell.current, "and nothing was written") },
-            { assertEquals(0, cell.writes, "not one patch") },
-            { assertEquals(memoryBefore, allocator.memory, "and the allocator observed nothing") },
+            { assertEquals(AllocationOutcome.Delegated(10), outcome, "the first grant and every one after it landed") },
+            { assertEquals(Int128.of(positionCeiling(Weight.ONE) - 100L + 100L * TICKS_PER_UNIT), relative(cell.current, e1), "e1 is exactly 100 units on") },
         )
     }
 
     /**
-     * The same check in a later round: `e1` sits 200 ticks below its ceiling, so the first grant
-     * lands 40 ticks under it and the second would pass it. The call reports the one grant, and the
-     * next call meets the ceiling in its first round and names it.
+     * The same in a later round: `e1` sits 200 ticks below its ceiling, so the first grant lands 40
+     * ticks under it and the second passes it. The call goes on granting, and the next call finds
+     * the supply spent rather than a ceiling. This used to stop after one grant and name the ceiling.
      */
     @Test
-    fun aLaterRoundWhoseDelegationWouldReachTheCeilingStopsAfterTheGrantsBeforeIt() {
+    fun aLaterRoundWhoseDelegationCrossesTheCeilingKeepsGranting() {
         val cell = CountingCell(seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 200L))
         val allocator = FairShareAllocator(self, policy).apply { rebaseEnabled = false }
         val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
         val first = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
-        val afterFirst = cell.current
         val second = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
         assertAll(
-            { assertEquals(AllocationOutcome.Delegated(1), first, "one grant landed before the ceiling") },
-            { assertEquals(10L, afterFirst.edge(e1)?.issued, "exactly one quantum went down e1") },
-            { assertTrue(!afterFirst.isAtPositionCeiling(e1), "and e1 stayed below its ceiling") },
-            { assertEquals(AllocationOutcome.PositionCeiling(root), second, "the next call names the ceiling") },
-            { assertEquals(afterFirst, cell.current, "and writes nothing") },
+            { assertEquals(AllocationOutcome.Delegated(10), first, "every round landed, the ones past the ceiling too") },
+            { assertEquals(100L, cell.current.edge(e1)?.issued) },
+            { assertEquals(Int128.of(positionCeiling(Weight.ONE) - 200L + 100L * TICKS_PER_UNIT), relative(cell.current, e1)) },
+            { assertEquals(AllocationOutcome.NothingToDelegate, second, "the next call finds the supply spent") },
         )
     }
 
@@ -228,7 +224,7 @@ class FairShareAllocatorRefusalTest {
      */
     /**
      * [blocker] adds `e4`, at its floor and seen demanding: it holds the rebase at nothing, so a
-     * child at its ceiling still refuses the pick (#3353, the window rule). The root's origin is
+     * child at its ceiling stays there through the round (#3353, the window rule). The root's origin is
      * raised to put it there, and [e1Ticks] is then read above that origin ([seatedAbove]).
      */
     private fun joining(mint: Long, e1Ticks: Long, blocker: Boolean = false): Pair<CountingCell, FairShareAllocator> {
@@ -243,20 +239,26 @@ class FairShareAllocatorRefusalTest {
         return CountingCell(s) to allocator
     }
 
+    /**
+     * The joining rig with `e1` at its ceiling: the first pick, which used to refuse here and drop its
+     * seats, grants, and the newborn's seat and the waker's clamp land with it. A refused first round
+     * writing nothing is now only the weight budget's, which
+     * [anOverBudgetSetMergedFromTwoPeersAnswersWeightBudgetAndWritesNothing] pins.
+     */
     @Test
-    fun aRefusedFirstPickWritesNoSeatAndObservesNothing() {
+    fun aFirstPickBesideAChildAtItsCeilingLandsItsSeats() {
         val (cell, allocator) = joining(mint = 100L, e1Ticks = positionCeiling(Weight.ONE), blocker = true)
         val before = cell.current
         val memoryBefore = allocator.memory
         val outcome = allocator.schedule(root, cell, earmarked = 0L) { hungry }
         assertAll(
             { assertTrue(relative(before, e4) <= Int128.of(positionFloor(Weight.ONE)), "the rig: e4 sits at its floor") },
+            { assertEquals(Int128.of(positionCeiling(Weight.ONE)), relative(before, e1), "the rig: e1 sits at its ceiling") },
             { assertTrue(before.gauge(e3) == null, "the rig: e3 is unseated") },
             { assertEquals(false, memoryBefore.demandingObserved[e2], "the rig: e2 was seen idle, so it is waking") },
-            { assertEquals(AllocationOutcome.PositionCeiling(root), outcome, "the rig: the first pick refused") },
-            { assertEquals(before, cell.current, "no seat landed for the newborn") },
-            { assertEquals(0, cell.writes, "not one patch") },
-            { assertEquals(memoryBefore, allocator.memory, "and no clamp or observation was kept") },
+            { assertEquals(AllocationOutcome.Delegated(10), outcome, "the first pick and every one after it granted") },
+            { assertTrue(cell.current.gauge(e3) != null, "the newborn's seat landed") },
+            { assertTrue(allocator.memory.wakeOffsets.containsKey(e2), "and the waker's clamp was kept") },
         )
     }
 

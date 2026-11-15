@@ -175,11 +175,10 @@ order is part of the API:
 - **`SupplyExhausted`**: the engine holds less time than the reservation, so
   the next pick is refused whoever is waiting. Most often `reconcileCapacity`
   has not been called yet.
-- **`PositionCeiling(parent)`**: the pick reaches `parent`, which has a child at
-  its position ceiling, so the pick is refused for everyone below. A busy group
-  resets its children's positions long before that, so a running engine rarely
-  meets it. The known way there is a child that keeps work queued and is never
-  served.
+- **`PositionCeiling(parent)`**: not returned today. The engine compares every
+  child's progress exactly, however far it has gone, so no pick is refused for
+  it. The answer is kept for a limit the engine meets only after an enormous
+  amount of service.
 - **`BehindAtLevel(parent, nextChild, …)`**: another child goes first at
   `parent`, the first group where the pick leaves this lane's path, and
   `nextChild` is the one it picks. In a deeper tree this tells you where the

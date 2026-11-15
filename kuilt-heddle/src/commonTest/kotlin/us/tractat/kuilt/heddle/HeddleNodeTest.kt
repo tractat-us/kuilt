@@ -1148,13 +1148,14 @@ class HeddleNodeTest {
         listOf(e1, e2).sumOf { checkNotNull(ledger.value.edge(it)) { "${it.value} is active" }.issued }
 
     /**
-     * A child whose position reached its ceiling stops every pick at the parent (#3313), and the
-     * node used to answer that as "nothing to delegate", the same as an idle tree. The ceiling here
-     * arrives the way any gauge does, merged into the replicated ledger, beside a sibling at its
-     * floor that holds the rebase at nothing ([holdAtTheCeiling]).
+     * A child whose position reached its ceiling no longer stops the picks at its parent: a pick
+     * orders the full 128-bit position, so the node delegates as it would anywhere. It used to answer
+     * [ScheduleOutcome.PositionCeiling] and delegate nothing. The ceiling here arrives the way any
+     * gauge does, merged into the replicated ledger, beside a sibling at its floor that holds the
+     * rebase at nothing ([holdAtTheCeiling]).
      */
     @Test
-    fun aParentWithAChildAtItsCeilingAnswersPositionCeiling() = runTest(
+    fun aParentWithAChildAtItsCeilingDelegates() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
@@ -1166,8 +1167,8 @@ class HeddleNodeTest {
         val outcome = node.schedule(root)
         h.pump()
         assertAll(
-            { assertEquals(ScheduleOutcome.PositionCeiling(root), outcome, "the node says why it stopped") },
-            { assertEquals(issuedBefore, node.issuedToBoth(), "and delegated nothing") },
+            { assertIs<ScheduleOutcome.Delegated>(outcome, "the node granted: $outcome") },
+            { assertTrue(node.issuedToBoth() > issuedBefore, "and delegated down the parent's children") },
         )
     }
 
@@ -1204,9 +1205,12 @@ class HeddleNodeTest {
         )
     }
 
-    /** The cookbook's reading of [ScheduleOutcome], run: idle, then a grant, then a child at its ceiling. */
+    /**
+     * The cookbook's reading of [ScheduleOutcome], run: idle, then a grant, then a grant again beside
+     * a child at its ceiling, which used to read as stuck.
+     */
     @Test
-    fun theScheduleOutcomesSampleReadsIdleDelegatedAndTheCeiling() = runTest(
+    fun theScheduleOutcomesSampleReadsIdleDelegatedAndDelegatedPastTheCeiling() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
@@ -1217,20 +1221,22 @@ class HeddleNodeTest {
         node.advertise(e2, Demand(targetOutstanding = 10L, maximumUsefulGrant = 10L))
         val delegated = node.sampleScheduleOutcomes(root)
         holdAtTheCeiling(h)
-        val stuck = node.sampleScheduleOutcomes(root)
+        val past = node.sampleScheduleOutcomes(root)
         assertAll(
             { assertEquals("idle", idle) },
             { assertEquals("delegated 1", delegated) },
-            { assertEquals("stuck at root: serve or close the child that waits", stuck) },
+            { assertTrue(past.startsWith("delegated "), "beside a child at its ceiling it still delegates: $past") },
         )
     }
 
     /**
-     * A refused schedule changes nothing (#3353): the newborns it would have seated before the pick
-     * stay unseated, since the seat step and the first pick land as one patch or not at all.
+     * A schedule beside a child at its ceiling seats its newborn and grants, in one patch (#3353).
+     * It used to be refused there and leave the newborn unseated; a refused schedule writing
+     * nothing is now only the weight budget's, which
+     * [anOverBudgetSetMergedOnHealAnswersWeightBudgetAndWritesNothing] pins.
      */
     @Test
-    fun aScheduleRefusedAtTheCeilingSeatsNoNewborn() = runTest(
+    fun aScheduleBesideAChildAtItsCeilingSeatsItsNewborn() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
@@ -1247,8 +1253,8 @@ class HeddleNodeTest {
         h.pump()
         assertAll(
             { assertEquals(null, before.gauge(newborn.id), "the rig: the newborn is unseated") },
-            { assertEquals(ScheduleOutcome.PositionCeiling(root), outcome, "the rig: the pick refused") },
-            { assertEquals(before, node.ledger.value, "and nothing was written, the newborn's seat included") },
+            { assertIs<ScheduleOutcome.Delegated>(outcome, "the pick granted: $outcome") },
+            { assertTrue(node.ledger.value.gauge(newborn.id) != null, "and the newborn was seated") },
         )
     }
 
@@ -1322,8 +1328,7 @@ class HeddleNodeTest {
         val target = 10 * GRANTS_BEFORE_THE_CEILING
         var peak = 0.0
         while (run.grants < target && run.calls < LONG_RUN_CALL_LIMIT) {
-            val outcome = run.step(scheduling)
-            assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${run.grants} grants")
+            run.step(scheduling)
             if (run.calls % 64 == 0) {
                 h.pump(1L)
                 peak = maxOf(peak, peer.node.boundMetrics(root).peakPositionFraction)
@@ -1349,7 +1354,8 @@ class HeddleNodeTest {
      * clamped to that front on its wake landed about 60 times as far up its own grid: past its
      * ceiling, where every call after refused. The rebase now also triggers on the front read on
      * every child's grid, and before the seat and wake step. The run counts its own grants and
-     * rebases.
+     * rebases, and checks that the peak effective position [HeddleNode.boundMetrics] reports stays
+     * below the ceiling.
      */
     @Test
     fun aWideSpreadRunNeverReachesThePositionCeiling() = runTest(
@@ -1361,29 +1367,30 @@ class HeddleNodeTest {
         val peer = h.peers[0]
         val run = MixedWeightRun(root, wideLanes, MAX_GRANT, Random(3313)) { call -> if (call <= WIDE_RUN_ALONE) listOf(wideLanes[3]) else null }
         val scheduling = peer.node.asSchedulingPeer()
+        var peak = 0.0
         while (run.grants < WIDE_RUN_GRANTS && run.calls < LONG_RUN_CALL_LIMIT) {
-            val outcome = run.step(scheduling)
-            assertTrue(outcome !is ScheduleOutcome.PositionCeiling, "refused at the ceiling after ${run.grants} grants")
+            run.step(scheduling)
+            peak = maxOf(peak, peer.node.boundMetrics(root).peakPositionFraction)
             if (run.calls % 64 == 0) h.pump(1L)
         }
-        println("wide run: calls=${run.calls} grants=${run.grants} rebases=${peer.node.rebasesForTest}")
+        println("wide run: calls=${run.calls} grants=${run.grants} rebases=${peer.node.rebasesForTest} peak=$peak")
         assertAll(
             { assertTrue(run.grants >= WIDE_RUN_GRANTS, "the run made its own ${run.grants} grants") },
             { assertTrue(peer.node.rebasesForTest > 0, "the rig: the parent rebased (${peer.node.rebasesForTest} times)") },
+            { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
         )
     }
 
     /**
-     * The node checks the ceiling after it delegates, as `LocalHeddle` does (#3353): a grant whose
-     * delegation would carry its child to its ceiling is not made, and the round answers
-     * [ScheduleOutcome.PositionCeiling] with nothing written. One lease of [MAX_GRANT] puts a
-     * `1/30,719` child 93.75% of the way up its own grid, so the second would pass it. Rebasing is
-     * off, which is the one way a running parent still gets there: a demanding child that is never
-     * served holds the origin where it is. Before this the node made that second grant and left the
-     * child past its ceiling.
+     * A grant whose delegation carries its child past its ceiling is made, as `LocalHeddle` makes
+     * one: a pick orders the full 128-bit position. One lease of [MAX_GRANT] puts a `1/30,719` child
+     * 93.75% of the way up its own grid, so the second passes it. Rebasing is off, which stands in for
+     * a demanding child that is never served holding the origin where it is. The call used to stop
+     * after the first lease, and the next one to answer [ScheduleOutcome.PositionCeiling] and write
+     * nothing.
      */
     @Test
-    fun aGrantThatWouldCarryAChildPastItsCeilingIsHeldBack() = runTest(
+    fun aGrantThatCarriesAChildPastItsCeilingIsMade() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
@@ -1393,17 +1400,13 @@ class HeddleNodeTest {
         val node = h.peers[0].node
         node.rebaseForTest = false
         node.advertise(fine.id, Demand(4L * MAX_GRANT, MAX_GRANT))
-        val first = node.schedule(root)
-        val afterFirst = node.ledger.value
+        val outcome = node.schedule(root)
         val peak = node.boundMetrics(root).peakPositionFraction
-        val second = node.schedule(root)
-        val afterSecond = node.ledger.value
         assertAll(
-            { assertEquals(ScheduleOutcome.Delegated(1), first, "one lease fits; the second would pass the ceiling") },
-            { assertEquals(MAX_GRANT, afterFirst.edge(fine.id)?.issued, "exactly one lease went down the edge") },
-            { assertTrue(peak > 0.9 && peak < 1.0, "the child sits one lease up, below its ceiling: $peak") },
-            { assertEquals(ScheduleOutcome.PositionCeiling(root), second, "the next call names the ceiling") },
-            { assertEquals(afterFirst, afterSecond, "and writes nothing") },
+            { assertEquals(ScheduleOutcome.Delegated(4), outcome, "all four leases the child asked for, in one call") },
+            { assertEquals(4L * MAX_GRANT, node.ledger.value.edge(fine.id)?.issued, "every one went down the edge") },
+            // One lease is 93.75% of the way up, so the second crossed the ceiling and the rest ran on past it.
+            { assertTrue(peak > 3.0, "the rig: the child ended well past its ceiling: $peak") },
         )
     }
 
@@ -1434,13 +1437,13 @@ class HeddleNodeTest {
     }
 
     /**
-     * The rebase changes no pick (#3353): a twin node with rebasing switched off, fed the same
-     * waiting sets, makes exactly the same grants call for call until the call where it refuses at
-     * its ceiling. That call can stop partway, so there its grants are a prefix of the rebasing
-     * node's, and its next call names the refusal. The rebasing node carries on past that point.
+     * The rebase changes no pick (#3353), and nor does the ceiling: a twin node with rebasing
+     * switched off, fed the same waiting sets, passes its ceiling and makes exactly the same grants
+     * call for call, there and for [TWIN_CALLS_PAST] calls after. The twin used to refuse at its
+     * ceiling, and the comparison stopped there.
      */
     @Test
-    fun aTwinThatNeverRebasesMakesTheSamePicksUntilItRefuses() = runTest(
+    fun aTwinThatNeverRebasesMakesTheSamePicksPastItsCeiling() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
@@ -1453,27 +1456,21 @@ class HeddleNodeTest {
         val b = MixedWeightRun(root, mixedLanes, MAX_GRANT, Random(7))
         val aPeer = rebasing.peers[0].node.asSchedulingPeer()
         val bPeer = twin.peers[0].node.asSchedulingPeer()
-        var refusedAt = -1
-        while (refusedAt < 0 && a.calls < 100_000) {
-            a.step(aPeer)
-            if (b.step(bPeer) is ScheduleOutcome.PositionCeiling) refusedAt = b.calls
-            if (refusedAt < 0 && b.issuedByLane(bPeer) != a.issuedByLane(aPeer)) {
-                // The twin can meet its ceiling in a later round of a call: it stops there, a prefix of
-                // the rebasing node's grants, and its next call names the refusal.
-                val (ahead, short) = a.issuedByLane(aPeer) to b.issuedByLane(bPeer)
-                assertTrue(ahead.zip(short).all { (x, y) -> x >= y }, "call ${a.calls}: the two made different picks, $ahead against $short")
-                assertTrue(b.step(bPeer) is ScheduleOutcome.PositionCeiling, "call ${a.calls}: the two made different picks, and the twin did not refuse")
-                refusedAt = b.calls
-            }
+        var passedAt = -1
+        while (a.calls < 100_000 && (passedAt < 0 || a.calls < passedAt + TWIN_CALLS_PAST)) {
+            val outcome = a.step(aPeer)
+            val twinOutcome = b.step(bPeer)
+            assertTrue(twinOutcome !is ScheduleOutcome.PositionCeiling, "call ${b.calls}: the twin refused at its ceiling")
+            assertEquals(outcome, twinOutcome, "call ${a.calls}: the two answered differently")
+            assertEquals(a.issuedByLane(aPeer), b.issuedByLane(bPeer), "call ${a.calls}: the two made different picks")
+            if (passedAt < 0 && bPeer.boundMetrics(root).peakPositionFraction >= 1.0) passedAt = b.calls
         }
-        val beyond = a.grants
-        println("twin: refused at call $refusedAt after ${b.grants} grants; the rebasing node rebased ${rebasing.peers[0].node.rebasesForTest} times")
-        repeat(64) { assertTrue(a.step(aPeer) !is ScheduleOutcome.PositionCeiling, "the rebasing node refused after the twin did") }
+        println("twin: passed its ceiling at call $passedAt; ${b.grants} grants alike; the rebasing node rebased ${rebasing.peers[0].node.rebasesForTest} times")
         assertAll(
-            { assertTrue(refusedAt > 0, "the rig: the twin reached its ceiling, at call $refusedAt") },
+            { assertTrue(passedAt > 0, "the rig: the twin passed its ceiling, at call $passedAt") },
+            { assertEquals(passedAt + TWIN_CALLS_PAST, b.calls, "and the two ran on alike past it") },
             { assertTrue(rebasing.peers[0].node.rebasesForTest > 0, "the rig: the rebasing node rebased") },
             { assertEquals(0, twin.peers[0].node.rebasesForTest, "the rig: the twin never did") },
-            { assertTrue(a.grants > beyond, "and the rebasing node went on granting") },
         )
     }
 
@@ -1708,6 +1705,9 @@ class HeddleNodeTest {
 
         /** The most calls a long run here makes: far past its grant target, so a run that stalls reds instead of hanging. */
         const val LONG_RUN_CALL_LIMIT: Int = 20_000
+
+        /** How many calls the twin and the rebasing node run alike after the twin passes its ceiling. */
+        const val TWIN_CALLS_PAST: Int = 64
 
         /** The lagging-peer scenario's grant, and how many a call makes: 12 calls of 256 pass a weight-1 lane's threshold. */
         const val LAG_GRANT: Long = LocalHeddle.MAX_RESERVATION

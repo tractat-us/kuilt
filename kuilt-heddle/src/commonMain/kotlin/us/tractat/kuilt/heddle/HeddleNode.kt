@@ -362,14 +362,14 @@ public class HeddleNode internal constructor(
      *
      * **A busy parent rebases by raising its origin, long before the position ceiling** (#3353).
      * Each child's position is stored wide, and a pick orders it relative to the parent's origin,
-     * narrowed to a `Long` with a ceiling. Once any child's effective position passes a sixteenth
+     * wide too. The ceiling is where the ledger's virtual-time reads stop being exact, and only
+     * those. Once any child's effective position passes a sixteenth
      * of that ceiling, or the front does, read on the grid of a child that is demanding or joining,
      * a round raises the origin, in the same patch as its grant, aimed at where the demanding
      * children stand on average and held short of carrying any of them below its floor, the mirror
      * of its ceiling (the window rule). The raise lands before the pick, at the seat and wake step
      * when there are joiners, so a heavy newborn or waker joining light runners is never seated past
-     * its own ceiling, and a child that a merge carried to its ceiling is brought back under it
-     * rather than refused.
+     * its own ceiling, and a child that a merge carried past its ceiling is brought back under it.
      *
      * Every child reads the same virtual time lower, and no joiner landing under the raise is held
      * at its floor, since the raise is bounded by every demanding child's room, so no pick changes.
@@ -377,25 +377,27 @@ public class HeddleNode internal constructor(
      * correctly, since both write absolute positions.
      * [boundMetrics] reports the peak effective position as a fraction of its ceiling.
      *
-     * The ceiling can still be met two ways. A demanding child that is never served is carried down
-     * to its floor, and there holds the step at nothing. And several schedulers granting one child at
-     * once, before their writes merge, can each add a lease past the margin a rebase keeps: keep
-     * denominator × schedulers under about 30,000 (#3458). A weight set so fine that one step or one full lease could carry a child past its
+     * A parent can still climb past the ceiling, and its picks are unaffected when it does. A
+     * demanding child that is never served drags the demanding children's mean, which the step aims
+     * at, down with it until no whole step fits. And several schedulers granting one child at once,
+     * before their writes merge, can each add a lease past the margin a rebase keeps (#3458). A weight set so fine that one step or one full lease could carry a child past its
      * ceiling is refused before it is active ([prepare], [activate]), and no grant is larger than
      * [LocalHeddle.MAX_RESERVATION], the lease that limit is sized for (#3353).
      *
      * A long-idle child that comes back demanding to a node that never saw it idle, after a restart,
-     * is clamped as a waker rather than read from far below the origin. A pick that would have to
-     * order a position at its ceiling is refused, and so is a grant whose own delegation would carry
-     * its child there (#3353); the rounds stop at that parent: a call that granted first answers [ScheduleOutcome.Delegated], and every call
-     * after it [ScheduleOutcome.PositionCeiling]. A refused call writes nothing and leaves the wake
-     * clamps as they were, and a call with nothing to grant writes nothing either
+     * is clamped as a waker rather than read from far below the origin. No position refuses a pick:
+     * a pick orders the full 128-bit position, however far a child stands from its parent's origin,
+     * and however many schedulers granted it at once. A refused call writes nothing and leaves the
+     * wake clamps as they were, and a call with nothing to grant writes nothing either
      * ([FairShareAllocator.schedule]).
      *
      * @return [ScheduleOutcome.Delegated] with the count of grants applied this call,
-     *   [ScheduleOutcome.NothingToDelegate] when none was, or [ScheduleOutcome.PositionCeiling] or
+     *   [ScheduleOutcome.NothingToDelegate] when none was, or
      *   [ScheduleOutcome.WeightBudget] when [parent]'s children cannot be ordered. Never
      *   [GateClosed]: a static node has no write gate.
+     * @throws ArithmeticException when a grant would carry an edge's issuance past `Long`, the
+     *   lifetime limit (#3475). A throw in the first round writes nothing; one in a later round keeps
+     *   the rounds before it, which have already landed ([FairShareAllocator.schedule]).
      *
      * A parent that starts answering [ScheduleOutcome.WeightBudget] is also logged, once, at
      * `warn`, naming its active edges and their weights, so a caller that discards the outcome

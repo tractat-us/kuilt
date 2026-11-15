@@ -150,27 +150,23 @@ public object HeddlePolicy {
      * @param edges the parent's immediate children.
      * @param config the round's quantum and caps.
      * @param localHoldings service this peer may itself delegate right now; caps the quantum.
+     * Every position here is the full 128-bit one and nothing narrows it: the mean, the eligibility
+     * bound and the deadline `p + q · G` are all compared wide ([compareVirtualWide]), so a pick
+     * orders exactly however far a child stands from its parent's origin, and there is no position
+     * past which it refuses. What bounds a parent's life instead is the `Long` lifetime counters the
+     * positions are read from, each edge's issuance among them.
+     *
      * @throws IllegalStateException if step 3's eligible set is empty — a policy bug, not an
      *   input the caller can provoke (issue #1737).
-     * @throws ArithmeticException if any of [edges] holds a position at its ceiling, which no longer
-     *   orders exactly (#3313): [LocalHeddle] answers that with [AcquireOutcome.PositionCeiling], and
-     *   [FairShareAllocator.schedule] answers [AllocationOutcome.PositionCeiling]. A deadline
-     *   `p + q · G` stays in `Long`: a grant is capped at [LocalHeddle.MAX_RESERVATION], which is
-     *   the headroom a position below its ceiling keeps.
      */
     public fun pick(edges: List<PolicyEdge>, config: PolicyConfig, localHoldings: Long): Grant? {
         require(localHoldings >= 0L) { "localHoldings must be non-negative, was $localHoldings" }
         if (localHoldings == 0L) return null
-        // Every child, not only the candidates: a saturated sibling moves the mean the others are
-        // judged against, so the whole parent stops ordering, not just that child.
-        edges.firstOrNull { isAtCeiling(it) }?.let {
-            throw PositionCeilingException("${it.record.id.value} is at its position ceiling")
-        }
 
         // 1. Candidates with their trimmed quantum.
         val candidates = edges.mapNotNull { edge ->
             val q = quantumFor(edge, config, localHoldings)
-            if (q <= 0L) null else Candidate(edge, q, effectiveTicks(edge))
+            if (q <= 0L) null else Candidate(edge, q, effectiveTicksWide(edge))
         }
         if (candidates.isEmpty()) return null
 
@@ -186,7 +182,7 @@ public object HeddlePolicy {
         //    minimum and carrying on — what design §7.3 step 3 used to prescribe — would schedule
         //    against an ordering just proved untrustworthy, and do it silently; the assertion
         //    names the state instead (#1737).
-        val eligible = candidates.filter { it.ticks <= v.ticksFor(it.edge.record.weight) }
+        val eligible = candidates.filter { it.ticks <= v.ticksForWide(it.edge.record.weight) }
         check(eligible.isNotEmpty()) {
             val listed = candidates.joinToString { c ->
                 "${c.edge.record.id.value} p=${c.ticks} w=${c.edge.record.weight}"
@@ -234,38 +230,11 @@ public object HeddlePolicy {
     internal fun rawTicks(edge: PolicyEdge): Int128 =
         edge.gauge.rawTicksAt(edge.baseIssued, edge.summary.returned, edge.record.weight, edge.origin)
 
-    /** The effective position, wide: [rawTicks] plus the scheduler-local wake clamp, in ticks. */
+    /**
+     * The effective position, wide: [rawTicks] plus the scheduler-local wake clamp, in ticks. The
+     * position a pick orders, never narrowed on the way to it.
+     */
     internal fun effectiveTicksWide(edge: PolicyEdge): Int128 = rawTicks(edge) + edge.offsetTicks
-
-    /**
-     * The position a pick orders: [effectiveTicksWide] narrowed to a `Long`, held at the edge's
-     * [positionCeiling] above and at `Long.MIN_VALUE` below. The one narrowing on the way from a
-     * gauge to a pick (#3353).
-     *
-     * The low end saturates on the **penalty** side, raising the position, and never refuses. A
-     * demanding child a pick saw sits no lower than its [positionFloor], less the leases it had out
-     * when a rebase took it there and has since cancelled (#3353, the window rule): no rebase carries
-     * a demanding child below its floor, and a newborn, a clamped waker and a child that comes back
-     * by its parent's clock (#3376) each land no lower than theirs. One the allocator never saw,
-     * seated and below zero, whether idle or carried down by a `LocalHeddle` charging call's rebase,
-     * is clamped as a waker ([FairShareAllocator]). So only a child that is not demanding, which no
-     * pick orders, can be anywhere near `Long.MIN_VALUE`, and a position raised for a child that
-     * cannot win costs nothing.
-     */
-    internal fun effectiveTicks(edge: PolicyEdge): Long {
-        val wide = effectiveTicksWide(edge)
-        val weight = edge.record.weight
-        if (wide >= Int128.of(positionCeiling(weight))) return positionCeiling(weight)
-        return wide.toLongOrNull() ?: Long.MIN_VALUE
-    }
-
-    /**
-     * Whether a pick over [edge] would have to order a position at its ceiling: its effective
-     * position, raw plus clamp and narrowed once, is there (#3313). A wake clamp is a difference,
-     * not a position, so it has no ceiling of its own (#3353).
-     */
-    internal fun isAtCeiling(edge: PolicyEdge): Boolean =
-        effectiveTicksWide(edge) >= Int128.of(positionCeiling(edge.record.weight))
 
     /**
      * Is [edge] **currently competing** — does its child want more service than it already
@@ -338,7 +307,7 @@ public object HeddlePolicy {
 
     /**
      * [front] kept unreduced, for the two writers that use it: a joiner of weight `w` is seated, or
-     * clamped, at [VirtualTime.ticksFor] on its own grid. The [Rational] form is for diagnostics;
+     * clamped, at [VirtualTime.ticksForWide] on its own grid. The [Rational] form is for diagnostics;
      * dividing it out is what used to grow every stored denominator (#3313).
      */
     internal fun frontTime(edges: List<PolicyEdge>, excluding: Set<AttachmentId> = emptySet()): VirtualTime? {
@@ -353,7 +322,7 @@ public object HeddlePolicy {
             return VirtualTime.of(effectiveTicksWide(top), top.record.weight)
         }
         // Wide, so a front over a position past the ceiling is still the exact front (#3353): a
-        // joiner seated or clamped against it lands where it belongs, and the pick refuses.
+        // joiner seated or clamped against it lands where it belongs, and the pick orders it.
         return meanOf(demanding)
     }
 
@@ -430,21 +399,22 @@ public object HeddlePolicy {
     /**
      * Order candidates by virtual deadline `ev + q/w`, then by attachment id. On the grid the
      * deadline is the position `p + q · G` at weight `w`, and two are compared by 128-bit
-     * cross-multiplication. The id tie-break is the deterministic symmetry-breaker: identical
-     * deadlines resolve the same way on every replica.
+     * cross-multiplication, exactly for any two positions ([compareVirtualWide]). The id tie-break
+     * is the deterministic symmetry-breaker: identical deadlines resolve the same way on every
+     * replica.
      */
     private val deadlineThenId: Comparator<Candidate> = Comparator { a, b ->
-        val byDeadline = compareVirtual(a.deadline(), a.edge.record.weight, b.deadline(), b.edge.record.weight)
+        val byDeadline = compareVirtualWide(a.deadline(), a.edge.record.weight, b.deadline(), b.edge.record.weight)
         if (byDeadline != 0) byDeadline else a.edge.record.id.compareTo(b.edge.record.id)
     }
 
     private class Candidate(
         val edge: PolicyEdge,
         val quantum: Long,
-        /** The candidate's effective position, in ticks of its own service. */
-        val ticks: Long,
+        /** The candidate's effective position, in ticks of its own service, wide. */
+        val ticks: Int128,
     ) {
-        /** The deadline as a position on this edge's grid: `p + q · G`. */
-        fun deadline(): Long = checkedAdd(ticks, ticksOf(quantum))
+        /** The deadline as a position on this edge's grid: `p + q · G`, wide. */
+        fun deadline(): Int128 = ticks + Int128.of(ticksOf(quantum))
     }
 }

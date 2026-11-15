@@ -142,13 +142,10 @@ public sealed interface AcquireOutcome {
     public data class NoLiveLineage(public val at: GroupId) : AcquireOutcome, AdmitOutcome
 
     /**
-     * The pick would have to order a position at its ceiling ([parent] has a child there), or its
-     * own delegation would take one there. Positions are kept in a `Long` of 1/16-unit ticks, and
-     * one at the ceiling no longer orders exactly, so the pick is refused rather than guessed.
-     * Nothing changed, the allocator's wake memory included.
-     *
-     * Only choosing is refused: [LocalHeddle.admit] and [LocalHeddle.complete] still charge a
-     * parent at its ceiling, and the position stays there (see "Failure surface" on [LocalHeddle]).
+     * Not returned today. A pick orders the full 128-bit position, so no position at [parent]
+     * refuses it, however far a child stands from the parent's origin. The arm is kept for the one
+     * limit a choosing call still meets, the ledger's `Long` lifetime counters (see "Failure
+     * surface" on [LocalHeddle]), which throw there for now.
      */
     public data class PositionCeiling(public val parent: GroupId) : AcquireOutcome
 }
@@ -229,10 +226,10 @@ public sealed interface LeaseOutcome {
     public data class Stale(public val currentEpoch: Long) : LeaseOutcome
 
     /**
-     * An extend whose delegation would take an edge of the lease's path to its position ceiling, or
-     * across a path already there; [parent] is the group above that edge. The lease and the engine
-     * are unchanged. The lease still settles: [LocalHeddle.complete] and [LocalHeddle.cancel] are
-     * never refused.
+     * Not returned today: an extend's delegation lands however far it carries an edge of the
+     * lease's path, since a pick orders the full 128-bit position. Kept, as
+     * [AcquireOutcome.PositionCeiling] is, for the ledger's `Long` lifetime counters, which throw
+     * there for now. [parent] would name the group above the edge.
      */
     public data class PositionCeiling(public val parent: GroupId) : LeaseOutcome
 }
@@ -323,10 +320,9 @@ public sealed interface LeaseOutcome {
  *
  * Every call that changes the engine runs on a working copy of its whole state (ledger, open
  * leases, wake memory, capacity) and the engine keeps that copy only when the call returns. So a
- * call that **throws** changes nothing, whatever it throws, and neither does one refused at a
- * position ceiling ([AcquireOutcome.PositionCeiling], [LeaseOutcome.PositionCeiling]): the engine
- * reads, and its [persist]ed snapshot encodes, exactly as before, and the next call starts clean. A
- * whole reload is one operation, however many children it changes.
+ * call that **throws** changes nothing, whatever it throws: the engine reads, and its [persist]ed
+ * snapshot encodes, exactly as before, and the next call starts clean. A whole reload is one
+ * operation, however many children it changes.
  *
  * The copy costs one copy of the open leases and of the wake memory per call.
  *
@@ -335,7 +331,7 @@ public sealed interface LeaseOutcome {
  * observed who was waiting, and forgetting that would treat the next observation as the first. So
  * does the `NoLiveLineage` of the [admit] overload that takes a waiting set, which observes it at
  * the root. Neither keeps any part of a rebase: a rebase is kept only with the delegated ledger it
- * belongs to. A ceiling refusal keeps nothing, because its pick could not order the children it observed.
+ * belongs to.
  *
  * ## Supply
  *
@@ -394,21 +390,19 @@ public sealed interface LeaseOutcome {
  * Nothing suspends and nothing times out. An argument out of range throws
  * [IllegalArgumentException], a reservation or extension above [MAX_RESERVATION] included.
  *
- * Arithmetic that would leave `Long` throws [ArithmeticException] rather than wrapping. The place
- * a running engine reached it first is now a typed refusal instead: an edge's **position**, its
- * service in ticks of 1/16 of a unit, has a ceiling, `Long.MAX_VALUE` less room for one
- * [MAX_RESERVATION] deadline, divided by its weight's denominator. A joiner inherits its position
- * from the front it is seated at, scaled by its weight against its siblings', so left alone the
- * service one parent could hand down over its lifetime would be bounded, by a bound that depends
- * on the weights. It does not depend on how often the waiting set changes: positions are whole
- * ticks, so no join can grow a denominator (#3313, #3231). At the ceiling:
- * - a call that **chooses**, [acquire] or [extend], is refused with a `PositionCeiling` outcome
- *   naming the parent, and changes nothing. A position there no longer orders exactly, so a pick
- *   over it would be a guess;
- * - a call that **charges**, [admit] or [complete], lands as usual. The books stay exact; only the
- *   position is held at the ceiling.
+ * Arithmetic that would leave `Long` throws [ArithmeticException] rather than wrapping. An edge's
+ * **position**, its service in ticks of 1/16 of a unit, is 128-bit, and every pick orders the full
+ * position, so no position refuses a pick, however far a child stands from its parent's origin:
+ * positions are whole ticks, so no join can grow a denominator (#3313, #3231), and nothing narrows
+ * one on its way to a comparison. What bounds an engine's lifetime instead is the `Long` counters
+ * the ledger keeps: an edge's issuance, and each epoch's running mint total, both in cost units,
+ * about 9.2 × 10¹⁸ of them. The call whose delegation or mint would pass one throws
+ * [ArithmeticException], a charging call included, and changes nothing.
  *
- * A running engine rarely gets there, because a pick **rebases** its parent first (#3329,
+ * An edge's position also has a **ceiling**, `Long.MAX_VALUE` less room for one [MAX_RESERVATION]
+ * lease, divided by its weight's denominator: the highest position the public virtual-time reads
+ * report exactly. Past it they report the ceiling, the penalty side. A running engine rarely gets
+ * there, because a pick **rebases** its parent first (#3329,
  * #3353). Once a child's effective position passes a sixteenth of its ceiling, or the front does,
  * read on the grid of a child that is demanding or joining, the pick raises the parent's origin by
  * one virtual time: to where its demanding children stand on average, unless that would carry one
@@ -422,19 +416,23 @@ public sealed interface LeaseOutcome {
  * one. The ceiling is measured net of
  * returns, so returned service never reaches it (#3360). A charging call, [admit], [extend] or an
  * overrun at [complete], runs the same step at every parent on its path, so a parent driven only
- * that way is rebased too. It is still reachable in two ways, where no whole step fits: a demanding
- * child that is never served is carried down to its floor, and there holds the rebase at nothing;
- * and a child a pick last saw demanding, idle since, counts as demanding for a plain [admit]'s
- * rebase until a pick sees it again, and does the same. A weight set so fine that one step or one full lease could carry a child past its
- * ceiling is refused at [apply] instead (#3353).
+ * that way is rebased too. A busy parent still climbs past the ceiling where no whole step fits.
+ * The rebase aims at the weighted mean of the children it counts as demanding, so one that is
+ * never served drags that mean down with it until it sits less than one step above the origin, and
+ * the rebase stops; a child counted demanding that is in fact idle does the same, which is what a
+ * charging call with no waiting set does with a child a pick last saw demanding, a plain [admit],
+ * an [extend] or an overrunning [complete] alike. Either way the picks are unaffected: they go on
+ * ordering the wide positions exactly. A weight set so fine that one step or one full lease could
+ * carry a child past its ceiling is refused at [apply] instead (#3353).
  *
- * Nothing is narrowed before the effective position a pick orders, so a seat or a wake clamp
- * taken against a front that includes a position at its ceiling is taken against the exact front,
- * and nothing an understated front would have handed out is kept as credit (#3353).
+ * Nothing is narrowed on the way to a pick, a seat or a wake clamp, so each is taken against the
+ * exact front, and nothing an understated front would have handed out is kept as credit (#3353).
  *
- * The diagnostics still answer in exact [Rational]s, and those can throw [ArithmeticException]
- * before the ceiling: [explain]'s [WaitExplanation.BehindAtLevel] fronts, whose numerator carries
- * the least common multiple of the sibling weights' denominators, and [entitlement].
+ * The diagnostics still answer in exact [Rational]s, which are `Long` over `Long`. Those can throw
+ * [ArithmeticException]: [explain]'s [WaitExplanation.BehindAtLevel] fronts, whose numerator
+ * carries the least common multiple of the sibling weights' denominators, and [entitlement]. Each
+ * position in them is first held inside its window, so a child past its ceiling reads the ceiling
+ * there.
  *
  * [apply] keeps the weight arithmetic in range the same way: a reload whose weights would put one
  * parent's products of numerators and denominators out of `Long` refuses that child with a
@@ -502,23 +500,21 @@ public class LocalHeddle private constructor(
     private var core = Core(ledger, allocator, leasable, HashMap(), nextSeq = 0L, capacity = Capacity.NONE, forcedMints = 0)
 
     /**
-     * Run [block] on a working copy of [core], and keep the copy only if [block] returns a result
-     * [keep] accepts. On a throw, or a result it refuses, the committed state is put back with one
-     * assignment. The body reads and writes the engine's fields as it would without this, because
-     * they all resolve through [core]. One swap of one reference, rather than a restore per field, is
-     * what makes a forgotten field impossible: there is nowhere else for one to live.
+     * Run [block] on a working copy of [core], and keep the copy only if [block] returns. On a
+     * throw, the committed state is put back with one assignment. The body reads and writes the
+     * engine's fields as it would without this, because they all resolve through [core]. One swap of
+     * one reference, rather than a restore per field, is what makes a forgotten field impossible:
+     * there is nowhere else for one to live.
      */
-    private inline fun <T> atomically(keep: (T) -> Boolean = { true }, block: () -> T): T {
+    private inline fun <T> atomically(block: () -> T): T {
         val committed = core
         core = committed.fork()
-        val result = try {
+        return try {
             block()
         } catch (failure: Throwable) {
             core = committed
             throw failure
         }
-        if (!keep(result)) core = committed
-        return result
     }
 
     private var ledger: EntitlementLedger
@@ -566,9 +562,7 @@ public class LocalHeddle private constructor(
      * [AcquireOutcome.NoLiveLineage]), [AcquireOutcome.SupplyExhausted] when the root holds less than [reservation] and no capacity
      * is reconciled, and [AcquireOutcome.NoLiveLineage] when no eligible leaf can be reached. In
      * each of those cases the ledger is unchanged, with no top-up either; only the allocator's wake
-     * memory may have moved (see the class KDoc). [AcquireOutcome.PositionCeiling] when a pick on
-     * the way would order a position at its ceiling, or the delegation would take one there; that
-     * changes nothing at all.
+     * memory may have moved (see the class KDoc).
      *
      * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION], or
      *   [eligible] is not a subset of [waiting].
@@ -579,7 +573,7 @@ public class LocalHeddle private constructor(
         eligible: Set<GroupId>,
         startedAt: Long,
         reservation: Long = policy.defaultReservation,
-    ): AcquireOutcome = atomically(keep = { it !is AcquireOutcome.PositionCeiling }) {
+    ): AcquireOutcome = atomically {
         requireReservation("reservation", reservation)
         require(waiting.containsAll(eligible)) { "eligible must be a subset of waiting" }
         if (eligible.isEmpty()) return@atomically AcquireOutcome.NothingEligible
@@ -589,7 +583,6 @@ public class LocalHeddle private constructor(
         val base = fundedBase(reservation) ?: return@atomically AcquireOutcome.SupplyExhausted
         when (val descent = descend(base, demands(base, waitingNow, eligibleNow, reservation), eligibleNow, reservation)) {
             is Descent.Refused -> AcquireOutcome.NoLiveLineage(descent.at)
-            is Descent.Ceiling -> AcquireOutcome.PositionCeiling(descent.at)
             is Descent.Reached -> {
                 // The rebases are in the ledger; counted only when it is kept.
                 ledger = descent.ledger
@@ -637,11 +630,7 @@ public class LocalHeddle private constructor(
         val rebases = ArrayList<Rebase>()
         var group = root
         while (group !in eligible || !local.isLeasable(group)) {
-            val pick = try {
-                pickChild(group, local, demands) ?: return Descent.Refused(group)
-            } catch (_: PositionCeilingException) {
-                return Descent.Ceiling(group)
-            }
+            val pick = pickChild(group, local, demands) ?: return Descent.Refused(group)
             afterPickForTest(group)
             val grant = pick.pick.grant
             val edge = grant.attachment
@@ -654,8 +643,6 @@ public class LocalHeddle private constructor(
             local = checkNotNull(seatThenDelegate(pick.pick.ledger, listOf(edge), reservation, demands.waiting)) {
                 "the delegation of $reservation down ${edge.value}, just picked, was refused"
             }
-            // The delegation saturated the edge it picked: the grant would be charged inexactly.
-            if (local.isAtPositionCeiling(edge)) return Descent.Ceiling(group)
             group = checkNotNull(local.record(edge)) { "picked edge ${edge.value} has no record" }.child
         }
         return Descent.Reached(local, group, levels, rebases)
@@ -741,9 +728,9 @@ public class LocalHeddle private constructor(
      *
      * At each group down [leaf]'s lineage it seats the newborns and clamps the wakers against
      * [waiting], as that pick does, then delegates [reservation] down the lineage without picking.
-     * So it is never refused for supply or at a position ceiling: a seat or a clamp taken at a
-     * ceiling saturates there, and the charge lands as the plain [admit]'s does. The equivalence
-     * holds wherever that acquire would lease; where it would be refused, this still charges.
+     * So it is never refused for supply, and the charge lands as the plain [admit]'s does. The
+     * equivalence holds wherever that acquire would lease; where it would be refused, this still
+     * charges.
      *
      * Nor is it refused at a concurrency ceiling (see "Ceilings"), so with ceilings set the
      * equivalence covers only a [leaf] with no group at its ceiling on its lineage. It observes
@@ -800,24 +787,19 @@ public class LocalHeddle private constructor(
      * Reserve [amount] more for [lease], down the path it was opened on. Not a new pick.
      *
      * Returns [LeaseOutcome.PathDraining] when an edge of that path is no longer ACTIVE,
-     * [LeaseOutcome.SupplyExhausted] when the root holds less than [amount] and no capacity is
-     * reconciled, and [LeaseOutcome.PositionCeiling] when an edge of the path is at its position
-     * ceiling once [amount] is delegated. None of them changes anything.
+     * and [LeaseOutcome.SupplyExhausted] when the root holds less than [amount] and no capacity is
+     * reconciled. Neither changes anything.
      *
      * @throws IllegalArgumentException when [amount] is not in `1..`[MAX_RESERVATION].
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
-    public fun extend(lease: LeaseId, amount: Long): LeaseOutcome = atomically(keep = { it !is LeaseOutcome.PositionCeiling }) {
+    public fun extend(lease: LeaseId, amount: Long): LeaseOutcome = atomically {
         requireReservation("extend amount", amount)
         val current = open[lease] ?: return@atomically missing(lease)
         val base = ledger
         base.firstNotActive(current.path)?.let { return@atomically LeaseOutcome.PathDraining(it) }
         val funded = supplied(base, amount) ?: return@atomically LeaseOutcome.SupplyExhausted
-        val delegated = rebasedAfterCharge(delegateOrFail(funded, current.path, amount), current.path, waiting = null)
-        current.path.firstOrNull { delegated.isAtPositionCeiling(it) }?.let { edge ->
-            return@atomically LeaseOutcome.PositionCeiling(checkNotNull(delegated.record(edge)) { "path edge ${edge.value} has no record" }.parent)
-        }
-        ledger = delegated
+        ledger = rebasedAfterCharge(delegateOrFail(funded, current.path, amount), current.path, waiting = null)
         open[lease] = current.copy(lease = current.lease.copy(reserved = checkedAdd(current.lease.reserved, amount)))
         LeaseOutcome.Done(charged = 0L, overrun = 0L)
     }
@@ -911,7 +893,8 @@ public class LocalHeddle private constructor(
      * @throws IllegalArgumentException as [acquire] does: [reservation] out of range, or [eligible]
      *   not a subset of [waiting].
      * @throws ArithmeticException when a [WaitExplanation.BehindAtLevel] front does not fit an exact
-     *   [Rational], which can happen well below the position ceiling (see "Failure surface").
+     *   [Rational], whose numerator carries the least common multiple of the sibling weights'
+     *   denominators (see "Failure surface").
      * @sample us.tractat.kuilt.heddle.sampleExplainWait
      */
     public fun explain(
@@ -1213,7 +1196,7 @@ public class LocalHeddle private constructor(
             val stepped = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
             // An activation whose weight would put its parent's weight products out of Long, or make
             // the set too fine for one full lease: the ledger would take it, and every pick at that
-            // parent would then throw, or one under-charged lease would wedge it (#3313, #3353).
+            // parent would then throw, or one under-charged lease could carry a child past its ceiling (#3313, #3353).
             val overBudget = stepped != null && step is TopologyStep.Activate && !stepped.activationFitsTheBudget(step.edge)
             val next = if (overBudget) null else stepped
             if (overBudget) unfit += checkNotNull(stepped.record(step.edge)) { "an activation the budget refused has no record" }.parent
@@ -1302,8 +1285,8 @@ public class LocalHeddle private constructor(
 
     /**
      * Whether this engine rebases a busy parent before its positions reach their ceiling (#3329).
-     * Off only in a test's twin, to show a run reaches the ceiling without it and picks the same
-     * until then. Not engine state: a [restore] starts with it on.
+     * Off only in a test's twin, to show a run passes the ceiling without it and picks the same all
+     * the same. Not engine state: a [restore] starts with it on.
      */
     internal var rebaseForTest: Boolean = true
 
@@ -1535,9 +1518,6 @@ public class LocalHeddle private constructor(
 
         /** No pick could be made at [at]. */
         class Refused(val at: GroupId) : Descent
-
-        /** The pick at [at] would order a position at its ceiling, or its delegation would reach one. */
-        class Ceiling(val at: GroupId) : Descent
     }
 
     /** One level of a [Descent]: the pick at [parent] chose [edge], on [seated], the ledger with [parent]'s children seated. */
@@ -1561,8 +1541,8 @@ public class LocalHeddle private constructor(
         /**
          * The largest single reservation or extension: 2^44, about 1.8 × 10^13 cost units. A lease
          * that runs longer is [extend]ed, or charged its overrun at [complete], which this does not
-         * bound. It does not bound the service a parent hands down over its lifetime either; that
-         * ceiling depends on the children's weights (see "Failure surface" in the class KDoc).
+         * bound. It does not bound the service a parent hands down over its lifetime either; the
+         * ledger's `Long` counters do (see "Failure surface" in the class KDoc).
          *
          * It exists to keep [UNBOUNDED_TARGET] unbounded in practice. Every pick asks for
          * `UNBOUNDED_TARGET − outstanding` on an edge, so the edge goes on reading as wanting the

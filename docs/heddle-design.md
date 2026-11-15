@@ -773,35 +773,39 @@ edges nothing is divided: a weighted mean stays an unreduced sum of positions
 over a sum of weights, and two edges compare by integer cross-multiplication in
 128 bits. Only the two joins of §7.2 round, and both round up.
 
-**A position a pick orders has a ceiling, and at the ceiling it saturates
-(#3313).** The ceiling is `(Long.MAX_VALUE − 2⁴⁸) / w.denominator` ticks.
-Dividing by the denominator keeps a position's virtual time,
-`p · w.den / (G · w.num)`, in `Long`, for the public reads. The `2⁴⁸` is room for
-one largest-reservation deadline `p + q · G`.
-
-**Everything up to the effective position is wide, and only the effective
-position is narrowed (#3353).** The gauge stores its position absolute, wide,
-exact and uncapped. The raw position, the front, a wake clamp `front − raw`, the
-stored clamp and the effective position, raw plus clamp, are all computed in 128
+**A pick orders the full 128-bit position, so no position refuses it.** The
+gauge stores its position absolute, wide, exact and uncapped. The raw position,
+the front, a wake clamp `front − raw`, the stored clamp, the effective position,
+raw plus clamp, and the deadline `p + q · G` are all computed and compared in 128
 bits. The origin's share `⌊O · w · G⌋` can reach about 2¹³⁰ at budget-legal
 extreme weights, so it is a checked wide `mulDiv` that throws rather than wraps.
-Only the effective position is narrowed to the `Long` a pick orders, and that is
-where it saturates. Nothing absolute is ever capped: a cap on an absolute value
-turns into credit once the origin passes it. Saturating is a pure function of
-the view, so replicas still agree. What a saturated position loses is
-exactness, so the rule splits by call:
+Nothing absolute is ever capped: a cap on an absolute value turns into credit
+once the origin passes it. Until #3313 and #3353 a pick narrowed the effective
+position to a `Long`, refused with `PositionCeiling(parent)` at the ceiling, and
+a busy parent beside a starved child met it after about 65,000 leases of the
+largest size. The `PositionCeiling` arms are kept, unreturned, for the
+lifetime-counter limit below.
 
-- A call that **chooses** refuses. A pick at a parent with a child at its
-  ceiling, or one whose own delegation would take a child there, returns
-  `PositionCeiling(parent)` from `LocalHeddle.acquire` and `extend`. The call
-  changes nothing.
-- A call that **charges** lands. `admit` and `complete` keep the books exact,
-  and the position stays at the ceiling.
+**A position still has a ceiling, for the public reads (#3313).** The ceiling is
+`(Long.MAX_VALUE − 2⁴⁸) / w.denominator` ticks. Dividing by the denominator keeps
+a position's virtual time, `p · w.den / (G · w.num)`, in `Long`, for
+`virtualService` and its kin, which report the ceiling past it, the penalty
+side. The rebase below exists to keep positions inside it, so those reads stay
+exact; no pick depends on it.
+
+**What bounds a parent's life is the `Long` counters.** An edge's issuance and an
+epoch's mint are `Long`s, about 9.2 × 10¹⁸ units. The call whose delegation or
+mint would pass one throws `ArithmeticException`. On `LocalHeddle` that call
+changes nothing, a charging call included. `FairShareAllocator.schedule`, and so
+`HeddleNode.schedule`, writes each round on its own, so a throw in round `k > 1`
+keeps rounds `1..k−1`, which have already landed; a throw in the first round
+writes nothing.
+
 - **No credit leaks through.** Nothing is narrowed before the effective
   position, so no front, seat or clamp is taken against an understated value. A
   seat is stored at the exact front, past the ceiling if that is where it is. A
   clamp carries a waker the whole way up to the front, however far behind it
-  idled. The pick over either refuses (§10.5).
+  idled. The pick over either orders it exactly (§10.5).
 
 Left alone, a busy parent does reach it. Gross positions grow with lifetime
 service under the parent, about `2⁵⁷` units at the largest reservation and a
@@ -879,8 +883,8 @@ peer had not seen keeps a residue below one tick, on the penalty side. Neither
 the Quilter frames nor the control log carry a version: a 0.7.4 peer and a 0.7.5
 peer must not share a cluster.
 
-On the seven-lane `LocalHeddle` run of #3329, a twin with no rebase makes the
-same picks and then refuses; the rebasing engine runs 100,000 picks. A
+On the seven-lane `LocalHeddle` run of #3329, a twin with no rebase passes its
+ceiling and makes the same picks for all 100,000. A
 delegation that is not a pick (`admit`, `extend`, an overrun at `complete`)
 runs the same step at every parent on its path once its charge lands, bounded by
 the call's waiting set, or, when it has none, by the child it charged and the
@@ -888,10 +892,10 @@ children last seen demanding; one last seen idle is clamped when it next wakes. 
 call never refuses, so a parent with no step is simply left as it is.
 
 On a governed cluster of three peers under `MultiNodeRaftSim`, the same holds for
-`HeddleNode` (`HeddleAcceptanceTest`). A twin with no rebase makes the same picks and
-then answers `PositionCeiling`, and again on the next call, at grants of the largest
-reservation over four mixed weights. The rebasing cluster makes ten times as many,
-charging each lease below its reservation. One scheduling peer that gets exactly one
+`HeddleNode` (`HeddleAcceptanceTest`). A twin with no rebase passes its ceiling within
+about a hundred grants of the largest reservation over four mixed weights, and makes the
+same picks as the rebasing cluster for the whole supply, charging each lease below its
+reservation. One scheduling peer that gets exactly one
 grant per call picks as `LocalHeddle` does on every call of the run. A 60/30/10/1
 parent whose weight-1 child runs alone in bursts keeps granting. So does a weight-60
 newborn joining a busy weight-1 runner, seated level with it. And so does a restarted
@@ -901,21 +905,21 @@ across a partition, and a scheduler that restarts, cannot match a single engine.
 There the run checks instead that the peers converge and every minted unit is
 accounted for.
 
-**Where the ceiling is still reached.** These ways, and `PositionCeiling` answers
-each:
+**Where a parent still climbs past the ceiling.** These ways. The picks carry on
+exactly in each; only the public reads saturate:
 
 - A demanding child that is never served: each rebase carries it further below
-  zero until it sits at its floor, and there it holds `Δ` at zero, since no
-  whole step fits inside its window. `LocalHeddlePositionCeilingTest` rigs it.
+  zero, and since the rebase aims at the demanding children's weighted mean, the
+  child drags that mean down with it until no whole step fits beneath it and `Δ`
+  is held at zero. `LocalHeddlePositionCeilingTest` rigs it.
   A heavy child joining lighter ones no longer gets there (the window rule).
 - With `k` schedulers granting one child concurrently before their writes merge,
   the margin a child needs is `C − R ≥ k · H`. That is huge for coarse weights and
-  slim near the edge of the weight budget below. It is documented, not enforced:
-  keep denominator × schedulers under about 30,000 (#3458).
+  slim near the edge of the weight budget below (#3458).
 - In a `LocalHeddle` parent driven by both picks and plain `admit`s, a child a
   pick last saw demanding, and idle since, still bounds a charging call's `Δ`
   inside its own window until a pick sees it again: a never-served child in
-  another guise, which reaches its floor and holds the step there.
+  another guise, which drags the mean down and holds the step there.
 
 A child that is not demanding can sit as far below zero as the origin has
 risen, past `Long`. A pick never orders it: if it comes back demanding to an
@@ -945,8 +949,8 @@ guarantee on both engines. It is necessary, not sufficient, as the step term
 below shows.
 The rebase fires only once a child passes its `R`, so a child that an
 under-charged `complete` parks between `C − H` and `R` (`H = MAX_RESERVATION · G`)
-is never rebased, yet its next full lease passes `C`. `acquire` refuses and
-keeps nothing, so the parent wedges. The review measured `{1/30,721, 1/30,722}`:
+is never rebased, yet its next full lease passes `C`, where the reads saturate.
+Before picks were wide, `acquire` refused there for good. The review measured `{1/30,721, 1/30,722}`:
 one lease charged `1.172 · 10¹²` and every later acquire refused, while
 `1.1715 · 10¹²` ran. So the budget also asks, for every child `i` of the set,
 
@@ -969,11 +973,9 @@ edges closed before the upgrade, or a fresh log, because a replay refuses them.
 `LocalHeddle.restore` does not check the budget, so a restored parent over it
 keeps running, but a new sibling there is refused.
 
-Where `HeddleNode` still meets the ceiling, its `schedule` answers `ScheduleOutcome.PositionCeiling(parent)`. It
-checks the ceiling after it delegates, as `LocalHeddle` does: a grant whose
-delegation would carry its child to the ceiling is not made, and the round writes
-nothing. A call that granted before meeting the ceiling answers `Delegated`, and
-the next call answers the ceiling. `apply` keeps the weight products in range the
+`HeddleNode.schedule` meets no ceiling either: a grant past it is made, as
+`LocalHeddle` makes one, and `ScheduleOutcome.PositionCeiling` is not returned.
+`apply` keeps the weight products in range the
 same way: an activation whose weights would put its parent's `L`, `S`, `G · S` or
 `S · d` out of `Long`, or fail P1′, is refused with a `StepRefusal`. Where a topology act enters a
 replicated ledger the same rule is checked. The control log refuses a `Prepare`

@@ -96,8 +96,8 @@ public class LocalHeddleView internal constructor(
      * decides, and the head sets only what the lease holds: `max(reservation, head)`. A head below
      * [reservation] holds [reservation], since a lease cannot shrink.
      *
-     * The list ends when no waiting leaf is eligible, or at the first call that is refused, a
-     * `PositionCeiling` refusal included. When the acquire lands and its extend is the call
+     * The list ends when no waiting leaf is eligible, or at the first call that is refused. When the
+     * acquire lands and its extend is the call
      * refused, that pick is left out and the list ends there, even if the root could fund the next
      * leaf: the caller's lease would hold less than its job needs, and its loop stops at it.
      *
@@ -143,16 +143,17 @@ public class LocalHeddleView internal constructor(
      * concurrency ceiling ([WaitExplanation.AtCeiling], naming the one nearest the root), or the root
      * cannot fund [reservation]. Past those, the answer is the pick itself, run on a throwaway engine with the
      * wake memory, so a group back from idle is placed here exactly as the acquire would place
-     * it: [WaitExplanation.WouldBePickedNext] when the pick ends at [leaf],
-     * [WaitExplanation.PositionCeiling] when it is refused at a position ceiling on the way, and
-     * otherwise [WaitExplanation.BehindAtLevel] at the first group where it goes another way.
+     * it: [WaitExplanation.WouldBePickedNext] when the pick ends at [leaf], and otherwise
+     * [WaitExplanation.BehindAtLevel] at the first group where it goes another way.
      *
      * @throws IllegalArgumentException as [LocalHeddle.acquire] does: [reservation] out of range, or
      *   [eligible] not a subset of [waiting].
      * @throws ArithmeticException when a [WaitExplanation.BehindAtLevel] front does not fit an exact
-     *   [Rational], which can happen well below the position ceiling (see "Failure surface" on
-     *   [LocalHeddle]). Never on how far a child is from its parent's origin: a child a `cancel`
-     *   walked back below its floor reads at its floor, the penalty side (#3353).
+     *   [Rational], whose numerator carries the least common multiple of the sibling weights'
+     *   denominators (see "Failure surface" on [LocalHeddle]). Never on how far a child is from its
+     *   parent's origin: each position is read inside its window, so a child past its ceiling reads
+     *   at the ceiling and one a `cancel` walked back below its floor at the floor, the penalty side
+     *   (#3353).
      * @sample us.tractat.kuilt.heddle.sampleExplainWait
      */
     public fun explain(
@@ -176,7 +177,6 @@ public class LocalHeddleView internal constructor(
 
         val demands = trial.demands(base, waitingNow, eligibleNow, reservation)
         val descent = trial.descend(base, demands, eligibleNow, reservation)
-        if (descent is LocalHeddle.Descent.Ceiling) return WaitExplanation.PositionCeiling(descent.at)
         // An eligible leaf the pick can end at, with the root funded: the root's pick has a candidate
         // in the leaf's own top edge, and every pick below goes toward an eligible leaf.
         check(descent is LocalHeddle.Descent.Reached) { "no pick reached any leaf, though ${leaf.value} is eligible and reachable" }

@@ -20,10 +20,12 @@ import kotlin.test.assertTrue
  * lease in [PARTIAL_EVERY] is charged half its reservation, so returns are in play, and one step in
  * [UNREACHABLE_EVERY] also asks for a group no lease can end at, which is refused.
  *
- * A twin engine with the rebase switched off makes the same calls. It must refuse at the ceiling
- * inside the run, which is what proves the arm needs the rebase at all, and every pick it makes
- * before that must be the rebasing engine's pick: the rebase moves every competing child by the
- * same virtual time, so the order cannot change. Any divergence means the rebase is not exact.
+ * A twin engine with the rebase switched off makes the same calls. It must pass its ceiling inside
+ * the run, which is what proves the arm reaches the regime the rebase exists for, and every pick it
+ * makes must be the rebasing engine's pick, past the ceiling too: the rebase moves every competing
+ * child by the same virtual time, and a pick orders the full 128-bit position, so neither the
+ * rebase nor the ceiling can change the order. Any divergence means one of them is not exact. The
+ * twin used to refuse at its ceiling, and the comparison stopped there.
  *
  * Halfway through, the rebasing engine is persisted, encoded, decoded and restored, and the engine
  * it was taken from keeps running beside the restored one for [RESTORE_WINDOW] picks, which must
@@ -54,8 +56,8 @@ class LocalHeddleRebasePropertyTest {
         var restored = 0
         var rebases = 0
         var twinPicks = 0
-        var twinRefusedAt = -1
-        var rebasesBeforeTwinRefused = -1
+        var twinPassedAt = -1
+        var rebasesBeforeTwinPassed = -1
         var besidePicks = 0
         val divergences = ArrayList<String>()
         var highestShare = 0.0
@@ -64,7 +66,7 @@ class LocalHeddleRebasePropertyTest {
             val waiting = leaves.filter { random.nextBoolean() }.ifEmpty { listOf(leaves[random.nextInt(leaves.size)]) }.toSet()
             val partial = step % PARTIAL_EVERY == 0
             val askUnreachable = step % UNREACHABLE_EVERY == 0
-            val running = listOfNotNull(engine, beside, twin.takeIf { twinRefusedAt < 0 })
+            val running = listOfNotNull(engine, beside, twin)
             val outcomes = running.map { e ->
                 val unreachableOutcome = if (askUnreachable) e.acquire(waiting + unreachable, setOf(unreachable), startedAt = step.toLong()) else null
                 val outcome = try {
@@ -91,23 +93,23 @@ class LocalHeddleRebasePropertyTest {
                 besidePicks++
                 if (besidePicks == RESTORE_WINDOW) beside = null
             }
-            if (twinRefusedAt < 0) {
-                when (val twinOutcome = outcomes.last().second) {
-                    is AcquireOutcome.Acquired -> {
-                        twinPicks++
-                        if (twinOutcome.lease.leaf != outcome.lease.leaf && divergences.size < MAX_REPORTED) {
-                            divergences += "pick ${step + 1}: ${outcome.lease.leaf.value} against the twin's ${twinOutcome.lease.leaf.value}"
-                        }
+            when (val twinOutcome = outcomes.last().second) {
+                is AcquireOutcome.Acquired -> {
+                    twinPicks++
+                    if (twinOutcome.lease.leaf != outcome.lease.leaf && divergences.size < MAX_REPORTED) {
+                        divergences += "pick ${step + 1}: ${outcome.lease.leaf.value} against the twin's ${twinOutcome.lease.leaf.value}"
                     }
-                    is AcquireOutcome.PositionCeiling -> {
-                        twinRefusedAt = step
-                        rebasesBeforeTwinRefused = rebases + engine.rebasesForTest
-                    }
-                    else -> error("pick ${step + 1}: the twin answered $twinOutcome")
                 }
+                else -> error("pick ${step + 1}: the twin answered $twinOutcome")
             }
 
-            if (step % SAMPLE_EVERY == 0) highestShare = maxOf(highestShare, highestCeilingShare(engine))
+            if (step % SAMPLE_EVERY == 0) {
+                highestShare = maxOf(highestShare, highestCeilingShare(engine))
+                if (twinPassedAt < 0 && highestCeilingShare(twin) >= 1.0) {
+                    twinPassedAt = step
+                    rebasesBeforeTwinPassed = rebases + engine.rebasesForTest
+                }
+            }
             if (step == PICKS / 2) {
                 rebases += engine.rebasesForTest
                 val bytes = Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), engine.persist())
@@ -126,12 +128,13 @@ class LocalHeddleRebasePropertyTest {
             { assertEquals(PICKS / UNREACHABLE_EVERY, refusedAsUnreachable, "every ask for the unreachable group was refused") },
             { assertEquals(1, restored, "the run went through one persist and restore") },
             { assertEquals(RESTORE_WINDOW, besidePicks, "the engine it was taken from ran beside the restored one") },
-            // The rig, twice over: without the rebase the run reaches the ceiling, and the rebasing
-            // engine rebased before the twin got there, so the comparison below spans rebases.
-            { assertTrue(twinRefusedAt >= 0, "the twin, with no rebase, refused at its ceiling within $PICKS picks") },
-            { assertTrue(rebasesBeforeTwinRefused >= 1, "the engine rebased before the twin refused: $rebasesBeforeTwinRefused") },
-            { assertTrue(rebases > rebasesBeforeTwinRefused, "and kept rebasing after: $rebases in all") },
-            { assertEquals(twinRefusedAt, twinPicks, "the twin picked every step until it refused") },
+            // The rig, twice over: without the rebase the run passes the ceiling, well inside the
+            // run, and the rebasing engine rebased before the twin got there, so the comparison
+            // below spans both rebases and positions past the ceiling.
+            { assertTrue(twinPassedAt in 0 until PICKS / 2, "the twin, with no rebase, passed its ceiling in the first half: $twinPassedAt") },
+            { assertTrue(rebasesBeforeTwinPassed >= 1, "the engine rebased before the twin passed it: $rebasesBeforeTwinPassed") },
+            { assertTrue(rebases > rebasesBeforeTwinPassed, "and kept rebasing after: $rebases in all") },
+            { assertEquals(PICKS, twinPicks, "the twin picked every step, past its ceiling too") },
             { assertEquals(emptyList<String>(), divergences, "every pick matched the twin's, and the restored engine's its origin's") },
             // Rebased at a sixteenth of the ceiling, a position stays far below it.
             { assertTrue(highestShare < MAX_SHARE, "the highest effective position reached ${highestShare * 100}% of its ceiling") },
@@ -141,8 +144,7 @@ class LocalHeddleRebasePropertyTest {
     /**
      * Returns in earnest: every lease charged half its reservation or cancelled outright, at a
      * reservation large enough that rebases fire, over a run whose lifetime returns stay well below
-     * the bound #3360 tracks. Every step picks, and every pick matches a twin's until that twin, if
-     * ever, refuses.
+     * the bound #3360 tracks. Every step picks, and every pick matches a twin's that never rebases.
      */
     @Test
     fun leasesChargedBelowTheirReservationKeepPickingAcrossRebases() {
@@ -154,13 +156,13 @@ class LocalHeddleRebasePropertyTest {
         val lanes = RETURN_LANES.map { topology.groupId(it.first) }
         val random = Random(3360)
         var picks = 0
-        var twinRefusedAt = -1
+        var twinPicks = 0
         val divergences = ArrayList<String>()
 
         for (step in 0 until RETURN_PICKS) {
             val waiting = lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }.toSet()
             val cancel = step % 4 == 0
-            val running = listOfNotNull(engine, twin.takeIf { twinRefusedAt < 0 })
+            val running = listOf(engine, twin)
             val outcomes = running.map { e ->
                 val outcome = e.acquire(waiting, waiting, startedAt = step.toLong(), reservation = RETURN_RESERVATION)
                 if (outcome is AcquireOutcome.Acquired) {
@@ -171,20 +173,18 @@ class LocalHeddleRebasePropertyTest {
             val outcome = outcomes[0]
             check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
             picks++
-            if (twinRefusedAt < 0) {
-                when (val twinOutcome = outcomes[1]) {
-                    is AcquireOutcome.Acquired -> if (twinOutcome.lease.leaf != outcome.lease.leaf && divergences.size < MAX_REPORTED) {
-                        divergences += "pick ${step + 1}: ${outcome.lease.leaf.value} against the twin's ${twinOutcome.lease.leaf.value}"
-                    }
-                    is AcquireOutcome.PositionCeiling -> twinRefusedAt = step
-                    else -> error("pick ${step + 1}: the twin answered $twinOutcome")
-                }
+            val twinOutcome = outcomes[1]
+            check(twinOutcome is AcquireOutcome.Acquired) { "pick ${step + 1}: the twin answered $twinOutcome" }
+            twinPicks++
+            if (twinOutcome.lease.leaf != outcome.lease.leaf && divergences.size < MAX_REPORTED) {
+                divergences += "pick ${step + 1}: ${outcome.lease.leaf.value} against the twin's ${twinOutcome.lease.leaf.value}"
             }
         }
         assertAll(
             { assertEquals(RETURN_PICKS, picks, "every step made one pick") },
             { assertTrue(engine.rebasesForTest >= 1, "the run rebased: ${engine.rebasesForTest}") },
-            { assertEquals(emptyList<String>(), divergences, "every pick matched the twin's while it picked") },
+            { assertEquals(RETURN_PICKS, twinPicks, "and so did the twin") },
+            { assertEquals(emptyList<String>(), divergences, "every pick matched the twin's") },
         )
     }
 
@@ -194,7 +194,11 @@ class LocalHeddleRebasePropertyTest {
      * nothing brought down, so this lane met [AcquireOutcome.PositionCeiling] after 4,681 picks
      * (measured on the slice 2–4 base, JVM). The ceiling is now measured on the raw position,
      * net of returns and relative to the parent's origin, and the gross is stored wide (#3353), so
-     * the lane makes [RETURNED_LANE_PICKS] picks with no refusal.
+     * the lane makes [RETURNED_LANE_PICKS] picks with no refusal. No pick refuses now, so the peak is
+     * the witness: the gross passes the ceiling, and the effective position a pick reads stays below
+     * it. Either the net-of-returns read or the rebase holds it there alone. With the rebase off the
+     * raw position climbs one unit a pick, and with returns left out of the read the rebase brings
+     * the lane back down, so the peak arm reds only with both removed (21× its ceiling, JVM).
      */
     @Test
     fun aLaneThatReturnsAlmostAllOfEachReservationNeverReachesTheCeiling() {
@@ -206,17 +210,21 @@ class LocalHeddleRebasePropertyTest {
             .apply { reconcileCapacity(1L) }
         val a = topology.groupId("a")
         var picks = 0
+        var peak = 0.0
         repeat(RETURNED_LANE_PICKS) { step ->
             val outcome = engine.acquire(setOf(a), setOf(a), startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
             check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
             engine.complete(outcome.lease.id, actualCost = 1L)
             picks++
+            if (step % SAMPLE_EVERY == 0) peak = maxOf(peak, peakShare(engine))
         }
+        peak = maxOf(peak, peakShare(engine))
         val returned = checkNotNull(engine.snapshot().ledger.let { it.edge(checkNotNull(it.lineageOf(a)).last()) }).returned
         assertAll(
             { assertEquals(RETURNED_LANE_PICKS, picks, "the run made its own picks") },
             // The bound the old read met: returned · G at the ceiling of weight 3/7.
             { assertTrue(returned.timesWide(TICKS_PER_UNIT) > Int128.of(positionCeiling(Weight.of(3L, 7L))), "the rig: the lane returned past the old bound ($returned units)") },
+            { assertTrue(peak < 1.0, "the effective position, net of returns, stayed below the ceiling: $peak") },
         )
     }
 
@@ -225,7 +233,7 @@ class LocalHeddleRebasePropertyTest {
      * light lane alone for [WIDE_ALONE] picks, then a waiting set drawn afresh each pick, leases at [LocalHeddle.MAX_RESERVATION] charged half or
      * cancelled. Rebased on each lane's own grid, the light lane could hold the front at its
      * threshold, and a heavy lane waking to it landed past its own ceiling. The run counts its own
-     * picks and rebases.
+     * picks and rebases, and pins the peak effective position below the ceiling.
      */
     @Test
     fun aWideSpreadNeverReachesTheCeiling() {
@@ -239,6 +247,7 @@ class LocalHeddleRebasePropertyTest {
         val lanes = listOf("w60", "w30", "w10", "w1").map { topology.groupId(it) }
         val random = Random(3313)
         var picks = 0
+        var peak = 0.0
         repeat(WIDE_PICKS) { step ->
             // The light lane alone first, long enough to climb toward its own threshold; then any set.
             val waiting = if (step < WIDE_ALONE) setOf(lanes[3]) else lanes.filter { random.nextBoolean() }.ifEmpty { listOf(lanes[random.nextInt(lanes.size)]) }.toSet()
@@ -246,10 +255,12 @@ class LocalHeddleRebasePropertyTest {
             check(outcome is AcquireOutcome.Acquired) { "pick ${step + 1}: expected a lease, got $outcome" }
             if (step % 4 == 0) engine.cancel(outcome.lease.id) else engine.complete(outcome.lease.id, actualCost = LocalHeddle.MAX_RESERVATION / 2)
             picks++
+            peak = maxOf(peak, peakShare(engine))
         }
         assertAll(
             { assertEquals(WIDE_PICKS, picks, "every step made one pick") },
             { assertTrue(engine.rebasesForTest >= 1, "the rig: the run rebased (${engine.rebasesForTest})") },
+            { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
         )
     }
 
@@ -258,7 +269,7 @@ class LocalHeddleRebasePropertyTest {
      * (#3353 review, item I). Only a pick used to rebase, so this lane's position climbed by
      * [LocalHeddle.MAX_RESERVATION] per lease until `extend` refused with `PositionCeiling`. A
      * charging call now runs the same origin step at every parent on its path. The run counts its
-     * own leases and rebases.
+     * own leases and rebases, and pins the peak effective position below the ceiling.
      */
     @Test
     fun aParentDrivenOnlyByChargingCallsNeverReachesTheCeiling() {
@@ -270,23 +281,35 @@ class LocalHeddleRebasePropertyTest {
         val a = topology.groupId("a")
         var leases = 0
         var extended = 0
+        var peak = 0.0
         repeat(CHARGED_LEASES) { step ->
             val admitted = engine.admit(a, startedAt = step.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
             check(admitted is AcquireOutcome.Acquired) { "lease ${step + 1}: expected a lease, got $admitted" }
             if (step % 3 == 0) {
                 val out = engine.extend(admitted.lease.id, LocalHeddle.MAX_RESERVATION)
-                check(out !is LeaseOutcome.PositionCeiling) { "lease ${step + 1}: extend refused at the ceiling" }
+                check(out is LeaseOutcome.Done) { "lease ${step + 1}: extend answered $out" }
                 extended++
             }
             engine.complete(admitted.lease.id, actualCost = LocalHeddle.MAX_RESERVATION)
             leases++
+            peak = maxOf(peak, peakShare(engine))
         }
         assertAll(
             { assertEquals(CHARGED_LEASES, leases, "every step admitted and completed one lease") },
             { assertTrue(extended > 0, "the rig: leases were extended") },
             { assertTrue(engine.rebasesForTest >= 1, "the rig: the parent rebased (${engine.rebasesForTest})") },
+            { assertTrue(peak > 0.0 && peak < 1.0, "the peak effective position stayed below the ceiling: $peak") },
         )
     }
+
+    /**
+     * The highest effective position among the root's children in [engine], as a share of each
+     * one's own ceiling: the position a pick reads, net of returns, plus its wake clamp
+     * ([FairShareAllocator.peakPositionFraction]). Unlike [highestCeilingShare] it leaves the gross
+     * out, which a lane that returns most of each lease carries past its ceiling by design.
+     */
+    private fun peakShare(engine: LocalHeddle): Double =
+        engine.allocator.peakPositionFraction(engine.snapshot().ledger, engine.root) { Demand.NONE }
 
     /**
      * The largest share of its own ceiling any edge's position reads at in [engine]: its gross

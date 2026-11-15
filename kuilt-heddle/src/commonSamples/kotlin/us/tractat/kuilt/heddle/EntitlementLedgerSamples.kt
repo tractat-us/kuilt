@@ -99,9 +99,8 @@ internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
         is ScheduleOutcome.Delegated -> "delegated ${outcome.grants}"
         // Nothing to move toward any advertised demand: an idle tree, or no holdings at the root.
         ScheduleOutcome.NothingToDelegate -> "idle"
-        // A child's position is at its ceiling, so no pick orders exactly. A busy parent rebases long
-        // before this. A demanding child that is never served still reaches it, and so can several schedulers granting one child at once.
-        is ScheduleOutcome.PositionCeiling -> "stuck at ${outcome.parent.value}: serve or close the child that waits"
+        // Not returned today: a pick orders the full position. Kept for the lifetime counters.
+        is ScheduleOutcome.PositionCeiling -> "stuck at ${outcome.parent.value}"
         // The active children's weights put a pick's sums out of Long, as gossip can merge. Close one of them.
         is ScheduleOutcome.WeightBudget -> "stuck at ${outcome.parent.value}: close a child, its weights cannot be summed"
         // Only a governed node has a write gate; a static node never answers this.

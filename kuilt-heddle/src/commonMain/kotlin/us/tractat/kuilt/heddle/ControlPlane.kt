@@ -268,7 +268,8 @@ public sealed interface ControlConflict {
      * A [ControlCommand.Prepare] or [ControlCommand.Activate] that would leave [parent]'s children
      * with a weight set a pick cannot do arithmetic on: a product of their weights would leave
      * `Long`, and every pick at [parent] would then throw, or the set is so fine that one full lease
-     * can carry a child past its ceiling, so one under-charged lease would wedge [parent] (#3353).
+     * can carry a child past its ceiling before a rebase is due, where the ledger's virtual-time
+     * reads saturate (#3353).
      * Any denominator above 30,719 is, at any lease size, since the rule is sized for the largest
      * lease, [LocalHeddle.MAX_RESERVATION]; staying below it is necessary, not sufficient. A
      * `Prepare` is refused when [edge]'s own weight fails alone; an `Activate` when it fails beside the children already

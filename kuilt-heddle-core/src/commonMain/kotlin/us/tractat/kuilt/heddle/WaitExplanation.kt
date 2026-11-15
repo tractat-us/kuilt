@@ -65,9 +65,9 @@ public sealed interface WaitExplanation {
     }
 
     /**
-     * The next acquire's pick reaches [parent], which has a child at its position ceiling, or its
-     * delegation would take one there, so it is refused whoever is waiting below. The same arm as
-     * [AcquireOutcome.PositionCeiling].
+     * Not returned today, as [AcquireOutcome.PositionCeiling] is not: no position refuses the next
+     * acquire's pick, since it orders the full 128-bit position. The same arm as
+     * [AcquireOutcome.PositionCeiling], kept with it.
      */
     public data class PositionCeiling(public val parent: GroupId) : WaitExplanation {
         override val kind: Kind get() = Kind.POSITION_CEILING

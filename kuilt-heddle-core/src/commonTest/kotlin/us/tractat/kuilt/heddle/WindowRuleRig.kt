@@ -40,10 +40,12 @@ internal class WindowRuleRig(
         val origin: Int128,
         /** The lane each lease went to, by name. */
         val leaves: List<String>,
+        /** The highest effective position any lane reached after a step, as a fraction of its ceiling. */
+        val peakShare: Double,
     ) {
         override fun toString(): String =
             "steps=$steps picks=$picks refusals=$refusals firstRefusal=$firstRefusal picksAfterRefusal=$picksAfterRefusal " +
-                "reloads=$reloads rebases=$rebases floorLandings=$floorLandings origin=$origin"
+                "reloads=$reloads rebases=$rebases floorLandings=$floorLandings origin=$origin peakShare=$peakShare"
     }
 
     /** Replace the lanes with [lanes]: a lane left out is retired, a new name is a newborn. */
@@ -69,6 +71,7 @@ internal class WindowRuleRig(
         var picksAfterRefusal = 0
         var reloads = 0
         val leaves = ArrayList<String>()
+        var peakShare = 0.0
         for (step in 0 until steps) {
             if (before(step)) reloads++
             val set = waiting(step, names).mapTo(HashSet()) { topology.groupId(it) }
@@ -89,8 +92,9 @@ internal class WindowRuleRig(
                 }
                 else -> error("the rig: step $step answered $out")
             }
+            peakShare = maxOf(peakShare, engine.allocator.peakPositionFraction(engine.snapshot().ledger, engine.root) { Demand.NONE })
         }
-        return Result(steps, picks, refusals, firstRefusal, picksAfterRefusal, reloads, engine.rebasesForTest, engine.floorLandingsForTest, engine.snapshot().ledger.origin(engine.root), leaves)
+        return Result(steps, picks, refusals, firstRefusal, picksAfterRefusal, reloads, engine.rebasesForTest, engine.floorLandingsForTest, engine.snapshot().ledger.origin(engine.root), leaves, peakShare)
     }
 
     companion object {

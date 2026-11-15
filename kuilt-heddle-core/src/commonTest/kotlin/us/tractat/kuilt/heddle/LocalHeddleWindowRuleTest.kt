@@ -55,18 +55,23 @@ class LocalHeddleWindowRuleTest {
     }
 
     /**
-     * `{1, 1, 1, 1}` and a weight-57,344 waker: a twin on the rule before refuses 50 steps from step
-     * 69, one waking burst, and the window rule refuses none. Measured on this tree with the rule
-     * before switched back on, not on the base, which also lacks the raise before the pick.
+     * `{1, 1, 1, 1}` and a weight-57,344 waker: a twin on the rule before carries a position past its
+     * ceiling within one waking burst, and the window rule keeps every one inside. The twin used to
+     * refuse 50 steps from step 69 there; picks are wide now, so it leases every step all the same,
+     * and the window rule's remaining job is to keep the public reads exact.
      */
     @Test
     fun aHeavyWakerBesideFourLightsIsNeverRefused() {
         fun run(windowRule: Boolean) = WindowRuleRig(four + ("heavy" to Weight.of(57_344L)), windowRule)
             .run(500, waiting = WindowRuleRig.randomWaker(Random(3354), idle = 200, burst = 50))
         val before = run(windowRule = false)
+        val windowed = run(windowRule = true)
         assertAll(
-            { assertTrue(before.refusals > 0, "the rig: the rule before refuses this row, $before") },
-            { assertNeverRefused(run(windowRule = true), heavyPicked = "heavy") },
+            { assertTrue(before.peakShare >= 1.0, "the rig: the rule before passes the ceiling on this row, $before") },
+            { assertEquals(0, before.refusals, "and is no longer refused there, $before") },
+            { assertEquals(before.steps, before.picks, "it leases every step, $before") },
+            { assertNeverRefused(windowed, heavyPicked = "heavy") },
+            { assertTrue(windowed.peakShare < 1.0, "the window rule keeps every position inside its window, $windowed") },
         )
     }
 
