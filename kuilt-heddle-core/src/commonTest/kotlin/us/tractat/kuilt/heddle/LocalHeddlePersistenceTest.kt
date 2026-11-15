@@ -365,11 +365,14 @@ class LocalHeddlePersistenceTest {
      * as an engine that never persisted. Picks, outcomes and books all match.
      *
      * The second arm restores the same snapshot with the wake memory forgotten, which is a
-     * restarted scheduler, and it picks the same too. That is the restart rule (design §7.2): `b`
-     * is seated and demanding and the forgetful engine has never observed it, so it is a waker and
-     * is clamped back to the front its stored offset had put it at. Before the rule the forgetful
-     * engine kept `b` at its raw position and handed it back its idle credit. So for a clamped
-     * waker the memory no longer carries the match; for a returner it still does, and
+     * restarted scheduler. The call that first observes `b` finds it seated and demanding, and the
+     * forgetful engine has never observed it, so by the restart rule (design §7.2) it is a waker,
+     * clamped to the same offset the memory held, and it takes no more picks than it would have.
+     * Before the rule the forgetful engine kept `b` at its raw position and handed it back its idle
+     * credit. Forgetting is not free, though: every seated child found demanding is clamped, and
+     * since all of them are joining, each comes back level with the furthest-ahead one, so a child
+     * that was owed service loses it, and a returner is clamped rather than moved by its parent's
+     * clock. Here `b` was the one behind and `a` the one ahead, so nothing was owed.
      * [aSnapshotTakenWhileAChildIsAwayKeepsItsPlace] is the witness that the memory matters.
      */
     @Test
@@ -377,27 +380,38 @@ class LocalHeddlePersistenceTest {
         val (reference, open) = wakerScenario()
         val persisted = wakerScenario().first.persist()
         val offset = wakeOffsetOf(persisted.allocatorMemory, b)
+        val forgotten = LocalHeddleSnapshot(
+            persisted.epoch, persisted.ledger, AllocatorMemory.EMPTY, persisted.totalSlots, persisted.open, persisted.lastApplied,
+        )
 
         val restored = LocalHeddle.restore(decoded(encode(persisted)), policy, epoch = 1L)
-        val forgetful = LocalHeddle.restore(
-            LocalHeddleSnapshot(
-                persisted.epoch, persisted.ledger, AllocatorMemory.EMPTY, persisted.totalSlots, persisted.open, persisted.lastApplied,
-            ),
-            policy,
-            epoch = 1L,
-        )
+        val forgetful = LocalHeddle.restore(forgotten, policy, epoch = 1L)
         val expected = continuation(reference, open)
         val actual = continuation(restored, open)
         val forgot = continuation(forgetful, open)
         val bPicks = { picks: List<Any> -> picks.count { it == b } }
+        // The continuation's calls one at a time on a second forgetful engine, up to the one that first observes b.
+        val probe = LocalHeddle.restore(forgotten, policy, epoch = 1L)
+        val calls = listOf<(LocalHeddle) -> Unit>(
+            { it.complete(open[0].id, 1L, waiting = emptySet()) },
+            { it.complete(open[1].id, 3L, waiting = emptySet()) },
+            { h -> h.lease(setOf(a, b), startedAt = 200L).also { h.complete(it.id, 1L, waiting = emptySet()) } },
+        )
+        val observedAt = calls.indexOfFirst { call ->
+            call(probe)
+            probe.persist().allocatorMemory.demandingObserved[edgeTo(b)] != null
+        }
+        val firstSight = probe.persist().allocatorMemory
         assertAll(
             { assertTrue(offset > Int128.ZERO, "the rig: b's wake offset is non-zero at persist time, $offset") },
             { assertEquals(true, persisted.allocatorMemory.demandingObserved[edgeTo(b)], "and b was last seen waiting") },
             { assertEquals(20, expected.count { it is GroupId }, "the rig: 20 picks ran after the restore") },
             { assertEquals(expected, actual, "the same picks and outcomes as the engine that never persisted") },
             { assertEquals(books(reference), books(restored), "and the same books") },
-            { assertEquals(expected, forgot, "an engine that forgot its memory picks the same: the restart rule clamps b again") },
-            { assertEquals(bPicks(expected), bPicks(forgot), "so it hands b back no idle credit") },
+            { assertTrue(observedAt >= 0, "the rig: the forgetful engine observed b within the continuation's first calls") },
+            { assertEquals(true, firstSight.demandingObserved[edgeTo(b)], "the forgetful engine first saw b demanding") },
+            { assertEquals(offset, wakeOffsetOf(firstSight, b), "and re-clamped it to the offset the memory held") },
+            { assertTrue(bPicks(forgot) <= bPicks(expected), "so it hands b back no idle credit: ${bPicks(forgot)} against ${bPicks(expected)}") },
         )
     }
 
@@ -753,6 +767,20 @@ class LocalHeddlePersistenceTest {
         check(honest in GOLDEN_FORMAT_1_RICH) { "the rig: the remainder is where this test expects it" }
         val out = LocalHeddle.decode(GOLDEN_FORMAT_1_RICH.replace(honest, honest.replace("\"denominator\":1", "\"denominator\":2")), Json)
         assertTrue(out is RestoreResult.Corrupt && "at denominator 2" in out.reason, "expected Corrupt naming the remainder, got $out")
+    }
+
+    /**
+     * An edge reads a missing wake offset as zero, so an allocator stores no zero offset and a
+     * snapshot holding one spells a state a second way. It is refused at decode as corrupt, a typed
+     * outcome, not thrown. The rich golden held one until the elision, `batch/y`'s.
+     */
+    @Test
+    fun aZeroWakeOffsetIsCorrupt() {
+        val honest = "\"wakeOffsets\":{\"root/acme/batch@1:1#0\":{\"low\":32}"
+        check(honest in GOLDEN_FORMAT_2_RICH) { "the rig: the offsets are where this test expects them" }
+        val zero = honest.replace("{\"root/acme/batch@1:1#0\"", "{\"root/acme/batch/y@2:1#0\":{},\"root/acme/batch@1:1#0\"")
+        val out = LocalHeddle.decode(GOLDEN_FORMAT_2_RICH.replace(honest, zero), Json)
+        assertTrue(out is RestoreResult.Corrupt && "root/acme/batch/y@2:1#0" in out.reason, "expected Corrupt naming the zero offset, got $out")
     }
 
     /** An honest fold is never negative, so a snapshot whose fold is, in either of its two maps, is corrupt. */

@@ -83,7 +83,8 @@ public class FairShareAllocator(
     /**
      * The wake clamps this peer computed, wide, in ticks of each edge's own grid (#3353). A zero
      * offset is absent: an edge reads an absent one as zero, so storing it would spell one state
-     * two ways. Written only through [writeWakeOffset].
+     * two ways. [AllocatorMemory] refuses one, so a loaded memory holds none, and every write
+     * goes through [writeWakeOffset].
      */
     private val wakeOffsets = HashMap<AttachmentId, Int128>()
     private val demandingObserved = HashMap<AttachmentId, Boolean>()
@@ -143,7 +144,7 @@ public class FairShareAllocator(
      * throwaway that picks exactly as the live one would next.
      */
     public constructor(self: ReplicaId, policy: PolicyConfig, memory: AllocatorMemory) : this(self, policy) {
-        for ((edge, offset) in memory.wakeOffsets) writeWakeOffset(edge, offset)
+        wakeOffsets.putAll(memory.wakeOffsets)
         demandingObserved.putAll(memory.demandingObserved)
         clocks.putAll(memory.clocks)
         served.putAll(memory.served)
