@@ -148,21 +148,22 @@ class FairShareAllocatorTest {
     }
 
     /**
-     * The wake detector fires on an observed idle→demand **transition**, never on first sight.
+     * The restart rule (design §7.2): a seated child this allocator has never observed, and finds
+     * demanding, is a waker, clamped to the front like any other.
      *
      * Peer B seats e3 at the origin and runs e1 and e2 to 100 each on its own holdings; A merges
-     * that and meets all three for the first time, e3 already 100 behind. Treating first sight as a
-     * wake would make e1 and e3 joiners, clamp e3 to the front over the one non-joiner, and split
-     * A's round between them instead of paying e3 its deficit.
+     * that and meets all three for the first time, e3 already 100 behind. On A, e1 and e3 are both
+     * first seen demanding, so both are joiners. No child outside them is demanding, so the front
+     * is the furthest-ahead child, 100, and e3 is clamped level with e1: A's 100 units split between
+     * them, where an unclamped e3 would have taken all 100. A first sighting carries no evidence of
+     * how long the child idled, and leaving it its raw position would let a child that idled under
+     * another scheduler, or before a restart, keep the whole gap as credit. Losing its lag once per
+     * allocator that first sees it is the bounded side (§10.6, #3472).
      *
-     * **e2 is load-bearing.** It is the non-joiner that holds that front at 100. Run e1 alone on B
-     * instead and the only non-joiner sits idle at the origin: the wrongly-detected wake clamps e3
-     * to 0, which moves nothing, and the test stays green with first sight counted as a wake. The
-     * node-level twin, `HeddleNodeTest.firstObservationOfADemandingEdgeIsNotTreatedAsAWake`, was
-     * written that way and could not see the mutation until #3177 gave it the same e2.
+     * The node-level twin is `HeddleNodeTest.aFirstObservationOfASeatedDemandingEdgeIsAWake`.
      */
     @Test
-    fun aFirstObservationIsNotAWake() {
+    fun aFirstObservationOfASeatedDemandingChildIsAWake() {
         val a = ReplicaId("a")
         val b = ReplicaId("b")
         val onB = flatLedger(mapOf(a to 100L, b to 200L))
@@ -172,13 +173,13 @@ class FairShareAllocatorTest {
         assertAll(
             { assertEquals(100L, issued(onA, e1), "A sees e1's run") },
             { assertEquals(100L, issued(onA, e2), "and e2's") },
-            { assertEquals(gaugeOfUnits(0L, 0L), onA.current.gauge(e3), "and e3 seated at the origin") },
+            { assertEquals(gaugeOfUnits(0L, 0L), onA.current.gauge(e3), "and e3 seated at the origin, 100 behind") },
         )
 
         FairShareAllocator(a, policy).schedule(root, onA, earmarked = 0L, demandOf(e1 to hungry, e3 to hungry))
         assertAll(
-            { assertEquals(100L, issued(onA, e3), "an unclamped first sight honours e3's deficit in full") },
-            { assertEquals(100L, issued(onA, e1), "and e1, 100 ahead, takes none of A's grants") },
+            { assertEquals(50L, issued(onA, e3), "e3, first seen demanding, is clamped level with e1 and takes half") },
+            { assertEquals(150L, issued(onA, e1), "and e1 takes the other half") },
         )
     }
 

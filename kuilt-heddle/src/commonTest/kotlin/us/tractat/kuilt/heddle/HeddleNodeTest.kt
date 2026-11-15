@@ -925,33 +925,30 @@ class HeddleNodeTest {
     }
 
     /**
-     * The clamp fires on an observed idle→demand **transition**, never on the first sight of an
-     * edge: a first observation carries no evidence the child was ever idle, and forfeiting a
-     * real deficit accrued under some *other* peer's scheduling would be a penalty this peer has
-     * no standing to impose. Seating a genuinely new generation is the seat bump's job
-     * ([EntitlementLedger.seat], #1688/#1752), not the clamp's.
+     * The restart rule through a whole node (design §7.2): a seated edge this peer has never
+     * observed, and finds demanding, is a waker, clamped to the front like any other. A first
+     * sighting carries no evidence of how long the child idled, so leaving it its raw position
+     * would let it keep, as credit, a gap that built up under another peer's scheduling or before a
+     * restart. It loses its lag instead, once per peer that first sees it: the bounded side
+     * (§10.6, #3472).
      *
      * **Two peers are load-bearing here, not scenery** (issue #1752). Since the seat moved into
      * the replicated [Gauge], a *locally* first-sighted edge is seated by this peer's own bump at
-     * the front it is joining, so it can never be behind — the deficit under test is only
-     * reachable when the seat was written **elsewhere**, at a time when the front was lower. So
-     * peer B seats `e3` at the origin and then runs `e1` and `e2` up to 100 each on its own
-     * holdings; peer A merges that and meets all three for the first time, `e3` already 100
-     * behind. If A treated first sight as a wake, `e1` and `e3` would both be joiners, `e3` would
-     * be clamped forward to the front over the one non-joiner — `e2`, at 100 — and A's grants
-     * would then alternate between `e1` and `e3` instead of going to the child that is owed them.
+     * the front it is joining, so it can never be behind — the gap under test is only reachable
+     * when the seat was written **elsewhere**, at a time when the front was lower. So peer B seats
+     * `e3` at the origin and then runs `e1` and `e2` up to 100 each on its own holdings; peer A
+     * merges that and meets all three for the first time, `e3` already 100 behind. On A, `e1` and
+     * `e3` are both first seen demanding, so both are joiners; with no other child demanding, the
+     * front is the furthest-ahead child, at 100, and `e3` is clamped level with `e1`. A's 100
+     * units then split between them, where an unclamped `e3` would have taken all of them.
      *
-     * **`e2` is load-bearing, and so is its bounded target** (issue #3177). It is the non-joiner
-     * that holds the front away from the origin; without it the only non-joiner sits idle at 0, the
-     * wrongly-detected wake clamps `e3` to 0, which moves nothing, and this test stays green with
-     * first sight counted as a wake — which is how it stood until #3177. And demand is replicated
-     * here, so B's advertisement of `e2` is live on A: an unbounded target would leave `e2`
-     * demanding there, make it a third first-sighted "waker", leave no non-joiner at all, and null
-     * the front. `targetOutstanding = 100` lets B fill it exactly, so on A it is active but not
-     * competing. The core twin is `FairShareAllocatorTest.aFirstObservationIsNotAWake`.
+     * Demand is replicated here, so B's advertisement of `e2` is live on A. `targetOutstanding = 100`
+     * lets B fill it exactly, so on A it is active but not competing, and the front A reads before
+     * its call is the two competing edges' mean (the rig). The core twin is
+     * `FairShareAllocatorTest.aFirstObservationOfASeatedDemandingChildIsAWake`.
      */
     @Test
-    fun firstObservationOfADemandingEdgeIsNotTreatedAsAWake() = runTest(
+    fun aFirstObservationOfASeatedDemandingEdgeIsAWake() = runTest(
         StandardTestDispatcher(),
         timeout = TEST_WEDGE_BACKSTOP,
     ) {
@@ -988,15 +985,15 @@ class HeddleNodeTest {
             },
         )
 
-        // A's first sight of e3, 100 behind. Unclamped, every one of A's 100 units is owed to it.
+        // A's first sight of e3, 100 behind. Unclamped, every one of A's 100 units would go to it.
         a.advertise(e1, hungrier)
         a.advertise(behind.id, hungrier)
-        // The rig's other half: e2 is filled, so on A only e1 (100) and e3 (0) compete. Were e2
-        // still demanding this would read 200/3 and the mutation would have no non-joiner to use.
+        // The rig's other half: e2 is filled, so on A only e1 (100) and e3 (0) compete, and before
+        // A's call, with no wake memory, they read 100 apart.
         assertEquals(
             Rational.of(50L),
             a.parentVirtualTime(root),
-            "only e1 and e3 compete on A — e2 is active but filled, the non-joiner off the origin",
+            "only e1 and e3 compete on A — e2 is active but filled",
         )
         a.schedule(root)
         h.pump()
@@ -1005,17 +1002,16 @@ class HeddleNodeTest {
         assertAll(
             {
                 assertEquals(
-                    100L,
+                    50L,
                     ledger.edge(behind.id)!!.issued,
-                    "an unclamped first observation must honour e3's real deficit in full",
+                    "e3, first seen demanding, is clamped level with e1 and takes half of A's units",
                 )
             },
             {
                 assertEquals(
-                    100L,
+                    150L,
                     ledger.edge(e1)!!.issued,
-                    "…and e1, 100 ahead, takes none of A's grants — a clamp would have levelled them " +
-                        "and split the round",
+                    "…and e1 takes the other half",
                 )
             },
         )
