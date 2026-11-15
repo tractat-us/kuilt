@@ -1580,7 +1580,7 @@ internal class SeamRoom(
             is AdmitMessage.Reject -> {
                 if (_role.value == SessionRole.Joiner) {
                     // A Reject means one of two things depending on where we are:
-                    //  - resume in flight  → resolve the parked resume as WindowClosed (existing behavior);
+                    //  - resume in flight  → resolve the parked resume as Refused, carrying the host's code (#2364);
                     //  - initial join      → the host refused admission; fail loudly (#1178) instead of
                     //                         swallowing it and leaving join()'s consumer hanging.
                     val hadPendingResume = resumeMachine?.rejectFlight(msg.reason, msg.code) ?: false
