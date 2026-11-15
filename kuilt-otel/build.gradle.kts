@@ -4,6 +4,9 @@ plugins {
 }
 
 kotlin {
+    // The log exporter raises a recovered log's clock past ids it could not read (#3410), through
+    // Rga entry points :kuilt-crdt keeps behind @CrdtInternalApi.
+    compilerOptions { optIn.add("us.tractat.kuilt.crdt.CrdtInternalApi") }
     sourceSets {
         commonMain.dependencies {
             api(project(":kuilt-crdt"))

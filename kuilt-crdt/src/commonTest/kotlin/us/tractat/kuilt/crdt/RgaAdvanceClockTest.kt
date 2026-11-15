@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
  * Pins [Rga.advanceClock] and [Rga.seqHighWater]: a state rebuilt without some of the ops its
  * replica minted can be moved past them, so it never mints one of their ids again (#3410).
  */
-@OptIn(ExperimentalSerializationApi::class)
+@OptIn(ExperimentalSerializationApi::class, CrdtInternalApi::class)
 class RgaAdvanceClockTest {
 
     private val me = ReplicaId("a")

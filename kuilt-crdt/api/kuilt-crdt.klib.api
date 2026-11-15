@@ -6,6 +6,10 @@
 // - Show declarations: true
 
 // Library unique name: <us.tractat.kuilt:kuilt-crdt>
+open annotation class us.tractat.kuilt.crdt/CrdtInternalApi : kotlin/Annotation { // us.tractat.kuilt.crdt/CrdtInternalApi|null[0]
+    constructor <init>() // us.tractat.kuilt.crdt/CrdtInternalApi.<init>|<init>(){}[0]
+}
+
 final enum class us.tractat.kuilt.crdt/FugueSide : kotlin/Enum<us.tractat.kuilt.crdt/FugueSide> { // us.tractat.kuilt.crdt/FugueSide|null[0]
     enum entry Left // us.tractat.kuilt.crdt/FugueSide.Left|null[0]
     enum entry Right // us.tractat.kuilt.crdt/FugueSide.Right|null[0]

@@ -238,6 +238,9 @@ public final class us/tractat/kuilt/crdt/CountMinSketch$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public abstract interface annotation class us/tractat/kuilt/crdt/CrdtInternalApi : java/lang/annotation/Annotation {
+}
+
 public final class us/tractat/kuilt/crdt/DDSketch : us/tractat/kuilt/crdt/Quilted {
 	public static final field Companion Lus/tractat/kuilt/crdt/DDSketch$Companion;
 	public static final field DEFAULT_MAX_INDEXED_VALUE D

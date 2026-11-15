@@ -640,6 +640,7 @@ internal fun sampleRgaDropWindow() {
  * rebuilt without those ops back to it before minting again.
  */
 @Suppress("unused")
+@OptIn(CrdtInternalApi::class)
 internal fun sampleRgaAdvanceClock() {
     val a = ReplicaId("A")
 
