@@ -155,7 +155,7 @@ class LocalHeddleRebaseTest {
         val out = engine.acquire(setOf(b, n), setOf(b, n), startedAt = 2L)
         val ledger = engine.snapshot().ledger
         val nEdge = engine.edgeOf(n)
-        val nAt = ledger.gauge(nEdge).rawTicksAt(ledger.baseIssuance(nEdge), ledger.edge(nEdge)?.returned ?: 0L, heavy, ledger.origin(root))
+        val nAt = ledger.gauge(nEdge).rawTicksAt(ledger.baseIssuance(nEdge), ledger.edge(nEdge)?.returned ?: 0L, heavy, ledger.origin(engine.root))
         assertAll(
             { assertEquals(landingsBefore + 1, engine.floorLandingsForTest, "the rig: one joiner landed at its floor") },
             { assertEquals(Int128.of(positionFloor(heavy)), nAt, "n sits at its floor") },
