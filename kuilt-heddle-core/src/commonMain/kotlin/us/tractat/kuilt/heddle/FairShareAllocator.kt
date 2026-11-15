@@ -806,7 +806,16 @@ public class FairShareAllocator(
         parent: GroupId,
         demand: (AttachmentId) -> Demand,
     ): Rational? =
-        if (childWeightsFit(ledger, parent)) HeddlePolicy.front(policyEdges(ledger, parent, demand)) else null
+        if (childWeightsFit(ledger, parent)) HeddlePolicy.front(policyEdges(ledger, parent, demand).map(::heldAtFloor)) else null
+
+    /**
+     * [edge] read no lower than its [positionFloor], for a diagnostic (#3353): a child a `cancel`
+     * walked back past its floor reads at it, the penalty side, so the read cannot throw on it.
+     */
+    private fun heldAtFloor(edge: PolicyEdge): PolicyEdge {
+        val below = Int128.of(positionFloor(edge.record.weight)) - HeddlePolicy.effectiveTicksWide(edge)
+        return if (below > Int128.ZERO) edge.copy(offsetTicks = edge.offsetTicks + below) else edge
+    }
 
     /**
      * [edge]'s effective virtual service as a pick at [parent] would read it in [ledger]: its
@@ -816,7 +825,7 @@ public class FairShareAllocator(
     internal fun effectiveVirtualService(ledger: EntitlementLedger, parent: GroupId, edge: AttachmentId): Rational? =
         policyEdges(ledger, parent, demand = { Demand.NONE })
             .firstOrNull { it.record.id == edge }
-            ?.let { ticksToVirtual(HeddlePolicy.effectiveTicks(it), it.record.weight) }
+            ?.let { readVirtual(HeddlePolicy.effectiveTicksWide(it), it.record.weight) }
 
     /**
      * The highest effective position among [parent]'s active children in [ledger], each as a
@@ -992,9 +1001,26 @@ public class FairShareAllocator(
     }
 
     /**
-     * One patch seating each of [unseated] at [front], each on its own grid
-     * ([VirtualTime.ticksForWide]), written absolute: `⌊O · w · G⌋ + ⌈V · w · G⌉` for the parent's
-     * origin `O` in [s], wide and exact (#3353). [EntitlementLedger.seatAtWide] refuses an edge that already carries a
+     * Where a joiner of weight [w] lands, relative to its parent's origin: [front] on its own grid,
+     * `⌈V · w · G⌉`, or its [positionFloor] when the front is below that (#3353, the window rule).
+     * The floor arm is never below the front, so it can only cost the joiner a turn. It is reached
+     * when the demanding children stand below the origin on average, which a rebase that aims at
+     * their front leaves behind once the one ahead stops asking; on a heavy child's grid the front
+     * is then far below zero. The penalty is `max(0, O − C/(w · G) − F)` in virtual time, about one
+     * lease for each lighter sibling a peer has served past the joiner: a lost turn, not starvation.
+     */
+    private fun landing(front: VirtualTime, w: Weight): Int128 {
+        val at = front.ticksForWide(w)
+        if (!windowRuleForTest) return at
+        val floor = Int128.of(positionFloor(w))
+        if (at >= floor) return at
+        floorLandingsForTest++
+        return floor
+    }
+
+    /**
+     * One patch seating each of [unseated] at [front], each on its own grid ([landing]), written
+     * absolute: `⌊O · w · G⌋ + ⌈V · w · G⌉` for the parent's origin `O` in [s], wide and exact (#3353). [EntitlementLedger.seatAtWide] refuses an edge that already carries a
      * gauge, so an id whose seat arrived between the front being read and this patch being built is
      * simply skipped rather than re-seated.
      *
@@ -1010,8 +1036,9 @@ public class FairShareAllocator(
         val gauges = LinkedHashMap<AttachmentId, Gauge>()
         for (id in unseated.sorted()) {
             val record = s.record(id) ?: continue
-            // Absolute: the origin this peer sees, plus the front, both on the newborn's own grid (#3353).
-            val absolute = originTicks(s.origin(record.parent), record.weight) + front.ticksForWide(record.weight)
+            // Absolute: the origin this peer sees, plus the front, both on the newborn's own grid (#3353),
+            // the front held at the newborn's floor ([landing]).
+            val absolute = originTicks(s.origin(record.parent), record.weight) + landing(front, record.weight)
             val seat = s.seatAtWide(id, absolute) ?: continue
             gauges[id] = checkNotNull(seat.delta.gauge(id)) { "a seat patch for ${id.value} carries no gauge" }
         }
@@ -1093,7 +1120,7 @@ public class FairShareAllocator(
      * [remainder] those ticks ran past its parent's clock, for its next return to take off; `null`
      * when the shift landed exactly.
      */
-    private class Shift(val ticks: Int128, val remainder: ShiftRemainder?)
+    private class Shift(val ticks: Int128, val remainder: ShiftRemainder?, val floored: Boolean = false)
 
     /**
      * How far each child at [parent] that would come back by the clock this round would move
@@ -1163,7 +1190,15 @@ public class FairShareAllocator(
         // ⌈owed / (CLOCK_GRID · d)⌉ in two exact steps, since CLOCK_GRID · d can pass a Long.
         val ticks = wide(mulDiv(wide(mulDiv(owed, 1L, CLOCK_GRID, Rounding.CEILING), clock, w), 1L, d, Rounding.CEILING), clock, w)
         val past = wide(mulDiv(wide(mulDiv(ticks, CLOCK_GRID, 1L, Rounding.FLOOR), clock, w), d, 1L, Rounding.FLOOR), clock, w) - owed
-        return Shift(maxOf(Int128.ZERO, ticks), if (past == Int128.ZERO) null else ShiftRemainder(past, d))
+        val remainder = if (past == Int128.ZERO) null else ShiftRemainder(past, d)
+        val clocked = maxOf(Int128.ZERO, ticks)
+        // A returner lands no lower than its floor, as a seat or a clamp does (#3353, the window rule).
+        // The remainder is the clock's alone: what the floor added is penalty, and is not carried.
+        if (windowRuleForTest) {
+            val toFloor = Int128.of(positionFloor(w)) - HeddlePolicy.effectiveTicksWide(edge)
+            if (toFloor > clocked) return Shift(toFloor, remainder, floored = true)
+        }
+        return Shift(clocked, remainder)
     }
 
     /** [value], or an [ArithmeticException] naming the clock read when it overflowed 128 bits. */
@@ -1179,6 +1214,7 @@ public class FairShareAllocator(
         for (edge in edges) {
             val id = edge.record.id
             val shift = shifts[id] ?: continue
+            if (shift.floored) floorLandingsForTest++
             wakeOffsets[id] = edge.offsetTicks + shift.ticks
             departures.remove(id)
             val remainder = shift.remainder
@@ -1262,7 +1298,8 @@ public class FairShareAllocator(
             // Wide, both sides (#3353): a waker idle since long before the origin was raised sits far
             // below its siblings, and a clamp narrowed before it is taken would leave it there.
             val computed = HeddlePolicy.clampTicks(
-                frontTicks = front.ticksForWide(weight),
+                // Held at the waker's floor ([landing], #3353): never below the front.
+                frontTicks = landing(front, weight),
                 rawTicks = HeddlePolicy.rawTicks(edge),
                 sleeperCredit = policy.sleeperCredit,
             )
