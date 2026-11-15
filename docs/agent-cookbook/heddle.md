@@ -56,6 +56,54 @@ unused part back, and reports any overrun, which is never refused.
     check(picks.count { it == heavy } in 19..21)
 ```
 
+The whole loop in one place, from the admin's file to a restart:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleFairShareQueue -->
+```kotlin
+    // The admin's file: web gets three parts to mobile's one, and forks are attached as they open.
+    val text = """
+        {"root": "farm", "children": [
+          {"type": "lane", "name": "web", "weight": "3"},
+          {"type": "lane", "name": "mobile"},
+          {"type": "group", "name": "forks", "template": {"maxConcurrent": 1}}
+        ]}
+    """
+    val parsed = Topology.from(Json.decodeFromString<TopologyDocument>(text))
+    // Invalid would carry every problem in the file, each with its address, for the admin to fix.
+    check(parsed is TopologyParse.Valid)
+    val farm = parsed.topology
+    val policy = LocalPolicy(defaultReservation = 3L)
+    // The epoch is a boot counter you persist and raise on every start.
+    val heddle = LocalHeddle.fromTopology(farm, policy, epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 4L)
+
+    // A contributor opens a fork while the program runs.
+    check(heddle.attach(listOf("forks"), "ana", generation = 1L).refusals.isEmpty())
+    val web = farm.groupId("web")
+    val mobile = farm.groupId("mobile")
+    val ana = farm.attachedChildId(listOf("forks"), "ana")
+
+    // Each free slot: lease it, run the work, charge what it really cost.
+    val queued = setOf(web, mobile, ana)
+    val first = heddle.acquire(waiting = queued, eligible = queued, startedAt = 0L)
+    check(first is AcquireOutcome.Acquired)
+    check(heddle.complete(first.lease.id, actualCost = 4L) is LeaseOutcome.Done)
+    val running = (heddle.acquire(queued, queued, startedAt = 4L) as AcquireOutcome.Acquired).lease
+    val lost = (heddle.acquire(queued, queued, startedAt = 4L) as AcquireOutcome.Acquired).lease
+
+    // Under the scheduling lock, persist. Encode and store the text exactly as it comes.
+    val stored = Json.encodeToString(LocalHeddleSnapshot.serializer(), heddle.persist())
+
+    // After the restart: decode, restore under the raised counter, and settle what did not survive.
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored)
+    val restored = LocalHeddle.restore(decoded.snapshot, policy, epoch = 1L)
+    val orphan = restored.reconcileLeases(live = setOf(running.id), now = 10L).orphaned.single()
+    check(orphan.lease == lost)
+    check(restored.complete(orphan.lease.id, orphan.defaultSettlement) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(restored.complete(running.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+```
+
 Cost is time, in your own unit. `LocalPolicy.defaultReservation` is the estimate a lease
 reserves when you pass none; pass a per-lease `reservation` when you know better. `extend`
 reserves more for a lease that runs long, and `cancel` closes one and charges nothing.
@@ -367,6 +415,29 @@ and `acquire` returns `NothingEligible` when every eligible leaf is capped. `adm
 and `complete` are never refused by a ceiling, and lowering one preempts nothing. A reload that
 changes only ceilings changes no edge.
 
+On a group with a template, the two ceilings stack: the template's caps each attached child, and
+the group's caps them all together. `explain` names whichever one holds a child back:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleTemplateCeiling -->
+```kotlin
+    val ci = draft("ci") {
+        group("repos", maxConcurrent = 2) { template(maxConcurrent = 1) }
+        lane("nightly")
+    }
+```
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleTemplateCeiling -->
+```kotlin
+    // `a` runs one job, its own ceiling.
+    check((heddle.acquire(setOf(a), setOf(a), startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf == a)
+    check(heddle.explain(a, waiting = all, eligible = all) == WaitExplanation.AtCeiling(a, limit = 1L))
+    // `b` runs one too, which puts the group at its ceiling of two: `c` waits on the group.
+    check((heddle.acquire(setOf(b), setOf(b), startedAt = 0L) as AcquireOutcome.Acquired).lease.leaf == b)
+    check(heddle.explain(c, waiting = all, eligible = all) == WaitExplanation.AtCeiling(ci.groupId("repos"), limit = 2L))
+    // So the next slot goes to the nightly lane, however much the repositories have queued.
+    check((heddle.acquire(all, all, startedAt = 1L) as AcquireOutcome.Acquired).lease.leaf == nightly)
+```
+
 In a config file, `maxConcurrent` beside a group with a template caps all its attached children
 together, and `maxConcurrent` inside the template caps each one:
 
@@ -453,6 +524,20 @@ does.
     check(view.entitlement(light, waiting = queued, totalSlots = 3L) == Rational.ONE)
 ```
 
+The view takes each lane's queue of estimates as the engine does:
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleSnapshotPreviewQueues -->
+```kotlin
+    // On the admin screen: each lane's queued builds by their estimates in minutes, the next one first.
+    val queues = mapOf(web to listOf(3L, 12L, 3L, 3L), mobile to listOf(3L, 3L, 3L))
+    val decoded = LocalHeddle.decode(stored, Json)
+    check(decoded is RestoreResult.Restored)
+    val view = decoded.snapshot.view(policy)
+    val both = setOf(web, mobile)
+    check(view.previewPicks(queues, eligible = both) == listOf(web, mobile, web, mobile, web, web, mobile))
+    check(view.previewPicks(queues, eligible = both) == heddle.previewPicks(queues, eligible = both))
+```
+
 ## Charging work started elsewhere
 
 **Intent:** someone started a job by hand, or another scheduler placed it, and it must still be
@@ -462,13 +547,22 @@ open a lease at the leaf without a pick and are never refused for supply or at a
 the work is already running; a shortfall at the root is minted. Settle the lease with
 `complete` as usual.
 
-<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleBuildFarm -->
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleAdmitExternal -->
 ```kotlin
-    // Someone started a mobile build by hand. Admit it: no pick, but it is charged like any other.
-    // Naming who else is waiting keeps the scheduler's view of the queue as a pick would leave it.
-    val byHand = heddle.admit(mobile, waiting = both, startedAt = 99L)
+    // No capacity is reconciled, so there is nothing to hand out; an admitted build is charged anyway.
+    val both = setOf(web, mobile)
+    check(heddle.acquire(both, both, startedAt = 0L) == AcquireOutcome.SupplyExhausted)
+    val byHand = heddle.admit(mobile, waiting = both, startedAt = 0L)
     check(byHand is AcquireOutcome.Acquired)
-    check(heddle.complete(byHand.lease.id, actualCost = 4L) == LeaseOutcome.Done(charged = 4L, overrun = 1L))
+
+    // Mobile is now at its ceiling of one, and a second build started by hand is still charged.
+    val another = heddle.admit(mobile, waiting = both, startedAt = 1L)
+    check(another is AcquireOutcome.Acquired)
+    check(heddle.complete(another.lease.id, actualCost = 5L) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+
+    // A group with a template and nothing attached is not somewhere a build can run.
+    val forks = farm.groupId("forks")
+    check(heddle.admit(forks, startedAt = 2L) == AcquireOutcome.NoLiveLineage(forks))
 ```
 
 **Pass `waiting` when your work is always started elsewhere.** The plain `admit` observes nothing,
@@ -578,6 +672,47 @@ included; `Stale` is one from another epoch. On a draining path `extend` is refu
 `complete` still settles: the reservation is charged at the leaf, and an overrun at the deepest
 group still reached through live edges.
 
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleRefusals -->
+```kotlin
+    // A ceiling of 0 pauses a lane: with only it eligible for this slot, there is nobody to pick.
+    val all = setOf(live, paused, retiring)
+    check(heddle.acquire(waiting = all, eligible = setOf(paused), startedAt = 0L) == AcquireOutcome.NothingEligible)
+    check(heddle.explain(paused, waiting = all, eligible = all) == WaitExplanation.AtCeiling(paused, limit = 0L))
+
+    // A reload removes `retiring` while its lease runs: the extend is refused, the complete settles.
+    val lease = (heddle.acquire(setOf(retiring), setOf(retiring), startedAt = 0L) as AcquireOutcome.Acquired).lease
+    val without = draft("pool") {
+        lane("live")
+        lane("paused", maxConcurrent = 0)
+    }
+    check(heddle.apply(without, generation = 1L).refusals.single() is StepRefusal.Draining)
+    check(heddle.extend(lease.id, amount = 3L) is LeaseOutcome.PathDraining)
+    check(heddle.complete(lease.id, actualCost = 3L) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+
+    // Settled once, the id is unknown to this engine; after a restart it is from an older epoch.
+    check(heddle.complete(lease.id, actualCost = 3L) == LeaseOutcome.Unknown)
+    val restarted = LocalHeddle.restore(heddle.persist(), policy, epoch = 1L)
+    check(restarted.complete(lease.id, actualCost = 3L) == LeaseOutcome.Stale(currentEpoch = 1L))
+
+    // Keep every weight's denominator at or below 30,719. A finer one is refused when it is
+    // applied, and the rest of the reload lands.
+    val finer = draft("pool") {
+        lane("live")
+        lane("paused", maxConcurrent = 0)
+        lane("fine", Weight.of(1, 30_720))
+        lane("coarse", Weight.of(1, 2))
+    }
+    val refused = restarted.apply(finer, generation = 2L).refusals.single()
+    check(refused is StepRefusal.Refused && refused.child == finer.groupId("fine"))
+    val coarse = finer.groupId("coarse")
+    check(restarted.acquire(setOf(coarse), setOf(coarse), startedAt = 10L) is AcquireOutcome.Acquired)
+```
+
+`PositionCeiling` is not in the sample, and not faked: a busy parent is rebased long before a
+child nears its ceiling, so no short honest run reaches it. Branch on it like the others; it
+means a demanding child is never served, or that a plain `admit` rebased over a child last seen
+demanding and now idle, so serve or close the child that waits.
+
 **What throws.** A bad argument throws `IllegalArgumentException`: a reservation or extension
 outside `1..LocalHeddle.MAX_RESERVATION` (2^44 cost units), an `eligible` set that is not a
 subset of `waiting`, a negative `actualCost`, a topology whose root is not the engine's, an
@@ -587,7 +722,11 @@ would leave `Long` throws `ArithmeticException` rather than wrapping; the diagno
 well before any ceiling, since they answer in exact `Rational`s: `explain`'s `BehindAtLevel`
 fronts, whose numerator carries the least common multiple of the sibling weights' denominators,
 and `entitlement`. `IllegalStateException` is left for a ledger conflict the engine did not
-create, such as two live edges into one group, a split record or a cycle on a lease's path.
+create, such as two live edges into one group, a split record or a cycle on a lease's path, and
+for one call a consumer can reach: `LocalHeddle.fromTopology` over a tree whose boot `apply`
+refuses a child, such as a weight with a denominator above 30,719. To get that refusal as a value
+instead, boot from a coarser tree and `apply` the finer one. A typed answer at boot is tracked
+by [#3461](https://github.com/tractat-us/kuilt/issues/3461).
 
 **The position ceiling.** Each child's progress is a count of sixteenths of a unit, stored exactly
 in 128 bits and read for a pick, net of what it returned, as a `Long` with a ceiling. A busy

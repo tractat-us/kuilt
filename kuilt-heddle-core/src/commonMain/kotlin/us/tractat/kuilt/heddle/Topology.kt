@@ -124,6 +124,7 @@ public data class Topology(public val root: String, public val children: List<No
      * @property maxConcurrent the most leases open on **each** attached child at once, not on all
      *   of them together; `null` for no ceiling, `0` to pause every one. Never negative. The
      *   group's own [Group.maxConcurrent] caps them all together.
+     * @sample us.tractat.kuilt.heddle.sampleTemplateCeiling
      */
     @Serializable
     public data class ChildTemplate(

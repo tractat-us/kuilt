@@ -106,7 +106,11 @@ public data class LocalHeddleState(
     public val allocatorMemory: AllocatorMemory,
 )
 
-/** What [LocalHeddle.acquire] did. */
+/**
+ * What [LocalHeddle.acquire] did.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleRefusals
+ */
 public sealed interface AcquireOutcome {
     /** A lease was opened. */
     public data class Acquired(public val lease: Lease) : AcquireOutcome, AdmitOutcome
@@ -192,7 +196,11 @@ public data class LeaseReconciliation(
     }
 }
 
-/** What [LocalHeddle.extend], [LocalHeddle.complete] or [LocalHeddle.cancel] did. */
+/**
+ * What [LocalHeddle.extend], [LocalHeddle.complete] or [LocalHeddle.cancel] did.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleRefusals
+ */
 public sealed interface LeaseOutcome {
     /**
      * The operation applied. [charged] is the cost charged to the lease's leaf and [overrun] how
@@ -439,9 +447,11 @@ public sealed interface LeaseOutcome {
  * the engine, or a ledger conflict the engine did not create, such as two live inbound edges into
  * one group, a divergent record, or a cycle on a lease's path (#1737). [apply] never leaves one on
  * an open lease's path: before it swaps a reload in, it checks that every open lease's path is its
- * leaf's one live lineage.
+ * leaf's one live lineage. [fromTopology] throws it too, when its boot [apply] refuses a child of
+ * a well-formed topology, such as a weight with a denominator above 30,719.
  *
  * @sample us.tractat.kuilt.heddle.sampleLocalLease
+ * @sample us.tractat.kuilt.heddle.sampleFairShareQueue
  */
 public class LocalHeddle private constructor(
     /** The tree's root: the group supply is minted at and every pick starts from. */
@@ -703,7 +713,7 @@ public class LocalHeddle private constructor(
      * lineage of active edges to the root. The ledger is then unchanged.
      *
      * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION].
-     * @sample us.tractat.kuilt.heddle.sampleBuildFarm
+     * @sample us.tractat.kuilt.heddle.sampleAdmitExternal
      */
     public fun admit(leaf: GroupId, startedAt: Long, reservation: Long = policy.defaultReservation): AdmitOutcome = atomically {
         requireReservation("reservation", reservation)
@@ -746,7 +756,7 @@ public class LocalHeddle private constructor(
      *
      * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION], or
      *   [leaf] is not in [waiting].
-     * @sample us.tractat.kuilt.heddle.sampleBuildFarm
+     * @sample us.tractat.kuilt.heddle.sampleAdmitExternal
      */
     public fun admit(
         leaf: GroupId,
@@ -1547,7 +1557,11 @@ public class LocalHeddle private constructor(
          * generation 0. So the ids it starts with are exactly [Topology.lower]'s, and there is no
          * second, unfloored way to build a tree.
          *
+         * @throws IllegalStateException when that boot [apply] refuses a child, as it refuses a
+         *   weight set too fine for one full lease (see "Failure surface"): boot from a coarser tree
+         *   and [apply] the finer one to have the refusal reported instead.
          * @sample us.tractat.kuilt.heddle.sampleLocalLease
+         * @sample us.tractat.kuilt.heddle.sampleFairShareQueue
          */
         public fun fromTopology(topology: Topology, policy: LocalPolicy, epoch: Long): LocalHeddle {
             val engine = LocalHeddle(

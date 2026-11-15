@@ -80,4 +80,19 @@ class HeddleSamplesRunTest {
 
     @Test
     fun snapshotViewHolds() = sampleSnapshotView()
+
+    @Test
+    fun fairShareQueueHolds() = sampleFairShareQueue()
+
+    @Test
+    fun admitExternalHolds() = sampleAdmitExternal()
+
+    @Test
+    fun refusalsHold() = sampleRefusals()
+
+    @Test
+    fun snapshotPreviewQueuesHolds() = sampleSnapshotPreviewQueues()
+
+    @Test
+    fun templateCeilingHolds() = sampleTemplateCeiling()
 }
