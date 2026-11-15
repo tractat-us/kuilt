@@ -43,8 +43,8 @@ and demanding.
 ### Scheduling without a network
 
 **Intent:** run the fair-share loop in one process — hand a budget down to the children that
-want it, 3:1 by weight, with newcomers and wakers seated level rather than given a head start —
-without a `Seam`, Raft or coroutines.
+want it, 3:1 by weight, with newcomers seated level and a child back from idle where it left
+off, neither given a head start — without a `Seam`, Raft or coroutines.
 **Primitive:** `FairShareAllocator.schedule(parent, ledger, earmarked, demand)`
 (`:kuilt-heddle-core`) over a `LedgerCell`: the latest ledger plus one write step that decides
 each grant on the state it lands on. For a single process the cell is a `var`. It is the same
@@ -282,11 +282,13 @@ work queued and `eligible` the ones this slot can run. A waiting leaf that canno
 keeps its claim, so it is not treated as returning from idle when a slot it can run comes up. Work
 no pick could reach counts as idle, even when you list it as waiting: a leaf behind an edge a
 reload is closing, or a group that has gained a child. Its subtree builds up no credit while it is
-cut off, so when it can be reached again it starts level with its siblings. A new leaf starts level
-with its siblings too, rather than owed their whole history. `extend` reserves
+cut off: when it can be reached again it comes back as far ahead of or behind its siblings as it was
+when it was cut off, moved by how far its parent's net-service clock ran meanwhile. A child this
+engine never saw stop is clamped level with its siblings instead. A new leaf starts level with its
+siblings, rather than owed their whole history. `extend` reserves
 more for a lease that runs long, `cancel` charges nothing, `admit(leaf, startedAt)` charges work
 another scheduler already started (`admit(leaf, waiting, startedAt)` also observes the waiting set
-as the equivalent `acquire` would, so a sibling returning from idle is clamped), and `previewPicks`
+as the equivalent `acquire` would, so a sibling returning from idle comes back where a pick would put it), and `previewPicks`
 answers "who goes next" without changing anything. Give it each leaf's queue of job estimates, head
 first, and each pick does what your loop would: `acquire` at the slot's reservation, then `extend`
 to the winner's head when that is larger. `startedAt` is stored on the lease and never read by a
@@ -377,7 +379,7 @@ in your own loop beside the engine: set `maxConcurrent` on that group or lane, o
 `template` to cap each attached child on its own (`0` pauses it). A pick skips every leaf
 beneath a node whose open leases have reached it, draining ones
 included, so the slot goes to a sibling, and the capped node counts as idle at its parent: it banks
-no credit and wakes clamped. `explain` tells such a leaf `AtCeiling(group, limit)`, naming the
+no credit, and comes back as far ahead of its siblings as it was when it reached the ceiling. `explain` tells such a leaf `AtCeiling(group, limit)`, naming the
 capped node nearest the root, before any supply check; `entitlement` owes it nothing; `previewPicks`
 counts the leases it opens against the ceiling; and `acquire` returns `NothingEligible` when every
 eligible leaf is capped. `admit`, `extend` and `complete` are never refused, and lowering a ceiling
@@ -536,14 +538,17 @@ settles at its estimate:
   Most callers send `defaultReservation`, so its size picks the side. Aim it at a typical job, and
   pass a per-lease `reservation` when history gives a better one. This is tracked by
   [#3239](https://github.com/tractat-us/kuilt/issues/3239).
-- **A lease that straddles a wake hands idle credit back.** A lane with a lease still running but
-  nothing in `waiting` is observed idle, so its next demand is a wake and is clamped to the front,
-  with that lease counted at its full reservation. When the lease then completes under its
-  reservation, the remainder walks the lane's virtual time back below the clamp; a `cancel` walks
-  back all of it. The credit is at most `reserved / weight` per such lease, and only a lane whose
-  queue empties while its own work still runs can earn it. `sleeperCredit = 0` does not prevent it.
-  This is tracked by [#3238](https://github.com/tractat-us/kuilt/issues/3238). `HeddleNode` does not take
-  this path: its `complete` keeps an unused earmark at the leaf.
+- **A cancel is charged nothing, and a sibling's refund leaks across a gap.** A lane whose queue
+  empties while its own lease runs is observed idle and comes back by its parent's net-service
+  clock. That reads the lease's own refund correctly: an over- or under-reserved lease that
+  straddles the gap is charged what it used. But a `cancel` returns the whole reservation, with or
+  without a gap, and a lane that cancels the job ending each burst gains share (+0.030 on the slot
+  probe). And a *sibling's* reservation counts in the clock at the weight of everyone asking, while
+  its refund lands at the weight of whoever is still asking, so a lane away across a sibling's refund
+  comes back owed more than it is, and takes extra turns. The two are tracked by
+  [#3238](https://github.com/tractat-us/kuilt/issues/3238) and
+  [#3239](https://github.com/tractat-us/kuilt/issues/3239). `HeddleNode`'s `complete` keeps an unused
+  earmark at the leaf, so its refunds do not take this path.
 
 ### Run it over a network — reserve, run, charge once
 
