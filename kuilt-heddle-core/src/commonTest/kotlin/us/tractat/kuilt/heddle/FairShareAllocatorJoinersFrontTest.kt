@@ -29,7 +29,7 @@ class FairShareAllocatorJoinersFrontTest {
         var l = shapedLedger(root, children)
         l = l.piece(l.mint(MintId("m"), root, LOCAL, supply).delta)
         val seats = mapOf(w1 to 800L, w2 to 160L, w3 to 480L).filterKeys { it in children }
-        return l.piece(EntitlementLedger.of(gauges = seats.map { (edge, ticks) -> edge.id to Gauge(ticksToVirtual(ticks, Weight.ONE), 0L) }.toMap()))
+        return l.piece(EntitlementLedger.of(gauges = seats.map { (edge, ticks) -> edge.id to gaugeAt(Int128.of(ticks), 0L) }.toMap()))
     }
 
     /** An allocator that has seen every one of [wakers] idle. */

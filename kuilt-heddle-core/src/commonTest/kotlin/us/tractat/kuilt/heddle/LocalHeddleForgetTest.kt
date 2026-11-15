@@ -1,6 +1,7 @@
 package us.tractat.kuilt.heddle
 
 import kotlinx.serialization.json.Json
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -284,8 +285,8 @@ class LocalHeddleForgetTest {
             val target = 2 * (positionCeiling(Weight.ONE) / 16)
             h.reshapeForTest { l ->
                 val gauge = checkNotNull(l.gauge(edge))
-                val floorTicks = target - (l.baseIssuance(edge) - gauge.folded) * TICKS_PER_UNIT
-                l.piece(EntitlementLedger.of(gauges = mapOf(edge to Gauge(ticksToVirtual(floorTicks, Weight.ONE), gauge.folded))))
+                val positionTicks = target - (l.baseIssuance(edge) - gauge.folded) * TICKS_PER_UNIT
+                l.piece(EntitlementLedger.of(gauges = mapOf(edge to gaugeAt(Int128.of(positionTicks), gauge.folded))))
             }
             val rebasesBefore = h.rebasesForTest
             check(h.complete(h.lease(setOf(ids[1]), reservation = 1L).id, 1L) is LeaseOutcome.Done)
