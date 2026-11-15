@@ -21,6 +21,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -501,15 +502,19 @@ public abstract class DeviceKeyStoreConformanceSuite {
      * [DeviceKeyStore.grants] and [DeviceKeyStore.keepGrant] throw an [Exception], nothing writes the
      * record while it is out of reach, and once the medium can read again the held grant is intact.
      *
-     * The other half of [corruptGrantsAreDroppedNotFatal], and the case a locked iPhone reaches: a file
-     * under Data Protection cannot be opened, while its directory still takes a new file. A store that
-     * answered "no grants" for a failed read would then keep a new grant by writing a record holding
-     * only that grant, over every grant the device held.
+     * The other half of [corruptGrantsAreDroppedNotFatal]. An iPhone reaches it after a restart, before
+     * its first unlock, when the grants file's protection class keeps it closed; a permission the
+     * process lacks reaches it on any platform. Where the medium refuses the read but would still take
+     * a new record, a store that answered "no grants" for a failed read would keep a new grant by
+     * writing a record holding only that grant, over every grant the device held.
      *
      * The rig must fire: its probe reads the record straight off the medium, bypassing the store, and
-     * the property requires that read to fail. The grant offered during the fault is newer than the
-     * held one, so a store that wrote it anyway leaves a different record behind, and the read after
-     * the restore reds as well as the rig's own count of writes.
+     * the property requires that read to fail. It must also leave the medium writable: its write probe
+     * keeps a sibling record through the same backend, in the same place, and the property requires
+     * that write to succeed, since a medium that refused it would refuse the mistaken rewrite too. The
+     * grant offered during the fault is newer than the held one, so a store that wrote it anyway leaves
+     * a different record behind, and the read after the restore reds as well as the rig's own count of
+     * writes.
      */
     @Test
     public fun unreadableGrantsAreRefusedNotRewritten(): TestResult = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -526,11 +531,13 @@ public abstract class DeviceKeyStoreConformanceSuite {
 
                 val rig = fixture.makeGrantsUnreadable()
                 var probeFailure: Throwable? = null
+                var writeFailure: Throwable? = null
                 var readFailure: Throwable? = null
                 var keepFailure: Throwable? = null
-                var rewritten = true // the restore below always answers
+                val rewritten: Boolean
                 try {
                     probeFailure = thrownBy { rig.probe() }
+                    writeFailure = thrownBy { rig.probeWrite() }
                     readFailure = thrownBy { fixture.open { }.grants() }
                     keepFailure = thrownBy { fixture.open { }.keepGrant(newer) }
                 } finally {
@@ -541,6 +548,12 @@ public abstract class DeviceKeyStoreConformanceSuite {
                 assertAll(
                     { assertEquals(listOf(held), control, "precondition: the grant was kept before the fault") },
                     { assertNotNull(probeFailure, "rig: a read straight off the medium fails while the grants are unreadable") },
+                    {
+                        assertNull(
+                            writeFailure,
+                            "rig: the medium still takes a new record while the grants are unreadable, or a mistaken rewrite could not land; got $writeFailure",
+                        )
+                    },
                     {
                         assertTrue(
                             readFailure is Exception,
@@ -728,9 +741,9 @@ public sealed interface DeviceKeyStoreFixture {
      *   permission it lacks, a file system loop, a Keychain locked before first unlock — and says how
      *   to put it back; see [UnreadableKey].
      * @param makeGrantsUnreadable puts the stored grants record out of the store's reach without
-     *   damaging it — a file the process may not open, as Data Protection leaves one on a locked
-     *   iPhone — while the medium still takes a new record, and says how to probe and undo it; see
-     *   [UnreadableGrants].
+     *   damaging it — a file the process may not open, as an iPhone's grants file is after a restart
+     *   until the first unlock — while the medium still takes a new record, and says how to probe and
+     *   undo it; see [UnreadableGrants].
      */
     public class Durable(
         private val reopen: suspend (beforeKeyIsMade: suspend () -> Unit) -> DeviceKeyStore,
@@ -783,7 +796,8 @@ public sealed interface DeviceKeyStoreFixture {
      *
      * The rig leaves the medium able to take a **new** record, because that is the case that loses
      * data: a medium that refused every write as well would refuse the mistaken rewrite on the store's
-     * behalf, and the property would pass a store that tried it.
+     * behalf, and the property would pass a store that tried it. [probeWrite] is how the property
+     * checks it: a rig that faulted the whole directory instead of the one record would fail it.
      *
      * ## What it cannot detect
      *
@@ -795,11 +809,16 @@ public sealed interface DeviceKeyStoreFixture {
      * @param probe reads the grants record straight off the medium, bypassing the store; while the
      *   record is unreadable it must throw. The property requires that it does, so a rig that broke
      *   nothing reds rather than passes.
+     * @param probeWrite writes a sibling record — never the grants record — straight to the medium
+     *   through the same backend, in the same place, while the grants record is unreadable; it must
+     *   return. The property requires that it does, so a rig that faulted the whole medium reds rather
+     *   than leaves the rewrite check with nothing to catch.
      * @param restore puts the record back within reach, and answers whether anything wrote, replaced
      *   or removed the record while it was unreadable. The suite calls it exactly once, in a `finally`.
      */
     public class UnreadableGrants(
         public val probe: suspend () -> Unit,
+        public val probeWrite: suspend () -> Unit,
         public val restore: suspend () -> Boolean,
     )
 
