@@ -302,31 +302,63 @@ class CountMinSketchTest {
     }
 
     /**
-     * `estimate` on a sparse delta is refused rather than answered. A delta's matrix is a one-wide
-     * stub of zeros, so before the fix it answered `0` for an item the delta had just counted. The
-     * sketch is one column wide so every column lands inside the stub: the old code answered
-     * instead of throwing an index error, which is the silent case. The first assertion is the rig:
-     * the delta really carries the occurrence.
+     * A sparse delta answers `estimate` as the state it is: its own cells, zero everywhere else.
+     * Every sibling sketch's delta is a readable state, and a delta reaches readers (see
+     * [anORMapValueThatIsADeltaAnswersItsCount]). Before the fix a delta read its one-wide stub of
+     * zeros: at width 1 it answered `0` for an item it had just counted, which is the silent case,
+     * and wider it threw an index error. The first assertion is the rig: the deltas really are
+     * sparse.
      */
     @Test
-    fun estimateRefusesASparseDelta() {
-        val delta = CountMinSketch.empty(width = 1, depth = 2).add("x").delta
+    fun aDeltaAnswersItsOwnCount() {
+        val base = CountMinSketch.empty(width = 64, depth = 4)
+            .piece { it.add("x") }
+            .piece { it.add("x") }
+        val delta = base.add("x").delta
+        val narrow = CountMinSketch.empty(width = 1, depth = 2).add("x").delta
+        val items = listOf("x", "y", "z", "w", "")
         assertAll(
-            { assertEquals(listOf(CellDelta(0, 0, 1L), CellDelta(1, 0, 1L)), delta.sparseCells, "the rig's delta counts x once per row") },
-            { assertFailsWith<IllegalStateException> { delta.estimate("x") } },
+            { assertTrue(delta.sparseCells != null && narrow.sparseCells != null, "the rig's deltas are sparse") },
+            { assertEquals(3L, delta.estimate("x"), "a delta over two prior adds counts x three times") },
+            { assertEquals(1L, narrow.estimate("x"), "a one-wide delta counts x once") },
+            {
+                val asState = CountMinSketch.empty(width = 64, depth = 4).piece(delta)
+                assertEquals(items.map(asState::estimate), items.map(delta::estimate), "a delta reads as the state it pieces into")
+            },
         )
     }
 
     /**
-     * `add` on a sparse delta is refused for the same reason: it reads the stub, so it would mint
-     * a delta of `1` whatever the delta already carried.
+     * `add` on a sparse delta counts from what the delta carries. Before the fix it read the stub,
+     * so it minted `1` whatever the delta held, or threw an index error when `width > 1`.
      */
     @Test
-    fun addRefusesASparseDelta() {
-        val delta = CountMinSketch.empty(width = 1, depth = 1).add("x").delta
+    fun addOnADeltaCountsFromWhatItCarries() {
+        val base = CountMinSketch.empty(width = 64, depth = 4).piece { it.add("x") }
+        val delta = base.add("x").delta
+        val next = delta.add("x").delta
         assertAll(
-            { assertEquals(listOf(CellDelta(0, 0, 1L)), delta.sparseCells, "the rig's delta counts x once") },
-            { assertFailsWith<IllegalStateException> { delta.add("x") } },
+            { assertTrue(delta.sparseCells != null, "the rig's delta is sparse") },
+            { assertEquals(List(4) { 3L }, next.sparseCells?.map { it.value }, "the next delta raises every row from 2 to 3") },
+            { assertEquals(3L, CountMinSketch.empty(width = 64, depth = 4).piece(next).estimate("x")) },
+        )
+    }
+
+    /**
+     * The path that puts a delta in front of a reader. An [ORMap] key holding one contribution
+     * returns that contribution as its value, and a put of `add(…).delta` stores the delta itself.
+     * Before the fix `estimate` on that value read the stub. The first assertion is the rig: the
+     * map really hands back the sparse delta.
+     */
+    @Test
+    fun anORMapValueThatIsADeltaAnswersItsCount() {
+        val replica = ReplicaId("a")
+        val map = ORMap.empty<String, CountMinSketch>()
+            .piece { it.put(replica, "k", CountMinSketch.empty(width = 64, depth = 4).add("x").delta) }
+        val value = map["k"]
+        assertAll(
+            { assertTrue(value?.sparseCells != null, "the rig's map value is the sparse delta") },
+            { assertEquals(1L, value?.estimate("x")) },
         )
     }
 
