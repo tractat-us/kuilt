@@ -165,7 +165,9 @@ whole ledger inherits the three merge laws for free.
 - `Gauge` — an edge's replicated virtual-time seat: where a new child starts competing, written by
   the scheduler and merged by taking the larger reading, so no single peer's guess is frozen in.
   The position is kept in 128 bits (`ticksHigh`, `ticksLow`), exactly and never capped, so a
-  long-lived busy parent cannot fill it.
+  long-lived busy parent cannot fill it. A gauge carrying v0.7.4's `floor` does not decode,
+  whatever the format's settings, since read without it the edge would sit lower than it was
+  written.
 - `EdgeSummary` — the parent-facing projection of one edge (`issued`/`returned`/
   `spent` and the derived `outstanding`).
 - `EntitlementLedger` — the replicated `Quilted` state itself.
