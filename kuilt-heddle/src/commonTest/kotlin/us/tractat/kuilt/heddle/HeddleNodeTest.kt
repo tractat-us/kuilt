@@ -1266,6 +1266,40 @@ class HeddleNodeTest {
     }
 
     /**
+     * The node checks the ceiling after it delegates, as `LocalHeddle` does (#3353): a grant whose
+     * delegation would carry its child to its ceiling is not made, and the round answers
+     * [ScheduleOutcome.PositionCeiling] with nothing written. One lease of [MAX_GRANT] puts a
+     * `1/30,719` child 93.75% of the way up its own grid, so the second would pass it. Rebasing is
+     * off, which is the one way a running parent still gets there: a demanding child that is never
+     * served holds the origin where it is. Before this the node made that second grant and left the
+     * child past its ceiling.
+     */
+    @Test
+    fun aGrantThatWouldCarryAChildPastItsCeilingIsHeldBack() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val fine = AttachmentRecord(AttachmentId("fine"), root, GroupId("g-fine"), Weight.of(1L, 30_719L))
+        val h = harness(peers = 1, mint = mapOf(0 to LONG_RUN_MINT), topology = listOf(fine), quantum = MAX_GRANT)
+        h.pump()
+        val node = h.peers[0].node
+        node.rebaseForTest = false
+        node.advertise(fine.id, Demand(4L * MAX_GRANT, MAX_GRANT))
+        val first = node.schedule(root)
+        val afterFirst = node.ledger.value
+        val peak = node.boundMetrics(root).peakPositionFraction
+        val second = node.schedule(root)
+        val afterSecond = node.ledger.value
+        assertAll(
+            { assertEquals(ScheduleOutcome.Delegated(1), first, "one lease fits; the second would pass the ceiling") },
+            { assertEquals(MAX_GRANT, afterFirst.edge(fine.id)?.issued, "exactly one lease went down the edge") },
+            { assertTrue(peak > 0.9 && peak < 1.0, "the child sits one lease up, below its ceiling: $peak") },
+            { assertEquals(ScheduleOutcome.PositionCeiling(root), second, "the next call names the ceiling") },
+            { assertEquals(afterFirst, afterSecond, "and writes nothing") },
+        )
+    }
+
+    /**
      * The rebase changes no pick (#3353): a twin node with rebasing switched off, fed the same
      * waiting sets, makes exactly the same grants call for call until it refuses at its ceiling,
      * and the rebasing node carries on past that point.
