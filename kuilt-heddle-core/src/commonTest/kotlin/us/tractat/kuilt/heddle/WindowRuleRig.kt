@@ -86,7 +86,7 @@ internal class WindowRuleRig(
                         else -> engine.complete(out.lease.id, actualCost = LocalHeddle.MAX_RESERVATION, waiting = emptySet())
                     }
                 }
-                is AcquireOutcome.PositionCeiling -> {
+                is AcquireOutcome.LifetimeExhausted -> {
                     refusals++
                     if (firstRefusal < 0) firstRefusal = step
                 }

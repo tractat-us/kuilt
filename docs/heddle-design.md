@@ -784,8 +784,7 @@ Nothing absolute is ever capped: a cap on an absolute value turns into credit
 once the origin passes it. Until #3313 and #3353 a pick narrowed the effective
 position to a `Long`, refused with `PositionCeiling(parent)` at the ceiling, and
 a busy parent beside a starved child met it after about 65,000 leases of the
-largest size. The `PositionCeiling` arms are kept, unreturned, for the
-lifetime-counter limit below.
+largest size.
 
 **A position still has a ceiling, for the public reads (#3313).** The ceiling is
 `(Long.MAX_VALUE − 2⁴⁸) / w.denominator` ticks. Dividing by the denominator keeps
@@ -794,13 +793,11 @@ a position's virtual time, `p · w.den / (G · w.num)`, in `Long`, for
 side. The rebase below exists to keep positions inside it, so those reads stay
 exact; no pick depends on it.
 
-**What bounds a parent's life is the `Long` counters.** An edge's issuance and an
-epoch's mint are `Long`s, about 9.2 × 10¹⁸ units. The call whose delegation or
-mint would pass one throws `ArithmeticException`. On `LocalHeddle` that call
-changes nothing, a charging call included. `FairShareAllocator.schedule`, and so
-`HeddleNode.schedule`, writes each round on its own, so a throw in round `k > 1`
-keeps rounds `1..k−1`, which have already landed; a throw in the first round
-writes nothing.
+**What bounds a parent's life is the `Long` counters.** An edge's effective
+issuance and the root's minted supply are `Long`s, about 9.2 × 10¹⁸ units. No
+call throws at them: a pick refuses a little before either runs out, and work
+already running uses the room it keeps. "The lifetime limit", below, is the
+rule.
 
 - **No credit leaks through.** Nothing is narrowed before the effective
   position, so no front, seat or clamp is taken against an understated value. A
@@ -969,7 +966,7 @@ edges closed before the upgrade, or a fresh log, because a replay refuses them.
 keeps running, but a new sibling there is refused.
 
 `HeddleNode.schedule` meets no ceiling either: a grant past it is made, as
-`LocalHeddle` makes one, and `ScheduleOutcome.PositionCeiling` is not returned.
+`LocalHeddle` makes one: no position refuses it.
 `apply` keeps the weight products in range the
 same way: an activation whose weights would put its parent's `L`, `S`, `G · S` or
 `S · d` out of `Long`, or fail P1′, is refused with a `StepRefusal`. Where a topology act enters a
@@ -1052,14 +1049,16 @@ an edge has had, counted from its start, and it only ever goes up.
 the second.
 
 1. **The `Long` lifetime counters.** An edge's issuance and an epoch's mint are
-   `Long`s, about 9.2 · 10¹⁸ units. Today they throw. Measured on `main` at
-   `3083d775f`, JVM only: two weight-1 lanes at the largest lease, charged in
+   `Long`s, about 9.2 · 10¹⁸ units. Before slice 7 they threw. Measured on `main`
+   at `3083d775f`, JVM only: two weight-1 lanes at the largest lease, charged in
    full, run 524,287 leases, and the next `acquire` throws
    `ArithmeticException` from the mint. Charged one unit each they run
    1,048,574, and the edge's issuance throws. Step B does not create this
    limit. It makes it the only one, so it gets the typed arm the ceiling had,
    on the calls that pick, and no call throws there any more. "The lifetime
-   limit" below is the whole rule.
+   limit" below is the whole rule, built in slice 7: the same run now ends in
+   `LifetimeExhausted` after 507,903 leases, `(Long.MAX_VALUE − 2⁵⁸) / 2⁴⁴`
+   (`LocalHeddleLifetimeRunTest`).
 2. **128 bits, which the weight budget puts out of reach (W1).** With the
    counters in range, the virtual time under a parent never passes about
    `2⁶⁴ · Σ⌈1/wᵢ⌉`: each unit of an edge's service moves that edge by `1/wᵢ`
@@ -1080,7 +1079,8 @@ keeps the clock inside 128 bits today. The clock was never rebased. A lone
 child of weight `1/d` runs it `d · 2²⁴` ticks a unit, which leaves 128 bits
 inside the counters for `d` above about `2⁴⁰`.
 
-**The lifetime limit.** Ruled by @keddie, 2026-11-15 (#3475): a new lease is
+**The lifetime limit.** Built in slice 7 (`LocalHeddleLifetimeTest`,
+`HeddleNodeLifetimeTest`). Ruled by @keddie, 2026-11-15 (#3475): a new lease is
 refused a little before a counter runs out, and work that is already running
 is never refused for it and never throws.
 
@@ -1136,21 +1136,35 @@ to return: `LeaseOutcome.PositionCeiling` is deleted, not renamed, and
 itself. A charge that still does not fit is **recorded whole or not at all**,
 level by level, and the call lands:
 
-- An overrun at `complete` goes down the path as far as it fits in whole and is
+- An overrun at `complete` larger than `LocalHeddle.MAX_RECORDED_OVERRUN`,
+  `LIFETIME_HEADROOM / 2` (2⁵⁷), is not recorded. It is reported whole in
+  `unrecorded`, the reservation is charged at the leaf, and nothing else
+  changes, the wake memory included. `admit` and `extend` amounts are already at
+  most `MAX_RESERVATION`, so the cap bites only at `complete`.
+- An overrun within the cap goes down the path as far as it fits in whole and is
   charged at the deepest group it reaches. That is the rule a draining path
   already follows, with "has no room" beside "is not ACTIVE". The groups above
   a full edge still pay the true cost.
 - What the root cannot fund in whole is not recorded. `LeaseOutcome.Done` gains
   a required `unrecorded: Long`, and `charged` is then the cost less that. The
-  lease closes either way. The same field reports an overrun dropped because
-  the root's own child edge is draining, which `Done` reports as charged today.
+  lease closes either way. At `extend`, `unrecorded` is a reservation that was
+  not made, not a cost: the work's cost arrives at its `complete`, so a caller
+  summing `unrecorded` over both would count it twice. The same field reports an overrun dropped because
+  the root's own child edge is draining, which `Done` reported as charged before (#3493).
 - An admission that does not fit reserves nothing. `admit` opens the lease
   with `reserved` zero, so the cost arrives as an overrun when it completes.
+  Nothing else changes, the wake memory included: an admission that charges
+  nothing observes nothing, and the overrun observes the waiting set when it lands.
 - An extension that does not fit reserves nothing and changes nothing, the
   wake memory included. `extend` answers `Done` with `unrecorded` the amount.
   The work carries on, and `complete` charges the cost as an overrun. A
   caller that wants the reason asks `explain`, which answers
   `WaitExplanation.LifetimeExhausted` for a leaf behind a full counter.
+- A reweight moves an open lease's reservation down its new path, which counts
+  on every edge of it again. A move the new path has no room for within `Long`
+  is not made: that child's change is refused, as `StepRefusal.Refused`, until
+  the lease settles. A lease admitted with nothing reserved moves with nothing
+  to delegate. Slice 7 added this; the entry above did not name `apply`.
 
 No counter is ever filled to its limit with part of a charge, and none
 saturates. A saturated counter would break conservation, since the edges of
@@ -1162,20 +1176,38 @@ supply to the brim lets one wrong argument end the engine:
 limit, and every later `acquire` would be refused. Whole-or-nothing records the
 reservation, reports the rest, and the scheduler carries on (§10.1, §10.12).
 
+Whole-or-nothing alone does not stop one wrong cost on a young engine. Where the
+lease is the engine's only service, the edge and the minted supply each have
+exactly `Long.MAX_VALUE − R` left, so `complete(lease, Long.MAX_VALUE)` fits
+whole and leaves the supply past the watermark. So a single overrun is capped:
+one above `MAX_RECORDED_OVERRUN` is not recorded at all. Within the cap, an
+overrun leaves a counter past the watermark only when that counter was already
+within the cap of it, and the headroom holds two of them
+(`completeAtLongMaxOnAFreshEngineIsUnrecordedAndTheNextAcquireLeases`,
+`anOverrunAtTheCapIsRecordedAndOneUnitMoreIsNot`; ruled by @keddie, 2026-11-15).
+
 Where a charge is not recorded, the lane it ran on has had service its
 position does not show. That is credit, the favour side, and it cannot be
 spent on a pick: the only way to spend it is an `acquire` across the full
 edge, which is refused. It reaches one place, the parent's net-service clock,
 which runs short by the overrun, so a sibling returning there comes back that
-much less moved. Slice 7 measures that, and the same read on a draining path.
+much less moved. Measured in slice 7 on two twins that differ only in whether
+a lane's overrun `O` is recorded, with a sibling away while that lane and one
+more ask: the sibling comes back exactly `O / 2` behind, the clock's shortfall
+over the two asking, and the lane reads `O` lower
+(`anUnrecordedOverrunRunsTheClockShortByItsShare`). The same read on a draining
+path is reasoned, not measured: the closing edge has left its parent's active
+set, so no clock there counts it.
 
 *What the headroom promises.* Unconditionally: no call throws or wraps at a
 lifetime counter, an `acquire` never leaves one past the watermark, and
-conservation holds. Conditionally: every charge is recorded in full while the
+conservation holds, and no single overrun leaves a counter past the watermark
+unless that counter was within `MAX_RECORDED_OVERRUN` of it. Conditionally:
+every charge is recorded in full while no overrun is above the cap and the
 extensions, admissions and overruns that land on a counter after its last
 `acquire` add up to no more than the headroom. No fixed margin can promise
-more, because those calls are not refused there and an overrun is any `Long`.
-Past it, an `extend` or a `complete` reports `unrecorded`. A caller that only ever admits is never refused, and has only
+more, because those calls are not refused there. Past it, an `extend` or a
+`complete` reports `unrecorded`. A caller that only ever admits is never refused, and has only
 the report.
 
 *Why `2⁵⁸`.* The counters count reservations, so a margin is paid for in
@@ -1200,8 +1232,10 @@ clamped. `HeddleNode` needs no charge rule: its `complete` charges at most what
 was reserved, so it only moves counters that issuance already bounds. An
 edge's issuance is a sum over replicas, so peers that grant one edge before
 their writes merge each check their own view, and the merged sum can pass the
-watermark. The headroom is what absorbs that: 16,384 grants of the largest
-size, unmerged, on one edge. Past `Long` the sum still throws when read,
+watermark. The headroom is what absorbs that: unmerged grants on one edge
+totalling at most `LIFETIME_HEADROOM`, 16,384 of the largest reservation. A
+`HeddleNode` grant is bounded by the quantum and the holdings it is drawn from,
+not by `MAX_RESERVATION`, so the bound is the total. Past `Long` the sum still throws when read,
 never wraps, as any state this module did not build does. A mint the control
 log applies is an act, not a charge, and this entry does not change it.
 
@@ -1286,6 +1320,11 @@ unambiguous would guard state that nobody holds (@keddie, 2026-11-15).
     the group above it, that edge's issuance does not move, and `validate()`
     is empty. `complete(lease, Long.MAX_VALUE)` on a fresh engine closes the
     lease, reports the overrun as `unrecorded`, and the next `acquire` leases.
+    An overrun of exactly `MAX_RECORDED_OVERRUN` is recorded in full, and one
+    unit more is not, leaving the engine as a completion at the reservation
+    would. An `extend` the root must mint for lands with the supply past the
+    watermark, and answers `Done(unrecorded = amount)` a unit past room within
+    `Long`.
     An `extend` at a full counter answers `Done` with `unrecorded` equal to
     the amount, and the lease, the ledger and the wake memory are equal
     before and after. One unit smaller, it lands with `unrecorded` zero. An
@@ -1345,8 +1384,10 @@ unambiguous would guard state that nobody holds (@keddie, 2026-11-15).
    `WaitExplanation`, and `AllocationOutcome` with `ScheduleOutcome`), and
    `LeaseOutcome`'s is deleted. The types hold the ruling: with no lifetime arm
    on `LeaseOutcome` or `AdmitOutcome`, a charging call cannot refuse for it,
-   and `unrecorded` has no default. Retires `LocalHeddlePositionCeilingTest`
-   for its lifetime twin. Docs: §7.1, §10.12, the cookbook, both `module.md`s,
+   and `unrecorded` has no default. Built, ahead of slice 3, so
+   `LocalHeddlePositionCeilingTest` stays until slice 3 or 6 retires the
+   rebase and the saturating reads its rows still pin; its lifetime twin is
+   `LocalHeddleLifetimeTest`. Docs: §7.1, §10.12, the cookbook, both `module.md`s,
    `Writerside/topics/heddle-local-turns.md`. #3458 is then a use of the
    headroom, not a limit of its own.
 
@@ -1411,6 +1452,11 @@ not depend on each other.
   gets, for room no caller needs. It is `2⁵⁸` (@keddie, 2026-11-15, #3475).
 - A headroom sized from the edge's outstanding: it moves with every
   completion, and it bounds no overrun (@keddie, 2026-11-15, #3475).
+- Recording any overrun that fits whole: on an engine whose only service is
+  one lease, `complete(lease, Long.MAX_VALUE)` fits exactly and leaves the
+  minted supply past the watermark, so one wrong cost ends the engine. An
+  overrun above `MAX_RECORDED_OVERRUN`, `LIFETIME_HEADROOM / 2`, is not recorded
+  and is reported whole in `unrecorded` (@keddie, 2026-11-15, #3475).
 - Skipping a full lane and picking its sibling in its place: the lane would
   starve with no answer anywhere saying why. A full lane that is eligible and
   next in line stalls the picks under its parent, and says so
@@ -2055,10 +2101,13 @@ Carried over from the source intact; each is a named property test (§13).
     on the least common multiple of their denominators. Everything before it is 128-bit:
     a gauge's stored position, a parent's origin, the raw position, the front and
     a wake clamp, and arithmetic that would leave 128 bits throws (#3353).
-    Step B changes what the `Long` lifetime counters do here: a pick refuses
-    with headroom, and a charge that does not fit is reported, not thrown.
-    Nothing wraps or saturates under either (§7.1, "The lifetime limit";
-    not built yet).
+    The `Long` lifetime counters, an edge's effective issuance and the root's
+    minted supply, are the other exception: no call throws at them. A pick
+    refuses with headroom, as `LifetimeExhausted`, and a charge that does not
+    fit is recorded whole or not at all and reported in `LeaseOutcome.Done.unrecorded`.
+    Nothing wraps or saturates under either (§7.1, "The lifetime limit",
+    built in slice 7). A merged sum of peers' writes past `Long` still throws
+    when read.
 13. **Consensus only at the embroidery.** Mint, overlapping reshape, and
     fencing use `:kuilt-raft`; nothing else coordinates, at any frequency.
 
@@ -2217,9 +2266,10 @@ with no banked credit (§10 invariant 6).
   since the whole subtree waits on it.
 - Its place in the order is after `NO_LIVE_LINEAGE` and before
   `SUPPLY_EXHAUSTED`, so a capped leaf is told about its ceiling even when the
-  root is empty. The overflow fix's `POSITION_CEILING` (#3313) comes after
+  root is empty. The lifetime limit's `LIFETIME_EXHAUSTED` (#3475), in the place
+  the overflow fix's `POSITION_CEILING` (#3313) held, comes after
   `SUPPLY_EXHAUSTED`, so the order is `NOT_WAITING`, `NOT_ELIGIBLE`,
-  `NO_LIVE_LINEAGE`, `AT_CEILING`, `SUPPLY_EXHAUSTED`, `POSITION_CEILING`,
+  `NO_LIVE_LINEAGE`, `AT_CEILING`, `SUPPLY_EXHAUSTED`, `LIFETIME_EXHAUSTED`,
   `BEHIND_AT_LEVEL`, `WOULD_BE_PICKED_NEXT`. Nothing persists the kind, so
   inserting it moved no stored value.
 - A name no pick can end at, such as a group named as if it were a leaf, is still
@@ -2260,8 +2310,8 @@ and never decides whether the caller runs anything.
 - A new `AcquireOutcome` arm for "everything is capped": `NothingEligible`
   covers it (#3324).
 - Treating a ceiling of 0 as a problem: it means pause (#3324).
-- `AT_CEILING` before `SUPPLY_EXHAUSTED`, and `POSITION_CEILING` after it
-  (#3324, #3313).
+- `AT_CEILING` before `SUPPLY_EXHAUSTED`, and `LIFETIME_EXHAUSTED` after it
+  (#3324, #3313, #3475).
 - A per-child ceiling written beside the template rather than inside it: a
   document once had both a marker and a separate ceiling field, and dropped the
   ceiling without a word when the marker was missing. Nesting it in `template`

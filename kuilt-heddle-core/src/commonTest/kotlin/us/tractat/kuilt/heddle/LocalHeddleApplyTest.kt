@@ -103,7 +103,7 @@ class LocalHeddleApplyTest {
             { assertEquals(6L, assertNotNull(l.edge(newAcme)).outstanding, "the three reservations crossed the new edge") },
             { assertEquals(emptyList(), l.validate()) },
             { assertEquals(0L, l.holdings(acme, LOCAL)) },
-            { assertEquals(List(3) { Triple(LeaseOutcome.Done(3L, 1L), emptyList<LedgerConflict>(), 0L) }, dones, "each charged once, clean, never negative") },
+            { assertEquals(List(3) { Triple(LeaseOutcome.Done(3L, 1L, 0L), emptyList<LedgerConflict>(), 0L) }, dones, "each charged once, clean, never negative") },
             { assertEquals(spentBefore + 9L, after.leafSpentTotal(), "nine units charged, once each") },
             { assertEquals(9L, assertNotNull(after.edge(newAcme)).spent - assertNotNull(l.edge(newAcme)).spent, "on the new edge") },
             { assertEquals(0L, assertNotNull(after.edge(newAcme)).outstanding) },
@@ -121,7 +121,7 @@ class LocalHeddleApplyTest {
             { assertEquals(l.lineageOf(batch), h.capturedPath(lease.id), "the lease charges the new lineage") },
             { assertEquals(listOf("root/acme@4:1#1", "root/acme/batch@2:1#1"), h.capturedPath(lease.id)?.map { it.value }) },
             { assertEquals(emptyList(), l.validate()) },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
             { assertEquals(emptyList(), h.snapshot().ledger.validate()) },
         )
     }
@@ -152,7 +152,7 @@ class LocalHeddleApplyTest {
             { assertEquals(4L, gauge.folded, "folded at the four re-homed units") },
             { assertEquals(front, gauge.assertedAt(Weight.of(4L)) - Rational.of(4L, 4L), "seated at the front, then advanced 4 units at weight 4") },
             { assertEquals(front + Rational.ONE, l.virtualService(h.edgeInto(acme))) },
-            { assertEquals(emptyList(), leases.map { h.complete(it.id, 2L, waiting = emptySet()) }.filter { it != LeaseOutcome.Done(2L, 0L) }) },
+            { assertEquals(emptyList(), leases.map { h.complete(it.id, 2L, waiting = emptySet()) }.filter { it != LeaseOutcome.Done(2L, 0L, 0L) }) },
         )
     }
 
@@ -200,7 +200,7 @@ class LocalHeddleApplyTest {
             { assertEquals(spent, assertNotNull(l.edge(newAcme)).spent, "onto the new edge") },
             { assertEquals(0L, l.holdings(acme, LOCAL)) },
             { assertEquals(emptyList(), l.validate()) },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(next.id, 2L, waiting = emptySet())) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L, 0L), h.complete(next.id, 2L, waiting = emptySet())) },
             { assertEquals(emptyList(), h.snapshot().ledger.validate()) },
         )
     }
@@ -248,7 +248,7 @@ class LocalHeddleApplyTest {
             { assertTrue(first.refusals.all { it is StepRefusal.Draining && it.blockingLeases == listOf(lease) }) },
             { assertEquals(LeaseOutcome.PathDraining(hobbyEdge), extend) },
             { assertEquals(AcquireOutcome.NoLiveLineage(t.groupId()), acquire, "nothing new is leased in a draining group") },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), done) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L, 0L), done) },
             { assertEquals(emptyList(), second.refusals) },
             { assertEquals(listOf(Retire(defaultEdge, default), Retire(hobbyEdge, hobby)), second.applied) },
             { assertEquals(emptyList(), l.allEdges().filter { l.lifecycle(it) == Lifecycle.CLOSING }) },
@@ -270,7 +270,7 @@ class LocalHeddleApplyTest {
             { assertEquals(listOf(hobby, default), first.refusals.map { it.child }) },
             { assertEquals("root/acme@5:1#1", h.edgeInto(acme).value, "the rest of the reload landed") },
             { assertEquals(orphan, found.lease) },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), settled) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L, 0L), settled) },
             { assertEquals(emptyList(), second.refusals) },
             { assertEquals(emptyList(), Topology.diff(target, l, generation = 0L)) },
             { assertEquals(emptyList(), l.validate()) },
@@ -288,7 +288,7 @@ class LocalHeddleApplyTest {
             { assertEquals(ApplyResult(emptyList(), emptyList()), result) },
             { assertSame(before.ledger, h.snapshot().ledger) },
             { assertEquals(before, h.snapshot()) },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
         )
     }
 
@@ -332,7 +332,7 @@ class LocalHeddleApplyTest {
             { assertEquals(x, child.leaf) },
             { assertEquals(2L, mid.holdings(x, LOCAL), "the new child got its own reservation") },
             { assertEquals(5L, mid.holdings(batch, LOCAL), "the open lease's 5 units stayed at the former lane") },
-            { assertEquals(LeaseOutcome.Done(5L, 0L), done) },
+            { assertEquals(LeaseOutcome.Done(5L, 0L, 0L), done) },
             { assertEquals(0L, after.holdings(batch, LOCAL)) },
             { assertEquals(emptyList(), after.validate()) },
         )
@@ -352,7 +352,7 @@ class LocalHeddleApplyTest {
             { assertEquals(listOf(h.edgeInto(t.groupId("tenants")), runtimeEdge), h.capturedPath(lease.id), "moved onto tenants' new edge") },
             { assertEquals("root/tenants@2:1#2", h.edgeInto(t.groupId("tenants")).value) },
             { assertEquals(emptyList(), l.validate()) },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
         )
     }
 
@@ -387,9 +387,9 @@ class LocalHeddleApplyTest {
             { assertEquals(Lifecycle.RETIRED, l.lifecycle(oldEdge)) },
             { assertEquals(l.lineageOf(c), h.capturedPath(lease.id)) },
             { assertEquals(newEdge, h.capturedPath(lease.id)?.last()) },
-            { assertEquals(LeaseOutcome.Done(0L, 0L), h.extend(lease.id, 1L, waiting = emptySet()), "it can grow again") },
+            { assertEquals(LeaseOutcome.Done(0L, 0L, 0L), h.extend(lease.id, 1L, waiting = emptySet()), "it can grow again") },
             { assertEquals(emptyList(), l.validate()) },
-            { assertEquals(LeaseOutcome.Done(3L, 0L), h.complete(lease.id, 3L, waiting = emptySet())) },
+            { assertEquals(LeaseOutcome.Done(3L, 0L, 0L), h.complete(lease.id, 3L, waiting = emptySet())) },
         )
     }
 
@@ -407,7 +407,7 @@ class LocalHeddleApplyTest {
             { assertEquals(listOf("root/hobby@1:1#2", "root/hobby/default@1:1#2"), h.capturedPath(lease.id)?.map { it.value }) },
             { assertEquals(emptyList(), l.allEdges().filter { l.lifecycle(it) == Lifecycle.CLOSING }) },
             { assertEquals(emptyList(), l.validate()) },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
+            { assertEquals(LeaseOutcome.Done(2L, 0L, 0L), h.complete(lease.id, 2L, waiting = emptySet())) },
         )
     }
 
@@ -452,7 +452,7 @@ class LocalHeddleApplyTest {
     /**
      * Plan Amendment 9's open item, decided: an overrun charged under a top-level group the reload
      * is removing has no ACTIVE group below the root to land on, and the ledger keeps no spend at
-     * the root. It is reported and recorded nowhere. That is accepted: the only counter it could
+     * the root. It is recorded nowhere, and reported as unrecorded (#3493). That is accepted: the only counter it could
      * reach belongs to a group on its way out, whose history leaves with it, and conservation is
      * untouched, since nothing was minted or delegated for it.
      */
@@ -470,7 +470,7 @@ class LocalHeddleApplyTest {
         assertAll(
             { assertTrue(before.holdings(t.groupId(), LOCAL) < 998L, "the rig: the root cannot cover the overrun") },
             { assertEquals(listOf(s), removing.refusals.map { it.child }) },
-            { assertEquals(LeaseOutcome.Done(charged = 1_000L, overrun = 998L), done, "reported in full") },
+            { assertEquals(LeaseOutcome.Done(charged = 2L, overrun = 998L, unrecorded = 998L), done, "reported in full, as unrecorded (#3493)") },
             { assertEquals(before.leafSpentTotal() + 2L, after.leafSpentTotal(), "only the reservation is recorded") },
             { assertEquals(before.mintedTotal(), after.mintedTotal(), "nothing was minted for the overrun") },
             { assertEquals(0, h.forcedMints) },

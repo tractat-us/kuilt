@@ -35,9 +35,11 @@ and a snapshot to survive a restart, and no `Seam` or Raft underneath.
   either node.
 - `ReserveOutcome` / `ScheduleOutcome` / `GateClosed` — what a spend call did. `reserve` answers
   `Reserved` or `NoHoldings`; `schedule` answers `Delegated` or `NothingToDelegate`, or
-  `WeightBudget` when the parent's children cannot be ordered at all. Its `PositionCeiling`
-  arm is not returned today: a pick compares the full 128-bit position, so no position stops
-  one. A busy parent rebases by raising its replicated origin in the same patch as a grant,
+  `WeightBudget` when the parent's children cannot be ordered at all, or `LifetimeExhausted`
+  when the first grant would carry the picked edge's effective issuance past the lifetime
+  watermark on this peer's view, `Long.MAX_VALUE` less `LocalHeddle.LIFETIME_HEADROOM`
+  (#3475). Nothing is published then, and no call throws at the counter. No position stops a
+  pick: a pick compares the full 128-bit position. A busy parent rebases by raising its replicated origin in the same patch as a grant,
   which keeps the ledger's virtual-time reads exact, and `boundMetrics` reports how close its
   peak child is to the ceiling past which those reads saturate (#3353). Only a
   governed node adds `GateClosed`, with a `Reason`, when this peer may not author entitlement at

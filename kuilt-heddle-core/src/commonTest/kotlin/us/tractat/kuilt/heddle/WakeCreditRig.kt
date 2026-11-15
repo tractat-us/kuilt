@@ -91,7 +91,7 @@ internal object WakeCreditRig {
                 val run = slots[i] ?: continue
                 if (run.endsAt != t) continue
                 if (run.cancels) {
-                    assertEquals(LeaseOutcome.Done(0L, 0L), h.cancel(run.lease))
+                    assertEquals(LeaseOutcome.Done(0L, 0L, 0L), h.cancel(run.lease))
                 } else {
                     h.complete(run.lease, run.actual, waiting = lanes.filter { it.queue.isNotEmpty() }.mapTo(HashSet()) { it.spec.leaf }.apply { add(B) })
                 }
@@ -129,7 +129,7 @@ internal object WakeCreditRig {
                     Arm.UNDER_LAST -> if (emptiesQueue) maxOf(1L, actual / 4) else actual
                     Arm.NOISE -> lane.cost(job.index + lane.spec.costs.size - 1)
                 }
-                if (r > 1L) assertEquals(LeaseOutcome.Done(0L, 0L), h.extend(lease.id, r - 1L, waiting = lanes.filter { it.queue.isNotEmpty() }.mapTo(HashSet()) { it.spec.leaf }.apply { add(B) }))
+                if (r > 1L) assertEquals(LeaseOutcome.Done(0L, 0L, 0L), h.extend(lease.id, r - 1L, waiting = lanes.filter { it.queue.isNotEmpty() }.mapTo(HashSet()) { it.spec.leaf }.apply { add(B) }))
                 val cancels = lane.spec.arm == Arm.CANCEL_LAST && emptiesQueue
                 slots[i] = Running(lease.id, laneIndex, endsAt = t + actual, actual = actual, cancels = cancels)
                 lane.slotTime += actual

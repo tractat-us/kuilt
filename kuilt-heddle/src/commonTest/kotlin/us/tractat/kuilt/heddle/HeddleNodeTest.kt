@@ -1198,7 +1198,7 @@ class HeddleNodeTest {
         assertAll(
             { assertEquals(atCeiling, gauge, "the rig: e1 sits at its ceiling") },
             { assertTrue(first is ScheduleOutcome.Delegated, "the parent is repaired on the first call: $first") },
-            { assertTrue(second !is ScheduleOutcome.PositionCeiling, "and stays repaired: $second") },
+            { assertTrue(second !is ScheduleOutcome.LifetimeExhausted, "and stays repaired: $second") },
             { assertTrue(node.rebasesForTest > rebasesBefore, "the rig: the repair is a rebase") },
         )
     }
@@ -1464,7 +1464,7 @@ class HeddleNodeTest {
         val outcomes = List(4) { node.schedule(root) }
         assertAll(
             { assertTrue(weightFitsTheBudget(coarse.weight), "rig: the weight fits the budget") },
-            { assertTrue(outcomes.none { it is ScheduleOutcome.PositionCeiling }, "no call met the ceiling: $outcomes") },
+            { assertTrue(outcomes.none { it is ScheduleOutcome.LifetimeExhausted }, "no call met the ceiling: $outcomes") },
             { assertIs<ScheduleOutcome.Delegated>(outcomes.first(), "the first call granted") },
             { assertEquals(0L, (node.ledger.value.edge(coarse.id)?.issued ?: 0L) % MAX_GRANT, "every grant was one largest lease") },
             { assertTrue((node.ledger.value.edge(coarse.id)?.issued ?: 0L) > 0L, "and something was granted") },
@@ -1495,7 +1495,7 @@ class HeddleNodeTest {
         while (a.calls < 100_000 && (passedAt < 0 || a.calls < passedAt + TWIN_CALLS_PAST)) {
             val outcome = a.step(aPeer)
             val twinOutcome = b.step(bPeer)
-            assertTrue(twinOutcome !is ScheduleOutcome.PositionCeiling, "call ${b.calls}: the twin refused at its ceiling")
+            assertTrue(twinOutcome !is ScheduleOutcome.LifetimeExhausted, "call ${b.calls}: the twin refused at its ceiling")
             assertEquals(outcome, twinOutcome, "call ${a.calls}: the two answered differently")
             assertEquals(a.issuedByLane(aPeer), b.issuedByLane(bPeer), "call ${a.calls}: the two made different picks")
             if (passedAt < 0 && bPeer.boundMetrics(root).peakPositionFraction >= 1.0) passedAt = b.calls
