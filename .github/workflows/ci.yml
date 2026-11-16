@@ -62,6 +62,15 @@ on:
     # ready_for_review so draft→ready transitions trigger a build (stack-draft
     # convention: only the bottom + top of a stack are out of draft).
     types: [opened, synchronize, reopened, ready_for_review]
+  # A merge queue tests each entry merged onto current `main` plus every entry ahead of it, and
+  # waits for the required check on that group commit (#3478). Without this trigger the queue
+  # would wait for a `ci-required` that never reports, and every merge would stall until its
+  # timeout. It must merge BEFORE the queue rule is turned on in the ruleset, never after.
+  # On this event `github.ref` is the group's temporary branch
+  # (`refs/heads/gh-readonly-queue/main/pr-<N>-<sha>`), so every `cache-read-only:` below reads
+  # the cache and writes nothing, and settings.gradle.kts's S3 push gate stays shut.
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -78,8 +87,14 @@ permissions:
 # synchronize (…-push group) can NEVER cancel the ready build — it always
 # completes and its ci-required check run supersedes the draft's on the same sha.
 # Rapid successive pushes still cancel each other (both in the …-push group).
+#
+# A merge_group run gets its own …-merge-group branch, and is never cancelled in progress
+# (cancel-in-progress is true only for pull_request). Each group already has a unique ref, so
+# the suffix is belt and braces — but the property it protects is the whole queue: with two
+# groups building, the second contains the first's commits, and if the two ever shared a
+# cancelling group the second would kill the first and nothing would merge.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event.action == 'ready_for_review' && 'ready' || 'push' }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'merge_group' && 'merge-group' || github.event.action == 'ready_for_review' && 'ready' || 'push' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
