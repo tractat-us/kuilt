@@ -106,15 +106,15 @@ class FairShareAllocatorRefusalTest {
     /**
      * A first-round grant whose delegation carries its child past the ceiling is made, and the
      * position goes past it exactly. `e1` sits 100 ticks below its ceiling, and one grant of 10 units
-     * is 160 ticks, so the very first grant crosses. The rebase is off: it would bring `e1` back down
-     * first. This used to answer `PositionCeiling` and write nothing.
+     * is 160 ticks, so the very first grant crosses, and nothing brings `e1` back down (#3472). This
+     * used to answer `PositionCeiling` and write nothing.
      */
     @Test
     fun aGrantWhoseDelegationCrossesTheCeilingIsMadeExactly() {
         val start = seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 100L)
         val cell = CountingCell(start)
         check(relative(start, e1) == Int128.of(positionCeiling(Weight.ONE) - 100L)) { "the rig: e1 starts below its ceiling" }
-        val allocator = FairShareAllocator(self, policy).apply { rebaseEnabled = false }
+        val allocator = FairShareAllocator(self, policy)
         val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
         val outcome = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
         assertAll(
@@ -124,42 +124,24 @@ class FairShareAllocatorRefusalTest {
     }
 
     /**
-     * A diagnostic front over a busy child past its ceiling reads it at the ceiling, and does not
-     * throw (#3485). `e1` and `e2` are `1/30,000` each, so one lease of [LocalHeddle.MAX_RESERVATION]
-     * carries a child 92% of the way up its grid. `e2` demands and is never served, the way a lane
-     * waits that no slot can run, so it holds the rebase while three grants carry `e1` past its
-     * ceiling; it is still inside its own window. The front is then the mean of the two public
-     * reads, and with nobody demanding it is the furthest ahead, `e1`'s ceiling. Both used to throw
-     * `PolicyEdge offsetTicks must be non-negative`: the read held `e1` by lowering its wake offset
-     * below zero. [FairShareAllocator.virtualTime] is what `LocalHeddle.explain`'s `BehindAtLevel`
-     * and `HeddleNode.parentVirtualTime` read.
+     * The parent's front reads past the ceiling too, held at it, and does not throw (#3472). The read
+     * used to hold a child by lowering its wake offset, which [PolicyEdge] refuses once that goes
+     * negative, so every front over a child past its ceiling threw `IllegalArgumentException`:
+     * `HeddleNode.parentVirtualTime` and `explain`'s `BehindAtLevel` among them. With no rebase,
+     * every busy parent gets there. Read with `e1` alone demanding, past its ceiling, and with
+     * nobody demanding, so both arms of the front are read.
      */
     @Test
     fun aFrontOverAChildPastItsCeilingReadsTheCeiling() {
-        val fine = Weight.of(1L, 30_000L)
-        val lease = LocalHeddle.MAX_RESERVATION
-        val cell = CountingCell(
-            withChildren(
-                EntitlementLedger.bootstrap(root, mapOf(self to 3L * lease), nonce = "genesis"),
-                AttachmentRecord(e1, root, GroupId("g1"), fine),
-                AttachmentRecord(e2, root, GroupId("g2"), fine),
-            ),
-        )
-        val allocator = FairShareAllocator(self, PolicyConfig(quantum = lease))
-        val busyBesideStarved = { edge: AttachmentId ->
-            if (edge == e1) Demand(targetOutstanding = 4L * lease, maximumUsefulGrant = lease) else Demand(targetOutstanding = 1L, maximumUsefulGrant = 0L)
-        }
-        val outcome = allocator.schedule(root, cell, earmarked = 0L, busyBesideStarved)
-        val ceiling = ticksToVirtual(positionCeiling(fine), fine)
-        val e1Read = assertNotNull(cell.current.virtualService(e1))
-        val e2Read = assertNotNull(cell.current.virtualService(e2))
+        val cell = CountingCell(seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 100L))
+        val allocator = FairShareAllocator(self, policy)
+        val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
+        allocator.schedule(root, cell, earmarked = 0L, wantsE1)
+        val atCeiling = ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE)
         assertAll(
-            { assertEquals(AllocationOutcome.Delegated(3), outcome, "the rig: all three grants went to e1") },
-            { assertTrue(allocator.peakPositionFraction(cell.current, root, busyBesideStarved) > 1.0, "the rig: e1 is past its ceiling") },
-            { assertEquals(ceiling, e1Read, "the rig: e1's public read is held at its ceiling") },
-            { assertTrue(e2Read > Rational.ZERO - ceiling && e2Read < Rational.ZERO, "the rig: e2 is below the origin, inside its window: $e2Read") },
-            { assertEquals((e1Read + e2Read) / Rational.of(2L), allocator.virtualTime(cell.current, root, busyBesideStarved), "the demanding front, e1 held at its ceiling") },
-            { assertEquals(ceiling, allocator.virtualTime(cell.current, root) { Demand.NONE }, "and the idle one, the furthest ahead") },
+            { assertTrue(relative(cell.current, e1) > Int128.of(positionCeiling(Weight.ONE)), "the rig: e1 is past its ceiling") },
+            { assertEquals(atCeiling, allocator.virtualTime(cell.current, root, wantsE1), "the demanding front reads the ceiling") },
+            { assertEquals(atCeiling, allocator.virtualTime(cell.current, root) { Demand.NONE }, "and so does the idle one, the furthest ahead") },
         )
     }
 
@@ -171,7 +153,7 @@ class FairShareAllocatorRefusalTest {
     @Test
     fun aLaterRoundWhoseDelegationCrossesTheCeilingKeepsGranting() {
         val cell = CountingCell(seatedAt(flat(mint = 100L), e1, positionCeiling(Weight.ONE) - 200L))
-        val allocator = FairShareAllocator(self, policy).apply { rebaseEnabled = false }
+        val allocator = FairShareAllocator(self, policy)
         val wantsE1 = { edge: AttachmentId -> if (edge == e1) hungry else Demand.NONE }
         val first = allocator.schedule(root, cell, earmarked = 0L, wantsE1)
         val second = allocator.schedule(root, cell, earmarked = 0L, wantsE1)

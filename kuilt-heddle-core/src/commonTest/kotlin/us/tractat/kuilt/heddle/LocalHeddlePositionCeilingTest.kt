@@ -404,11 +404,11 @@ class LocalHeddlePositionCeilingTest {
     }
 
     /**
-     * A waker about to be clamped to a front past its own ceiling is rebased first (#3353 review,
-     * item A). The front on a heavy waker's grid passes the waker's ceiling long before any sibling
+     * A waker clamped to a front past its own ceiling is picked all the same (#3353 review, item A;
+     * #3472). The front on a heavy waker's grid passes the waker's ceiling long before any sibling
      * reaches its own: with `a` at 1/1000 and `b` at 1000, `b`'s front is `10⁶` times `a`'s position.
-     * Since review of #3352 that pick refused. The front, read on `b`'s grid, is past `b`'s threshold,
-     * so the origin is raised before the wake step, `b` is clamped near zero, and the pick goes ahead.
+     * Since review of #3352 that pick refused; then a rebase brought the front back down first. Now
+     * nothing does: `b` is clamped past its ceiling, wide, and the pick goes ahead.
      *
      * b is never seen asking before it wakes, so this peer holds no departure for it and clamps it.
      * A b seen to leave would come back by its parent's clock, near where it left, and count in the
@@ -416,7 +416,7 @@ class LocalHeddlePositionCeilingTest {
      * a returner the front left out, so it raised the origin for a clamp that never happened.
      */
     @Test
-    fun aWakerAboutToBeClampedPastItsCeilingIsRebasedFirst() {
+    fun aWakerClampedPastItsCeilingIsPicked() {
         val clampTopology = draft("clamp") {
             lane("a", Weight.of(1, 1000))
             lane("b", Weight.of(1000))
@@ -439,12 +439,8 @@ class LocalHeddlePositionCeilingTest {
         // The rig: a is far below its own ceiling, and b's front, a's position times 10⁶, is past b's.
         check(engine.grossTicks(a) < positionCeiling(aWeight) / 100) { "a sits well below its ceiling" }
         check(engine.grossTicks(a).timesWide(1_000_000L) > Int128.of(positionCeiling(bWeight))) { "b's front is past b's ceiling" }
-        val rebasesBefore = engine.rebasesForTest
         val outcome = engine.acquire(setOf(a, b), setOf(a, b), startedAt = 1L)
-        assertAll(
-            { assertIs<AcquireOutcome.Acquired>(outcome, "the pick goes ahead: $outcome") },
-            { assertTrue(engine.rebasesForTest > rebasesBefore, "the rig: it rebased first") },
-        )
+        assertIs<AcquireOutcome.Acquired>(outcome, "the pick goes ahead: $outcome")
     }
 
     /**

@@ -81,11 +81,12 @@ class LocalHeddleFineWeightTest {
     }
 
     /**
-     * Why the set is refused, on an engine handed it past [LocalHeddle.apply]: one lease charged
-     * [BAND_COST] parks `a` between `C − H` and `R`. No rebase is due there, and the next full lease
-     * carries `a` past `C`, where the public reads saturate. The parent still runs, since a pick
-     * orders the wide position; it used to refuse every acquire after the first. A cost a hair lower
-     * does not reach the band, and `a` stays inside its window, the control.
+     * Why the set was refused, on an engine handed it past [LocalHeddle.apply]: one lease charged
+     * [BAND_COST] parked `a` between `C − H` and `R`, where no rebase was due, and the next full
+     * lease carried `a` past `C`, where the public reads saturate. It used to refuse every acquire
+     * after the first. Nothing rebases now (#3472), so a cost a hair lower carries `a` past its
+     * ceiling too, and the band no longer separates the two: both run every acquire, since a pick
+     * orders the wide position. P1′ is what still refuses the set, and it stays (design §7.1).
      */
     @Test
     fun aBandSetHandedPastApplyRunsPastItsCeilingAfterOneUnderChargedLease() {
@@ -107,8 +108,8 @@ class LocalHeddleFineWeightTest {
             { assertTrue(!weightsFitTheBudget(listOf(Weight.of(1, 30_721), Weight.of(1, 30_722))), "rig: apply would refuse this set") },
             { assertEquals(Run(acquired = 200, refused = 0), crossed, "every acquire leased, past the ceiling too") },
             { assertTrue(pastCeiling > 0, "the rig: a lease carried a past its ceiling") },
-            { assertEquals(Run(acquired = 200, refused = 0), clear, "the control: a cost below the band runs") },
-            { assertEquals(0, belowPast, "the control: and a stays inside its window") },
+            { assertEquals(Run(acquired = 200, refused = 0), clear, "a cost below the band runs") },
+            { assertTrue(belowPast > 0, "and, with no rebase, passes its ceiling too") },
         )
     }
 
