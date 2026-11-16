@@ -351,4 +351,26 @@ class FairShareAllocatorRefusalTest {
             { assertEquals(AllocationOutcome.LifetimeExhausted(root), past, "one tick more is refused") },
         )
     }
+
+    /**
+     * Two peers that each land a child high, then merge (design §7.1): each position is one a peer
+     * checked, so each fits, but their load does not. `e1` and `e2` stand at `2¹²⁴ + 2¹²³` each, a
+     * load of `3 · 2¹²⁴`, past the limit and inside 128 bits. The next pick forms the load, refuses
+     * typed, and writes nothing, and every read still answers.
+     */
+    @Test
+    fun aMergedLoadPastTheLimitRefusesThePickAndEveryReadAnswers() {
+        val high = twoTo(124) + twoTo(123)
+        val start = seatedAtWide(seatedAtWide(flat(mint = 100L), e1, high), e2, high)
+        val cell = CountingCell(start)
+        val allocator = FairShareAllocator(self, policy)
+        val wants = { _: AttachmentId -> hungry }
+        val outcome = allocator.schedule(root, cell, earmarked = 0L, wants)
+        assertAll(
+            { assertEquals(AllocationOutcome.LifetimeExhausted(root), outcome, "the merged load is past the limit") },
+            { assertEquals(0, cell.writes, "and nothing was written") },
+            { assertNotNull(cell.current.virtualService(e1), "the virtual-service read answers") },
+            { assertNotNull(allocator.virtualTime(cell.current, root, wants), "and so does the front") },
+        )
+    }
 }
