@@ -131,32 +131,9 @@ internal fun weightsFitTheBudget(weights: List<Weight>): Boolean {
     for (w in weights) sum = sum.plusOrNull(w.numerator.timesOrNull(l / w.denominator) ?: return false) ?: return false
     if (sum.timesOrNull(TICKS_PER_UNIT) == null) return false
     if (!weights.all { sum.timesOrNull(it.denominator) != null }) return false
-    return w1Fits(weights)
+    val step = gridStepOf(weights) ?: return false
+    return weights.all { aFullLeaseFits(it, step) }
 }
-
-/**
- * W1, as design §7.1's step B entry words it: `Σ⌈1/wᵢ⌉ ≤ 2³⁶` and `N · max⌈wᵢ⌉ · Σ⌈1/wᵢ⌉ ≤ 2⁵⁶`
- * over the parent's `N` active children.
- */
-internal fun w1Fits(weights: List<Weight>): Boolean {
-    var inverses = 0L
-    var heaviest = 0L
-    for (w in weights) {
-        inverses = inverses.plusOrNull(ceilDiv(w.denominator, w.numerator)) ?: return false
-        heaviest = maxOf(heaviest, ceilDiv(w.numerator, w.denominator))
-    }
-    if (inverses > W1_INVERSE_LIMIT) return false
-    val product = weights.size.toLong().timesOrNull(heaviest)?.timesOrNull(inverses) ?: return false
-    return product <= W1_SPREAD_LIMIT
-}
-
-private fun ceilDiv(a: Long, b: Long): Long = a / b + if (a % b == 0L) 0L else 1L
-
-/** W1's first clause: `Σ⌈1/wᵢ⌉ ≤ 2³⁶`. */
-internal const val W1_INVERSE_LIMIT: Long = 1L shl 36
-
-/** W1's second clause: `N · max⌈wᵢ⌉ · Σ⌈1/wᵢ⌉ ≤ 2⁵⁶`. */
-internal const val W1_SPREAD_LIMIT: Long = 1L shl 56
 
 /**
  * Whether one lease of [LocalHeddle.MAX_RESERVATION] from just under [w]'s [rebaseThreshold], plus

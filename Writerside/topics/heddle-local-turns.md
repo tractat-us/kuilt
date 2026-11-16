@@ -252,8 +252,8 @@ wake in one string, identical on every target.
 |---|---|---:|---:|
 | backlogged | overall share against 3 : 1 : 1 | 0.01 | 0.000222 |
 | backlogged | worst 500-step window | 0.05 | 0.023810 |
-| churn | overall share against the share of whoever was waiting | 0.03 | 0.016677 |
-| churn | worst 500-step window | 0.15 | 0.089246 |
+| churn | overall share against the share of whoever was waiting | 0.03 | 0.007225 |
+| churn | worst 500-step window | 0.15 | 0.062730 |
 
 **Scale.** `LeaseScaleProbe` times one `acquire` when a lane has 5,000 children
 and 50,000 retired ones. *Served* rows' retired children once did work, which the
@@ -311,15 +311,23 @@ hand that to a status page or another thread instead of the engine.
 **Outcomes, not exceptions.** Nothing suspends and nothing times out. The usual
 "no" is a typed answer that changes nothing: `SupplyExhausted`, `NothingEligible`,
 or `NoLiveLineage` from `acquire`, and `Unknown`, `Stale`, `PathDraining` or
-`SupplyExhausted` from a lease call. Both also have a `PositionCeiling` arm,
-which nothing returns today.
+`SupplyExhausted` from a lease call.
 `complete` and `admit` are never refused. Each call is all or nothing, with one
 exception: an `acquire` refused as `NoLiveLineage` still updates the engine's
 memory of who was waiting, because its pick saw them.
 
+**The books fill up, eventually.** The engine counts service in 64-bit whole
+numbers, and two lanes of the largest leases fill them after about half a
+million. So `acquire` stops a little early, with `LifetimeExhausted`, and keeps
+the rest for work already running: `admit`, `extend` and `complete` are never
+refused for it, and never throw. A charge that still does not fit is recorded
+whole or not at all, and `Done.unrecorded` says how much the books left out.
+One overrun too large to be real, above `MAX_RECORDED_OVERRUN`, is left out
+too, so a single wrong cost cannot stop the engine.
+
 **Exceptions mean a mistake.** An argument out of range throws
 `IllegalArgumentException`. Arithmetic past `Long` throws `ArithmeticException`
-rather than wrapping, except at the ceiling above. `IllegalStateException` means the
+rather than wrapping, except at the lifetime limit above. `IllegalStateException` means the
 engine found a state its own rules rule out: a bug in it, or a damaged ledger it
 did not write.
 

@@ -97,7 +97,7 @@ internal class MixedWeightRun(
     var chargedBelowReservation: Int = 0
         private set
 
-    /** Calls answered [ScheduleOutcome.PositionCeiling] or [ScheduleOutcome.WeightBudget]: a refusal. */
+    /** Calls answered [ScheduleOutcome.LifetimeExhausted] or [ScheduleOutcome.WeightBudget]: a refusal. */
     var refusals: Int = 0
         private set
 
@@ -118,7 +118,7 @@ internal class MixedWeightRun(
         calls++
         val outcome = peer.schedule(root)
         if (outcome is ScheduleOutcome.Delegated) grants += outcome.grants
-        if (outcome is ScheduleOutcome.PositionCeiling || outcome is ScheduleOutcome.WeightBudget) refusals++
+        if (outcome is ScheduleOutcome.LifetimeExhausted || outcome is ScheduleOutcome.WeightBudget) refusals++
         return outcome
     }
 

@@ -10,7 +10,7 @@ Asking changes nothing, so a screen can ask on every refresh. Only a real build
 moves the line. The second half, why it is not you yet, has a page of its own:
 [Explaining a wait](heddle-local-explain.md).
 
-> **Playground.** This engine works today, and its API can change.
+> **Beta.** This engine is built and heavily tested, and its API can still change.
 
 This page uses the build farm from [Fair share in one program](heddle-local.md):
 web at three parts, mobile at one, four agents, and builds of about three

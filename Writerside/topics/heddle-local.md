@@ -9,7 +9,7 @@ It keeps the promise over time, not build by build. A team that sat idle
 does not come back owed a pile of turns. A build that ran long pays for
 every minute.
 
-> **Playground.** This engine works today, and its API can change.
+> **Beta.** This engine is built and heavily tested, and its API can still change.
 
 This page follows one farm from its first build, through a change to its tree,
 to a crash and a restart. Every example is one compiled sample,
@@ -185,7 +185,7 @@ into words a person can act on, from a running engine or a saved one, see
 // The ninth build is web's, and it runs 9 minutes against its 3-minute estimate.
 val ninth = heddle.acquire(both, both, startedAt = 24L)
 check(ninth is AcquireOutcome.Acquired && ninth.lease.leaf == web)
-check(heddle.complete(ninth.lease.id, actualCost = 9L, waiting = both) == LeaseOutcome.Done(charged = 9L, overrun = 6L))
+check(heddle.complete(ninth.lease.id, actualCost = 9L, waiting = both) == LeaseOutcome.Done(charged = 9L, overrun = 6L, unrecorded = 0L))
 // All nine minutes count: web is now past the line, so mobile goes next.
 check(
     heddle.explain(web, waiting = both, eligible = both) ==
@@ -283,17 +283,17 @@ refuses a build that is already running.
 val estimated = heddle.acquire(waiting = both, eligible = setOf(mobile), startedAt = 90L, reservation = 7L)
 check(estimated is AcquireOutcome.Acquired && estimated.lease.reserved == 7L)
 // Still running at 7 minutes, it asks for 3 more, then finishes at 8.
-check(heddle.extend(estimated.lease.id, amount = 3L, waiting = both) == LeaseOutcome.Done(charged = 0L, overrun = 0L))
-check(heddle.complete(estimated.lease.id, actualCost = 8L, waiting = both) == LeaseOutcome.Done(charged = 8L, overrun = 0L))
+check(heddle.extend(estimated.lease.id, amount = 3L, waiting = both) == LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L))
+check(heddle.complete(estimated.lease.id, actualCost = 8L, waiting = both) == LeaseOutcome.Done(charged = 8L, overrun = 0L, unrecorded = 0L))
 // A build cancelled before it ran is charged nothing.
 val cancelled = heddle.acquire(both, both, startedAt = 98L)
 check(cancelled is AcquireOutcome.Acquired)
-check(heddle.cancel(cancelled.lease.id) == LeaseOutcome.Done(charged = 0L, overrun = 0L))
+check(heddle.cancel(cancelled.lease.id) == LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L))
 // Someone started a mobile build by hand. Admit it: no pick, but it is charged like any other.
 // Naming who else is waiting keeps the scheduler's view of the queue as a pick would leave it.
 val byHand = heddle.admit(mobile, waiting = both, startedAt = 99L)
 check(byHand is AcquireOutcome.Acquired)
-check(heddle.complete(byHand.lease.id, actualCost = 4L, waiting = both) == LeaseOutcome.Done(charged = 4L, overrun = 1L))
+check(heddle.complete(byHand.lease.id, actualCost = 4L, waiting = both) == LeaseOutcome.Done(charged = 4L, overrun = 1L, unrecorded = 0L))
 ```
 
 - **A Mac agent.** Web is still waiting, but this agent cannot run its builds,
@@ -329,7 +329,7 @@ val grown = draft("farm") {
 }
 check(heddle.apply(grown, generation = 1L).refusals.isEmpty())
 // The running build moved onto web's new weight, and finishes as if nothing happened.
-check(heddle.complete(running.lease.id, actualCost = 3L, waiting = setOf(web)) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+check(heddle.complete(running.lease.id, actualCost = 3L, waiting = setOf(web)) == LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L))
 ```
 
 `apply` takes the whole new tree, works out what changed, and makes every change
@@ -357,7 +357,7 @@ check(forkBuild is AcquireOutcome.Acquired && forkBuild.lease.leaf == ana)
 val closing = heddle.detach(listOf("forks"), "ana").refusals.single()
 check(closing is StepRefusal.Draining && closing.child == ana && closing.blockingLeases == listOf(forkBuild.lease))
 check(heddle.acquire(setOf(ana), setOf(ana), startedAt = 104L) is AcquireOutcome.NoLiveLineage)
-check(heddle.complete(forkBuild.lease.id, actualCost = 3L, waiting = setOf(ana)) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+check(heddle.complete(forkBuild.lease.id, actualCost = 3L, waiting = setOf(ana)) == LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L))
 // Its last build is done, so the same detach now finishes.
 check(heddle.detach(listOf("forks"), "ana").refusals.isEmpty())
 ```
@@ -377,7 +377,11 @@ lost build holds a removal up only until you settle it.
 Each child's change lands on its own. When one child's change cannot land yet,
 because it is draining or was refused, that child is held back. So is any group
 above it whose change must retire an old part, such as a reweight or a removal,
-and that group is listed in `refusals` too. Every other change in the same
+and that group is listed in `refusals` too. A new group held back takes the
+groups beneath it along, and each is listed. If that group is waiting for builds,
+they wait as `Draining` too. No lane runs under a group the engine never added,
+and an `attach` there is refused the same way. A group that was already running keeps its old part, so a new
+lane under it still lands. Every other change in the same
 reload still lands. Call `apply` with the same tree later, and only
 what is left is done.
 
@@ -408,7 +412,7 @@ check(found.unknown == listOf(stranger))
 val orphan = found.orphaned.single()
 check(orphan.lease == lost && orphan.elapsed == 14L && orphan.granted == 3L)
 // It ran 14 minutes on a 3-minute lease, which a lost build cannot prove: charge the 3.
-check(heddle.complete(orphan.lease.id, orphan.defaultSettlement, waiting = both) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+check(heddle.complete(orphan.lease.id, orphan.defaultSettlement, waiting = both) == LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L))
 // Settled once, it is gone: a second settlement changes nothing.
 check(heddle.complete(orphan.lease.id, actualCost = 14L, waiting = both) == LeaseOutcome.Unknown)
 ```
@@ -452,7 +456,7 @@ val restored = LocalHeddle.restore(decoded.snapshot, policy, epoch = 1L)
 val ahead = mapOf(web to 8, mobile to 8)
 check(restored.previewPicks(ahead, both, List(8) { 3L }) == heddle.previewPicks(ahead, both, List(8) { 3L }))
 // The build that was running finishes on the new engine, charged as it would have been.
-check(restored.complete(kept.id, actualCost = 3L, waiting = both) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+check(restored.complete(kept.id, actualCost = 3L, waiting = both) == LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L))
 // A lease settled before the restart is named as one from an older epoch.
 check(restored.complete(lost.id, actualCost = 3L, waiting = both) == LeaseOutcome.Stale(currentEpoch = 1L))
 // The agent count came back too, so it leases at once, and new ids carry the new epoch.
@@ -512,9 +516,11 @@ object so that a store that reorders an object's keys, as Postgres `jsonb` does,
 cannot move `state` ahead of the version. Equal snapshots encode to equal bytes.
 
 `LocalHeddleSnapshot.FORMAT_VERSION` is the format this release writes, and
-`SUPPORTED_FORMAT_VERSIONS` lists the formats it reads. 0.7.5 reads only
-snapshots it wrote itself; a consumer coming from 0.7.4 starts from its
-topology again.
+`SUPPORTED_FORMAT_VERSIONS` lists the formats it reads. 0.7.5 writes and reads
+format 1 alone. It is the first frozen format: a later release that changes what
+it means ships a reader for it. A consumer coming from 0.7.4 starts from its
+topology again. 0.7.4's snapshots also say format 1, in an older layout, and
+are not read: they fail to decode, so do not keep them across the upgrade.
 
 `decode` reads the version first and never throws for what the bytes hold.
 It gives one of three answers:
@@ -522,7 +528,8 @@ It gives one of three answers:
 - **`Restored`** holds the snapshot, ready for `restore`.
 - **`UnsupportedVersion`** means this release does not read the format the
   bytes were written in. It names the format it found and the formats it reads.
-  Either a newer release wrote them, or an older one did, such as 0.7.4.
+  Either a newer release wrote them, or a development build of 0.7.5 did, in
+  format 2.
   The engine reads nothing past the version, so nothing is half-loaded.
 - **`Corrupt`** means the bytes are not a snapshot, or hold one that does not add
   up, such as a lease on a part of the tree the books do not hold. Its `reason`

@@ -145,8 +145,8 @@ class LocalHeddleCeilingTest {
         val lease = assertIs<AcquireOutcome.Acquired>(plain).lease
         assertAll(
             { assertIs<AcquireOutcome.Acquired>(observing) },
-            { assertEquals(LeaseOutcome.Done(0L, 0L), h.extend(lease.id, 1L, waiting = emptySet())) },
-            { assertEquals(LeaseOutcome.Done(3L, 1L), h.complete(lease.id, 3L, waiting = emptySet())) },
+            { assertEquals(LeaseOutcome.Done(0L, 0L, 0L), h.extend(lease.id, 1L, waiting = emptySet())) },
+            { assertEquals(LeaseOutcome.Done(3L, 1L, 0L), h.complete(lease.id, 3L, waiting = emptySet())) },
             { assertEquals(AcquireOutcome.NothingEligible, h.acquire(ab, setOf(a), startedAt = 0L), "and the lane stays paused") },
         )
     }
