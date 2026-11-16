@@ -257,8 +257,16 @@ public class WarpMetricExporter(
 
     /**
      * Whether a durable-write outage is currently **open** — i.e. a refused store write has already
-     * been reported and the store has not taken a write since. Read and written only by [persist];
-     * nothing else touches it.
+     * been reported and the store has not taken a write since. Written only by [persist].
+     *
+     * A key in it is also a kind whose memory is **ahead of its disk**: its last write was refused,
+     * and only a write of it lands what that write carried. So [record] reads it too, and writes
+     * such a kind again even for an update that moved nothing, such as an up-down level reported
+     * again (#3307). Without that, a steady level never retried, its share never reached disk, and
+     * the key stayed here for good, so the next outage on any kind was never reported. One set
+     * serves both, rather than a second set of kinds ahead of disk, because the two are the same
+     * fact: added by a refused write of the key, removed by a landed one, and only [persist] sees
+     * either. A second copy would be a second place for that fact to drift.
      *
      * ## What it is for
      *
@@ -797,7 +805,9 @@ public class WarpMetricExporter(
      * already gone. A kind the batch never touched is not rewritten, as before.
      * An update that changes nothing — an up-down level set to the share it already holds, or a
      * [MetricUpdate.Forget] of a series the exporter does not hold — touches no kind, so a batch of
-     * only those writes nothing and counts no turn.
+     * only those writes nothing and counts no turn. The exception is a kind whose last write the
+     * store refused: memory holds what that write carried and disk does not, so such an update
+     * writes the kind again, and that is a turn of it.
      *
      * An empty [updates] is [MetricExportResult.Success] and touches neither memory nor the store.
      * Each [MetricUpdate] validates its own arguments at construction. Before **any** update is
@@ -855,9 +865,18 @@ public class WarpMetricExporter(
                 if (overflow != null) return@withLock emptyList()
                 // The last series each kind's updates named — only for the failure log line. An
                 // update that changed nothing, a level set again or a forget of an absent series,
-                // touches no kind, so it costs no write.
+                // touches no kind, so it costs no write — unless the kind's last write was refused:
+                // then memory is ahead of disk, and only a write puts it there. A steady level
+                // otherwise never retries, and the refused key holds the outage open for good.
+                // writeMutex orders this read after every persist that changed the set.
+                val aheadOfDisk = durableWriteOutage.value
                 val touched = LinkedHashMap<StoredKind, MetricKey>()
-                admitted.forEach { update -> applyLocked(update).forEach { kind -> touched[kind] = update.key } }
+                admitted.forEach { update ->
+                    val changed = applyLocked(update)
+                    update.storedKinds
+                        .filter { kind -> kind in changed || kind.storeKey in aheadOfDisk }
+                        .forEach { kind -> touched[kind] = update.key }
+                }
                 StoredKind.entries.mapNotNull { kind ->
                     touched[kind]?.let { lastKey -> PendingWrite(kind, encode(kind), lastKey) }
                 }
@@ -1467,7 +1486,9 @@ public class WarpMetricExporter(
      * Set this replica's share of the up-down sum for [key] to [level], the way an OpenTelemetry
      * UpDownCounter reports its level each collection (#3307). This replica's slot moves by
      * `level − its share`, so the series' value is the sum of every replica's level: two replicas at
-     * 3 and 4 read 7 once merged. Setting the level it already holds writes nothing.
+     * 3 and 4 read 7 once merged. Setting the level it already holds writes nothing, unless the
+     * store refused the last write of the kind: then it writes again, so a steady level still lands
+     * a share a refused write left in memory only.
      *
      * A restart that kept [replica] and the store gets its share back from [recover], or from the
      * kind's first turn, so the same level reported after a restart moves nothing. Two things stay in
