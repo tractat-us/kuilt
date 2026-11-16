@@ -12,7 +12,8 @@ import kotlin.test.assertTrue
  *
  * Every arm builds the hole the way a partial read does — six inserts minted, some applied to a
  * fresh state, which is then raised to the full state's counters — and asserts the hole is there
- * before it measures anything.
+ * before it measures anything. A held op whose predecessor is in the hole re-roots to HEAD, so the
+ * rigs compare what is held as a set.
  */
 @OptIn(CrdtInternalApi::class)
 class RgaDropWindowPastUnheldTest {
@@ -38,7 +39,7 @@ class RgaDropWindowPastUnheldTest {
         assertAll(
             // The rig: seqs 2 and 3 are a hole, and dropWindow's walk stops at it.
             { assertEquals(6L, state.seqHighWater(me), "the raise reached seq 6") },
-            { assertEquals(listOf("1", "4", "5", "6"), state.toList(), "seqs 2 and 3 are not held") },
+            { assertEquals(setOf("1", "4", "5", "6"), state.toList().toSet(), "seqs 2 and 3 are not held") },
             { assertEquals(1L, wedged.compactedBelow[me], "dropWindow stops below the hole") },
             { assertEquals(ids(minted, 4), wedged.compactedIds, "and records seq 4 in a Compact") },
             // The property.
@@ -80,7 +81,7 @@ class RgaDropWindowPastUnheldTest {
         val (state, minted) = holed(1, 4, 5)
         val (dropped, _) = requireNotNull(state.dropWindowPastUnheld(me, ids(minted, 1, 5)))
         assertAll(
-            { assertEquals(listOf("1", "4", "5"), state.toList(), "the rig: 2 and 3 are a hole below a held 4") },
+            { assertEquals(setOf("1", "4", "5"), state.toList().toSet(), "the rig: 2 and 3 are a hole below a held 4") },
             { assertEquals(1L, dropped.compactedBelow[me], "the floor stops below the hole, since 4 stays") },
             { assertEquals(ids(minted, 5), dropped.compactedIds, "and 5 is recorded in a Compact") },
             { assertEquals(listOf("4"), dropped.toList()) },
