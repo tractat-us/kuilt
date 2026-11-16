@@ -76,6 +76,45 @@ class RgaDropWindowPastUnheldTest {
         )
     }
 
+    /** [Rga.dropAllOwn] closes the hole [aHoleWithNoDroppedSeqAboveItStaysOpen] leaves (#3513). */
+    @Test
+    fun dropAllOwnClosesAHoleAboveEveryHeldSeq() {
+        val (state, minted) = holed(1, 2)
+        val (dropped, patch) = requireNotNull(state.dropAllOwn(me))
+        val returned = minted.filter { it.id.seq >= 3L }.fold(Rga.empty<String>()) { s, op -> s.apply(op) }
+        assertAll(
+            { assertEquals(6L, state.seqHighWater(me), "the rig: seqs 3 to 6 are a hole past every held one") },
+            { assertEquals(listOf("1", "2"), state.toList(), "the rig: 1 and 2 are held") },
+            { assertEquals(6L, dropped.compactedBelow[me], "the floor reaches the high-water") },
+            { assertEquals(emptyList(), dropped.toList(), "the held ops are dropped") },
+            { assertEquals(emptyList(), dropped.piece(returned).toList(), "the hole's ops are purged when they come back") },
+            { assertEquals(emptyList(), returned.piece(patch.delta).toList(), "and by a peer that absorbs the delta") },
+            { assertEquals(6L, dropped.seqHighWater(me), "the next mint still lies past them") },
+        )
+    }
+
+    @Test
+    fun dropAllOwnLeavesAForeignAuthorAlone() {
+        val (state, _) = holed(1, 2)
+        val (withPeer, peerOps) = state.insertAllAfter(peer, RgaId.HEAD, listOf("p", "q"))
+        val (dropped, _) = requireNotNull(withPeer.dropAllOwn(me))
+        assertAll(
+            { assertEquals(0L, dropped.compactedBelow[peer], "the peer's entry never moves") },
+            { assertEquals(emptySet(), dropped.compactedIds, "and nothing goes to a Compact") },
+            { assertEquals(listOf("p", "q"), dropped.toList(), "its records stay: ${peerOps.map { it.id }}") },
+        )
+    }
+
+    @Test
+    fun dropAllOwnIsNullOnceTheFloorIsAtTheHighWater() {
+        val (state, _) = holed(1, 2)
+        val (dropped, _) = requireNotNull(state.dropAllOwn(me))
+        assertAll(
+            { assertEquals(null, dropped.dropAllOwn(me), "a second call raises nothing") },
+            { assertEquals(null, Rga.empty<String>().dropAllOwn(me), "nor does one on a state that minted nothing") },
+        )
+    }
+
     @Test
     fun aHeldRetainedSeqAboveTheHoleBlocksTheCrossing() {
         val (state, minted) = holed(1, 4, 5)
