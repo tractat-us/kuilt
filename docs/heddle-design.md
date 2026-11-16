@@ -1536,10 +1536,14 @@ origins, which is a layout 0.7.5 already reads, so the format number and
    `origins` and `PolicyEdge.origin` stay, deprecated. The format number does
    not change. Docs: §7.1, §10.5, both `module.md`s,
    `Writerside/topics/heddle-local.md`.
-5. **The position limit.** In progress (#3500): built so far are the limit, the
-   sealed results, the refusal on `acquire` and `schedule`, the charging-call
-   path rule and the early check in `apply`, with the bridge, waker and
-   two-sides rows. `POSITION_LIMIT`, the sealed result of the
+5. **The position limit.** Built (#3500): the limit, the sealed results, the
+   refusal on `acquire` and `schedule` (`HeddleNode` included), the
+   charging-call path rule, and the early check in `apply` and `attach`, which
+   counts every unseated sibling as seated at the same front. A returner's
+   shift is formed as `q · K + r` with `K = CLOCK_GRID · d`, never as run times
+   numerator, so it reaches the limit and no sooner. Rows in
+   `W1BridgeProbeTest`, `FairShareAllocatorRefusalTest`, `HeddleNodeTest` and
+   `PositionLimitDriverTest`. `POSITION_LIMIT`, the sealed result of the
    seat-and-wake step and of `VirtualTime.ticksForWide`, the refusal on
    `acquire` and `schedule`, the path rule for a charging call, and the early
    check in `LocalHeddle.apply`. `weightsFitTheBudget` does not change.
