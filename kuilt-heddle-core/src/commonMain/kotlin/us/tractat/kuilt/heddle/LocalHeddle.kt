@@ -484,13 +484,13 @@ public sealed interface LeaseOutcome {
  *
  * [apply] keeps the weight arithmetic in range the same way: a reload whose weights would put one
  * parent's products of numerators and denominators out of `Long` refuses that child with a
- * [StepRefusal.Refused], and its siblings land. Refused so, a group the reload adds takes every
- * group beneath it out with it, each a [StepRefusal.Refused] of its own, so no lane activates below a
- * group with no inbound edge (#3466); a running group whose reweight is refused keeps its old edge,
- * and what is beneath it. So does one too fine for a full lease: keep every
+ * [StepRefusal.Refused], and its siblings land. So does one too fine for a full lease: keep every
  * weight's denominator at or below 30,719 (#3353). The limit holds at any lease size, because it is
  * sized for the largest lease, [MAX_RESERVATION]. It is necessary, not sufficient: several fine
- * weights whose denominators share no factor are refused below it too. A reload refuses the
+ * weights whose denominators share no factor are refused below it too. Refused so, a group the
+ * reload adds takes every group beneath it out with it, each a [StepRefusal.Refused] of its own, so
+ * no lane activates below a group the root cannot reach (#3466); a running group whose reweight is
+ * refused keeps its old edge, and what is beneath it. A reload refuses the
  * sibling whose activation tips the set over, and siblings activate in id order, so of two new
  * siblings that fit alone but not together, the one whose id sorts last is refused. A boot, which
  * has no previous tree to keep, leaves out their parent and everything beneath it instead (see
@@ -1068,10 +1068,11 @@ public class LocalHeddle private constructor(
      * whole list runs on a working copy that replaces the ledger at the end, so nothing is ever
      * leased against a state part-way through a reload. A child whose change cannot land yet is
      * reported in [ApplyResult.refusals], and every other child's change still lands in the same
-     * swap. Apply the same topology again later, and only what is left is listed. A child left out
-     * that was not reachable from the root before the reload, a new group, takes every group beneath
-     * it out too, each reported, so nothing activates below a group with no inbound edge. A child
-     * that was reachable keeps its edge, so what is beneath it still lands.
+     * swap. Apply the same topology again later, and only what is left is listed. Nothing activates
+     * that the root cannot reach: a new group left out takes every group beneath it out too, each
+     * reported, as [StepRefusal.Draining] on the same leases when the group waits on a drain and as
+     * [StepRefusal.Refused] otherwise. A running group whose change is refused keeps its old edge,
+     * so what is beneath it still lands. The same holds for [attach] and for a boot.
      *
      * **A reweight moves its open leases with it.** A changed weight is a new edge, and an open
      * lease whose path crosses the old one moves onto the new one in the same unit: its reservation
@@ -1154,7 +1155,7 @@ public class LocalHeddle private constructor(
     private fun run(steps: List<TopologyStep>, attribution: Attribution): ApplyResult {
         val left = LinkedHashMap<GroupId, StepRefusal>()
         while (true) {
-            when (val trial = attempt(steps, left.keys)) {
+            when (val trial = attempt(steps, left)) {
                 is Trial.LeaveOut -> {
                     val fresh = trial.refusals.filter { it.child !in left }
                     check(fresh.isNotEmpty()) { "an attempt left out only children already left out: ${trial.refusals}" }
@@ -1245,8 +1246,8 @@ public class LocalHeddle private constructor(
     }
 
     /**
-     * One attempt at [steps] on a working copy of the ledger, without the steps of the children in
-     * [leftOut]. It lands when every child left in either lands or is a removal waiting on a drain;
+     * One attempt at [steps] on a working copy of the ledger, without the steps of the children
+     * [left] already holds, each with its answer. It lands when every child left in either lands or is a removal waiting on a drain;
      * otherwise it names the children to leave out.
      *
      * A **replacement** is a child whose list retires an edge and activates another. The open leases
@@ -1257,13 +1258,15 @@ public class LocalHeddle private constructor(
      * unless a lease that cannot move is what holds it ([StepRefusal.Draining]). A retire refused
      * after those releases is refused for units that are not this engine's, which waiting will not
      * cure. A child any of whose steps the ledger refuses outright is left out too, and so is every
-     * group beneath a left-out child that was not reachable from the root in the committed ledger,
-     * the mirror of a retire waiting on a group below it. Only a removal
+     * child this unit activates that the root would not reach once it lands ([cutOff]): the mirror
+     * of a retire waiting on a group below it, checked on the end state so that neither the step
+     * order nor the entry point can get round it. Only a removal
      * waiting on a drain keeps its steps up to the refused retire, since its close is what stops new
      * work going there.
      */
-    private fun attempt(steps: List<TopologyStep>, leftOut: Set<GroupId>): Trial {
+    private fun attempt(steps: List<TopologyStep>, left: Map<GroupId, StepRefusal>): Trial {
         val base = ledger
+        val leftOut = left.keys
         val replaced = replacedEdges(steps, leftOut)
         // Edges this list closes or retires for a child that gets no new edge: a lease across one
         // drains where it is, and cannot be moved.
@@ -1309,18 +1312,6 @@ public class LocalHeddle private constructor(
             // Retires run bottom-up, so a group's retire waits on every group below it whose change did
             // not land: one stopped in this attempt, or one left out of it.
             val below = (stopped.asSequence() + leftOut.asSequence()).filter { it.value.startsWith(child.value + "/") }.minOrNull()
-            // And a group beneath one whose change did not land is left out with it when that group
-            // was not reachable from the root before the reload: a new group, so the lanes under it
-            // would activate below a group with no inbound edge (#3466). A group that was reachable
-            // keeps its edge, so what is beneath it still has a way down from the root.
-            val above = (stopped.asSequence() + leftOut.asSequence())
-                .filter { child.value.startsWith(it.value + "/") && !base.reachesFromRoot(it) }
-                .minOrNull()
-            if (above != null) {
-                leaveOut += StepRefusal.Refused(child, step, "${above.value}, above it, was left out, and no delegation from the root reaches it without that group")
-                stopped += child
-                continue
-            }
             val stepped = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
             // An activation whose weight would put its parent's weight products out of Long, or make
             // the set too fine for one full lease: the ledger would take it, and every pick at that
@@ -1351,6 +1342,18 @@ public class LocalHeddle private constructor(
             stopped += child
         }
         if (leaveOut.isNotEmpty()) return Trial.LeaveOut(leaveOut, unfit)
+
+        // Every group this unit activates must be reachable from the root once it lands, whatever
+        // the entry point and the step order: a lane under a new group left out of this reload, or
+        // under one an earlier call left out, would otherwise activate below a group with no inbound
+        // edge (#3466). A running group whose own change did not land keeps its old edge, so what is
+        // beneath it still reaches the root and lands.
+        val unreachable = applied.asSequence().filterIsInstance<TopologyStep.Activate>().map { it.child }.distinct()
+            .filter { !local.reachesFromRoot(it) }.toList()
+        if (unreachable.isNotEmpty()) {
+            val waits = (left.values.asSequence() + draining.asSequence()).filterIsInstance<StepRefusal.Draining>().associateBy { it.child }
+            return Trial.LeaveOut(unreachable.map { cutOff(it, local, steps, waits) }, unfit = emptySet())
+        }
 
         val moved = LinkedHashMap<LeaseId, List<AttachmentId>>()
         for (lease in moving) {
@@ -1383,12 +1386,33 @@ public class LocalHeddle private constructor(
         // `observeAndDelegate` and `releaseUp` throw on. An engine bug if not; the ledger is not swapped.
         for (lease in open.values) {
             val path = moved[lease.lease.id] ?: lease.path
-            check(local.lineageOf(lease.lease.leaf) == path && local.record(path.first())?.parent == root) {
+            check(local.lineageOf(lease.lease.leaf) == path && path.firstOrNull()?.let(local::record)?.parent == root) {
                 "a reload left lease ${lease.lease.id} on ${path.map { it.value }}, not ${lease.lease.leaf.value}'s lineage " +
-                    "${local.lineageOf(lease.lease.leaf)?.map { it.value }}"
+                    "${local.lineageOf(lease.lease.leaf)?.map { it.value }} from the root ${root.value}"
             }
         }
         return Trial.Landed(local, applied, draining, moved)
+    }
+
+    /**
+     * Why [child], activated by this unit, is left out of it: no delegation from the [root] reaches
+     * it in [local]. The outermost group above it that the root does not reach is the cause. When
+     * that group waits on a drain, in [waits], so does [child], on the same leases, since the cause
+     * clears once they settle; otherwise [child] is [StepRefusal.Refused] at its first step.
+     */
+    private fun cutOff(child: GroupId, local: EntitlementLedger, steps: List<TopologyStep>, waits: Map<GroupId, StepRefusal.Draining>): StepRefusal {
+        val names = child.value.split('/')
+        val cause = (1 until names.size).asSequence()
+            .map { GroupId(names.subList(0, it).joinToString("/")) }
+            .firstOrNull { it != root && !local.reachesFromRoot(it) }
+        val wait = cause?.let(waits::get)
+        if (wait != null) return StepRefusal.Draining(child, wait.edge, wait.outstanding, wait.blockingLeases)
+        val reason = if (cause != null) {
+            "${cause.value}, above it, is not reachable from the root, so no delegation could reach ${child.value}"
+        } else {
+            "no delegation from the root would reach it"
+        }
+        return StepRefusal.Refused(child, steps.first { it.child == child }, reason)
     }
 
     /**

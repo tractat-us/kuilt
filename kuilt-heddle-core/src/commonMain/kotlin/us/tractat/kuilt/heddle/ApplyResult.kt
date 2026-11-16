@@ -28,6 +28,10 @@ public sealed interface StepRefusal {
      * reweight that waits, because a lease beneath it sits under a child the same reload removes,
      * has changed nothing: [edge] stays as it was, ACTIVE for a reweight, or still CLOSING for a
      * child put back before its removal drained, and keeps its history until its leases can move.
+     *
+     * A group the same apply would activate beneath a group that waits is held back with it, since
+     * the root could not reach it until that group lands: it is reported as `Draining` too, and
+     * [edge], [outstanding] and [blockingLeases] are then that group's.
      */
     public data class Draining(
         override val child: GroupId,
@@ -40,8 +44,8 @@ public sealed interface StepRefusal {
      * [step] was refused for a reason waiting on this engine's leases will not cure,
      * described by [reason]: a record the ledger holds twice, say, or a reweight whose old edge
      * still carries units after the engine released every one of its own there. Or [child] sits
-     * beneath a group the same apply adds and leaves out, where no delegation from the root could
-     * reach it; [reason] names that group. [child] is left as it was before this apply.
+     * beneath a group the root does not reach, a new one this apply or an earlier one left out, so
+     * no delegation could reach it; [reason] names that group. [child] is left as it was before this apply.
      */
     public data class Refused(
         override val child: GroupId,

@@ -378,8 +378,9 @@ Each child's change lands on its own. When one child's change cannot land yet,
 because it is draining or was refused, that child is held back. So is any group
 above it whose change must retire an old part, such as a reweight or a removal,
 and that group is listed in `refusals` too. A new group held back takes the
-groups beneath it along, and each is listed: a lane never runs under a group the
-reload did not add. A group that was already running keeps its old part, so a new
+groups beneath it along, and each is listed. If that group is waiting for builds,
+they wait as `Draining` too. No lane runs under a group the engine never added,
+and an `attach` there is refused the same way. A group that was already running keeps its old part, so a new
 lane under it still lands. Every other change in the same
 reload still lands. Call `apply` with the same tree later, and only
 what is left is done.

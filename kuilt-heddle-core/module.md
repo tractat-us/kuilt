@@ -260,7 +260,7 @@ because it is sized for the largest lease, `MAX_RESERVATION`, and no grant is la
 is necessary, not sufficient: several fine weights whose denominators share no factor
 are refused below it too. `LocalHeddle.apply` answers a `StepRefusal` for such a child,
 and for each new group beneath it when the child is new itself, so no lane activates below a
-group with no inbound edge; a running group whose reweight is refused keeps its old edge and
+group the root cannot reach, whether `apply`, `attach` or a boot would add it; a running group whose reweight is refused keeps its old edge and
 everything beneath it. And `LocalHeddle.fromTopology`, which has no running tree to keep, leaves out the
 child's parent and everything beneath it, reporting each in its `Boot`. It remembers, between calls, which children it
 has seen idle and what clamp each carries; that memory is local to the allocator and

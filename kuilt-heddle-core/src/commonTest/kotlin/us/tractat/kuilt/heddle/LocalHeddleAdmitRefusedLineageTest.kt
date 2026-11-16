@@ -4,6 +4,7 @@ import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /**
  * A lane beneath a group with no inbound edge: the state a 0.7.5 engine persisted when a reload
@@ -31,7 +32,8 @@ class LocalHeddleAdmitRefusedLineageTest {
             val refused = apply(withHuge, generation = 1L).refusals.map { it.child }
             check(refused == listOf(huge, lane)) { "the rig: huge and its lane are refused, was $refused" }
             reshapeForTest { l ->
-                val edge = AttachmentRecord(AttachmentId("own-as-0.7.5-left-it"), huge, lane, Weight.ONE)
+                // The id the generation-1 diff gave it, as a 0.7.5 engine wrote it.
+                val edge = AttachmentRecord(AttachmentId("${lane.value}@1:1#1"), huge, lane, Weight.ONE)
                 val prepared = l.piece(checkNotNull(l.prepare(edge)) { "prepare the lane's edge" }.delta)
                 prepared.piece(checkNotNull(prepared.activate(edge.id)) { "activate the lane's edge" }.delta)
             }
@@ -81,6 +83,24 @@ class LocalHeddleAdmitRefusedLineageTest {
             { assertEquals(Rational.ZERO, engine.entitlement(lane, setOf(lane), totalSlots = 4L)) },
             { assertEquals(Rational.ZERO, engine.entitlement(lane, both, totalSlots = 4L)) },
             { assertEquals(Rational.of(4L), engine.entitlement(withHuge.groupId("small"), both, totalSlots = 4L), "small has every slot") },
+        )
+    }
+
+    /** A reload that gives `huge` a weight that fits heals the lane: `huge` activates above it, and the lane leases. */
+    @Test
+    fun aFixedReloadHealsTheLaneLeftBeneathARefusedGroup() {
+        val engine = engine()
+        val fixed = draft("pool") {
+            lane("small", Weight.ONE)
+            group("huge", Weight.ONE) { lane("own", Weight.ONE) }
+        }
+        val result = engine.apply(fixed, generation = 2L)
+        val leased = engine.acquire(setOf(lane), setOf(lane), startedAt = 0L)
+        assertAll(
+            { assertEquals(emptyList(), result.refusals, "the fixed reload lands whole") },
+            { assertTrue(result.applied.any { it is TopologyStep.Activate && it.child == huge }, "huge activates: ${result.applied}") },
+            { assertTrue(result.applied.none { it.child == lane }, "the lane's edge is kept as it was: ${result.applied}") },
+            { assertIs<AcquireOutcome.Acquired>(leased, "the lane leases from the root: $leased") },
         )
     }
 }
