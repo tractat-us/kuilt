@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.core.CloseReason
 import us.tractat.kuilt.core.FabricAvailability
 import us.tractat.kuilt.core.InMemoryLoom
@@ -22,8 +23,11 @@ import us.tractat.kuilt.core.TransportCapability
 import us.tractat.kuilt.core.TransportRole
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.minutes
 
 /**
  * The **positive control** for #2601's lifecycle/identity slice: proof that the joiner half each of
@@ -134,19 +138,39 @@ class SymmetricLifecycleObligationRigTest {
 
     // ── (3) incomingCompletesWhenSeamCloses ──────────────────────────────────
 
+    // This obligation waits unbounded and reds through `runTest`'s wall-clock backstop (#3519), so
+    // its red is a body that never completes rather than a named arm. The rig shows that on the
+    // virtual clock, which is honest here because every seam in it is in-memory: the body must still
+    // be parked after a window far past anything the reference needs, and parked on the JOINER's
+    // collection, which starts only once the host's has completed.
+
     @Test
     fun aJoinerWhoseIncomingNeverCompletesFailsTheTerminationObligation(): TestResult = runTest {
-        val failure = assertFailsWith<AssertionError>(
-            "a joiner whose incoming never terminates must FAIL — a consumer self-closing via " +
-                "onCompletion never runs, and the leak is invisible from the host end",
-        ) {
-            harnessOver(DecoratingJoinerLoom(InMemoryLoom(), ::SeamWhoseIncomingNeverCompletes))
-                .runIncomingCompletesWhenSeamCloses(this)
+        var joinerCollections = 0
+        val completed = withTimeoutOrNull(NEVER_COMPLETES_WINDOW) {
+            harnessOver(
+                DecoratingJoinerLoom(InMemoryLoom()) { seam ->
+                    SeamWhoseIncomingNeverCompletes(seam) { joinerCollections++ }
+                },
+            ).runIncomingCompletesWhenSeamCloses(this)
         }
         assertAll(
-            { assertRedOn("the JOINER's incoming must COMPLETE", failure) },
-            // The host is untouched: one arm of three.
-            { assertArmCount(1, failure) },
+            {
+                assertNull(
+                    completed,
+                    "a joiner whose incoming never terminates must keep the obligation from completing — " +
+                        "a consumer self-closing via onCompletion never runs, and the leak is invisible " +
+                        "from the host end",
+                )
+            },
+            {
+                assertEquals(
+                    1,
+                    joinerCollections,
+                    "the obligation must be parked on the JOINER's collection, which starts only after " +
+                        "the host's completed; 0 means it hung on the host end instead",
+                )
+            },
         )
     }
 
@@ -409,9 +433,16 @@ class SymmetricLifecycleObligationRigTest {
         }
     }
 
-    /** A joiner whose `incoming` relays the real flow and then never terminates. */
-    private class SeamWhoseIncomingNeverCompletes(private val delegate: Seam) : Seam by delegate {
+    /**
+     * A joiner whose `incoming` relays the real flow and then never terminates. [onCollect] is told
+     * each time someone starts collecting it.
+     */
+    private class SeamWhoseIncomingNeverCompletes(
+        private val delegate: Seam,
+        private val onCollect: () -> Unit,
+    ) : Seam by delegate {
         override val incoming: Flow<Swatch> = flow {
+            onCollect()
             delegate.incoming.collect { emit(it) }
             awaitCancellation()
         }
@@ -537,6 +568,13 @@ class SymmetricLifecycleObligationRigTest {
     private companion object {
         private const val GAP_URL = "https://github.com/tractat-us/kuilt/issues/2601"
         private const val SECOND_CLOSE_THREW = "rig: this joiner's second close() throws"
+
+        /**
+         * Virtual time the never-completing row waits before calling the obligation parked. The
+         * reference completes without the virtual clock moving, so any window separates the two;
+         * this one is far past the suite's own bounds so nothing inside the body is cut short.
+         */
+        private val NEVER_COMPLETES_WINDOW = 1.minutes
 
         /** The unreachable remote a torn joiner must not go on advertising. */
         private val PHANTOM_REMOTE = PeerId("rig-remote-the-torn-joiner-cannot-reach")
