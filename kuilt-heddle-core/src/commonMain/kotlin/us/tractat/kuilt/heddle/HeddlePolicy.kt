@@ -227,7 +227,11 @@ public object HeddlePolicy {
      * Held inside the edge's window (#3353): past its ceiling it reads the ceiling, below its floor
      * the floor, so it never throws on a position.
      */
+    @Deprecated("A Rational read sticks at the ceiling once nothing rebases (design §7.1); read virtualServiceWide(edge), a VirtualTime, instead.", ReplaceWith("virtualServiceWide(edge)"))
     public fun virtualService(edge: PolicyEdge): Rational = readVirtual(rawTicks(edge), edge.record.weight)
+
+    /** [virtualService] as a [VirtualTime], exact and never held (design §7.1). */
+    public fun virtualServiceWide(edge: PolicyEdge): VirtualTime = VirtualTime.of(rawTicks(edge), edge.record.weight)
 
     /**
      * [virtualService] as a position: whole ticks of the edge's own service, wide and never
@@ -309,8 +313,21 @@ public object HeddlePolicy {
      * @return the front, or `null` when no edge survives [excluding] and there is therefore no
      *   set to take a front of.
      */
+    @Deprecated("A Rational read sticks at the ceiling once nothing rebases (design §7.1); read frontWide(edges, excluding), a VirtualTime, instead.", ReplaceWith("frontWide(edges, excluding)"))
     public fun front(edges: List<PolicyEdge>, excluding: Set<AttachmentId> = emptySet()): Rational? =
         frontTime(edges, excluding)?.toRational()
+
+    /**
+     * [front] as a [VirtualTime], exact (design §7.1). `null` when no edge survives [excluding], and
+     * `null` too over a merged load whose sum leaves 128 bits, a state the position limit keeps any
+     * one peer from building.
+     */
+    public fun frontWide(edges: List<PolicyEdge>, excluding: Set<AttachmentId> = emptySet()): VirtualTime? =
+        try {
+            frontTime(edges, excluding)
+        } catch (_: ArithmeticException) {
+            null
+        }
 
     /**
      * [front] kept unreduced, for the two writers that use it: a joiner of weight `w` is seated, or
@@ -352,6 +369,20 @@ public object HeddlePolicy {
         // The front rounds up and the waker's own position down, so an off-grid caller's offset
         // can only overshoot the front, never land short of it (§10.5).
         clampTicks(wideTicksAt(front, weight), wideTicksAt(vRaw, weight, Rounding.FLOOR), sleeperCredit)
+
+    /**
+     * [wakeOffset] over [VirtualTime]s: the front read on the waker's grid rounded up, its own
+     * time rounded down, so the offset can only overshoot the front (§10.5).
+     *
+     * @throws ArithmeticException when the front on the waker's grid passes the position limit,
+     *   where no clamp can land (design §7.1).
+     */
+    public fun wakeOffset(front: VirtualTime, vRaw: VirtualTime, weight: Weight, sleeperCredit: Long): Int128 {
+        val frontTicks = (front.ticksForWide(weight) as? Ticks.Fits)?.value
+            ?: throw ArithmeticException("a front of $front on a waker of weight $weight passes the position limit")
+        val rawTicks = vRaw.floorTicksFor(weight)
+        return clampTicks(frontTicks, rawTicks, sleeperCredit)
+    }
 
     /**
      * [wakeOffset] in ticks, wide: how far a waker at [rawTicks] moves up to reach [frontTicks], less

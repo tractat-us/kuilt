@@ -349,6 +349,11 @@ public class VirtualTime internal constructor(
         return if (value > POSITION_LIMIT || value < Int128.ZERO - POSITION_LIMIT) Ticks.PastLimit else Ticks.Fits(value)
     }
 
+    /** This time on the grid of weight [w], rounded down: `⌊V · w · G⌋` ticks. */
+    internal fun floorTicksFor(w: Weight): Int128 =
+        mulDiv(ticks, checkedMul(weightDenominator, w.numerator), checkedMul(weightNumerator, w.denominator), Rounding.FLOOR)
+            ?: throw ArithmeticException("Int128 overflow: a virtual time read on the grid of $w")
+
     /** This time in whole units of virtual time, rounded down: `⌊ticks / (G · w)⌋`. */
     internal fun unitsFloor(): Int128 =
         mulDiv(ticks, weightDenominator, checkedMul(TICKS_PER_UNIT, weightNumerator), Rounding.FLOOR)

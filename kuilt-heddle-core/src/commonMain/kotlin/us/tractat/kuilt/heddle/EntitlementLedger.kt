@@ -477,8 +477,18 @@ public class EntitlementLedger private constructor(
      * reads the wide position instead, and orders it exactly. One below its floor, `−ceiling`, reads
      * as the floor (#3353): higher than it is, the penalty side.
      */
+    @Deprecated("A Rational read sticks at the ceiling once nothing rebases (design §7.1); read grossVirtualServiceWide(id), a VirtualTime, instead.", ReplaceWith("grossVirtualServiceWide(id)"))
     public fun grossVirtualService(id: AttachmentId): Rational? =
         recordOf(id)?.let { grossVirtualService(id, it) }
+
+    /**
+     * [grossVirtualService] as a [VirtualTime], exact: never held at a ceiling, never thrown on how
+     * far the edge has run (design §7.1). `null` if [id] is unknown or divergent.
+     */
+    public fun grossVirtualServiceWide(id: AttachmentId): VirtualTime? {
+        val record = recordOf(id) ?: return null
+        return VirtualTime.of(gauges[id].exactGrossTicksAt(counterValue(issued, id)), record.weight)
+    }
 
     /**
      * [id]'s virtual service net of returns — `grossVirtualService − returned / w` (design §7.1's
@@ -486,9 +496,19 @@ public class EntitlementLedger private constructor(
      * computed wide and narrowed only here. `null` if [id] is unknown or divergent. Past the
      * ceiling it reads the ceiling, and below the floor the floor, as [grossVirtualService] does.
      */
+    @Deprecated("A Rational read sticks at the ceiling once nothing rebases (design §7.1); read virtualServiceWide(id), a VirtualTime, instead.", ReplaceWith("virtualServiceWide(id)"))
     public fun virtualService(id: AttachmentId): Rational? {
         val record = recordOf(id) ?: return null
         return readVirtual(rawTicks(id, record), record.weight)
+    }
+
+    /**
+     * [virtualService] as a [VirtualTime], exact: never held at a ceiling, never thrown on how far
+     * the edge has run (design §7.1). `null` if [id] is unknown or divergent.
+     */
+    public fun virtualServiceWide(id: AttachmentId): VirtualTime? {
+        val record = recordOf(id) ?: return null
+        return VirtualTime.of(rawTicks(id, record), record.weight)
     }
 
     /** [id]'s raw position, wide ([rawTicksAt], #3353). */
