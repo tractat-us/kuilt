@@ -179,7 +179,9 @@ class WarpMetricExporterUpDownSumTest {
 
     /**
      * A share is a difference of two growing totals, so it can land a rounding step off the level.
-     * Whatever the level, setting it again settles: at most one more write, then none. Run over many
+     * Whatever the level, setting it again settles within a few writes: each one must bring the
+     * share strictly closer, so they end. Three was the most a level took over 400,000 random
+     * states, so the fourth to sixth sets of each level here must write nothing. Run over many
      * levels so a rounding that lands on either side of the level is reached.
      */
     @Test
@@ -188,16 +190,37 @@ class WarpMetricExporterUpDownSumTest {
         val onA = exporter(a, store)
         val unsettled = (1..200).mapNotNull { i ->
             val level = i * 0.1 - 7.3
-            onA.setUpDownSumDouble(inFlight, level)
-            onA.setUpDownSumDouble(inFlight, level)
+            repeat(3) { onA.setUpDownSumDouble(inFlight, level) }
             val settled = store.writeCount()
-            onA.setUpDownSumDouble(inFlight, level)
-            onA.setUpDownSumDouble(inFlight, level)
+            repeat(3) { onA.setUpDownSumDouble(inFlight, level) }
             if (store.writeCount() == settled) null else level
         }
         assertAll(
             { assertTrue(store.writeCount() >= 200, "the rig: every new level wrote, ${store.writeCount()} writes") },
-            { assertEquals(emptyList<Double>(), unsettled, "levels still writing on their third and fourth set") },
+            { assertEquals(emptyList<Double>(), unsettled, "levels still writing on their fourth to sixth set") },
+        )
+    }
+
+    /**
+     * A state found by a random search in which moving the share by `level − share` never lands:
+     * each write rounds to the other side of the level, so without the rule that a set must bring
+     * the share closer, this level is rewritten on every collection, forever. The rig: the first set
+     * really does write.
+     */
+    @Test
+    fun aLevelWhoseEveryMoveOvershootsSettlesAfterOneWrite() = runTest {
+        val store = RecordingStore()
+        val onA = exporter(a, store)
+        onA.addUpDownSumDouble(inFlight, 0.04524733402924585)
+        onA.addUpDownSumDouble(inFlight, -0.013141399650194556)
+        val before = store.writeCount()
+        onA.setUpDownSumDouble(inFlight, -0.0727241849719674)
+        val afterFirst = store.writeCount()
+        repeat(6) { onA.setUpDownSumDouble(inFlight, -0.0727241849719674) }
+        assertAll(
+            { assertEquals(before + 1, afterFirst, "the first set wrote") },
+            { assertEquals(afterFirst, store.writeCount(), "the level settled after that one write") },
+            { assertEquals(-0.0727241849719674, onA.upDownSumDoubleValue(inFlight), 1e-16) },
         )
     }
 

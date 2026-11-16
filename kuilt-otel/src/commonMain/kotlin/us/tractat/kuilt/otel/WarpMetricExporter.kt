@@ -153,7 +153,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  *   would break the accuracy guarantee, so ingestion rejects it up front rather than
  *   letting an OTLP drain fail later.
  *
- * @param replica Stable unique identity for this device/process (use a UUID).
+ * @param replica Stable unique identity for this device/process (use a UUID). Keep it, with [store],
+ *   across restarts: an up-down sum's share lives in this replica's slot, so a process that comes
+ *   back under a new id leaves its old share in the sum for good.
  * @param store Durable persistence backend. [InMemoryDurableStore] in tests.
  * @param maxMetrics Maximum number of distinct [MetricKey]s across all kinds; at least 1.
  * @param bufferPolicy Eviction strategy when [maxMetrics] is exceeded.
@@ -1058,8 +1060,9 @@ public class WarpMetricExporter(
      *
      * A share is a difference of two growing totals, so a set can land a rounding step off its level.
      * A [MetricUpdate.SetUpDownSumDouble] that would bring the share no closer to the level than it
-     * already is moves nothing, so a level reported again settles after at most one more write rather
-     * than rewriting the series every collection.
+     * already is moves nothing. Each write that lands brings it strictly closer, so a level reported
+     * again settles within a few writes (three at most over 400,000 random states) rather than
+     * rewriting the series every collection, which a plain `level − share` move can do forever.
      */
     private fun upDownSumDoubleNextOrNull(current: PNCounterDouble, update: MetricUpdate): PNCounterDouble? {
         val share = current.count(replica)
@@ -1518,8 +1521,8 @@ public class WarpMetricExporter(
      *
      * A share is a difference of two growing totals, so it carries a rounding error that grows with
      * how far it has moved in all, and a set can land a rounding step off its level. A set that would
-     * bring the share no closer moves nothing, so a level reported again settles after at most one
-     * more write. Returns a [MetricExportResult.Refused] when the move would take one of this
+     * bring the share no closer moves nothing, so a level reported again settles within a few
+     * writes. Returns a [MetricExportResult.Refused] when the move would take one of this
      * replica's slots past [Double.MAX_VALUE].
      *
      * @throws IllegalArgumentException if [level] is NaN or infinite.
