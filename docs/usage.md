@@ -767,7 +767,7 @@ Inside kuilt's own `macosArm64` debug test binary (#3532), every trace — a for
 `stackTraceToString()`, or the one kotlin-logging renders for a `logger.warn(e) { … }`
 — cost **~25 ms with `libbacktrace` and ~23 ms with `coresymbolication`** on a
 16-core dev Mac, and **50–70 ms** on a 3-vCPU CI runner. A test that logged 448
-throwables spent 12.2 s rendering them and 0.03 s with the throwable dropped. A
+throwables took 12.2 s with the throwable attached and 0.03 s with it dropped. A
 `logger.warn { … }` with no throwable never resolves anything at all (~2.5 µs).
 
 These were not measured side by side with the first-trace table above, so do not
@@ -777,7 +777,7 @@ device has been measured.
 
 ### What has *not* been confirmed
 
-This is a measured effect with a known lever, **not a confirmed shipped defect** —
+This is a measured effect, with a known lever for the first trace, **not a confirmed shipped defect** —
 be sceptical of it in the following ways:
 
 - The numbers are from **debug binaries on a development Mac** (macosArm64,
