@@ -24,6 +24,7 @@ class W1BridgeProbeTest {
     private val fine = Weight.of(1L, 1L shl 14)
     private val four = Weight.of(4L)
     private val heavy = Weight.of(1L shl 58)
+    private val twoHeavy = Weight.of(1L shl 57)
 
     private fun tree(vararg lanes: Pair<String, Weight>) = draft("p") { for ((name, w) in lanes) lane(name, w) }
 
@@ -108,6 +109,50 @@ class W1BridgeProbeTest {
             { assertEquals(AcquireOutcome.LifetimeExhausted(GroupId("p")), refused, "heavy's clamp would pass the limit") },
             { assertEquals(before, after, "and nothing changed, the wake memory included") },
             { assertEquals(l, assertIs<AcquireOutcome.Acquired>(light, "light still leases").lease.leaf) },
+        )
+    }
+
+    /**
+     * Two heavy joiners, the review's rig on #3495: with nothing rebasing, a front sums absolute
+     * positions, and two `2⁵⁷` children seated where `fine` ran up the front put `Σ p` past 128 bits,
+     * so every acquire threw. Here `apply` reads each joiner's seat beside the other, and no call
+     * throws. At 128 leases each seat alone is about `2¹²⁶` ticks, so both are refused and `four`
+     * leases. At 48 leases each seat is `1.5 · 2¹²⁴`: one fits, two do not, so the first lands and
+     * the second, the one that takes the load past the limit, is refused alone.
+     */
+    @Test
+    fun twoHeavyJoinersThatFitAloneButNotTogetherRefuseTheSecondAndNoCallThrows() {
+        fun run(leases: Int): Pair<List<GroupId>, List<GroupId>> {
+            val first = tree("fine" to fine)
+            val h = LocalHeddle.bootWhole(first, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+            val f = first.groupId("fine")
+            val m = tree("four" to four).groupId("four")
+            h.mintSupply(1L shl 53)
+            repeat(leases) { lease(h, setOf(f), f, it.toLong()) }
+            check(h.apply(tree("fine" to fine, "four" to four), generation = 1L).refusals.isEmpty()) { "the rig: four joined" }
+            lease(h, setOf(f, m), m, 1_000L)
+            check(h.apply(tree("four" to four), generation = 2L).refusals.isEmpty()) { "the rig: fine left" }
+            val shape = tree("four" to four, "h1" to twoHeavy, "h2" to twoHeavy)
+            val refused = h.apply(shape, generation = 3L).refusals.map { it.child }
+            val all = listOf("four", "h1", "h2").map(shape::groupId).toSet()
+            val leaves = (0 until 6).map { i ->
+                val out = h.acquire(all, all, startedAt = 2_000L + i, reservation = MAX)
+                val lease = assertIs<AcquireOutcome.Acquired>(out, "acquire $i at $leases leases").lease
+                h.complete(lease.id, MAX, waiting = emptySet())
+                lease.leaf
+            }
+            return refused to leaves.distinct().sortedBy { it.value }
+        }
+        val shape = tree("four" to four, "h1" to twoHeavy, "h2" to twoHeavy)
+        val (m, h1, h2) = listOf("four", "h1", "h2").map(shape::groupId)
+        val many = run(leases = 128)
+        val some = run(leases = 48)
+        assertAll(
+            { assertTrue(weightsFitTheBudget(listOf(four, twoHeavy, twoHeavy)), "the rig: the set fits the budget") },
+            { assertEquals(listOf(h1, h2), many.first, "at 128 leases each heavy joiner is refused") },
+            { assertEquals(listOf(m), many.second, "and four goes on being leased") },
+            { assertEquals(listOf(h2), some.first, "at 48 leases the second joiner, which passes the load, is refused alone") },
+            { assertEquals(listOf(m, h1), some.second, "and four and h1 are both leased") },
         )
     }
 

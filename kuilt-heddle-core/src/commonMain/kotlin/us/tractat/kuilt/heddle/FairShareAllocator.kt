@@ -670,24 +670,27 @@ public class FairShareAllocator(
     }
 
     /**
-     * Whether [edge], active in [s], could be seated level with the furthest-ahead of its active
-     * siblings and leave its parent's load within the [POSITION_LIMIT] (design §7.1). The same test
-     * a pick's step runs, asked early, for [LocalHeddle.apply]; it is not the guarantee, which is
-     * the step's own.
+     * Whether [edge], active in [s], could be seated level with the furthest-ahead of its seated
+     * siblings and leave its parent's load within the [POSITION_LIMIT] (design §7.1). Every sibling
+     * not yet seated is counted where it will be seated too, at that same front on its own grid, so
+     * two joiners that each fit alone but not together are told apart: the second is refused. The
+     * same test a pick's step runs, asked early, for [LocalHeddle.apply]; it is not the guarantee,
+     * which is the step's own.
      */
     internal fun seatFitsBesideFurthest(s: EntitlementLedger, edge: AttachmentId): Boolean = try {
         val record = checkNotNull(s.record(edge)) { "an activated edge ${edge.value} has no record" }
         val siblings = policyEdges(s, record.parent) { Demand.NONE }.filter { it.record.id != edge }
-        if (siblings.isEmpty()) {
+        val (seated, joining) = siblings.partition { it.gauge != null }
+        if (seated.isEmpty()) {
             true
         } else {
-            val top = siblings.maxWith { x, y ->
+            val top = seated.maxWith { x, y ->
                 compareVirtualWide(HeddlePolicy.effectiveTicksWide(x), x.record.weight, HeddlePolicy.effectiveTicksWide(y), y.record.weight)
             }
-            when (val seat = VirtualTime.of(HeddlePolicy.effectiveTicksWide(top), top.record.weight).ticksForWide(record.weight)) {
-                is Ticks.Fits -> loadFits(siblings.asSequence().map(HeddlePolicy::effectiveTicksWide) + seat.value)
-                Ticks.PastLimit -> false
-            }
+            val front = VirtualTime.of(HeddlePolicy.effectiveTicksWide(top), top.record.weight)
+            val landings = (joining.map { it.record.weight } + record.weight).map { front.ticksForWide(it) }
+            landings.all { it is Ticks.Fits } &&
+                loadFits(seated.asSequence().map(HeddlePolicy::effectiveTicksWide) + landings.asSequence().map { (it as Ticks.Fits).value })
         }
     } catch (_: ArithmeticException) {
         false
