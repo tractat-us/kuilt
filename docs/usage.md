@@ -759,9 +759,21 @@ in a process — `Throwable.stackTrace`, `stackTraceToString()`, or any
 | `coresymbolication` (default) | ~65 ms (~356 ms cold) | **~6.0–6.5 s** |
 | `libbacktrace` | ~7 ms | **~7 ms — flat** |
 
-Every subsequent trace is ~2–3 ms either way, and a `logger.warn { … }` with no
-throwable never resolves anything at all (~2.5 µs). The ~100× gap under load is
-the whole effect: idle, this is not worth thinking about.
+The ~100× gap under load is the whole of the *first-trace* effect: idle, it is not
+worth thinking about.
+
+Every trace after the first costs its own resolve, and that one does not go away.
+Inside kuilt's own `macosArm64` debug test binary (#3532), every trace — a forced
+`stackTraceToString()`, or the one kotlin-logging renders for a `logger.warn(e) { … }`
+— cost **~25 ms with `libbacktrace` and ~23 ms with `coresymbolication`** on a
+16-core dev Mac, and **50–70 ms** on a 3-vCPU CI runner. A test that logged 448
+throwables spent 12.2 s rendering them and 0.03 s with the throwable dropped. A
+`logger.warn { … }` with no throwable never resolves anything at all (~2.5 µs).
+
+These were not measured side by side with the first-trace table above, which is
+why its ~7 ms first trace sits below the ~25 ms per trace: the binaries and the
+stacks they unwound differ. Neither a release build nor a real device has been
+measured.
 
 ### What has *not* been confirmed
 
