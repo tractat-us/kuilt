@@ -2555,8 +2555,11 @@ public abstract class SeamConformanceSuite {
                 // unbounded advance) AND both `incoming` flows must complete (a late collector on the
                 // drained spool terminates). The suspend collection happens first; the terminal-state
                 // checks are batched through assertAll so both failures surface at once.
+                println("WWPROBE afterInject host=${host.state.value::class.simpleName} joiner=${joiner.state.value::class.simpleName} t=${testScheduler.currentTime}")
+                withTimeout(5.seconds) { joiner.state.first { it is SeamState.Torn } } // WWPROBE joiner-first
                 val hostTorn = withTimeout(5.seconds) { host.state.first { it is SeamState.Torn } }
                 withTimeout(5.seconds) { host.incoming.toList() }
+                println("WWPROBE beforeJoinerAwait joiner=${joiner.state.value::class.simpleName} t=${testScheduler.currentTime}")
                 val joinerTorn = withTimeout(5.seconds) { joiner.state.first { it is SeamState.Torn } }
                 withTimeout(5.seconds) { joiner.incoming.toList() }
 
