@@ -132,6 +132,9 @@ jobs:
         # They are independent: a module.md-only PR is docs-only=true AND
         # dokka-inputs=true — it skips the build but MUST still pass Dokka, because a
         # bad module.md header silently freezes the whole Pages deploy (#1061).
+        env:
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
           case "${{ github.event_name }}" in
@@ -145,6 +148,24 @@ jobs:
                 { echo "docs-only=false"; echo "dokka-inputs=true"; echo "spike-inputs=true"; } >> "$GITHUB_OUTPUT"; exit 0
               fi
               FILES=$(git diff --name-only "$BEFORE" "${{ github.event.after }}" 2>/dev/null || echo "")
+              ;;
+            merge_group)
+              # The group commit against the `main` it was built on: every entry in the group,
+              # and nothing already on `main` (#3478). There is no PR diff on this event.
+              # Unlike the two arms above, a failed diff here does NOT fall through to "no
+              # changed files", which would also clear dokka-inputs and spike-inputs and so skip
+              # the Dokka and spike gates. The group is the last check before `main`, so it
+              # fails safe and runs everything.
+              BASE="$MERGE_GROUP_BASE_SHA"; HEAD_SHA="$MERGE_GROUP_HEAD_SHA"
+              # The checkout holds 50 commits of the group branch, and a group is at most a
+              # handful of squashes over its base, so BASE is normally present already. Fetch it
+              # if not: a two-commit diff needs only the two commits, not the history between.
+              git cat-file -e "${BASE}^{commit}" 2>/dev/null \
+                || git fetch --no-tags --depth=1 origin "$BASE" || true
+              if ! FILES=$(git diff --name-only "$BASE" "$HEAD_SHA"); then
+                echo "::warning::merge_group: could not diff $BASE..$HEAD_SHA — treating as not docs-only, run Dokka + spike compile."
+                { echo "docs-only=false"; echo "dokka-inputs=true"; echo "spike-inputs=true"; } >> "$GITHUB_OUTPUT"; exit 0
+              fi
               ;;
             *)
               echo "${{ github.event_name }} — treating as not docs-only, run Dokka + spike compile."
@@ -1350,6 +1371,11 @@ jobs:
             echo "::error::Draft run — not a merge gate. The ready_for_review build produces the real ci-required (see #131, #1275)."
             exit 1
           fi
+          # merge_group, push and workflow_dispatch carry no pull_request payload, so the draft
+          # expression above renders empty and those runs fall through to the gate below,
+          # judged by exactly the rules a ready PR is (#3478). The queue merges a group only on
+          # this job's success on the group commit, so this is the check the ruleset names.
+          echo "event: ${{ github.event_name }}"
 
           DETECT="${{ needs.detect.result }}"
           BUILD_JVM="${{ needs.build-jvm.result }}"
