@@ -341,7 +341,8 @@ class PersistenceHealthTest {
         store.refusedWrites = setOf(StoreKey("otel.logs.idx"))
         assertIs<ExportResult.Failure>(telemetry.logs.export(LogRecord(recordId = ByteString(ByteArray(8)), body = "log", severityNumber = 9)))
         assertAll(
-            { assertEquals(1, store.writeFailures) },
+            // The index write claiming the record's id ahead of the turn (#3452), then the turn's.
+            { assertEquals(2, store.writeFailures) },
             { assertEquals(1L, telemetry.health.logs.failed) },
             { assertEquals(0L, telemetry.health.logs.accepted) },
         )
