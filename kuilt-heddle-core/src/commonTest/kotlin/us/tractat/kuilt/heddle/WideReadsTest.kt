@@ -38,7 +38,7 @@ class WideReadsTest {
         val wideFront = assertNotNull(why.frontWide)
         assertAll(
             { assertEquals(ceiling, held, "the rig: the Rational read is held at the ceiling") },
-            { assertTrue(wide.toDouble() > ceiling.toDouble() * 2.0, "the wide read is exact, well past it: ${wide.toDouble()}") },
+            { assertTrue(wide > VirtualTime.of(us.tractat.kuilt.math.Int128.of(positionCeiling(fine)), fine), "the wide read is exact, past it: ${wide.toDouble()}") },
             { assertEquals(wide, VirtualTime.of(assertIs<Ticks.Fits>(wide.ticksForWide(fine)).value, fine), "and round-trips on its own grid") },
             { assertEquals(wide, why.leafSideVirtualServiceWide, "explain carries x's wide side") },
             { assertTrue(wideFront > assertNotNull(VirtualTime.of(us.tractat.kuilt.math.Int128.ZERO, fine)), "and a wide front past zero") },
