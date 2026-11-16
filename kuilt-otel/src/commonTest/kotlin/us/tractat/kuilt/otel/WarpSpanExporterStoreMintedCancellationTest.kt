@@ -110,8 +110,12 @@ class WarpSpanExporterStoreMintedCancellationTest {
 
     // ---- Export ----
 
+    /**
+     * The refused export publishes nothing (#3517), so the next export's write does not carry its span:
+     * the caller's retry is its only copy, as it is for a stamped span.
+     */
     @Test
-    fun aCancellationTheStoreMintsOnTheExportWriteFailsTheExportAndTheNextExportRepairsIt() = runTest {
+    fun aCancellationTheStoreMintsOnTheExportWriteFailsTheExportAndPublishesNothing() = runTest {
         val backing = RecordingStore()
         val store = CancellationScriptedStore(backing)
         val exporter = WarpSpanExporter(replica, store)
@@ -119,23 +123,25 @@ class WarpSpanExporterStoreMintedCancellationTest {
         store.arm(StoreCall.WRITE, StoreAct.MINT, isSpans)
         val minted = escapeOf { exporter.export(span(1)) }
         val failedAfter = exporter.health.value.failed
-        val durableBeforeRepair = idsAfterRestart(backing)
-        val repaired = exporter.export(span(2))
-        val durableAfterRepair = idsAfterRestart(backing)
+        val liveAfterFailure = exporter.snapshot().elements.map { it.spanId }.toSet()
+        val durableBeforeNext = idsAfterRestart(backing)
+        val next = exporter.export(span(2))
+        val durableAfterNext = idsAfterRestart(backing)
 
         assertAll(
             { assertEquals(1, store.minted, "the rig minted ${store.minted} cancellations on the write, not one") },
             { assertNull(minted.escaped, "a cancellation the store minted escaped export: ${minted.escaped}") },
             { assertIs<ExportResult.Failure>(minted.returned, "the minted write reported ${minted.returned}") },
             { assertEquals(1L, failedAfter, "the minted write was not counted as a refused write") },
-            { assertEquals(emptySet(), durableBeforeRepair, "the minted write landed anyway, so nothing was left to repair") },
-            { assertEquals(ExportResult.Success, repaired) },
-            { assertEquals(setOf(span(1).spanId, span(2).spanId), durableAfterRepair, "the next export did not carry the refused span") },
+            { assertEquals(emptySet(), durableBeforeNext, "the rig: the minted write landed anyway") },
+            { assertEquals(emptySet(), liveAfterFailure, "the refused export published its span") },
+            { assertEquals(ExportResult.Success, next) },
+            { assertEquals(setOf(span(2).spanId), durableAfterNext, "the next export carried the refused span") },
         )
     }
 
     @Test
-    fun aCancellationTheStoreMintsOnTheClockPersistFailsTheExportAndRollsTheStampBack() = runTest {
+    fun aCancellationTheStoreMintsOnTheClockPersistFailsTheExportAndPublishesNothing() = runTest {
         val store = CancellationScriptedStore(RecordingStore())
         val exporter = WarpSpanExporter(replica, store, causalClock = WarpCausalClock(replica))
 

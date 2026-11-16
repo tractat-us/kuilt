@@ -91,13 +91,15 @@ have held and, once the clock has read its own entry, the clock's number when th
 The floor is the larger of that mark and the highest dot the stored spans carry. The mark is read
 from the running clock as the write is made, so it covers every dot minted before that write.
 
-Three gaps remain. If both saved entries are corrupt, the floor starts at zero. A span can reach
-a peer through `snapshot()` before its export has written the clock; if the device crashes then,
-no entry need be corrupt: the restart reads a clock below that dot, and a new span can take the
-dot until the peer sends it back. That is the export's crash window plus gossip, tracked in
-#3517; the log exporter's twin was closed by a claim written ahead of the mint. And a corrupt span entry starts fresh and loses its mark. A
-sound clock entry still covers every dot an export or clear wrote, since those write the clock
-first, but not a dot a merge wrote before any clock write: a merge never writes the clock.
+Two gaps remain. If both saved entries are corrupt, the floor starts at zero. And a corrupt span
+entry starts fresh and loses its mark. A sound clock entry still covers every dot an export or
+clear wrote, since those write the clock first, but not a dot a merge wrote before any clock
+write: a merge never writes the clock.
+
+A span cannot reach a peer before its dot is saved. An export shows its span in `snapshot()` only
+after both its writes have landed (#3517). Before that, a crash between the mint and the clock
+write could leak a dot that the restart then reused. The new span shared the old one's causal dot,
+and a merge dropped both spans, because the set's own dot for the add was reused as well.
 
 The clock also trusts every dot it reads, merges or is handed, so a buggy peer's dot at the
 largest possible number stops it stamping at all: later spans are saved without a stamp.

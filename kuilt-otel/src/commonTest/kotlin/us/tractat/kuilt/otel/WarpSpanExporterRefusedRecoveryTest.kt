@@ -526,13 +526,12 @@ class WarpSpanExporterRefusedRecoveryTest {
     }
 
     /**
-     * An export on an exporter nobody recovered adds its stamped span inside the write section, after
-     * the landing read. Cancelled in the write, it rolls that span back out of memory, as a recovered
-     * export rolls back its early add: otherwise the caller's retry of the unstamped span mints a
-     * second stamped copy beside it.
+     * An export on an exporter nobody recovered builds its stamped span inside the write section, after
+     * the landing read, as every export does (#3517). Cancelled in the write, it publishes nothing:
+     * otherwise the caller's retry of the unstamped span would mint a second stamped copy beside it.
      */
     @Test
-    fun aCancelledFirstExportOnANeverRecoveredExporterRollsItsStampBack() = runTest {
+    fun aCancelledFirstExportOnANeverRecoveredExporterPublishesNothing() = runTest {
         val backing = InMemoryDurableStore()
         durableSpans(backing, 1, 2)
         val store = CancellationScriptedStore(backing)

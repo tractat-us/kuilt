@@ -21,14 +21,16 @@ Every signal is stored as a **CRDT**. Spans are full `SpanRecord` values in an
 Metrics are mergeable counters. Logs are an ordered append-only sequence.
 Merging the same saved snapshot again is idempotent: it does not add another copy.
 
-Retrying `export()` is different from merging a snapshot. A span write may land
-even when the call fails or is cancelled. Either way the call removes a freshly
-stamped span from memory, so a retry in the same process holds one copy, and with
-no retry that span is gone from memory. After a restart, recovery can read a landed
-write. Retrying the original unstamped span then mints a new stamp and adds another
-value with the same span id. Rollback affects live memory, not a write that already
-landed. Retrying a metric increment adds it again; a log record whose id was
-already exported is skipped.
+Retrying `export()` is different from merging a snapshot. A span shows in
+`snapshot()` only once its writes have landed, so a peer never holds a span the
+store might lack. A failed or cancelled export shows nothing and leaves nothing in
+memory, stamped or not, so the caller's retry is the span's only copy. (Earlier
+versions kept a failed export's unstamped or explicitly stamped span in memory,
+and the next write saved it.) A span write may still land after the call failed or
+was cancelled. After a restart, recovery can read it, and retrying the original
+unstamped span then mints a new stamp and adds another value with the same span
+id. Retrying a metric increment adds it again; a log record whose id was already
+exported is skipped.
 
 ## Quick start
 
