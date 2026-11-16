@@ -221,7 +221,7 @@ class W1BridgeProbeTest {
             ledger.piece(EntitlementLedger.of(gauges = mapOf(lightEdge to gaugeAt(Int128.fromTwosComplement(1L shl 30, 0L), folded = 0L))))
         }
         val admitted = h.admit(x, waiting = setOf(x), startedAt = 0L)
-        val lease = assertIs<AdmitOutcome.Acquired>(admitted, "admit is never refused: $admitted").lease
+        val lease = assertIs<AcquireOutcome.Acquired>(admitted, "admit is never refused: $admitted").lease
         val done = h.complete(lease.id, actualCost = 3L, waiting = emptySet())
         val light = h.acquire(setOf(l), setOf(l), startedAt = 1L, reservation = 1L)
         assertAll(
