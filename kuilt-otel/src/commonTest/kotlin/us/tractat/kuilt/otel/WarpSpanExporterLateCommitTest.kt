@@ -1,6 +1,8 @@
 package us.tractat.kuilt.otel
 
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
@@ -10,6 +12,7 @@ import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -41,11 +44,13 @@ class WarpSpanExporterLateCommitTest {
     )
 
     /**
-     * Delegates to [backing]. While [refusing] is above zero, a span write throws to its caller and
-     * its bytes are kept in [held]; [commitFirstHeld] lands the first of them late.
+     * Delegates to [backing]. While [refusing] is above zero, a span write throws to its caller, and
+     * while [parking] is, it waits until its caller is cancelled; either way its bytes are kept in
+     * [held], and [commitFirstHeld] lands the first of them late.
      */
     private class LateCommitStore(private val backing: DurableStore, private val key: StoreKey) : DurableStore {
         var refusing = 0
+        var parking = 0
         val held = mutableListOf<ByteArray>()
 
         suspend fun commitFirstHeld() {
@@ -59,6 +64,11 @@ class WarpSpanExporterLateCommitTest {
                 refusing--
                 held += bytes
                 throw IllegalStateException("the store timed out; the write is still in flight")
+            }
+            if (key == this.key && parking > 0) {
+                parking--
+                held += bytes
+                awaitCancellation()
             }
             backing.write(key, bytes)
         }
@@ -150,6 +160,36 @@ class WarpSpanExporterLateCommitTest {
             { assertEquals(1, store.held.size, "the rig: the repeated export's write was not refused") },
             { assertEquals(ExportResult.Success, next) },
             { assertEquals(setOf(span(1).spanId, span(2).spanId), held, "the next turn dropped the held copy") },
+        )
+    }
+
+    /**
+     * The caller gives up on the export while its span write is in flight, and the write commits
+     * later anyway. A cancelled turn keeps its set dot as a failed one does.
+     */
+    @Test
+    fun aCancelledExportWhoseWriteCommitsLateSharesNoSetDotWithTheNextSpan() = runTest {
+        val backing = InMemoryDurableStore()
+        val store = LateCommitStore(backing, spansKey)
+        val writer = WarpSpanExporter(replica, store).apply { recover() }
+        repeat(5) { assertEquals(ExportResult.Success, writer.export(span(it)), "the rig: export $it") }
+        store.parking = 1
+        val abandoned = withTimeoutOrNull(1_000L) { writer.export(span(100)) }
+        val landed = writer.export(span(200))
+        val gossiped = writer.snapshot()
+        store.commitFirstHeld()
+
+        val restarted = WarpSpanExporter(replica, backing).apply { recover() }
+        val heldAfterRestart = ids(restarted.snapshot())
+        val merged = restarted.merge(gossiped)
+        val afterMerge = ids(restarted.snapshot())
+        assertAll(
+            { assertNull(abandoned, "the rig: the export returned instead of being abandoned") },
+            { assertEquals(1, store.held.size, "the rig: the abandoned write was not held") },
+            { assertEquals(ExportResult.Success, landed, "the rig: span 200 was not saved") },
+            { assertTrue(span(100).spanId in heldAfterRestart, "the rig: the late commit did not land") },
+            { assertEquals(ExportResult.Success, merged, "the merge after the restart") },
+            { assertTrue(span(200).spanId in afterMerge, "the merge dropped the span that landed") },
         )
     }
 }
