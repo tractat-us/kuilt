@@ -84,7 +84,8 @@ class LocalHeddleExplainTest {
      * A lane past its ceiling is explained, not thrown out of (#3485). `x` and `y` are `1/30,000`
      * each, both waiting and only `x` eligible, the way a slot waits that cannot run `y`: three leases
      * of [LocalHeddle.MAX_RESERVATION], each completed in full, carry `x` past its ceiling while `y`,
-     * demanding and never served, holds the rebase. Asked with both eligible, the pick goes to `y`,
+     * demanding and never served, stays at its start, since nothing rebases (#3472). Asked with
+     * both eligible, the pick goes to `y`,
      * and the front is the mean of the two public reads, `x` held at its ceiling. This used to throw
      * `PolicyEdge offsetTicks must be non-negative` from the second lease on.
      */
@@ -111,7 +112,7 @@ class LocalHeddleExplainTest {
             { assertEquals(listOf(x, x, x), leased, "the rig: every lease went to x") },
             { assertTrue(h.allocator.peakPositionFraction(ledger, root) { Demand.NONE } > 1.0, "the rig: x is past its ceiling") },
             { assertEquals(ceiling, xRead, "the rig: x's public read is held at its ceiling") },
-            { assertTrue(yRead > Rational.ZERO - ceiling && yRead < Rational.ZERO, "the rig: y is below the origin, inside its window: $yRead") },
+            { assertEquals(Rational.ZERO, yRead, "the rig: y stands at its start, never served") },
             { assertEquals(WaitExplanation.BehindAtLevel(root, y, ceiling, front, front), h.explain(x, both, both)) },
         )
     }
