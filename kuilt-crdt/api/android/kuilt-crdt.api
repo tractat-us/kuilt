@@ -1571,6 +1571,7 @@ public final class us/tractat/kuilt/crdt/Rga : us/tractat/kuilt/crdt/OpLogCrdt, 
 	public synthetic fun dotOf (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Dot;
 	public fun dotOf (Lus/tractat/kuilt/crdt/RgaId;)Lus/tractat/kuilt/crdt/Dot;
 	public final fun dropWindow-8mRuq1Y (Ljava/lang/String;Ljava/util/Set;)Lkotlin/Pair;
+	public final fun dropWindowPastUnheld-8mRuq1Y (Ljava/lang/String;Ljava/util/Set;)Lkotlin/Pair;
 	public final fun entries ()Ljava/util/List;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCompactOpCount ()I

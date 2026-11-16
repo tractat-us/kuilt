@@ -120,7 +120,8 @@ public interface Quilted<S : Quilted<S>> {
      * half reported a given dot.
      *
      * It can only describe a **downward-closed** compacted set. `Rga.dropWindow` guarantees
-     * that by advancing the floor across a contiguous own-dot run only, recording every other
+     * that by advancing the floor across a contiguous own-dot run only (`Rga.dropWindowPastUnheld`
+     * also crosses own dots the state holds no op of, so none of them is in [causalDots]), recording every other
      * drop as an explicit `Compact` that [causalDots] still re-emits. A CRDT whose compaction
      * is not downward-closed must keep re-emitting through [causalDots] and leave this
      * defaulted.
