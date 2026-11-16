@@ -82,7 +82,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  *
  * A dot no key holds yet cannot reach a peer to be handed back: [WarpSpanExporter] shows an export's
  * span in [WarpSpanExporter.snapshot] only once the turn's clock and span writes have both returned
- * (#3517). A dot a turn minted and never published leaves a gap, which nothing reads as missing.
+ * (#3517). A clock dot a turn minted and never published leaves a gap in this clock's sequence, which
+ * nothing reads as missing. The set dot the same turn minted is not a gap: the exporter keeps it, and
+ * the next span's write carries it.
  *
  * ## Thread-safety
  *

@@ -731,9 +731,15 @@ public class WarpSpanExporter(
      * stored spans nor any local export, which waits for that read (#3390).
      *
      * A local export shows here only once its writes have returned (#3517), so every dot this
-     * process's exports minted that the set holds is already durable: a peer that gossips from it
-     * cannot hand a restarted process a dot that process would mint again. An export whose writes
+     * process's exports minted that the set holds was durable when it showed. An export whose writes
      * are in flight, or failed, is not here.
+     *
+     * Durable is not final, though. A failed write can still commit after its caller stopped waiting,
+     * over newer bytes ([DurableStore.write]). The exporter keeps such a turn's set dot, so the span
+     * shown next never shares it. What that leaves open: a restart over the late commit reads a set
+     * context that lacks the set dots of spans shown after the failed one, so an export it makes
+     * before a peer hands those spans back can mint one of them again. The clock's dots are not
+     * affected, since the clock key is written ahead of each span write and only after it returns.
      */
     public fun snapshot(): ORSet<SpanRecord> = lock.withLock { spans }
 
