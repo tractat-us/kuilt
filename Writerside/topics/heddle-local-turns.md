@@ -34,7 +34,7 @@ ev = seat + (issued − issuedAtSeat) / w − returned / w
   In the farm both teams joined together, before anything ran, so both start at 0.
 
 Spending does not move `ev`; handing out does. That is why a build that is still
-running already counts against its team. The formula is `HeddlePolicy.virtualService`,
+running already counts against its team. The formula is `HeddlePolicy.virtualServiceWide`,
 and design [§7.1](https://github.com/tractat-us/kuilt/blob/main/docs/heddle-design.md#71-virtual-service)
 gives its derivation.
 
@@ -152,7 +152,8 @@ the one web's overrun owed it, and then the three-to-one pattern resumes.
 ## Check it on your own engine
 
 - **Read one pick.** Call `explain` on a waiting lane. For `BehindAtLevel`,
-  compare `leafSideVirtualService` with `eligibleFront`. Above it, the lane's side
+  compare `leafSideVirtualServiceWide` with `eligibleFrontWide`. The two older
+  fields stop at a ceiling on a busy engine, and these do not. Above it, the lane's side
   was past the line and not a candidate this slot. At or below it, the lane's
   side was a candidate, and `nextChild` had the earlier deadline or won the
   tie on its id. Then compare it

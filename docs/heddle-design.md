@@ -1545,7 +1545,8 @@ origins, which is a layout 0.7.5 already reads, so the format number and
    check in `LocalHeddle.apply`. `weightsFitTheBudget` does not change.
    Retargets #3500's probe. Docs: §7.1, §9, §10, `docs/agent-cookbook/heddle.md`
    (Refusals and limits), both `module.md`s.
-6. **`VirtualTime` is a public read, beside the `Rational` ones.** The wide
+6. **`VirtualTime` is a public read, beside the `Rational` ones.** In progress
+   (#3523): built, with `WideReadsTest`; the dumps gain lines and lose none. The wide
    siblings in the table above, and `@Deprecated` on the reads they replace.
    Nothing is deleted or retyped. Docs: §11,
    `docs/agent-cookbook/heddle.md`, `Writerside/topics/heddle-local-turns.md`.
