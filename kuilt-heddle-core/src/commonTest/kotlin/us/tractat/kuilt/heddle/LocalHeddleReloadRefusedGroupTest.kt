@@ -197,4 +197,50 @@ class LocalHeddleReloadRefusedGroupTest {
             { assertIs<AcquireOutcome.Acquired>(zLeases, "and t/z leases: $zLeases") },
         )
     }
+
+    /**
+     * `t` is removed while a lease keeps `t/x` draining, then put back, and a later, separate
+     * `attach` lands a worker under it. No refusal of this call says `t` waits, yet it does, on the
+     * lease: the attach is [StepRefusal.Draining] on that lease, and lands once it completes (#3508).
+     */
+    @OptIn(HeddleInternalApi::class)
+    @Test
+    fun anAttachUnderAGroupStillDrainingFromAnEarlierCallWaitsOnTheSameLease() {
+        val withX = draft("pool") {
+            lane("small", Weight.ONE)
+            group("t", Weight.ONE) {
+                lane("x", Weight.ONE)
+                template()
+            }
+        }
+        val putBack = draft("pool") {
+            lane("small", Weight.ONE)
+            group("t", Weight.ONE) { template() }
+        }
+        val t = withX.groupId("t")
+        val x = withX.groupId("t", "x")
+        val worker = putBack.attachedChildId(listOf("t"), "w1")
+        val engine = LocalHeddle.bootWhole(withX, policy, epoch = 1L).apply { reconcileCapacity(4_000L) }
+        val lease = assertIs<AcquireOutcome.Acquired>(engine.acquire(setOf(x), setOf(x), startedAt = 0L)).lease
+        engine.apply(pool(withHuge = false), generation = 1L)
+        val reloaded = engine.apply(putBack, generation = 2L)
+        val attached = engine.attach(listOf("t"), "w1", generation = 3L)
+        val wait = attached.refusals.singleOrNull()
+        val orphans = engine.orphanParents(listOf(t))
+        engine.complete(lease.id, actualCost = 1L, waiting = emptySet())
+        val landed = engine.apply(putBack, generation = 4L)
+        val again = engine.attach(listOf("t"), "w1", generation = 5L)
+        val leased = engine.acquire(setOf(worker), setOf(worker), startedAt = 1L)
+        assertAll(
+            { assertIs<StepRefusal.Draining>(reloaded.refusals.firstOrNull { it.child == t }, "the rig: t is put back while it drains: ${reloaded.refusals}") },
+            { assertEquals(worker, wait?.child, "the attach is held back: ${attached.refusals}") },
+            { assertIs<StepRefusal.Draining>(wait, "as Draining: ${attached.refusals}") },
+            { assertEquals(listOf(lease), (wait as? StepRefusal.Draining)?.blockingLeases, "on the same lease") },
+            { assertTrue(attached.applied.none { it.child == worker }, "no step of it lands: ${attached.applied}") },
+            { assertEquals(emptyList(), orphans, "no orphan") },
+            { assertEquals(emptyList(), landed.refusals, "after the lease, the put-back lands") },
+            { assertEquals(emptyList(), again.refusals, "and so does the attach") },
+            { assertIs<AcquireOutcome.Acquired>(leased, "and the worker leases: $leased") },
+        )
+    }
 }

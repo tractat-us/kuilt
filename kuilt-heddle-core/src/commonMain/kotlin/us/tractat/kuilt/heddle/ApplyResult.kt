@@ -30,8 +30,9 @@ public sealed interface StepRefusal {
      * has changed nothing: [edge] stays as it was, ACTIVE for a reweight, or still CLOSING for a
      * child put back before its removal drained, and keeps its history until its leases can move.
      *
-     * A group the same apply would activate beneath a group that waits is held back with it, since
-     * the root could not reach it until that group lands: it is reported as `Draining` too, and
+     * A group an apply or [LocalHeddle.attach] would activate beneath a group that waits, in this
+     * call or since an earlier one, is held back with it, since the root could not reach it until
+     * that group lands: it is reported as `Draining` too, and
      * [edge], [outstanding] and [blockingLeases] are then that group's.
      */
     public data class Draining(
@@ -47,10 +48,6 @@ public sealed interface StepRefusal {
      * still carries units after the engine released every one of its own there. Or [child] sits
      * beneath a group the root does not reach, a new one this apply or an earlier one left out, so
      * no delegation could reach it; [reason] names that group. [child] is left as it was before this apply.
-     *
-     * One such case is curable by waiting. An [LocalHeddle.attach] under a group that is still
-     * draining from an earlier call comes back `Refused`, not [Draining], because only the drains
-     * of the current call are known to it. Attach again once that group's leases settle.
      */
     public data class Refused(
         override val child: GroupId,

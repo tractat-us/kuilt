@@ -1397,15 +1397,18 @@ public class LocalHeddle private constructor(
     /**
      * Why [child], activated by this unit, is left out of it: no delegation from the [root] reaches
      * it in [local]. The outermost group above it that the root does not reach is the cause. When
-     * that group waits on a drain, in [waits], so does [child], on the same leases, since the cause
-     * clears once they settle; otherwise [child] is [StepRefusal.Refused] at its first step.
+     * that group waits on a drain, so does [child], on the same leases, since the cause clears once
+     * they settle; otherwise [child] is [StepRefusal.Refused] at its first step. A wait this call
+     * found is in [waits]; one an earlier call left, such as a removal still draining when an
+     * [attach] lands beneath the group put back over it, is read off [local]: the cause's inbound
+     * edge CLOSING with units still outstanding on it (#3508).
      */
     private fun cutOff(child: GroupId, local: EntitlementLedger, steps: List<TopologyStep>, waits: Map<GroupId, StepRefusal.Draining>): StepRefusal {
         val names = child.value.split('/')
         val cause = (1 until names.size).asSequence()
             .map { GroupId(names.subList(0, it).joinToString("/")) }
             .firstOrNull { it != root && !local.reachesFromRoot(it) }
-        val wait = cause?.let(waits::get)
+        val wait = cause?.let { waits[it] ?: local.drainingInto(it) }
         if (wait != null) return StepRefusal.Draining(child, wait.edge, wait.outstanding, wait.blockingLeases)
         val reason = if (cause != null) {
             "${cause.value}, above it, is not reachable from the root, so no delegation could reach ${child.value}"
@@ -1413,6 +1416,19 @@ public class LocalHeddle private constructor(
             "no delegation from the root would reach it"
         }
         return StepRefusal.Refused(child, steps.first { it.child == child }, reason)
+    }
+
+    /**
+     * [group]'s wait, when its inbound edge here is CLOSING with units still outstanding on it: that
+     * edge, those units, and this engine's open leases whose path crosses it, in id order. `null`
+     * for any other edge, or none.
+     */
+    private fun EntitlementLedger.drainingInto(group: GroupId): StepRefusal.Draining? {
+        val edge = lineageOf(group)?.lastOrNull() ?: return null
+        val outstanding = outstanding(edge)
+        if (lifecycle(edge) != Lifecycle.CLOSING || outstanding == 0L) return null
+        val blocking = open.values.filter { edge in it.path }.map { it.lease }.sortedBy { it.id }
+        return StepRefusal.Draining(group, edge, outstanding, blocking)
     }
 
     /**
