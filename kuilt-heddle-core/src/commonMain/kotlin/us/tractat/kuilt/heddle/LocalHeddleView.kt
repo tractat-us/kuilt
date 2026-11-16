@@ -198,21 +198,22 @@ public class LocalHeddleView internal constructor(
         val at = descent.levels[level]
         // The trial's wake memory has moved on below this level, but each level writes only its own
         // children's entries, so what it holds for this level's children is what this level read.
+        val side = lineage[level]
+        val noChildren = { "${at.parent.value} has no active children, though a pick was made there" }
+        @Suppress("DEPRECATION")
         return WaitExplanation.BehindAtLevel(
             parent = at.parent,
             nextChild = checkNotNull(base.record(at.edge)) { "picked edge ${at.edge.value} has no record" }.child,
-            leafSideVirtualService = checkNotNull(trial.allocator.effectiveVirtualService(at.seated, at.parent, lineage[level])) {
-                "${lineage[level].value} is not an active child of ${at.parent.value}"
-            },
-            front = checkNotNull(trial.allocator.virtualTime(at.seated, at.parent, demands.waiting)) {
-                "${at.parent.value} has no active children, though a pick was made there"
-            },
+            leafSide = checkNotNull(trial.allocator.effectiveVirtualService(at.seated, at.parent, side)) {
+                "${side.value} is not an active child of ${at.parent.value}"
+            } to checkNotNull(trial.allocator.effectiveVirtualTime(at.seated, at.parent, side)),
+            front = checkNotNull(trial.allocator.virtualTime(at.seated, at.parent, demands.waiting), noChildren) to
+                trial.allocator.virtualTimeWide(at.seated, at.parent, demands.waiting),
             // Over the children the pick saw as candidates: every one is seated by now, and each is
             // granted the whole reservation, so the set the pick averaged is exactly the set
             // `eligible` wants.
-            eligibleFront = checkNotNull(trial.allocator.virtualTime(at.seated, at.parent, demands.eligible)) {
-                "${at.parent.value} has no active children, though a pick was made there"
-            },
+            eligibleFront = checkNotNull(trial.allocator.virtualTime(at.seated, at.parent, demands.eligible), noChildren) to
+                trial.allocator.virtualTimeWide(at.seated, at.parent, demands.eligible),
         )
     }
 
