@@ -1403,8 +1403,9 @@ class HeddleNodeTest {
     /**
      * [HeddleNode.parentVirtualTime] over a busy child past its ceiling reads it at the ceiling, and
      * does not throw (#3485). Two `1/30,000` children: `busy` is granted the root's three leases of
-     * [MAX_GRANT], while `starved` demands and is never served, so it holds the rebase and `busy`
-     * climbs past its ceiling with the rebase on. The front is the mean of the two public reads.
+     * [MAX_GRANT], while `starved` demands and is never served, so it stays at its start and `busy`
+     * climbs past its ceiling, since nothing rebases (#3472). The front is the mean of the two
+     * public reads.
      * It used to throw `PolicyEdge offsetTicks must be non-negative`: the read held `busy` by
      * lowering its wake offset below zero.
      */
@@ -1432,7 +1433,7 @@ class HeddleNodeTest {
             { assertEquals(ScheduleOutcome.Delegated(3), outcome, "the rig: the root's three leases, all to busy") },
             { assertTrue(node.boundMetrics(root).peakPositionFraction > 1.0, "the rig: busy is past its ceiling") },
             { assertEquals(ceiling, busyRead, "the rig: busy's public read is held at its ceiling") },
-            { assertTrue(starvedRead > Rational.ZERO - ceiling && starvedRead < Rational.ZERO, "the rig: starved is below the origin, inside its window: $starvedRead") },
+            { assertEquals(Rational.ZERO, starvedRead, "the rig: starved stands at its start, never served") },
             { assertEquals((busyRead + starvedRead) / Rational.of(2L), node.parentVirtualTime(root)) },
         )
     }
