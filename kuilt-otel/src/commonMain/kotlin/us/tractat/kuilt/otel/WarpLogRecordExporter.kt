@@ -415,8 +415,15 @@ public class WarpLogRecordExporter(
     // WarpLogRecordExporterTailCacheTest. Eviction is the *only* thing that can remove
     // an element on the export path, and it only ever removes a leading prefix of the
     // visible sequence, so no export can invalidate `tail` while the log is non-empty.
+    // An eviction that empties it needs no reset either: every eviction is paired with an
+    // admitted insert, and applyTurn sets `tail` to that insert after committing both.
 
-    /** Predecessor for the next append: the last visible element, or [RgaId.HEAD] when empty. */
+    /**
+     * Predecessor for the next append: the last visible element, or [RgaId.HEAD] when empty.
+     *
+     * Visible, not last: a merged run of another author's tombstones that sorts after it stays
+     * behind every later export, which is the residue the class KDoc describes (#3528).
+     */
     private var tail: RgaId = RgaId.HEAD
 
     /** Number of visible (non-tombstoned) records in [log] — the eviction gate. */
@@ -2096,7 +2103,6 @@ public class WarpLogRecordExporter(
         eviction.evicted.forEach { record -> seenIds.remove(record.recordId) }
         visibleCount -= count
         evictionsSincePass += count
-        if (visibleCount == 0) tail = RgaId.HEAD
     }
 
     /** Count [count] [BufferPolicy.DROP_OLDEST] evictions. Must hold [lock]; see [commitEviction]. */
@@ -3378,7 +3384,9 @@ public class WarpLogRecordExporter(
      *
      * Tombstones inside the window are retained along with it and counted against nothing;
      * tombstones in the prefix are dropped with it, which is the point — an evicted record's
-     * `Insert` *and* its `Remove` both leave the log.
+     * `Insert` *and* its `Remove` both leave the log. A run of another author's tombstones that
+     * trails every visible record is never in the prefix, and is deliberately not cut by any other
+     * rule here; its author's own pass clears it (#3528, and the class KDoc).
      *
      * At `retain = 0` the loop breaks on its first iteration with `cut` still at
      * `sequence.size`, so every id comes back — which is what makes [clear] the same pass
@@ -3402,8 +3410,10 @@ public class WarpLogRecordExporter(
     /**
      * Recompute [tail], [visibleCount] and [seenIds] from [log] in one pass.
      *
-     * The entry point for the two events that replace the log wholesale — [recover]
-     * and [merge] — where nothing can be threaded forward. Tombstoned entries are
+     * The entry point for the events that change the log in ways nothing can thread forward:
+     * a [merge], and a drop installed by [installDrop], which a [windowPass] and [clear]'s
+     * [dropUnheldOwn] both reach. [recover] does not call it: it walks the entries outside the
+     * lock and assigns them through [installDerivedState]. Tombstoned entries are
      * excluded by [Rga.entries], so an evicted record's dedup slot is freed for re-use.
      *
      * Must be called with [lock] held.
