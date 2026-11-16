@@ -546,8 +546,8 @@ public class WarpLogRecordExporter(
      * Raised only once a segment write has returned ([StoreAction.CommitActive],
      * [StoreAction.CommitAdopt]), to the seq that segment carries, and by recovery to what the index
      * it read already claimed. Never to [log]'s own seq, which counts what a turn has minted into
-     * memory before any key holds it: an index claiming that, landing beside a refused segment
-     * write, raised a restart's log past seqs no key holds, and its floor could never fold past them.
+     * memory before any key holds it. What an index claims past this is [mintClaim]'s, and only a
+     * claim write carries it.
      */
     private var durableSeqHighWater: Long = 0L
 
@@ -2598,8 +2598,8 @@ public class WarpLogRecordExporter(
         // this write restates the ledger; it cannot extend it. It does extend it with an abandoned
         // adopt's number (see abandonAdopt), which was never sealed and needs no covering write.
         //
-        // It lands before this turn's segment write, so it claims the seq high-water already on
-        // disk, not the one this turn minted (see encodeIndex).
+        // It lands before this turn's segment write, so it claims what is already on disk, and
+        // the mint claim, which a claim write put there before this turn minted (see encodeIndex).
         if (writeIndex) actions += StoreAction.Put(INDEX_KEY, encodeIndex())
         actions += flushActiveSegment(retire = retire, adopting = null)
         return actions
@@ -2938,9 +2938,10 @@ public class WarpLogRecordExporter(
      * - The **lamport** is [log]'s clock as it stands, and no caller can pass another. It only has
      *   to be high enough: lamports are not dense, so claiming one no id carries costs a gap in the
      *   clock and nothing else.
-     * - The **seq** is [seqHighWater], by default [durableSeqHighWater]: only what a segment write
-     *   has already put on disk. Seqs are dense, and a claimed seq no key holds is a hole the floor
-     *   cannot fold past. Two writes may claim more, each only what it names sealed: a roll's and a
+     * - The **seq** is the larger of [mintClaim]'s and [seqHighWater], by default
+     *   [durableSeqHighWater]: what a segment write has already put on disk. The mint claim runs
+     *   ahead of the keys on purpose, and the hole a restart then has is one the window's floor
+     *   crosses (#3447). Two writes may claim more than that, each only what it names sealed: a roll's and a
      *   retirement's, which land after this turn's segment writes and project them
      *   ([flushActiveSegment]), and an adopt's leading write ([adoptRemoteSegment]), which lands
      *   ahead of its segment but behind any active-segment write the turn owes, so if the adopt is

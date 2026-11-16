@@ -63,15 +63,13 @@ import kotlinx.serialization.encoding.Encoder
  * @property seqHighWater This replica's seq high-water, on the same terms, and only this replica's:
  *   another author's seq is never minted here.
  *
- *   **Bounded on both sides, since seqs are dense.** It must reach every seq in a segment the
- *   index names sealed, and it must not pass the seqs the keys hold except by ones a peer holds
- *   too. A turn's leading index write lands before its segment write, so it claims only what
- *   earlier segment writes put on disk; claiming the turn's own new seqs, with the segment write
- *   then refused, left a restart's log holding a hole whose seqs nothing anywhere holds. The one write that may claim more is a merge's adopt, whose index
- *   names its segment before writing it. It claims what the adopted log carries, and the turn
- *   writes the active segment first, so if the adopt is then refused, the claim passes the keys
- *   only by seqs of this replica's that a peer handed back and this store had lost. That peer can
- *   hand them back again, so that hole can heal.
+ *   **It runs ahead of the keys, by the exporter's mint claim.** It must reach every seq in a
+ *   segment the index names sealed, and every seq the exporter has minted at all: a turn publishes
+ *   its records and shows them in `snapshot()` before its write, so a record whose write never
+ *   lands can already be held by a peer or a sink, and a restart that minted from the keys would
+ *   hand its dot out again (#3452). So before a turn mints, a claim write puts a seq here a lease
+ *   past every id the turn can mint. A merge's adopt claims what the adopted log carries as well,
+ *   since its index names its segment before writing it.
  *
  *   **The raise leaves a hole whenever it passes seqs the loaded log lacks**: a sealed segment
  *   that was not read (the case it exists for), records [WarpLogRecordExporter] could not install,
