@@ -92,7 +92,7 @@ class W1BridgeProbeTest {
         val l = shape.groupId("light")
         val x = shape.groupId("heavy")
         val h = LocalHeddle.bootWhole(shape, LocalPolicy(defaultReservation = 1L), epoch = 1L)
-        h.mintSupply(1L shl 20)
+        h.mintSupply(1L shl 50)
         lease(h, setOf(l, x), x, 0L)
         repeat(2) { lease(h, setOf(l), l, 1L + it) }
         val edge = checkNotNull(h.snapshot().ledger.lineageOf(l)).last()
