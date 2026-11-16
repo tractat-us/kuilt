@@ -71,18 +71,22 @@ import kotlinx.serialization.encoding.Encoder
  *   names its segment before writing it. It claims what the adopted log carries, and the turn
  *   writes the active segment first, so if the adopt is then refused, the claim passes the keys
  *   only by seqs of this replica's that a peer handed back and this store had lost. That peer can
- *   hand them back again, so that hole can heal.
+ *   hand them back again, and the window's floor crosses that hole either way.
  *
  *   **The raise leaves a hole whenever it passes seqs the loaded log lacks**: a sealed segment
  *   that was not read (the case it exists for), records [WarpLogRecordExporter] could not install,
- *   an active segment that does not decode. The exporter's window drops through
- *   [us.tractat.kuilt.crdt.Rga.dropWindowPastUnheld], whose floor crosses a hole once a record
- *   minted after it is dropped, so this replica's drops keep folding into the floor and no segment
- *   is pinned by them (#3447). The records in the hole are older than the one dropped, so a
- *   drop-oldest window would have dropped them first; when their segment is read back, the floor
- *   purges them. Before that, [us.tractat.kuilt.crdt.Rga.dropWindow]'s walk stopped at the hole,
- *   and on #3410's repro (one unread segment, 300 exports at eight ops a segment) left 35 segment
- *   keys where 3 is normal, 30 of them pinned by an `RgaOp.Compact`, for good.
+ *   an active segment that does not decode. The window's intent is to drop this replica's records
+ *   in **arrival** order, and a hole's records arrived before every record minted since. List
+ *   order does not keep that promise after a restart: the hole's records, read back, sort after
+ *   the records minted since. So each window pass drops every own record that arrived before one
+ *   it drops, and drops through [us.tractat.kuilt.crdt.Rga.dropWindowPastUnheld], whose floor
+ *   crosses the hole. The hole's records are then dropped with the newer ones, whether they are
+ *   still unread or already back, and this replica's drops keep folding into the floor (#3447).
+ *   Before that, [us.tractat.kuilt.crdt.Rga.dropWindow]'s walk stopped at the hole, and on #3410's
+ *   repro (one unread segment, 300 exports at eight ops a segment) left 35 segment keys where 3 is
+ *   normal, 30 of them pinned by an `RgaOp.Compact`, for good. Crossing the hole alone was not
+ *   enough: read back within fewer exports than the window holds, the records sorted behind newer
+ *   ones and blocked the floor the same way.
  *
  *   Both default to `0`, which is what an index written before them meant: mint from what was read.
  */

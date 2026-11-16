@@ -858,9 +858,13 @@ public class Rga<V> private constructor(
      * one `(RgaId -> RgaId)` pair each.
      *
      * Only [self]'s floor entry is ever raised. Raising a foreign author's would annihilate a
-     * dot that author may not have minted yet; this replica, by contrast, can never hold an
-     * undelivered dot of its own. (The reason is *not* that a single-author log is somehow
-     * safe — see [compactedBelow], where the reorder is shown to bite within one author too.)
+     * dot that author may not have minted yet. [self]'s own dots, by contrast, were all minted
+     * here, so every one at or below a seq it drops exists. Some may not be held: a state rebuilt
+     * from part of its log and raised by [advanceClock] lacks the rest, and they can arrive later.
+     * That is why this walk stops at the first one it does not hold; [dropWindowPastUnheld]
+     * crosses them for a caller that drops in arrival order. (The reason is *not* that a
+     * single-author log is somehow safe — see [compactedBelow], where the reorder is shown to bite
+     * within one author too.)
      *
      * **The floor's positional reroot degrades to [RgaId.HEAD].** A floor writes no
      * [RgaOp.Compact.positions], so a survivor whose predecessor this call floored away
