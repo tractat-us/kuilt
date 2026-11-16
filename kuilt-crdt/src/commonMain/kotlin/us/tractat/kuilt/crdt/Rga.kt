@@ -885,16 +885,44 @@ public class Rga<V> private constructor(
      *
      * @sample us.tractat.kuilt.crdt.sampleRgaDropWindow
      */
-    public fun dropWindow(self: ReplicaId, dropped: Set<RgaId>): Pair<Rga<V>, Patch<Rga<V>>>? {
+    public fun dropWindow(self: ReplicaId, dropped: Set<RgaId>): Pair<Rga<V>, Patch<Rga<V>>>? =
+        dropWindow(self, dropped, OwnFloorWalk.CONTIGUOUS)
+
+    /**
+     * [dropWindow], with [self]'s floor also stepping over the seqs of [self]'s own that this state
+     * holds no op of, wherever a dropped own seq lies above them.
+     *
+     * The remedy for the first cost [advanceClock] names. A state raised past ops it does not hold
+     * has a hole in [self]'s seqs at each of them, and [dropWindow]'s floor walk stops at the first
+     * hole: every later own drop is recorded as an explicit [RgaOp.Compact], one pair per id, for as
+     * long as the ops stay away, and the pairs already recorded stay after they return. Here the
+     * walk crosses a run of held-nowhere seqs when the next seq above the run is one being dropped
+     * (or already compacted), and so a windowed log keeps its O(authors) floor through the hole.
+     *
+     * **What it costs: the ops in a crossed hole are dropped too.** When they come back — a later
+     * [piece] with the store or the peer that holds them — the floor purges them, and a peer that
+     * absorbs the floor purges its copy as well. That is the right answer only for a caller whose
+     * window drops this replica's records **oldest-minted first**, so that a held-nowhere record
+     * minted before a dropped one would have been dropped before it. Seq order is mint order for one
+     * author, so the caller's drop order is what decides it, and this state cannot see that order.
+     * A drop-oldest buffer of records appended at the tail is the case it was made for.
+     *
+     * A run with no dropped seq above it is left alone, so a hole whose ops are newer than every
+     * drop stays open and its ops are admitted when they return. Only [self]'s entry moves, as in
+     * [dropWindow]; a foreign author's dots never fold.
+     *
+     * @return as [dropWindow].
+     */
+    @CrdtInternalApi
+    public fun dropWindowPastUnheld(self: ReplicaId, dropped: Set<RgaId>): Pair<Rga<V>, Patch<Rga<V>>>? =
+        dropWindow(self, dropped, OwnFloorWalk.ACROSS_UNHELD)
+
+    /** How far [dropWindow]'s walk up [self]'s own seqs may go; see [dropWindowPastUnheld]. */
+    private enum class OwnFloorWalk { CONTIGUOUS, ACROSS_UNHELD }
+
+    private fun dropWindow(self: ReplicaId, dropped: Set<RgaId>, walk: OwnFloorWalk): Pair<Rga<V>, Patch<Rga<V>>>? {
         if (dropped.isEmpty()) return null
-        val ownSeqs = dropped.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
-        // Own dots ALREADY dropped explicitly — recorded in a retained Compact, and therefore
-        // never *reappear* in insertsById; a caller may still re-pass one, which the residue
-        // filter below tolerates. Without these the walk cannot step over them and the floor
-        // wedges below the first one FOREVER (see the wedge test).
-        val ownCompacted = compactedIds.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
-        var floorSeq = compactedBelow[self]
-        while ((floorSeq + 1L) in ownSeqs || (floorSeq + 1L) in ownCompacted) floorSeq++
+        val floorSeq = ownFloorAfter(self, dropped, walk)
         val newFloor = compactedBelow.ceilWith(VersionVector.of(mapOf(self to floorSeq)))
 
         // `it in insertsById` is load-bearing: positionsFor calls getValue and throws on an
@@ -904,6 +932,38 @@ public class Rga<V> private constructor(
 
         val state = withCompactedBelow(newFloor).let { if (compactOp == null) it else it.apply(compactOp) }
         return state to Patch(deltaOf<V>(newFloor, compactOp))
+    }
+
+    /**
+     * The seq [self]'s floor entry may rise to when [dropped] leaves this log: up from the current
+     * entry, over every seq being dropped or already compacted. Under [OwnFloorWalk.ACROSS_UNHELD]
+     * it also crosses a gap of seqs this state holds no op of when the seq above the gap is one of
+     * those; under [OwnFloorWalk.CONTIGUOUS] a gap ends the walk.
+     */
+    private fun ownFloorAfter(self: ReplicaId, dropped: Set<RgaId>, walk: OwnFloorWalk): Long {
+        val ownSeqs = dropped.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
+        // Own dots ALREADY dropped explicitly — recorded in a retained Compact, and therefore
+        // never *reappear* in insertsById; a caller may still re-pass one, which the residue
+        // filter below tolerates. Without these the walk cannot step over them and the floor
+        // wedges below the first one FOREVER (see the wedge test).
+        val ownCompacted = compactedIds.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
+        val steppable = ownSeqs + ownCompacted
+        var floorSeq = compactedBelow[self]
+        // Every own seq above the floor this state knows of, ascending. Under ACROSS_UNHELD the
+        // held ones join them, so a held, retained seq blocks a crossing rather than being skipped.
+        val held = if (walk == OwnFloorWalk.ACROSS_UNHELD) {
+            insertsById.keys.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
+        } else {
+            emptySet()
+        }
+        val known = (steppable + held).filter { it > floorSeq }.sorted()
+        for (seq in known) {
+            val contiguous = seq == floorSeq + 1L
+            if (!contiguous && walk == OwnFloorWalk.CONTIGUOUS) break
+            if (seq !in steppable) break
+            floorSeq = seq
+        }
+        return floorSeq
     }
 
     /** Rebuild the derived caches after the floor rose to [merged]. */

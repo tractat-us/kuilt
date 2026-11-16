@@ -67,22 +67,22 @@ import kotlinx.serialization.encoding.Encoder
  *   index names sealed, and it must not pass the seqs the keys hold except by ones a peer holds
  *   too. A turn's leading index write lands before its segment write, so it claims only what
  *   earlier segment writes put on disk; claiming the turn's own new seqs, with the segment write
- *   then refused, left a restart's log holding a hole no drop could fold past (the cost below,
- *   with nothing to heal it). The one write that may claim more is a merge's adopt, whose index
+ *   then refused, left a restart's log holding a hole whose seqs nothing anywhere holds. The one write that may claim more is a merge's adopt, whose index
  *   names its segment before writing it. It claims what the adopted log carries, and the turn
  *   writes the active segment first, so if the adopt is then refused, the claim passes the keys
  *   only by seqs of this replica's that a peer handed back and this store had lost. That peer can
  *   hand them back again, so that hole can heal.
  *
- *   **The raise has a cost of its own whenever it passes seqs the loaded log lacks**: a sealed
- *   segment that was not read (the case it exists for), records [WarpLogRecordExporter] could not
- *   install, an active segment that does not decode. [us.tractat.kuilt.crdt.Rga.dropWindow] folds
- *   this replica's drops into its floor only along an unbroken run of seqs, so until the missing
- *   segment is read every drop past the hole is kept as an explicit `RgaOp.Compact`, and a
- *   segment carrying one is never retired. Measured on #3410's repro, one unread segment and 300
- *   exports at eight ops a segment: 35 segment keys where 3 is normal, 30 of them pinned, 50 KB
- *   resident, and 299 compacted ids kept, all of it still there after a clean start has read the
- *   segment and healed the floor. When the segment is gone for good the floor never moves again.
+ *   **The raise leaves a hole whenever it passes seqs the loaded log lacks**: a sealed segment
+ *   that was not read (the case it exists for), records [WarpLogRecordExporter] could not install,
+ *   an active segment that does not decode. The exporter's window drops through
+ *   [us.tractat.kuilt.crdt.Rga.dropWindowPastUnheld], whose floor crosses a hole once a record
+ *   minted after it is dropped, so this replica's drops keep folding into the floor and no segment
+ *   is pinned by them (#3447). The records in the hole are older than the one dropped, so a
+ *   drop-oldest window would have dropped them first; when their segment is read back, the floor
+ *   purges them. Before that, [us.tractat.kuilt.crdt.Rga.dropWindow]'s walk stopped at the hole,
+ *   and on #3410's repro (one unread segment, 300 exports at eight ops a segment) left 35 segment
+ *   keys where 3 is normal, 30 of them pinned by an `RgaOp.Compact`, for good.
  *
  *   Both default to `0`, which is what an index written before them meant: mint from what was read.
  */

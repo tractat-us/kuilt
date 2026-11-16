@@ -1109,8 +1109,8 @@ public class WarpLogRecordExporter(
         runCatchingCancellable {
             // Raised before anything can mint, so a sealed segment recovery could not read keeps
             // its ids: the next export mints past them rather than from what was read (#3410).
-            // Raising past seqs the loaded log lacks leaves a hole the floor cannot fold past
-            // until that segment is read; see LogSegmentIndex.seqHighWater for what it costs.
+            // Raising past seqs the loaded log lacks leaves a hole, which the window's floor
+            // crosses (windowPass); see LogSegmentIndex.seqHighWater.
             val raised = recovered.log.advanceClock(replica, recovered.lamportHighWater, recovered.seqHighWater)
             val entries = raised.entries()
             val suppression = Suppression.of(raised)
@@ -3125,7 +3125,11 @@ public class WarpLogRecordExporter(
     private fun windowPass(retain: Int = maxRecords): Boolean {
         evictionsSincePass = 0
         val dropped = idsOutsideWindow(retain) ?: return false
-        val (newLog, delta) = log.dropWindow(replica, dropped) ?: return false
+        // PastUnheld, not dropWindow: a recovery that raised the seq past an unread segment left
+        // a hole in this replica's seqs, and dropWindow's floor stops at it, turning every later
+        // own drop into a Compact that pins its segment for good (#3447). Records in the hole were
+        // minted before every record this pass drops, and the window drops oldest first.
+        val (newLog, delta) = log.dropWindowPastUnheld(replica, dropped) ?: return false
         // dropWindow returns null only for an EMPTY drop set; a set that changes nothing —
         // ids already under the floor, or never delivered here — comes back as this very
         // state with an inert delta. Persisting that would rewrite the segment for nothing.
