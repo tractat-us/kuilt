@@ -11,8 +11,8 @@ package us.tractat.kuilt.otel
  *
  * Each variant rejects at construction the arguments its CRDT would reject when applied. What a
  * variant cannot know until it meets an exporter — [AddExponentialHistogram]'s scale against the
- * exporter's [WarpMetricExporter.histogramScale], and whether an [IncrementSum] or a histogram update
- * would carry one of the exporter's counts past [Long.MAX_VALUE] — [WarpMetricExporter.record]
+ * exporter's [WarpMetricExporter.histogramScale], and whether an [IncrementSum], a histogram update or an
+ * up-down update would carry one of the exporter's counts past what it holds — [WarpMetricExporter.record]
  * checks for every update before it applies any, so none leaves a batch applied half-way. The
  * one-by-one equivalence above holds for every batch `record` accepts.
  *

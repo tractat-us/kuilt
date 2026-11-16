@@ -195,9 +195,9 @@ totals out.
 
 Going in, `KuiltMetricExporter` asks the SDK for delta temporality on counters,
 because `incrementSum` *adds* what it is given; a running total would be added again
-on every collection. It asks for cumulative on UpDownCounters, which become gauges:
-a gauge holds a level, and a delta would store the change since the last collection
-instead. Gauges and histograms stay delta. A sum that arrives the other way, from a
+on every collection. It asks for cumulative on UpDownCounters, whose point is a level: each process sets
+its own share of an up-down sum to it, so the fleet reads the sum of the levels and
+a level reported again, even after a restart, counts once. Gauges and histograms stay delta. A sum that arrives the other way, from a
 reader that picks its own temporality, is dropped with a warning. The SDK sets
 temporality per reader, so registering the bridge on a reader of its own leaves your
 existing OTLP exporter as it was.
@@ -212,6 +212,8 @@ encoders in `kuilt-otel-otlp` (JSON and protobuf alike) put it on the wire like 
 | `GAUGE` | `LWWRegister<Double>` | `Gauge` | none — a level |
 | `CARDINALITY` | `HyperLogLog` | `Gauge`, the integer estimate | none — a level |
 | `EXPONENTIAL_HISTOGRAM` | `DDSketch` | `ExponentialHistogram` | cumulative |
+| `UP_DOWN_SUM`, `setUpDownSum` | `PNCounter` | non-monotonic `Sum`, integer | cumulative |
+| `UP_DOWN_SUM`, `setUpDownSumDouble` | `PNCounterDouble` | non-monotonic `Sum`, double | cumulative |
 
 A collector should expect four things of those points:
 
@@ -236,7 +238,7 @@ so send them as cumulative.
 | Type | What it does |
 |---|---|
 | `WarpSpanExporter` | Span buffer of full `SpanRecord` values (ORSet). Snapshot merge is idempotent; export retries can mint another causal stamp. |
-| `WarpMetricExporter` | CRDT-backed metric buffer: sums (GCounter, GCounterDouble), gauges (LWWRegister), cardinality (HyperLogLog), exponential histograms (DDSketch). `Success` means durably written. |
+| `WarpMetricExporter` | CRDT-backed metric buffer: sums (GCounter, GCounterDouble), gauges (LWWRegister), cardinality (HyperLogLog), exponential histograms (DDSketch), up-down sums (PNCounter, PNCounterDouble). `Success` means durably written. |
 | `WarpLogRecordExporter` | CRDT-backed log buffer (Rga). Ordered, idempotent export + merge. |
 | `WarpTelemetry` | Facade that composes all exporters under one surface. |
 | `WarpTelemetry.clear` | The supported reset: empties every signal's buffer and its persisted state on a **live** instance — no restart, no per-platform directory delete. Logs and spans suppress what they drop, so a peer cannot re-merge it back; metrics forget only locally (a monotonic join has no merge-safe forget). |
@@ -247,7 +249,7 @@ so send them as cumulative.
 | `SpanRecord` | OTLP-shaped span data model. |
 | `LogRecord` | OTLP-shaped log-record data model with optional trace correlation. |
 | `MetricKey` | Identity of one metric time series (name + kind + label set). |
-| `MetricKind` | SUM / GAUGE / CARDINALITY / EXPONENTIAL_HISTOGRAM. |
+| `MetricKind` | SUM / GAUGE / CARDINALITY / EXPONENTIAL_HISTOGRAM / UP_DOWN_SUM. |
 | `ExportResult` | Typed result of span/log `export()` / `merge()`. |
 | `MetricExportResult` | Typed result of `record` and the single-point metric mutators: `Success`, `Refused` (an overflow; nothing applied), or `Partial`, whose `uncounted` is exactly the updates a retry may send again. |
 | `MetricWriteResult` | Typed result of the idempotent `merge*` calls and metric `clear()`: `Success` or `Failure(cause)`. |
