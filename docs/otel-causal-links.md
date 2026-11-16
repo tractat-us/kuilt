@@ -95,7 +95,7 @@ Three gaps remain. If both saved entries are corrupt, the floor starts at zero. 
 a peer through `snapshot()` before its export has written the clock; if the device crashes then,
 no entry need be corrupt: the restart reads a clock below that dot, and a new span can take the
 dot until the peer sends it back. That is the export's crash window plus gossip, tracked in
-#3452 with the log exporter's twin. And a corrupt span entry starts fresh and loses its mark. A
+#3517; the log exporter's twin was closed by a claim written ahead of the mint. And a corrupt span entry starts fresh and loses its mark. A
 sound clock entry still covers every dot an export or clear wrote, since those write the clock
 first, but not a dot a merge wrote before any clock write: a merge never writes the clock.
 
