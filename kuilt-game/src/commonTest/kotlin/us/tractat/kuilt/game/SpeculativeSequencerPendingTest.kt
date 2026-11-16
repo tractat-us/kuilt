@@ -465,9 +465,9 @@ class SpeculativeSequencerPendingTest {
      * meet constantly.
      *
      * The expected state is folded here with [rule] over the commits in delivery order, without
-     * the sequencer's help. Every step also checks the bound
-     * that makes the convergence argument work: there are never more pending entries than proposals
-     * whose own outcome has yet to retire one.
+     * the sequencer's help. Every step also checks the bound that makes the convergence argument
+     * work: there are never more pending entries than proposals whose own outcome has yet to
+     * retire one.
      *
      * Returns how many commits [rule] refused: each is a WARN with a stack trace in the sequencer.
      */
