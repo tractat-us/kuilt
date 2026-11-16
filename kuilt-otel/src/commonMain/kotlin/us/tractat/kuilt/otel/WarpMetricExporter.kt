@@ -28,10 +28,12 @@ import us.tractat.kuilt.crdt.PNCounterDouble
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.math.minusOrNull
 import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.store.StoreKey
+import kotlin.math.abs
 
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExporter")
 
@@ -232,6 +234,9 @@ public class WarpMetricExporter(
 
     /** The histogram series a [record] has already been refused for; read only inside [lock] (#3354). */
     private val refusedHistograms = FirstSightings()
+
+    /** The up-down sum series a [record] has already been refused for; read only inside [lock] (#3307). */
+    private val refusedUpDownSums = FirstSightings()
 
     /**
      * Whether a durable-write outage is currently **open** — i.e. a refused store write has already
@@ -810,8 +815,8 @@ public class WarpMetricExporter(
         return writeMutex.withLock {
             // A kind whose persisted series is still unread admits nothing; the rest of the batch
             // goes on. Read first, so the overflow check below counts what the store held (#3390).
-            val unread = refusedReads(updates.mapTo(HashSet()) { it.storedKind })
-            val admitted = if (unread.isEmpty()) updates else updates.filter { it.storedKind !in unread }
+            val unread = refusedReads(updates.flatMapTo(HashSet()) { it.storedKinds })
+            val admitted = if (unread.isEmpty()) updates else updates.filter { it.isAdmittedPast(unread) }
             var overflow: MetricOverflowException? = null
             var firstRefusal = false
             val writes = lock.withLock {
@@ -819,12 +824,16 @@ public class WarpMetricExporter(
                     firstRefusal = when (refused) {
                         is MetricSumOverflowException -> refusedSums.firstSighting(refused.key, sums.keys)
                         is MetricHistogramOverflowException -> refusedHistograms.firstSighting(refused.key, histograms.keys)
+                        is MetricUpDownSumOverflowException ->
+                            refusedUpDownSums.firstSighting(refused.key, upDownSums.keys + upDownSumsDouble.keys)
                     }
                 }
                 if (overflow != null) return@withLock emptyList()
-                // The last series each kind's updates named — only for the failure log line.
+                // The last series each kind's updates named — only for the failure log line. An
+                // update that changed nothing, a level set again or a forget of an absent series,
+                // touches no kind, so it costs no write.
                 val touched = LinkedHashMap<StoredKind, MetricKey>()
-                admitted.forEach { update -> touched[applyLocked(update)] = update.key }
+                admitted.forEach { update -> applyLocked(update).forEach { kind -> touched[kind] = update.key } }
                 StoredKind.entries.mapNotNull { kind ->
                     touched[kind]?.let { lastKey -> PendingWrite(kind, encode(kind), lastKey) }
                 }
@@ -844,7 +853,7 @@ public class WarpMetricExporter(
             } else {
                 // Only the unread kinds' updates: every other update was applied, so a retry of it
                 // would count it twice.
-                MetricExportResult.Partial(updates.filter { it.storedKind in unread }, causes)
+                MetricExportResult.Partial(updates.filterNot { it.isAdmittedPast(unread) }, causes)
             }
         }
     }
@@ -864,6 +873,11 @@ public class WarpMetricExporter(
             is MetricUpdate.SetGauge,
             is MetricUpdate.AddCardinality,
             is MetricUpdate.RecordHistogram,
+            is MetricUpdate.AddUpDownSum,
+            is MetricUpdate.AddUpDownSumDouble,
+            is MetricUpdate.SetUpDownSum,
+            is MetricUpdate.SetUpDownSumDouble,
+            is MetricUpdate.Forget,
             -> Unit
             is MetricUpdate.AddExponentialHistogram -> {
                 require(update.scale >= histogramScale) {
@@ -911,8 +925,34 @@ public class WarpMetricExporter(
     private fun firstOverflowLocked(updates: List<MetricUpdate>): MetricOverflowException? {
         val runningSums = HashMap<MetricKey, Long>()
         val runningHistograms = HashMap<MetricKey, DDSketch>()
+        val runningUpDownSums = HashMap<MetricKey, PNCounter>()
+        val runningUpDownSumsDouble = HashMap<MetricKey, PNCounterDouble>()
         for (update in updates) {
             when (update) {
+                is MetricUpdate.AddUpDownSum,
+                is MetricUpdate.SetUpDownSum,
+                -> {
+                    val current = runningUpDownSums[update.key] ?: upDownSums[update.key] ?: PNCounter.ZERO
+                    runningUpDownSums[update.key] = upDownSumNextOrNull(current, update)
+                        ?: return MetricUpDownSumOverflowException(update.key)
+                }
+                is MetricUpdate.AddUpDownSumDouble,
+                is MetricUpdate.SetUpDownSumDouble,
+                -> {
+                    val current = runningUpDownSumsDouble[update.key] ?: upDownSumsDouble[update.key] ?: PNCounterDouble.ZERO
+                    runningUpDownSumsDouble[update.key] = upDownSumDoubleNextOrNull(current, update)
+                        ?: return MetricUpDownSumOverflowException(update.key)
+                }
+                // A later update to a forgotten series starts it again from nothing, as applyLocked will.
+                is MetricUpdate.Forget -> update.storedKinds.forEach { kind ->
+                    when (kind) {
+                        StoredKind.SUMS -> runningSums[update.key] = 0L
+                        StoredKind.HISTOGRAMS -> runningHistograms[update.key] = histogramPrototype
+                        StoredKind.UP_DOWN_SUMS -> runningUpDownSums[update.key] = PNCounter.ZERO
+                        StoredKind.UP_DOWN_SUMS_DOUBLE -> runningUpDownSumsDouble[update.key] = PNCounterDouble.ZERO
+                        StoredKind.SUMS_DOUBLE, StoredKind.GAUGES, StoredKind.CARDINALITIES -> Unit
+                    }
+                }
                 is MetricUpdate.IncrementSum -> {
                     // The total the bridge exports as the point's value: every replica's slot, summed
                     // exactly. A slot that fits can still carry it past Long with a peer's merged in (#3445).
@@ -962,31 +1002,99 @@ public class WarpMetricExporter(
         else -> error("not a histogram update: $update")
     }
 
-    /** Apply one update to its map, evicting first if it opens a new series. Called inside [lock]. */
-    private fun applyLocked(update: MetricUpdate): StoredKind = when (update) {
+    /**
+     * The counter [update] leaves the up-down sum [current] at, [current] itself when it moves
+     * nothing, or `null` when it cannot be applied: it would carry one of this replica's slots past
+     * [Long.MAX_VALUE], or leave a total over every replica that does not fit in a `Long`, which the
+     * OTLP bridge could not export. The one place an integer up-down update is worked out, so
+     * [firstOverflowLocked]'s check and [applyLocked] cannot drift apart.
+     *
+     * A [MetricUpdate.SetUpDownSum] moves this replica's own slot by `level − count(replica)`, its
+     * share, so the series' value is the sum of every replica's level and the same level set twice
+     * moves nothing the second time.
+     */
+    private fun upDownSumNextOrNull(current: PNCounter, update: MetricUpdate): PNCounter? {
+        val move = when (update) {
+            is MetricUpdate.AddUpDownSum -> update.by
+            is MetricUpdate.SetUpDownSum -> update.level.minusOrNull(current.count(replica)) ?: return null
+            else -> error("not an integer up-down update: $update")
+        }
+        if (move == 0L) return current
+        // A move past what one slot holds cannot be made. Long.MIN_VALUE is the one move whose
+        // magnitude does not fit, and its slot could not take it either.
+        if (move == Long.MIN_VALUE) return null
+        // Nothing in here suspends, and ArithmeticException is not a CancellationException, so this
+        // narrow catch cannot swallow a cancellation.
+        val next = try {
+            current.piece(if (move > 0L) current.increment(replica, move) else current.decrement(replica, -move))
+        } catch (_: ArithmeticException) {
+            return null
+        }
+        return next.takeIf { it.valueOrNull() != null }
+    }
+
+    /**
+     * The fractional twin of [upDownSumNextOrNull]: `null` only when the move is not finite or would
+     * take one of this replica's slots past [Double.MAX_VALUE]. A total over every replica that rounds
+     * to infinity is still exported, as OTLP/JSON's string form of a non-finite double.
+     *
+     * A share is a difference of two growing totals, so a set can land a rounding step off its level.
+     * A [MetricUpdate.SetUpDownSumDouble] that would bring the share no closer to the level than it
+     * already is moves nothing, so a level reported again settles after at most one more write rather
+     * than rewriting the series every collection.
+     */
+    private fun upDownSumDoubleNextOrNull(current: PNCounterDouble, update: MetricUpdate): PNCounterDouble? {
+        val share = current.count(replica)
+        val move = when (update) {
+            is MetricUpdate.AddUpDownSumDouble -> update.by
+            is MetricUpdate.SetUpDownSumDouble -> update.level - share
+            else -> error("not a fractional up-down update: $update")
+        }
+        if (move == 0.0) return current
+        if (!move.isFinite()) return null
+        // Nothing in here suspends; see upDownSumNextOrNull.
+        val next = try {
+            current.piece(if (move > 0.0) current.increment(replica, move) else current.decrement(replica, -move))
+        } catch (_: ArithmeticException) {
+            return null
+        }
+        if (update is MetricUpdate.SetUpDownSumDouble &&
+            abs(update.level - next.count(replica)) >= abs(update.level - share)
+        ) {
+            return current
+        }
+        return next
+    }
+
+    /**
+     * Apply one update to its map, evicting first if it opens a new series, and return the kinds it
+     * changed: none for an update that moved nothing, so its batch writes nothing for it. Called
+     * inside [lock].
+     */
+    private fun applyLocked(update: MetricUpdate): Set<StoredKind> = when (update) {
         is MetricUpdate.IncrementSum -> {
             maybeEvictForNewKey(update.key, sums)
             val current = sums.getOrPut(update.key) { GCounter.ZERO }
             sums[update.key] = current.piece(current.inc(replica, update.by).delta)
-            StoredKind.SUMS
+            setOf(StoredKind.SUMS)
         }
         is MetricUpdate.IncrementSumDouble -> {
             maybeEvictForNewKey(update.key, sumsDouble)
             val current = sumsDouble.getOrPut(update.key) { GCounterDouble.ZERO }
             sumsDouble[update.key] = current.piece(current.inc(replica, update.by).delta)
-            StoredKind.SUMS_DOUBLE
+            setOf(StoredKind.SUMS_DOUBLE)
         }
         is MetricUpdate.SetGauge -> {
             maybeEvictForNewKey(update.key, gauges)
             val current = gauges.getOrPut(update.key) { LWWRegister.empty<Double>() }
             gauges[update.key] = current.piece(current.set(replica, update.timestamp, update.value))
-            StoredKind.GAUGES
+            setOf(StoredKind.GAUGES)
         }
         is MetricUpdate.AddCardinality -> {
             maybeEvictForNewKey(update.key, cardinalities)
             val current = cardinalities.getOrPut(update.key) { HyperLogLog.empty() }
             cardinalities[update.key] = current.piece(current.add(update.element).delta)
-            StoredKind.CARDINALITIES
+            setOf(StoredKind.CARDINALITIES)
         }
         is MetricUpdate.RecordHistogram,
         is MetricUpdate.AddExponentialHistogram,
@@ -997,8 +1105,48 @@ public class WarpMetricExporter(
                 "histogram update for ${update.key.name} overflows, yet record's check passed it"
             }
             histograms[update.key] = current.piece(patch.delta)
-            StoredKind.HISTOGRAMS
+            setOf(StoredKind.HISTOGRAMS)
         }
+        is MetricUpdate.AddUpDownSum,
+        is MetricUpdate.SetUpDownSum,
+        -> applyUpDownLocked(update, upDownSums, PNCounter.ZERO, StoredKind.UP_DOWN_SUMS, ::upDownSumNextOrNull)
+        is MetricUpdate.AddUpDownSumDouble,
+        is MetricUpdate.SetUpDownSumDouble,
+        -> applyUpDownLocked(update, upDownSumsDouble, PNCounterDouble.ZERO, StoredKind.UP_DOWN_SUMS_DOUBLE, ::upDownSumDoubleNextOrNull)
+        // Local-only: drops the series from this exporter and opens nothing, so it never evicts.
+        is MetricUpdate.Forget -> update.storedKinds.filterTo(LinkedHashSet()) { kind -> seriesOf(kind).remove(update.key) != null }
+    }
+
+    /**
+     * Apply an up-down [update] to [series] through [next], the same function [firstOverflowLocked]
+     * checked it with. A new series is a change even at level zero, so it is written and exported.
+     */
+    private fun <C : Quilted<C>> applyUpDownLocked(
+        update: MetricUpdate,
+        series: LinkedHashMap<MetricKey, C>,
+        zero: C,
+        kind: StoredKind,
+        next: (C, MetricUpdate) -> C?,
+    ): Set<StoredKind> {
+        maybeEvictForNewKey(update.key, series)
+        val current = series[update.key]
+        val moved = checkNotNull(next(current ?: zero, update)) {
+            "up-down update for ${update.key.name} overflows, yet record's check passed it"
+        }
+        if (current != null && moved == current) return emptySet()
+        series[update.key] = moved
+        return setOf(kind)
+    }
+
+    /** The map that holds [kind]'s series. */
+    private fun seriesOf(kind: StoredKind): LinkedHashMap<MetricKey, out Quilted<*>> = when (kind) {
+        StoredKind.SUMS -> sums
+        StoredKind.SUMS_DOUBLE -> sumsDouble
+        StoredKind.GAUGES -> gauges
+        StoredKind.CARDINALITIES -> cardinalities
+        StoredKind.HISTOGRAMS -> histograms
+        StoredKind.UP_DOWN_SUMS -> upDownSums
+        StoredKind.UP_DOWN_SUMS_DOUBLE -> upDownSumsDouble
     }
 
     /**
@@ -1489,15 +1637,31 @@ internal enum class StoredKind(val storeKey: StoreKey) {
     UP_DOWN_SUMS_DOUBLE(StoreKey("otel.metrics.updown.double")),
 }
 
-/** The persisted map [this] update changes. */
-internal val MetricUpdate.storedKind: StoredKind
+/**
+ * The persisted maps [this] update may change: one for every update but a [MetricUpdate.Forget],
+ * which names a series by its key's kind, and a sum or up-down sum's key names a series in both the
+ * integer and the fractional map.
+ */
+internal val MetricUpdate.storedKinds: Set<StoredKind>
     get() = when (this) {
-        is MetricUpdate.IncrementSum -> StoredKind.SUMS
-        is MetricUpdate.IncrementSumDouble -> StoredKind.SUMS_DOUBLE
-        is MetricUpdate.SetGauge -> StoredKind.GAUGES
-        is MetricUpdate.AddCardinality -> StoredKind.CARDINALITIES
-        is MetricUpdate.RecordHistogram, is MetricUpdate.AddExponentialHistogram -> StoredKind.HISTOGRAMS
+        is MetricUpdate.IncrementSum -> setOf(StoredKind.SUMS)
+        is MetricUpdate.IncrementSumDouble -> setOf(StoredKind.SUMS_DOUBLE)
+        is MetricUpdate.SetGauge -> setOf(StoredKind.GAUGES)
+        is MetricUpdate.AddCardinality -> setOf(StoredKind.CARDINALITIES)
+        is MetricUpdate.RecordHistogram, is MetricUpdate.AddExponentialHistogram -> setOf(StoredKind.HISTOGRAMS)
+        is MetricUpdate.AddUpDownSum, is MetricUpdate.SetUpDownSum -> setOf(StoredKind.UP_DOWN_SUMS)
+        is MetricUpdate.AddUpDownSumDouble, is MetricUpdate.SetUpDownSumDouble -> setOf(StoredKind.UP_DOWN_SUMS_DOUBLE)
+        is MetricUpdate.Forget -> when (key.kind) {
+            MetricKind.SUM -> setOf(StoredKind.SUMS, StoredKind.SUMS_DOUBLE)
+            MetricKind.GAUGE -> setOf(StoredKind.GAUGES)
+            MetricKind.CARDINALITY -> setOf(StoredKind.CARDINALITIES)
+            MetricKind.EXPONENTIAL_HISTOGRAM -> setOf(StoredKind.HISTOGRAMS)
+            MetricKind.UP_DOWN_SUM -> setOf(StoredKind.UP_DOWN_SUMS, StoredKind.UP_DOWN_SUMS_DOUBLE)
+        }
     }
+
+/** Whether none of the maps [this] update may change is one whose persisted series is still [unread]. */
+private fun MetricUpdate.isAdmittedPast(unread: Map<StoredKind, *>): Boolean = storedKinds.none { it in unread }
 
 /**
  * The result of [WarpMetricExporter.record] and of the single-point mutators built on it. Each arm
@@ -1627,4 +1791,23 @@ public class MetricHistogramOverflowException internal constructor(
 ) : MetricOverflowException(
     "histogram series ${key.name} ${key.attributes}: its total count, or this replica's count in one of its " +
         "buckets or in its zero or overflow counter, cannot take this batch's values without passing Long.MAX_VALUE",
+)
+
+/**
+ * A [MetricOverflowException] for an up-down sum (#3307): a [MetricUpdate.AddUpDownSum],
+ * [MetricUpdate.SetUpDownSum] or a fractional twin would move one of this replica's slots past what
+ * it holds — [Long.MAX_VALUE], or [Double.MAX_VALUE] for the fractional map — counting the batch's own
+ * earlier updates to the series. For the integer map it is also refused when the total over every
+ * replica it would leave does not fit in a `Long`, since the OTLP bridge could not export it.
+ *
+ * An update that brings such a total back into range is not refused, unlike a sum's: an up-down
+ * total moves both ways.
+ *
+ * @property key the up-down series that cannot take the update.
+ */
+public class MetricUpDownSumOverflowException internal constructor(
+    override val key: MetricKey,
+) : MetricOverflowException(
+    "up-down sum series ${key.name} ${key.attributes}: this batch would move this replica's share past what " +
+        "its slots hold, or leave a total over every replica that does not fit in a Long",
 )
