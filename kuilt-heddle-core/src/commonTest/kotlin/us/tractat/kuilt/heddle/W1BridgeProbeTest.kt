@@ -206,7 +206,8 @@ class W1BridgeProbeTest {
      * A charging call is never refused at the limit (design §7.1). `heavy`, at `2⁴⁰`, is active and
      * unseated beside `light`, planted at `2⁹⁴` ticks, so no seat can be made for it. `admit` opens
      * its lease at zero rather than refusing, and `complete` reports the cost as unrecorded, since
-     * the only group above `heavy`'s edge is the root. Nothing throws, and `light` still leases.
+     * the only group above `heavy`'s edge is the root. Nothing throws. A pick at the root stalls
+     * and says so, `LifetimeExhausted`, until `heavy` is removed: its seat is part of every step there.
      */
     @Test
     fun aChargingCallAcrossAnEdgeThatCannotBeSeatedOpensAtZeroAndNeverRefuses() {
@@ -228,7 +229,7 @@ class W1BridgeProbeTest {
             { assertEquals(null, h.snapshot().ledger.gauge(heavyEdge), "the rig: heavy's edge was never seated") },
             { assertEquals(0L, lease.reserved, "the lease opens at zero") },
             { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 3L, unrecorded = 3L), done, "and its cost is reported, unrecorded") },
-            { assertEquals(l, assertIs<AcquireOutcome.Acquired>(light, "light still leases").lease.leaf) },
+            { assertEquals(AcquireOutcome.LifetimeExhausted(GroupId("p")), light, "a pick at the root stalls, typed, while heavy cannot be seated") },
         )
     }
 
