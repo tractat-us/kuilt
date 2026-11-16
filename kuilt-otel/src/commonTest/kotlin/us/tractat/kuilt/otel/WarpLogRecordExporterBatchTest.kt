@@ -39,7 +39,7 @@ class WarpLogRecordExporterBatchTest {
     }
 
     /**
-     * Refuses the **first** write and accepts every later one — the shape a quota-bound
+     * Refuses the **first segment** write and accepts every other — the shape a quota-bound
      * store presents transiently, and the discriminator for whether a failed turn
      * abandons the rest of its batch.
      */
@@ -48,8 +48,10 @@ class WarpLogRecordExporterBatchTest {
 
         override suspend fun read(key: StoreKey): ByteArray? = delegate.read(key)
 
+        // A segment write, not the index write claiming the turn's ids ahead of it: that claim is
+        // best effort (#3452), so refusing it would fail nothing.
         override suspend fun write(key: StoreKey, bytes: ByteArray) {
-            if (!refused) {
+            if (!refused && key.name.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST)) {
                 refused = true
                 error("store refused the write")
             }
