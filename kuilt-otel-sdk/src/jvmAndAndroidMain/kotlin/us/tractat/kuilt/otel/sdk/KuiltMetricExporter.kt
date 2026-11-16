@@ -48,10 +48,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *   would be added again on every collection. A delta is exactly the increment to add, and
  *   it is additive, so two replicas' counters merge to the true total with no coordination.
  * - **UpDownCounters** (`UP_DOWN_COUNTER`, `OBSERVABLE_UP_DOWN_COUNTER`) →
- *   [AggregationTemporality.CUMULATIVE]. One becomes a gauge, which holds a level; under
- *   delta its point would be the change over the interval, and a queue going 10 → 12 would
- *   read 2. The cost: a cumulative series is re-sent on every collection whether or not it
- *   moved, so each one is a `setGauge` write per collection.
+ *   [AggregationTemporality.CUMULATIVE]. Its point is this process's level, which sets this
+ *   replica's share of an up-down sum (`MetricUpdate.SetUpDownSum`), so the series sums across
+ *   replicas and the same level re-sent moves nothing (#3307). Under delta the level would live
+ *   only in the buffer, and a process reporting its first observation in full after a restart
+ *   would count it twice. A cumulative series is re-sent on every collection; an unchanged one
+ *   writes nothing.
  * - **Gauges and histograms** → [AggregationTemporality.DELTA]. A gauge's point is a level
  *   either way; under delta the SDK sends it only when it was recorded in the interval, so
  *   an unchanged gauge is not rewritten with a fresh timestamp each collection. A histogram's
@@ -84,8 +86,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *
  * ## Mapping
  * - monotonic `LONG_SUM` → `incrementSum`; monotonic `DOUBLE_SUM` → `incrementSumDouble`.
- * - non-monotonic sums (UpDownCounter) and gauges → `setGauge`. An UpDownCounter arrives
- *   cumulative (above), so the gauge it becomes holds its current level.
+ * - non-monotonic sums (UpDownCounter) → `MetricUpdate.SetUpDownSum`, this replica's share of
+ *   an up-down sum, `SetUpDownSumDouble` for a double one; a NaN or infinite double level is
+ *   dropped (WARN). The batch also forgets, locally, the gauge an older build wrote the same
+ *   counter as, so it does not linger beside the sum.
+ * - gauges → `setGauge`.
  * - delta exponential histograms → `MetricUpdate.AddExponentialHistogram`, which adds the
  *   interval's bucket counts to the series' `DDSketch`. The point's `sum`, `min`, `max` and
  *   exemplars are not kept; a sketch has no field for them.
@@ -97,8 +102,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it), and so is a
  *   NaN delta (WARN). Either is one dropped point, never a failed export: the export is one
  *   batch, so a point it could not apply would otherwise take every other point with it.
- * - a monotonic sum or a histogram whose total count over every replica cannot grow past
- *   [Long.MAX_VALUE] is dropped from the export (WARN the first
+ * - a monotonic sum, a histogram or an up-down sum `record` refuses as saturated is dropped from
+ *   the export (WARN the first
  *   time) for the same reason: `record` refuses the whole batch for it, so the export is recorded
  *   again without that series, and every other point lands once.
  * - a sum whose own temporality is not the one asked for above — a cumulative counter, or a
@@ -308,16 +313,12 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             MetricDataType.LONG_SUM -> {
                 val s = md.longSumData
                 if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return
-                s.points.forEach { p ->
-                    if (s.isMonotonic) incLong(name, p, into) else gauge(name, p.attributes, p.value.toDouble(), p.epochNanos, into)
-                }
+                s.points.forEach { p -> if (s.isMonotonic) incLong(name, p, into) else upDownLong(name, p, into) }
             }
             MetricDataType.DOUBLE_SUM -> {
                 val s = md.doubleSumData
                 if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return
-                s.points.forEach { p ->
-                    if (s.isMonotonic) incDouble(name, p, into) else gauge(name, p.attributes, p.value, p.epochNanos, into)
-                }
+                s.points.forEach { p -> if (s.isMonotonic) incDouble(name, p, into) else upDownDouble(name, p, into) }
             }
             MetricDataType.LONG_GAUGE ->
                 md.longGaugeData.points.forEach { gauge(name, it.attributes, it.value.toDouble(), it.epochNanos, into) }
@@ -404,6 +405,46 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             return
         }
         into += MetricUpdate.IncrementSumDouble(MetricKey(name, MetricKind.SUM, attrs(p.attributes)), p.value)
+    }
+
+    /**
+     * One cumulative UpDownCounter point: this replica's level, set as its share of the series'
+     * up-down sum, so the series sums across replicas (#3307). See [retireGaugeTwin].
+     */
+    private fun upDownLong(name: String, p: LongPointData, into: MutableList<MetricUpdate>) {
+        val key = MetricKey(name, MetricKind.UP_DOWN_SUM, attrs(p.attributes))
+        retireGaugeTwin(key, into)
+        into += MetricUpdate.SetUpDownSum(key, p.value)
+    }
+
+    /**
+     * The double twin of [upDownLong]. A NaN or infinite level is dropped with a WARN: a share
+     * cannot hold one, and [MetricUpdate.SetUpDownSumDouble] would reject it while the export is
+     * being collected, failing every valid point with it.
+     */
+    private fun upDownDouble(name: String, p: DoublePointData, into: MutableList<MetricUpdate>) {
+        if (!p.value.isFinite()) {
+            logger.warn { "KuiltMetricExporter: dropping a ${p.value} point of UpDownCounter '$name' — a share cannot hold it" }
+            return
+        }
+        val key = MetricKey(name, MetricKind.UP_DOWN_SUM, attrs(p.attributes))
+        retireGaugeTwin(key, into)
+        into += MetricUpdate.SetUpDownSumDouble(key, p.value)
+    }
+
+    /**
+     * Before #3307 this bridge wrote every UpDownCounter as a [MetricKind.GAUGE] under the same name
+     * and attributes. That series would linger beside the up-down sum, holding a cap slot and going
+     * out as a Gauge of the same name, so the batch that writes [upDown] forgets it, locally only.
+     *
+     * Only when the buffer holds it: a forget names the gauges' map, so it would make every export
+     * read that map, and fail when the store refuses it, long after the twin is gone. The check and
+     * the record are not atomic; the worst either way is one forget that finds nothing, or a twin
+     * retired one collection later.
+     */
+    private fun retireGaugeTwin(upDown: MetricKey, into: MutableList<MetricUpdate>) {
+        val twin = upDown.copy(kind = MetricKind.GAUGE)
+        if (exporter.gaugeValue(twin) != null) into += MetricUpdate.Forget(twin)
     }
 
     /**
