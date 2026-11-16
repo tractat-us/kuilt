@@ -553,8 +553,8 @@ class SpeculativeSequencerPendingTest {
         const val STEPS = 40
 
         /**
-         * The most refused commits [SEEDED_WALK_BACKSTOP] is sized for. These seeds produce 448 on
-         * every target; the walk asserts it stays under this, so a change to the seeds, the steps or
+         * The most refused commits [SEEDED_WALK_BACKSTOP] is sized for. These seeds produce 448, the same
+         * on the JVM, `macosArm64` and `iosSimulatorArm64`; the walk asserts it stays under this, so a change to the seeds, the steps or
          * the rule that adds traces fails here rather than at the ceiling on the slowest runner.
          */
         const val MAX_REFUSED_COMMITS = 500
@@ -568,7 +568,7 @@ class SpeculativeSequencerPendingTest {
          * time cannot absorb that. Measured for #3532: the arm takes 12 s on a 16-core Mac and
          * 0.03 s with the throwable dropped from that one log line; forcing the render on
          * `iosSimulatorArm64`, which normally skips it, costs the same 12 s. On the 3-vCPU nightly
-         * runner it took 23–31 s, about 60 ms a trace, against [TEST_WEDGE_BACKSTOP]'s 30 s.
+         * runner it took 23–31 s, 50–70 ms a trace, against [TEST_WEDGE_BACKSTOP]'s 30 s.
          *
          * The seeds fix the work, so this is about four times the slowest run seen. A wedge still
          * fails here, two minutes in instead of thirty seconds.
