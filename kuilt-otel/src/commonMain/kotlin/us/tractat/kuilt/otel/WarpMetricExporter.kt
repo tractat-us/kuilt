@@ -252,8 +252,15 @@ public class WarpMetricExporter(
     /** The histogram series a [record] has already been refused for; read only inside [lock] (#3354). */
     private val refusedHistograms = FirstSightings()
 
-    /** The up-down sum series a [record] has already been refused for; read only inside [lock] (#3307). */
+    /**
+     * The integer up-down sum series a [record] has already been refused for; read only inside
+     * [lock] (#3307). Apart from [refusedUpDownSumsDouble] because one key names a series in both
+     * maps, and each series' first refusal is news.
+     */
     private val refusedUpDownSums = FirstSightings()
+
+    /** The fractional twin of [refusedUpDownSums]. */
+    private val refusedUpDownSumsDouble = FirstSightings()
 
     /**
      * Whether a durable-write outage is currently **open** — i.e. a refused store write has already
@@ -859,7 +866,11 @@ public class WarpMetricExporter(
                         is MetricSumOverflowException -> refusedSums.firstSighting(refused.key, sums.keys)
                         is MetricHistogramOverflowException -> refusedHistograms.firstSighting(refused.key, histograms.keys)
                         is MetricUpDownSumOverflowException ->
-                            refusedUpDownSums.firstSighting(refused.key, upDownSums.keys + upDownSumsDouble.keys)
+                            if (refused.fractional) {
+                                refusedUpDownSumsDouble.firstSighting(refused.key, upDownSumsDouble.keys)
+                            } else {
+                                refusedUpDownSums.firstSighting(refused.key, upDownSums.keys)
+                            }
                     }
                 }
                 if (overflow != null) return@withLock emptyList()
@@ -980,14 +991,14 @@ public class WarpMetricExporter(
                 -> {
                     val current = runningUpDownSums[update.key] ?: upDownSums[update.key] ?: PNCounter.ZERO
                     runningUpDownSums[update.key] = upDownSumNextOrNull(current, update)
-                        ?: return MetricUpDownSumOverflowException(update.key)
+                        ?: return MetricUpDownSumOverflowException(update.key, fractional = false)
                 }
                 is MetricUpdate.AddUpDownSumDouble,
                 is MetricUpdate.SetUpDownSumDouble,
                 -> {
                     val current = runningUpDownSumsDouble[update.key] ?: upDownSumsDouble[update.key] ?: PNCounterDouble.ZERO
                     runningUpDownSumsDouble[update.key] = upDownSumDoubleNextOrNull(current, update)
-                        ?: return MetricUpDownSumOverflowException(update.key)
+                        ?: return MetricUpDownSumOverflowException(update.key, fractional = true)
                 }
                 // A later update to a forgotten series starts it again from nothing, as applyLocked will.
                 is MetricUpdate.Forget -> update.storedKinds.forEach { kind ->
@@ -1967,6 +1978,8 @@ public class MetricHistogramOverflowException internal constructor(
  */
 public class MetricUpDownSumOverflowException internal constructor(
     override val key: MetricKey,
+    /** Whether the refused series is the fractional one; [key] names a series in both maps. */
+    internal val fractional: Boolean,
 ) : MetricOverflowException(
     "up-down sum series ${key.name} ${key.attributes}: this batch would move this replica's share past what " +
         "its slots hold, or leave a total over every replica that does not fit in a Long",
