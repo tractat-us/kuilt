@@ -124,7 +124,7 @@ class LocalHeddleFineWeightTest {
                     acquired++
                     engine.complete(out.lease.id, actualCost = cost, waiting = emptySet())
                 }
-                is AcquireOutcome.PositionCeiling -> refused++
+                is AcquireOutcome.LifetimeExhausted -> refused++
                 else -> error("unexpected $out")
             }
         }

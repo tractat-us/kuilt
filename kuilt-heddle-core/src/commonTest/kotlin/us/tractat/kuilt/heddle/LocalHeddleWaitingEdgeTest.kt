@@ -279,14 +279,14 @@ class LocalHeddleWaitingEdgeTest {
         }
         val observed = if (arm == Arm.EMPTY_SET) emptySet() else both
         when {
-            arm == Arm.NO_CHARGE -> assertEquals(LeaseOutcome.Done(1L, 0L), h.complete(la.id, 1L, waiting = both))
+            arm == Arm.NO_CHARGE -> assertEquals(LeaseOutcome.Done(1L, 0L, 0L), h.complete(la.id, 1L, waiting = both))
             charge == Charge.EXTEND -> {
-                assertEquals(LeaseOutcome.Done(0L, 0L), h.extend(la.id, CHARGE, waiting = observed))
+                assertEquals(LeaseOutcome.Done(0L, 0L, 0L), h.extend(la.id, CHARGE, waiting = observed))
                 balanced("extend")
                 // Within its reservation now, so this complete charges nothing new and observes nothing.
-                assertEquals(LeaseOutcome.Done(1L + CHARGE, 0L), h.complete(la.id, 1L + CHARGE, waiting = both))
+                assertEquals(LeaseOutcome.Done(1L + CHARGE, 0L, 0L), h.complete(la.id, 1L + CHARGE, waiting = both))
             }
-            else -> assertEquals(LeaseOutcome.Done(1L + CHARGE, CHARGE), h.complete(la.id, 1L + CHARGE, waiting = observed))
+            else -> assertEquals(LeaseOutcome.Done(1L + CHARGE, CHARGE, 0L), h.complete(la.id, 1L + CHARGE, waiting = observed))
         }
         balanced("the charge")
         val bEdge = checkNotNull(h.snapshot().ledger.lineageOf(b)).single()

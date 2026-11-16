@@ -26,12 +26,13 @@ public sealed interface ReserveOutcome {
 
 /**
  * What [HeddleNode.schedule] and [GovernedHeddleNode.schedule] did: delegated something, found
- * nothing to delegate, stopped because the parent cannot be ordered, or, on a governed node only,
- * was refused because this peer may not author entitlement yet (issue #1892).
+ * nothing to delegate, stopped because the parent cannot be ordered or its pick met the lifetime
+ * limit, or, on a governed node only, was refused because this peer may not author entitlement yet
+ * (issue #1892).
  *
  * [NothingToDelegate] clears by itself once holdings or demand arrive. [WeightBudget] does not: it
  * is a property of the parent's children, so every later call at that parent answers the same until
- * the children change.
+ * the children change. [LifetimeExhausted] lasts while the full edge is picked.
  */
 public sealed interface ScheduleOutcome {
 
@@ -53,12 +54,16 @@ public sealed interface ScheduleOutcome {
     public data object NothingToDelegate : ScheduleOutcome
 
     /**
-     * Not returned today. A pick orders the full 128-bit position, so no position at [parent]
-     * stops a round, however far a child stands from the parent's origin and however many
-     * schedulers granted it at once. Kept for the ledger's `Long` lifetime counters, which throw
-     * there for now.
+     * The pick at [parent] chose an edge whose effective issuance the grant would carry past the
+     * lifetime watermark, `Long.MAX_VALUE` less `LocalHeddle.LIFETIME_HEADROOM`, on this peer's
+     * view (#3475), and nothing was written. A full edge that is next in line stalls its parent
+     * rather than being skipped, so this lasts while that edge is picked. Peers that each grant
+     * under their own view can merge past the watermark: their unmerged grants are absorbed while
+     * those on one edge total at most `LocalHeddle.LIFETIME_HEADROOM`, and past `Long` the merged
+     * sum throws when read, never wraps. A grant is bounded by the quantum and the holdings it is
+     * drawn from, not by `LocalHeddle.MAX_RESERVATION`.
      */
-    public data class PositionCeiling(public val parent: GroupId) : ScheduleOutcome
+    public data class LifetimeExhausted(public val parent: GroupId) : ScheduleOutcome
 
     /**
      * [parent]'s active children carry weights whose products a pick forms leave `Long`, so no pick
@@ -131,6 +136,6 @@ public data class GateClosed(
 internal fun AllocationOutcome.toScheduleOutcome(): ScheduleOutcome = when (this) {
     is AllocationOutcome.Delegated -> ScheduleOutcome.Delegated(grants)
     AllocationOutcome.NothingToDelegate -> ScheduleOutcome.NothingToDelegate
-    is AllocationOutcome.PositionCeiling -> ScheduleOutcome.PositionCeiling(parent)
+    is AllocationOutcome.LifetimeExhausted -> ScheduleOutcome.LifetimeExhausted(parent)
     is AllocationOutcome.WeightBudget -> ScheduleOutcome.WeightBudget(parent)
 }

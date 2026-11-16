@@ -13,7 +13,9 @@ import us.tractat.kuilt.crdt.ReplicaId
  * after it. So a top-up runs about once per `targetSlots − lowWatermarkSlots` rounds of leases,
  * and the low watermark is the headroom kept for what is never refused: an overrun charged at
  * [LocalHeddle.complete], and an [LocalHeddle.admit]. Work beyond that headroom is still charged,
- * through a mint of its own.
+ * through a mint of its own. A top-up never carries the root's minted supply past the lifetime
+ * watermark ([LocalHeddle.LIFETIME_HEADROOM]): it is trimmed there first, so the float is never
+ * what refuses an acquire.
  *
  * @property lowWatermarkSlots the rounds of supply below which a top-up runs. Non-negative.
  * @property targetSlots the rounds of supply a top-up leaves. At least [lowWatermarkSlots].
@@ -75,7 +77,8 @@ public data class LeaseId(public val epoch: Long, public val seq: Long) : Compar
 /**
  * One open lease: one slot of work running for [leaf].
  *
- * @property reserved the cost delegated to it so far: its reservation plus every extension.
+ * @property reserved the cost delegated to it so far: its reservation plus every extension. `0` for
+ *   a lease [LocalHeddle.admit] opened past the lifetime limit, which reserved nothing.
  * @property startedAt when the work started, as the caller reported it, in the cost unit. Stored
  *   and handed back, never read by a pick: two runs that differ only in start times make the same
  *   picks.
@@ -142,18 +145,25 @@ public sealed interface AcquireOutcome {
     public data class NoLiveLineage(public val at: GroupId) : AcquireOutcome, AdmitOutcome
 
     /**
-     * Not returned today. A pick orders the full 128-bit position, so no position at [parent]
-     * refuses it, however far a child stands from the parent's origin. The arm is kept for the one
-     * limit a choosing call still meets, the ledger's `Long` lifetime counters (see "Failure
-     * surface" on [LocalHeddle]), which throw there for now.
+     * The reservation would carry a lifetime counter past the watermark, `Long.MAX_VALUE` less
+     * [LocalHeddle.LIFETIME_HEADROOM] (see "The lifetime limit" on [LocalHeddle]): the effective
+     * issuance of the edge the pick chose below [parent], or, with [parent] the root, the root's
+     * minted supply, when the root cannot fund the reservation without minting past it. Nothing
+     * changed but the wake memory, as for [NoLiveLineage].
+     *
+     * The refusal belongs to the path, not to [parent]: a sibling whose own edge has room is still
+     * picked when the full lane is not eligible. While the full lane is eligible and next in line,
+     * every acquire there answers this again, since a refusal moves no position. Leave the work
+     * queued. [LocalHeddle.explain] names [parent] for a leaf behind it, as
+     * [WaitExplanation.LifetimeExhausted].
      */
-    public data class PositionCeiling(public val parent: GroupId) : AcquireOutcome
+    public data class LifetimeExhausted(public val parent: GroupId) : AcquireOutcome
 }
 
 /**
  * What [LocalHeddle.admit] did: [AcquireOutcome.Acquired] or [AcquireOutcome.NoLiveLineage]. It
  * shares those two arms with [AcquireOutcome] and has no other, since an admission makes no pick
- * and is never refused for supply.
+ * and is never refused for supply or for the lifetime limit: work already started is charged.
  */
 public sealed interface AdmitOutcome
 
@@ -200,10 +210,26 @@ public data class LeaseReconciliation(
  */
 public sealed interface LeaseOutcome {
     /**
-     * The operation applied. [charged] is the cost charged to the lease's leaf and [overrun] how
-     * much of it lay beyond the reservation. Both are `0` for an extend and a cancel.
+     * The operation applied. [charged] is the cost the ledger recorded for the lease, and [overrun]
+     * how much of the cost lay beyond the reservation. [unrecorded] is what the ledger recorded on
+     * no edge, so `charged + unrecorded` is the cost a [LocalHeddle.complete] was given.
+     *
+     * [unrecorded] is `0` but in two cases. At [LocalHeddle.complete], it is an overrun with nowhere
+     * to be charged: the root's own child edge on the path is draining (see "A draining path" on
+     * [LocalHeddle]), or the overrun is above [LocalHeddle.MAX_RECORDED_OVERRUN], or no edge of the
+     * path has room for it in whole, or the root cannot fund it in whole, within `Long` (see "The
+     * lifetime limit"). At [LocalHeddle.extend], it is an extension that does not fit a lifetime
+     * counter: the whole amount, with nothing changed, the lease and the wake memory included. The
+     * work goes on, and [LocalHeddle.complete] charges its cost as an overrun.
+     *
+     * So the two do not mean the same thing. At [LocalHeddle.complete] [unrecorded] is cost that was
+     * spent and is recorded nowhere; at [LocalHeddle.extend] it is a reservation that was not made,
+     * and no cost at all. That work's cost arrives at its [LocalHeddle.complete], so a caller summing
+     * [unrecorded] over both calls counts it twice. Sum it over completions only.
+     *
+     * All three are `0` for a cancel, and for an extend that landed.
      */
-    public data class Done(public val charged: Long, public val overrun: Long) : LeaseOutcome
+    public data class Done(public val charged: Long, public val overrun: Long, public val unrecorded: Long) : LeaseOutcome
 
     /**
      * An extend the root could not fund, with no capacity reconciled to top it up
@@ -224,14 +250,6 @@ public sealed interface LeaseOutcome {
 
     /** No open lease has this id, and it is from another epoch than [currentEpoch]. Nothing changed. */
     public data class Stale(public val currentEpoch: Long) : LeaseOutcome
-
-    /**
-     * Not returned today: an extend's delegation lands however far it carries an edge of the
-     * lease's path, since a pick orders the full 128-bit position. Kept, as
-     * [AcquireOutcome.PositionCeiling] is, for the ledger's `Long` lifetime counters, which throw
-     * there for now. [parent] would name the group above the edge.
-     */
-    public data class PositionCeiling(public val parent: GroupId) : LeaseOutcome
 }
 
 /**
@@ -374,7 +392,40 @@ public sealed interface LeaseOutcome {
  * edges from the root. That group's own edge advances by the overrun, which is the fairness that
  * still matters, since a closing edge is never picked again. When the root's own child edge is the
  * closing one there is no such group below the root, and the ledger has no counter for spend at
- * the root, so the overrun is reported in [LeaseOutcome.Done] but recorded on no edge.
+ * the root, so the overrun is recorded on no edge, and [LeaseOutcome.Done.unrecorded] reports it
+ * (#3493).
+ *
+ * ## The lifetime limit
+ *
+ * Two counters the ledger keeps in `Long` grow for as long as the engine runs, in cost units: an
+ * edge's issuance, which counts every reservation, extension and overrun that crosses it, and the
+ * root's minted supply, the sum of every epoch's mint record. Two weight-1 lanes at
+ * [MAX_RESERVATION], charged in full, reach `Long.MAX_VALUE` after about 524,000 leases. So a pick
+ * keeps [LIFETIME_HEADROOM] in hand: [acquire] answers [AcquireOutcome.LifetimeExhausted] rather
+ * than carry either counter past `Long.MAX_VALUE − LIFETIME_HEADROOM`, and changes nothing but the
+ * wake memory. That run then ends in the refusal after 507,903 leases.
+ *
+ * Work already running is never refused for it, and no call throws at it. [admit], [extend] and
+ * [complete] use the headroom, up to `Long.MAX_VALUE` itself, and a charge that still does not fit
+ * is recorded whole or not at all, never in part:
+ * - an overrun at [complete] goes down the path as far as every edge has room for it in whole,
+ *   and is charged at the deepest group it reaches, as on a draining path. An overrun above
+ *   [MAX_RECORDED_OVERRUN], what the root cannot fund in whole, and what no edge has room for are
+ *   reported in [LeaseOutcome.Done.unrecorded];
+ * - an [admit] that does not fit reserves nothing, and changes nothing but the lease it opens,
+ *   with [Lease.reserved] `0`, so the cost arrives as an overrun when it completes;
+ * - an [extend] that does not fit changes nothing, the wake memory included, and answers
+ *   [LeaseOutcome.Done] with the whole amount [LeaseOutcome.Done.unrecorded]. [explain] answers
+ *   [WaitExplanation.LifetimeExhausted] for a leaf behind a full counter.
+ *
+ * A charge left unrecorded is service the lane's position does not show: credit, on the favour
+ * side, but credit that cannot be spent on a pick, since the only way to spend it is an [acquire]
+ * across the full counter, which is refused. The headroom holds 16,384 charges of
+ * [MAX_RESERVATION] after a counter's last [acquire]; past that a charge is reported rather than
+ * recorded. One absurd cost cannot end an engine: an overrun above [MAX_RECORDED_OVERRUN], half the
+ * headroom, is recorded nowhere, so `complete(lease, Long.MAX_VALUE)` reports its overrun and the
+ * next [acquire] leases, on a young engine as on an old one. An overrun within the cap leaves a
+ * counter past the watermark only when that counter was already within the cap of it.
  *
  * ## What it does not do
  *
@@ -396,9 +447,7 @@ public sealed interface LeaseOutcome {
  * position, so no position refuses a pick, however far a child stands from its parent's origin:
  * positions are whole ticks, so no join can grow a denominator (#3313, #3231), and nothing narrows
  * one on its way to a comparison. What bounds an engine's lifetime instead is the `Long` counters
- * the ledger keeps: an edge's issuance, and each epoch's running mint total, both in cost units,
- * about 9.2 × 10¹⁸ of them. The call whose delegation or mint would pass one throws
- * [ArithmeticException], a charging call included, and changes nothing.
+ * the ledger keeps, and no call throws at them (see "The lifetime limit").
  *
  * An edge's position also has a **ceiling**, `Long.MAX_VALUE` less room for one [MAX_RESERVATION]
  * lease, divided by its weight's denominator: the highest position the public virtual-time reads
@@ -438,7 +487,10 @@ public sealed interface LeaseOutcome {
  * [StepRefusal.Refused], and its siblings land. So does one too fine for a full lease: keep every
  * weight's denominator at or below 30,719 (#3353). The limit holds at any lease size, because it is
  * sized for the largest lease, [MAX_RESERVATION]. It is necessary, not sufficient: several fine
- * weights whose denominators share no factor are refused below it too. A reload refuses the
+ * weights whose denominators share no factor are refused below it too. Refused so, a group the
+ * reload adds takes every group beneath it out with it, each a [StepRefusal.Refused] of its own, so
+ * no lane activates below a group the root cannot reach (#3466); a running group whose reweight is
+ * refused keeps its old edge, and what is beneath it. A reload refuses the
  * sibling whose activation tips the set over, and siblings activate in id order, so of two new
  * siblings that fit alone but not together, the one whose id sorts last is refused. A boot, which
  * has no previous tree to keep, leaves out their parent and everything beneath it instead (see
@@ -559,9 +611,10 @@ public class LocalHeddle private constructor(
      * Returns [AcquireOutcome.NothingEligible] when [eligible] is empty, or every leaf in it is
      * beneath a group at its ceiling (see "Ceilings"; a name no pick can end at is still
      * [AcquireOutcome.NoLiveLineage]), [AcquireOutcome.SupplyExhausted] when the root holds less than [reservation] and no capacity
-     * is reconciled, and [AcquireOutcome.NoLiveLineage] when no eligible leaf can be reached. In
-     * each of those cases the ledger is unchanged, with no top-up either; only the allocator's wake
-     * memory may have moved (see the class KDoc).
+     * is reconciled, [AcquireOutcome.NoLiveLineage] when no eligible leaf can be reached, and
+     * [AcquireOutcome.LifetimeExhausted] when the reservation would carry a lifetime counter past
+     * the watermark (see "The lifetime limit"). In each of those cases the ledger is unchanged,
+     * with no top-up either; only the allocator's wake memory may have moved (see the class KDoc).
      *
      * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION], or
      *   [eligible] is not a subset of [waiting].
@@ -579,9 +632,14 @@ public class LocalHeddle private constructor(
         val (waitingNow, eligibleNow) = belowCeilings(waiting, eligible)
         if (eligibleNow.isEmpty()) return@atomically AcquireOutcome.NothingEligible
         // Topped up on the working value only: a descent that then fails discards the mint with it.
-        val base = fundedBase(reservation) ?: return@atomically AcquireOutcome.SupplyExhausted
+        val base = when (val supply = fundedBase(reservation)) {
+            is Supply.Funded -> supply.ledger
+            Supply.Short -> return@atomically AcquireOutcome.SupplyExhausted
+            Supply.Exhausted -> return@atomically AcquireOutcome.LifetimeExhausted(root)
+        }
         when (val descent = descend(base, demands(base, waitingNow, eligibleNow, reservation), eligibleNow, reservation)) {
             is Descent.Refused -> AcquireOutcome.NoLiveLineage(descent.at)
+            is Descent.Exhausted -> AcquireOutcome.LifetimeExhausted(descent.parent)
             is Descent.Reached -> {
                 // The rebases are in the ledger; counted only when it is kept.
                 ledger = descent.ledger
@@ -638,6 +696,9 @@ public class LocalHeddle private constructor(
             check(grant.amount == reservation) {
                 "picked ${edge.value} for ${grant.amount}, not the reservation $reservation"
             }
+            // After the pick, so a full lane that is next in line stalls its parent rather than
+            // being skipped for a sibling (#3475): a refusal moves nothing, so it is picked again.
+            if (!pickFits(pick.pick.ledger.effectiveIssuance(edge), reservation)) return Descent.Exhausted(group)
             // The settled ledger, not the rebased one: what the pick was made on, which is what [explain] reads it with.
             levels += Level(group, pick.settled, edge)
             pick.rebase?.let(rebases::add)
@@ -658,12 +719,13 @@ public class LocalHeddle private constructor(
         }
 
     /**
-     * The ledger a pick of [reservation] runs on, or `null` when the root cannot fund it. The one
-     * supply check [acquire] and [explain] share, so the two cannot disagree about it. It reads the
-     * engine and writes nothing: whatever it returns is only committed by the caller. It is topped
-     * up below the low watermark ([supplied]), so an [explain] sees the supply the [acquire] would.
+     * The ledger a pick of [reservation] runs on, or why the root cannot fund it. The one supply
+     * check [acquire] and [explain] share, so the two cannot disagree about it. It reads the engine
+     * and writes nothing: whatever it returns is only committed by the caller. It is topped up below
+     * the low watermark ([supplied]), so an [explain] sees the supply the [acquire] would. A pick
+     * mints no further than the lifetime watermark.
      */
-    internal fun fundedBase(reservation: Long): EntitlementLedger? = supplied(ledger, reservation)
+    internal fun fundedBase(reservation: Long): Supply = supplied(ledger, reservation, pick = true)
 
     /**
      * How many leases are open beneath each capped group: this engine's own, by the child of every
@@ -721,6 +783,11 @@ public class LocalHeddle private constructor(
      * fund the reservation; where it cannot, that acquire returns [AcquireOutcome.SupplyExhausted]
      * and observes nothing.
      *
+     * Never refused at the lifetime limit either (see "The lifetime limit"). A reservation that an
+     * edge of the lineage has no room for within `Long`, or that the root cannot fund in whole, is
+     * reserved nowhere: the lease opens with [Lease.reserved] `0`, nothing else changes, the wake
+     * memory included, and its cost arrives at [complete] as an overrun.
+     *
      * @throws IllegalArgumentException when [reservation] is not in `1..`[MAX_RESERVATION], or
      *   [leaf] is not in [waiting].
      * @sample us.tractat.kuilt.heddle.sampleAdmitExternal
@@ -742,7 +809,10 @@ public class LocalHeddle private constructor(
         }
         val path = checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }
 
-        val (funded, minted) = fund(base, reservation)
+        // Whole or not at all (#3475): a reservation some counter has no room for reserves nothing,
+        // and the cost arrives as an overrun at complete.
+        val (funded, minted) = (if (base.roomFor(path, reservation)) fund(base, reservation) else null)
+            ?: return@atomically AcquireOutcome.Acquired(open(leaf, path, reservation = 0L, startedAt))
         ledger = rebasedAfterCharge(observeAndDelegate(funded, path, reservation, seen), path, seen)
         forcedMints += minted
         AcquireOutcome.Acquired(open(leaf, path, reservation, startedAt))
@@ -761,6 +831,12 @@ public class LocalHeddle private constructor(
      * and [LeaseOutcome.SupplyExhausted] when the root holds less than [amount] and no capacity is
      * reconciled. Neither changes anything, the wake memory included.
      *
+     * Never refused at the lifetime limit (see "The lifetime limit"): the work is running, so the
+     * extension uses the headroom a pick keeps. One that an edge of the path has no room for within
+     * `Long`, or that the root cannot fund in whole, answers [LeaseOutcome.Done] with
+     * [LeaseOutcome.Done.unrecorded] the whole [amount], and changes nothing, the wake memory
+     * included. Carry on: [complete] charges the cost as an overrun.
+     *
      * @throws IllegalArgumentException when [amount] is not in `1..`[MAX_RESERVATION].
      * @sample us.tractat.kuilt.heddle.sampleBuildFarm
      */
@@ -769,11 +845,17 @@ public class LocalHeddle private constructor(
         val current = open[lease] ?: return@atomically missing(lease)
         val base = ledger
         base.firstNotActive(current.path)?.let { return@atomically LeaseOutcome.PathDraining(it) }
-        val funded = supplied(base, amount) ?: return@atomically LeaseOutcome.SupplyExhausted
+        val doesNotFit = LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = amount)
+        val funded = when (val supply = supplied(base, amount, pick = false)) {
+            is Supply.Funded -> supply.ledger
+            Supply.Short -> return@atomically LeaseOutcome.SupplyExhausted
+            Supply.Exhausted -> return@atomically doesNotFit
+        }
+        if (!base.roomFor(current.path, amount)) return@atomically doesNotFit
         val seen = observedWaiting(base, waiting, running = current.lease.leaf, amount)
         ledger = rebasedAfterCharge(observeAndDelegate(funded, current.path, amount, seen), current.path, seen)
         open[lease] = current.copy(lease = current.lease.copy(reserved = checkedAdd(current.lease.reserved, amount)))
-        LeaseOutcome.Done(charged = 0L, overrun = 0L)
+        LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L)
     }
 
     /**
@@ -791,7 +873,11 @@ public class LocalHeddle private constructor(
      * When an edge of the lease's path is no longer ACTIVE, an overrun cannot be delegated across
      * it. The reservation is still charged at the leaf, and the overrun is charged at the deepest
      * group of the path that ACTIVE edges still reach from the root (see "A draining path" in the
-     * class KDoc).
+     * class KDoc). An edge with no room for the whole overrun within `Long` stops it the same way
+     * (see "The lifetime limit"). Where no group below the root is reached, the overrun is above
+     * [MAX_RECORDED_OVERRUN], or the root cannot fund it in whole, it is recorded nowhere and
+     * reported in [LeaseOutcome.Done.unrecorded], with [LeaseOutcome.Done.charged] the cost less
+     * that. The reservation is charged at the leaf either way, and nothing else changes.
      *
      * @throws IllegalArgumentException when [actualCost] is negative.
      * @sample us.tractat.kuilt.heddle.sampleLocalLease
@@ -802,28 +888,34 @@ public class LocalHeddle private constructor(
         val path = current.path
         val reserved = current.lease.reserved
         val overrun = maxOf(0L, actualCost - reserved)
-        // Where an overrun is delegated: the whole path while it is ACTIVE, else the part above the
-        // first edge that is not. Empty when the root's own child edge is the one closing.
-        val reach = if (overrun == 0L) path else path.subList(0, ledger.firstNotActiveIndex(path) ?: path.size)
-        val toLeaf = reach.size == path.size
+        // Where an overrun is delegated: the whole path while every edge is ACTIVE and has room for
+        // it in whole, else the part above the first edge that is not or has not (#3475). Empty when
+        // the root's own child edge is that edge.
+        val reach = if (overrun == 0L) path else path.subList(0, ledger.firstClosedToIndex(path, overrun) ?: path.size)
+        // An overrun above the cap is not funded, so it is recorded nowhere (#3475).
+        val funding = if (overrun in 1L..MAX_RECORDED_OVERRUN && reach.isNotEmpty()) fund(ledger, overrun) else null
+        // What the overrun is recorded down: [reach], unless it is above the cap or the root cannot
+        // fund it in whole, when it is recorded nowhere. The lease still closes either way.
+        val recorded = if (overrun > 0L && funding == null) emptyList() else reach
+        val unrecorded = if (overrun > 0L && recorded.isEmpty()) overrun else 0L
+        val toLeaf = recorded.size == path.size
         var local = ledger
         var minted = 0
-        if (overrun > 0L && reach.isNotEmpty()) {
+        if (funding != null) {
             val seen = observedWaiting(local, waiting, running = current.lease.leaf, overrun)
-            val (funded, forced) = fund(local, overrun)
-            minted = forced
-            local = rebasedAfterCharge(observeAndDelegate(funded, reach, overrun, seen), reach, seen)
+            minted = funding.second
+            local = rebasedAfterCharge(observeAndDelegate(funding.first, recorded, overrun, seen), recorded, seen)
         }
         // What the leaf holds for this lease, and what of it is charged there; the rest goes back up.
         val atLeafHeld = if (toLeaf) checkedAdd(reserved, overrun) else reserved
         val atLeafCharged = if (toLeaf) actualCost else reserved
         local = spendOrFail(local, path, atLeafCharged)
-        if (!toLeaf && reach.isNotEmpty()) local = spendOrFail(local, reach, overrun)
+        if (!toLeaf && recorded.isNotEmpty()) local = spendOrFail(local, recorded, overrun)
         local = releaseUp(local, path, checkedSub(atLeafHeld, atLeafCharged))
         ledger = local
         forcedMints += minted
         open.remove(lease)
-        LeaseOutcome.Done(charged = actualCost, overrun = overrun)
+        LeaseOutcome.Done(charged = actualCost - unrecorded, overrun = overrun, unrecorded = unrecorded)
     }
 
     /**
@@ -871,7 +963,7 @@ public class LocalHeddle private constructor(
         val current = open[lease] ?: return@atomically missing(lease)
         ledger = releaseUp(ledger, current.path, current.lease.reserved)
         open.remove(lease)
-        LeaseOutcome.Done(charged = 0L, overrun = 0L)
+        LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L)
     }
 
     /**
@@ -976,7 +1068,11 @@ public class LocalHeddle private constructor(
      * whole list runs on a working copy that replaces the ledger at the end, so nothing is ever
      * leased against a state part-way through a reload. A child whose change cannot land yet is
      * reported in [ApplyResult.refusals], and every other child's change still lands in the same
-     * swap. Apply the same topology again later, and only what is left is listed.
+     * swap. Apply the same topology again later, and only what is left is listed. Nothing activates
+     * that the root cannot reach: a new group left out takes every group beneath it out too, each
+     * reported, as [StepRefusal.Draining] on the same leases when the group waits on a drain and as
+     * [StepRefusal.Refused] otherwise. A running group whose change is refused keeps its old edge,
+     * so what is beneath it still lands. The same holds for [attach] and for a boot.
      *
      * **A reweight moves its open leases with it.** A changed weight is a new edge, and an open
      * lease whose path crosses the old one moves onto the new one in the same unit: its reservation
@@ -984,7 +1080,10 @@ public class LocalHeddle private constructor(
      * activates (taking over the old edge's spend with a [TopologyStep.Reconcile] when the group is
      * internal), and the reservation is delegated down the new path, which the lease charges from
      * then on. A lease under a group and its child, both reweighted, crosses two old edges and
-     * moves once. It keeps its id, leaf and reservation, so the caller sees nothing change.
+     * moves once. It keeps its id, leaf and reservation, so the caller sees nothing change. The move
+     * counts the reservation again on every edge the old and new paths share, so where one of them
+     * has no room for it within `Long` the lease is not moved and the child's change is refused,
+     * as [StepRefusal.Refused], until the lease settles (see "The lifetime limit").
      * **The reweighted group's fairness history resets:** its new edge is seated at its parent's
      * front, like a newcomer's, so it is neither owed for its past nor charged for it. A child added
      * back before its removal drained is a new edge for the same group, and its draining leases
@@ -1056,7 +1155,7 @@ public class LocalHeddle private constructor(
     private fun run(steps: List<TopologyStep>, attribution: Attribution): ApplyResult {
         val left = LinkedHashMap<GroupId, StepRefusal>()
         while (true) {
-            when (val trial = attempt(steps, left.keys)) {
+            when (val trial = attempt(steps, left)) {
                 is Trial.LeaveOut -> {
                     val fresh = trial.refusals.filter { it.child !in left }
                     check(fresh.isNotEmpty()) { "an attempt left out only children already left out: ${trial.refusals}" }
@@ -1147,8 +1246,8 @@ public class LocalHeddle private constructor(
     }
 
     /**
-     * One attempt at [steps] on a working copy of the ledger, without the steps of the children in
-     * [leftOut]. It lands when every child left in either lands or is a removal waiting on a drain;
+     * One attempt at [steps] on a working copy of the ledger, without the steps of the children
+     * [left] already holds, each with its answer. It lands when every child left in either lands or is a removal waiting on a drain;
      * otherwise it names the children to leave out.
      *
      * A **replacement** is a child whose list retires an edge and activates another. The open leases
@@ -1158,12 +1257,16 @@ public class LocalHeddle private constructor(
      * A replacement is all or nothing: if any part fails it is left out, as [StepRefusal.Refused]
      * unless a lease that cannot move is what holds it ([StepRefusal.Draining]). A retire refused
      * after those releases is refused for units that are not this engine's, which waiting will not
-     * cure. A child any of whose steps the ledger refuses outright is left out too. Only a removal
+     * cure. A child any of whose steps the ledger refuses outright is left out too, and so is every
+     * child this unit activates that the root would not reach once it lands ([cutOff]): the mirror
+     * of a retire waiting on a group below it, checked on the end state so that neither the step
+     * order nor the entry point can get round it. Only a removal
      * waiting on a drain keeps its steps up to the refused retire, since its close is what stops new
      * work going there.
      */
-    private fun attempt(steps: List<TopologyStep>, leftOut: Set<GroupId>): Trial {
+    private fun attempt(steps: List<TopologyStep>, left: Map<GroupId, StepRefusal>): Trial {
         val base = ledger
+        val leftOut = left.keys
         val replaced = replacedEdges(steps, leftOut)
         // Edges this list closes or retires for a child that gets no new edge: a lease across one
         // drains where it is, and cannot be moved.
@@ -1240,10 +1343,31 @@ public class LocalHeddle private constructor(
         }
         if (leaveOut.isNotEmpty()) return Trial.LeaveOut(leaveOut, unfit)
 
+        // Every group this unit activates must be reachable from the root once it lands, whatever
+        // the entry point and the step order: a lane under a new group left out of this reload, or
+        // under one an earlier call left out, would otherwise activate below a group with no inbound
+        // edge (#3466). A running group whose own change did not land keeps its old edge, so what is
+        // beneath it still reaches the root and lands.
+        val unreachable = applied.asSequence().filterIsInstance<TopologyStep.Activate>().map { it.child }.distinct()
+            .filter { !local.reachesFromRoot(it) }.toList()
+        if (unreachable.isNotEmpty()) {
+            val waits = (left.values.asSequence() + draining.asSequence()).filterIsInstance<StepRefusal.Draining>().associateBy { it.child }
+            return Trial.LeaveOut(unreachable.map { cutOff(it, local, steps, waits) }, unfit = emptySet())
+        }
+
         val moved = LinkedHashMap<LeaseId, List<AttachmentId>>()
         for (lease in moving) {
             val path = local.lineageOf(lease.lease.leaf)?.takeIf { p -> p.isNotEmpty() && p.all { local.lifecycle(it) == Lifecycle.ACTIVE } }
-            val delegated = path?.let { seatThenDelegate(local, it, lease.lease.reserved, observedDemand(lease.lease.reserved)) }
+            val reserved = lease.lease.reserved
+            // A lease admitted past the lifetime limit reserves nothing, so there is nothing to move;
+            // one whose reservation the new path has no room for within `Long` is not moved (#3475).
+            val delegated = path?.let {
+                when {
+                    reserved == 0L -> local
+                    !local.roomFor(it, reserved) -> null
+                    else -> seatThenDelegate(local, it, reserved, observedDemand(reserved))
+                }
+            }
             if (path == null || delegated == null) {
                 return Trial.LeaveOut(
                     unfit = emptySet(),
@@ -1257,17 +1381,63 @@ public class LocalHeddle private constructor(
             moved[lease.lease.id] = path
         }
 
-        // Every open lease's path is its leaf's one live lineage: no lease crosses a retired edge, and
+        // Every open lease's path is its leaf's one live lineage, from the root: no lease crosses a retired edge, and
         // the reload left no leaf with two live inbound edges, a divergent record or a cycle, which
         // `observeAndDelegate` and `releaseUp` throw on. An engine bug if not; the ledger is not swapped.
         for (lease in open.values) {
             val path = moved[lease.lease.id] ?: lease.path
-            check(local.lineageOf(lease.lease.leaf) == path) {
+            check(local.lineageOf(lease.lease.leaf) == path && path.firstOrNull()?.let(local::record)?.parent == root) {
                 "a reload left lease ${lease.lease.id} on ${path.map { it.value }}, not ${lease.lease.leaf.value}'s lineage " +
-                    "${local.lineageOf(lease.lease.leaf)?.map { it.value }}"
+                    "${local.lineageOf(lease.lease.leaf)?.map { it.value }} from the root ${root.value}"
             }
         }
         return Trial.Landed(local, applied, draining, moved)
+    }
+
+    /**
+     * Why [child], activated by this unit, is left out of it: no delegation from the [root] reaches
+     * it in [local]. The outermost group above it that the root does not reach is the cause. When
+     * that group waits on a drain, so does [child], on the same leases, since the cause clears once
+     * they settle; otherwise [child] is [StepRefusal.Refused] at its first step. A wait this call
+     * found is in [waits]; one an earlier call left, such as a removal still draining when an
+     * [attach] lands beneath the group put back over it, is read off [local]: the cause's inbound
+     * edge CLOSING with units still outstanding on it (#3508).
+     */
+    private fun cutOff(child: GroupId, local: EntitlementLedger, steps: List<TopologyStep>, waits: Map<GroupId, StepRefusal.Draining>): StepRefusal {
+        val names = child.value.split('/')
+        val cause = (1 until names.size).asSequence()
+            .map { GroupId(names.subList(0, it).joinToString("/")) }
+            .firstOrNull { it != root && !local.reachesFromRoot(it) }
+        val wait = cause?.let { waits[it] ?: local.drainingInto(it) }
+        if (wait != null) return StepRefusal.Draining(child, wait.edge, wait.outstanding, wait.blockingLeases)
+        val reason = if (cause != null) {
+            "${cause.value}, above it, is not reachable from the root, so no delegation could reach ${child.value}"
+        } else {
+            "no delegation from the root would reach it"
+        }
+        return StepRefusal.Refused(child, steps.first { it.child == child }, reason)
+    }
+
+    /**
+     * [group]'s wait, when its inbound edge here is CLOSING with units still outstanding on it: that
+     * edge, those units, and this engine's open leases whose path crosses it, in id order. `null`
+     * for any other edge, or none.
+     */
+    private fun EntitlementLedger.drainingInto(group: GroupId): StepRefusal.Draining? {
+        val edge = lineageOf(group)?.lastOrNull() ?: return null
+        val outstanding = outstanding(edge)
+        if (lifecycle(edge) != Lifecycle.CLOSING || outstanding == 0L) return null
+        val blocking = open.values.filter { edge in it.path }.map { it.lease }.sortedBy { it.id }
+        return StepRefusal.Draining(group, edge, outstanding, blocking)
+    }
+
+    /**
+     * Whether a delegation from the [root] reaches [group] here: it has a lineage, every edge of it
+     * ACTIVE, and the lineage starts at the [root]. The root itself does not, having no inbound edge.
+     */
+    private fun EntitlementLedger.reachesFromRoot(group: GroupId): Boolean {
+        val lineage = lineageOf(group) ?: return false
+        return lineage.isNotEmpty() && lineage.all { lifecycle(it) == Lifecycle.ACTIVE } && record(lineage.first())?.parent == root
     }
 
     /**
@@ -1415,27 +1585,43 @@ public class LocalHeddle private constructor(
     }
 
     /**
-     * [start] with the root able to fund [need] for an [acquire] or [extend], topped up when needed;
-     * `null` when it cannot. When the operation would leave the root below the low watermark, this
-     * mints enough that the target is left after it, so the operation is funded whatever its size.
-     * With no capacity reconciled both levels are zero and nothing is minted ahead: the root funds
-     * [need] from what it holds, or the operation is refused.
+     * [start] with the root able to fund [need] for an [acquire] or [extend], topped up when needed,
+     * or why it cannot. When the operation would leave the root below the low watermark, this mints
+     * enough that the target is left after it, so the operation is funded whatever its size. With no
+     * capacity reconciled both levels are zero and nothing is minted ahead: the root funds [need]
+     * from what it holds, or the operation is [Supply.Short].
+     *
+     * The float a top-up keeps beyond [need] is trimmed to the lifetime watermark, so it is never
+     * what refuses. The shortfall itself may carry the minted supply to the watermark when [pick],
+     * and to `Long.MAX_VALUE` when not (an [extend]); past that it is [Supply.Exhausted] (#3475).
      */
-    private fun supplied(start: EntitlementLedger, need: Long): EntitlementLedger? {
+    private fun supplied(start: EntitlementLedger, need: Long, pick: Boolean): Supply {
         val held = start.holdings(root, SELF)
-        return when {
-            capacity.slots > 0L && held - need < capacity.low -> mintAt(start, checkedSub(checkedAdd(capacity.target, need), held))
-            held >= need -> start
-            else -> null
-        }
+        if (capacity.slots <= 0L || held - need >= capacity.low) return if (held >= need) Supply.Funded(start) else Supply.Short
+        val minted = start.mintedSupply(root, SELF)
+        val shortfall = need - held
+        // The float is what the target asks beyond the need, kept at or below the watermark.
+        val amount = maxOf(shortfall, minOf(checkedSub(checkedAdd(capacity.target, need), held), LIFETIME_WATERMARK - minted))
+        if (amount <= 0L) return Supply.Funded(start)
+        val fits = if (pick) pickFits(minted, amount) else chargeFits(minted, amount)
+        return if (fits) Supply.Funded(mintAt(start, amount)) else Supply.Exhausted
     }
 
-    /** [start] with the root holding at least [amount], minting the shortfall; and how many mints that took. */
-    private fun fund(start: EntitlementLedger, amount: Long): Pair<EntitlementLedger, Int> {
+    /**
+     * [start] with the root holding at least [amount], minting the shortfall, and how many mints
+     * that took; or `null` when the shortfall would carry the minted supply past `Long.MAX_VALUE`,
+     * so the charge cannot be funded in whole (#3475). The one funding a charge reads.
+     */
+    private fun fund(start: EntitlementLedger, amount: Long): Pair<EntitlementLedger, Int>? {
         val shortfall = amount - start.holdings(root, SELF)
         if (shortfall <= 0L) return start to 0
+        if (!chargeFits(start.mintedSupply(root, SELF), shortfall)) return null
         return mintAt(start, shortfall) to 1
     }
+
+    /** Whether every edge of [path] has room for [amount] more within `Long`, the test a charge applies at each level (#3475). */
+    private fun EntitlementLedger.roomFor(path: List<AttachmentId>, amount: Long): Boolean =
+        path.all { chargeFits(effectiveIssuance(it), amount) }
 
     /**
      * A demand view for the one delegation that is not a call with a waiting set: a reload moving an
@@ -1530,6 +1716,21 @@ public class LocalHeddle private constructor(
 
         /** No pick could be made at [at]. */
         class Refused(val at: GroupId) : Descent
+
+        /** The pick at [parent] chose an edge the reservation would carry past the lifetime watermark (#3475). */
+        class Exhausted(val parent: GroupId) : Descent
+    }
+
+    /** Whether the root can fund a delegation: [supplied]'s answer. */
+    internal sealed interface Supply {
+        /** It can, on [ledger], topped up if it needed to be. */
+        class Funded(val ledger: EntitlementLedger) : Supply
+
+        /** It holds too little, and no capacity is reconciled to top it up. */
+        data object Short : Supply
+
+        /** A mint that would fund it would carry the minted supply past its limit (#3475). */
+        data object Exhausted : Supply
     }
 
     /** One level of a [Descent]: the pick at [parent] chose [edge], on [seated], the ledger with [parent]'s children seated. */
@@ -1554,7 +1755,7 @@ public class LocalHeddle private constructor(
          * The largest single reservation or extension: 2^44, about 1.8 × 10^13 cost units. A lease
          * that runs longer is [extend]ed, or charged its overrun at [complete], which this does not
          * bound. It does not bound the service a parent hands down over its lifetime either; the
-         * ledger's `Long` counters do (see "Failure surface" in the class KDoc).
+         * ledger's `Long` counters do (see "The lifetime limit" in the class KDoc).
          *
          * It exists to keep [UNBOUNDED_TARGET] unbounded in practice. Every pick asks for
          * `UNBOUNDED_TARGET − outstanding` on an edge, so the edge goes on reading as wanting the
@@ -1562,6 +1763,32 @@ public class LocalHeddle private constructor(
          * reservations open under one edge at once.
          */
         public const val MAX_RESERVATION: Long = 1L shl 44
+
+        /**
+         * The room a pick keeps below `Long.MAX_VALUE` on each lifetime counter: 2^58 cost units,
+         * 16,384 charges of [MAX_RESERVATION] (see "The lifetime limit" in the class KDoc). An
+         * [acquire], and a [FairShareAllocator.schedule] round, refuses rather than carry an
+         * edge's effective issuance or the root's minted supply past `Long.MAX_VALUE` less this.
+         * [admit], [extend] and [complete] use the room, so work already running is never refused
+         * for the limit. It costs a caller one lease in 32 at [MAX_RESERVATION].
+         */
+        public const val LIFETIME_HEADROOM: Long = 1L shl 58
+
+        /**
+         * The largest overrun [complete] records: 2^57 cost units, half of [LIFETIME_HEADROOM]. An
+         * overrun above it is recorded on no edge and minted nowhere. It is reported whole in
+         * [LeaseOutcome.Done.unrecorded], the reservation is charged at the leaf as for a
+         * completion at it, and nothing else changes, the wake memory included (see "The lifetime
+         * limit" in the class KDoc).
+         *
+         * It exists so that one absurd cost cannot end an engine. Recorded, an overrun moves an
+         * edge's issuance and the root's minted supply by its whole size, and a counter left past
+         * the watermark refuses every later [acquire] for good. An overrun within the cap leaves a
+         * counter past the watermark only when that counter was already within the cap of it, and
+         * the headroom holds two of them. [admit] and [extend] amounts are bounded by
+         * [MAX_RESERVATION], far below it, so the cap bites only at [complete].
+         */
+        public const val MAX_RECORDED_OVERRUN: Long = LIFETIME_HEADROOM / 2
 
         /**
          * The target every wanted edge advertises, `Long.MAX_VALUE / 4` (just under 2^61): far above
@@ -1577,6 +1804,14 @@ public class LocalHeddle private constructor(
         /** The index of the first edge of [path] that is not ACTIVE, or `null` when every edge is. */
         private fun EntitlementLedger.firstNotActiveIndex(path: List<AttachmentId>): Int? =
             path.indexOfFirst { lifecycle(it) != Lifecycle.ACTIVE }.takeIf { it >= 0 }
+
+        /**
+         * The index of the first edge of [path] an overrun of [amount] cannot cross: one that is not
+         * ACTIVE, or whose effective issuance has no room for the whole [amount] within `Long`
+         * (#3475). `null` when it can cross them all.
+         */
+        private fun EntitlementLedger.firstClosedToIndex(path: List<AttachmentId>, amount: Long): Int? =
+            path.indexOfFirst { lifecycle(it) != Lifecycle.ACTIVE || !chargeFits(effectiveIssuance(it), amount) }.takeIf { it >= 0 }
 
         /** What [edge] still carries: issued, less returned and spent. `0` for an edge this ledger does not know. */
         private fun EntitlementLedger.outstanding(edge: AttachmentId): Long = edge(edge)?.outstanding ?: 0L

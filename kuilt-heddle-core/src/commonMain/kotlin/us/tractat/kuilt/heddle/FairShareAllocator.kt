@@ -48,9 +48,10 @@ public interface LedgerCell {
  *
  * The demanding state is what makes the clamp an *edge* detector rather than a level one: `false`
  * means this peer has seen the child not competing, so the next round in which it competes is a
- * wake. An id that is *absent* has never been observed and is therefore never treated as a wake: a
- * first observation carries no evidence the child was ever idle, and forfeiting a deficit accrued
- * under some other peer's scheduling would be a penalty this peer has no standing to impose.
+ * wake. An id that is *absent* has never been observed, and a seated one found competing is a wake
+ * too, the restart rule (design §7.2, #3472): a first sighting says nothing about how long the
+ * child idled, so this peer gives it no credit for a gap it did not watch, at the cost of its lag,
+ * once. That is every child of a restarted `HeddleNode`, and a child another peer seated and ran.
  * Seating a genuinely new generation is the seat bump's job ([schedule]), not the clamp's.
  *
  * That memory is a value too: [memory] exports it as an [AllocatorMemory] and the secondary
@@ -79,7 +80,12 @@ public class FairShareAllocator(
     private val self: ReplicaId,
     private val policy: PolicyConfig,
 ) {
-    /** The wake clamps this peer computed, wide, in ticks of each edge's own grid (#3353). */
+    /**
+     * The wake clamps this peer computed, wide, in ticks of each edge's own grid (#3353). A zero
+     * offset is absent: an edge reads an absent one as zero, so storing it would spell one state
+     * two ways. [AllocatorMemory] refuses one, so a loaded memory holds none, and every write
+     * goes through [writeWakeOffset].
+     */
     private val wakeOffsets = HashMap<AttachmentId, Int128>()
     private val demandingObserved = HashMap<AttachmentId, Boolean>()
 
@@ -213,17 +219,27 @@ public class FairShareAllocator(
      * set neither of them is in (§7.2, §10.6, #1752), so a joiner meets the front it is rejoining
      * rather than one it helped set.
      *
-     * One state stops it, and it does not throw: active children whose weights fail
+     * Two states stop it, and neither throws. Active children whose weights fail
      * [weightsFitTheBudget] stop it before the seat step, since the replicated ledger can merge such
-     * a set from writes that each fit (#3353). No position stops it: a pick orders the full 128-bit
-     * position, however far a child stands from its parent's origin.
+     * a set from writes that each fit (#3353). And a grant that would carry the effective issuance
+     * of the edge it picked past the lifetime watermark, `Long.MAX_VALUE` less
+     * [LocalHeddle.LIFETIME_HEADROOM], stops it after the pick, on this peer's view (#3475). A full
+     * edge that is picked stalls its parent rather than being skipped for a sibling, as in
+     * [LocalHeddle.acquire]. No position stops it: a pick orders the full 128-bit position, however
+     * far a child stands from its parent's origin.
+     *
+     * Peers that grant one edge before their writes merge each check their own view, so the merged
+     * issuance can pass the watermark: the headroom absorbs unmerged grants on one edge totalling at
+     * most [LocalHeddle.LIFETIME_HEADROOM], 16,384 of [LocalHeddle.MAX_RESERVATION]. A grant is
+     * bounded by the quantum and holdings, not by that, so the bound is the total. Past `Long` the
+     * sum throws when read, never wraps.
      *
      * ## A refused or empty call writes nothing
      *
      * The seat step and the first pick run together, on a [fork] of this allocator, inside **one**
      * [LedgerCell.mutateOrSkip] (#3353):
-     * - the first round **refused** at the weight budget: no patch, and the fork is dropped, so no
-     *   seat, no clamp and no observation is kept;
+     * - the first round **refused** at the weight budget or the lifetime limit: no patch, and the
+     *   fork is dropped, so no seat, no clamp and no observation is kept;
      * - the first pick found **nothing** to grant: no patch either, so the seats are dropped with
      *   it, but the fork's wake memory is kept, since it observed who was waiting. That is what
      *   [LocalHeddle] does, and it means an idle call writes nothing to a replicated ledger;
@@ -252,12 +268,9 @@ public class FairShareAllocator(
      *   answer from live state rather than a copy taken before the call.
      * @return [AllocationOutcome.Delegated] with the count of grants applied this call, even when a
      *   refusal stopped it after them; otherwise [AllocationOutcome.WeightBudget] when [parent]'s
-     *   children cannot be ordered, and
-     *   [AllocationOutcome.NothingToDelegate] when it simply had nothing to grant.
-     * @throws ArithmeticException when a grant would carry an edge's issuance past `Long`, the
-     *   lifetime limit (#3475). In the first round that writes nothing, and the fork is dropped. In a
-     *   round `k > 1` it keeps rounds `1..k−1`, which have already landed, unlike [LocalHeddle],
-     *   whose calls change nothing when they throw.
+     *   children cannot be ordered, [AllocationOutcome.LifetimeExhausted] when the first grant would
+     *   pass the lifetime watermark, and [AllocationOutcome.NothingToDelegate] when it simply had
+     *   nothing to grant.
      * @throws IllegalStateException when this allocator was built from an [AllocatorMemory] no
      *   allocator wrote, one holding a child's shift remainder at a denominator other than its
      *   weight's (#3416 review), and that child returns: a remainder is always on its edge's own
@@ -277,6 +290,7 @@ public class FairShareAllocator(
         }
         when (val opened = checkNotNull(first) { "the cell's write step never ran its transform" }) {
             FirstRound.OverBudget -> return AllocationOutcome.WeightBudget(parent)
+            FirstRound.LifetimeExhausted -> return AllocationOutcome.LifetimeExhausted(parent)
             is FirstRound.Empty -> {
                 adoptMemoryOf(opened.fork)
                 return AllocationOutcome.NothingToDelegate
@@ -301,6 +315,8 @@ public class FairShareAllocator(
                 // down as soon as it is seen (#3353).
                 val preRaised = raiseBeforePick(parent, cell, earmarked, demand)
                 val grant = pickOne(cell.current, parent, earmarked, demand) ?: return@mutateOrSkip null
+                // A full edge stops the call here; the next call's first round names it (#3475).
+                if (!grantFits(cell.current, grant)) return@mutateOrSkip null
                 if (preRaised) checkRaiseChangedNoPick(s, parent, earmarked, demand, grant)
                 val raised = raiseOriginBeneath(parent, cell, earmarked, demand, grant)
                 if (!cell.mutateOrSkip { it.delegate(self, grant.attachment, grant.amount) }) return@mutateOrSkip null
@@ -315,6 +331,9 @@ public class FairShareAllocator(
         // grants, and the next call meets the refusal in its first round and names it.
         return AllocationOutcome.Delegated(grants)
     }
+
+    /** Whether [grant] fits the lifetime limit on [s]: its edge's effective issuance stays at or below the watermark (#3475). */
+    private fun grantFits(s: EntitlementLedger, grant: Grant): Boolean = pickFits(s.effectiveIssuance(grant.attachment), grant.amount)
 
     /** Whether [parent]'s active children in [s] fit [weightsFitTheBudget], so a pick there can be computed. */
     private fun childWeightsFit(s: EntitlementLedger, parent: GroupId): Boolean =
@@ -607,19 +626,18 @@ public class FairShareAllocator(
 
     /**
      * Whether [edge] wakes: demanding now, and last observed not demanding. Or, never observed at
-     * all, seated, demanding and below zero (#3353 review, item B). The threshold stays at zero
-     * under the window rule, whose rebase leaves a watched demanding child anywhere in `[−C, 0)`:
-     * one this allocator never saw there may be such a child, a restarted `HeddleNode`'s say, and
-     * clamping it costs it at most its lag, once, the penalty side. A threshold at the floor would
-     * leave a child idle while nobody watched below zero with up to a window of credit, which is the
-     * side §10.5 forbids. Clamping costs turns, never credit (§10.6).
+     * all, seated and demanding: the restart rule (design §7.2, #3472). This allocator did not
+     * watch the gap before it first saw the child, so it gives it no credit for it, wherever the
+     * child stands. Clamping it costs it at most its lag, once, the penalty side: clamping costs
+     * turns, never credit (§10.6). The rule took in the arm it replaced, which clamped a
+     * never-observed child only below zero, where only a rebase could put it.
      */
     private fun isWaker(edge: PolicyEdge): Boolean {
         if (!HeddlePolicy.isDemanding(edge)) return false
         return when (demandingObserved[edge.record.id]) {
             false -> true
             true -> false
-            null -> edge.gauge != null && HeddlePolicy.effectiveTicksWide(edge) < Int128.ZERO
+            null -> edge.gauge != null
         }
     }
 
@@ -669,7 +687,10 @@ public class FairShareAllocator(
         // With none, the raise still runs before the pick (#3353).
         val preSeat = fork.preSeatRaise(s, parent, demand) ?: fork.prePickRaise(s, parent, demand)
         fork.settleJoiners(parent, cell, demand, preSeat)
-        val delegated = fork.pickOne(cell.current, parent, earmarked, demand)?.let { grant ->
+        val picked = fork.pickOne(cell.current, parent, earmarked, demand)
+        // After the pick, on this peer's view, before anything is written (#3475).
+        if (picked != null && !grantFits(cell.current, picked)) return FirstRound.LifetimeExhausted
+        val delegated = picked?.let { grant ->
             if (preSeat != null) fork().checkPreSeatRaiseChangedNoPick(s, parent, earmarked, demand, demand, grant)
             // The rebase after the seat and wake step, before the grant, in the same patch (#3353).
             val raised = fork.raiseOriginBeneath(parent, cell, earmarked, demand, grant)
@@ -688,6 +709,12 @@ public class FairShareAllocator(
          * fork with everything it observed.
          */
         data object OverBudget : FirstRound
+
+        /**
+         * The first grant would carry its edge's effective issuance past the lifetime watermark
+         * (#3475): write nothing, and drop the fork, as for [OverBudget].
+         */
+        data object LifetimeExhausted : FirstRound
 
         /** Nothing to grant: write nothing, but keep [fork]'s wake memory, which saw who was waiting. */
         class Empty(val fork: FairShareAllocator) : FirstRound
@@ -835,18 +862,25 @@ public class FairShareAllocator(
         parent: GroupId,
         demand: (AttachmentId) -> Demand,
     ): Rational? =
-        if (childWeightsFit(ledger, parent)) HeddlePolicy.front(policyEdges(ledger, parent, demand).map(::heldInWindow)) else null
+        if (childWeightsFit(ledger, parent)) heldFront(policyEdges(ledger, parent, demand)) else null
 
     /**
-     * [edge] read inside its window, for a diagnostic (#3353), as the public reads hold it
-     * ([inWindow]): a child a `cancel` walked back past its floor reads at the floor, the penalty
-     * side, and one past its ceiling at the ceiling, so the front over them cannot throw on how far
-     * a child is from its origin.
+     * [HeddlePolicy.front] over [edges], each position read inside its window, for a diagnostic
+     * (#3353), as the public reads hold it ([inWindow]): a child a `cancel` walked back past its
+     * floor reads at the floor, the penalty side, and one past its ceiling at the ceiling, so the
+     * front cannot throw on how far a child has climbed. `null` when [edges] is empty.
+     *
+     * It reads the held positions directly. Holding an edge by lowering its wake offset, as this
+     * once did, makes a negative offset, which [PolicyEdge] refuses: a busy child past its ceiling
+     * beside a demanding sibling that is never served then threw out of every read of its parent's
+     * front (#3485).
      */
-    private fun heldInWindow(edge: PolicyEdge): PolicyEdge {
-        val effective = HeddlePolicy.effectiveTicksWide(edge)
-        val held = Int128.of(inWindow(effective, edge.record.weight))
-        return if (held == effective) edge else edge.copy(offsetTicks = edge.offsetTicks + (held - effective))
+    private fun heldFront(edges: List<PolicyEdge>): Rational? {
+        if (edges.isEmpty()) return null
+        val demanding = edges.filter { HeddlePolicy.isDemanding(it) }
+        if (demanding.isEmpty()) return edges.maxOf { readVirtual(HeddlePolicy.effectiveTicksWide(it), it.record.weight) }
+        val held = demanding.map { Int128.of(inWindow(HeddlePolicy.effectiveTicksWide(it), it.record.weight)) }
+        return VirtualTime.mean(held, demanding.map { it.record.weight }).toRational()
     }
 
     /**
@@ -1254,7 +1288,7 @@ public class FairShareAllocator(
         for (edge in edges) {
             val id = edge.record.id
             val shift = shifts[id] ?: continue
-            wakeOffsets[id] = edge.offsetTicks + shift.ticks
+            writeWakeOffset(id, edge.offsetTicks + shift.ticks)
             departures.remove(id)
             val remainder = shift.remainder
             if (remainder == null) shiftRemainders.remove(id) else shiftRemainders[id] = remainder
@@ -1349,8 +1383,13 @@ public class FairShareAllocator(
             // Written, not joined: a seated waker with no departure holds no offset (see above).
             // Both sides are on the waker's grid, and the result is stored on it, so a stored offset
             // never carries a front's denominator into the next one (#3313).
-            wakeOffsets[edge.record.id] = computed
+            writeWakeOffset(edge.record.id, computed)
         }
+    }
+
+    /** Store [offset] as [edge]'s wake offset, or drop the entry when it is zero, the value an absent one reads as. */
+    private fun writeWakeOffset(edge: AttachmentId, offset: Int128) {
+        if (offset == Int128.ZERO) wakeOffsets.remove(edge) else wakeOffsets[edge] = offset
     }
 
     /**
@@ -1403,11 +1442,12 @@ public class FairShareAllocator(
 
 /**
  * What one [FairShareAllocator.schedule] call did at a parent: delegated something, found nothing to
- * delegate, or stopped because the parent cannot be ordered at all.
+ * delegate, or stopped because the parent cannot be ordered at all or its pick met the lifetime limit.
  *
- * The two empty answers are separate arms because they clear differently. [NothingToDelegate] is
+ * The empty answers are separate arms because they clear differently. [NothingToDelegate] is
  * the ordinary answer, and it clears by itself once holdings or demand arrive. [WeightBudget] is a
- * property of the parent's children, and it lasts until those change.
+ * property of the parent's children, and it lasts until those change. [LifetimeExhausted] lasts
+ * while the full edge is picked.
  */
 public sealed interface AllocationOutcome {
 
@@ -1429,10 +1469,12 @@ public sealed interface AllocationOutcome {
     public data object NothingToDelegate : AllocationOutcome
 
     /**
-     * Not returned today. A pick orders the full 128-bit position, so no position at [parent]
-     * stops a round. Kept for the ledger's `Long` lifetime counters, which throw there for now.
+     * The pick at [parent] chose an edge whose effective issuance the grant would carry past the
+     * lifetime watermark, `Long.MAX_VALUE` less [LocalHeddle.LIFETIME_HEADROOM], on this peer's view
+     * (#3475). Nothing was written. It lasts while that edge is picked: a refusal moves no
+     * position, so a full edge that is next in line stalls its parent, as in [LocalHeddle.acquire].
      */
-    public data class PositionCeiling(public val parent: GroupId) : AllocationOutcome
+    public data class LifetimeExhausted(public val parent: GroupId) : AllocationOutcome
 
     /**
      * [parent]'s active children carry weights that fail [weightsFitTheBudget]: a product a pick

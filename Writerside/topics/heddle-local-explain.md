@@ -8,7 +8,7 @@ turn. Heddle can say so, and name the team.
 Ask about any lane at any moment. The answer changes nothing, and it always
 agrees with what the engine does next.
 
-> **Playground.** This engine works today, and its API can change.
+> **Beta.** This engine is built and heavily tested, and its API can still change.
 
 This page uses the build farm from [Fair share in one program](heddle-local.md):
 web at three parts, mobile at one, four agents, and builds of about three
@@ -62,7 +62,7 @@ fun why(lane: GroupId, waiting: Set<GroupId>, eligible: Set<GroupId>): String =
         WaitExplanation.SupplyExhausted -> "No agent time is free yet."
         is WaitExplanation.NoLiveLineage -> "Its part of the tree is being changed."
         is WaitExplanation.AtCeiling -> "${names.getValue(answer.group)} already runs ${answer.limit} at once, its limit."
-        is WaitExplanation.PositionCeiling -> "Scheduling is stuck at ${names.getValue(answer.parent)}."
+        is WaitExplanation.LifetimeExhausted -> "New work under ${names.getValue(answer.parent)} waits: its books are full."
         is WaitExplanation.BehindAtLevel -> "${names.getValue(answer.nextChild)} goes first at ${names.getValue(answer.parent)}."
     }
 ```
@@ -99,7 +99,7 @@ ninth build ran nine minutes against an estimate of three:
 // The ninth build is web's, and it runs 9 minutes against its 3-minute estimate.
 val ninth = heddle.acquire(both, both, startedAt = 24L)
 check(ninth is AcquireOutcome.Acquired && ninth.lease.leaf == web)
-check(heddle.complete(ninth.lease.id, actualCost = 9L, waiting = both) == LeaseOutcome.Done(charged = 9L, overrun = 6L))
+check(heddle.complete(ninth.lease.id, actualCost = 9L, waiting = both) == LeaseOutcome.Done(charged = 9L, overrun = 6L, unrecorded = 0L))
 // All nine minutes count: web is now past the line, so mobile goes next.
 check(
     heddle.explain(web, waiting = both, eligible = both) ==
@@ -175,10 +175,12 @@ order is part of the API:
 - **`SupplyExhausted`**: the engine holds less time than the reservation, so
   the next pick is refused whoever is waiting. Most often `reconcileCapacity`
   has not been called yet.
-- **`PositionCeiling(parent)`**: not returned today. The engine compares every
-  child's progress exactly, however far it has gone, so no pick is refused for
-  it. The answer is kept for a limit the engine meets only after an enormous
-  amount of service.
+- **`LifetimeExhausted(parent)`**: the books are nearly full. The engine counts
+  service in whole numbers that cannot grow forever, so it stops opening new
+  leases a little before a count runs out, and keeps the rest for work already
+  running. Two lanes of the largest leases get there after about half a million.
+  A lane told this, or one that waits behind such a lane at `parent`, stays
+  queued: nothing clears it.
 - **`BehindAtLevel(parent, nextChild, …)`**: another child goes first at
   `parent`, the first group where the pick leaves this lane's path, and
   `nextChild` is the one it picks. In a deeper tree this tells you where the
@@ -209,7 +211,7 @@ fun reason(answer: WaitExplanation): Pair<WaitExplanation.Kind, List<GroupId>> =
         WaitExplanation.WouldBePickedNext -> emptyList()
         is WaitExplanation.NoLiveLineage -> listOf(answer.at)
         is WaitExplanation.AtCeiling -> listOf(answer.group)
-        is WaitExplanation.PositionCeiling -> listOf(answer.parent)
+        is WaitExplanation.LifetimeExhausted -> listOf(answer.parent)
         is WaitExplanation.BehindAtLevel -> listOf(answer.parent, answer.nextChild)
     }
 

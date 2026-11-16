@@ -20,7 +20,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
-import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -247,7 +246,7 @@ class LocalHeddlePersistenceTest {
             { assertIs<StepRefusal.Draining>(first.refusals.single(), "the rig: the removal is draining") },
             { assertEquals(Lifecycle.CLOSING, persisted.ledger.lifecycle(edge), "the rig: the snapshot holds a CLOSING edge on an open lease's path") },
             { assertEquals(listOf(leftover), persisted.leases) },
-            { assertEquals(LeaseOutcome.Done(1L, 0L), done, "the lease completes after the restore") },
+            { assertEquals(LeaseOutcome.Done(1L, 0L, 0L), done, "the lease completes after the restore") },
             { assertEquals(emptyList(), second.refusals, "and the same topology applied again lands") },
             { assertTrue(TopologyStep.Retire(edge, spare) in second.applied, "the edge retired: $second") },
             { assertEquals(null, restored.snapshot().ledger.lifecycle(edge), "and its swap forgot it") },
@@ -288,7 +287,7 @@ class LocalHeddlePersistenceTest {
         assertAll(
             { assertEquals(open, before, "every lease is open again under its own id") },
             { assertEquals(setOf(a, b), open.map { it.leaf }.toSet(), "the rig: one lease under each leaf") },
-            { assertEquals(listOf(LeaseOutcome.Done(2L, 1L), LeaseOutcome.Done(2L, 1L)), viaRestored) },
+            { assertEquals(listOf(LeaseOutcome.Done(2L, 1L, 0L), LeaseOutcome.Done(2L, 1L, 0L)), viaRestored) },
             { assertEquals(viaReference, viaRestored, "completing them is what completing them would have been") },
             { assertEquals(books(reference), books(restored), "charged to the same leaves, down the same paths") },
             { assertTrue(restored.snapshot().ledger.validate().isEmpty()) },
@@ -363,36 +362,56 @@ class LocalHeddlePersistenceTest {
 
     /**
      * Restore under the next epoch, with the wake offset `b`'s clamp just wrote, then the same calls
-     * as an engine that never persisted. Picks, outcomes and books all match. The control arm
-     * restores the same snapshot with the wake memory forgotten, and picks differently, so the
-     * memory is what carries the match.
+     * as an engine that never persisted. Picks, outcomes and books all match.
+     *
+     * The second arm restores the same snapshot with the wake memory forgotten, which is a
+     * restarted scheduler. The call that first observes `b` finds it seated and demanding, and the
+     * forgetful engine has never observed it, so by the restart rule (design §7.2) it is a waker,
+     * clamped to the same offset the memory held, and it takes no more picks than it would have.
+     * Before the rule the forgetful engine kept `b` at its raw position and handed it back its idle
+     * credit. Forgetting is not free, though: every seated child found demanding is clamped, and
+     * since all of them are joining, each comes back level with the furthest-ahead one, so a child
+     * that was owed service loses it, and a returner is clamped rather than moved by its parent's
+     * clock. Here `b` was the one behind and `a` the one ahead, so nothing was owed.
+     * [aSnapshotTakenWhileAChildIsAwayKeepsItsPlace] is the witness that the memory matters.
      */
     @Test
     fun restoreReplaysIdenticallyWithAWaker() {
         val (reference, open) = wakerScenario()
         val persisted = wakerScenario().first.persist()
         val offset = wakeOffsetOf(persisted.allocatorMemory, b)
+        val forgotten = LocalHeddleSnapshot(
+            persisted.epoch, persisted.ledger, AllocatorMemory.EMPTY, persisted.totalSlots, persisted.open, persisted.lastApplied,
+        )
 
         val restored = LocalHeddle.restore(decoded(encode(persisted)), policy, epoch = 1L)
-        val forgetful = LocalHeddle.restore(
-            LocalHeddleSnapshot(
-                persisted.epoch, persisted.ledger, AllocatorMemory.EMPTY, persisted.totalSlots, persisted.open, persisted.lastApplied,
-            ),
-            policy,
-            epoch = 1L,
-        )
+        val forgetful = LocalHeddle.restore(forgotten, policy, epoch = 1L)
         val expected = continuation(reference, open)
         val actual = continuation(restored, open)
-        val control = continuation(forgetful, open)
+        val forgot = continuation(forgetful, open)
         val bPicks = { picks: List<Any> -> picks.count { it == b } }
+        // The continuation's calls one at a time on a second forgetful engine, up to the one that first observes b.
+        val probe = LocalHeddle.restore(forgotten, policy, epoch = 1L)
+        val calls = listOf<(LocalHeddle) -> Unit>(
+            { it.complete(open[0].id, 1L, waiting = emptySet()) },
+            { it.complete(open[1].id, 3L, waiting = emptySet()) },
+            { h -> h.lease(setOf(a, b), startedAt = 200L).also { h.complete(it.id, 1L, waiting = emptySet()) } },
+        )
+        val observedAt = calls.indexOfFirst { call ->
+            call(probe)
+            probe.persist().allocatorMemory.demandingObserved[edgeTo(b)] != null
+        }
+        val firstSight = probe.persist().allocatorMemory
         assertAll(
             { assertTrue(offset > Int128.ZERO, "the rig: b's wake offset is non-zero at persist time, $offset") },
             { assertEquals(true, persisted.allocatorMemory.demandingObserved[edgeTo(b)], "and b was last seen waiting") },
             { assertEquals(20, expected.count { it is GroupId }, "the rig: 20 picks ran after the restore") },
             { assertEquals(expected, actual, "the same picks and outcomes as the engine that never persisted") },
             { assertEquals(books(reference), books(restored), "and the same books") },
-            { assertNotEquals(expected, control, "the control: forgetting the memory changes the picks") },
-            { assertTrue(bPicks(control) > bPicks(expected), "it hands b back the idle credit: ${bPicks(control)} against ${bPicks(expected)}") },
+            { assertTrue(observedAt >= 0, "the rig: the forgetful engine observed b within the continuation's first calls") },
+            { assertEquals(true, firstSight.demandingObserved[edgeTo(b)], "the forgetful engine first saw b demanding") },
+            { assertEquals(offset, wakeOffsetOf(firstSight, b), "and re-clamped it to the offset the memory held") },
+            { assertTrue(bPicks(forgot) <= bPicks(expected), "so it hands b back no idle credit: ${bPicks(forgot)} against ${bPicks(expected)}") },
         )
     }
 
@@ -549,7 +568,7 @@ class LocalHeddlePersistenceTest {
         val reload = h.apply(richAfter, generation = 2L)
         check(reload.refusals.single() is StepRefusal.Draining) { "spare drains: $reload" }
         check(h.capturedPath(interactive.id) != pathBefore) { "the reweight moved the interactive lease" }
-        check(h.cancel(x.id) == LeaseOutcome.Done(0L, 0L)) { "cancelled" }
+        check(h.cancel(x.id) == LeaseOutcome.Done(0L, 0L, 0L)) { "cancelled" }
         val restored = throughJson(h, richPolicy).also { it.forgetsForTest = forgets }
         val later = restored.lease(setOf(richBefore.groupId("acme", "batch", "y")), reservation = 2L, startedAt = 20L)
         return restored to listOf(interactive, spare, inTenant, later)
@@ -750,6 +769,20 @@ class LocalHeddlePersistenceTest {
         assertTrue(out is RestoreResult.Corrupt && "at denominator 2" in out.reason, "expected Corrupt naming the remainder, got $out")
     }
 
+    /**
+     * An edge reads a missing wake offset as zero, so an allocator stores no zero offset and a
+     * snapshot holding one spells a state a second way. It is refused at decode as corrupt, a typed
+     * outcome, not thrown. The rich golden held one until the elision, `batch/y`'s.
+     */
+    @Test
+    fun aZeroWakeOffsetIsCorrupt() {
+        val honest = "\"wakeOffsets\":{\"root/acme/batch@1:1#0\":{\"low\":32}"
+        check(honest in GOLDEN_FORMAT_1_RICH) { "the rig: the offsets are where this test expects them" }
+        val zero = honest.replace("{\"root/acme/batch@1:1#0\"", "{\"root/acme/batch/y@2:1#0\":{},\"root/acme/batch@1:1#0\"")
+        val out = LocalHeddle.decode(GOLDEN_FORMAT_1_RICH.replace(honest, zero), Json)
+        assertTrue(out is RestoreResult.Corrupt && "root/acme/batch/y@2:1#0" in out.reason, "expected Corrupt naming the zero offset, got $out")
+    }
+
     /** An honest fold is never negative, so a snapshot whose fold is, in either of its two maps, is corrupt. */
     @Test
     fun aNegativeFoldIsCorrupt() {
@@ -876,7 +909,7 @@ class LocalHeddlePersistenceTest {
             Triple("a negative epoch", golden.replaceFirst("$prefix{\"epoch\":0,", "$prefix{\"epoch\":-1,"), "epoch must be non-negative"),
             Triple("a negative sequence number", golden.replaceFirst("\"seq\":50,", "\"seq\":-50,"), "negative sequence number"),
             Triple("ids not strictly increasing", golden.replaceFirst("\"seq\":51,", "\"seq\":50,"), "strictly increasing id order"),
-            Triple("a reservation of 0", golden.replaceFirst("\"reserved\":1,", "\"reserved\":0,"), "not a positive amount"),
+            Triple("a negative reservation", golden.replaceFirst("\"reserved\":1,", "\"reserved\":-1,"), "a negative amount"),
             Triple("an empty path", golden.replace(pathToA, "\"path\":[]"), "empty path"),
             Triple("a broken path", golden.replace(pathToA, "\"path\":[\"${edgeTo(b).value}\",\"${edgeTo(a).value}\"]"), "path is broken"),
             Triple("a path across a retired edge", golden.replaceFirst("\"lifecycle\":{\"${edgeTo(a).value}\":\"ACTIVE\"", "\"lifecycle\":{\"${edgeTo(a).value}\":\"RETIRED\""), "which is retired"),
@@ -946,7 +979,7 @@ class LocalHeddlePersistenceTest {
             { assertSame(resetBefore, reset.snapshot().ledger, "the reset engine charged nothing") },
             { assertEquals(LeaseOutcome.Stale(1L), restored.complete(settled.id, 1L, waiting = emptySet()), "a lease settled before the persist") },
             { assertSame(restoredBefore, restored.snapshot().ledger, "and that charged nothing either") },
-            { assertEquals(LeaseOutcome.Done(1L, 0L), restored.complete(open[0].id, 1L, waiting = emptySet()), "a lease the snapshot holds is still valid") },
+            { assertEquals(LeaseOutcome.Done(1L, 0L, 0L), restored.complete(open[0].id, 1L, waiting = emptySet()), "a lease the snapshot holds is still valid") },
         )
     }
 

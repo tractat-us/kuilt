@@ -106,4 +106,4 @@ Departure alone does not reclaim that peer's holdings.
 
 Next: [connect a Warp job to its allowance](warp-jobs.md), or read the
 [ledger design](https://github.com/tractat-us/kuilt/blob/main/docs/heddle-ledger-design.md)
-for the algebra. These APIs remain part of the Playground and can change.
+for the algebra. These APIs are in beta and can still change.

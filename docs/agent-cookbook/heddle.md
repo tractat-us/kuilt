@@ -46,7 +46,7 @@ unused part back, and reports any overrun, which is never refused.
     check(first is AcquireOutcome.Acquired)
 
     // The job overran its 3-unit estimate: all 5 units are charged, 2 of them as overrun.
-    check(heddle.complete(first.lease.id, actualCost = 5L, waiting = queued) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+    check(heddle.complete(first.lease.id, actualCost = 5L, waiting = queued) == LeaseOutcome.Done(charged = 5L, overrun = 2L, unrecorded = 0L))
 
     // Over many slots the shares follow the weights, 2 : 1.
     val picks = (0 until 30).map {
@@ -102,8 +102,8 @@ The whole loop in one place, from the admin's file to a restart:
     val restored = LocalHeddle.restore(decoded.snapshot, policy, epoch = 1L)
     val orphan = restored.reconcileLeases(live = setOf(running.id), now = 10L).orphaned.single()
     check(orphan.lease == lost)
-    check(restored.complete(orphan.lease.id, orphan.defaultSettlement, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
-    check(restored.complete(running.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(restored.complete(orphan.lease.id, orphan.defaultSettlement, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L))
+    check(restored.complete(running.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L))
 ```
 
 Cost is time, in your own unit. `LocalPolicy.defaultReservation` is the estimate a lease
@@ -317,8 +317,8 @@ as one unit, swapped in once. Open leases survive it and are still charged once,
     // Spare is closed to new work and waits for its lease; heavy's lease moved onto its new edge.
     val waiting = reload.refusals.single()
     check(waiting is StepRefusal.Draining && waiting.child == spare && waiting.blockingLeases == listOf(leftover))
-    check(heddle.complete(running.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
-    check(heddle.complete(leftover.id, actualCost = 2L, waiting = emptySet()) == LeaseOutcome.Done(charged = 2L, overrun = 0L))
+    check(heddle.complete(running.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L))
+    check(heddle.complete(leftover.id, actualCost = 2L, waiting = emptySet()) == LeaseOutcome.Done(charged = 2L, overrun = 0L, unrecorded = 0L))
 
     // Once the drain is over, the same reload finishes the job.
     check(heddle.apply(after, generation = 1L).refusals.isEmpty())
@@ -481,7 +481,7 @@ order. None of them changes anything, the wake memory included.
 `explain` runs the real pick on a throwaway copy, so it agrees with the next `acquire` on the
 same arguments. It answers one of `NotWaiting`, `NotEligible`, `NoLiveLineage(at)` (no pick can
 end there, the same test `acquire` applies), `AtCeiling(group, limit)`, `SupplyExhausted`,
-`PositionCeiling(parent)` (not returned today), `BehindAtLevel(parent, nextChild, …)` at the first group where another
+`LifetimeExhausted(parent)` (the next pick stalls at `parent` at the lifetime limit), `BehindAtLevel(parent, nextChild, …)` at the first group where another
 child goes first, or `WouldBePickedNext`. `BehindAtLevel` carries the leaf side's virtual service
 beside two lines: `eligibleFront`, the line this pick drew over the children it could run (more
 than one sixteenth of a unit of the side's own service above it, the side was not a candidate; at
@@ -560,7 +560,7 @@ ceiling, since the work is already running; a shortfall at the root is minted. S
     // Mobile is now at its ceiling of one, and a second build started by hand is still charged.
     val another = heddle.admit(mobile, waiting = both, startedAt = 1L)
     check(another is AcquireOutcome.Acquired)
-    check(heddle.complete(another.lease.id, actualCost = 5L, waiting = emptySet()) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+    check(heddle.complete(another.lease.id, actualCost = 5L, waiting = emptySet()) == LeaseOutcome.Done(charged = 5L, overrun = 2L, unrecorded = 0L))
 
     // A group with a template and nothing attached is not somewhere a build can run.
     val forks = farm.groupId("forks")
@@ -594,7 +594,7 @@ made, and the work that did not survive settled.
     val restarted = LocalHeddle.restore(decoded.snapshot, policy, epoch = decoded.snapshot.epoch + 1)
 
     // The lease that was running is still open, and settles as it would have.
-    check(restarted.complete(running.id, actualCost = 3L, waiting = queued) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(restarted.complete(running.id, actualCost = 3L, waiting = queued) == LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L))
 ```
 
 The encoding is a two-element array, `[formatVersion, state]`, so a store that reorders object
@@ -620,7 +620,7 @@ memory, the reconciled capacity and the topology last applied come back.
   stored also says format 1, in an older layout this release does not tell apart: do not decode
   it, boot from the topology again.
 - **What `decode` checks.** The envelope's shape and version, then consistency: every open lease
-  has a positive reservation, an epoch no later than the snapshot's and a path that is its leaf's
+  has a reservation that is not negative, an epoch no later than the snapshot's and a path that is its leaf's
   one live lineage from the root, over edges the ledger holds and none retired; leases in id
   order; a valid topology. It does **not** bound values an engine could never reach, such as a
   reservation above `MAX_RESERVATION`, which decodes as `Restored` (tracked by
@@ -649,7 +649,7 @@ that will resume belongs in `live`, so it never becomes an orphan.
     check(orphan.lease == lost && orphan.elapsed == 9L && orphan.granted == 3L)
 
     // It ran 9 units against the 3 it was granted, which a dead job cannot prove: charge 3.
-    check(heddle.complete(orphan.lease.id, orphan.defaultSettlement, waiting = queued) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.complete(orphan.lease.id, orphan.defaultSettlement, waiting = queued) == LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L))
     check(heddle.reconcileLeases(live = setOf(kept.id), now = 110L).orphaned.isEmpty())
 ```
 
@@ -664,10 +664,10 @@ who was waiting.
 
 | Call | Answers | Never refused for |
 |---|---|---|
-| `acquire` | `AcquireOutcome`: `Acquired`, `NothingEligible` (empty eligible set, or every eligible leaf capped), `SupplyExhausted` (no capacity reconciled), `NoLiveLineage(root)`; `PositionCeiling(parent)`, not returned today | — |
-| `admit` | `AdmitOutcome`: `Acquired`, `NoLiveLineage(leaf)` | supply, a concurrency ceiling |
-| `extend` | `LeaseOutcome`: `Done`, `PathDraining(edge)` (a reload is closing the path), `SupplyExhausted`, `Unknown`, `Stale(currentEpoch)`; `PositionCeiling(parent)`, not returned today | a concurrency ceiling |
-| `complete` | `LeaseOutcome`: `Done(charged, overrun)`, `Unknown`, `Stale(currentEpoch)` | anything: a draining path, an overrun, a ceiling |
+| `acquire` | `AcquireOutcome`: `Acquired`, `NothingEligible` (empty eligible set, or every eligible leaf capped), `SupplyExhausted` (no capacity reconciled), `NoLiveLineage(root)`, `LifetimeExhausted(parent)` (the lifetime limit) | — |
+| `admit` | `AdmitOutcome`: `Acquired`, `NoLiveLineage(leaf)`; past the lifetime limit `Acquired` with `reserved` 0 | supply, a concurrency ceiling, the lifetime limit |
+| `extend` | `LeaseOutcome`: `Done` (with `unrecorded` the whole amount past the lifetime limit), `PathDraining(edge)` (a reload is closing the path), `SupplyExhausted`, `Unknown`, `Stale(currentEpoch)` | a concurrency ceiling, the lifetime limit |
+| `complete` | `LeaseOutcome`: `Done(charged, overrun, unrecorded)`, `Unknown`, `Stale(currentEpoch)` | anything: a draining path, an overrun, a ceiling, the lifetime limit |
 | `cancel` | `LeaseOutcome`: `Done`, `Unknown`, `Stale(currentEpoch)` | anything |
 | `fromTopology` | `LocalHeddle.Boot(heddle, result)`: the engine, and an `ApplyResult` naming every group the boot left out, each a `StepRefusal.Refused` | — |
 | `apply`, `attach`, `detach` | `ApplyResult(applied, refusals)`, each refusal a `StepRefusal.Draining` (waits on open leases) or `StepRefusal.Refused` (the ledger will not take it) | — |
@@ -676,7 +676,10 @@ who was waiting.
 `Unknown` is an id from this engine's epoch that holds no open lease, a second `complete`
 included; `Stale` is one from another epoch. On a draining path `extend` is refused but
 `complete` still settles: the reservation is charged at the leaf, and an overrun at the deepest
-group still reached through live edges.
+group still reached through live edges. **`Done.unrecorded`** is what the ledger recorded on no
+edge, so `charged + unrecorded` is the cost `complete` was given: an overrun under a draining
+top-level group (#3493), one above `MAX_RECORDED_OVERRUN`, or one the lifetime limit leaves no
+room for. It is `0` everywhere else.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleRefusals -->
 ```kotlin
@@ -693,7 +696,7 @@ group still reached through live edges.
     }
     check(heddle.apply(without, generation = 1L).refusals.single() is StepRefusal.Draining)
     check(heddle.extend(lease.id, amount = 3L, waiting = emptySet()) is LeaseOutcome.PathDraining)
-    check(heddle.complete(lease.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L))
+    check(heddle.complete(lease.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L))
 
     // Settled once, the id is unknown to this engine; after a restart it is from an older epoch.
     check(heddle.complete(lease.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Unknown)
@@ -716,7 +719,11 @@ group still reached through live edges.
 
 **A boot is not a reload.** The weight budget belongs to a whole sibling set, and a reload
 activates a set's new children in id order, so of two new siblings that fit alone but not
-together it refuses the one whose id sorts last, and leaves the running tree as it was. A boot
+together it refuses the one whose id sorts last, and leaves the running tree as it was. A refused new
+group takes its new descendants with it, each reported in `refusals` (as `Draining`, on the same
+leases, when that group waits on a drain), so no lane activates below a group the root cannot
+reach, and an `attach` under one is refused too; a running group whose reweight is refused keeps its old edge, and
+a new lane under it lands. A boot
 has no running tree to keep. Where a group's children's weights do not fit together, it leaves
 out that group and every group beneath it, reports each one, and boots the rest; at the root,
 nothing boots. The answer is the same whatever the children are named and in whatever order they
@@ -737,9 +744,8 @@ are written. Apply a tree that fits to bring the left-out groups back.
     check(booted.refusals.all { it is StepRefusal.Refused })
 ```
 
-`PositionCeiling` is not in the sample, because nothing returns it today: a pick compares the
-full 128-bit position, so no position refuses one. The arm is kept for the limit a long-lived
-engine does reach, its `Long` counters, which throw for now.
+`LifetimeExhausted` is not in the sample, because a run reaches it only after about half a
+million leases of the largest size (see **The lifetime limit** below).
 
 **What throws.** A bad argument throws `IllegalArgumentException`: a reservation or extension
 outside `1..LocalHeddle.MAX_RESERVATION` (2^44 cost units), an `eligible` set that is not a
@@ -766,10 +772,27 @@ a demanding child that is never served drags that average down with it until no 
 so does a child a charging call counts as demanding while it is idle. The picks carry on exactly
 there; only the reads saturate.
 
-**The lifetime limit.** What a long-lived engine meets first is the ledger's `Long` counters: an
-edge's issuance and an epoch's mint, about 9.2 × 10¹⁸ units each. The call that would pass one
-throws `ArithmeticException` and changes nothing. That is two weight-1 lanes running about half a
-million leases of the largest size.
+**The lifetime limit.** What a long-lived engine meets first is two of the ledger's `Long`
+counters: an edge's effective issuance, which counts every reservation, extension and overrun
+across it, and the root's minted supply, the sum of every epoch's mint record. A pick keeps
+`LocalHeddle.LIFETIME_HEADROOM` (2^58 units) in hand on each: `acquire` answers
+`AcquireOutcome.LifetimeExhausted(parent)` rather than carry either past
+`Long.MAX_VALUE − LIFETIME_HEADROOM`, and changes nothing but the wake memory. Two weight-1 lanes
+at the largest lease, charged in full, run 507,903 leases and then get that answer. Leave the work
+queued: nothing clears it. The refusal belongs to the path: a sibling with room is leased when it
+alone is eligible, but a full lane that is next in line stalls its parent, and `explain` answers
+`WaitExplanation.LifetimeExhausted` for both. Work already running is never refused for the limit,
+and no call throws at it. `admit`, `extend` and `complete` use the headroom, up to `Long.MAX_VALUE`,
+and record a charge that still does not fit whole or not at all. An `admit` reserves nothing and
+its cost arrives as an overrun. An `extend` answers `Done` with the whole amount `unrecorded`.
+An overrun is charged at the deepest group every edge above has room for, or reported
+`unrecorded`.
+
+One absurd cost cannot end an engine. An overrun above `LocalHeddle.MAX_RECORDED_OVERRUN` (2^57,
+half the headroom) is recorded nowhere and reported whole as `unrecorded`, so
+`complete(lease, Long.MAX_VALUE)` closes the lease and the next `acquire` leases, even on an engine
+that has served nothing else. An `extend`'s `unrecorded` is a reservation that was not made, not a
+cost: the work's cost arrives at its `complete`, so sum `unrecorded` over completions only.
 
 **The weight budget.** Keep every weight's denominator at or below 30,719. A weight set so fine
 that one step or one full lease could carry a child past its ceiling is refused when it is
@@ -829,12 +852,15 @@ idle or something at a parent is wrong, without reading the ledger by hand.
 **Primitive:** the `ScheduleOutcome` that `HeddleNode.schedule(parent)` returns, on a static node
 and a governed one alike. `NothingToDelegate` is the idle answer. `WeightBudget(parent)` says the
 parent's children cannot be ordered: weights gossip merged that a pick cannot sum in `Long`, or
-that are too fine for one full lease. It clears when one child closes. `PositionCeiling(parent)`
-is not returned today: a pick compares the full 128-bit position, so a long run keeps granting
-however far its children climb, at weights as far apart as 60 to 1, across a restart, and with
-several schedulers granting one child at once. What a long-running parent does meet is the
-lifetime limit: a grant that would carry an edge's issuance past `Long` throws
-`ArithmeticException`, and the rounds the call made before it stay landed (#3475).
+that are too fine for one full lease. It clears when one child closes. No position stops a pick:
+a pick compares the full 128-bit position, so a long run keeps granting however far its children
+climb, at weights as far apart as 60 to 1, across a restart, and with several schedulers granting
+one child at once. What a long-running parent does meet is the lifetime limit:
+`LifetimeExhausted(parent)` when the first grant would carry the picked edge's effective issuance
+past `Long.MAX_VALUE − LocalHeddle.LIFETIME_HEADROOM` on this peer's view (#3475). It lasts while
+that edge is picked. Peers that grant one edge before their writes merge can pass the watermark
+together; the headroom absorbs 16,384 such grants of the largest size, and every read still
+answers.
 
 **A refusal writes nothing.** The first round of a call, with the newborns it seats before that
 pick, lands as one patch or not at all, so a refused call leaves the ledger and the wake clamps as
@@ -849,8 +875,8 @@ internal fun HeddleNode.sampleScheduleOutcomes(root: GroupId): String =
         is ScheduleOutcome.Delegated -> "delegated ${outcome.grants}"
         // Nothing to move toward any advertised demand: an idle tree, or no holdings at the root.
         ScheduleOutcome.NothingToDelegate -> "idle"
-        // Not returned today: a pick orders the full position. Kept for the lifetime counters.
-        is ScheduleOutcome.PositionCeiling -> "stuck at ${outcome.parent.value}"
+        // The pick chose an edge near the end of its Long lifetime counter. Leave the work queued: nothing clears it.
+        is ScheduleOutcome.LifetimeExhausted -> "exhausted at ${outcome.parent.value}"
         // The active children's weights put a pick's sums out of Long, as gossip can merge. Close one of them.
         is ScheduleOutcome.WeightBudget -> "stuck at ${outcome.parent.value}: close a child, its weights cannot be summed"
         // Only a governed node has a write gate; a static node never answers this.

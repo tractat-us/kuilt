@@ -46,7 +46,9 @@ Use the parts you need on their own. See
 [how connections work](contract.md), [choose a connection](fabrics.md), or
 [browse the modules](modules.md) when you are ready to build.
 
+[Scheduling](scheduling.md) shares a busy machine between teams.
+Heddle gives each team its fair share, in one program or across many devices.
+
 In the **Playground**, we explore what else these parts can do.
 [Warp](warp.md) shares a pile of work across devices.
-[Heddle](heddle.md) gives each team its fair share of that work.
-These parts work today, but their APIs can still change.
+It works today, but its API can still change.

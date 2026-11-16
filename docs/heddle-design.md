@@ -1,6 +1,6 @@
 # `:kuilt-heddle` — weighted fair-share scheduling over kuilt
 
-> **Status: design spec, built (pre-1.0, Playground).** All six phases of §15 have
+> **Status: design spec, built (pre-1.0, Beta).** All six phases of §15 have
 > shipped; where the code settled a question differently from this text, the section
 > says so (§11 maps the sketch onto what shipped). A kuilt-native design for a
 > distributed weighted fair-share scheduler — a hierarchical EEVDF-inspired
@@ -784,8 +784,7 @@ Nothing absolute is ever capped: a cap on an absolute value turns into credit
 once the origin passes it. Until #3313 and #3353 a pick narrowed the effective
 position to a `Long`, refused with `PositionCeiling(parent)` at the ceiling, and
 a busy parent beside a starved child met it after about 65,000 leases of the
-largest size. The `PositionCeiling` arms are kept, unreturned, for the
-lifetime-counter limit below.
+largest size.
 
 **A position still has a ceiling, for the public reads (#3313).** The ceiling is
 `(Long.MAX_VALUE − 2⁴⁸) / w.denominator` ticks. Dividing by the denominator keeps
@@ -794,13 +793,11 @@ a position's virtual time, `p · w.den / (G · w.num)`, in `Long`, for
 side. The rebase below exists to keep positions inside it, so those reads stay
 exact; no pick depends on it.
 
-**What bounds a parent's life is the `Long` counters.** An edge's issuance and an
-epoch's mint are `Long`s, about 9.2 × 10¹⁸ units. The call whose delegation or
-mint would pass one throws `ArithmeticException`. On `LocalHeddle` that call
-changes nothing, a charging call included. `FairShareAllocator.schedule`, and so
-`HeddleNode.schedule`, writes each round on its own, so a throw in round `k > 1`
-keeps rounds `1..k−1`, which have already landed; a throw in the first round
-writes nothing.
+**What bounds a parent's life is the `Long` counters.** An edge's effective
+issuance and the root's minted supply are `Long`s, about 9.2 × 10¹⁸ units. No
+call throws at them: a pick refuses a little before either runs out, and work
+already running uses the room it keeps. "The lifetime limit", below, is the
+rule.
 
 - **No credit leaks through.** Nothing is narrowed before the effective
   position, so no front, seat or clamp is taken against an understated value. A
@@ -921,13 +918,11 @@ exactly in each; only the public reads saturate:
 A child that is not demanding can sit as far below zero as the origin has
 risen, past `Long`. A pick never orders it: if it comes back demanding to an
 allocator that never saw it idle, a restarted `HeddleNode` say, it is clamped as
-a waker, since anything below zero and demanding that the allocator never
-watched may have idled there. That threshold stays at zero, not at the floor: a
-watched demanding child can now sit in `[−C, 0)`, and clamping one costs it at
-most its lag, once, while a threshold at the floor would leave an unwatched idle
-child up to a window of credit. The narrowing a pick reads saturates there on
-the penalty side rather than refusing, and so do the public reads, which hold a
-child a `cancel` walked back past its floor at the floor rather than throwing.
+a waker by the restart rule (§7.2), which clamps every seated child an allocator
+has never observed and finds demanding, wherever it stands. The narrowing a pick
+reads saturates there on the penalty side rather than refusing, and so do the
+public reads, which hold a child a `cancel` walked back past its floor at the
+floor rather than throwing.
 
 **Returns no longer reach it** (#3360). The ceiling is measured on the raw
 position, net of returns and relative to the origin, and the gross position
@@ -971,7 +966,7 @@ edges closed before the upgrade, or a fresh log, because a replay refuses them.
 keeps running, but a new sibling there is refused.
 
 `HeddleNode.schedule` meets no ceiling either: a grant past it is made, as
-`LocalHeddle` makes one, and `ScheduleOutcome.PositionCeiling` is not returned.
+`LocalHeddle` makes one: no position refuses it.
 `apply` keeps the weight products in range the
 same way: an activation whose weights would put its parent's `L`, `S`, `G · S` or
 `S · d` out of `Long`, or fail P1′, is refused with a `StepRefusal`. Where a topology act enters a
@@ -1040,7 +1035,7 @@ that may have run a long way (the position limit, below).
 | The ceiling (`positionCeiling`, `rebaseThreshold`, `POSITION_HEADROOM`, `inWindow`, `readVirtual`, `peakPositionFraction`) | The largest position a `Long` pick orders | Unreachable | No engine reads it. It stays for two readers: the weight budget, whose constants it is, and the deprecated `Rational` reads, which report it past it |
 | P1′'s lease clause of the weight budget (denominators at most 30,719) | One full lease from just under `R` stays below `C` | No `R` and no `C` | Kept exactly, as the set of weights an apply accepts. What keeps a pick inside 128 bits is the position limit below, not a clause on the weights |
 | The multi-scheduler margin (#3458, denominator × schedulers under about 30,000) | `k` peers granting one child at once stay under `C − R` | No `C` | Gone. `k` concurrent grants only add to the edge's issuance |
-| The below-zero arm of the first-sighting rule (§7.2) | A child a fresh allocator never watched, sitting below the origin, is clamped | Only a rebase puts a child below zero | Replaced by the restart rule below: it was the only thing a restarted `HeddleNode` had |
+| The below-zero arm of the first-sighting rule (§7.2) | A child a fresh allocator never watched, sitting below the origin, is clamped | Only a rebase puts a child below zero | Done in slice 2: the restart rule (§7.2) replaced it |
 
 **What stays, and why.**
 
@@ -1066,14 +1061,16 @@ that may have run a long way (the position limit, below).
 the second.
 
 1. **The `Long` lifetime counters.** An edge's issuance and an epoch's mint are
-   `Long`s, about 9.2 · 10¹⁸ units. Today they throw. Measured on `main` at
-   `3083d775f`, JVM only: two weight-1 lanes at the largest lease, charged in
+   `Long`s, about 9.2 · 10¹⁸ units. Before slice 7 they threw. Measured on `main`
+   at `3083d775f`, JVM only: two weight-1 lanes at the largest lease, charged in
    full, run 524,287 leases, and the next `acquire` throws
    `ArithmeticException` from the mint. Charged one unit each they run
    1,048,574, and the edge's issuance throws. Step B does not create this
    limit. It makes it the one a caller meets, so it gets the typed arm the
-   ceiling had, on the calls that pick, and no call throws there any more. "The lifetime
-   limit" below is the whole rule.
+   ceiling had, on the calls that pick, and no call throws there any more. "The
+   lifetime limit" below is the whole rule, built in slice 7: the same run now
+   ends in `LifetimeExhausted` after 507,903 leases, `(Long.MAX_VALUE − 2⁵⁸) / 2⁴⁴`
+   (`LocalHeddleLifetimeRunTest`).
 2. **128 bits, which the position limit keeps out of reach.** A check on the
    positions themselves, where they are formed. It replaces W1, the clause on
    the weights this entry first proposed (#3501).
@@ -1212,7 +1209,8 @@ budget they would land, and the replica would not be the one that wrote the
 log. The cap on denominators also keeps the clock's reach modest: a lone child
 of weight `1/d` runs it `d · 2²⁴` ticks a unit.
 
-**The lifetime limit.** Ruled by @keddie, 2026-11-15 (#3475): a new lease is
+**The lifetime limit.** Built in slice 7 (`LocalHeddleLifetimeTest`,
+`HeddleNodeLifetimeTest`). Ruled by @keddie, 2026-11-15 (#3475): a new lease is
 refused a little before a counter runs out, and work that is already running
 is never refused for it and never throws.
 
@@ -1269,21 +1267,35 @@ to return: `LeaseOutcome.PositionCeiling` is deleted, not renamed, and
 itself. A charge that still does not fit is **recorded whole or not at all**,
 level by level, and the call lands:
 
-- An overrun at `complete` goes down the path as far as it fits in whole and is
+- An overrun at `complete` larger than `LocalHeddle.MAX_RECORDED_OVERRUN`,
+  `LIFETIME_HEADROOM / 2` (2⁵⁷), is not recorded. It is reported whole in
+  `unrecorded`, the reservation is charged at the leaf, and nothing else
+  changes, the wake memory included. `admit` and `extend` amounts are already at
+  most `MAX_RESERVATION`, so the cap bites only at `complete`.
+- An overrun within the cap goes down the path as far as it fits in whole and is
   charged at the deepest group it reaches. That is the rule a draining path
   already follows, with "has no room" beside "is not ACTIVE". The groups above
   a full edge still pay the true cost.
 - What the root cannot fund in whole is not recorded. `LeaseOutcome.Done` gains
   a required `unrecorded: Long`, and `charged` is then the cost less that. The
-  lease closes either way. The same field reports an overrun dropped because
-  the root's own child edge is draining, which `Done` reports as charged today.
+  lease closes either way. At `extend`, `unrecorded` is a reservation that was
+  not made, not a cost: the work's cost arrives at its `complete`, so a caller
+  summing `unrecorded` over both would count it twice. The same field reports an overrun dropped because
+  the root's own child edge is draining, which `Done` reported as charged before (#3493).
 - An admission that does not fit reserves nothing. `admit` opens the lease
   with `reserved` zero, so the cost arrives as an overrun when it completes.
+  Nothing else changes, the wake memory included: an admission that charges
+  nothing observes nothing, and the overrun observes the waiting set when it lands.
 - An extension that does not fit reserves nothing and changes nothing, the
   wake memory included. `extend` answers `Done` with `unrecorded` the amount.
   The work carries on, and `complete` charges the cost as an overrun. A
   caller that wants the reason asks `explain`, which answers
   `WaitExplanation.LifetimeExhausted` for a leaf behind a full counter.
+- A reweight moves an open lease's reservation down its new path, which counts
+  on every edge of it again. A move the new path has no room for within `Long`
+  is not made: that child's change is refused, as `StepRefusal.Refused`, until
+  the lease settles. A lease admitted with nothing reserved moves with nothing
+  to delegate. Slice 7 added this; the entry above did not name `apply`.
 
 No counter is ever filled to its limit with part of a charge, and none
 saturates. A saturated counter would break conservation, since the edges of
@@ -1295,20 +1307,38 @@ supply to the brim lets one wrong argument end the engine:
 limit, and every later `acquire` would be refused. Whole-or-nothing records the
 reservation, reports the rest, and the scheduler carries on (§10.1, §10.12).
 
+Whole-or-nothing alone does not stop one wrong cost on a young engine. Where the
+lease is the engine's only service, the edge and the minted supply each have
+exactly `Long.MAX_VALUE − R` left, so `complete(lease, Long.MAX_VALUE)` fits
+whole and leaves the supply past the watermark. So a single overrun is capped:
+one above `MAX_RECORDED_OVERRUN` is not recorded at all. Within the cap, an
+overrun leaves a counter past the watermark only when that counter was already
+within the cap of it, and the headroom holds two of them
+(`completeAtLongMaxOnAFreshEngineIsUnrecordedAndTheNextAcquireLeases`,
+`anOverrunAtTheCapIsRecordedAndOneUnitMoreIsNot`; ruled by @keddie, 2026-11-15).
+
 Where a charge is not recorded, the lane it ran on has had service its
 position does not show. That is credit, the favour side, and it cannot be
 spent on a pick: the only way to spend it is an `acquire` across the full
 edge, which is refused. It reaches one place, the parent's net-service clock,
 which runs short by the overrun, so a sibling returning there comes back that
-much less moved. Slice 7 measures that, and the same read on a draining path.
+much less moved. Measured in slice 7 on two twins that differ only in whether
+a lane's overrun `O` is recorded, with a sibling away while that lane and one
+more ask: the sibling comes back exactly `O / 2` behind, the clock's shortfall
+over the two asking, and the lane reads `O` lower
+(`anUnrecordedOverrunRunsTheClockShortByItsShare`). The same read on a draining
+path is reasoned, not measured: the closing edge has left its parent's active
+set, so no clock there counts it.
 
 *What the headroom promises.* Unconditionally: no call throws or wraps at a
 lifetime counter, an `acquire` never leaves one past the watermark, and
-conservation holds. Conditionally: every charge is recorded in full while the
+conservation holds, and no single overrun leaves a counter past the watermark
+unless that counter was within `MAX_RECORDED_OVERRUN` of it. Conditionally:
+every charge is recorded in full while no overrun is above the cap and the
 extensions, admissions and overruns that land on a counter after its last
 `acquire` add up to no more than the headroom. No fixed margin can promise
-more, because those calls are not refused there and an overrun is any `Long`.
-Past it, an `extend` or a `complete` reports `unrecorded`. A caller that only ever admits is never refused, and has only
+more, because those calls are not refused there. Past it, an `extend` or a
+`complete` reports `unrecorded`. A caller that only ever admits is never refused, and has only
 the report.
 
 *Why `2⁵⁸`.* The counters count reservations, so a margin is paid for in
@@ -1333,8 +1363,10 @@ clamped. `HeddleNode` needs no charge rule: its `complete` charges at most what
 was reserved, so it only moves counters that issuance already bounds. An
 edge's issuance is a sum over replicas, so peers that grant one edge before
 their writes merge each check their own view, and the merged sum can pass the
-watermark. The headroom is what absorbs that: 16,384 grants of the largest
-size, unmerged, on one edge. Past `Long` the sum still throws when read,
+watermark. The headroom is what absorbs that: unmerged grants on one edge
+totalling at most `LIFETIME_HEADROOM`, 16,384 of the largest reservation. A
+`HeddleNode` grant is bounded by the quantum and the holdings it is drawn from,
+not by `MAX_RESERVATION`, so the bound is the total. Past `Long` the sum still throws when read,
 never wraps, as any state this module did not build does. A mint the control
 log applies is an act, not a charge, and this entry does not change it.
 
@@ -1367,20 +1399,11 @@ sticks at the ceiling, and its message names the sibling to use.
 `copy` or its `componentN`: if constructor parameters cannot do that, they are
 properties in its body, set by an internal constructor.
 
-**The restart rule.** The origin did one job nobody gave it: it told an
-allocator with no memory that a child had been idle. A restarted `HeddleNode`
-keeps no wake memory, so every child it sees asking is a first sighting, and a
-first sighting is clamped only when it sits below the origin (§7.2). That fires
-only for a child idle across a rebase, and no rebase happens before a child
-has had about `2⁵⁵ / d` units. In any shorter run a child that idled before the
-restart already keeps all of that as credit. With no origin the arm never
-fires. Step B replaces it with a rule that does not depend on run length: **a
-seated child an allocator has never observed, and finds demanding, is a
-waker.** It is clamped to the front of the children that are not joining, or
-level with the furthest-ahead child when all of them are, as any waker is.
-That costs a child its lag, once per allocator that first sees it, the penalty
-side (§10.5, §10.6). `LocalHeddle` persists its observations, so it meets the
-rule only for a child a plain `admit` charged and no pick has seen.
+**The restart rule** is built (slice 2) and now lives in §7.2. The origin did
+one job nobody gave it: it told an allocator with no memory that a child had
+been idle, since a first sighting was clamped only below the origin. The rule
+that replaced it does not read the origin, so slice 3 can remove the rebase
+without leaving a restarted scheduler's idle children their whole gap as credit.
 
 **Replication.** The ledger is a product of join-semilattices, one per field,
 and step B removes one factor, the per-parent origin. What is left is still a
@@ -1532,6 +1555,11 @@ origins, which is a layout 0.7.5 already reads, so the format number and
     the group above it, that edge's issuance does not move, and `validate()`
     is empty. `complete(lease, Long.MAX_VALUE)` on a fresh engine closes the
     lease, reports the overrun as `unrecorded`, and the next `acquire` leases.
+    An overrun of exactly `MAX_RECORDED_OVERRUN` is recorded in full, and one
+    unit more is not, leaving the engine as a completion at the reservation
+    would. An `extend` the root must mint for lands with the supply past the
+    watermark, and answers `Done(unrecorded = amount)` a unit past room within
+    `Long`.
     An `extend` at a full counter answers `Done` with `unrecorded` equal to
     the amount, and the lease, the ledger and the wake memory are equal
     before and after. One unit smaller, it lands with `unrecorded` zero. An
@@ -1557,10 +1585,12 @@ origins, which is a layout 0.7.5 already reads, so the format number and
 **Slices,** in order, one behaviour move each. Each carries its own docs.
 
 1. **The twin proof.** Tests only. §13.
-2. **The restart rule.** A never-observed seated demanding child is a waker,
-   which takes in the below-zero arm while the rebase still runs.
-   `aRestartedSchedulerWithALongIdleChildDemandingAtBootDoesNotWedge` is its
-   pin, retargeted from "does not wedge" to "comes back level". §7.2, §10.6.
+2. **The restart rule.** Built (#3490). A never-observed seated demanding
+   child is a waker, which takes in the below-zero arm while the rebase still
+   runs. Its pin, once "does not wedge", is two "comes back level" rows of
+   `HeddleAcceptanceTest`: one with the rebase off, where only the rule can
+   level the idle child, and one with it on, which slice 3 retires. It inverted
+   the two first-observation tests, which pinned the old rule. §7.2, §10.6.
 3. **Nothing rebases.** Delete the raise sites, the floor arms and the window
    in `FairShareAllocator` and `LocalHeddle`. The origin
    field stays, read as zero. `rebaseEnabled` and `rebases` stay, deprecated
@@ -1592,8 +1622,10 @@ origins, which is a layout 0.7.5 already reads, so the format number and
    `WaitExplanation`, and `AllocationOutcome` with `ScheduleOutcome`), and
    `LeaseOutcome`'s is deleted. The types hold the ruling: with no lifetime arm
    on `LeaseOutcome` or `AdmitOutcome`, a charging call cannot refuse for it,
-   and `unrecorded` has no default. Retires `LocalHeddlePositionCeilingTest`
-   for its lifetime twin. Docs: §7.1, §10.12, the cookbook, both `module.md`s,
+   and `unrecorded` has no default. Built, ahead of slice 3, so
+   `LocalHeddlePositionCeilingTest` stays until slice 3 or 6 retires the
+   rebase and the saturating reads its rows still pin; its lifetime twin is
+   `LocalHeddleLifetimeTest`. Docs: §7.1, §10.12, the cookbook, both `module.md`s,
    `Writerside/topics/heddle-local-turns.md`. #3458 is then a use of the
    headroom, not a limit of its own.
 
@@ -1708,6 +1740,11 @@ at the same absolute value.
   gets, for room no caller needs. It is `2⁵⁸` (@keddie, 2026-11-15, #3475).
 - A headroom sized from the edge's outstanding: it moves with every
   completion, and it bounds no overrun (@keddie, 2026-11-15, #3475).
+- Recording any overrun that fits whole: on an engine whose only service is
+  one lease, `complete(lease, Long.MAX_VALUE)` fits exactly and leaves the
+  minted supply past the watermark, so one wrong cost ends the engine. An
+  overrun above `MAX_RECORDED_OVERRUN`, `LIFETIME_HEADROOM / 2`, is not recorded
+  and is reported whole in `unrecorded` (@keddie, 2026-11-15, #3475).
 - Skipping a full lane and picking its sibling in its place: the lane would
   starve with no answer anywhere saying why. A full lane that is eligible and
   next in line stalls the picks under its parent, and says so
@@ -1794,13 +1831,43 @@ at the same absolute value.
 
   Default `sleeperCredit = 0`. `parentVirtualTime` here is the front defined
   just below, with the waker itself — and every sibling waking in the same
-  round — excluded from its mean. The clamp fires only on a transition this peer has
-  actually *observed*: an edge seen for the first time is recorded as it
-  stands, never clamped on arrival, because a first sighting is not evidence
-  that anyone slept. The offset is scheduler-local policy state — deliberately
-  *not* replicated, so divergent offsets can reorder locally but can never
-  touch conservation.
-- **Which children define the front.** Both bullets above turn on one phrase,
+  round — excluded from its mean. The offset is scheduler-local policy state —
+  deliberately *not* replicated, so divergent offsets can reorder locally but
+  can never touch conservation. A zero offset is not stored: an edge reads a
+  missing one as zero.
+- **The restart rule: a seated child this peer has never observed, and finds
+  demanding, is a waker** (#3472). It is clamped as above, to the front of the
+  children that are not joining, or level with the furthest-ahead child when
+  all of them are. A first sighting says nothing about how long the child
+  idled, and keeping its raw position would let a child that idled under
+  another peer's scheduling, or before a restart, keep the whole gap as credit
+  and take every slot it is eligible for until it caught up. Clamping costs it
+  its lag instead, once per allocator that first sees it: the penalty side
+  (§10.5, §10.6). An unseated child is a newborn, which the seat puts at the
+  front, so the rule is about seated ones.
+
+  Who meets it. A restarted `HeddleNode` keeps no wake memory, so every seated
+  child it finds asking at its first call is clamped, and all of them are
+  joining, so all come back level with the furthest-ahead one
+  (`HeddleAcceptanceTest`'s two restart rows). A peer meeting a child another
+  peer seated and ran is the same case (`aFirstObservationOfASeatedDemandingEdgeIsAWake`).
+  `LocalHeddle` persists its observations, and every pick and every charging
+  call observes its waiting set (#3471), so it meets the rule in two places
+  only: a generation a reload seated to carry an open lease it moved, which
+  no call has observed yet, and a restore from a snapshot whose memory was
+  dropped. The second is a restart, and costs what a restart costs: every
+  seated child the engine finds demanding is clamped, and since all of them
+  are joining, each comes back level with the furthest-ahead one. A clamped
+  waker lands where the memory had it, but a child that was owed service loses
+  it, and a returner is clamped rather than moved by its parent's clock
+  (`LocalHeddlePersistenceTest`). So the snapshot still keeps the memory.
+
+  The rule replaced an older one, under which a first sighting was recorded as
+  it stood and clamped only when it sat below its parent's origin, where only
+  a rebase could put it. In any run too short to rebase, a child that idled
+  before a restart kept all of that as credit, and with no origin (step B,
+  §7.1) that arm would never fire at all.
+- **Which children define the front.** The bullets above turn on one phrase,
   "the parent's current virtual time", and it means one thing: the front of
   the set the joiner is about to compete in. Concretely, the weighted mean of
   `effectiveVirtualService` over the children that are **demanding right
@@ -1944,10 +2011,9 @@ while it was away.
   that writes the offset sees it asking. So its next stop is recorded as a
   leaving and its next wake is a return. The clamp is therefore written, not
   joined with a stored offset (#3416 review).
-- **A child first seen already asking** is neither moved nor clamped. That
-  covers every child of a restarted `HeddleNode`, which keeps no clock. It
-  keeps its raw position, and is clamped only if that is below zero. This
-  predates the clock: it is the first-sighting rule above.
+- **A seated child first seen already asking** has no departure, so it is not
+  moved by the clock. It is clamped to the front, by the restart rule above.
+  That covers every child of a restarted `HeddleNode`, which keeps no clock.
 
 `FairShareAllocator` runs the clock in its seat-and-wake step, `settleJoiners`,
 which every pick, every `LocalHeddle.admit` with a waiting set and the first
@@ -2005,7 +2071,7 @@ different departures compute different offsets, which reorders their grants and
 never creates entitlement, as wake offsets already do. `LocalHeddle` persists it
 in its snapshot, format 1, as `AllocatorMemory`'s `clocks`, `served`,
 `departures` and `shiftRemainders`; `HeddleNode` keeps it in memory, so a restart forgets it and
-every child it sees asking afterwards is a first sighting.
+every seated child it sees asking afterwards is a first sighting, clamped by the restart rule.
 
 The clock is kept wide, on a grid of `16 · 720,720` ticks to a unit of virtual
 time. `720,720` is the least common multiple of 1 to 16, so a parent whose
@@ -2298,9 +2364,11 @@ Carried over from the source intact; each is a named property test (§13).
 6. **No unlimited idle credit.** A child that stops competing comes back moved
    by how far its parent's net-service clock ran while it was away, and gains
    nothing for the time it was idle. A child seen idle but never seen to stop
-   is clamped to the front, and one first seen asking keeps its position
-   unless that is below zero. Default sleeper credit is zero, and applies only
-   to a clamped waker (§7.2, #3376).
+   is clamped to the front, and so is a seated child first seen asking, the
+   restart rule: an allocator with no memory of a child, a restarted one say,
+   gives it no credit for a gap it did not watch, at the cost of its lag, once
+   per allocator. Default sleeper credit is zero, and applies only to a
+   clamped waker (§7.2, #3376, #3472).
 7. **Partition safety.** No peer ever spends beyond `holdings(P, self)`;
    post-heal convergence restores a single agreed ledger.
 8. **Projection homomorphism.**
@@ -2329,10 +2397,13 @@ Carried over from the source intact; each is a named property test (§13).
     on the least common multiple of their denominators. Everything before it is 128-bit:
     a gauge's stored position, a parent's origin, the raw position, the front and
     a wake clamp, and arithmetic that would leave 128 bits throws (#3353).
-    Step B changes what the `Long` lifetime counters do here: a pick refuses
-    with headroom, and a charge that does not fit is reported, not thrown.
-    Nothing wraps or saturates under either (§7.1, "The lifetime limit";
-    not built yet).
+    The `Long` lifetime counters, an edge's effective issuance and the root's
+    minted supply, are the other exception: no call throws at them. A pick
+    refuses with headroom, as `LifetimeExhausted`, and a charge that does not
+    fit is recorded whole or not at all and reported in `LeaseOutcome.Done.unrecorded`.
+    Nothing wraps or saturates under either (§7.1, "The lifetime limit",
+    built in slice 7). A merged sum of peers' writes past `Long` still throws
+    when read.
 13. **Consensus only at the embroidery.** Mint, overlapping reshape, and
     fencing use `:kuilt-raft`; nothing else coordinates, at any frequency.
 
@@ -2491,9 +2562,10 @@ with no banked credit (§10 invariant 6).
   since the whole subtree waits on it.
 - Its place in the order is after `NO_LIVE_LINEAGE` and before
   `SUPPLY_EXHAUSTED`, so a capped leaf is told about its ceiling even when the
-  root is empty. The overflow fix's `POSITION_CEILING` (#3313) comes after
+  root is empty. The lifetime limit's `LIFETIME_EXHAUSTED` (#3475), in the place
+  the overflow fix's `POSITION_CEILING` (#3313) held, comes after
   `SUPPLY_EXHAUSTED`, so the order is `NOT_WAITING`, `NOT_ELIGIBLE`,
-  `NO_LIVE_LINEAGE`, `AT_CEILING`, `SUPPLY_EXHAUSTED`, `POSITION_CEILING`,
+  `NO_LIVE_LINEAGE`, `AT_CEILING`, `SUPPLY_EXHAUSTED`, `LIFETIME_EXHAUSTED`,
   `BEHIND_AT_LEVEL`, `WOULD_BE_PICKED_NEXT`. Nothing persists the kind, so
   inserting it moved no stored value.
 - A name no pick can end at, such as a group named as if it were a leaf, is still
@@ -2534,8 +2606,8 @@ and never decides whether the caller runs anything.
 - A new `AcquireOutcome` arm for "everything is capped": `NothingEligible`
   covers it (#3324).
 - Treating a ceiling of 0 as a problem: it means pause (#3324).
-- `AT_CEILING` before `SUPPLY_EXHAUSTED`, and `POSITION_CEILING` after it
-  (#3324, #3313).
+- `AT_CEILING` before `SUPPLY_EXHAUSTED`, and `LIFETIME_EXHAUSTED` after it
+  (#3324, #3313, #3475).
 - A per-child ceiling written beside the template rather than inside it: a
   document once had both a marker and a separate ceiling field, and dropped the
   ceiling without a word when the marker was missing. Nesting it in `template`

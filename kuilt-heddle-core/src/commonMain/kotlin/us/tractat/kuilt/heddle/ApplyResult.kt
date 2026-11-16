@@ -19,8 +19,9 @@ public sealed interface StepRefusal {
     public val child: GroupId
 
     /**
-     * [child]'s [edge] still carries [outstanding] units, so it cannot retire yet: the change
-     * waits for that work to finish. [blockingLeases] are this engine's open leases whose path
+     * [edge], which is [child]'s own edge or that of a waiting group above [child] (see below),
+     * still carries [outstanding] units, so it cannot retire yet: the change waits for that work
+     * to finish. [blockingLeases] are this engine's open leases whose path
      * crosses [edge], in id order; complete or cancel them, or settle them through
      * [LocalHeddle.reconcileLeases] if their work is gone, and apply again.
      *
@@ -28,6 +29,11 @@ public sealed interface StepRefusal {
      * reweight that waits, because a lease beneath it sits under a child the same reload removes,
      * has changed nothing: [edge] stays as it was, ACTIVE for a reweight, or still CLOSING for a
      * child put back before its removal drained, and keeps its history until its leases can move.
+     *
+     * A group an apply or [LocalHeddle.attach] would activate beneath a group that waits, in this
+     * call or since an earlier one, is held back with it, since the root could not reach it until
+     * that group lands: it is reported as `Draining` too, and
+     * [edge], [outstanding] and [blockingLeases] are then that group's.
      */
     public data class Draining(
         override val child: GroupId,
@@ -37,10 +43,11 @@ public sealed interface StepRefusal {
     ) : StepRefusal
 
     /**
-     * The ledger refused [step] for a reason waiting on this engine's leases will not cure,
+     * [step] was refused for a reason waiting on this engine's leases will not cure,
      * described by [reason]: a record the ledger holds twice, say, or a reweight whose old edge
-     * still carries units after the engine released every one of its own there. [child] is left
-     * as it was before this apply.
+     * still carries units after the engine released every one of its own there. Or [child] sits
+     * beneath a group the root does not reach, a new one this apply or an earlier one left out, so
+     * no delegation could reach it; [reason] names that group. [child] is left as it was before this apply.
      */
     public data class Refused(
         override val child: GroupId,
