@@ -354,6 +354,18 @@ public class VirtualTime internal constructor(
         mulDiv(ticks, checkedMul(weightDenominator, w.numerator), checkedMul(weightNumerator, w.denominator), Rounding.FLOOR)
             ?: throw ArithmeticException("Int128 overflow: a virtual time read on the grid of $w")
 
+    /**
+     * Whether [position], ticks on the grid of weight [w], is at or below this time read on that
+     * grid rounded up: `position ≤ ⌈V · w · G⌉`, the eligibility test of a pick (design §7.3 step 3).
+     * Exact for every pair, with no position limit: a bound past 128 bits is above every position
+     * when this time is positive and below every one when it is negative.
+     */
+    internal fun admits(position: Int128, w: Weight): Boolean {
+        val bound = mulDiv(ticks, checkedMul(weightDenominator, w.numerator), checkedMul(weightNumerator, w.denominator), Rounding.CEILING)
+            ?: return ticks > Int128.ZERO
+        return position <= bound
+    }
+
     /** This time in whole units of virtual time, rounded down: `⌊ticks / (G · w)⌋`. */
     internal fun unitsFloor(): Int128 =
         mulDiv(ticks, weightDenominator, checkedMul(TICKS_PER_UNIT, weightNumerator), Rounding.FLOOR)
