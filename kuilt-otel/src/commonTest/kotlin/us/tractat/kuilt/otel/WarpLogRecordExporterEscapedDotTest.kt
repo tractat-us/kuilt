@@ -9,6 +9,7 @@ import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -55,6 +56,17 @@ class WarpLogRecordExporterEscapedDotTest {
         }
     }
 
+    /**
+     * Every pair of distinct own ids that share a lamport. [RgaId.compareTo] orders on
+     * `(lamport, replica)` alone, so two such ids compare equal and the sequence's order breaks.
+     */
+    private fun sharedLamports(ids: Collection<RgaId>): List<String> =
+        ids.filter { it.replicaId == replica }
+            .distinct()
+            .groupBy { it.lamport }
+            .filterValues { it.size > 1 }
+            .map { (lamport, same) -> "lamport $lamport: $same" }
+
     /** Every pair of distinct own records that share a seq. */
     private fun sharedDots(ids: Collection<Pair<RgaId, ByteString>>): List<String> =
         ids.filter { it.first.replicaId == replica }
@@ -100,6 +112,10 @@ class WarpLogRecordExporterEscapedDotTest {
             { assertEquals(ExportResult.Success, next, "the export after the restart") },
             // The property.
             { assertEquals(emptyList(), sharedDots(ids), "two records share a dot") },
+            {
+                val all = escape.gossiped.entries().map { it.first } + restarted.snapshot().entries().map { it.first }
+                assertEquals(emptyList(), sharedLamports(all), "two own ids share a lamport")
+            },
             { assertEquals(7, merged.size, "the merged log holds every record once") },
         )
     }
@@ -118,6 +134,53 @@ class WarpLogRecordExporterEscapedDotTest {
             { assertEquals(ExportResult.Success, next, "the export after the restart") },
             { assertEquals(7, ids.size, "the sink saw seven inserts") },
             { assertEquals(emptyList(), sharedDots(ids), "two published records share a dot") },
+            { assertEquals(emptyList(), sharedLamports(sink.inserts.map { it.id }), "two published ids share a lamport") },
+        )
+    }
+
+    /** Once [fill] is called, refuses every write, the index included: a full disk. */
+    private class FullDisk(private val backing: DurableStore) : DurableStore {
+        private val lock = reentrantLock()
+        private var full = false
+
+        fun fill(): Unit = lock.withLock { full = true }
+
+        override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+
+        override suspend fun write(key: StoreKey, bytes: ByteArray) {
+            if (lock.withLock { full }) throw IllegalStateException("simulated full disk writing ${key.name}")
+            backing.write(key, bytes)
+        }
+
+        override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
+    }
+
+    /**
+     * **Pins today's residual, so a fix has a red to turn** (#3518). Recovery leaves no claim
+     * headroom, so the first turn of every incarnation must claim before its mints are covered.
+     * Restart twice inside an outage that refuses the index write too, and each incarnation mints
+     * `claim + 1` with nothing behind it: the record the first one published shares its dot with the
+     * second's. When this arm goes red, the gap is closed; turn it into the property.
+     */
+    @Test
+    fun aRestartInsideAnOutageThatRefusesTheIndexMintsTheSameDotAgainToday() = runTest {
+        val backing = RecordingStore()
+        val disk = FullDisk(backing)
+        val sink = Collecting()
+        val writer = exporterFor(disk, sink)
+        writer.recover()
+        repeat(5) { assertEquals(ExportResult.Success, writer.export(record(it)), "the rig: export $it") }
+        disk.fill()
+        val incarnations = listOf(100, 200).map { id ->
+            val restarted = exporterFor(disk, sink)
+            restarted.recover()
+            restarted.export(record(id))
+        }
+        val ids = sink.inserts.map { it.id to it.value.recordId }
+        assertAll(
+            { assertTrue(incarnations.all { it is ExportResult.Failure }, "an export inside the outage was written") },
+            { assertEquals(7, ids.size, "the sink saw seven inserts") },
+            { assertEquals(1, sharedDots(ids).size, "today: the two incarnations share one dot") },
         )
     }
 }

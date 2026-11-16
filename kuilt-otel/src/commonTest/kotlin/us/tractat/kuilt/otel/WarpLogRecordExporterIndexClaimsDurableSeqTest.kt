@@ -45,6 +45,21 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
     private fun exporterFor(store: DurableStore) =
         WarpLogRecordExporter(replica, store, maxRecords = maxRecords, segmentOps = 8)
 
+    /** A lease of [SHORT_LEASE], so a run of a few dozen exports renews the claim many times. */
+    private fun shortLeaseExporterFor(store: DurableStore) = WarpLogRecordExporter(
+        replica,
+        store,
+        maxRecords,
+        BufferPolicy.DROP_OLDEST,
+        segmentOps = 8,
+        appliedOps = AppliedOpSink.Discarding,
+        mintLease = SHORT_LEASE,
+    )
+
+    private companion object {
+        const val SHORT_LEASE = 8L
+    }
+
     private suspend fun indexOf(store: RecordingStore): LogSegmentIndex =
         decodeIndexForTest(requireNotNull(store.read(INDEX_KEY_FOR_TEST)) { "no index written" })
 
@@ -281,7 +296,7 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
     fun everySegmentWrittenStaysUnderTheClaimAndEveryIndexCoversWhatItSeals() = runTest {
         val backing = RecordingStore()
         val quota = RefuseSegmentWritesStore(backing)
-        val writer = exporterFor(quota)
+        val writer = shortLeaseExporterFor(quota)
         writer.recover()
         repeat(25) { writer.export(record(it)) }
         quota.refuseSegmentWrites()
@@ -297,7 +312,7 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
 
         // Restarted with the outage still on, so the first turns after recovery fail: their index
         // writes restate what recovery found, and nothing a segment write raised yet.
-        val restarted = exporterFor(quota)
+        val restarted = shortLeaseExporterFor(quota)
         restarted.recover()
         val unwritten = restarted.export(record(600))
         val (secondPeerLog, _) = Rga.empty<LogRecord>().insertAllAfter(ReplicaId("C"), RgaId.HEAD, listOf(record(901)))
@@ -321,6 +336,8 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
         var segmentsChecked = 0
         var retiredSomething = false
         var claimed = 0L
+        var claimedLamport = 0L
+        var claimRaises = 0
         var segmentWritesChecked = 0
         operations.forEachIndexed { at, op ->
             when (op.kind) {
@@ -342,7 +359,15 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
                         val index = decodeIndexForTest(bytes)
                         indexesChecked++
                         retiredSomething = retiredSomething || index.retired.isNotEmpty()
+                        // A claim only rises: a later index write restating a lower one would
+                        // un-claim ids already minted under it.
+                        if (index.seqHighWater < claimed || index.lamportHighWater < claimedLamport) {
+                            breaches += "operation $at: index lowers the claim to " +
+                                "(${index.seqHighWater}, ${index.lamportHighWater}) from ($claimed, $claimedLamport)"
+                        }
+                        if (index.seqHighWater > claimed) claimRaises++
                         claimed = index.seqHighWater
+                        claimedLamport = index.lamportHighWater
                         for (number in index.sealedSegments) {
                             val sealed = lastWritten[segmentKeyForTest(number)] ?: continue
                             segmentsChecked++
@@ -374,6 +399,8 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
             { assertEquals(ExportResult.Success, cleared, "the clear") },
             { assertTrue(indexesChecked > 20, "only $indexesChecked index writes checked") },
             { assertTrue(segmentWritesChecked > 20, "only $segmentWritesChecked segment writes checked") },
+            // The rig: the short lease renewed the claim, so the renewal branch ran, many times.
+            { assertTrue(claimRaises > 8, "the claim rose only $claimRaises times") },
             { assertTrue(segmentsChecked > 20, "only $segmentsChecked sealed segments checked") },
             { assertTrue(retiredSomething, "no window pass retired a segment") },
             // The property.

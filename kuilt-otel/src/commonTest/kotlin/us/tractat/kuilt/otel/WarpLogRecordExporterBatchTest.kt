@@ -39,7 +39,7 @@ class WarpLogRecordExporterBatchTest {
     }
 
     /**
-     * Refuses the **first** write and accepts every later one — the shape a quota-bound
+     * Refuses the **first segment** write and accepts every other — the shape a quota-bound
      * store presents transiently, and the discriminator for whether a failed turn
      * abandons the rest of its batch.
      */
