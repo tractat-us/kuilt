@@ -53,9 +53,9 @@ internal class PNCounterDoubleConvergenceTest : LatticeLawSuite<PNCounterDouble>
         val merged = (0 until harness.replicaCount).fold(harness.initial) { state, replicaIndex ->
             dec.apply(inc.apply(state, replicaIndex, random), replicaIndex, random)
         }
-        // The halves are private; their toString names each slot as `R<i>=<count>`, once per half.
+        // The halves are private; their toString names each slot as `R<i>)=<count>`, once per half.
         val printed = merged.toString()
-        val withBoth = (0 until harness.replicaCount).count { i -> printed.split("R$i=").size - 1 == 2 }
+        val withBoth = (0 until harness.replicaCount).count { i -> printed.split("R$i)=").size - 1 == 2 }
         assertEquals(harness.replicaCount, withBoth, "every replica must hold a slot in both halves: $printed")
     }
 }
