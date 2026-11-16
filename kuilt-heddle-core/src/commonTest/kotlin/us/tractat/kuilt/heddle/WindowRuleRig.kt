@@ -93,7 +93,7 @@ internal class WindowRuleRig(lanes: List<Pair<String, Weight>>) {
                     if (step % 4 != 0) engine.complete(out.lease.id, actualCost = cost, waiting = emptySet())
                     served[leaf] = (served[leaf] ?: 0L) + cost
                 }
-                is AcquireOutcome.PositionCeiling -> {
+                is AcquireOutcome.LifetimeExhausted -> {
                     refusals++
                     if (firstRefusal < 0) firstRefusal = step
                 }

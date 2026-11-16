@@ -33,7 +33,7 @@ children's weights do not fit together, tell it how many slots you run with
     check(first is AcquireOutcome.Acquired)
 
     // The job overran its 3-unit estimate: all 5 units are charged, 2 of them as overrun.
-    check(heddle.complete(first.lease.id, actualCost = 5L, waiting = queued) == LeaseOutcome.Done(charged = 5L, overrun = 2L))
+    check(heddle.complete(first.lease.id, actualCost = 5L, waiting = queued) == LeaseOutcome.Done(charged = 5L, overrun = 2L, unrecorded = 0L))
 ```
 
 The rest of the surface, by what you would ask it:
@@ -195,9 +195,18 @@ Arithmetic that would exceed `Long` throws rather than wrapping: a fair-share
 tally that silently overflowed would be worse than one that stopped. A child's
 position is 128-bit everywhere, and a pick compares the full value, so no position
 refuses a pick: the gauge stores it exactly, and the raw position, the front, a
-wake clamp and the deadline a pick orders are wide too (#3353). What a long-lived engine reaches first is the ledger's `Long` counters,
-an edge's issuance and an epoch's mint, which throw. The `PositionCeiling` outcomes
-are kept for that limit and are not returned today. A position does still have a
+wake clamp and the deadline a pick orders are wide too (#3353). What a
+long-lived engine reaches first is the lifetime limit: two
+`Long` counters, an edge's effective issuance and the root's minted supply. A pick
+keeps `LocalHeddle.LIFETIME_HEADROOM` (2^58 units) in hand on each, and answers
+`LifetimeExhausted(parent)` rather than pass `Long.MAX_VALUE` less that, from
+`LocalHeddle.acquire` and `FairShareAllocator.schedule` alike. Work already running
+is never refused for it: `admit`, `extend` and `complete` use the headroom, and a
+charge that still does not fit is recorded whole or not at all, never in part, and
+reported in `LeaseOutcome.Done.unrecorded`, and an overrun above
+`LocalHeddle.MAX_RECORDED_OVERRUN` is never recorded, so one wrong cost cannot end
+an engine. No call throws at either counter (#3475).
+A position does still have a
 ceiling, past which the public virtual-time reads saturate, the penalty side.
 Nothing rebases a busy parent (#3472): a position only counts up from its edge's
 start, so a long-running parent passes its ceiling, and only those reads
@@ -234,8 +243,9 @@ until nothing more can move. Before the first pick it seats any child that has n
 yet and clamps any child that just woke, both against one front, so neither joiner
 drags the front down to meet itself. When nobody else is competing, that front is the
 child that has had the most, so everyone joining starts level with it. It answers an `AllocationOutcome`: `Delegated`
-with the grant count, `NothingToDelegate`, or `WeightBudget` when the parent's
-children cannot be ordered at all. Its `PositionCeiling` arm is not returned today.
+with the grant count, `NothingToDelegate`, `WeightBudget` when the parent's
+children cannot be ordered at all, or `LifetimeExhausted` when the first grant would
+carry the picked edge past the lifetime watermark.
 
 Weights have a budget, and it has two halves. A pick multiplies a parent's weights
 together, so a mix whose products leave a 64-bit number is refused. And a weight set too
@@ -244,7 +254,9 @@ a finer weight set is refused when it is applied. The limit holds at any lease s
 because it is sized for the largest lease, `MAX_RESERVATION`, and no grant is larger. It
 is necessary, not sufficient: several fine weights whose denominators share no factor
 are refused below it too. `LocalHeddle.apply` answers a `StepRefusal` for such a child,
-and `LocalHeddle.fromTopology`, which has no running tree to keep, leaves out the
+and for each new group beneath it when the child is new itself, so no lane activates below a
+group the root cannot reach, whether `apply`, `attach` or a boot would add it; a running group whose reweight is refused keeps its old edge and
+everything beneath it. And `LocalHeddle.fromTopology`, which has no running tree to keep, leaves out the
 child's parent and everything beneath it, reporting each in its `Boot`. It remembers, between calls, which children it
 has seen idle and what clamp each carries; that memory is local to the allocator and
 is never part of the ledger.

@@ -170,15 +170,25 @@ public class LocalHeddleView internal constructor(
         // check above against the same counts the trial starts from, so it is still eligible.
         val (waitingNow, eligibleNow) = trial.belowCeilings(waiting, eligible)
         check(leaf in eligibleNow) { "${leaf.value} is below every ceiling, yet the pick drops it" }
-        val base = trial.fundedBase(reservation) ?: return WaitExplanation.SupplyExhausted
+        val base = when (val supply = trial.fundedBase(reservation)) {
+            is LocalHeddle.Supply.Funded -> supply.ledger
+            LocalHeddle.Supply.Short -> return WaitExplanation.SupplyExhausted
+            LocalHeddle.Supply.Exhausted -> return WaitExplanation.LifetimeExhausted(root)
+        }
+        val lineage = checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }
+        // A full edge on the leaf's own lineage: no acquire leases it again (#3475).
+        lineage.firstOrNull { !pickFits(base.effectiveIssuance(it), reservation) }?.let { full ->
+            return WaitExplanation.LifetimeExhausted(checkNotNull(base.record(full)) { "lineage edge ${full.value} has no record" }.parent)
+        }
 
         val demands = trial.demands(base, waitingNow, eligibleNow, reservation)
         val descent = trial.descend(base, demands, eligibleNow, reservation)
+        // A pick that chose a full lane elsewhere: the acquire stalls there, whoever else is waiting.
+        if (descent is LocalHeddle.Descent.Exhausted) return WaitExplanation.LifetimeExhausted(descent.parent)
         // An eligible leaf the pick can end at, with the root funded: the root's pick has a candidate
         // in the leaf's own top edge, and every pick below goes toward an eligible leaf.
         check(descent is LocalHeddle.Descent.Reached) { "no pick reached any leaf, though ${leaf.value} is eligible and reachable" }
         if (descent.leaf == leaf) return WaitExplanation.WouldBePickedNext
-        val lineage = checkNotNull(base.lineageOf(leaf)) { "${leaf.value} can be reached but has no lineage" }
         // Every group above the leaf on its lineage has an active child, so the pick cannot have
         // stopped there: it left the lineage at some level.
         val level = checkNotNull(lineage.indices.firstOrNull { it >= descent.levels.size || descent.levels[it].edge != lineage[it] }) {

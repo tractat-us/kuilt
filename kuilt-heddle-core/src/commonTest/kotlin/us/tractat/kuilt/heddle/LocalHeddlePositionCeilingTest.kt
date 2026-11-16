@@ -185,7 +185,7 @@ class LocalHeddlePositionCeilingTest {
         engine.pushTowardCeiling(a, below = 1L)
         val extended = engine.extend(lease.id, amount = 1L, waiting = setOf(a, b))
         assertAll(
-            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 0L), extended) },
+            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L), extended) },
             { assertEquals(lease.reserved + 1L, engine.snapshot().leases.single().reserved, "the lease holds the extension") },
             { assertEquals(Int128.of(engine.ceilingOf(a) - 1L + TICKS_PER_UNIT), engine.grossWide(a), "a went past its ceiling exactly") },
             { assertIs<LeaseOutcome.Done>(engine.complete(lease.id, actualCost = 2L, waiting = setOf(a, b))) },
@@ -211,7 +211,7 @@ class LocalHeddlePositionCeilingTest {
         assertAll(
             { assertEquals(Int128.of(engine.ceilingOf(a) - 1L), start, "the rig: a starts a tick under its ceiling") },
             { assertEquals(start + unit, afterAdmit, "the admission moved a by its reservation, past the ceiling") },
-            { assertEquals(LeaseOutcome.Done(charged = 3 * LocalHeddle.MAX_RESERVATION, overrun = 2 * LocalHeddle.MAX_RESERVATION), done) },
+            { assertEquals(LeaseOutcome.Done(charged = 3 * LocalHeddle.MAX_RESERVATION, overrun = 2 * LocalHeddle.MAX_RESERVATION, unrecorded = 0L), done) },
             { assertEquals(afterAdmit + unit + unit, engine.grossWide(a), "and the overrun's checkpoint by the overrun") },
             { assertEquals(engine.publicCeiling(a), engine.publicGross(a), "the public read holds at the ceiling") },
             { assertEquals(0L, engine.snapshot().ledger.edge(engine.edgeOf(a))?.outstanding) },
@@ -303,7 +303,7 @@ class LocalHeddlePositionCeilingTest {
             { assertEquals(listOf(a), withoutExtend, "the control: the acquire alone lands") },
             { assertEquals(listOf(a), withExtend, "and so does the acquire whose extend crosses") },
             { assertTrue(unchanged, "neither preview moved the engine") },
-            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 0L), crossing.extend(lease.id, 1L, waiting = setOf(a, b)), "the rig: the extend lands") },
+            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L), crossing.extend(lease.id, 1L, waiting = setOf(a, b)), "the rig: the extend lands") },
             { assertTrue(crossing.grossWide(a) > Int128.of(crossing.ceilingOf(a)), "the rig: and it crossed the ceiling") },
         )
     }

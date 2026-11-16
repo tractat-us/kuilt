@@ -830,6 +830,20 @@ public class EntitlementLedger private constructor(
         return acc.toLongExact()
     }
 
+    /**
+     * [edge]'s effective issuance, `issued + issuedRelocIn` summed over every replica: one of the two
+     * lifetime counters a pick may not carry past [LIFETIME_WATERMARK] (#3475). `0` for an edge
+     * this ledger does not know.
+     */
+    internal fun effectiveIssuance(edge: AttachmentId): Long = effIssuedTotal(edge)
+
+    /**
+     * Every mint record credited to [r] at [root], summed: the root's minted supply, the other
+     * lifetime counter (#3475). The sum over every epoch's record, not one epoch's, since
+     * [holdings] at the root adds all of them.
+     */
+    internal fun mintedSupply(root: GroupId, r: ReplicaId): Long = mintedHeldBy(root, r)
+
     /** `effIssued(edge)[r] − returned(edge)[r]` — [r]'s net inflow across one edge. */
     private fun netInflow(edge: AttachmentId, r: ReplicaId): Long =
         checkedSub(effIssuedSlot(edge, r), slot(returned, edge, r))
@@ -1727,15 +1741,24 @@ public class EntitlementLedger private constructor(
      * subtree whose only route to its leaf crosses a closing edge, or whose named group has gained an
      * ACTIVE child, has no group a descent could stop at, so it must never read as wanted: a pick down
      * it would find nothing below, and the work it could have given a sibling would be lost.
+     *
+     * A walk must also end AT [root], which is why [root] is required. A group with no inbound edge
+     * is not necessarily the root: a reload that refuses a group's activation still activates the
+     * edges beneath it, so its subtree hangs from a group with no inbound edge at all. Read as a
+     * root, that group would make a leaf under it reachable, though no delegation from the real root
+     * can get there, and a charge down that lineage would throw.
      */
-    internal fun withDelegableLineages(groups: Collection<GroupId>): Set<GroupId> = liftLineages(groups, delegable = true)
+    internal fun withDelegableLineages(groups: Collection<GroupId>, root: GroupId): Set<GroupId> =
+        liftLineages(groups, delegable = true, root = root)
 
     /**
      * The shared walk behind [withLiveLineages] and [withDelegableLineages]. With [delegable], a start
      * must be a leaf with an inbound edge, and the one live inbound edge at each step must also be
-     * ACTIVE; a group the walk reaches as an ancestor is never required to be a leaf.
+     * ACTIVE; a group the walk reaches as an ancestor is never required to be a leaf. With a [root],
+     * a walk that ends at a group with no inbound edge counts only when that group is [root]; without
+     * one ([withLiveLineages]), any such group counts as a root.
      */
-    private fun liftLineages(groups: Collection<GroupId>, delegable: Boolean): Set<GroupId> {
+    private fun liftLineages(groups: Collection<GroupId>, delegable: Boolean, root: GroupId? = null): Set<GroupId> {
         val idx = index.value
         val live = HashMap<GroupId, Boolean>()
         val chain = ArrayList<GroupId>()
@@ -1759,8 +1782,8 @@ public class EntitlementLedger private constructor(
                 }
                 chain += cur
                 val inboundIds = idx.inbound[cur].orEmpty()
-                if (inboundIds.isEmpty()) { // reached the root
-                    verdict = true
+                if (inboundIds.isEmpty()) { // reached a group with no inbound edge: the root, if no root is named
+                    verdict = root == null || cur == root
                     break
                 }
                 // Exactly one live inbound edge, with a single record: otherwise there is no live path,

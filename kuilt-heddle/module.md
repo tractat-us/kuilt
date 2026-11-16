@@ -35,11 +35,13 @@ and a snapshot to survive a restart, and no `Seam` or Raft underneath.
   either node.
 - `ReserveOutcome` / `ScheduleOutcome` / `GateClosed` — what a spend call did. `reserve` answers
   `Reserved` or `NoHoldings`; `schedule` answers `Delegated` or `NothingToDelegate`, or
-  `WeightBudget` when the parent's children cannot be ordered at all. Its `PositionCeiling`
-  arm is not returned today: a pick compares the full 128-bit position, so no position stops
-  one. Nothing rebases a busy parent (#3472), so a long-running one passes the ceiling past
-  which the ledger's virtual-time reads saturate, and `boundMetrics` reports how far its peak
-  child stands against it; no pick depends on it. Only a
+  `WeightBudget` when the parent's children cannot be ordered at all, or `LifetimeExhausted`
+  when the first grant would carry the picked edge's effective issuance past the lifetime
+  watermark on this peer's view, `Long.MAX_VALUE` less `LocalHeddle.LIFETIME_HEADROOM`
+  (#3475). Nothing is published then, and no call throws at the counter. No position stops a
+  pick: a pick compares the full 128-bit position. Nothing rebases a busy parent (#3472), so a
+  long-running one passes the ceiling past which the ledger's virtual-time reads saturate, and
+  `boundMetrics` reports how far its peak child stands against it; no pick depends on it. Only a
   governed node adds `GateClosed`, with a `Reason`, when this peer may not author entitlement at
   all.
 - `HeddleNode` / `heddleStatic` — the node that runs the tally, demand board, reservations,
