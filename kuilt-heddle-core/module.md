@@ -61,7 +61,9 @@ The rest of the surface, by what you would ask it:
   JSON or CBOR; `LocalHeddle.decode` reads it back as a `RestoreResult`, and
   `LocalHeddle.restore` carries on from it under a later epoch, a boot counter
   you persist and raise on every start. 0.7.5 writes and
-  reads format 1 alone (`SUPPORTED_FORMAT_VERSIONS`), the first frozen format. A
+  reads format 1 alone (`SUPPORTED_FORMAT_VERSIONS`), the first frozen format.
+  A later release reads 0.7.5's format 1 by translating each origin it holds into
+  its children's positions, rounded up, and writes format 1 with none. A
   consumer coming from 0.7.4 starts from its topology again: 0.7.4's snapshots are
   not read.
 

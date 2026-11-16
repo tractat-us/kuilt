@@ -12,6 +12,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.long
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.modules.SerializersModule
 import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
@@ -1149,11 +1151,13 @@ class LocalHeddlePersistenceTest {
      * origin into its children's positions, rounded up, never by dropping it (design §7.1).
      * [GOLDEN_FORMAT_1_ORIGIN]'s origin is 3 units at `golden`: whole on the grids of `a`, `b` and
      * `c`, which keep their stored ticks, and `3 · 16 / 5` on `d`'s, which comes back one tick
-     * higher. `e` has no gauge, and `c`'s wake offset is a distance, so neither moves. A restored
-     * engine then picks what 0.7.5 picked on the same history with no origin raised, the no-rebase
-     * twin. It does not pick what 0.7.5 picked with the origin, and the row asserts that too: 0.7.5
-     * read `d` 0.6 of a tick low, credit its own rounding gave it, and the translation takes it back.
-     * What 0.7.6 writes holds no origin.
+     * higher. `e` has no gauge, and the allocator memory, wake offsets and clock included, holds
+     * distances, so none of it moves. Each restored position equals the one 0.7.5's no-origin twin
+     * holds on the same history, or is one tick above it, the penalty side; on this golden every
+     * one equals it, and the restored engine picks what that twin picked. It does not pick what
+     * 0.7.5 picked with the origin, and the row asserts that too: 0.7.5 read `d` 0.4 of a tick below
+     * the twin, credit its own share rounded down gave it, and the translation takes it back. What
+     * 0.7.6 writes holds no origin.
      */
     @Test
     fun aFormat1SnapshotWithAnOriginIsReadByTranslatingIt() {
@@ -1166,6 +1170,9 @@ class LocalHeddlePersistenceTest {
         }
         val (ga, gb, gc, gd, ge) = listOf("a", "b", "c", "d", "e").map { topology.groupId(it) }
         val snapshot = decoded(GOLDEN_FORMAT_1_ORIGIN)
+        val state = Json.parseToJsonElement(GOLDEN_FORMAT_1_ORIGIN).jsonArray[1].jsonObject
+        val parents = state.getValue("ledger").jsonObject.getValue("parents").jsonObject
+        val writtenMemory = Json.decodeFromJsonElement(AllocatorMemory.serializer(), state.getValue("allocatorMemory"))
         val ledger = snapshot.ledger
         fun ticksOf(lane: GroupId) = ledger.gauge(checkNotNull(ledger.lineageOf(lane)).last())?.let { Int128.fromTwosComplement(it.ticksHigh, it.ticksLow) }
         val h = LocalHeddle.restore(snapshot, LocalPolicy(defaultReservation = 1L), epoch = snapshot.epoch + 1)
@@ -1177,7 +1184,8 @@ class LocalHeddlePersistenceTest {
         }
         val written = encode(h.persist())
         assertAll(
-            { assertTrue("\"parents\":{\"golden\":{\"originLow\":3}}" in GOLDEN_FORMAT_1_ORIGIN, "the rig: 0.7.5 wrote an origin of 3 at the root") },
+            { assertEquals(3L, parents.getValue("golden").jsonObject.getValue("originLow").jsonPrimitive.long, "the rig: 0.7.5 wrote an origin of 3 at the root") },
+            { assertEquals(writtenMemory, snapshot.allocatorMemory, "the allocator memory, the clock and the offsets included, is as written") },
             { assertEquals(listOf(112L, 32L, 32L).map(Int128::of), listOf(ga, gb, gc).map(::ticksOf), "a, b and c, whole on their grids, keep their stored ticks") },
             { assertEquals(Int128.of(19L), ticksOf(gd), "d, not whole on its grid, comes back one tick higher than its stored 18") },
             { assertEquals(null, ticksOf(ge), "e has no gauge, so no position to move") },
@@ -1187,6 +1195,19 @@ class LocalHeddlePersistenceTest {
             { assertTrue("\"parents\"" !in written, "what 0.7.6 writes holds no origin") },
             { assertIs<RestoreResult.Restored>(LocalHeddle.decode(written, Json), "and reads back") },
         )
+    }
+
+    /**
+     * A format 1 origin no 0.7.5 engine could raise, `2¹²⁴`, whose share on `d`'s grid leaves 128
+     * bits, is refused as corrupt, not thrown out of [LocalHeddle.decode] (#3498 review, B3).
+     */
+    @Test
+    fun aFormat1OriginWhoseShareLeaves128BitsIsCorrupt() {
+        val honest = "\"parents\":{\"golden\":{\"originLow\":3}}"
+        check(honest in GOLDEN_FORMAT_1_ORIGIN) { "the rig: the origin is where this test expects it" }
+        val huge = GOLDEN_FORMAT_1_ORIGIN.replace(honest, "\"parents\":{\"golden\":{\"originHigh\":1152921504606846976}}")
+        val out = LocalHeddle.decode(huge, Json)
+        assertTrue(out is RestoreResult.Corrupt && "128 bits" in out.reason, "expected Corrupt naming the overflow, got $out")
     }
 
     private companion object {

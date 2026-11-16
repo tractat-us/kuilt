@@ -854,8 +854,9 @@ below shows.
 The rebase fired only once a child passed its `R`, so a child that an
 under-charged `complete` parked between `C − H` and `R` (`H = MAX_RESERVATION · G`)
 was never rebased, yet its next full lease passed `C`, where the reads saturate.
-With no rebase that reasoning has nothing left to protect, and W1 replaces it
-(slice 5).
+With no rebase that reasoning has nothing left to protect. P1′ stays all the
+same, as the set of weights an apply accepts (slice 5 keeps it, and adds the
+position limit beside it, not in its place).
 Before picks were wide, `acquire` refused there for good. The review measured `{1/30,721, 1/30,722}`:
 one lease charged `1.172 · 10¹²` and every later acquire refused, while
 `1.1715 · 10¹²` ran. So the budget also asks, for every child `i` of the set,
@@ -1386,7 +1387,13 @@ origins, which is a layout 0.7.5 already reads, so the format number and
   multiple of the grid step, and an `originTicks` that rounds up: each breaks
   the translation, and the twin must diverge. In the final engine, a pick
   compare narrowed back to `Long`, a `clampTicks` with its `max(0, …)`
-  dropped, and a returner's shift removed.
+  dropped, and a returner's shift removed. Measured on slice 3, JVM, against
+  `:kuilt-heddle-core`'s 643 tests: the narrowed compare reds 3, all in
+  `LocalHeddleLongRunTest`, the dropped `max` reds 10, and the removed shift
+  reds 30. `LocalHeddleLongRunTest` is therefore the pin on pick order past
+  the old ceiling. `HeddleAcceptanceTest`'s governed match does not pin it,
+  since both of its sides call `HeddlePolicy.pick`: a mutation there moves
+  both alike (#3504).
 - **The pick goldens do not move.** `HeddlePolicyGoldenVectorTest` and
   `HeddlePolicyOracleTest` pass unchanged through every slice.
 - **The position limit (slice 5).** Every row asserts its rig before it acts:
@@ -1451,8 +1458,10 @@ origins, which is a layout 0.7.5 already reads, so the format number and
   picks that follow, the restored engine and a 0.7.5 twin with no origin, fed
   the same history and the same calls, pick the same leaves. A 0.7.5 twin
   with the origin does not, and is not meant to: it seated the not-whole child
-  with its share rounded down, a fraction of a tick of credit the translation
-  takes back. A snapshot 0.7.6 writes holds no origin. Mutations that must red:
+  with its share rounded down, 0.4 of a tick of credit against the no-origin
+  twin, which the translation takes back. In general each restored position
+  equals the no-origin twin's or is one tick above it, always the penalty side;
+  on the golden every one equals it, and so do the picks. A snapshot 0.7.6 writes holds no origin. Mutations that must red:
   the origin dropped with no translation, on a rig where that tick decides a
   pick; the share added a second time; the share rounded down.
   Built (#3498): `LocalHeddlePersistenceTest.aFormat1SnapshotWithAnOriginIsReadByTranslatingIt`.
@@ -1556,9 +1565,13 @@ origins, which is a layout 0.7.5 already reads, so the format number and
 
 Slice 2 goes first so that slice 3 leaves the restarted scheduler's row green.
 Slices 1, 2 and 7 ship in 0.7.5. Slices 4, 5 and 6 follow 3 and do not depend
-on each other, and 0.7.6 is not cut without slice 5. Slice 3 does not open the
-gap slice 5 closes: the bridge overflows on `main` with the rebase in place,
-at the same absolute value.
+on each other, and 0.7.6 is not cut without slice 5. For one joiner, slice 3
+does not open the gap slice 5 closes: the bridge overflows on `main` with the
+rebase in place, at the same absolute value. For a parent's **load** it does.
+With no rebase a front sums absolute positions, so two `2⁵⁷` joiners seated
+where a `1/2¹⁴` lane ran up the front put that sum past 128 bits, and every
+acquire throws for good, where the rebasing engine kept picking. So slices 3
+to 5 land together, never 3 alone (#3495 review).
 
 #### Settled — don't reopen
 

@@ -60,9 +60,21 @@ internal class LedgerFormat1(
     val parents: Map<GroupId, ParentFormat1> = emptyMap(),
     val forgotten: ForgottenEdges = ForgottenEdges.NONE,
 ) {
-    /** The ledger, each origin in [parents] translated into its children's positions. */
+    /**
+     * The ledger, each origin in [parents] translated into its children's positions. An origin no
+     * 0.7.5 engine could have raised, one whose share on a child's grid leaves 128 bits, is refused
+     * as an [IllegalArgumentException], which `LocalHeddle.decode` answers as `RestoreResult.Corrupt`:
+     * corrupt or foreign bytes are a typed outcome, never a thrown `ArithmeticException`.
+     */
     @OptIn(HeddleInternalApi::class)
-    fun toLedger(): EntitlementLedger = EntitlementLedger.of(
+    fun toLedger(): EntitlementLedger = try {
+        translated()
+    } catch (overflow: ArithmeticException) {
+        throw IllegalArgumentException("a format 1 origin leaves 128 bits when translated: ${overflow.message}", overflow)
+    }
+
+    @OptIn(HeddleInternalApi::class)
+    private fun translated(): EntitlementLedger = EntitlementLedger.of(
         records = records,
         minted = minted,
         issued = issued,

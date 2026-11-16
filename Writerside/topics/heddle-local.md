@@ -437,7 +437,9 @@ keep that safe:
   every start. Lease ids are numbered afresh in each epoch, so a reused epoch
   could hand out an id that an earlier run already used.
 - **Upgrade one release at a time.** Each release reads the format the release
-  before it wrote, as well as its own.
+  before it wrote, as well as its own. A snapshot from 0.7.5 still loads in
+  0.7.6. 0.7.6 no longer keeps the origin 0.7.5 stored, so it folds that number
+  into the positions as it reads them, rounding up, so that no lane gains a turn.
 
 The farm's engine restarts while `kept` is still running:
 
