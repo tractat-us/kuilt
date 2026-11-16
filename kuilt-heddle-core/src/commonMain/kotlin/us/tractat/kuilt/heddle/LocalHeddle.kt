@@ -643,7 +643,12 @@ public class LocalHeddle private constructor(
         val levels = ArrayList<Level>()
         var group = root
         while (group !in eligible || !local.isLeasable(group)) {
-            val pick = allocator.pickChild(group, local, demands.waiting, demands.eligible) ?: return Descent.Refused(group)
+            val pick = when (val step = allocator.pickChildStep(group, local, demands.waiting, demands.eligible)) {
+                is FairShareAllocator.ChildStep.Picked -> step.pick
+                FairShareAllocator.ChildStep.NoPick -> return Descent.Refused(group)
+                // The seat and wake step there would pass the position limit (design §7.1).
+                FairShareAllocator.ChildStep.PastLimit -> return Descent.Exhausted(group)
+            }
             afterPickForTest(group)
             val grant = pick.grant
             val edge = grant.attachment
