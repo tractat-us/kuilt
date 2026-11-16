@@ -71,6 +71,19 @@ sealed interface us.tractat.kuilt.heddle/AcquireOutcome { // us.tractat.kuilt.he
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AcquireOutcome.Acquired.toString|toString(){}[0]
     }
 
+    final class LifetimeExhausted : us.tractat.kuilt.heddle/AcquireOutcome { // us.tractat.kuilt.heddle/AcquireOutcome.LifetimeExhausted|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/AcquireOutcome.LifetimeExhausted.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val parent // us.tractat.kuilt.heddle/AcquireOutcome.LifetimeExhausted.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AcquireOutcome.LifetimeExhausted.parent.<get-parent>|<get-parent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AcquireOutcome.LifetimeExhausted.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/AcquireOutcome.LifetimeExhausted // us.tractat.kuilt.heddle/AcquireOutcome.LifetimeExhausted.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AcquireOutcome.LifetimeExhausted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AcquireOutcome.LifetimeExhausted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AcquireOutcome.LifetimeExhausted.toString|toString(){}[0]
+    }
+
     final class NoLiveLineage : us.tractat.kuilt.heddle/AcquireOutcome, us.tractat.kuilt.heddle/AdmitOutcome { // us.tractat.kuilt.heddle/AcquireOutcome.NoLiveLineage|null[0]
         constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/AcquireOutcome.NoLiveLineage.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
 
@@ -82,19 +95,6 @@ sealed interface us.tractat.kuilt.heddle/AcquireOutcome { // us.tractat.kuilt.he
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AcquireOutcome.NoLiveLineage.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AcquireOutcome.NoLiveLineage.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AcquireOutcome.NoLiveLineage.toString|toString(){}[0]
-    }
-
-    final class PositionCeiling : us.tractat.kuilt.heddle/AcquireOutcome { // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling|null[0]
-        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
-
-        final val parent // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.parent|{}parent[0]
-            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.parent.<get-parent>|<get-parent>(){}[0]
-
-        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.component1|component1(){}[0]
-        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
-        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.equals|equals(kotlin.Any?){}[0]
-        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.hashCode|hashCode(){}[0]
-        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AcquireOutcome.PositionCeiling.toString|toString(){}[0]
     }
 
     final object NothingEligible : us.tractat.kuilt.heddle/AcquireOutcome { // us.tractat.kuilt.heddle/AcquireOutcome.NothingEligible|null[0]
@@ -126,17 +126,17 @@ sealed interface us.tractat.kuilt.heddle/AllocationOutcome { // us.tractat.kuilt
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AllocationOutcome.Delegated.toString|toString(){}[0]
     }
 
-    final class PositionCeiling : us.tractat.kuilt.heddle/AllocationOutcome { // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling|null[0]
-        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+    final class LifetimeExhausted : us.tractat.kuilt.heddle/AllocationOutcome { // us.tractat.kuilt.heddle/AllocationOutcome.LifetimeExhausted|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/AllocationOutcome.LifetimeExhausted.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
 
-        final val parent // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.parent|{}parent[0]
-            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.parent.<get-parent>|<get-parent>(){}[0]
+        final val parent // us.tractat.kuilt.heddle/AllocationOutcome.LifetimeExhausted.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AllocationOutcome.LifetimeExhausted.parent.<get-parent>|<get-parent>(){}[0]
 
-        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.component1|component1(){}[0]
-        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
-        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.equals|equals(kotlin.Any?){}[0]
-        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.hashCode|hashCode(){}[0]
-        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AllocationOutcome.PositionCeiling.toString|toString(){}[0]
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/AllocationOutcome.LifetimeExhausted.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/AllocationOutcome.LifetimeExhausted // us.tractat.kuilt.heddle/AllocationOutcome.LifetimeExhausted.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/AllocationOutcome.LifetimeExhausted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/AllocationOutcome.LifetimeExhausted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/AllocationOutcome.LifetimeExhausted.toString|toString(){}[0]
     }
 
     final class WeightBudget : us.tractat.kuilt.heddle/AllocationOutcome { // us.tractat.kuilt.heddle/AllocationOutcome.WeightBudget|null[0]
@@ -197,16 +197,19 @@ sealed interface us.tractat.kuilt.heddle/GroupPath { // us.tractat.kuilt.heddle/
 
 sealed interface us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.heddle/LeaseOutcome|null[0]
     final class Done : us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.heddle/LeaseOutcome.Done|null[0]
-        constructor <init>(kotlin/Long, kotlin/Long) // us.tractat.kuilt.heddle/LeaseOutcome.Done.<init>|<init>(kotlin.Long;kotlin.Long){}[0]
+        constructor <init>(kotlin/Long, kotlin/Long, kotlin/Long) // us.tractat.kuilt.heddle/LeaseOutcome.Done.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Long){}[0]
 
         final val charged // us.tractat.kuilt.heddle/LeaseOutcome.Done.charged|{}charged[0]
             final fun <get-charged>(): kotlin/Long // us.tractat.kuilt.heddle/LeaseOutcome.Done.charged.<get-charged>|<get-charged>(){}[0]
         final val overrun // us.tractat.kuilt.heddle/LeaseOutcome.Done.overrun|{}overrun[0]
             final fun <get-overrun>(): kotlin/Long // us.tractat.kuilt.heddle/LeaseOutcome.Done.overrun.<get-overrun>|<get-overrun>(){}[0]
+        final val unrecorded // us.tractat.kuilt.heddle/LeaseOutcome.Done.unrecorded|{}unrecorded[0]
+            final fun <get-unrecorded>(): kotlin/Long // us.tractat.kuilt.heddle/LeaseOutcome.Done.unrecorded.<get-unrecorded>|<get-unrecorded>(){}[0]
 
         final fun component1(): kotlin/Long // us.tractat.kuilt.heddle/LeaseOutcome.Done.component1|component1(){}[0]
         final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/LeaseOutcome.Done.component2|component2(){}[0]
-        final fun copy(kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/LeaseOutcome.Done // us.tractat.kuilt.heddle/LeaseOutcome.Done.copy|copy(kotlin.Long;kotlin.Long){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.heddle/LeaseOutcome.Done.component3|component3(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/LeaseOutcome.Done // us.tractat.kuilt.heddle/LeaseOutcome.Done.copy|copy(kotlin.Long;kotlin.Long;kotlin.Long){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LeaseOutcome.Done.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LeaseOutcome.Done.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LeaseOutcome.Done.toString|toString(){}[0]
@@ -223,19 +226,6 @@ sealed interface us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.hedd
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LeaseOutcome.PathDraining.toString|toString(){}[0]
-    }
-
-    final class PositionCeiling : us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling|null[0]
-        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
-
-        final val parent // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.parent|{}parent[0]
-            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.parent.<get-parent>|<get-parent>(){}[0]
-
-        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.component1|component1(){}[0]
-        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
-        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.equals|equals(kotlin.Any?){}[0]
-        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.hashCode|hashCode(){}[0]
-        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LeaseOutcome.PositionCeiling.toString|toString(){}[0]
     }
 
     final class Stale : us.tractat.kuilt.heddle/LeaseOutcome { // us.tractat.kuilt.heddle/LeaseOutcome.Stale|null[0]
@@ -688,10 +678,10 @@ sealed interface us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.h
     final enum class Kind : kotlin/Enum<us.tractat.kuilt.heddle/WaitExplanation.Kind> { // us.tractat.kuilt.heddle/WaitExplanation.Kind|null[0]
         enum entry AT_CEILING // us.tractat.kuilt.heddle/WaitExplanation.Kind.AT_CEILING|null[0]
         enum entry BEHIND_AT_LEVEL // us.tractat.kuilt.heddle/WaitExplanation.Kind.BEHIND_AT_LEVEL|null[0]
+        enum entry LIFETIME_EXHAUSTED // us.tractat.kuilt.heddle/WaitExplanation.Kind.LIFETIME_EXHAUSTED|null[0]
         enum entry NOT_ELIGIBLE // us.tractat.kuilt.heddle/WaitExplanation.Kind.NOT_ELIGIBLE|null[0]
         enum entry NOT_WAITING // us.tractat.kuilt.heddle/WaitExplanation.Kind.NOT_WAITING|null[0]
         enum entry NO_LIVE_LINEAGE // us.tractat.kuilt.heddle/WaitExplanation.Kind.NO_LIVE_LINEAGE|null[0]
-        enum entry POSITION_CEILING // us.tractat.kuilt.heddle/WaitExplanation.Kind.POSITION_CEILING|null[0]
         enum entry SUPPLY_EXHAUSTED // us.tractat.kuilt.heddle/WaitExplanation.Kind.SUPPLY_EXHAUSTED|null[0]
         enum entry WOULD_BE_PICKED_NEXT // us.tractat.kuilt.heddle/WaitExplanation.Kind.WOULD_BE_PICKED_NEXT|null[0]
 
@@ -747,6 +737,21 @@ sealed interface us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.h
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.toString|toString(){}[0]
     }
 
+    final class LifetimeExhausted : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted|null[0]
+        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
+
+        final val kind // us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted.kind|{}kind[0]
+            final fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted.kind.<get-kind>|<get-kind>(){}[0]
+        final val parent // us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted.parent|{}parent[0]
+            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted.parent.<get-parent>|<get-parent>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted // us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.LifetimeExhausted.toString|toString(){}[0]
+    }
+
     final class NoLiveLineage : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage|null[0]
         constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
 
@@ -760,21 +765,6 @@ sealed interface us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.h
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.NoLiveLineage.toString|toString(){}[0]
-    }
-
-    final class PositionCeiling : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling|null[0]
-        constructor <init>(us.tractat.kuilt.heddle/GroupId) // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.<init>|<init>(us.tractat.kuilt.heddle.GroupId){}[0]
-
-        final val kind // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.kind|{}kind[0]
-            final fun <get-kind>(): us.tractat.kuilt.heddle/WaitExplanation.Kind // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.kind.<get-kind>|<get-kind>(){}[0]
-        final val parent // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.parent|{}parent[0]
-            final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.parent.<get-parent>|<get-parent>(){}[0]
-
-        final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.component1|component1(){}[0]
-        final fun copy(us.tractat.kuilt.heddle/GroupId = ...): us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.copy|copy(us.tractat.kuilt.heddle.GroupId){}[0]
-        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.equals|equals(kotlin.Any?){}[0]
-        final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.hashCode|hashCode(){}[0]
-        final fun toString(): kotlin/String // us.tractat.kuilt.heddle/WaitExplanation.PositionCeiling.toString|toString(){}[0]
     }
 
     final object NotEligible : us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.heddle/WaitExplanation.NotEligible|null[0]
@@ -1210,6 +1200,10 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
     }
 
     final object Companion { // us.tractat.kuilt.heddle/LocalHeddle.Companion|null[0]
+        final const val LIFETIME_HEADROOM // us.tractat.kuilt.heddle/LocalHeddle.Companion.LIFETIME_HEADROOM|{}LIFETIME_HEADROOM[0]
+            final fun <get-LIFETIME_HEADROOM>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.Companion.LIFETIME_HEADROOM.<get-LIFETIME_HEADROOM>|<get-LIFETIME_HEADROOM>(){}[0]
+        final const val MAX_RECORDED_OVERRUN // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RECORDED_OVERRUN|{}MAX_RECORDED_OVERRUN[0]
+            final fun <get-MAX_RECORDED_OVERRUN>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RECORDED_OVERRUN.<get-MAX_RECORDED_OVERRUN>|<get-MAX_RECORDED_OVERRUN>(){}[0]
         final const val MAX_RESERVATION // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION|{}MAX_RESERVATION[0]
             final fun <get-MAX_RESERVATION>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.Companion.MAX_RESERVATION.<get-MAX_RESERVATION>|<get-MAX_RESERVATION>(){}[0]
 

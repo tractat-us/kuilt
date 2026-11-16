@@ -54,7 +54,7 @@ class LocalHeddlePropertyTest {
                 val at = "seed $seed"
                 if (out == AcquireOutcome.SupplyExhausted || out == LeaseOutcome.SupplyExhausted) fail("refused for supply with a capacity reconciled, $at")
                 // After an acquire or extend that went through, the root holds at least the low watermark: one round.
-                if (out is AcquireOutcome.Acquired || out == LeaseOutcome.Done(0L, 0L)) {
+                if (out is AcquireOutcome.Acquired || out == LeaseOutcome.Done(0L, 0L, 0L)) {
                     funded++
                     val held = h.snapshot().ledger.holdings(root, LOCAL)
                     if (held < slots(seed) * 3L) fail("the root holds $held after a funded operation, under the watermark ${slots(seed) * 3L}, $at")
@@ -223,7 +223,7 @@ class LocalHeddlePropertyTest {
                 val waiting = leaves.filter { remaining.getValue(it).isNotEmpty() }
                 val out = h.acquire(waiting.toSet(), waiting.filter { it in eligible }.toSet(), startedAt = 0L, reservation = r)
                 if (out == AcquireOutcome.NothingEligible) drained++
-                if (out == AcquireOutcome.SupplyExhausted || out is AcquireOutcome.PositionCeiling) endedOnAcquire++
+                if (out == AcquireOutcome.SupplyExhausted || out is AcquireOutcome.LifetimeExhausted) endedOnAcquire++
                 if (out !is AcquireOutcome.Acquired) break
                 val head = remaining.getValue(out.lease.leaf).removeFirst()
                 if (head > r) {
@@ -325,7 +325,7 @@ class LocalHeddlePropertyTest {
                             }
                             AcquireOutcome.NothingEligible -> if (eligible.isNotEmpty()) fail("NothingEligible with $eligible at $at")
                             AcquireOutcome.SupplyExhausted -> fail("the supply is sized never to run out, at $at")
-                            is AcquireOutcome.PositionCeiling -> fail("no position nears its ceiling here, at $at")
+                            is AcquireOutcome.LifetimeExhausted -> fail("no position nears its ceiling here, at $at")
                         }
                     }
                     open.isEmpty() -> reshape(h, rng, seen)
@@ -347,7 +347,10 @@ class LocalHeddlePropertyTest {
                         if (overrunDraining) seen[OVERRUN_DRAINING]++
                         if (overrunDraining && reach >= 2) seen[OVERRUN_DEEP_REACH]++
                         val out = h.complete(lease.id, actual, waiting = emptySet())
-                        if (out != LeaseOutcome.Done(actual, maxOf(0L, actual - lease.reserved))) fail("complete gave $out, seed $seed step $step")
+                        val overrun = maxOf(0L, actual - lease.reserved)
+                        // With the root's own child edge closing, an overrun reaches no group below the root (#3493).
+                        val unrecorded = if (reach == 0) overrun else 0L
+                        if (out != LeaseOutcome.Done(actual - unrecorded, overrun, unrecorded)) fail("complete gave $out, seed $seed step $step")
                         if (overrunDraining) {
                             val after = h.snapshot().ledger
                             fun grew(e: AttachmentId): Long = checkNotNull(after.edge(e)).spent - checkNotNull(l.edge(e)).spent

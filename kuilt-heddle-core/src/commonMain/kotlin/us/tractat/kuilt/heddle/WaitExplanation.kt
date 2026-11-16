@@ -20,7 +20,7 @@ public sealed interface WaitExplanation {
     public val kind: Kind
 
     /** The arms of a [WaitExplanation], in the order they are checked; their order is part of the API. */
-    public enum class Kind { NOT_WAITING, NOT_ELIGIBLE, NO_LIVE_LINEAGE, AT_CEILING, SUPPLY_EXHAUSTED, POSITION_CEILING, BEHIND_AT_LEVEL, WOULD_BE_PICKED_NEXT }
+    public enum class Kind { NOT_WAITING, NOT_ELIGIBLE, NO_LIVE_LINEAGE, AT_CEILING, SUPPLY_EXHAUSTED, LIFETIME_EXHAUSTED, BEHIND_AT_LEVEL, WOULD_BE_PICKED_NEXT }
 
     /** The leaf is not in the waiting set: it has no work queued. */
     public data object NotWaiting : WaitExplanation {
@@ -65,12 +65,18 @@ public sealed interface WaitExplanation {
     }
 
     /**
-     * Not returned today, as [AcquireOutcome.PositionCeiling] is not: no position refuses the next
-     * acquire's pick, since it orders the full 128-bit position. The same arm as
-     * [AcquireOutcome.PositionCeiling], kept with it.
+     * The next acquire stops at [parent] at the lifetime limit (see "The lifetime limit" on
+     * [LocalHeddle]): an edge below [parent] has no room for the reservation under the watermark,
+     * or, with [parent] the root, the root cannot fund it without minting past the watermark. The
+     * same arm as [AcquireOutcome.LifetimeExhausted].
+     *
+     * Two leaves are told it. One whose own lineage holds the full edge, nearest the root first, is
+     * never leased again. One the next acquire would reach only through a pick that chooses a full
+     * lane waits on that lane: a refusal moves no position, so the pick at [parent] stalls there
+     * while the full lane is eligible and next in line. Checked after the supply.
      */
-    public data class PositionCeiling(public val parent: GroupId) : WaitExplanation {
-        override val kind: Kind get() = Kind.POSITION_CEILING
+    public data class LifetimeExhausted(public val parent: GroupId) : WaitExplanation {
+        override val kind: Kind get() = Kind.LIFETIME_EXHAUSTED
     }
 
     /**

@@ -109,7 +109,7 @@ class LeaseScaleProbe {
                 val wants = Demand(targetOutstanding = 1L shl 40, maximumUsefulGrant = 3L)
                 FairShareAllocator(self, PolicyConfig(quantum = Long.MAX_VALUE)).pickChild(lane, probe, { wants }, { wants })?.grant?.amount ?: -1L
             },
-            "liftLineages" to { probe.withDelegableLineages(everyone).size.toLong() },
+            "liftLineages" to { probe.withDelegableLineages(everyone, ROOT).size.toLong() },
             "liftLive" to { probe.withLiveLineages(everyone).size.toLong() },
             "delegatePiece" to {
                 val edge = children.first().id

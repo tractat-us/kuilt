@@ -25,7 +25,8 @@ module.
 | `kuilt-cluster` | Server-cluster overlay: `ServerCluster` (voter mesh + relay accept loop) + `ClusterClient` (propose + observe) |
 | `kuilt-liveness` | Peer-liveness detection: `HeartbeatPartitionDetector` emits `PartitionEvent` (Unresponsive/Recovered/Lost) |
 | `kuilt-session` | Membership-aware `Room`: admit/identify handshake, roster, reconnect tokens |
-| `kuilt-heddle` | Fair shares of one pooled resource, with nobody in charge: each group gets the slice it was promised, an idle group lends its share to a busy one, and it keeps working through a network split — see [Fair Share](heddle.md) |
+| `kuilt-heddle` | Fair shares of one pooled resource, with nobody in charge: each group gets the slice it was promised, an idle group lends its share to a busy one, and it keeps working through a network split — see [Fair Share](heddle.md) and [Scheduling](scheduling.md) |
+| `kuilt-heddle-core` | The same fair share in one program, with no network (`LocalHeddle`): lease a slot, charge its real cost, preview and explain the next picks, and survive a restart — see [Scheduling](scheduling.md) |
 | `kuilt-websocket` | Ktor WebSocket fabric (`KtorClientLoom` + `KtorServerLoom`) |
 | `kuilt-tcp` | Plain TCP sockets as a fabric (`tcpLoomHost`/`tcpLoomJoin`, JVM/Android) — the worked example in the [fabric kit](fabric-kit.md) |
 | `kuilt-mdns` | Bonjour/mDNS local-network discovery feeding a WebSocket connection |

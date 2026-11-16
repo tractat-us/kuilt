@@ -37,8 +37,9 @@ Now a second team adds photos. Who gets how much of the room?
 A team with twice the share should get roughly twice the service while
 both have work waiting.
 
-That is [Heddle's part of the story](heddle.md). Warp chooses where a job
-runs. Heddle controls how much work each team may start.
+That is [Heddle's part of the story](heddle.md), told in
+[Scheduling](scheduling.md). Warp chooses where a job runs. Heddle controls
+how much work each team may start.
 
 ## Take a closer look
 

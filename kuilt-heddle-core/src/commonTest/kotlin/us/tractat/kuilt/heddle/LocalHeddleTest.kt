@@ -30,7 +30,7 @@ class LocalHeddleTest {
         (0 until n).map {
             val out = h.acquire(waiting, eligible, startedAt = it.toLong(), reservation = reservation)
             val lease = (out as? AcquireOutcome.Acquired)?.lease ?: error("cycle $it: $out")
-            assertEquals(LeaseOutcome.Done(reservation, 0L), h.complete(lease.id, reservation, waiting = emptySet()))
+            assertEquals(LeaseOutcome.Done(reservation, 0L, 0L), h.complete(lease.id, reservation, waiting = emptySet()))
             lease.leaf
         }
 
@@ -144,7 +144,7 @@ class LocalHeddleTest {
         val done = h.complete(lease.id, 5L, waiting = emptySet())
         val l = h.snapshot().ledger
         assertAll(
-            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L), done) },
+            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L, unrecorded = 0L), done) },
             { assertEquals(5L, assertNotNull(l.edge(AttachmentId("root>a"))).spent, "the whole actual cost is charged") },
             { assertEquals(0L, l.holdings(a, LOCAL), "nothing is left at the leaf") },
             { assertEquals(95L, l.holdings(root, LOCAL), "the root paid the overrun too") },
@@ -159,7 +159,7 @@ class LocalHeddleTest {
         val done = h.complete(lease.id, 2L, waiting = emptySet())
         val l = h.snapshot().ledger
         assertAll(
-            { assertEquals(LeaseOutcome.Done(charged = 2L, overrun = 0L), done) },
+            { assertEquals(LeaseOutcome.Done(charged = 2L, overrun = 0L, unrecorded = 0L), done) },
             { assertEquals(98L, l.holdings(root, LOCAL), "the unused 3 went back to the root") },
             { assertEquals(0L, l.holdings(a, LOCAL)) },
             { assertEquals(emptyList(), h.snapshot().leases) },
@@ -175,10 +175,10 @@ class LocalHeddleTest {
         val mid = h.snapshot()
         val done = h.complete(lease.id, 4L, waiting = emptySet())
         assertAll(
-            { assertEquals(LeaseOutcome.Done(0L, 0L), extended) },
+            { assertEquals(LeaseOutcome.Done(0L, 0L, 0L), extended) },
             { assertEquals(5L, mid.leases.single().reserved, "the lease now holds 2 + 3") },
             { assertEquals(5L, mid.ledger.holdings(a, LOCAL), "all of it sits at the leaf") },
-            { assertEquals(LeaseOutcome.Done(4L, 0L), done) },
+            { assertEquals(LeaseOutcome.Done(4L, 0L, 0L), done) },
             { assertEquals(96L, h.snapshot().ledger.holdings(root, LOCAL)) },
         )
     }
@@ -190,7 +190,7 @@ class LocalHeddleTest {
         val done = h.cancel(lease.id)
         val l = h.snapshot().ledger
         assertAll(
-            { assertEquals(LeaseOutcome.Done(0L, 0L), done) },
+            { assertEquals(LeaseOutcome.Done(0L, 0L, 0L), done) },
             { assertEquals(100L, l.holdings(root, LOCAL)) },
             { assertEquals(0L, l.leafSpentTotal()) },
             { assertEquals(emptyList(), h.snapshot().leases) },
@@ -314,7 +314,7 @@ class LocalHeddleTest {
             { assertEquals(AcquireOutcome.NoLiveLineage(root), alone, "neither pool nor its attached child is a place the descent can end") },
             { assertSame(before, unchanged) },
             { assertEquals(listOf(s, s, s, s), beside, "the sibling is leased instead") },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(open.id, 2L, waiting = emptySet()), "the open lease still settles") },
+            { assertEquals(LeaseOutcome.Done(2L, 0L, 0L), h.complete(open.id, 2L, waiting = emptySet()), "the open lease still settles") },
         )
     }
 
@@ -337,7 +337,7 @@ class LocalHeddleTest {
             { assertEquals(LeaseOutcome.PathDraining(poolC.id), out) },
             { assertSame(before.ledger, h.snapshot().ledger, "the ledger is the very same value") },
             { assertEquals(before.leases, h.snapshot().leases, "the lease kept its reservation") },
-            { assertEquals(LeaseOutcome.Done(2L, 0L), h.complete(open.id, 2L, waiting = emptySet()), "and still settles") },
+            { assertEquals(LeaseOutcome.Done(2L, 0L, 0L), h.complete(open.id, 2L, waiting = emptySet()), "and still settles") },
         )
     }
 
@@ -353,7 +353,7 @@ class LocalHeddleTest {
         val l = h.snapshot().ledger
         val pool = poolC.parent
         assertAll(
-            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L), done) },
+            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L, unrecorded = 0L), done) },
             { assertEquals(emptyList(), h.snapshot().leases, "the lease is closed") },
             { assertEquals(2L, assertNotNull(l.edge(poolC.id)).spent, "the reservation is charged at the leaf") },
             { assertEquals(5L, assertNotNull(l.edge(AttachmentId("root>pool"))).spent, "the whole cost reaches the ACTIVE edge") },
@@ -373,7 +373,7 @@ class LocalHeddleTest {
         val done = h.complete(open.id, 5L, waiting = emptySet())
         val l = h.snapshot().ledger
         assertAll(
-            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L), done) },
+            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L, unrecorded = 0L), done) },
             { assertEquals(1, h.forcedMints) },
             { assertEquals(5L, l.mintedTotal()) },
             { assertEquals(5L, l.leafSpentTotal()) },
@@ -400,7 +400,7 @@ class LocalHeddleTest {
         val done = h.complete(open.id, 5L, waiting = emptySet())
         val l = h.snapshot().ledger
         assertAll(
-            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L), done) },
+            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L, unrecorded = 0L), done) },
             { assertEquals(Rational.of(2L), before.virtualService(pa.id), "the rig: p → a carried the reservation") },
             { assertEquals(Rational.of(5L), l.virtualService(pa.id), "p → a advanced by the 3-unit overrun") },
             { assertEquals(5L, assertNotNull(l.edge(pa.id)).spent, "the whole cost is charged at p → a") },
@@ -434,7 +434,7 @@ class LocalHeddleTest {
             { assertEquals(List(30) { p }, cutOff, "the rig: a is waiting but unreachable, so p runs alone") },
             { assertEquals(false, observed, "t was observed idle, though a was listed as waiting") },
             { assertTrue(count(after, a2) in 9..11, "t woke level with p, not 30 units behind it: ${count(after, a2)} of 20") },
-            { assertEquals(LeaseOutcome.Done(1L, 0L), h.complete(open.id, 1L, waiting = emptySet()), "the cut-off lease still settles") },
+            { assertEquals(LeaseOutcome.Done(1L, 0L, 0L), h.complete(open.id, 1L, waiting = emptySet()), "the cut-off lease still settles") },
         )
     }
 
@@ -473,7 +473,7 @@ class LocalHeddleTest {
      * The one place the overrun has nowhere to go: the root's own child edge is closing, so no group
      * below the root is reached through ACTIVE edges, and the ledger keeps no spend at the root. The
      * lease still closes, the reservation is charged at the leaf, conservation holds and nothing is
-     * minted; the overrun is reported but recorded on no edge.
+     * minted; the overrun is recorded on no edge, and reported as unrecorded rather than charged (#3493).
      */
     @Test
     fun anOverrunBelowAClosingRootEdgeIsReportedButRecordedNowhere() {
@@ -486,7 +486,7 @@ class LocalHeddleTest {
         val done = h.complete(open.id, 5L, waiting = emptySet())
         val l = h.snapshot().ledger
         assertAll(
-            { assertEquals(LeaseOutcome.Done(charged = 5L, overrun = 3L), done) },
+            { assertEquals(LeaseOutcome.Done(charged = 2L, overrun = 3L, unrecorded = 3L), done, "the overrun is reported as unrecorded, not as charged (#3493)") },
             { assertEquals(emptyList(), h.snapshot().leases) },
             { assertEquals(2L, l.leafSpentTotal(), "only the reservation reached an edge") },
             { assertEquals(0, h.forcedMints) },
@@ -511,13 +511,13 @@ class LocalHeddleTest {
         assertAll(
             { assertEquals(1L shl 44, max, "the documented bound") },
             { assertEquals(listOf(a, a), listOf(first.leaf, second.leaf)) },
-            { assertEquals(LeaseOutcome.Done(0L, 0L), extended) },
+            { assertEquals(LeaseOutcome.Done(0L, 0L, 0L), extended) },
             { assertEquals(3 * max, assertNotNull(h.snapshot().ledger.edge(AttachmentId("root>a"))).outstanding, "3 × 2^44 outstanding on one edge") },
             { assertFailsWith<IllegalArgumentException> { h.acquire(setOf(a), setOf(a), 0L, reservation = max + 1) } },
             { assertFailsWith<IllegalArgumentException> { h.admit(a, setOf(a), 0L, reservation = max + 1) } },
             { assertFailsWith<IllegalArgumentException> { h.extend(second.id, max + 1, waiting = emptySet()) } },
             { assertFailsWith<IllegalArgumentException> { LocalPolicy(defaultReservation = max + 1) } },
-            { assertEquals(LeaseOutcome.Done(2 * max, 0L), h.complete(first.id, 2 * max, waiting = emptySet())) },
+            { assertEquals(LeaseOutcome.Done(2 * max, 0L, 0L), h.complete(first.id, 2 * max, waiting = emptySet())) },
         )
     }
 
@@ -551,7 +551,7 @@ class LocalHeddleTest {
         val l = h.snapshot().ledger
         assertAll(
             { assertEquals(0L, short, "the rig: the root holds nothing when the overrun arrives") },
-            { assertEquals(LeaseOutcome.Done(5L, 3L), done) },
+            { assertEquals(LeaseOutcome.Done(5L, 3L, 0L), done) },
             { assertEquals(1, h.forcedMints) },
             { assertEquals(5L, l.mintedTotal(), "2 minted up front plus the 3-unit shortfall") },
             { assertEquals(5L, assertNotNull(l.edge(AttachmentId("root>a"))).spent) },
@@ -583,7 +583,7 @@ class LocalHeddleTest {
             { assertEquals(x, child.leaf) },
             { assertEquals(2L, mid.holdings(x, LOCAL), "the new child got its own reservation") },
             { assertEquals(5L, mid.holdings(a, LOCAL), "the open lease's 5 units stayed at the former lane") },
-            { assertEquals(LeaseOutcome.Done(5L, 0L), done) },
+            { assertEquals(LeaseOutcome.Done(5L, 0L, 0L), done) },
             { assertEquals(0L, after.holdings(a, LOCAL)) },
             { assertEquals(emptyList(), after.validate()) },
         )
@@ -686,7 +686,7 @@ class LocalHeddleTest {
         val l = h.snapshot().ledger
         assertAll(
             { assertEquals(1, h.forcedMints, "the shortfall was minted") },
-            { assertEquals(LeaseOutcome.Done(3L, 0L), done) },
+            { assertEquals(LeaseOutcome.Done(3L, 0L, 0L), done) },
             { assertEquals(3L, l.mintedTotal()) },
             { assertEquals(3L, l.leafSpentTotal()) },
         )

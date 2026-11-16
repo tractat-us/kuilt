@@ -246,7 +246,7 @@ class LocalHeddlePersistenceTest {
             { assertIs<StepRefusal.Draining>(first.refusals.single(), "the rig: the removal is draining") },
             { assertEquals(Lifecycle.CLOSING, persisted.ledger.lifecycle(edge), "the rig: the snapshot holds a CLOSING edge on an open lease's path") },
             { assertEquals(listOf(leftover), persisted.leases) },
-            { assertEquals(LeaseOutcome.Done(1L, 0L), done, "the lease completes after the restore") },
+            { assertEquals(LeaseOutcome.Done(1L, 0L, 0L), done, "the lease completes after the restore") },
             { assertEquals(emptyList(), second.refusals, "and the same topology applied again lands") },
             { assertTrue(TopologyStep.Retire(edge, spare) in second.applied, "the edge retired: $second") },
             { assertEquals(null, restored.snapshot().ledger.lifecycle(edge), "and its swap forgot it") },
@@ -287,7 +287,7 @@ class LocalHeddlePersistenceTest {
         assertAll(
             { assertEquals(open, before, "every lease is open again under its own id") },
             { assertEquals(setOf(a, b), open.map { it.leaf }.toSet(), "the rig: one lease under each leaf") },
-            { assertEquals(listOf(LeaseOutcome.Done(2L, 1L), LeaseOutcome.Done(2L, 1L)), viaRestored) },
+            { assertEquals(listOf(LeaseOutcome.Done(2L, 1L, 0L), LeaseOutcome.Done(2L, 1L, 0L)), viaRestored) },
             { assertEquals(viaReference, viaRestored, "completing them is what completing them would have been") },
             { assertEquals(books(reference), books(restored), "charged to the same leaves, down the same paths") },
             { assertTrue(restored.snapshot().ledger.validate().isEmpty()) },
@@ -568,7 +568,7 @@ class LocalHeddlePersistenceTest {
         val reload = h.apply(richAfter, generation = 2L)
         check(reload.refusals.single() is StepRefusal.Draining) { "spare drains: $reload" }
         check(h.capturedPath(interactive.id) != pathBefore) { "the reweight moved the interactive lease" }
-        check(h.cancel(x.id) == LeaseOutcome.Done(0L, 0L)) { "cancelled" }
+        check(h.cancel(x.id) == LeaseOutcome.Done(0L, 0L, 0L)) { "cancelled" }
         val restored = throughJson(h, richPolicy).also { it.forgetsForTest = forgets }
         val later = restored.lease(setOf(richBefore.groupId("acme", "batch", "y")), reservation = 2L, startedAt = 20L)
         return restored to listOf(interactive, spare, inTenant, later)
@@ -909,7 +909,7 @@ class LocalHeddlePersistenceTest {
             Triple("a negative epoch", golden.replaceFirst("$prefix{\"epoch\":0,", "$prefix{\"epoch\":-1,"), "epoch must be non-negative"),
             Triple("a negative sequence number", golden.replaceFirst("\"seq\":50,", "\"seq\":-50,"), "negative sequence number"),
             Triple("ids not strictly increasing", golden.replaceFirst("\"seq\":51,", "\"seq\":50,"), "strictly increasing id order"),
-            Triple("a reservation of 0", golden.replaceFirst("\"reserved\":1,", "\"reserved\":0,"), "not a positive amount"),
+            Triple("a negative reservation", golden.replaceFirst("\"reserved\":1,", "\"reserved\":-1,"), "a negative amount"),
             Triple("an empty path", golden.replace(pathToA, "\"path\":[]"), "empty path"),
             Triple("a broken path", golden.replace(pathToA, "\"path\":[\"${edgeTo(b).value}\",\"${edgeTo(a).value}\"]"), "path is broken"),
             Triple("a path across a retired edge", golden.replaceFirst("\"lifecycle\":{\"${edgeTo(a).value}\":\"ACTIVE\"", "\"lifecycle\":{\"${edgeTo(a).value}\":\"RETIRED\""), "which is retired"),
@@ -979,7 +979,7 @@ class LocalHeddlePersistenceTest {
             { assertSame(resetBefore, reset.snapshot().ledger, "the reset engine charged nothing") },
             { assertEquals(LeaseOutcome.Stale(1L), restored.complete(settled.id, 1L, waiting = emptySet()), "a lease settled before the persist") },
             { assertSame(restoredBefore, restored.snapshot().ledger, "and that charged nothing either") },
-            { assertEquals(LeaseOutcome.Done(1L, 0L), restored.complete(open[0].id, 1L, waiting = emptySet()), "a lease the snapshot holds is still valid") },
+            { assertEquals(LeaseOutcome.Done(1L, 0L, 0L), restored.complete(open[0].id, 1L, waiting = emptySet()), "a lease the snapshot holds is still valid") },
         )
     }
 
