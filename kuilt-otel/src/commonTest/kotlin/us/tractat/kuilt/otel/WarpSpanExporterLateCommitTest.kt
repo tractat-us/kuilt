@@ -129,4 +129,27 @@ class WarpSpanExporterLateCommitTest {
     fun twoFailedWritesInARowLeaveBothDotsTaken() = runTest {
         assertTheLandedSpanSurvives(failThenLandLate(failures = 2), failures = 2)
     }
+
+    /**
+     * A failed export of a value the set already holds keeps only its own new dot. The add's delta
+     * also witnesses the held copy's dot, and kept whole it would act as a removal of that copy when
+     * the next turn builds on it.
+     */
+    @Test
+    fun aFailedExportOfAHeldValueLeavesTheHeldCopyInPlace() = runTest {
+        val store = LateCommitStore(InMemoryDurableStore(), spansKey)
+        val writer = WarpSpanExporter(replica, store).apply { recover() }
+        val first = writer.export(span(1))
+        store.refusing = 1
+        val again = writer.export(span(1))
+        val next = writer.export(span(2))
+        val held = ids(writer.snapshot())
+        assertAll(
+            { assertEquals(ExportResult.Success, first, "the rig: the first export was not saved") },
+            { assertTrue(again is ExportResult.Failure, "the rig: the repeated export landed: $again") },
+            { assertEquals(1, store.held.size, "the rig: the repeated export's write was not refused") },
+            { assertEquals(ExportResult.Success, next) },
+            { assertEquals(setOf(span(1).spanId, span(2).spanId), held, "the next turn dropped the held copy") },
+        )
+    }
 }
