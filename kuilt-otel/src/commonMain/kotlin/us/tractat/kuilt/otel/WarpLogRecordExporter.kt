@@ -166,6 +166,23 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * not attempted here. `WarpLogRecordExporterWindowingTest` measures both terms against
  * each other.
  *
+ * **A third term: another author's tombstones that trail the list.** A pass cuts a leading
+ * prefix of the list, and the next export goes after the last *visible* record. A merge can
+ * deliver a run that another author wrote and then tombstoned whole, sorted after every visible
+ * record: appended after our newest record at a higher clock, say, or rooted at the head behind
+ * our own records. Every later export lands ahead of that run, so no local pass ever reaches it,
+ * and its `Insert`s, bodies included, stay in [log] with their tombstones.
+ *
+ * They are not cut here, on purpose. Cutting them is an [RgaOp.Compact], and a replica that still
+ * holds one of those ids visible may append after it; that record re-roots to the front of the
+ * list, ahead of older records, and is the one DROP_OLDEST evicts. No local rule can tell when
+ * that is safe without a causal-stability witness, which this class does not have. Instead the run
+ * clears when the **author's own** window pass reaches it and arrives here by [merge]: the author
+ * drops the ids through its floor, by its cut or by [withOlderOwn] (#3511) when they trail its list
+ * too, and [Rga.piece] purges them under that floor. The run stays only while its author never
+ * passes those ids. #3528 is where this was ruled; `WarpLogRecordExporterForeignTombstoneResidueTest`
+ * pins both halves.
+ *
  * **[Rga.compact] is not the mechanism, and could not be.** It is the obvious candidate — it is
  * the reclamation this codebase already had — and it reclaims *nothing at all* here, for a
  * structural reason rather than a tuning one. Its condition 4 refuses to collect a tombstone that
