@@ -94,6 +94,21 @@
         </toc-element>
     </toc-element>
 
+    <toc-element toc-title="Scheduling">
+        <toc-element topic="scheduling.md"/>
+        <toc-element topic="heddle-local.md">
+            <toc-element topic="heddle-local-preview.md"/>
+            <toc-element topic="heddle-local-explain.md"/>
+            <toc-element topic="heddle-local-turns.md"/>
+        </toc-element>
+        <toc-element topic="heddle-embedding.md"/>
+        <toc-element topic="heddle.md">
+            <toc-element topic="heddle-accounting.md"/>
+        </toc-element>
+        <toc-element topic="heddle-verification.md"/>
+        <toc-element topic="heddle-lineage.md"/>
+    </toc-element>
+
     <toc-element toc-title="Testing">
         <toc-element topic="testing.md"/>
     </toc-element>
@@ -108,14 +123,6 @@
             <toc-element topic="warp-jobs.md"/>
             <toc-element topic="warp-planning.md"/>
             <toc-element topic="warp-compiler.md"/>
-        </toc-element>
-        <toc-element topic="heddle.md">
-            <toc-element topic="heddle-accounting.md"/>
-            <toc-element topic="heddle-local.md">
-                <toc-element topic="heddle-local-preview.md"/>
-                <toc-element topic="heddle-local-explain.md"/>
-                <toc-element topic="heddle-local-turns.md"/>
-            </toc-element>
         </toc-element>
     </toc-element>
 
