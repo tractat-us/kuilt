@@ -102,11 +102,21 @@ class WarpSpanExporterEscapedDotTest {
         val restarted = start(backing)
         val heldAfterRestart = restarted.snapshot().elements.map { it.spanId }.toSet()
         val next = restarted.export(span(200))
+        val both = gossiped.elements + restarted.snapshot().elements
         val merged = restarted.snapshot().piece(gossiped)
-        return AfterRestart(heldAfterRestart, next, merged.elements)
+        return AfterRestart(heldAfterRestart, next, both, merged.elements)
     }
 
-    private class AfterRestart(val heldAfterRestart: Set<ByteString>, val next: ExportResult, val merged: Set<SpanRecord>)
+    /**
+     * [both] is every span either side holds, read before any merge: two spans on one dot are both
+     * here even where a merge would drop them.
+     */
+    private class AfterRestart(
+        val heldAfterRestart: Set<ByteString>,
+        val next: ExportResult,
+        val both: Set<SpanRecord>,
+        val merged: Set<SpanRecord>,
+    )
 
     private fun escapedDot(gossiped: ORSet<SpanRecord>?): Dot? =
         gossiped?.elements?.singleOrNull { it.spanId == span(100).spanId }?.causalStamp?.dot
@@ -129,7 +139,7 @@ class WarpSpanExporterEscapedDotTest {
             { assertTrue(span(100).spanId !in after.heldAfterRestart, "the rig: the store holds span 100") },
             { assertEquals(ExportResult.Success, after.next, "the export after the restart") },
             // The property.
-            { assertEquals(emptyMap(), sharedDots(after.merged), "two spans share a dot") },
+            { assertEquals(emptyMap(), sharedDots(after.both), "two spans share a dot") },
             { assertEquals(7, after.merged.size, "the merged set holds every span once") },
         )
     }
@@ -159,7 +169,7 @@ class WarpSpanExporterEscapedDotTest {
             { assertTrue(span(100).spanId !in after.heldAfterRestart, "the rig: the store holds span 100") },
             { assertEquals(ExportResult.Success, after.next, "the export after the restart") },
             // The property.
-            { assertEquals(emptyMap(), sharedDots(after.merged), "two spans share a dot") },
+            { assertEquals(emptyMap(), sharedDots(after.both), "two spans share a dot") },
             { assertEquals(7, after.merged.size, "the merged set holds every span once") },
         )
     }
