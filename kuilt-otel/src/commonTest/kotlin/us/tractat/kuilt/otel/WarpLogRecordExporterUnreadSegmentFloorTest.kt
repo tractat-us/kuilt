@@ -1,0 +1,161 @@
+package us.tractat.kuilt.otel
+
+import kotlinx.coroutines.test.runTest
+import kotlinx.io.bytestring.ByteString
+import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.Rga
+import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.StoreKey
+import us.tractat.kuilt.test.assertAll
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+/**
+ * Pins that a sealed segment recovery could not read does not wedge this replica's drop floor
+ * (#3447).
+ *
+ * Recovery raises the log's seq past an unread segment's ids, so the loaded log holds none of the
+ * seqs in it. A floor walk that cannot step over a seq the log does not hold stops below the first
+ * of them, every later own drop becomes an explicit `RgaOp.Compact`, and every segment carrying
+ * one is pinned on disk for good. Measured on the #3410 repro before the fix: 35 segment keys, 30
+ * of them pinned, about 50 KB resident, against 3 keys and about 2.3 KB with no refusal.
+ *
+ * The shape is the issue's: 16 exports with eight ops to a segment and room for ten records, a
+ * restart whose read of segment 1 is refused once, 300 exports, then a clean restart and 300 more.
+ * The no-refusal run is the control, and the refused run must end in the same layout.
+ */
+class WarpLogRecordExporterUnreadSegmentFloorTest {
+
+    private val replica = ReplicaId("A")
+
+    private fun recordId(id: Int): ByteString = ByteString(ByteArray(8) { i -> (id.toLong() shr (8 * i)).toByte() })
+
+    private fun record(id: Int) = LogRecord(
+        recordId = recordId(id),
+        body = "body-$id",
+        observedEpochNanos = 1_700_000_000_000_000_000L,
+    )
+
+    private fun exporterFor(store: DurableStore) = WarpLogRecordExporter(
+        replica = replica,
+        store = store,
+        maxRecords = 10,
+        bufferPolicy = BufferPolicy.DROP_OLDEST,
+        segmentOps = 8,
+    )
+
+    /** What the store and the log look like at the end of a run. */
+    private data class Layout(
+        val segmentKeys: Int,
+        val compactCarrying: Int,
+        val residentBytes: Int,
+        val compactedIds: Int,
+    )
+
+    private class Run(
+        val refusals: Int,
+        val floorBeforeCleanStart: Long,
+        val seqBeforeCleanStart: Long,
+        val compactedBeforeCleanStart: Int,
+        val visible: List<String?>,
+        val layout: Layout,
+        val failures: Int,
+    )
+
+    private suspend fun layoutOf(store: RecordingStore, log: Rga<LogRecord>): Layout {
+        val segments = store.keys().filter { it.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }
+        val compactCarrying = segments.count { key ->
+            decodeSegmentForTest(requireNotNull(store.read(StoreKey(key)))).compactOpCount > 0
+        }
+        return Layout(segments.size, compactCarrying, store.residentBytes(), log.compactedIds.size)
+    }
+
+    private suspend fun run(refuseOnce: Boolean): Run {
+        val backing = RecordingStore()
+        val writer = exporterFor(backing)
+        var failures = 0
+        repeat(16) { if (writer.export(record(it)) != ExportResult.Success) failures++ }
+
+        val refusing = ReadRefusingStore(backing, StoreKey(segmentKeyForTest(1L)), refusingAtStart = refuseOnce)
+        val restarted = exporterFor(refusing)
+        restarted.recover()
+        refusing.heal()
+        repeat(300) { if (restarted.export(record(100 + it)) != ExportResult.Success) failures++ }
+        val before = restarted.snapshot()
+
+        val clean = exporterFor(backing)
+        clean.recover()
+        repeat(300) { if (clean.export(record(1000 + it)) != ExportResult.Success) failures++ }
+        val after = clean.snapshot()
+        return Run(
+            refusals = refusing.refusals,
+            floorBeforeCleanStart = before.compactedBelow[replica],
+            seqBeforeCleanStart = before.seqHighWater(replica),
+            compactedBeforeCleanStart = before.compactedIds.size,
+            visible = after.toList().map { it.body },
+            layout = layoutOf(backing, after),
+            failures = failures,
+        )
+    }
+
+    @Test
+    fun aRefusedReadEndsInTheLayoutOfARunWithNoRefusal() = runTest {
+        val control = run(refuseOnce = false)
+        val refused = run(refuseOnce = true)
+        assertAll(
+            // The rigs: the refused run really was refused, once, and the control never was.
+            { assertEquals(1, refused.refusals, "segment 1's read was refused once") },
+            { assertEquals(0, control.refusals, "the control was never refused") },
+            { assertEquals(0, refused.failures + control.failures, "every export succeeded") },
+            // The control's own shape, so a change that bloats both runs alike cannot pass.
+            { assertEquals(0, control.layout.compactCarrying, "the control pins nothing") },
+            { assertEquals(0, control.layout.compactedIds, "the control holds no Compact id") },
+            // The property: the floor walked past the unread segment's seqs before it came back,
+            { assertEquals(control.seqBeforeCleanStart, refused.seqBeforeCleanStart, "both runs minted the same seqs") },
+            {
+                assertEquals(
+                    control.floorBeforeCleanStart,
+                    refused.floorBeforeCleanStart,
+                    "the refused run's floor kept pace with the control's",
+                )
+            },
+            { assertEquals(0, refused.compactedBeforeCleanStart, "no own drop became a Compact") },
+            // and the store ends where the control's does.
+            { assertEquals(control.layout, refused.layout, "the refused run ends in the control's layout") },
+            { assertEquals(control.visible, refused.visible, "and holds the same records") },
+        )
+    }
+
+    /**
+     * A sealed key the store refuses for good: the floor still walks past its seqs, so nothing
+     * own is pinned, and the layout stops growing. The key itself stays named, since nothing was
+     * read out of it.
+     */
+    @Test
+    fun aSegmentRefusedForGoodStopsGrowingTheStore() = runTest {
+        val backing = RecordingStore()
+        val writer = exporterFor(backing)
+        repeat(16) { assertEquals(ExportResult.Success, writer.export(record(it))) }
+        val refusing = ReadRefusingStore(backing, StoreKey(segmentKeyForTest(1L)))
+        val restarted = exporterFor(refusing)
+        restarted.recover()
+        repeat(300) { assertEquals(ExportResult.Success, restarted.export(record(100 + it))) }
+        val atThreeHundred = layoutOf(backing, restarted.snapshot())
+        repeat(300) { assertEquals(ExportResult.Success, restarted.export(record(1000 + it))) }
+        val atSixHundred = layoutOf(backing, restarted.snapshot())
+        assertAll(
+            { assertTrue(refusing.refusals >= 1, "segment 1's read was refused") },
+            { assertTrue(segmentKeyForTest(1L) in backing.keys(), "the refused segment stays on disk") },
+            { assertEquals(0, atSixHundred.compactCarrying, "no segment carries a Compact") },
+            { assertEquals(0, atSixHundred.compactedIds, "no own drop became a Compact") },
+            { assertEquals(atThreeHundred.segmentKeys, atSixHundred.segmentKeys, "the key count stopped growing") },
+            {
+                assertTrue(
+                    atSixHundred.segmentKeys <= 4,
+                    "the store holds the control's three keys and the refused one: ${backing.keys()}",
+                )
+            },
+        )
+    }
+}
