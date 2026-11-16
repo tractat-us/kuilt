@@ -1304,8 +1304,7 @@ public class LocalHeddle private constructor(
             val reason = when {
                 below != null -> "${below.value}, below it, did not retire"
                 overBudget -> "its weight would put its siblings' weight arithmetic out of Long, or let one full lease carry a child past its ceiling"
-                pastLimit -> "seated level with the furthest-ahead of its siblings, it would carry its parent past the position limit; " +
-                    "remove it, or wait for its siblings' share to be spent on a fresh parent"
+                pastLimit -> "seated level with the furthest-ahead of its siblings, it would carry its parent past the position limit"
                 else -> "the ledger refused it"
             }
             if (child in replaced.values) {

@@ -400,7 +400,8 @@ public class FairShareAllocator(
      * @param eligible each child edge's appetite for this pick: [Demand.NONE] for a child that
      *   cannot take this grant. A child [eligible] wants should also be one [waiting] wants.
      * @return the seated ledger and the grant, or `null` when no child can be granted anything:
-     *   none is eligible, none is seated, or [parent] holds nothing.
+     *   none is eligible, none is seated, [parent] holds nothing, or the seat and wake step there
+     *   would pass the position limit ([pickChildStep] tells that one apart).
      */
     public fun pickChild(
         parent: GroupId,
