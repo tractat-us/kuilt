@@ -553,9 +553,10 @@ class SpeculativeSequencerPendingTest {
         const val STEPS = 40
 
         /**
-         * The most refused commits [SEEDED_WALK_BACKSTOP] is sized for. These seeds produce 448, the same
-         * on the JVM, `macosArm64` and `iosSimulatorArm64`; the walk asserts it stays under this, so a change to the seeds, the steps or
-         * the rule that adds traces fails here rather than at the ceiling on the slowest runner.
+         * The most refused commits [SEEDED_WALK_BACKSTOP] is sized for. These seeds produce 448, the
+         * same on the JVM, `macosArm64` and `iosSimulatorArm64`. The walk asserts the count stays under
+         * this, so a change to the seeds, the steps or the rule that adds traces fails here rather
+         * than at the ceiling on the slowest runner.
          */
         const val MAX_REFUSED_COMMITS = 500
 
