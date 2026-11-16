@@ -755,8 +755,13 @@ public class WarpSpanExporter(
      * over newer bytes ([DurableStore.write]). The exporter keeps such a turn's set dot, so the span
      * shown next never shares it. What that leaves open: a restart over the late commit reads a set
      * context that lacks the set dots of spans shown after the failed one, so an export it makes
-     * before a peer hands those spans back can mint one of them again. The clock's dots are not
-     * affected, since the clock key is written ahead of each span write and only after it returns.
+     * before a peer hands those spans back can mint one of them again. It also reaches them by a
+     * second route: an export that fails in that window keeps the dot it minted, and if a peer then
+     * hands back a span on that same dot, the next export's turn drops it, since the kept context has
+     * seen the dot and holds no span on it. A successful export in that window loses the handed-back
+     * span as well, so this route widens the residual rather than opening it (#3544). The clock's dots
+     * are not affected, since the clock key is written ahead of each span write and only after it
+     * returns.
      */
     public fun snapshot(): ORSet<SpanRecord> = lock.withLock { spans }
 
