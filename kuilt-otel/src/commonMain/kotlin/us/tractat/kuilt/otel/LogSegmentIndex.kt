@@ -85,7 +85,9 @@ import kotlinx.serialization.encoding.Encoder
  *   repro (one unread segment, 300 exports at eight ops a segment) left 35 segment keys where 3 is
  *   normal, 30 of them pinned by an `RgaOp.Compact`, for good. Crossing the hole alone was not
  *   enough: read back within fewer exports than the window holds, the records sorted behind newer
- *   ones and blocked the floor the same way.
+ *   ones and blocked the floor the same way. A clear drops no seq above a hole past every held one,
+ *   so it raises the floor to this high-water instead ([us.tractat.kuilt.crdt.Rga.dropAllOwn],
+ *   #3513).
  *
  *   Both default to `0`, which is what an index written before them meant: mint from what was read.
  */
