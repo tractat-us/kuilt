@@ -202,6 +202,36 @@ class W1BridgeProbeTest {
         )
     }
 
+    /**
+     * A charging call is never refused at the limit (design §7.1). `heavy`, at `2⁴⁰`, is active and
+     * unseated beside `light`, planted at `2⁹⁴` ticks, so no seat can be made for it. `admit` opens
+     * its lease at zero rather than refusing, and `complete` reports the cost as unrecorded, since
+     * the only group above `heavy`'s edge is the root. Nothing throws, and `light` still leases.
+     */
+    @Test
+    fun aChargingCallAcrossAnEdgeThatCannotBeSeatedOpensAtZeroAndNeverRefuses() {
+        val shape = tree("light" to Weight.ONE, "heavy" to Weight.of(1L shl 40))
+        val l = shape.groupId("light")
+        val x = shape.groupId("heavy")
+        val h = LocalHeddle.bootWhole(shape, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+        h.mintSupply(1L shl 20)
+        val lightEdge = checkNotNull(h.snapshot().ledger.lineageOf(l)).last()
+        val heavyEdge = checkNotNull(h.snapshot().ledger.lineageOf(x)).last()
+        h.reshapeForTest { ledger ->
+            ledger.piece(EntitlementLedger.of(gauges = mapOf(lightEdge to gaugeAt(Int128.fromTwosComplement(1L shl 30, 0L), folded = 0L))))
+        }
+        val admitted = h.admit(x, waiting = setOf(x), startedAt = 0L)
+        val lease = assertIs<AdmitOutcome.Acquired>(admitted, "admit is never refused: $admitted").lease
+        val done = h.complete(lease.id, actualCost = 3L, waiting = emptySet())
+        val light = h.acquire(setOf(l), setOf(l), startedAt = 1L, reservation = 1L)
+        assertAll(
+            { assertEquals(null, h.snapshot().ledger.gauge(heavyEdge), "the rig: heavy's edge was never seated") },
+            { assertEquals(0L, lease.reserved, "the lease opens at zero") },
+            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 3L, unrecorded = 3L), done, "and its cost is reported, unrecorded") },
+            { assertEquals(l, assertIs<AcquireOutcome.Acquired>(light, "light still leases").lease.leaf) },
+        )
+    }
+
     private companion object {
         const val MAX: Long = LocalHeddle.MAX_RESERVATION
     }

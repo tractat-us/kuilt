@@ -426,11 +426,14 @@ class FairShareAllocatorRefusalTest {
         val past = allocator(twoTo(105)).schedule(root, pastCell, earmarked = 0L) { hungry }
         val withoutE3 = allocator(twoTo(105)).schedule(root, CountingCell(start), earmarked = 0L) { if (it == e3) Demand.NONE else hungry }
         val under = allocator(twoTo(104)).schedule(root, CountingCell(start), earmarked = 0L) { hungry }
+        // At 2^110 the shift itself leaves 128 bits: refused, not thrown.
+        val overflowing = allocator(twoTo(110)).schedule(root, CountingCell(start), earmarked = 0L) { hungry }
         assertAll(
             { assertEquals(AllocationOutcome.LifetimeExhausted(root), past, "a shift past the limit is refused") },
             { assertEquals(0, pastCell.writes, "and nothing was written") },
             { assertTrue(withoutE3 is AllocationOutcome.Delegated, "with e3 not asking, e1 is picked: $withoutE3") },
             { assertTrue(under is AllocationOutcome.Delegated, "a shift under the limit lands, though run times numerator is past 128 bits: $under") },
+            { assertEquals(AllocationOutcome.LifetimeExhausted(root), overflowing, "a shift past 128 bits is refused, not thrown") },
         )
     }
 }
