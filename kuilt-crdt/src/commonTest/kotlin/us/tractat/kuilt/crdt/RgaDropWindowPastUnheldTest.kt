@@ -113,6 +113,42 @@ class RgaDropWindowPastUnheldTest {
         )
     }
 
+    /**
+     * A compacted seq inside a gap does not block a crossing that a dropped seq above it licenses.
+     * The peer's `Compact` took this replica's 3, between the holes 2 and 4; dropping 1 and 5 floors
+     * through all of them, so the drops keep folding into the floor.
+     */
+    @Test
+    fun aCompactedSeqInsideAGapDoesNotBlockACrossingLicensedAboveIt() {
+        val (state, minted) = holed(1, 5, 6)
+        val peerHeld = minted.filter { it.id.seq == 3L }.fold(Rga.empty<String>()) { s, op -> s.apply(op) }
+        val (_, peerPatch) = requireNotNull(peerHeld.dropWindow(peer, ids(minted, 3)))
+        val merged = state.piece(peerPatch.delta)
+        val (dropped, _) = requireNotNull(merged.dropWindowPastUnheld(me, ids(minted, 1, 5)))
+        assertAll(
+            { assertEquals(ids(minted, 3), merged.compactedIds, "the rig: the peer's Compact took 3") },
+            { assertEquals(5L, dropped.compactedBelow[me], "the floor crosses 2 to 4 to the dropped 5") },
+            { assertEquals(listOf("6"), dropped.toList()) },
+        )
+    }
+
+    /**
+     * A wedge already recorded heals. Before #3447 a drop above a hole became a `Compact`; a later
+     * pass that drops a seq above it crosses the hole and the compacted seq together.
+     */
+    @Test
+    fun aWedgeAlreadyRecordedHealsOnTheNextDropAboveIt() {
+        val (state, minted) = holed(1, 4, 5, 6)
+        val (wedged, _) = requireNotNull(state.dropWindow(me, ids(minted, 4)))
+        val (healed, _) = requireNotNull(wedged.dropWindowPastUnheld(me, ids(minted, 1, 5)))
+        assertAll(
+            { assertEquals(0L, wedged.compactedBelow[me], "the rig: seq 4 went to a Compact") },
+            { assertEquals(ids(minted, 4), wedged.compactedIds) },
+            { assertEquals(5L, healed.compactedBelow[me], "the floor crosses 2, 3 and the compacted 4 to 5") },
+            { assertEquals(listOf("6"), healed.toList()) },
+        )
+    }
+
     /** A compacted seq contiguous with the floor still extends it, as in [Rga.dropWindow]. */
     @Test
     fun aCompactedSeqContiguousWithTheFloorStillExtendsIt() {
