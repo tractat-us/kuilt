@@ -95,9 +95,12 @@ public enum class OtlpWireFormat {
  * one with `400` too. A `413` on a request of several records halves it and sends the
  * halves; the smaller size is not remembered. A record bigger than the cap on its own
  * is sent alone, after every other request is acknowledged, because the cap is a guess
- * and the collector may still take it. A `413` on any single record records it as
- * delivered, with a WARN naming it and its size: the same bytes would be refused again,
- * and keeping it would fail the signal on every drain until the buffer evicts it.
+ * and the collector may still take it. A `413` on that record records it as delivered,
+ * with a WARN naming it and its size: the same bytes would be refused again, and keeping
+ * it would fail the signal on every drain until the buffer evicts it. A `413` on a lone
+ * record **inside** the cap fails the signal instead, like any other refusal: something in
+ * front of the collector limits bodies below [maxRequestBytes], and folding would report
+ * records sent that the collector never took. Lower [maxRequestBytes] to that limit.
  *
  * @param client caller-owned Ktor [HttpClient] — it owns the engine, timeouts, TLS,
  *   and any auth headers. kuilt does not create or close it, and this module ships no
@@ -388,6 +391,13 @@ public class OtlpHttpEdge(
                 status.isSuccess() -> delivered += chunk
                 status != HttpStatusCode.PayloadTooLarge -> error("OTLP POST $path failed: $status")
                 chunk.size > 1 -> sendHalves(chunk)
+                // A lone record inside the cap that is still too large: something in front of the
+                // collector caps bodies below maxRequestBytes. Folding it would record every record
+                // as sent while the collector holds none, so the signal fails, every drain, visibly.
+                body.bytes <= maxRequestBytes -> error(
+                    "OTLP POST $path failed: $status on ${describe(chunk.single())} (${body.bytes} bytes), inside " +
+                        "maxRequestBytes = $maxRequestBytes; the collector or a proxy in front of it limits bodies below that",
+                )
                 else -> {
                     logger.warn {
                         "OTLP POST $path: the collector refused ${describe(chunk.single())} (${body.bytes} bytes) as too " +
