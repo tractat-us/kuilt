@@ -316,7 +316,9 @@ class WarpLogRecordExporterUnreadSealedSegmentIdsTest {
         val ownLamports = restarted.snapshot().entries().map { it.first.lamport }
 
         val peer = ReplicaId("B")
-        val (peerLog, minted) = peerHeld.advanceClock(peer, lamport = 1_000L, seq = 0L)
+        // Ahead of every id this replica has minted, by construction rather than by a constant:
+        // the exporter's clock does not count one per record.
+        val (peerLog, minted) = peerHeld.advanceClock(peer, lamport = ownLamports.max() + 1_000L, seq = 0L)
             .insertAllAfter(peer, peerHeld.entries().last().first, listOf(record(900)))
         assertEquals(ExportResult.Success, restarted.merge(peerLog))
         return AheadPeerRun(
