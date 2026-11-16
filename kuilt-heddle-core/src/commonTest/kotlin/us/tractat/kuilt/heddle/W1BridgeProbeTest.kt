@@ -152,7 +152,8 @@ class W1BridgeProbeTest {
             { assertEquals(listOf(h1, h2), many.first, "at 128 leases each heavy joiner is refused") },
             { assertEquals(listOf(m), many.second, "and four goes on being leased") },
             { assertEquals(listOf(h2), some.first, "at 48 leases the second joiner, which passes the load, is refused alone") },
-            { assertEquals(listOf(m, h1), some.second, "and four and h1 are both leased") },
+            // h1 lands level with four, and four has run a lease, so h1 takes the next picks.
+            { assertEquals(listOf(h1), some.second, "and h1, landed, is picked") },
         )
     }
 
