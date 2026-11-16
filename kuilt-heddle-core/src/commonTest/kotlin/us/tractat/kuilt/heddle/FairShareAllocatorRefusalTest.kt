@@ -311,7 +311,7 @@ class FairShareAllocatorRefusalTest {
         val e3 = AttachmentId("e3")
         val start = withChildren(
             seatedAtWide(flat(mint = 100L), e1, twoTo(94)),
-            AttachmentRecord(e3, root, GroupId("g3"), Weight.of(1L shl 40)),
+            AttachmentRecord(e3, root, GroupId("g3"), Weight.of(1L shl 20)),
         )
         val cell = CountingCell(start)
         val allocator = FairShareAllocator(self, policy)
@@ -397,19 +397,23 @@ class FairShareAllocatorRefusalTest {
     }
 
     /**
-     * A returner whose shift would pass the limit (design §7.1). `e3`, at `2⁴⁰`, left at clock zero
-     * and comes back to a clock planted at `2¹⁰⁵` ticks, so its shift on its own grid is about
-     * `2¹²⁵·⁵` ticks: past the limit and inside 128 bits. The pick is refused and writes nothing,
-     * and with `e3` not asking, `e1` is picked. At a clock of `2¹⁰⁴` the shift, about `2¹²⁴·⁵`,
-     * lands.
+     * A returner whose shift cannot be formed is refused, typed (design §7.1). `e3`, at `2²⁰`, left
+     * at clock zero and comes back to a clock planted at `2¹¹⁰` ticks. Its shift is formed as the
+     * clock's run times its weight's numerator, `2¹³⁰`, before it is divided down, so it leaves
+     * 128 bits there: the pick is refused and writes nothing, and with `e3` not asking, `e1` is
+     * picked. At a clock of `2¹⁰⁰` the shift, about `2¹⁰⁰·⁵` ticks, lands.
+     *
+     * That intermediate refuses a return before its shift reaches the limit: a returner of
+     * numerator `n` is refused once the clock's run passes `2¹²⁷ / n`, where the shift itself is
+     * only about `2¹⁰⁷·⁵ / d`. Refused rather than thrown, so safe, but sooner than §7.1 says.
      */
     @Test
-    fun aReturnerWhoseShiftWouldPassTheLimitIsRefused() {
+    fun aReturnerWhoseShiftCannotBeFormedIsRefusedTyped() {
         val e3 = AttachmentId("e3")
         val start = withChildren(
             EntitlementLedger.bootstrap(root, mapOf(self to 100L), nonce = "genesis"),
             AttachmentRecord(e1, root, GroupId("g1"), Weight.ONE),
-            AttachmentRecord(e3, root, GroupId("g3"), Weight.of(1L shl 40)),
+            AttachmentRecord(e3, root, GroupId("g3"), Weight.of(1L shl 20)),
         ).let { seatedAt(seatedAt(it, e1, 0L), e3, 0L) }
         fun allocator(clock: Int128) = FairShareAllocator(
             self,
@@ -422,11 +426,11 @@ class FairShareAllocatorRefusalTest {
             ),
         )
         val pastCell = CountingCell(start)
-        val past = allocator(twoTo(105)).schedule(root, pastCell, earmarked = 0L) { hungry }
-        val withoutE3 = allocator(twoTo(105)).schedule(root, CountingCell(start), earmarked = 0L) { if (it == e3) Demand.NONE else hungry }
-        val under = allocator(twoTo(104)).schedule(root, CountingCell(start), earmarked = 0L) { hungry }
+        val past = allocator(twoTo(110)).schedule(root, pastCell, earmarked = 0L) { hungry }
+        val withoutE3 = allocator(twoTo(110)).schedule(root, CountingCell(start), earmarked = 0L) { if (it == e3) Demand.NONE else hungry }
+        val under = allocator(twoTo(100)).schedule(root, CountingCell(start), earmarked = 0L) { hungry }
         assertAll(
-            { assertEquals(AllocationOutcome.LifetimeExhausted(root), past, "the returner's shift would pass the limit") },
+            { assertEquals(AllocationOutcome.LifetimeExhausted(root), past, "the returner's shift cannot be formed in 128 bits") },
             { assertEquals(0, pastCell.writes, "and nothing was written") },
             { assertTrue(withoutE3 is AllocationOutcome.Delegated, "with e3 not asking, e1 is picked: $withoutE3") },
             { assertTrue(under is AllocationOutcome.Delegated, "a shift under the limit lands: $under") },
