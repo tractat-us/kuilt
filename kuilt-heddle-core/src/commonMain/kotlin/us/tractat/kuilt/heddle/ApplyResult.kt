@@ -37,10 +37,11 @@ public sealed interface StepRefusal {
     ) : StepRefusal
 
     /**
-     * The ledger refused [step] for a reason waiting on this engine's leases will not cure,
+     * [step] was refused for a reason waiting on this engine's leases will not cure,
      * described by [reason]: a record the ledger holds twice, say, or a reweight whose old edge
-     * still carries units after the engine released every one of its own there. [child] is left
-     * as it was before this apply.
+     * still carries units after the engine released every one of its own there. Or [child] sits
+     * beneath a group the same apply adds and leaves out, where no delegation from the root could
+     * reach it; [reason] names that group. [child] is left as it was before this apply.
      */
     public data class Refused(
         override val child: GroupId,

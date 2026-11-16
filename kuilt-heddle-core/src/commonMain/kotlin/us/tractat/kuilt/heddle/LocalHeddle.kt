@@ -484,7 +484,10 @@ public sealed interface LeaseOutcome {
  *
  * [apply] keeps the weight arithmetic in range the same way: a reload whose weights would put one
  * parent's products of numerators and denominators out of `Long` refuses that child with a
- * [StepRefusal.Refused], and its siblings land. So does one too fine for a full lease: keep every
+ * [StepRefusal.Refused], and its siblings land. Refused so, a group the reload adds takes every
+ * group beneath it out with it, each a [StepRefusal.Refused] of its own, so no lane activates below a
+ * group with no inbound edge (#3466); a running group whose reweight is refused keeps its old edge,
+ * and what is beneath it. So does one too fine for a full lease: keep every
  * weight's denominator at or below 30,719 (#3353). The limit holds at any lease size, because it is
  * sized for the largest lease, [MAX_RESERVATION]. It is necessary, not sufficient: several fine
  * weights whose denominators share no factor are refused below it too. A reload refuses the
@@ -1065,7 +1068,10 @@ public class LocalHeddle private constructor(
      * whole list runs on a working copy that replaces the ledger at the end, so nothing is ever
      * leased against a state part-way through a reload. A child whose change cannot land yet is
      * reported in [ApplyResult.refusals], and every other child's change still lands in the same
-     * swap. Apply the same topology again later, and only what is left is listed.
+     * swap. Apply the same topology again later, and only what is left is listed. A child left out
+     * that was not reachable from the root before the reload, a new group, takes every group beneath
+     * it out too, each reported, so nothing activates below a group with no inbound edge. A child
+     * that was reachable keeps its edge, so what is beneath it still lands.
      *
      * **A reweight moves its open leases with it.** A changed weight is a new edge, and an open
      * lease whose path crosses the old one moves onto the new one in the same unit: its reservation
@@ -1250,7 +1256,9 @@ public class LocalHeddle private constructor(
      * A replacement is all or nothing: if any part fails it is left out, as [StepRefusal.Refused]
      * unless a lease that cannot move is what holds it ([StepRefusal.Draining]). A retire refused
      * after those releases is refused for units that are not this engine's, which waiting will not
-     * cure. A child any of whose steps the ledger refuses outright is left out too. Only a removal
+     * cure. A child any of whose steps the ledger refuses outright is left out too, and so is every
+     * group beneath a left-out child that was not reachable from the root in the committed ledger,
+     * the mirror of a retire waiting on a group below it. Only a removal
      * waiting on a drain keeps its steps up to the refused retire, since its close is what stops new
      * work going there.
      */
@@ -1309,7 +1317,7 @@ public class LocalHeddle private constructor(
                 .filter { child.value.startsWith(it.value + "/") && !base.reachesFromRoot(it) }
                 .minOrNull()
             if (above != null) {
-                leaveOut += StepRefusal.Refused(child, step, "${above.value}, above it, was left out, and nothing above ${child.value} is reachable from the root without it")
+                leaveOut += StepRefusal.Refused(child, step, "${above.value}, above it, was left out, and no delegation from the root reaches it without that group")
                 stopped += child
                 continue
             }

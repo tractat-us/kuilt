@@ -719,7 +719,10 @@ room for. It is `0` everywhere else.
 
 **A boot is not a reload.** The weight budget belongs to a whole sibling set, and a reload
 activates a set's new children in id order, so of two new siblings that fit alone but not
-together it refuses the one whose id sorts last, and leaves the running tree as it was. A boot
+together it refuses the one whose id sorts last, and leaves the running tree as it was. A refused new
+group takes its new descendants with it, each reported in `refusals`, so no lane activates below
+a group with no inbound edge; a running group whose reweight is refused keeps its old edge, and
+a new lane under it lands. A boot
 has no running tree to keep. Where a group's children's weights do not fit together, it leaves
 out that group and every group beneath it, reports each one, and boots the rest; at the root,
 nothing boots. The answer is the same whatever the children are named and in whatever order they
