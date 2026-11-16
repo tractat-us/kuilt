@@ -7,6 +7,7 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.Rounding
 import us.tractat.kuilt.math.WideSum
 import us.tractat.kuilt.math.timesWide
 import kotlinx.serialization.Serializable
@@ -497,6 +498,16 @@ public class EntitlementLedger private constructor(
     /** [grossVirtualService] once the edge's single record is in hand. */
     private fun grossVirtualService(id: AttachmentId, record: AttachmentRecord): Rational =
         gauges[id].grossVirtualServiceAt(counterValue(issued, id), record.weight)
+
+    /**
+     * Zero, for every parent. 0.7.5 kept an origin per parent, raised by a rebase. Nothing rebases
+     * now and no ledger holds one (design §7.1, step B): a position is absolute, and a 0.7.5 ledger
+     * is read with each origin translated into its children's positions. Kept because 0.7.5
+     * published it.
+     */
+    @Deprecated("Positions have no origin since design §7.1 step B; this always reads zero.")
+    @Suppress("UNUSED_PARAMETER")
+    public fun origin(parent: GroupId): Int128 = Int128.ZERO
 
     /**
      * The [Lifecycle] of [id], or `null` if [id] is entirely unknown to this ledger.
@@ -2747,13 +2758,38 @@ public class EntitlementLedger private constructor(
             @IntroducedAt("0.7.5") forgottenOutflow: Map<GroupId, Map<ReplicaId, Long>> = emptyMap(),
             @IntroducedAt("0.7.5") forgottenLeafSpend: Map<ReplicaId, Long> = emptyMap(),
             @IntroducedAt("0.7.5") forgottenGenerationFloor: Long = -1L,
+            @IntroducedAt("0.7.5") origins: Map<GroupId, Int128> = emptyMap(),
         ): EntitlementLedger =
             EntitlementLedger(
                 records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
-                issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
+                issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut,
+                withOriginsTranslated(gauges, records, origins),
                 transferRelocIn, transferRelocOut,
                 ForgottenEdges(forgottenOutflow, forgottenLeafSpend, forgottenGenerationFloor),
             )
+
+        /**
+         * [gauges] as positions with no origin, given the [origins] a 0.7.5 ledger held per parent
+         * (design §7.1, "0.7.6 reads format 1 by translating"). 0.7.5 picked on
+         * `stored − ⌊O · w · G⌋`, so each gauge under a parent with an origin `O` puts the share
+         * back rounded up: `stored − ⌊O · w · G⌋ + ⌈O · w · G⌉`. A child whose grid `O` is whole on
+         * keeps its stored position, and any other moves up one tick, once: penalty, never credit
+         * (§10.5). An edge with no gauge has no position, and an edge with no single record no
+         * weight, so neither moves.
+         */
+        private fun withOriginsTranslated(
+            gauges: Map<AttachmentId, Gauge>,
+            records: Map<AttachmentId, Set<AttachmentRecord>>,
+            origins: Map<GroupId, Int128>,
+        ): Map<AttachmentId, Gauge> {
+            if (origins.values.all { it == Int128.ZERO }) return gauges
+            return gauges.mapValues { (id, gauge) ->
+                val record = records[id]?.singleOrNull() ?: return@mapValues gauge
+                val origin = origins[record.parent] ?: return@mapValues gauge
+                val lift = originTicks(origin, record.weight, Rounding.CEILING) - originTicks(origin, record.weight)
+                if (lift == Int128.ZERO) gauge else gaugeAt(gauge.ticks + lift, gauge.folded)
+            }
+        }
     }
 }
 

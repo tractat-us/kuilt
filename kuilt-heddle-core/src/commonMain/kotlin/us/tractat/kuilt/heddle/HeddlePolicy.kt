@@ -25,6 +25,9 @@ import us.tractat.kuilt.math.timesWide
  *   the effective value here would make a relocation-receiving edge appear to have consumed its
  *   whole re-homed strand the instant it arrived (issue #1752, F2); it is also what makes the seat
  *   arrival-order independent. Necessarily `0 ≤ baseIssued ≤ summary.issued`.
+ * @property origin deprecated, and zero from every engine since design §7.1 step B, where
+ *   positions are absolute. 0.7.5 published it. A caller that sets it reads every position less
+ *   `⌊origin · w · G⌋`, as 0.7.5 did. Non-negative.
  * @property offsetTicks scheduler-local forward clamp applied on wake so an idle child cannot
  *   bank a backlog of virtual time (design §7.2), in ticks of the edge's own service and wide
  *   (#3353). Zero for a child that never slept; computed on an idle→demand edge —
@@ -40,6 +43,8 @@ public data class PolicyEdge(
     public val gauge: Gauge?,
     public val baseIssued: Long,
     public val offsetTicks: Int128 = Int128.ZERO,
+    @Deprecated("No engine sets an origin since design §7.1 step B: positions are absolute. Leave it at zero.")
+    public val origin: Int128 = Int128.ZERO,
 ) {
     init {
         require(record.id == summary.attachment) {
@@ -47,6 +52,8 @@ public data class PolicyEdge(
         }
         require(baseIssued >= 0L) { "PolicyEdge baseIssued must be non-negative, was $baseIssued" }
         require(offsetTicks >= Int128.ZERO) { "PolicyEdge offsetTicks must be non-negative, was $offsetTicks" }
+        @Suppress("DEPRECATION")
+        require(origin >= Int128.ZERO) { "PolicyEdge origin must be non-negative, was $origin" }
         require(baseIssued <= summary.issued) {
             "PolicyEdge baseIssued $baseIssued exceeds effective issued ${summary.issued} on ${record.id} — " +
                 "the effective value is the base plus non-negative relocation credit, so this pair cannot " +
@@ -221,7 +228,8 @@ public object HeddlePolicy {
      * narrowed ([rawTicksAt], #3353).
      */
     internal fun rawTicks(edge: PolicyEdge): Int128 =
-        edge.gauge.rawTicksAt(edge.baseIssued, edge.summary.returned)
+        @Suppress("DEPRECATION")
+        edge.gauge.rawTicksAt(edge.baseIssued, edge.summary.returned) - originTicks(edge.origin, edge.record.weight)
 
     /**
      * The effective position, wide: [rawTicks] plus the scheduler-local wake clamp, in ticks. The

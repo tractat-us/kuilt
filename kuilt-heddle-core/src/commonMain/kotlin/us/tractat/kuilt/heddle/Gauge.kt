@@ -8,6 +8,8 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.Rounding
+import us.tractat.kuilt.math.mulDiv
 import us.tractat.kuilt.math.timesWide
 
 /**
@@ -212,3 +214,16 @@ internal fun Gauge?.exactGrossTicksAt(baseIssued: Long): Int128 =
  */
 internal fun Gauge?.rawTicksAt(baseIssued: Long, returned: Long): Int128 =
     exactGrossTicksAt(baseIssued) - returned.timesWide(TICKS_PER_UNIT)
+
+/**
+ * An origin of [origin] whole units of virtual time, as ticks on the grid of weight [w], rounded
+ * [rounding]: `O · w · G`. 0.7.5 read every child of a parent less the share rounded down. No
+ * engine raises an origin now (design §7.1, step B), so only two readers remain: a caller that
+ * sets the deprecated [PolicyEdge.origin], and the reader of a 0.7.5 ledger, which puts each
+ * share back rounded up ([EntitlementLedger.of]'s `origins`).
+ */
+internal fun originTicks(origin: Int128, w: Weight, rounding: Rounding = Rounding.FLOOR): Int128 {
+    if (origin == Int128.ZERO) return Int128.ZERO
+    return mulDiv(origin, checkedMul(TICKS_PER_UNIT, w.numerator), w.denominator, rounding)
+        ?: throw ArithmeticException("Int128 overflow: origin $origin read at weight $w")
+}
