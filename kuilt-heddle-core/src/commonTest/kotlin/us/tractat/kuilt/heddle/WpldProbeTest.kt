@@ -110,6 +110,37 @@ class WpldProbeTest {
     }
 
     @Test
+    fun clampProbe() {
+        for (heavyExp in listOf(56, 57, 58)) {
+            for (n in listOf(10, 20, 40)) {
+                val heavy = Weight.of(1L shl heavyExp)
+                val shape = try {
+                    draft("p") { lane("a", Weight.of(1L, 1L shl 14)); lane("b", heavy); lane("c", heavy) }
+                } catch (e: Throwable) { println("WPLD-CLAMP 2^$heavyExp draft threw $e"); continue }
+                val h = try {
+                    LocalHeddle.bootWhole(shape, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+                } catch (e: Throwable) { println("WPLD-CLAMP 2^$heavyExp boot threw $e"); continue }
+                h.mintSupply(1L shl 58)
+                val a = setOf(shape.groupId("a"))
+                val all = listOf("a", "b", "c").map { shape.groupId(it) }.sortedBy { it.value }.toSet()
+                var last: AcquireOutcome? = null
+                repeat(n) { i ->
+                    val out = h.acquire(a, a, startedAt = i.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
+                    if (out is AcquireOutcome.Acquired) h.complete(out.lease.id, LocalHeddle.MAX_RESERVATION, waiting = emptySet()) else last = out
+                }
+                val before = load(h.snapshot(), GroupId("p"))
+                val out = h.acquire(all, all, startedAt = n.toLong(), reservation = LocalHeddle.MAX_RESERVATION)
+                val s = h.snapshot()
+                println(
+                    "WPLD-CLAMP 2^$heavyExp n=$n warm=${last?.let { it::class.simpleName }} before=$before out=${out::class.simpleName} " +
+                        "load=${load(s, GroupId("p"))} noOff=${load(s, GroupId("p"), offsets = false)} stored=${storedSum(s.ledger, GroupId("p"))} " +
+                        "offsets=${s.allocatorMemory.wakeOffsets.size} limit=$POSITION_LIMIT",
+                )
+            }
+        }
+    }
+
+    @Test
     fun limitStats() {
         val slack = (LocalHeddle.MAX_RESERVATION + (1L shl 20)).timesWide(16L)
         val bound = POSITION_LIMIT + slack
