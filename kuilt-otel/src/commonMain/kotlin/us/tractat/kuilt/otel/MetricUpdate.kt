@@ -174,8 +174,8 @@ public sealed interface MetricUpdate {
      * for any peer that already saw it.** A later update starts the slot again from nothing, while
      * the peer keeps the larger of its old and new counts, so a sum there stops growing until the
      * slot passes its old count, and an up-down sum reads a stale share until its increments do.
-     * Here the series is right at once. Forget a key only when no later update will write to it, or
-     * when no peer holds it, as the bridge's retired gauge twin does.
+     * Here the series is right at once. Forget such a key only when nothing will write to it again,
+     * or no peer holds it. The SDK bridge forgets only a [MetricKind.GAUGE], which has no slots.
      */
     public data class Forget(override val key: MetricKey) : MetricUpdate
 }
