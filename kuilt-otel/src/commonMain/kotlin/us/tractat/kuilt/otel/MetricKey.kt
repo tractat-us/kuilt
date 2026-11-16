@@ -12,8 +12,7 @@ import us.tractat.kuilt.crdt.CanonicalMapSerializer
  * to accumulate into the same series.
  *
  * @param name Human-readable metric name. Must not be blank.
- * @param kind The measurement kind: [MetricKind.SUM], [MetricKind.GAUGE], or
- *   [MetricKind.CARDINALITY].
+ * @param kind The measurement kind, one of [MetricKind].
  * @param attributes Key/value label set that differentiates series within the same
  *   metric name (e.g. `{"path" to "/api/v1"}`). Empty means no labels. Two keys that differ only
  *   in the order their attributes were written are equal, so they encode alike too, or sorting a
@@ -71,4 +70,15 @@ public enum class MetricKind {
      * OTLP-aligned via [alphaForOtlpScale] (the exporter enforces this).
      */
     EXPONENTIAL_HISTOGRAM,
+
+    /**
+     * A level that goes up and down and adds up across replicas (e.g. in-flight requests across a
+     * fleet): OpenTelemetry's UpDownCounter, a non-monotonic Sum.
+     *
+     * Backed by a [us.tractat.kuilt.crdt.PNCounter], or a [us.tractat.kuilt.crdt.PNCounterDouble]
+     * for fractional values. Each replica holds its own share, and the series' value is the sum of
+     * every replica's share. A replica reporting a level moves only its own share to it, so the same
+     * level reported again changes nothing, and two replicas at 3 and 4 read 7 after they merge.
+     */
+    UP_DOWN_SUM,
 }
