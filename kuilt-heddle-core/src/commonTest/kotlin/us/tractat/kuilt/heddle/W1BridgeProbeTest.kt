@@ -184,8 +184,10 @@ class W1BridgeProbeTest {
             lease(h, setOf(f, m), m, 1_000L)
             check(h.apply(under("four" to four), generation = 2L).refusals.isEmpty()) { "the rig: fine left" }
             val attached = h.attach(listOf("g"), "heavy", generation = 3L)
-            val x = GroupId(m.value.substringBeforeLast('/') + "/heavy")
-            val next = h.acquire(setOf(m, x), setOf(m, x), startedAt = 2_000L, reservation = MAX)
+            // An attached child's id is the engine's to mint; read it off what the attach applied.
+            val x = attached.applied.map { it.child }.distinct().singleOrNull()
+            val all = setOfNotNull(m, x)
+            val next = h.acquire(all, all, startedAt = 2_000L, reservation = MAX)
             return Triple(attached, next, withFour)
         }
         val (refused, afterRefusal, shape) = run(leases = 160)
@@ -196,7 +198,7 @@ class W1BridgeProbeTest {
             { assertTrue(refused.refusals.single() is StepRefusal.Refused, "as a refusal, alone") },
             { assertEquals(m, assertIs<AcquireOutcome.Acquired>(afterRefusal, "four still leases").lease.leaf) },
             { assertEquals(emptyList(), landed.refusals, "at 16 leases the attach lands") },
-            { assertEquals("heavy", assertIs<AcquireOutcome.Acquired>(afterLanding, "and the heavy lane is picked").lease.leaf.value.substringAfterLast('/')) },
+            { assertTrue(assertIs<AcquireOutcome.Acquired>(afterLanding, "the attached lane leases").lease.leaf.value.endsWith("heavy"), "and it is the one picked: $afterLanding") },
         )
     }
 
