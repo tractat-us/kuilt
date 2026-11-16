@@ -18,7 +18,6 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -2540,7 +2539,7 @@ public abstract class SeamConformanceSuite {
 
     @Test
     public fun incomingCompletesOnInjectedMidSessionDeath(): TestResult =
-        runTest { runIncomingCompletesOnInjectedMidSessionDeath(this) }
+        runTest(timeout = TEST_WEDGE_BACKSTOP) { runIncomingCompletesOnInjectedMidSessionDeath(this) }
 
     internal suspend fun runIncomingCompletesOnInjectedMidSessionDeath(scope: TestScope): Unit =
         scope.connectedPair { host, joiner ->
@@ -2553,14 +2552,24 @@ public abstract class SeamConformanceSuite {
             val injected = injectMidSessionDeath(host, joiner)
             if (!injected) return@connectedPair // meta-test reds on Proven-without-injection.
 
-            // Both symmetric ends must reach Torn on the injected transport death (bounded — no
-            // unbounded advance) AND both `incoming` flows must complete (a late collector on the
-            // drained spool terminates). The suspend collection happens first; the terminal-state
-            // checks are batched through assertAll so both failures surface at once.
-            val hostTorn = withTimeout(5.seconds) { host.state.first { it is SeamState.Torn } }
-            withTimeout(5.seconds) { host.incoming.toList() }
-            val joinerTorn = withTimeout(5.seconds) { joiner.state.first { it is SeamState.Torn } }
-            withTimeout(5.seconds) { joiner.incoming.toList() }
+            // Both symmetric ends must reach Torn on the injected transport death AND both `incoming`
+            // flows must complete (a late collector on the drained spool terminates). The suspend
+            // collection happens first; the terminal-state checks are batched through assertAll so
+            // both failures surface at once.
+            //
+            // **Unbounded, and `runTest`'s wall-clock ceiling is the backstop (#3483).** Each wait used
+            // to sit inside `withTimeout(5.seconds)`, which is VIRTUAL time here: once this coroutine
+            // parks and nothing else is queued, the scheduler jumps the clock to the bound. A real-IO
+            // harness delivers the death on the wall clock — `WebSocketConformanceTest`'s client seam
+            // tears only when its reader thread sees the socket close, a few ms after the server's
+            // `stop` returns — so the bound fired in ~16 ms of real time on a fabric that was working
+            // fine, whenever the client had not torn before the wait began. That race moved with JIT
+            // warmth and load, which made it look like test ordering.
+            // `MidSessionDeathWallClockRigTest` forces the losing side and reds if a bound comes back.
+            val hostTorn = host.state.first { it is SeamState.Torn }
+            host.incoming.toList()
+            val joinerTorn = joiner.state.first { it is SeamState.Torn }
+            joiner.incoming.toList()
 
             assertAll(
                 { assertIs<SeamState.Torn>(hostTorn, "host must latch Torn on injected mid-session transport death") },
@@ -2585,7 +2594,7 @@ public abstract class SeamConformanceSuite {
 
     @Test
     public fun peersDrainWithoutTearOnInjectedMembershipDrain(): TestResult =
-        runTest {
+        runTest(timeout = TEST_WEDGE_BACKSTOP) {
             connectedPair { host, joiner ->
                 val drainedPeer = joiner.selfId
                 // Declaration first — see incomingCompletesOnInjectedMidSessionDeath for why.
@@ -2593,8 +2602,10 @@ public abstract class SeamConformanceSuite {
                 val injected = injectMembershipDrain(host, joiner)
                 if (!injected) return@connectedPair // meta-test reds on Proven-without-injection.
 
-                // Bounded: the survivor observes the drained peer leave its roster (no unbounded advance).
-                val peersAfter = withTimeout(5.seconds) { host.peers.first { drainedPeer !in it } }
+                // The survivor observes the drained peer leave its roster. Unbounded for the reason
+                // runIncomingCompletesOnInjectedMidSessionDeath gives (#3483): a virtual 5 s bound would
+                // fire at once on a harness that delivers the drain on the wall clock.
+                val peersAfter = host.peers.first { drainedPeer !in it }
 
                 // The defining invariant of a DRAIN (vs a tear): the survivor's state stays Woven.
                 assertAll(
