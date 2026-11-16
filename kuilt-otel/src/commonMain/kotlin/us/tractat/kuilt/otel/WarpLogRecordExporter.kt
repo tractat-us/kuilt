@@ -169,14 +169,12 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * structural reason rather than a tuning one. Its condition 4 refuses to collect a tombstone that
  * is still some live element's `after`, and this log is an append **chain**: every record is
  * inserted after the previous one, so every element except the tail is the predecessor of a live
- * successor. [BufferPolicy.DROP_OLDEST] evicts index 0, which at every [maxRecords] above one is
- * the element furthest from being the tail — so the one tombstone condition 4 would accept is the
- * one this exporter never produces. At `maxRecords = 1` that stops holding: index 0 *is* the tail,
- * and the record replacing it is appended after [RgaId.HEAD], so condition 4 would accept the
- * eviction. It reclaims nothing there either, because condition 3 blocks independently and at
- * every cap: a delivered frontier is a fact about peers, and this class holds a [DurableStore],
- * not a [us.tractat.kuilt.core.Seam]. Windowing
- * exists because forgetting *position* needs no barrier at all — the next paragraph is why.
+ * successor. That holds at every [maxRecords], one included: a turn whose eviction takes the
+ * whole buffer still appends after the record it tombstoned (#3522), so the one tombstone
+ * condition 4 would accept is the one this exporter never produces. Condition 3 blocks
+ * independently and at every cap too: a delivered frontier is a fact about peers, and this class
+ * holds a [DurableStore], not a [us.tractat.kuilt.core.Seam]. Windowing exists because forgetting
+ * *position* needs no barrier at all — the next paragraph is why.
  *
  * Windowing is sound without a causal-stability barrier because it deliberately forgets
  * *position*, not *identity*: a dropped dot stays suppressed, so a peer that still holds
@@ -1821,18 +1819,12 @@ public class WarpLogRecordExporter(
      * [refusals] is the turn's `DROP_NEWEST` cap refusals, counted here with the rest for the same
      * reason: a refused turn counts nothing, and its retry counts them once.
      *
-     * ## Two ways this is not *bit*-identical to the per-record loop
+     * ## One way this is not *bit*-identical to the per-record loop
      *
-     * Both are unreachable at the production [DEFAULT_MAX_LOG_RECORDS] and neither
-     * changes the visible sequence, but "indistinguishable from the loop" is exact at
-     * the [Rga] level and only *observationally* exact here, so they are written down.
+     * It is unreachable at the production [DEFAULT_MAX_LOG_RECORDS] and does not change
+     * the visible sequence, but "indistinguishable from the loop" is exact at the [Rga]
+     * level and only *observationally* exact here, so it is written down.
      *
-     * - **Evictions that empty the buffer re-root the run.** When a turn's evictions
-     *   take the whole pre-turn buffer, the run chains after `RgaId.HEAD`, where the loop
-     *   would have chained after the tombstoned predecessor. Same visible order, different
-     *   `after` links in the op-log. Reachable only when a turn is as large as the buffer,
-     *   i.e. `maxRecords` at or below a turn's size — test-scale configuration, not the
-     *   10,000-record default.
      * - **A record re-arriving in the same turn that evicts it is skipped.** [seenIds]
      *   is read at admission time, before this function runs, so a batch containing a
      *   record whose id the same turn is about to evict finds it still present and skips
@@ -1846,10 +1838,12 @@ public class WarpLogRecordExporter(
      */
     private fun applyTurn(admitted: List<LogRecord>, evictions: Int, refusals: Int): List<RgaOp<LogRecord>> {
         val eviction = planEviction(evictions)
-        // DROP_OLDEST removes a leading prefix of the visible sequence. With at least one element
-        // still standing the first and last visible elements are distinct, so `tail` stands; at
-        // zero there is nothing left to append after.
-        val after = if (eviction != null && eviction.count == visibleCount) RgaId.HEAD else tail
+        // After `tail` even when this turn's eviction tombstones it, which it does whenever the
+        // eviction takes the whole buffer. A tombstone is still a position, and appending after
+        // it keeps the log one chain in arrival order, which is the order [idsOutsideWindow]
+        // cuts in. After HEAD instead, the run sorted AHEAD of every older tombstone, the cut
+        // never reached them, and an export-only log at `maxRecords = 1` grew without bound (#3522).
+        val after = tail
         // The one call that can refuse, with nothing committed yet.
         val (newLog, inserts) = (eviction?.log ?: log).insertAllAfter(replica = replica, after = after, values = admitted)
         val applied = (eviction?.removes ?: emptyList()) + inserts
