@@ -25,6 +25,7 @@ import us.tractat.kuilt.otel.MetricExportResult
 import us.tractat.kuilt.otel.MetricHistogramOverflowException
 import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.MetricSumOverflowException
+import us.tractat.kuilt.otel.MetricUpDownSumOverflowException
 import us.tractat.kuilt.otel.MetricUpdate
 import us.tractat.kuilt.otel.MetricWriteResult
 import us.tractat.kuilt.otel.WarpMetricExporter
@@ -254,6 +255,51 @@ class KuiltMetricExporterBatchTest {
             { assertEquals(failedBefore + 1, exp.health.value.failed, "one export counted ${exp.health.value.failed - failedBefore} failed turns") },
             { assertEquals(4L, exp.sumValue(sumKey("requests", "/b")), "the unsaturated sum did not land once") },
             { assertEquals(null, exp.gaugeValue(gaugeKey("temp", "/a")), "the unread kind's gauge was counted") },
+        )
+    }
+
+    /**
+     * A saturated up-down series (#3307): this replica's increment slot is at [Long.MAX_VALUE], so
+     * the level it reports in every export would move the slot past it. `record` refuses the batch
+     * for it; the bridge leaves that series out and records the rest again, so the other up-down
+     * series, the counter and the gauge land once and the export succeeds. The bridge's loop asserts
+     * that a refusal names an update still in the batch; an up-down refusal must satisfy it, not trip it.
+     */
+    @Test
+    fun aSaturatedUpDownSeriesIsLeftOutAndTheRestOfTheExportLandsOnce() = runTest {
+        val store = CountingStore()
+        val exp = WarpMetricExporter(replica = ReplicaId("dev"), store = store)
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val saturated = MetricKey("in_flight", MetricKind.UP_DOWN_SUM, mapOf("route" to "/a"))
+        val other = MetricKey("in_flight", MetricKind.UP_DOWN_SUM, mapOf("route" to "/b"))
+        assertEquals(MetricExportResult.Success, exp.setUpDownSum(saturated, Long.MAX_VALUE))
+        assertEquals(MetricExportResult.Success, exp.setUpDownSum(saturated, 0L))
+        val rigRefuses = exp.setUpDownSum(saturated, 2L)
+        val export = listOf(
+            metric(
+                "in_flight",
+                MetricDataType.LONG_SUM,
+                ImmutableSumData.create(false, AggregationTemporality.CUMULATIVE, listOf(longPoint(2L, "/a"), longPoint(5L, "/b"))),
+            ),
+            metric("requests", MetricDataType.LONG_SUM, deltaCounter(listOf(longPoint(4L, "/b")))),
+            metric("temp", MetricDataType.DOUBLE_GAUGE, ImmutableGaugeData.create(listOf(doublePoint(21.5, "/a")))),
+        )
+
+        val code = bridge.export(export)
+        runCurrent()
+
+        val recovered = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
+        assertAll(
+            {
+                val refusal = assertIs<MetricExportResult.Refused>(rigRefuses, "the rig: the series really is saturated")
+                assertEquals(saturated, assertIs<MetricUpDownSumOverflowException>(refusal.overflow).key)
+            },
+            { assertTrue(code.isDone && code.isSuccess, "a saturated up-down series is not an export failure") },
+            { assertEquals(0L, exp.upDownSumValue(saturated), "the saturated series took nothing") },
+            { assertEquals(5L, exp.upDownSumValue(other), "the other up-down series landed") },
+            { assertEquals(4L, exp.sumValue(sumKey("requests", "/b")), "one copy of the delta, not two") },
+            { assertEquals(21.5, exp.gaugeValue(gaugeKey("temp", "/a"))) },
+            { assertEquals(5L, recovered.upDownSumValue(other), "and it is on disk") },
         )
     }
 

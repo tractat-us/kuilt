@@ -225,23 +225,28 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             }
             val line = {
                 "KuiltMetricExporter: dropping this export's updates to ${saturated.what} ${saturated.key.name} " +
-                    "${saturated.key.attributes}: its total count over every replica cannot grow past Long.MAX_VALUE"
+                    "${saturated.key.attributes}: ${saturated.why}"
             }
             if (firstDrop(saturated)) logger.warn(line) else logger.debug(line)
             remaining = remaining.filterNot(saturated::carries)
         }
     }
 
-    /** Which of a key's series `record` refused as saturated. */
-    private enum class SeriesKind(val what: String) {
-        SUM("sum series"),
-        HISTOGRAM("histogram series"),
-        UP_DOWN_SUM("up-down sum series"),
+    /** Which of a key's series `record` refused as saturated, and why that series cannot take more. */
+    private enum class SeriesKind(val what: String, val why: String) {
+        SUM("sum series", "its total over every replica cannot grow past Long.MAX_VALUE"),
+        HISTOGRAM("histogram series", "its total count over every replica cannot grow past Long.MAX_VALUE"),
+        UP_DOWN_SUM(
+            "up-down sum series",
+            "this replica's share cannot move to the level without taking one of its slots past what it holds, " +
+                "or the total over every replica outside a Long",
+        ),
     }
 
     /** A series `record` refused as saturated: a sum, histogram or up-down sum series under [key]. */
     private data class Saturated(val key: MetricKey, val kind: SeriesKind) {
         val what: String get() = kind.what
+        val why: String get() = kind.why
 
         /** Whether [update] is one `record` refused this series for, and so leaves the retry. */
         fun carries(update: MetricUpdate): Boolean = update.key == key && when (update) {
