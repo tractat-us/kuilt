@@ -23,6 +23,7 @@ import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.MetricOverflowException
 import us.tractat.kuilt.otel.MetricSumOverflowException
+import us.tractat.kuilt.otel.MetricUpDownSumOverflowException
 import us.tractat.kuilt.otel.MetricUpdate
 import us.tractat.kuilt.otel.WarpMetricExporter
 import java.util.concurrent.ConcurrentHashMap
@@ -226,21 +227,34 @@ public class KuiltMetricExporter @JvmOverloads constructor(
         }
     }
 
-    /** A series `record` refused as saturated: a sum series, or a histogram series, under [key]. */
-    private data class Saturated(val key: MetricKey, val histogram: Boolean) {
-        val what: String get() = if (histogram) "histogram series" else "sum series"
+    /** Which of a key's series `record` refused as saturated. */
+    private enum class SeriesKind(val what: String) {
+        SUM("sum series"),
+        HISTOGRAM("histogram series"),
+        UP_DOWN_SUM("up-down sum series"),
+    }
+
+    /** A series `record` refused as saturated: a sum, histogram or up-down sum series under [key]. */
+    private data class Saturated(val key: MetricKey, val kind: SeriesKind) {
+        val what: String get() = kind.what
 
         /** Whether [update] is one `record` refused this series for, and so leaves the retry. */
         fun carries(update: MetricUpdate): Boolean = update.key == key && when (update) {
-            is MetricUpdate.IncrementSum -> !histogram
-            is MetricUpdate.RecordHistogram, is MetricUpdate.AddExponentialHistogram -> histogram
-            is MetricUpdate.IncrementSumDouble, is MetricUpdate.SetGauge, is MetricUpdate.AddCardinality -> false
+            is MetricUpdate.IncrementSum -> kind == SeriesKind.SUM
+            is MetricUpdate.RecordHistogram, is MetricUpdate.AddExponentialHistogram -> kind == SeriesKind.HISTOGRAM
+            is MetricUpdate.AddUpDownSum, is MetricUpdate.SetUpDownSum,
+            is MetricUpdate.AddUpDownSumDouble, is MetricUpdate.SetUpDownSumDouble,
+            -> kind == SeriesKind.UP_DOWN_SUM
+            is MetricUpdate.IncrementSumDouble, is MetricUpdate.SetGauge, is MetricUpdate.AddCardinality,
+            is MetricUpdate.Forget,
+            -> false
         }
 
         companion object {
             fun of(refused: MetricOverflowException): Saturated = when (refused) {
-                is MetricSumOverflowException -> Saturated(refused.key, histogram = false)
-                is MetricHistogramOverflowException -> Saturated(refused.key, histogram = true)
+                is MetricSumOverflowException -> Saturated(refused.key, SeriesKind.SUM)
+                is MetricHistogramOverflowException -> Saturated(refused.key, SeriesKind.HISTOGRAM)
+                is MetricUpDownSumOverflowException -> Saturated(refused.key, SeriesKind.UP_DOWN_SUM)
             }
         }
     }
@@ -256,7 +270,13 @@ public class KuiltMetricExporter @JvmOverloads constructor(
      */
     private fun firstDrop(series: Saturated): Boolean {
         val held = exporter.snapshotAll()
-        dropped.removeIf { if (it.histogram) it.key !in held.histograms else it.key !in held.sums }
+        dropped.removeIf {
+            when (it.kind) {
+                SeriesKind.SUM -> it.key !in held.sums
+                SeriesKind.HISTOGRAM -> it.key !in held.histograms
+                SeriesKind.UP_DOWN_SUM -> it.key !in held.upDownSums && it.key !in held.doubleUpDownSums
+            }
+        }
         return dropped.add(series)
     }
 
