@@ -37,9 +37,9 @@ class WarpLogRecordExporterSmallCapTest {
 
     private class Run(val marks: List<Mark>, val visible: List<LogRecord>, val dropped: Long)
 
-    private suspend fun run(maxRecords: Int, batch: Int): Run {
+    private suspend fun run(maxRecords: Int, batch: Int, segmentOps: Int = SEGMENT_OPS): Run {
         val store = RecordingStore()
-        val exporter = WarpLogRecordExporter(replica, store, maxRecords = maxRecords, segmentOps = SEGMENT_OPS)
+        val exporter = WarpLogRecordExporter(replica, store, maxRecords = maxRecords, segmentOps = segmentOps)
         val marks = mutableListOf<Mark>()
         (0 until EXPORTS).chunked(batch).forEach { ids ->
             exporter.export(ids.map(::record))
@@ -98,7 +98,7 @@ class WarpLogRecordExporterSmallCapTest {
 
     @Test
     fun aTurnThatEvictsAWholeBufferOfTwoStaysBounded() = runTest {
-        assertBounded(maxRecords = 2, batch = 2, run = run(maxRecords = 2, batch = 2))
+        assertBounded(maxRecords = 2, batch = 2, run = run(maxRecords = 2, batch = 2, segmentOps = DEFAULT_LOG_SEGMENT_OPS))
     }
 
     @Test
