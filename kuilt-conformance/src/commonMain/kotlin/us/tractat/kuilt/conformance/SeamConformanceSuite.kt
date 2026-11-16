@@ -2540,31 +2540,43 @@ public abstract class SeamConformanceSuite {
 
     @Test
     public fun incomingCompletesOnInjectedMidSessionDeath(): TestResult =
-        runTest {
-            connectedPair { host, joiner ->
-                // Read the declaration BEFORE injecting: a harness whose fabric answers a death
-                // differently on purpose (ObligationDeclaration.NotApplicable.ContractDiffers) can
-                // inject, but this obligation is not the one that holds for it — the DEVIATION is
-                // asserted by midSessionDeathDeclarationIsHonest instead. Injecting first and skipping
-                // after would perform a destructive drop for nothing.
-                if (midSessionDeathDeclaration() !is ObligationDeclaration.Proven) return@connectedPair
-                val injected = injectMidSessionDeath(host, joiner)
-                if (!injected) return@connectedPair // meta-test reds on Proven-without-injection.
+        runTest(timeout = TEST_WEDGE_BACKSTOP) { runIncomingCompletesOnInjectedMidSessionDeath(this) }
 
-                // Both symmetric ends must reach Torn on the injected transport death (bounded — no
-                // unbounded advance) AND both `incoming` flows must complete (a late collector on the
-                // drained spool terminates). The suspend collection happens first; the terminal-state
-                // checks are batched through assertAll so both failures surface at once.
-                val hostTorn = withTimeout(5.seconds) { host.state.first { it is SeamState.Torn } }
-                withTimeout(5.seconds) { host.incoming.toList() }
-                val joinerTorn = withTimeout(5.seconds) { joiner.state.first { it is SeamState.Torn } }
-                withTimeout(5.seconds) { joiner.incoming.toList() }
+    internal suspend fun runIncomingCompletesOnInjectedMidSessionDeath(scope: TestScope): Unit =
+        scope.connectedPair { host, joiner ->
+            // Read the declaration BEFORE injecting: a harness whose fabric answers a death
+            // differently on purpose (ObligationDeclaration.NotApplicable.ContractDiffers) can
+            // inject, but this obligation is not the one that holds for it — the DEVIATION is
+            // asserted by midSessionDeathDeclarationIsHonest instead. Injecting first and skipping
+            // after would perform a destructive drop for nothing.
+            if (midSessionDeathDeclaration() !is ObligationDeclaration.Proven) return@connectedPair
+            val injected = injectMidSessionDeath(host, joiner)
+            if (!injected) return@connectedPair // meta-test reds on Proven-without-injection.
 
-                assertAll(
-                    { assertIs<SeamState.Torn>(hostTorn, "host must latch Torn on injected mid-session transport death") },
-                    { assertIs<SeamState.Torn>(joinerTorn, "joiner must latch Torn on injected mid-session transport death") },
-                )
-            }
+            // Both symmetric ends must reach Torn on the injected transport death AND both `incoming`
+            // flows must complete (a late collector on the drained spool terminates). The suspend
+            // collection happens first; the terminal-state checks are batched through assertAll so
+            // both failures surface at once.
+            //
+            // **Unbounded, and `runTest`'s wall-clock ceiling is the backstop (#3483).** Each wait used
+            // to sit inside `withTimeout(5.seconds)`, which is VIRTUAL time here: once this coroutine
+            // parks and nothing else is queued, the scheduler jumps the clock to the bound. A real-IO
+            // harness delivers the death on the wall clock — `WebSocketConformanceTest`'s client seam
+            // tears only when its reader thread sees the socket close, a few ms after the server's
+            // `stop` returns — so the bound fired in ~16 ms of real time on a fabric that was working
+            // fine, whenever the client had not torn before the wait began. That race moved with JIT
+            // warmth and load, which made it look like test ordering.
+            // `MidSessionDeathWallClockRigTest` forces the losing side, and reds if a bound returns on the
+            // joiner's `state` wait.
+            val hostTorn = host.state.first { it is SeamState.Torn }
+            host.incoming.toList()
+            val joinerTorn = joiner.state.first { it is SeamState.Torn }
+            joiner.incoming.toList()
+
+            assertAll(
+                { assertIs<SeamState.Torn>(hostTorn, "host must latch Torn on injected mid-session transport death") },
+                { assertIs<SeamState.Torn>(joinerTorn, "joiner must latch Torn on injected mid-session transport death") },
+            )
         }
 
     // ── (13c) a membership drain shrinks peers WITHOUT tearing the survivor ───

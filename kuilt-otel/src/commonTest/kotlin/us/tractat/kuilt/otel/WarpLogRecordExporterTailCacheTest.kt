@@ -417,8 +417,13 @@ class WarpLogRecordExporterTailCacheTest {
 
         private fun windowPass() {
             evictionsSincePass = 0
-            val dropped = idsOutsideWindow() ?: return
-            val (newLog, _) = log.dropWindow(replica, dropped) ?: return
+            val outside = idsOutsideWindow() ?: return
+            // The window drops in arrival order, as production's does (#3447): every own record
+            // that arrived before one it drops goes too. At `cap = 1` that is the tombstones the
+            // newest record sorts ahead of, since each insert re-roots after HEAD.
+            val newestDropped = outside.filter { it.replicaId == replica }.maxOfOrNull { it.seq } ?: 0L
+            val dropped = outside + log.sequence.filter { it.replicaId == replica && it.seq < newestDropped }
+            val (newLog, _) = log.dropWindowPastUnheld(replica, dropped) ?: return
             log = newLog
             seenIds = log.entries().associate { (rgaId, record) -> record.recordId to rgaId }
         }
