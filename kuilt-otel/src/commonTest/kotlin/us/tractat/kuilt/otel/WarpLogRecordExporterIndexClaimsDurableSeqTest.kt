@@ -14,20 +14,21 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Pins that no index the log exporter writes claims a seq the store does not hold (#3410's
- * second half).
+ * Pins that every index the log exporter writes claims past every seq it has minted, and that a
+ * restart which raises the log to that claim keeps its drop floor advancing.
  *
- * The index carries this replica's seq high-water so a restart mints past a sealed segment it
- * could not read. It has to stop there. Recovery raises the log to whatever the index claims, and
- * [Rga.dropWindow] folds this replica's drops into its floor only along an unbroken run of seqs.
- * A seq the index claims and no key holds is a hole in that run, so the floor stops below it for
- * good: every later drop is recorded as an explicit [RgaOp.Compact], and a segment carrying one is
- * never retired.
+ * The index carries this replica's seq high-water so a restart mints past ids it cannot see: a
+ * sealed segment it could not read (#3410), or a record that escaped through [WarpLogRecordExporter.snapshot]
+ * or a sink before its write landed (#3452). So the claim runs ahead of what the keys hold, and
+ * a restart's log has a hole in its seqs. Until #3447 that hole stopped the floor for good: the
+ * window folded drops only along an unbroken run, every later drop was kept as an explicit
+ * [RgaOp.Compact], and a segment carrying one was never retired. #3444 answered by keeping the
+ * claim down to what the keys hold, which re-minted the escaped ids. The window now crosses the
+ * hole ([Rga.dropWindowPastUnheld]), and these arms pin both halves: the claim covers every seq,
+ * and the layout after a restart stays as small as a run with no outage.
  *
- * The over-claim needs only a segment write refused while the index write beside it lands, which
- * is the shape a quota-bound store has: it refuses the large segment and takes the small index.
- * Each turn after the first refusal leads with an index write, and that write used to carry the
- * seqs the same turn had just minted into memory.
+ * The shapes need only a segment write refused while the index write beside it lands, which is
+ * the shape a quota-bound store has: it refuses the large segment and takes the small index.
  */
 class WarpLogRecordExporterIndexClaimsDurableSeqTest {
 
@@ -113,12 +114,13 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
             { assertTrue(indexWritesInOutage > 0, "no index write landed during the outage") },
             { assertTrue(mintedInMemory > heldAtRestart, "the outage minted nothing past $heldAtRestart") },
             { assertTrue(after.all { it == ExportResult.Success }, "an export after the restart failed") },
-            // The property: the index claims only what the store holds, so the restarted log has
-            // no hole to stop its floor, and the layout stays as small as a run with no outage.
+            // The property: the index claims every seq minted into memory, and the restarted
+            // log's floor crosses the hole that leaves, so the layout stays as small as a run with
+            // no outage.
             {
                 assertTrue(
-                    indexAtRestart.seqHighWater <= heldAtRestart,
-                    "the index claims seq ${indexAtRestart.seqHighWater}; the store holds 1..$heldAtRestart",
+                    indexAtRestart.seqHighWater >= mintedInMemory,
+                    "the index claims seq ${indexAtRestart.seqHighWater}; memory minted $mintedInMemory",
                 )
             },
             {
@@ -135,16 +137,15 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
 
     /**
      * A whole-log adopt whose segment is refused while the log carries an own record no key holds,
-     * then a restart. The adopt's leading index write claims the adopted log's seq, so it may land
-     * only once the active segment carrying that record has: otherwise the restart raises the log
-     * past a seq that exists nowhere, and the floor stops below it for good.
+     * then a restart. The restart raises the log past that record's seq, which the claim covers,
+     * and the floor crosses the hole the refused writes left.
      *
      * The store refuses only large writes once the adopt comes, the shape a quota-bound store has:
      * the whole log, padded by a peer's long record, is refused and the active segment is taken.
      * [adopt] is the turn that builds the whole-log adopt, a merge or an export deduplicating
      * against the refused merge's record, the two sites that build one.
      */
-    private fun aRefusedWholeLogAdoptClaimsOnlyWhatTheStoreHolds(adopt: suspend (WarpLogRecordExporter) -> ExportResult) =
+    private fun aRefusedWholeLogAdoptClaimsEveryMintedSeq(adopt: suspend (WarpLogRecordExporter) -> ExportResult) =
         runTest {
             val backing = RecordingStore()
             val sized = RefuseLargeWritesStore(backing, maxBytes = 2_048)
@@ -187,8 +188,14 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
                 // The property.
                 {
                     assertTrue(
-                        indexAtRestart.seqHighWater <= heldAtRestart,
-                        "the index claims seq ${indexAtRestart.seqHighWater}; the store holds 1..$heldAtRestart",
+                        indexAtRestart.seqHighWater >= mintedInMemory,
+                        "the index claims seq ${indexAtRestart.seqHighWater}; memory minted $mintedInMemory",
+                    )
+                },
+                {
+                    assertTrue(
+                        indexAtRestart.seqHighWater > heldAtRestart,
+                        "the rig: the claim runs ahead of the store's 1..$heldAtRestart",
                     )
                 },
                 {
@@ -248,29 +255,30 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
     }
 
     @Test
-    fun aRefusedWholeLogAdoptByAMergeClaimsOnlyWhatTheStoreHolds() =
-        aRefusedWholeLogAdoptClaimsOnlyWhatTheStoreHolds { writer ->
+    fun aRefusedWholeLogAdoptByAMergeClaimsEveryMintedSeq() =
+        aRefusedWholeLogAdoptClaimsEveryMintedSeq { writer ->
             val (peerLog, _) = Rga.empty<LogRecord>().insertAllAfter(ReplicaId("D"), RgaId.HEAD, listOf(record(902)))
             writer.merge(peerLog)
         }
 
     @Test
-    fun aRefusedWholeLogAdoptByADeduplicatingExportClaimsOnlyWhatTheStoreHolds() =
-        aRefusedWholeLogAdoptClaimsOnlyWhatTheStoreHolds { writer -> writer.export(record(901)) }
+    fun aRefusedWholeLogAdoptByADeduplicatingExportClaimsEveryMintedSeq() =
+        aRefusedWholeLogAdoptClaimsEveryMintedSeq { writer -> writer.export(record(901)) }
 
     /**
-     * Every index write, at the moment it lands, claims no seq past the run the segment keys then
-     * on disk hold, and covers the ids of every segment it names sealed. Driven through two
+     * Every segment write carries no own seq past the claim of the last index write that landed
+     * before it, so no id reaches a key, a snapshot or a sink ahead of its claim; and every index
+     * write covers the ids of every segment it names sealed. Driven through two
      * segment-write outages, one healed in place and one carried across a restart, so the first
      * turns after recovery fail; a merge refused in that outage, so the next merge adopts the whole
      * log with an unwritten record in it; rolls, window passes that retire segments, and a clear.
      *
      * The second half is [WarpLogRecordExporterUnreadSealedSegmentIdsTest]'s invariant, run here
-     * through refused writes. The two pull against each other: a claim too low reuses an unread
-     * segment's ids, a claim too high wedges the floor.
+     * through refused writes. Before #3447 the two pulled against each other, since a claim past the
+     * keys wedged the floor; the window now crosses that hole, so a claim may only be too low.
      */
     @Test
-    fun everyIndexWrittenClaimsOnlySeqsTheStoreHoldsAndCoversWhatItSeals() = runTest {
+    fun everySegmentWrittenStaysUnderTheClaimAndEveryIndexCoversWhatItSeals() = runTest {
         val backing = RecordingStore()
         val quota = RefuseSegmentWritesStore(backing)
         val writer = exporterFor(quota)
@@ -312,25 +320,29 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
         var indexesChecked = 0
         var segmentsChecked = 0
         var retiredSomething = false
+        var claimed = 0L
+        var segmentWritesChecked = 0
         operations.forEachIndexed { at, op ->
             when (op.kind) {
                 StoreOpKind.READ -> Unit
                 StoreOpKind.DELETE -> disk.remove(op.key.name)
                 StoreOpKind.WRITE -> {
                     val bytes = requireNotNull(op.bytes)
+                    if (op.key.name.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST)) {
+                        segmentWritesChecked++
+                        val segment = decodeSegmentForTest(bytes)
+                        val newest = segment.operations().mapNotNull { segmentOp ->
+                            (segmentOp as? RgaOp.Insert)?.id?.takeIf { it.replicaId == replica }?.seq
+                        }.maxOrNull() ?: 0L
+                        // An adopt carries a peer's copy of this replica's ids, and its own index
+                        // write, which names the segment, lands first and claims them.
+                        if (newest > claimed) breaches += "operation $at: segment carries seq $newest past the claim $claimed"
+                    }
                     if (op.key == INDEX_KEY_FOR_TEST) {
                         val index = decodeIndexForTest(bytes)
                         indexesChecked++
                         retiredSomething = retiredSomething || index.retired.isNotEmpty()
-                        // What the store holds now, plus what a segment this index names sealed and
-                        // the store does not hold yet will hold: a merge's adopt names its segment
-                        // before writing it, so that write may claim the segment's seqs.
-                        val segmentsHere = disk.filterKeys { it.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }.values +
-                            index.sealedSegments.map { segmentKeyForTest(it) }.filter { it !in disk }.mapNotNull { lastWritten[it] }
-                        val held = ownSeqsHeldWithoutAGap(segmentsHere)
-                        if (index.seqHighWater > held) {
-                            breaches += "operation $at: index claims seq ${index.seqHighWater}, the store holds 1..$held"
-                        }
+                        claimed = index.seqHighWater
                         for (number in index.sealedSegments) {
                             val sealed = lastWritten[segmentKeyForTest(number)] ?: continue
                             segmentsChecked++
@@ -361,6 +373,7 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
             { assertEquals(ExportResult.Success, mergedAgain, "the second merge") },
             { assertEquals(ExportResult.Success, cleared, "the clear") },
             { assertTrue(indexesChecked > 20, "only $indexesChecked index writes checked") },
+            { assertTrue(segmentWritesChecked > 20, "only $segmentWritesChecked segment writes checked") },
             { assertTrue(segmentsChecked > 20, "only $segmentsChecked sealed segments checked") },
             { assertTrue(retiredSomething, "no window pass retired a segment") },
             // The property.
