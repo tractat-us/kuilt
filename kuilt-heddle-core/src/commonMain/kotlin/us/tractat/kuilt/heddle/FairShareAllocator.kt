@@ -932,13 +932,31 @@ public class FairShareAllocator(
         val carried = shiftRemainders[id]?.also { r ->
             check(r.denominator == d) { "a shift remainder on ${id.value} was taken at denominator ${r.denominator}, not its weight's $d" }
         }?.numerator ?: Int128.ZERO
-        // The run less the carry, in units of 1 / (CLOCK_GRID · d) of a tick, so it is a whole number.
-        val owed = wide(mulDiv(clock - left, w.numerator, 1L, Rounding.FLOOR), clock, w) - carried
-        // ⌈owed / (CLOCK_GRID · d)⌉ in two exact steps, since CLOCK_GRID · d can pass a Long.
-        val ticks = wide(mulDiv(wide(mulDiv(owed, 1L, CLOCK_GRID, Rounding.CEILING), clock, w), 1L, d, Rounding.CEILING), clock, w)
-        val past = wide(mulDiv(wide(mulDiv(ticks, CLOCK_GRID, 1L, Rounding.FLOOR), clock, w), d, 1L, Rounding.FLOOR), clock, w) - owed
-        val remainder = if (past == Int128.ZERO) null else ShiftRemainder(past, d)
+        // The run times the weight's numerator, in units of 1 / K of a tick with K = CLOCK_GRID · d,
+        // less the carry. It is never formed whole: run · n can leave 128 bits long before the shift
+        // it stands for nears the position limit, which refused a return sooner than design §7.1
+        // allows. So it is split as q · K + r, q by one 192-bit mulDiv and r by modular arithmetic,
+        // and only the shift and its remainder, each a fraction of the run, are formed.
+        // K fits a Long for every weight the budget accepts (denominators at most 30,719).
+        val k = checkedMul(CLOCK_GRID, d)
+        val run = clock - left
+        val q = wide(mulDiv(run, w.numerator, k, Rounding.FLOOR), clock, w)
+        val r = productMod(run, w.numerator, k)
+        val c = checkNotNull(carried.toLongOrNull()) { "a shift remainder on ${id.value} past its grid: $carried" }
+        // run · n − c = q · K + (r − c), with r − c in (−K, K): the shift is ⌈that / K⌉.
+        val extra = r - c
+        val ticks = if (extra > 0L) q + Int128.of(1L) else q
+        // What the shift ran past the clock, `ticks · K − (run · n − c)`, in [0, K).
+        val past = if (extra > 0L) k - extra else -extra
+        val remainder = if (past == 0L) null else ShiftRemainder(Int128.of(past), d)
         return Shift(maxOf(Int128.ZERO, ticks), remainder)
+    }
+
+    /** `(a · n) mod k`, in `[0, k)`, without forming `a · n`. */
+    private fun productMod(a: Int128, n: Long, k: Long): Long {
+        val am = (a % k).let { if (it < 0L) it + k else it }
+        val product = checkNotNull(mulDiv(Int128.of(am), n % k, 1L, Rounding.FLOOR)) { "two residues under $k multiply inside 128 bits" }
+        return product % k
     }
 
     /** [value], or an [ArithmeticException] naming the clock read when it overflowed 128 bits. */
