@@ -695,7 +695,8 @@ public class Rga<V> private constructor(
      *   floor, so it stops below the first held-nowhere seq. Every later own drop above it is
      *   recorded as an explicit [RgaOp.Compact] instead, one pair per id. They accumulate until the
      *   missing ops are pieced back in, and the ones already recorded stay after that. If the ops
-     *   never come back, the floor never moves again.
+     *   never come back, the floor never moves again. [dropWindowPastUnheld] is the walk that
+     *   crosses a hole, for a caller whose window drops oldest-minted first.
      * - [causalDots] reports no dot for a hole, so a frontier folded from it stops below the hole,
      *   and [compact] never collects [replica]'s ops past it, on this replica or on any peer that
      *   folds this frontier.
