@@ -77,6 +77,13 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  *   restart that keeps [replica] and the store counts nothing twice. Only a slot's owner moves it,
  *   so a replica that never returns keeps its last share in the sum.
  *
+ *   **A slot that starts over misleads every peer that already saw it.** An eviction, a [clear] or
+ *   a [MetricUpdate.Forget] drops the series here, and the next set starts this replica's slot
+ *   again from nothing. Here the value is right at once. A peer that merged the old slot keeps the
+ *   larger of each half, so it reads a stale share: one that saw `(10, 0)` and then merges
+ *   `(4, 2)` reads 8, not 2, and stays wrong until this replica's increments pass 10. Nothing
+ *   here repairs that peer, and a tap puller never sends anything back.
+ *
  * ## Key inversion
  *
  * Every mutating method — [incrementSum], [incrementSumDouble], [setGauge], [addCardinality],
@@ -1466,6 +1473,11 @@ public class WarpMetricExporter(
      * kind's first turn, so the same level reported after a restart moves nothing. Two things stay in
      * the sum until someone moves them: a series this replica does not report again keeps its last
      * level, and a replica that never comes back keeps its share, since only a slot's owner moves it.
+     *
+     * An eviction, a [clear] or a [MetricUpdate.Forget] does **not** heal on the next set for a peer
+     * that already merged this series. The set starts this replica's slot again from nothing, and a
+     * peer keeps the larger of each half of the old slot and the new one, so it reads a stale share
+     * until this replica's increments pass the old ones. The value here is right; see the class KDoc.
      *
      * Returns a [MetricExportResult.Refused] whose `overflow` is a [MetricUpDownSumOverflowException],
      * having applied and written nothing, when the move would carry this replica's slot past

@@ -169,6 +169,13 @@ public sealed interface MetricUpdate {
      * A [MetricKind.SUM] or [MetricKind.UP_DOWN_SUM] key names a series in both the integer and the
      * fractional map, and both are dropped. Forgetting a series the exporter does not hold changes
      * nothing and writes nothing.
+     *
+     * **Forgetting a [MetricKind.SUM] or [MetricKind.UP_DOWN_SUM] series rewinds this replica's slot
+     * for any peer that already saw it.** A later update starts the slot again from nothing, while
+     * the peer keeps the larger of its old and new counts, so a sum there stops growing until the
+     * slot passes its old count, and an up-down sum reads a stale share until its increments do.
+     * Here the series is right at once. Forget a key only when no later update will write to it, or
+     * when no peer holds it, as the bridge's retired gauge twin does.
      */
     public data class Forget(override val key: MetricKey) : MetricUpdate
 }
