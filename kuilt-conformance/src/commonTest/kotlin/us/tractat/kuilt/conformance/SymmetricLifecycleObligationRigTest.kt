@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
@@ -16,6 +17,7 @@ import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Loom
 import us.tractat.kuilt.core.Pattern
 import us.tractat.kuilt.core.PeerId
+import us.tractat.kuilt.core.Rendezvous
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
 import us.tractat.kuilt.core.Swatch
@@ -32,7 +34,9 @@ import kotlin.time.Duration.Companion.minutes
 /**
  * The **positive control** for #2601's lifecycle/identity slice: proof that the joiner half each of
  * seven [SeamConformanceSuite] obligations gained can actually go red, and that it reds on the arm
- * it names rather than somewhere else in the same obligation.
+ * it names rather than somewhere else in the same obligation. One row is the exception:
+ * `incomingCompletesWhenSeamCloses` has waited unbounded since #3519, so a joiner whose flow never
+ * terminates parks it rather than reddening an arm, and its row shows where it parked instead.
  *
  * `Seam` is *one peer's symmetric view of a session*, but a role-split fabric ships two different
  * `Seam` implementations behind one harness — websocket hosts a `MeshSeam` and joins a `LinkSeam` —
@@ -68,7 +72,9 @@ import kotlin.time.Duration.Companion.minutes
  * hand-writing a fabric: the assertions under test read one property each, so a decorator is a
  * faithful stimulus, and a hand-written fabric would add surface that could itself be wrong. Each
  * red assertion is checked by **message shape** — a rig that reddened on the host arm, or on a
- * precondition, would tick a "did it go red?" box while proving nothing.
+ * precondition, would tick a "did it go red?" box while proving nothing. The termination row has no
+ * red message to check, so it checks the position instead: the host's collection had completed when
+ * the joiner's began. That is also the one row that decorates the host, only to observe it.
  *
  * Where the obligation batches its arms through [assertAll], the count is asserted too
  * (`"1 assertion(s) failed"` / `"2 assertion(s) failed"`): a broader red means the rig broke the
@@ -138,20 +144,27 @@ class SymmetricLifecycleObligationRigTest {
 
     // ── (3) incomingCompletesWhenSeamCloses ──────────────────────────────────
 
-    // This obligation waits unbounded and reds through `runTest`'s wall-clock backstop (#3519), so
-    // its red is a body that never completes rather than a named arm. The rig shows that on the
+    // The one row that does NOT red on a named arm. This obligation waits unbounded, and a flow that
+    // never terminates reds through `runTest`'s wall-clock backstop (#3519) as a bare
+    // `UncompletedCoroutinesError` that names no end. So the row shows the parking instead, on the
     // virtual clock, which is honest here because every seam in it is in-memory: the body must still
-    // be parked after a window far past anything the reference needs, and parked on the JOINER's
-    // collection, which starts only once the host's has completed.
+    // be parked after a window far past anything the reference needs, the joiner's collection must
+    // have begun, and the host's must have COMPLETED before it did. That last arm is what pins the
+    // stall to the joiner; the obligation's own red does not.
 
     @Test
     fun aJoinerWhoseIncomingNeverCompletesFailsTheTerminationObligation(): TestResult = runTest {
-        var joinerCollections = 0
+        var hostCollectionCompleted = false
+        val hostCompletedWhenJoinerBegan = mutableListOf<Boolean>()
         val completed = withTimeoutOrNull(NEVER_COMPLETES_WINDOW) {
             harnessOver(
-                DecoratingJoinerLoom(InMemoryLoom()) { seam ->
-                    SeamWhoseIncomingNeverCompletes(seam) { joinerCollections++ }
-                },
+                DecoratingBothEndsLoom(
+                    InMemoryLoom(),
+                    decorateHost = { seam -> SeamReportingCompletion(seam) { hostCollectionCompleted = true } },
+                    decorateJoiner = { seam ->
+                        SeamWhoseIncomingNeverCompletes(seam) { hostCompletedWhenJoinerBegan += hostCollectionCompleted }
+                    },
+                ),
             ).runIncomingCompletesWhenSeamCloses(this@runTest)
         }
         assertAll(
@@ -165,10 +178,11 @@ class SymmetricLifecycleObligationRigTest {
             },
             {
                 assertEquals(
-                    1,
-                    joinerCollections,
-                    "the obligation must be parked on the JOINER's collection, which starts only after " +
-                        "the host's completed; 0 means it hung on the host end instead",
+                    listOf(true),
+                    hostCompletedWhenJoinerBegan,
+                    "the obligation must collect the JOINER exactly once, and only after the HOST's " +
+                        "incoming has completed; [] means it stalled on the host end, [false] that the " +
+                        "two ends overlapped",
                 )
             },
         )
@@ -446,6 +460,36 @@ class SymmetricLifecycleObligationRigTest {
             delegate.incoming.collect { emit(it) }
             awaitCancellation()
         }
+    }
+
+    /**
+     * A host that behaves exactly like the reference and reports when a collection of its
+     * `incoming` completes normally — the witness row 3 uses to place the obligation's stall.
+     */
+    private class SeamReportingCompletion(
+        private val delegate: Seam,
+        private val onCompleted: () -> Unit,
+    ) : Seam by delegate {
+        override val incoming: Flow<Swatch> = delegate.incoming.onCompletion { cause ->
+            if (cause == null) onCompleted()
+        }
+    }
+
+    /**
+     * [DecoratingJoinerLoom] for both ends: [decorateHost] on the hosted seam, [decorateJoiner] on
+     * the joined one. Implemented rather than delegated for the reason that class gives.
+     */
+    private class DecoratingBothEndsLoom(
+        private val inner: Loom,
+        private val decorateHost: (Seam) -> Seam,
+        private val decorateJoiner: (Seam) -> Seam,
+    ) : Loom {
+        override suspend fun weave(rendezvous: Rendezvous): Seam {
+            val seam = inner.weave(rendezvous)
+            return if (rendezvous is Rendezvous.New) decorateHost(seam) else decorateJoiner(seam)
+        }
+
+        override fun capability(): TransportCapability = inner.capability()
     }
 
     /** A joiner with no live path observer reporting a confident verdict anyway. */

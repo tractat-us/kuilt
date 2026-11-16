@@ -48,6 +48,11 @@ import kotlin.test.assertTrue
  * broken obligation too: the late completion fired exactly once, the obligation was already
  * collecting when it did, and the collection was still open at that moment.
  *
+ * It also checks the obligation's collector was **already collecting when `close()` was called** —
+ * the consumer's shape, which the obligation gets by starting it `UNDISPATCHED`. That arm reds if
+ * the collector goes back to being merely queued. The thread still waits on the collecting latch
+ * rather than trusting that arm, so the rig ends cleanly and reports the arm even when it is red.
+ *
  * JVM-only because the late completion needs a real thread. The harness is an anonymous object for
  * the reason [SymmetricLifecycleObligationRigTest] gives: a named subclass would be collected as a
  * test class.
@@ -80,6 +85,14 @@ class IncomingCompletesWallClockRigTest {
             },
             {
                 assertTrue(
+                    rig.collectingWhenClosed,
+                    "the obligation must already be collecting the $end's incoming when it calls close(); " +
+                        "a collector that starts afterwards tests a late subscriber, not the consumer that " +
+                        "is mid-collection when its seam closes",
+                )
+            },
+            {
+                assertTrue(
                     rig.collectionWasOpenWhenCompleted,
                     "the $end's incoming must still be open when the rig completes it; otherwise something " +
                         "else completed it and nothing arrived on the wall clock",
@@ -100,6 +113,9 @@ class IncomingCompletesWallClockRigTest {
         @Volatile var collectionWasOpenWhenCompleted = false
             private set
 
+        @Volatile var collectingWhenClosed = false
+            private set
+
         val lateCompletions = AtomicInteger()
 
         @Volatile private var completer: Thread? = null
@@ -113,7 +129,7 @@ class IncomingCompletesWallClockRigTest {
 
             override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(reportsLiveCapability = false)
 
-            override fun capabilityGaps(): Map<String, String> = mapOf("reportsLiveCapability" to GAP_URL)
+            override fun capabilityGaps(): Map<String, String> = mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
 
             override fun joinerRosterOrigin(): JoinerRosterOrigin =
                 JoinerRosterOrigin.FilledByConstruction("a rig over one InMemoryLoom (#3519 positive control)")
@@ -146,6 +162,7 @@ class IncomingCompletesWallClockRigTest {
                     delegate.close(reason)
                     return
                 }
+                collectingWhenClosed = collectionOpen.get()
                 completer = thread(name = "incoming-completes-wall-clock-rig") {
                     suiteWasCollecting = suiteCollecting.await(COLLECT_WAIT_SECONDS, TimeUnit.SECONDS)
                     Thread.sleep(GRACE_MILLIS)
@@ -176,8 +193,6 @@ class IncomingCompletesWallClockRigTest {
     }
 
     private companion object {
-        const val GAP_URL = "https://github.com/tractat-us/kuilt/issues/3519"
-
         /** Long enough that a virtual bound has certainly fired first; short enough to cost nothing. */
         const val GRACE_MILLIS = 100L
 
