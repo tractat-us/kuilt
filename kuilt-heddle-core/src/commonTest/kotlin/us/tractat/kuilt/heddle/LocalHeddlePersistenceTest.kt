@@ -1189,6 +1189,19 @@ class LocalHeddlePersistenceTest {
         )
     }
 
+    /**
+     * A format 1 origin no 0.7.5 engine could raise, `2¹²⁴`, whose share on `d`'s grid leaves 128
+     * bits, is refused as corrupt, not thrown out of [LocalHeddle.decode] (#3498 review, B3).
+     */
+    @Test
+    fun aFormat1OriginWhoseShareLeaves128BitsIsCorrupt() {
+        val honest = "\"parents\":{\"golden\":{\"originLow\":3}}"
+        check(honest in GOLDEN_FORMAT_1_ORIGIN) { "the rig: the origin is where this test expects it" }
+        val huge = GOLDEN_FORMAT_1_ORIGIN.replace(honest, "\"parents\":{\"golden\":{\"originHigh\":1152921504606846976}}")
+        val out = LocalHeddle.decode(huge, Json)
+        assertTrue(out is RestoreResult.Corrupt && "128 bits" in out.reason, "expected Corrupt naming the overflow, got $out")
+    }
+
     private companion object {
         const val SEEDS = 60
         const val STEPS = 40
