@@ -31,6 +31,8 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 
 /** Whether [SpeculativeGame.apply] refuses `action` against `state`. */
 private typealias Rule = (state: List<Int>, action: Int) -> Boolean
@@ -445,11 +447,17 @@ class SpeculativeSequencerPendingTest {
         action == 2 && state.size % 2 == 1
     }
 
-    private fun walkSeeds(rejects: Rule) = runRigTest {
+    private fun walkSeeds(rejects: Rule) = runTest(timeout = SEEDED_WALK_BACKSTOP) {
         var rejected = 0
+        var refusedCommits = 0
         val counting: Rule = { state, action -> rejects(state, action).also { if (it) rejected++ } }
-        for (seed in 0 until SEEDS) walk(seed, counting, rejects)
+        for (seed in 0 until SEEDS) refusedCommits += walk(seed, counting, rejects)
         if (rejects !== NOTHING_REJECTED) assertTrue(rejected > 0, "rig: the rule must have refused something")
+        assertTrue(
+            refusedCommits <= MAX_REFUSED_COMMITS,
+            "$refusedCommits refused commits, each logged with its stack trace: " +
+                "SEEDED_WALK_BACKSTOP is sized for at most $MAX_REFUSED_COMMITS, so re-measure it",
+        )
     }
 
     /**
@@ -461,18 +469,21 @@ class SpeculativeSequencerPendingTest {
      * the commits in delivery order, without the sequencer's help. Every step also checks the bound
      * that makes the convergence argument work: there are never more pending entries than proposals
      * whose own outcome has yet to retire one.
+     *
+     * Returns how many commits [reference] refused: each is a WARN with a stack trace in the sequencer.
      */
-    private suspend fun TestScope.walk(seed: Int, rule: Rule, reference: Rule) {
+    private suspend fun TestScope.walk(seed: Int, rule: Rule, reference: Rule): Int {
         val random = Random(seed)
         val rig = Rig(this, rule)
         val inFlight = mutableListOf<Call>()
         val lateFromSuccess = mutableListOf<Int>()
         val lateFromFailure = mutableListOf<Int>()
         var expected = emptyList<Int>()
+        var refusedCommits = 0
 
         suspend fun commit(value: Int) {
             rig.commit(value)
-            if (!reference(expected, value)) expected = expected + value
+            if (reference(expected, value)) refusedCommits++ else expected = expected + value
         }
 
         suspend fun resolve(call: Call, mode: Int) {
@@ -534,10 +545,34 @@ class SpeculativeSequencerPendingTest {
             { assertEquals(0, rig.seq.pendingCount, "seed=$seed: nothing is pending once everything has landed") },
             { assertEquals(expected, rig.seq.speculativeState.value, "seed=$seed: the state is the log's fold") },
         )
+        return refusedCommits
     }
 
     private companion object {
         const val SEEDS = 300
         const val STEPS = 40
+
+        /**
+         * The most refused commits [SEEDED_WALK_BACKSTOP] is sized for. These seeds produce 448 on
+         * every target; the walk asserts it stays under this, so a change to the seeds, the steps or
+         * the rule that adds traces fails here rather than at the ceiling on the slowest runner.
+         */
+        const val MAX_REFUSED_COMMITS = 500
+
+        /**
+         * Wall-clock backstop for the seeded walks, sized to the real work the rejecting one does.
+         *
+         * Nearly all of that work is in the logger, not the sequencer. Each commit that `apply`
+         * refuses makes [SpeculativeSequencer] log a WARN with the exception attached, and on
+         * `macosArm64` the logger renders the throwable, which symbolizes its stack trace. Virtual
+         * time cannot absorb that. Measured for #3532: the arm takes 12 s on a 16-core Mac and
+         * 0.03 s with the throwable dropped from that one log line; forcing the render on
+         * `iosSimulatorArm64`, which normally skips it, costs the same 12 s. On the 3-vCPU nightly
+         * runner it took 23–31 s, about 60 ms a trace, against [TEST_WEDGE_BACKSTOP]'s 30 s.
+         *
+         * The seeds fix the work, so this is about four times the slowest run seen. A wedge still
+         * fails here, two minutes in instead of thirty seconds.
+         */
+        val SEEDED_WALK_BACKSTOP: Duration = 2.minutes
     }
 }
