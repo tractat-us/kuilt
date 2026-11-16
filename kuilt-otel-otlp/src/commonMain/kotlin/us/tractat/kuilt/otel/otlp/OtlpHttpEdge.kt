@@ -214,6 +214,7 @@ public class OtlpHttpEdge(
         deliver(
             path = "/v1/traces",
             items = spans.toList(),
+            idOf = { it.spanId },
             // A span's links travel with it. Two stamped copies of one span id can share a chunk,
             // so the ids are made distinct first, or each copy would carry the links twice.
             encode = { chunk -> encodeTraces(chunk, chunk.map { it.spanId }.distinct().flatMap { linksByFrom[it].orEmpty() }) },
@@ -225,6 +226,7 @@ public class OtlpHttpEdge(
         deliver(
             path = "/v1/logs",
             items = logs.toList(),
+            idOf = { it.recordId },
             encode = ::encodeLogs,
             describe = { "log record ${it.recordId.toHexString()}" },
         ) { delivered -> recordIds(logKey, delivered.map { it.recordId.toHexString() }) }
@@ -234,6 +236,7 @@ public class OtlpHttpEdge(
         deliver(
             path = "/v1/metrics",
             items = points.toList(),
+            idOf = { it.key },
             encode = ::encodeMetrics,
             describe = { "metric series ${it.key.name}" },
         ) { delivered ->
@@ -294,7 +297,8 @@ public class OtlpHttpEdge(
     // ── Sending one signal, split by size (#3286) ──────────────────────────────
 
     /**
-     * POSTs [items] in as many requests as [maxRequestBytes] needs, then hands every record an
+     * POSTs [items] in as many requests as [maxRequestBytes] needs, keeping every record that shares
+     * an [idOf] in one request, then hands every record an
      * acknowledged request carried to [record], once. [record] runs whatever ended the sends: the
      * last acknowledgement, a refused request, a transport failure, or this coroutine's own
      * cancellation. It runs shielded, so what the collector acknowledged is written down even while
@@ -306,6 +310,7 @@ public class OtlpHttpEdge(
     private suspend fun <T> deliver(
         path: String,
         items: List<T>,
+        idOf: (T) -> Any,
         encode: (List<T>) -> Encoded,
         describe: (T) -> String,
         record: suspend (List<T>) -> Unit,
@@ -314,7 +319,7 @@ public class OtlpHttpEdge(
         // Caught to be rethrown below, after the write: whatever ended the sends, own cancellation
         // included, the acknowledged requests are recorded first.
         val failure: Throwable? = try {
-            Chunker(path, encode, describe, delivered).send(items)
+            Chunker(path, encode, describe, delivered).send(items.groupBy(idOf).values.toList())
             null
         } catch (failure: Throwable) {
             failure
@@ -338,79 +343,88 @@ public class OtlpHttpEdge(
         if (failure != null) throw failure
     }
 
-    /** One signal's sends: appends each acknowledged request's records to [delivered], in order. */
+    /**
+     * One signal's sends: appends each acknowledged request's records to [delivered], in order.
+     *
+     * It packs, halves and refuses whole groups, each the records that share one id, in the order
+     * each id first appears. Delivery is recorded by id, so two copies of one id split across two
+     * requests could see the first acknowledged and the second refused, and the refused copy would
+     * then count as sent and never be retried. A span's links already travel with it the same way.
+     */
     private inner class Chunker<T>(
         private val path: String,
         private val encode: (List<T>) -> Encoded,
         private val describe: (T) -> String,
         private val delivered: MutableList<T>,
     ) {
-        suspend fun send(items: List<T>) {
+        suspend fun send(groups: List<List<T>>) {
             // The fast path: a batch under the cap is one encode and one request, as before #3286.
-            val whole = encode(items)
-            if (whole.bytes <= maxRequestBytes) return sendChunk(items, whole)
+            val whole = encode(groups.flatten())
+            if (whole.bytes <= maxRequestBytes) return sendChunk(groups, whole)
 
-            // Measure each record inside an otherwise empty request, so its cost includes what the
+            // Measure each group inside an otherwise empty request, so its cost includes what the
             // wire adds around it, then pack greedily. Every chunk is encoded for real before it is
             // sent, and halved if the estimate fell short.
             val emptyBytes = encode(emptyList()).bytes
-            val fitting = ArrayList<Pair<T, Int>>(items.size)
-            val oversized = ArrayList<Pair<T, Encoded>>()
-            for (item in items) {
-                val alone = encode(listOf(item))
-                if (alone.bytes > maxRequestBytes) oversized += item to alone else fitting += item to alone.bytes - emptyBytes
+            val fitting = ArrayList<Pair<List<T>, Int>>(groups.size)
+            val oversized = ArrayList<Pair<List<T>, Encoded>>()
+            for (group in groups) {
+                val alone = encode(group)
+                if (alone.bytes > maxRequestBytes) oversized += group to alone else fitting += group to alone.bytes - emptyBytes
             }
-            for (chunk in pack(fitting, emptyBytes)) sendChunk(chunk, encode(chunk))
+            for (chunk in pack(fitting, emptyBytes)) sendChunk(chunk, encode(chunk.flatten()))
             // Last, so a record the collector may refuse holds back nothing else.
-            for ((item, alone) in oversized) sendChunk(listOf(item), alone)
+            for ((group, alone) in oversized) sendChunk(listOf(group), alone)
         }
 
-        private fun pack(fitting: List<Pair<T, Int>>, emptyBytes: Int): List<List<T>> {
+        private fun pack(fitting: List<Pair<List<T>, Int>>, emptyBytes: Int): List<List<List<T>>> {
             val budget = maxRequestBytes - PACKING_SLACK_BYTES
-            val chunks = ArrayList<List<T>>()
-            var current = ArrayList<T>()
+            val chunks = ArrayList<List<List<T>>>()
+            var current = ArrayList<List<T>>()
             var bytes = emptyBytes
-            for ((item, cost) in fitting) {
-                // One byte more per record: JSON's comma between array elements.
+            for ((group, cost) in fitting) {
+                // One byte more per group: JSON's comma between array elements. A group measured
+                // alone already carries the commas between its own copies.
                 if (current.isNotEmpty() && bytes + cost + 1 > budget) {
                     chunks += current
                     current = ArrayList()
                     bytes = emptyBytes
                 }
-                current += item
+                current += group
                 bytes += cost + 1
             }
             if (current.isNotEmpty()) chunks += current
             return chunks
         }
 
-        private suspend fun sendChunk(chunk: List<T>, body: Encoded) {
+        private suspend fun sendChunk(chunk: List<List<T>>, body: Encoded) {
             if (chunk.size > 1 && body.bytes > maxRequestBytes) return sendHalves(chunk)
             val status = post(path, body)
             when {
-                status.isSuccess() -> delivered += chunk
+                status.isSuccess() -> chunk.forEach { delivered += it }
                 status != HttpStatusCode.PayloadTooLarge -> error("OTLP POST $path failed: $status")
                 chunk.size > 1 -> sendHalves(chunk)
                 // A lone record inside the cap that is still too large: something in front of the
                 // collector caps bodies below maxRequestBytes. Folding it would record every record
                 // as sent while the collector holds none, so the signal fails, every drain, visibly.
                 body.bytes <= maxRequestBytes -> error(
-                    "OTLP POST $path failed: $status on ${describe(chunk.single())} (${body.bytes} bytes), inside " +
-                        "maxRequestBytes = $maxRequestBytes; the collector or a proxy in front of it limits bodies below that",
+                    "OTLP POST $path failed: $status on ${describe(chunk.single().first())} (${body.bytes} bytes), " +
+                        "inside maxRequestBytes = $maxRequestBytes; the collector or a proxy in front of it limits " +
+                        "bodies below that",
                 )
                 else -> {
                     logger.warn {
-                        "OTLP POST $path: the collector refused ${describe(chunk.single())} (${body.bytes} bytes) as too " +
-                            "large on its own; recording it as sent, since the same bytes would be refused on every drain"
+                        "OTLP POST $path: the collector refused ${describe(chunk.single().first())} (${body.bytes} bytes) " +
+                            "as too large on its own; recording it as sent, since the same bytes would be refused on every drain"
                     }
-                    delivered += chunk
+                    delivered += chunk.single()
                 }
             }
         }
 
-        private suspend fun sendHalves(chunk: List<T>) {
+        private suspend fun sendHalves(chunk: List<List<T>>) {
             val mid = chunk.size / 2
-            for (half in listOf(chunk.subList(0, mid), chunk.subList(mid, chunk.size))) sendChunk(half, encode(half))
+            for (half in listOf(chunk.subList(0, mid), chunk.subList(mid, chunk.size))) sendChunk(half, encode(half.flatten()))
         }
     }
 
