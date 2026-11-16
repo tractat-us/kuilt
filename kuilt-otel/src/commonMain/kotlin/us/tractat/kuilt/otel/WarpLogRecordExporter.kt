@@ -270,6 +270,26 @@ public class WarpLogRecordExporter(
         require(maxRecords >= 1) { "maxRecords must be at least 1; got $maxRecords" }
     }
 
+    /**
+     * The exporter with a [mintLease] other than [MINT_LEASE], so a test can drive the claim's
+     * renewal across a run of a few hundred records rather than tens of thousands.
+     */
+    internal constructor(
+        replica: ReplicaId,
+        store: DurableStore,
+        maxRecords: Int,
+        bufferPolicy: BufferPolicy,
+        segmentOps: Int,
+        appliedOps: AppliedOpSink,
+        mintLease: Long,
+    ) : this(replica, store, maxRecords, bufferPolicy, segmentOps, appliedOps) {
+        require(mintLease >= 2L) { "mintLease must be at least 2; got $mintLease" }
+        this.mintLease = mintLease
+    }
+
+    /** How far a claim reaches past a turn's mints; see [MINT_LEASE]. Set once, at construction. */
+    private var mintLease: Long = MINT_LEASE
+
     // The lock guards 'log' and every derived field below. No suspend calls are
     // made inside the locked section — Cbor encode/decode and the CRDT mutations
     // are pure (non-suspending). The store write is performed outside the lock on
@@ -569,6 +589,18 @@ public class WarpLogRecordExporter(
      */
     private var mintClaim: MintClaim = MintClaim.NONE
 
+    /**
+     * The highest claim any index write has carried, landed or not. Guarded by [lock]; it only
+     * rises, and it is at least [mintClaim].
+     *
+     * Every index write restates this rather than [mintClaim] ([encodeIndex]). A claim write the
+     * store reports refused may still have landed — a store's own timeout cancels the call, not the
+     * write — and the turn then mints under it. Restating only the confirmed claim would let the
+     * next index write lower the claim on disk below those ids. And the turn's leading index write,
+     * which restates this, becomes a second attempt at a refused claim ([StoreAction.CommitClaim]).
+     */
+    private var claimAttempted: MintClaim = MintClaim.NONE
+
     private var activeNumber: Long = 0
     private var activeOpCount: Int = 0
     private var nextSegmentNumber: Long = 1
@@ -689,7 +721,7 @@ public class WarpLogRecordExporter(
         private const val OPS_PER_RECORD = 2
 
         /**
-         * How far past the next turn's mints a claim reaches ([claimMintsAhead]), in seqs and
+         * The default [mintLease]: how far past the next turn's mints a claim reaches ([claimMintsAhead]), in seqs and
          * lamports alike. A turn writes a new claim when less than half of it is left, so in steady
          * state that is one small index write per `MINT_LEASE / 2` records, plus one before the
          * first mint after each start.
@@ -1833,10 +1865,16 @@ public class WarpLogRecordExporter(
      * **Best effort, and that is the residual.** A refused claim does not refuse the turn: the turn
      * mints, publishes and attempts its write as before, so a store that refuses every write still
      * hands each record to [appliedOps] before refusing it, as [AppliedOpSink] promises. The ids
-     * such a turn mints are covered by the next claim that lands, which the next turn to mint
-     * writes first, since a claim is taken from [log]'s own counters. What stays open is an outage
-     * that refuses the index write too, a record that escapes during it, and a crash before a later
-     * claim lands: that record's dot can be minted again after the restart.
+     * such a turn mints are covered by the next claim that lands: the turn's own leading index
+     * write tries again ([claimAttempted]), and the next turn to mint claims from [log]'s counters.
+     *
+     * **What stays open is deterministic, not a coincidence.** Recovery leaves no headroom: the log
+     * is raised to the claim it read, so the first turn of every incarnation must write a claim
+     * before its mints are covered. A process that restarts inside an outage that refuses the index
+     * write too, as a full disk crash-looping the app does, therefore mints `claim + 1` on every
+     * incarnation without a claim behind it. Each such record that escapes, to a sink or a peer,
+     * shares its dot with the next incarnation's. `WarpLogRecordExporterEscapedDotTest` pins that
+     * behaviour as it stands.
      */
     private suspend fun claimMintsAhead(records: List<LogRecord>, from: Int) {
         val claim = lock.withLock {
@@ -1850,9 +1888,9 @@ public class WarpLogRecordExporter(
             val seq = log.seqHighWater(replica).plusOrNull(mints) ?: return
             val lamport = log.lamport.plusOrNull(mints) ?: return
             val needed = MintClaim(seq, lamport)
-            if (mintClaim.covers(needed.plus(MINT_LEASE / 2))) return
-            val target = mintClaim.atLeast(needed.plus(MINT_LEASE))
-            StoreAction.CommitClaim(encodeIndex(claim = target), target)
+            if (mintClaim.covers(needed.plus(mintLease / 2))) return
+            claimAttempted = claimAttempted.atLeast(mintClaim).atLeast(needed.plus(mintLease))
+            StoreAction.CommitClaim(encodeIndex(), claimAttempted)
         }
         // Not through [commit]: a refused claim is not a refused export, so it neither counts on
         // [health] nor opens the outage latch. The turn's own write reports the outage.
@@ -2600,7 +2638,9 @@ public class WarpLogRecordExporter(
         //
         // It lands before this turn's segment write, so it claims what is already on disk, and
         // the mint claim, which a claim write put there before this turn minted (see encodeIndex).
-        if (writeIndex) actions += StoreAction.Put(INDEX_KEY, encodeIndex())
+        // A claim write too: it restates the highest claim attempted, so when the turn's own claim
+        // was refused, this is its second attempt, and it confirms the claim if it lands.
+        if (writeIndex) actions += StoreAction.CommitClaim(encodeIndex(), restatedClaim())
         actions += flushActiveSegment(retire = retire, adopting = null)
         return actions
     }
@@ -2958,7 +2998,7 @@ public class WarpLogRecordExporter(
         active: Long = activeNumber,
         next: Long = nextSegmentNumber,
         seqHighWater: Long = durableSeqHighWater,
-        claim: MintClaim = mintClaim,
+        claim: MintClaim = restatedClaim(),
     ): ByteArray = cbor.encodeToByteArray(
         indexSerializer,
         LogSegmentIndex(
@@ -2970,6 +3010,9 @@ public class WarpLogRecordExporter(
             seqHighWater = maxOf(seqHighWater, claim.seq),
         ),
     )
+
+    /** The claim every index write carries: the highest attempted, never lower. Must hold [lock]. */
+    private fun restatedClaim(): MintClaim = claimAttempted.atLeast(mintClaim)
 
     /** The ledger this turn would leave behind if [staged] commits. Must hold [lock]. */
     private fun ledgerWith(staged: List<Long>): List<Long> =
