@@ -23,6 +23,8 @@ import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.HyperLogLog
 import us.tractat.kuilt.crdt.LWWRegister
+import us.tractat.kuilt.crdt.PNCounter
+import us.tractat.kuilt.crdt.PNCounterDouble
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
@@ -222,6 +224,8 @@ public class WarpMetricExporter(
     private val gauges: LinkedHashMap<MetricKey, LWWRegister<Double>> = LinkedHashMap()
     private val cardinalities: LinkedHashMap<MetricKey, HyperLogLog> = LinkedHashMap()
     private val histograms: LinkedHashMap<MetricKey, DDSketch> = LinkedHashMap()
+    private val upDownSums: LinkedHashMap<MetricKey, PNCounter> = LinkedHashMap()
+    private val upDownSumsDouble: LinkedHashMap<MetricKey, PNCounterDouble> = LinkedHashMap()
 
     /** The sum series a [record] has already been refused for; read only inside [lock] (#3318). */
     private val refusedSums = FirstSightings()
@@ -314,6 +318,8 @@ public class WarpMetricExporter(
         private val GAUGE_STORE_KEY = StoredKind.GAUGES.storeKey
         private val CARDINALITY_STORE_KEY = StoredKind.CARDINALITIES.storeKey
         private val HISTOGRAM_STORE_KEY = StoredKind.HISTOGRAMS.storeKey
+        private val UP_DOWN_SUM_STORE_KEY = StoredKind.UP_DOWN_SUMS.storeKey
+        private val UP_DOWN_SUM_DOUBLE_STORE_KEY = StoredKind.UP_DOWN_SUMS_DOUBLE.storeKey
 
         private val cbor = Cbor { alwaysUseByteString = true }
 
@@ -323,12 +329,16 @@ public class WarpMetricExporter(
         private val lwwSerializer = LWWRegister.serializer(Double.serializer())
         private val hllSerializer = HyperLogLog.serializer()
         private val ddSketchSerializer = DDSketch.serializer()
+        private val pnCounterSerializer = PNCounter.serializer()
+        private val pnCounterDoubleSerializer = PNCounterDouble.serializer()
 
         private val sumsSerializer = MapSerializer(metricKeySerializer, gcounterSerializer)
         private val sumsDoubleSerializer = MapSerializer(metricKeySerializer, gcounterDoubleSerializer)
         private val gaugesSerializer = MapSerializer(metricKeySerializer, lwwSerializer)
         private val cardinalitiesSerializer = MapSerializer(metricKeySerializer, hllSerializer)
         private val histogramsSerializer = MapSerializer(metricKeySerializer, ddSketchSerializer)
+        private val upDownSumsSerializer = MapSerializer(metricKeySerializer, pnCounterSerializer)
+        private val upDownSumsDoubleSerializer = MapSerializer(metricKeySerializer, pnCounterDoubleSerializer)
     }
 
     // ── Recovery ───────────────────────────────────────────────────────────────
@@ -484,6 +494,8 @@ public class WarpMetricExporter(
         StoredKind.GAUGES -> settle(kind, read(kind, gaugesSerializer), gauges)
         StoredKind.CARDINALITIES -> settle(kind, read(kind, cardinalitiesSerializer), cardinalities)
         StoredKind.HISTOGRAMS -> settle(kind, read(kind, histogramsSerializer).keepingPrototypeConfiguration(), histograms)
+        StoredKind.UP_DOWN_SUMS -> settle(kind, read(kind, upDownSumsSerializer), upDownSums)
+        StoredKind.UP_DOWN_SUMS_DOUBLE -> settle(kind, read(kind, upDownSumsDoubleSerializer), upDownSumsDouble)
     }
 
     private suspend fun <V> read(kind: StoredKind, serializer: KSerializer<Map<MetricKey, V>>): KindRead<V> {
@@ -679,6 +691,8 @@ public class WarpMetricExporter(
             gauges.clear()
             cardinalities.clear()
             histograms.clear()
+            upDownSums.clear()
+            upDownSumsDouble.clear()
             // Whatever is on disk now is unwanted, not unseen, so no kind owes a read of it, even
             // if a delete below is refused: a read would bring back the series this call drops.
             owedReads = emptyMap()
@@ -689,6 +703,8 @@ public class WarpMetricExporter(
             store.delete(GAUGE_STORE_KEY)
             store.delete(CARDINALITY_STORE_KEY)
             store.delete(HISTOGRAM_STORE_KEY)
+            store.delete(UP_DOWN_SUM_STORE_KEY)
+            store.delete(UP_DOWN_SUM_DOUBLE_STORE_KEY)
             Result.success(Unit)
         } catch (cause: Throwable) {
             // `clear` never throws: a cancellation the store minted is a refused delete, and only
@@ -1017,6 +1033,8 @@ public class WarpMetricExporter(
         StoredKind.GAUGES -> encodeGauges()
         StoredKind.CARDINALITIES -> encodeCardinalities()
         StoredKind.HISTOGRAMS -> encodeHistograms()
+        StoredKind.UP_DOWN_SUMS -> encodeUpDownSums()
+        StoredKind.UP_DOWN_SUMS_DOUBLE -> encodeUpDownSumsDouble()
     }
 
     // ── Sum (GCounter) ─────────────────────────────────────────────────────────
@@ -1284,6 +1302,8 @@ public class WarpMetricExporter(
             gauges = gauges.toMap(),
             cardinalities = cardinalities.toMap(),
             histograms = histograms.toMap(),
+            upDownSums = upDownSums.toMap(),
+            doubleUpDownSums = upDownSumsDouble.toMap(),
         )
     }
 
@@ -1304,6 +1324,12 @@ public class WarpMetricExporter(
     private fun encodeHistograms(): ByteArray =
         cbor.encodeToByteArray(histogramsSerializer, histograms)
 
+    private fun encodeUpDownSums(): ByteArray =
+        cbor.encodeToByteArray(upDownSumsSerializer, upDownSums)
+
+    private fun encodeUpDownSumsDouble(): ByteArray =
+        cbor.encodeToByteArray(upDownSumsDoubleSerializer, upDownSumsDouble)
+
     // ── Persistence (called outside lock) ────────────────────────────────────
 
     private suspend fun persistSums(encoded: ByteArray, key: MetricKey): MetricWriteResult =
@@ -1320,6 +1346,12 @@ public class WarpMetricExporter(
 
     private suspend fun persistHistograms(encoded: ByteArray, key: MetricKey): MetricWriteResult =
         persist(HISTOGRAM_STORE_KEY, encoded, key).asWriteResult()
+
+    private suspend fun persistUpDownSums(encoded: ByteArray, key: MetricKey): MetricWriteResult =
+        persist(UP_DOWN_SUM_STORE_KEY, encoded, key).asWriteResult()
+
+    private suspend fun persistUpDownSumsDouble(encoded: ByteArray, key: MetricKey): MetricWriteResult =
+        persist(UP_DOWN_SUM_DOUBLE_STORE_KEY, encoded, key).asWriteResult()
 
     /** A [persist] refusal, or `null` for a landed write, as a merge's result. */
     private fun Throwable?.asWriteResult(): MetricWriteResult = this?.let { MetricWriteResult.Failure(it) } ?: MetricWriteResult.Success
@@ -1389,7 +1421,8 @@ public class WarpMetricExporter(
     }
 
     private fun totalCount(): Int =
-        sums.size + sumsDouble.size + gauges.size + cardinalities.size + histograms.size
+        sums.size + sumsDouble.size + gauges.size + cardinalities.size + histograms.size +
+            upDownSums.size + upDownSumsDouble.size
 
     /**
      * Evict one series under [bufferPolicy]. Called only at or over [maxMetrics], which is at least
@@ -1408,6 +1441,8 @@ public class WarpMetricExporter(
         gauges.remove(victim)
         cardinalities.remove(victim)
         histograms.remove(victim)
+        upDownSums.remove(victim)
+        upDownSumsDouble.remove(victim)
     }
 
     /**
@@ -1420,7 +1455,7 @@ public class WarpMetricExporter(
         listOfNotNull(
             sums.keys.firstOrNull(), sumsDouble.keys.firstOrNull(),
             gauges.keys.firstOrNull(), cardinalities.keys.firstOrNull(),
-            histograms.keys.firstOrNull(),
+            histograms.keys.firstOrNull(), upDownSums.keys.firstOrNull(), upDownSumsDouble.keys.firstOrNull(),
         ).firstOrNull()
 
     /**
@@ -1431,7 +1466,7 @@ public class WarpMetricExporter(
         listOfNotNull(
             sums.keys.lastOrNull(), sumsDouble.keys.lastOrNull(),
             gauges.keys.lastOrNull(), cardinalities.keys.lastOrNull(),
-            histograms.keys.lastOrNull(),
+            histograms.keys.lastOrNull(), upDownSums.keys.lastOrNull(), upDownSumsDouble.keys.lastOrNull(),
         ).lastOrNull()
 
     private fun logEviction(victim: MetricKey) {
@@ -1450,6 +1485,8 @@ internal enum class StoredKind(val storeKey: StoreKey) {
     GAUGES(StoreKey("otel.metrics.gauges")),
     CARDINALITIES(StoreKey("otel.metrics.cardinalities")),
     HISTOGRAMS(StoreKey("otel.metrics.histograms")),
+    UP_DOWN_SUMS(StoreKey("otel.metrics.updown")),
+    UP_DOWN_SUMS_DOUBLE(StoreKey("otel.metrics.updown.double")),
 }
 
 /** The persisted map [this] update changes. */
