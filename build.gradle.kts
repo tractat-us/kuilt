@@ -6733,7 +6733,7 @@ val forbidLintFrontendSkew by tasks.registering {
 //      one on by default. The live example is Kotlin/Native link IC (`kotlin.incremental.native`):
 //      2.4.20-Beta2 defaulted it ON, which would have handed the NATIVE lane its own retained-IC
 //      surface, and 2.4.20 shipped with it OFF again — so the 2.4.20 re-measurement found the
-//      2.4.10 population unchanged. The next release can flip it back.
+//      2.4.10 population unchanged, as did 2.4.21's (still OFF). The next release can flip it back.
 //
 // FAILS ON CHANGE, not on regression, exactly like `forbidLintFrontendSkew`. Re-enabling wasm IC is good
 // news and a Kotlin bump is routine; the point is that both silently invalidate a measurement
@@ -6765,7 +6765,7 @@ val forbidLintFrontendSkew by tasks.registering {
 // The Kotlin version point (4)'s sentinel experiment was measured on. A LITERAL here on purpose:
 // per "Guard plumbing" above, a literal in this script is folded into the task-action
 // implementation hash, so editing it re-runs the guard instead of replaying a cached verdict.
-val cleanGateMeasuredKotlin = "2.4.20"
+val cleanGateMeasuredKotlin = "2.4.21"
 
 // The version the catalog entry `build-logic` actually applies Kotlin through resolves to. A
 // sibling of `AgpCatalogScanner` rather than a generalisation of it, for the reason given there (a

@@ -112,8 +112,9 @@ public sealed interface WaitExplanation {
 
         /**
          * [leafSideVirtualService], exact and never held (design §7.1). Set by [LocalHeddle.explain];
-         * `null` on a value a caller built itself. Not part of [equals], [copy] or the components,
-         * so a caller compiled against the three `Rational`s is unaffected.
+         * `null` on a value a caller built itself, and on any [copy], which carries only the
+         * constructor's values. Not part of [equals] or the components, so a caller compiled
+         * against the three `Rational`s is unaffected.
          */
         public var leafSideVirtualServiceWide: VirtualTime? = null
             private set

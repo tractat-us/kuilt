@@ -182,13 +182,8 @@ public object HeddlePolicy {
         //    minimum and carrying on — what design §7.3 step 3 used to prescribe — would schedule
         //    against an ordering just proved untrustworthy, and do it silently; the assertion
         //    names the state instead (#1737).
-        // A bound past the limit is above every candidate's position, which a fitting load keeps under it.
-        val eligible = candidates.filter {
-            when (val bound = v.ticksForWide(it.edge.record.weight)) {
-                is Ticks.Fits -> it.ticks <= bound.value
-                Ticks.PastLimit -> true
-            }
-        }
+        // A comparison, not a landing: exact at every position, the limit plays no part (#3500 review).
+        val eligible = candidates.filter { v.admits(it.ticks, it.edge.record.weight) }
         check(eligible.isNotEmpty()) {
             val listed = candidates.joinToString { c ->
                 "${c.edge.record.id.value} p=${c.ticks} w=${c.edge.record.weight}"

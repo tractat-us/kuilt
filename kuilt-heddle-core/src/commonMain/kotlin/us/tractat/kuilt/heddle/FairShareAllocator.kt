@@ -522,7 +522,14 @@ public class FairShareAllocator(
         val demanding = edges.filter { HeddlePolicy.isDemanding(it) }
         if (demanding.isEmpty()) return edges.maxOf { readVirtual(HeddlePolicy.effectiveTicksWide(it), it.record.weight) }
         val held = demanding.map { Int128.of(inWindow(HeddlePolicy.effectiveTicksWide(it), it.record.weight)) }
-        return VirtualTime.mean(held, demanding.map { it.record.weight }).toRational()
+        // The exact mean of children held at their ceilings need not reduce into a `Long` Rational
+        // (#3523 review): the deprecated read then saturates on the penalty side, at the furthest
+        // held child, rather than throw. The wide read, virtualTimeWide, stays exact.
+        return try {
+            VirtualTime.mean(held, demanding.map { it.record.weight }).toRational()
+        } catch (_: ArithmeticException) {
+            demanding.maxOf { readVirtual(HeddlePolicy.effectiveTicksWide(it), it.record.weight) }
+        }
     }
 
     /**

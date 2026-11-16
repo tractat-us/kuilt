@@ -1109,8 +1109,8 @@ public class WarpLogRecordExporter(
         runCatchingCancellable {
             // Raised before anything can mint, so a sealed segment recovery could not read keeps
             // its ids: the next export mints past them rather than from what was read (#3410).
-            // Raising past seqs the loaded log lacks leaves a hole the floor cannot fold past
-            // until that segment is read; see LogSegmentIndex.seqHighWater for what it costs.
+            // Raising past seqs the loaded log lacks leaves a hole, which the window's floor
+            // crosses (windowPass); see LogSegmentIndex.seqHighWater.
             val raised = recovered.log.advanceClock(replica, recovered.lamportHighWater, recovered.seqHighWater)
             val entries = raised.entries()
             val suppression = Suppression.of(raised)
@@ -3124,8 +3124,13 @@ public class WarpLogRecordExporter(
      */
     private fun windowPass(retain: Int = maxRecords): Boolean {
         evictionsSincePass = 0
-        val dropped = idsOutsideWindow(retain) ?: return false
-        val (newLog, delta) = log.dropWindow(replica, dropped) ?: return false
+        val dropped = withOlderOwn(idsOutsideWindow(retain) ?: return false)
+        // PastUnheld, not dropWindow: a recovery that raised the seq past an unread segment left
+        // a hole in this replica's seqs, and dropWindow's floor stops at it, turning every later
+        // own drop into a Compact that pins its segment for good (#3447). withOlderOwn is what
+        // makes crossing it right: the pass drops every own record that arrived before one it
+        // drops, so the hole's records, which arrived earlier still, are dropped with them.
+        val (newLog, delta) = log.dropWindowPastUnheld(replica, dropped) ?: return false
         // dropWindow returns null only for an EMPTY drop set; a set that changes nothing —
         // ids already under the floor, or never delivered here — comes back as this very
         // state with an inert delta. Persisting that would rewrite the segment for nothing.
@@ -3135,6 +3140,34 @@ public class WarpLogRecordExporter(
         activeOpCount = opCountOf(activeSegment)
         rebuildDerivedState()
         return true
+    }
+
+    /**
+     * [outside], plus every id of this replica's that arrived before the newest of its own in
+     * [outside]: the records the window means to drop, in **arrival** order. Must hold [lock].
+     *
+     * The window is cut in list order ([idsOutsideWindow]), and for this replica's records list
+     * order is arrival order until something reorders the list. A restart past an unread segment
+     * does: the next records are inserted after the loaded log's tail, and when the segment is read
+     * back its records are siblings with a lower lamport, so they sort **after** everything minted
+     * since. The cut then reaches newer records first, and the returned ones, visible or already
+     * tombstoned, sit inside the window behind them. Each held own record the pass keeps blocks the
+     * floor ([Rga.dropWindowPastUnheld]), so every later own drop became an `RgaOp.Compact` and
+     * pinned its segment; trailing tombstones blocked it for good (#3447).
+     *
+     * Seq order is this replica's arrival order, so the ids added here are exactly the own records
+     * that arrived before one the window drops. Dropping them makes the cut the one a list in
+     * arrival order would have had. A foreign author's ids carry no such order and are left to
+     * the list.
+     *
+     * Visible records dropped here are not counted on [ExporterHealth.dropped], as the visible
+     * records a pass over a merged log drops are not: they are older than records already dropped.
+     */
+    private fun withOlderOwn(outside: Set<RgaId>): Set<RgaId> {
+        val newestDropped = outside.maxOfOrNull { if (it.replicaId == replica) it.seq else 0L } ?: return outside
+        if (newestDropped == 0L) return outside
+        val older = log.sequence.filter { it.replicaId == replica && it.seq < newestDropped && it !in outside }
+        return if (older.isEmpty()) outside else outside + older
     }
 
     /**
