@@ -770,10 +770,10 @@ Inside kuilt's own `macosArm64` debug test binary (#3532), every trace — a for
 throwables spent 12.2 s rendering them and 0.03 s with the throwable dropped. A
 `logger.warn { … }` with no throwable never resolves anything at all (~2.5 µs).
 
-These were not measured side by side with the first-trace table above, which is
-why its ~7 ms first trace sits below the ~25 ms per trace: the binaries and the
-stacks they unwound differ. Neither a release build nor a real device has been
-measured.
+These were not measured side by side with the first-trace table above, so do not
+read its ~7 ms first trace against the ~25 ms per trace: the binaries differ, and
+so may the depth of the stacks they unwound. Neither a release build nor a real
+device has been measured.
 
 ### What has *not* been confirmed
 
