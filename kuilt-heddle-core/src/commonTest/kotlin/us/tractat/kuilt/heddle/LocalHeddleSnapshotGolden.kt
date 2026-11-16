@@ -50,8 +50,8 @@ internal const val GOLDEN_FORMAT_1_ORIGIN: String = """[1,{"epoch":1,"totalSlots
 /**
  * The leaves a 0.7.5 engine restored from [GOLDEN_FORMAT_1_ORIGIN] picked, one per call, as its run
  * printed them. 0.7.6 does not repeat them, and is not meant to: 0.7.5 seated `d` at
- * `⌊3 · 16 / 5⌋ + 9 = 18` ticks, a share rounded down, so it read `d` 0.6 of a tick below where the
- * same history puts it with no origin. That is credit, and the translation takes it back (§10.5).
+ * `⌊3 · 16 / 5⌋ + 9 = 18` ticks, a share rounded down, so it read `d` 0.4 of a tick below where the
+ * same history puts it with no origin, at 19. That is credit, and the translation takes it back (§10.5).
  */
 internal val GOLDEN_FORMAT_1_ORIGIN_PICKS: List<String> = "golden/e,golden/c,golden/a,golden/b,golden/e,golden/a,golden/d,golden/c,golden/e,golden/a,golden/e,golden/a,golden/b,golden/c,golden/e,golden/a,golden/e,golden/c,golden/a,golden/e,golden/a,golden/b,golden/c,golden/e,golden/a,golden/e,golden/d,golden/a,golden/c,golden/e".split(",")
 

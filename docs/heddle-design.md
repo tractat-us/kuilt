@@ -1456,8 +1456,10 @@ origins, which is a layout 0.7.5 already reads, so the format number and
   picks that follow, the restored engine and a 0.7.5 twin with no origin, fed
   the same history and the same calls, pick the same leaves. A 0.7.5 twin
   with the origin does not, and is not meant to: it seated the not-whole child
-  with its share rounded down, a fraction of a tick of credit the translation
-  takes back. A snapshot 0.7.6 writes holds no origin. Mutations that must red:
+  with its share rounded down, 0.4 of a tick of credit against the no-origin
+  twin, which the translation takes back. In general each restored position
+  equals the no-origin twin's or is one tick above it, always the penalty side;
+  on the golden every one equals it, and so do the picks. A snapshot 0.7.6 writes holds no origin. Mutations that must red:
   the origin dropped with no translation, on a rig where that tick decides a
   pick; the share added a second time; the share rounded down.
   Built (#3498): `LocalHeddlePersistenceTest.aFormat1SnapshotWithAnOriginIsReadByTranslatingIt`.
