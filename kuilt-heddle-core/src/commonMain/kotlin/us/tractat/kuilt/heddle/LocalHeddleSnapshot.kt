@@ -269,19 +269,21 @@ public sealed interface RestoreResult {
 private class SnapshotFormat1(
     val epoch: Long,
     val totalSlots: Long,
-    val ledger: EntitlementLedger,
+    val ledger: LedgerFormat1,
     val allocatorMemory: AllocatorMemory,
     val leases: List<LeaseFormat1>,
     val lastApplied: Topology,
 ) {
-    fun toSnapshot(): LocalHeddleSnapshot =
-        LocalHeddleSnapshot(epoch, ledger, allocatorMemory, totalSlots, leases.map { it.toPersisted(ledger) }, lastApplied)
+    fun toSnapshot(): LocalHeddleSnapshot {
+        val books = ledger.toLedger()
+        return LocalHeddleSnapshot(epoch, books, allocatorMemory, totalSlots, leases.map { it.toPersisted(books) }, lastApplied)
+    }
 
     companion object {
         fun of(snapshot: LocalHeddleSnapshot): SnapshotFormat1 = SnapshotFormat1(
             epoch = snapshot.epoch,
             totalSlots = snapshot.totalSlots,
-            ledger = snapshot.ledger,
+            ledger = snapshot.ledger.toFormat1(),
             allocatorMemory = snapshot.allocatorMemory,
             leases = snapshot.open.map(LeaseFormat1::of),
             lastApplied = snapshot.lastApplied,

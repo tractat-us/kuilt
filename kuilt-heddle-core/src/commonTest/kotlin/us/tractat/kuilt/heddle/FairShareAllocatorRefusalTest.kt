@@ -24,7 +24,6 @@ class FairShareAllocatorRefusalTest {
     private val root = GroupId("root")
     private val e1 = AttachmentId("e1")
     private val e2 = AttachmentId("e2")
-    private val e4 = AttachmentId("e4")
     private val self = ReplicaId("self")
     private val policy = PolicyConfig(quantum = 10L)
     private val hungry = Demand(targetOutstanding = 10_000L, maximumUsefulGrant = 10L)
@@ -65,35 +64,21 @@ class FairShareAllocatorRefusalTest {
     private fun seatedAt(ledger: EntitlementLedger, edge: AttachmentId, ticks: Long): EntitlementLedger =
         ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to gaugeAt(Int128.of(ticks), folded = 0L))))
 
-    /**
-     * The root's origin at [FLOOR_ORIGIN], so a gauge at zero reads one tick below its floor, `−C`, and
-     * [edge] seated [relative] ticks above that origin on weight 1's grid (#3353, the window rule).
-     */
-    private fun seatedAbove(ledger: EntitlementLedger, edge: AttachmentId, relative: Long): EntitlementLedger =
-        ledger.piece(
-            EntitlementLedger.of(
-                origins = mapOf(root to FLOOR_ORIGIN),
-                gauges = mapOf(edge to gaugeAt(originTicks(FLOOR_ORIGIN, Weight.ONE) + Int128.of(relative), folded = 0L)),
-            ),
-        )
-
-    /** [edge]'s raw position in [ledger], relative to the root's origin, in ticks. */
+    /** [edge]'s raw position in [ledger], in ticks. */
     private fun relative(ledger: EntitlementLedger, edge: AttachmentId): Int128 =
-        ledger.gauge(edge).rawTicksAt(ledger.baseIssuance(edge), ledger.edge(edge)?.returned ?: 0L, Weight.ONE, ledger.origin(root))
+        ledger.gauge(edge).rawTicksAt(ledger.baseIssuance(edge), ledger.edge(edge)?.returned ?: 0L)
 
     /**
      * A child at its ceiling no longer stops its parent: the pick orders the wide positions, so the
      * whole supply goes to `e2`, the child furthest behind. This used to answer `PositionCeiling`
-     * and grant nothing. `e2` demanding below its floor, seen demanding, has no room to come down,
-     * so the rebase is held at nothing (#3353, the window rule), and `e1` stays at its ceiling for
-     * every round. Seen demanding, since a child this allocator has never seen, below zero and
-     * demanding, is clamped up to the front as a waker.
+     * and grant nothing. `e2` sits at zero, seen demanding, since a child this allocator has never
+     * seen and finds demanding is clamped up to the front as a waker (the restart rule, §7.2).
      */
     @Test
     fun aParentWithAChildAtItsCeilingGrantsTheChildBehind() {
-        val cell = CountingCell(seatedAbove(seatedAt(flat(mint = 100L), e2, 0L), e1, positionCeiling(Weight.ONE)))
+        val cell = CountingCell(seatedAt(seatedAt(flat(mint = 100L), e2, 0L), e1, positionCeiling(Weight.ONE)))
         check(relative(cell.current, e1) == Int128.of(positionCeiling(Weight.ONE))) { "the rig: e1 sits at its ceiling" }
-        check(relative(cell.current, e2) <= Int128.of(positionFloor(Weight.ONE))) { "the rig: e2 sits at its floor" }
+        check(relative(cell.current, e2) == Int128.ZERO) { "the rig: e2 sits at zero, far behind" }
         val seen = AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = mapOf(e1 to true, e2 to true))
         val outcome = FairShareAllocator(self, policy, seen).schedule(root, cell, earmarked = 0L) { hungry }
         assertAll(
@@ -244,19 +229,10 @@ class FairShareAllocatorRefusalTest {
      * `e3` a newborn with no seat, and [mint] at the root. Each joiner has something for the seat
      * step to write: `e3` a seat, `e2` a clamp up to `e1`.
      */
-    /**
-     * [blocker] adds `e4`, at its floor and seen demanding: it holds the rebase at nothing, so a
-     * child at its ceiling stays there through the round (#3353, the window rule). The root's origin is
-     * raised to put it there, and [e1Ticks] is then read above that origin ([seatedAbove]).
-     */
-    private fun joining(mint: Long, e1Ticks: Long, blocker: Boolean = false): Pair<CountingCell, FairShareAllocator> {
+    private fun joining(mint: Long, e1Ticks: Long): Pair<CountingCell, FairShareAllocator> {
         val unseated = withChildren(seatedAt(flat(mint), e2, 0L), AttachmentRecord(e3, root, GroupId("g3"), Weight.ONE))
-        var s = if (blocker) seatedAbove(unseated, e1, e1Ticks) else seatedAt(unseated, e1, e1Ticks)
-        val observed = HashMap(mapOf(e1 to true, e2 to false))
-        if (blocker) {
-            s = seatedAt(withChildren(s, AttachmentRecord(e4, root, GroupId("g4"), Weight.ONE)), e4, 0L)
-            observed[e4] = true
-        }
+        val s = seatedAt(unseated, e1, e1Ticks)
+        val observed = mapOf(e1 to true, e2 to false)
         val allocator = FairShareAllocator(self, policy, AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = observed))
         return CountingCell(s) to allocator
     }
@@ -269,12 +245,11 @@ class FairShareAllocatorRefusalTest {
      */
     @Test
     fun aFirstPickBesideAChildAtItsCeilingLandsItsSeats() {
-        val (cell, allocator) = joining(mint = 100L, e1Ticks = positionCeiling(Weight.ONE), blocker = true)
+        val (cell, allocator) = joining(mint = 100L, e1Ticks = positionCeiling(Weight.ONE))
         val before = cell.current
         val memoryBefore = allocator.memory
         val outcome = allocator.schedule(root, cell, earmarked = 0L) { hungry }
         assertAll(
-            { assertTrue(relative(before, e4) <= Int128.of(positionFloor(Weight.ONE)), "the rig: e4 sits at its floor") },
             { assertEquals(Int128.of(positionCeiling(Weight.ONE)), relative(before, e1), "the rig: e1 sits at its ceiling") },
             { assertTrue(before.gauge(e3) == null, "the rig: e3 is unseated") },
             { assertEquals(false, memoryBefore.demandingObserved[e2], "the rig: e2 was seen idle, so it is waking") },
@@ -316,10 +291,5 @@ class FairShareAllocatorRefusalTest {
             { assertTrue(cell.current.gauge(e3) != null, "and so did the newborn's seat") },
             { assertEquals(1, cell.writes, "in a single patch") },
         )
-    }
-
-    private companion object {
-        /** An origin at which a gauge at zero reads `−C − 1` on weight 1's grid: `16 · O = C + 1`. */
-        val FLOOR_ORIGIN: Int128 = Int128.of(positionCeiling(Weight.ONE) / TICKS_PER_UNIT + 1L)
     }
 }

@@ -747,15 +747,16 @@ which would put the edge lower than it was written:
 
 ```text
 gross(e) = P(e) + (baseIssued(e) − folded(e)) · G     (no gauge ⇒ baseIssued(e) · G)
-raw(e)   = gross(e) − returned(e) · G − ⌊O(parent) · w(e) · G⌋
+raw(e)   = gross(e) − returned(e) · G
 v_raw(e) = raw(e) / (G · w(e))
 ```
 
-`O(parent)` is the parent's **origin**, one replicated max-register per parent in
-whole units of virtual time (#3353). Every child of the parent reads its position
-less the origin on its own grid, so raising the origin moves every child down
-together. Nothing raises it any more, so it reads zero (step B, below); slice 4 takes it out
-of the ledger.
+A position is how much service an edge has had, counted from its start, and it only
+goes up. Until step B the ledger also kept a per-parent **origin**, a replicated
+max-register every child read its position less of, which the rebase raised; it is
+gone from the ledger and the wire (#3472, below). Snapshot format 1 reads a 0.7.5
+ledger through a frozen surrogate that still holds the origins, and translates each
+into its children's positions, rounded up.
 
 Which is design §7.1's `b(e) + committedService(e) / w(e)` with `b` supplied by the
 gauge — and with the **base** issuance as the fold axis, deliberately not the effective
@@ -779,10 +780,7 @@ over a sum of weights, and two edges compare by integer cross-multiplication in
 gauge stores its position absolute, wide, exact and uncapped. The raw position,
 the front, a wake clamp `front − raw`, the stored clamp, the effective position,
 raw plus clamp, and the deadline `p + q · G` are all computed and compared in 128
-bits. The origin's share `⌊O · w · G⌋` can reach about 2¹³⁰ at budget-legal
-extreme weights, so it is a checked wide `mulDiv` that throws rather than wraps.
-Nothing absolute is ever capped: a cap on an absolute value turns into credit
-once the origin passes it. Until #3313 and #3353 a pick narrowed the effective
+bits. Nothing is ever capped. Until #3313 and #3353 a pick narrowed the effective
 position to a `Long`, refused with `PositionCeiling(parent)` at the ceiling, and
 a busy parent beside a starved child met it after about 65,000 leases of the
 largest size.
@@ -1448,10 +1446,14 @@ origins, which is a layout 0.7.5 already reads, so the format number and
   an unseated edge and a wake offset. The row asserts the origin it read is
   above zero. Restored, the whole-grid children read their stored positions,
   the other reads one tick more, and offsets and clock are equal. Over the
-  picks that follow, the restored engine and a 0.7.5 twin fed the same calls
-  pick the same leaves. A snapshot 0.7.6 writes holds no origin. Mutations
-  that must red: the origin dropped with no translation, on a rig where that
-  tick decides a pick; the share added a second time; the share rounded down.
+  picks that follow, the restored engine and a 0.7.5 twin with no origin, fed
+  the same history and the same calls, pick the same leaves. A 0.7.5 twin
+  with the origin does not, and is not meant to: it seated the not-whole child
+  with its share rounded down, a fraction of a tick of credit the translation
+  takes back. A snapshot 0.7.6 writes holds no origin. Mutations that must red:
+  the origin dropped with no translation, on a rig where that tick decides a
+  pick; the share added a second time; the share rounded down.
+  Built (#3498): `LocalHeddlePersistenceTest.aFormat1SnapshotWithAnOriginIsReadByTranslatingIt`.
 - **Nothing public breaks (slices 3 to 6).** The API dumps of
   `:kuilt-heddle-core` and `:kuilt-heddle` gain lines and lose none in each
   slice's diff, and each PR says so. A test compiled against the deprecated
@@ -1517,9 +1519,11 @@ origins, which is a layout 0.7.5 already reads, so the format number and
    long-run rows are retargeted to "never refused, and fair". Docs: this
    section, §7.2, §10.5, §10.9, both `module.md`s, the cookbook.
 4. **The origin leaves the ledger and the wire, and format 1 is read by
-   translating.** `ParentRecord`, the canonical-encoding arm, and the reader
-   above. `EntitlementLedger.origin` and `PolicyEdge.origin` stay, deprecated.
-   The format number does not change. Docs: §7.1, §10.5, both `module.md`s,
+   translating.** Built (#3498). `ParentRecord` and the canonical-encoding arm
+   are gone; format 1 reads its ledger through the frozen `LedgerFormat1`,
+   which translates. `EntitlementLedger.origin`, `EntitlementLedger.of`'s
+   `origins` and `PolicyEdge.origin` stay, deprecated. The format number does
+   not change. Docs: §7.1, §10.5, both `module.md`s,
    `Writerside/topics/heddle-local.md`.
 5. **The position limit.** `POSITION_LIMIT`, the sealed result of the
    seat-and-wake step and of `VirtualTime.ticksForWide`, the refusal on
@@ -1742,8 +1746,8 @@ at the same absolute value.
   so it scales onto the grid by `G` like any other service. The stored offset is
   kept on the grid, so it never carries a front's denominator into the next
   one. The clamp and the stored offset are 128-bit
-  (#3353): a waker idle since long before the parent's origin was raised sits far
-  below its siblings, and the clamp carries it the whole way back to the front.
+  (#3353): a waker idle for long sits far below its siblings, and the clamp
+  carries it the whole way back to the front.
 
   Default `sleeperCredit = 0`. `parentVirtualTime` here is the front defined
   just below, with the waker itself — and every sibling waking in the same
@@ -2267,9 +2271,7 @@ Carried over from the source intact; each is a named property test (§13).
    the joiners is demanding (§7.2) — never with lifetime credit. The
    seat is published on the edge's `Gauge`, not frozen into the record, and is
    the front rounded **up** to the edge's own grid, under one tick (§7.2). It is
-   written absolute, the origin the seating peer saw added back on the edge's
-   grid, so it means the same under any later origin, and it is stored exactly and
-   uncapped. The front it is taken from is wide too, so no seat is taken against
+   stored exactly and uncapped. The front it is taken from is wide too, so no seat is taken against
    an understated front (#3353, §7.1). No floor holds it: nothing seats a
    child below zero any more (#3472).
 6. **No unlimited idle credit.** A child that stops competing comes back moved
@@ -2300,9 +2302,9 @@ Carried over from the source intact; each is a named property test (§13).
     narrowed for a pick, which saturates at its ceiling; a pick that would order it
     refuses with a typed outcome instead (§7.1). The public reads of a position
     saturate too, at its ceiling and at its floor, so none of them throws on how
-    far a child is from its origin; a front over many children can still throw
+    far a child has climbed; a front over many children can still throw
     on the least common multiple of their denominators. Everything before it is 128-bit:
-    a gauge's stored position, a parent's origin, the raw position, the front and
+    a gauge's stored position, the raw position, the front and
     a wake clamp, and arithmetic that would leave 128 bits throws (#3353).
     The `Long` lifetime counters, an edge's effective issuance and the root's
     minted supply, are the other exception: no call throws at them. A pick

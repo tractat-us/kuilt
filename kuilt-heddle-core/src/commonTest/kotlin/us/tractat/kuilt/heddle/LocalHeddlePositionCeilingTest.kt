@@ -4,8 +4,6 @@ import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.math.Int128
-import us.tractat.kuilt.math.Rounding
-import us.tractat.kuilt.math.mulDiv
 import us.tractat.kuilt.math.timesWide
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
@@ -29,11 +27,7 @@ import kotlin.test.assertTrue
  * its lane is where the rig put it, so a landing past the ceiling is not a fixture that never got
  * there.
  *
- * The engine rebases a parent long before a child gets there (#3329), so an arm that wants a child
- * to stay past the ceiling keeps a demanding sibling below its floor ([holdAtFloor]): the rebase
- * takes no demanding child out of its window, so a sibling with no room left holds it at nothing
- * (#3353, the window rule). Every position is planted relative to the parent's origin, which
- * [holdAtFloor] raises.
+ * Nothing rebases a parent (#3472), so a child planted past the ceiling stays there.
  */
 class LocalHeddlePositionCeilingTest {
 
@@ -69,13 +63,11 @@ class LocalHeddlePositionCeilingTest {
     private fun LocalHeddle.edgeOf(lane: GroupId): AttachmentId =
         checkNotNull(snapshot().ledger.lineageOf(lane)?.last()) { "${lane.value} has no lineage" }
 
-    /** [lane]'s gross position in ticks of its own service, relative to its parent's origin, exactly, as a pick reads it. */
+    /** [lane]'s gross position in ticks of its own service, exactly, as a pick reads it. */
     private fun LocalHeddle.grossWide(lane: GroupId): Int128 {
         val ledger = snapshot().ledger
         val edge = edgeOf(lane)
-        val record = checkNotNull(ledger.record(edge))
-        val gross = ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge))
-        return gross - originTicks(ledger.origin(record.parent), record.weight)
+        return ledger.gauge(edge).exactGrossTicksAt(ledger.baseIssuance(edge))
     }
 
     /** [grossWide] held at [lane]'s ceiling, as a `Long`: what the rig plants and checks. */
@@ -99,46 +91,27 @@ class LocalHeddlePositionCeilingTest {
         positionCeiling(checkNotNull(snapshot().ledger.record(edgeOf(lane))).weight)
 
     /**
-     * Raise [lane]'s gauge so its gross position reads [below] ticks under its ceiling, relative to
-     * its parent's origin. A gauge only goes up under its join, so this is a write any peer could
+     * Raise [lane]'s gauge so its gross position reads [below] ticks under its ceiling. A gauge only goes up under its join, so this is a write any peer could
      * have made.
      */
     private fun LocalHeddle.pushTowardCeiling(lane: GroupId, below: Long) {
         val edge = edgeOf(lane)
         reshapeForTest { ledger ->
             val record = checkNotNull(ledger.record(edge))
-            val stored = originTicks(ledger.origin(record.parent), record.weight) + Int128.of(positionCeiling(record.weight) - below)
+            val stored = Int128.of(positionCeiling(record.weight) - below)
             ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to gaugeAt(stored, folded = ledger.baseIssuance(edge)))))
         }
         check(grossTicks(lane) == ceilingOf(lane) - below) { "the rig did not put ${lane.value} $below under its ceiling" }
     }
 
-    /** [lane]'s effective position, relative to its parent's origin, as a pick reads it. */
+    /** [lane]'s effective position, as a pick reads it. */
     private fun LocalHeddle.effectiveTicks(lane: GroupId): Int128 {
         val state = snapshot()
         val ledger = state.ledger
         val edge = edgeOf(lane)
         val record = checkNotNull(ledger.record(edge))
-        val raw = ledger.gauge(edge).rawTicksAt(ledger.baseIssuance(edge), ledger.edge(edge)?.returned ?: 0L, record.weight, ledger.origin(record.parent))
+        val raw = ledger.gauge(edge).rawTicksAt(ledger.baseIssuance(edge), ledger.edge(edge)?.returned ?: 0L)
         return raw + (state.allocatorMemory.wakeOffsets[edge] ?: Int128.ZERO)
-    }
-
-    /**
-     * Raise the origin of [lane]'s parent until [lane] sits below its floor, `−C` (#3353): a
-     * demanding child there has no room to come down, so it holds every rebase at its parent at
-     * nothing. Every sibling comes down by as much; [pushTowardCeiling] reads relative to the origin.
-     */
-    private fun LocalHeddle.holdAtFloor(lane: GroupId) {
-        val edge = edgeOf(lane)
-        val weight = checkNotNull(snapshot().ledger.record(edge)).weight
-        val above = effectiveTicks(lane) - Int128.of(positionFloor(weight))
-        // One unit more than the room, so the origin's rounding cannot leave it a tick short.
-        val units = checkNotNull(mulDiv(above, weight.denominator, TICKS_PER_UNIT * weight.numerator, Rounding.CEILING)) + Int128.of(1L)
-        reshapeForTest { ledger ->
-            val parent = checkNotNull(ledger.record(edge)).parent
-            ledger.piece(EntitlementLedger.of(origins = mapOf(parent to ledger.origin(parent) + units)))
-        }
-        check(effectiveTicks(lane) < Int128.of(positionFloor(weight))) { "the rig did not put ${lane.value} below its floor" }
     }
 
     private fun LocalHeddle.bytes(): ByteArray = Cbor.encodeToByteArray(LocalHeddleSnapshot.serializer(), persist())
@@ -170,7 +143,7 @@ class LocalHeddlePositionCeilingTest {
         assertAll(
             // The root orders a, b and g; g's own position is nowhere near its ceiling.
             { assertIs<AcquireOutcome.Acquired>(elsewhere) },
-            // Not refused since #3353 round 2: x's position is exact, so g's pick rebases it down first.
+            // Not refused since #3353 round 2: x's position is exact, and g's pick orders it wide.
             { assertIs<AcquireOutcome.Acquired>(beneath) },
         )
     }
@@ -185,12 +158,10 @@ class LocalHeddlePositionCeilingTest {
         // No warm-up: a carries no wake offset, so the pick itself reads a below its ceiling and
         // only the delegation can be what crosses.
         val engine = engine()
-        // One pick with a and b both waiting seats b and wakes nobody. b then waits beside a below
-        // its floor, which holds the rebase at nothing.
+        // One pick with a and b both waiting seats b and wakes nobody. b then waits beside a.
         val seating = (engine.acquire(setOf(a, b), setOf(a, b), startedAt = 99L) as AcquireOutcome.Acquired).lease
         engine.complete(seating.id, actualCost = 1L, waiting = setOf(a, b))
         check(engine.snapshot().allocatorMemory.wakeOffsets.isEmpty()) { "nobody has woken, so there are no wake offsets" }
-        engine.holdAtFloor(b)
         // One unit is 16 ticks: one tick under the ceiling, the delegation of one unit crosses it.
         engine.pushTowardCeiling(a, below = 1L)
         val outcome = engine.acquire(setOf(a, b), setOf(a), startedAt = 100L)
@@ -209,10 +180,8 @@ class LocalHeddlePositionCeilingTest {
     @Test
     fun anExtendAcrossTheCeilingLandsAndTheLeaseHoldsIt() {
         val engine = engine()
-        // An extend's own rebase runs after its charge. b waits beside a below its floor all the
-        // same, which holds every rebase at nothing, so a stays where the extension puts it.
+        // Nothing rebases (#3472), so a stays where the extension puts it.
         val lease = (engine.acquire(setOf(a, b), setOf(a), startedAt = 100L) as AcquireOutcome.Acquired).lease
-        engine.holdAtFloor(b)
         engine.pushTowardCeiling(a, below = 1L)
         val extended = engine.extend(lease.id, amount = 1L, waiting = setOf(a, b))
         assertAll(
@@ -232,7 +201,6 @@ class LocalHeddlePositionCeilingTest {
     @Test
     fun admitAndCompleteCarryThePositionPastTheCeilingExactly() {
         val engine = engine().apply { warmUp() }
-        engine.holdAtFloor(b)
         engine.pushTowardCeiling(a, below = 1L)
         val start = engine.grossWide(a)
         val admitted = engine.admit(a, waiting = setOf(a, b), startedAt = 100L, reservation = LocalHeddle.MAX_RESERVATION)
@@ -319,12 +287,10 @@ class LocalHeddlePositionCeilingTest {
         saturated.pushTowardCeiling(a, below = 0L)
 
         // One unit is 16 ticks: 17 under, an acquire of 1 lands one tick under, and an extend crosses.
-        // b waits beside a, never eligible, below its floor: it holds the rebase's shift at zero
-        // (#3353), so a is not brought down. One pick with both waiting seats b first.
+        // b waits beside a, never eligible. One pick with both waiting seats b first.
         val crossing = engine()
         val seating = assertIs<AcquireOutcome.Acquired>(crossing.acquire(setOf(a, b), setOf(a), startedAt = 0L)).lease
         crossing.complete(seating.id, actualCost = 1L, waiting = setOf(a, b))
-        crossing.holdAtFloor(b)
         crossing.pushTowardCeiling(a, below = 17L)
         val before = crossing.snapshot()
         val withoutExtend = crossing.previewPicks(mapOf(a to listOf(1L), b to listOf(1L)), setOf(a), reservation = 1L)
@@ -369,15 +335,14 @@ class LocalHeddlePositionCeilingTest {
     @Test
     fun scheduleAndPickChildGrantBesideAChildAtItsCeiling() {
         val engine = engine().apply { warmUp() }
-        engine.holdAtFloor(b)
         engine.pushTowardCeiling(a, below = 0L)
         // Supply at the root, so the allocator reaches a pick at all rather than stopping at empty holdings.
         engine.mintSupply(100L)
         val ledger = engine.snapshot().ledger
         val self = ReplicaId("local")
         check(ledger.holdings(root, self) > 0L) { "the root holds supply for the allocator to grant" }
-        // The engine's wake memory: it has seen b demanding, so b at its floor is not clamped up as a
-        // waker, which is what a fresh allocator does with a child below zero it never saw.
+        // The engine's wake memory: it has seen b demanding, so b is not clamped up as a waker,
+        // which is what a fresh allocator does with a seated child it never saw (the restart rule).
         val allocator = FairShareAllocator(self, PolicyConfig(quantum = 1L), engine.snapshot().allocatorMemory)
         val wants = Demand(targetOutstanding = 10L, maximumUsefulGrant = 1L)
         val cell = object : LedgerCell {
@@ -413,7 +378,7 @@ class LocalHeddlePositionCeilingTest {
      * b is never seen asking before it wakes, so this peer holds no departure for it and clamps it.
      * A b seen to leave would come back by its parent's clock, near where it left, and count in the
      * front there (#3446), which then sits nowhere near its ceiling: until that, this rig passed on
-     * a returner the front left out, so it raised the origin for a clamp that never happened.
+     * a returner the front left out, so a rebase fired for a clamp that never happened.
      */
     @Test
     fun aWakerClampedPastItsCeilingIsPicked() {
@@ -477,7 +442,7 @@ class LocalHeddlePositionCeilingTest {
         assertAll(
             { assertIs<AcquireOutcome.Acquired>(admitted) },
             { assertTrue(offset != null && offset > Int128.of(positionCeiling(bWeight)), "b's clamp is exact, past its ceiling: $offset") },
-            // Not refused since #3353 round 2: the clamp is exact, and the next pick's rebase brings b down.
+            // Not refused since #3353 round 2: the clamp is exact, and the next pick orders b wide.
             { assertIs<AcquireOutcome.Acquired>(engine.acquire(setOf(a, b), setOf(b), startedAt = 2L)) },
         )
     }
@@ -487,8 +452,7 @@ class LocalHeddlePositionCeilingTest {
      * front (#3353). The review of #3352 sent such a seat to the newborn's own ceiling, because the
      * sibling's position read lower than it stood for and so did the front. Nothing is narrowed
      * before the front is taken now, so the front is exact and the seat is stored exactly. `admit`
-     * must charge, so it seats. The sibling `y`
-     * waits at its floor, so the admission's own rebase cannot move `x` off its ceiling (#3353).
+     * must charge, so it seats. Nothing rebases (#3472), so `x` stays at its ceiling.
      */
     @Test
     fun aSeatAgainstASaturatedFrontLandsAtTheExactFront() {
@@ -507,8 +471,7 @@ class LocalHeddlePositionCeilingTest {
             val lease = (engine.acquire(setOf(x, y), setOf(x, y), startedAt = 0L) as AcquireOutcome.Acquired).lease
             engine.complete(lease.id, actualCost = 1L, waiting = emptySet())
         }
-        // y at its floor holds the admission's own rebase at nothing, so x is still at its ceiling after it.
-        engine.holdAtFloor(y)
+        // Nothing rebases, so x is still at its ceiling after it.
         engine.pushTowardCeiling(x, below = 0L)
         check(engine.attach(rt, "n", generation = 2L).refusals.isEmpty())
         val n = rtTopology.attachedChildId(rt, "n")

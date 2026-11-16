@@ -7,6 +7,7 @@ import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Quilted
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.Rounding
 import us.tractat.kuilt.math.WideSum
 import us.tractat.kuilt.math.timesWide
 import kotlinx.serialization.Serializable
@@ -236,13 +237,6 @@ public class EntitlementLedger private constructor(
     private val transferRelocIn: Map<PathKey, @Serializable(with = CanonicalMapSerializer::class) Map<ReplicaId, GCounter>> = emptyMap(),
     @Serializable(with = CanonicalMapSerializer::class)
     private val transferRelocOut: Map<PathKey, @Serializable(with = CanonicalMapSerializer::class) Map<ReplicaId, GCounter>> = emptyMap(),
-    /**
-     * Each parent's [ParentRecord]: its origin, the virtual time every pick there subtracts before
-     * it orders the children (#3353). Joined per parent, field by field. Absent ⇒ a zero origin,
-     * and elided when empty, so a ledger no rebase has touched encodes as it did before.
-     */
-    @Serializable(with = CanonicalMapSerializer::class)
-    private val parents: Map<GroupId, ParentRecord> = emptyMap(),
     /** The fold of every edge this ledger has forgotten; [ForgottenEdges.NONE] on every replicated ledger. */
     private val forgotten: ForgottenEdges = ForgottenEdges.NONE,
     /** An [EdgeIndex] handed over by [piece]; derived state, see [index]. Never encoded, never compared. */
@@ -319,8 +313,6 @@ public class EntitlementLedger private constructor(
             transferRelocOut = transferRelocOut.joinValues(other.transferRelocOut) { mine, theirs ->
                 mine.mergeRows(theirs)
             },
-            // The origin max-register: join = max on the whole 128-bit value, per parent (#3353).
-            parents = parents.joinValues(other.parents) { mine, theirs -> mine.join(theirs) },
             forgotten = joinForgotten(other),
         )
 
@@ -362,7 +354,7 @@ public class EntitlementLedger private constructor(
     private fun withIndex(index: EdgeIndex): EntitlementLedger = EntitlementLedger(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
         issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
-        transferRelocIn, transferRelocOut, parents, forgotten, carried = index,
+        transferRelocIn, transferRelocOut, forgotten, carried = index,
     )
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -465,9 +457,8 @@ public class EntitlementLedger private constructor(
 
     /**
      * [id]'s **gross** virtual service — the [Gauge]'s position advanced by `(baseIssued − folded)`
-     * units, less its parent's [origin] on the edge's grid, over `G · w`, or `baseIssued / w` less
-     * the origin when no gauge is stored, read on the edge's 1/16-unit grid ([grossVirtualServiceAt],
-     * #3313, #3353). `null` if [id] is unknown
+     * units, over `G · w`, or `baseIssued / w` when no gauge is stored, read on the edge's
+     * 1/16-unit grid ([grossVirtualServiceAt], #3313, #3353). `null` if [id] is unknown
      * *or divergent* (no single record ⇒ no single weight to divide by).
      *
      * ## Base issuance, not effective (issue #1752, F2)
@@ -491,8 +482,7 @@ public class EntitlementLedger private constructor(
 
     /**
      * [id]'s virtual service net of returns — `grossVirtualService − returned / w` (design §7.1's
-     * `b + committedService / weight`, with the gauge supplying `b` and the fold), relative to its
-     * parent's [origin]. The raw position a pick reads, before the wake clamp ([rawTicksAt]),
+     * `b + committedService / weight`, with the gauge supplying `b` and the fold). The raw position a pick reads, before the wake clamp ([rawTicksAt]),
      * computed wide and narrowed only here. `null` if [id] is unknown or divergent. Past the
      * ceiling it reads the ceiling, and below the floor the floor, as [grossVirtualService] does.
      */
@@ -501,29 +491,30 @@ public class EntitlementLedger private constructor(
         return readVirtual(rawTicks(id, record), record.weight)
     }
 
-    /** [id]'s raw position, wide, relative to its parent's origin ([rawTicksAt], #3353). */
+    /** [id]'s raw position, wide ([rawTicksAt], #3353). */
     private fun rawTicks(id: AttachmentId, record: AttachmentRecord): Int128 =
-        gauges[id].rawTicksAt(counterValue(issued, id), counterValue(returned, id), record.weight, origin(record.parent))
+        gauges[id].rawTicksAt(counterValue(issued, id), counterValue(returned, id))
 
     /** [grossVirtualService] once the edge's single record is in hand. */
     private fun grossVirtualService(id: AttachmentId, record: AttachmentRecord): Rational =
-        gauges[id].grossVirtualServiceAt(counterValue(issued, id), record.weight, origin(record.parent))
+        gauges[id].grossVirtualServiceAt(counterValue(issued, id), record.weight)
 
     /**
-     * [parent]'s origin in whole virtual-time units: what every pick at [parent] subtracts from each
-     * child's position, on the child's own grid, before it orders them (#3353). Zero for a parent no
-     * rebase has moved. A max-register, so it only ever rises.
+     * Zero, for every parent. 0.7.5 kept an origin per parent, raised by a rebase. Nothing rebases
+     * now and no ledger holds one (design §7.1, step B): a position is absolute, and a 0.7.5 ledger
+     * is read with each origin translated into its children's positions. Kept because 0.7.5
+     * published it.
      */
-    public fun origin(parent: GroupId): Int128 = parents[parent]?.origin ?: Int128.ZERO
+    @Deprecated("Positions have no origin since design §7.1 step B; this always reads zero.")
+    @Suppress("UNUSED_PARAMETER")
+    public fun origin(parent: GroupId): Int128 = Int128.ZERO
 
-    /**
-     * Raise [parent]'s origin to [to]: the whole of a rebase (#3353). It rewrites no gauge. `null`
-     * when [to] is not above the origin already stored, since the register only keeps the higher.
-     */
-    internal fun raiseOrigin(parent: GroupId, to: Int128): Patch<EntitlementLedger>? {
-        if (to <= origin(parent)) return null
-        return Patch(of(origins = mapOf(parent to to)))
-    }
+    /** This ledger in [LocalHeddleSnapshot] format 1's frozen shape, with no origins. */
+    internal fun toFormat1(): LedgerFormat1 = LedgerFormat1(
+        records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
+        issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
+        transferRelocIn, transferRelocOut, parents = emptyMap(), forgotten = forgotten,
+    )
 
     /**
      * The [Lifecycle] of [id], or `null` if [id] is entirely unknown to this ledger.
@@ -1629,23 +1620,19 @@ public class EntitlementLedger private constructor(
      */
     public fun seat(edge: AttachmentId, front: Rational): Patch<EntitlementLedger>? {
         val record = recordOf(edge) ?: return null
-        return seatAtWide(edge, originTicks(origin(record.parent), record.weight) + wideTicksAt(front, record.weight))
+        return seatAtWide(edge, wideTicksAt(front, record.weight))
     }
 
     /**
-     * [seat] at an absolute position: [ticks] of [edge]'s own service, `⌊O · w · G⌋ + ⌈V · w · G⌉`
-     * for the origin `O` and the front `V` a scheduler read (#3353). The position written is
+     * [seat] at a position: [ticks] of [edge]'s own service, `⌈V · w · G⌉` for the front `V` a
+     * scheduler read (#3353). The position written is
      * `max(ticks, baseIssued · G)`, taken in 128 bits and stored in the gauge's ticks exactly, with
      * the floor left at zero. Rounding the front up is the only rounding a seat does (design §7.2).
      * Nothing here caps it, and nothing upstream narrows it: a seat past the edge's
      * [positionCeiling] is stored past it, and a pick orders it there exactly.
      *
-     * Absolute is what makes it safe under replication. Two peers that seat one newborn against
-     * different origins write the same position, give or take a tick, so the join's `max` adds no
-     * rebase to it (#3329 hazard (a)). The one exception is a seat held at the newborn's floor
-     * (#3353, the window rule): each peer's floor sits under its own origin, so two such seats can
-     * differ by up to the gap between the two origins on the newborn's grid. The join keeps the
-     * higher, so that difference is always penalty, never credit.
+     * Two peers that seat one newborn at their own fronts write different positions, and the
+     * join's `max` keeps the higher, the penalty side (#1752). No origin enters it (#3472).
      */
     internal fun seatAtWide(edge: AttachmentId, ticks: Int128): Patch<EntitlementLedger>? {
         if (recordOf(edge) == null) return null
@@ -2036,7 +2023,7 @@ public class EntitlementLedger private constructor(
     private fun withFreshIndex(): EntitlementLedger = EntitlementLedger(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
         issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
-        transferRelocIn, transferRelocOut, parents, forgotten,
+        transferRelocIn, transferRelocOut, forgotten,
     )
 
     /** The body of [validate], run on [withFreshIndex]'s copy. */
@@ -2325,7 +2312,6 @@ public class EntitlementLedger private constructor(
             gauges = gauges.without(),
             transferRelocIn = transferRelocIn,
             transferRelocOut = transferRelocOut,
-            parents = parents,
             forgotten = ForgottenEdges(outflow, leafSpend, floor),
         )
     }
@@ -2614,7 +2600,7 @@ public class EntitlementLedger private constructor(
     internal fun withoutGauges(): EntitlementLedger = EntitlementLedger(
         records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
         issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges = emptyMap(),
-        transferRelocIn = transferRelocIn, transferRelocOut = transferRelocOut, parents = parents, forgotten = forgotten,
+        transferRelocIn = transferRelocIn, transferRelocOut = transferRelocOut, forgotten = forgotten,
     )
 
     /**
@@ -2650,7 +2636,6 @@ public class EntitlementLedger private constructor(
             gauges == other.gauges &&
             transferRelocIn == other.transferRelocIn &&
             transferRelocOut == other.transferRelocOut &&
-            parents == other.parents &&
             forgotten == other.forgotten
 
     override fun hashCode(): Int {
@@ -2670,7 +2655,6 @@ public class EntitlementLedger private constructor(
         h = 31 * h + gauges.hashCode()
         h = 31 * h + transferRelocIn.hashCode()
         h = 31 * h + transferRelocOut.hashCode()
-        h = 31 * h + parents.hashCode()
         h = 31 * h + forgotten.hashCode()
         return h
     }
@@ -2681,7 +2665,7 @@ public class EntitlementLedger private constructor(
             "transfers=$transfers, lifecycle=$lifecycle, issuedRelocIn=$issuedRelocIn, " +
             "leafRelocIn=$leafRelocIn, leafRelocOut=$leafRelocOut, " +
             "rollupRelocIn=$rollupRelocIn, rollupRelocOut=$rollupRelocOut, gauges=$gauges, " +
-            "transferRelocIn=$transferRelocIn, transferRelocOut=$transferRelocOut, parents=$parents, forgotten=$forgotten)"
+            "transferRelocIn=$transferRelocIn, transferRelocOut=$transferRelocOut, forgotten=$forgotten)"
 
     /**
      * The derived topology [index] holds. Every list is sorted by [AttachmentId] and every map is
@@ -2785,10 +2769,34 @@ public class EntitlementLedger private constructor(
         ): EntitlementLedger =
             EntitlementLedger(
                 records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
-                issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
-                transferRelocIn, transferRelocOut, origins.mapValues { (_, units) -> ParentRecord.withOrigin(units) },
+                issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut,
+                withOriginsTranslated(gauges, records, origins),
+                transferRelocIn, transferRelocOut,
                 ForgottenEdges(forgottenOutflow, forgottenLeafSpend, forgottenGenerationFloor),
             )
+
+        /**
+         * [gauges] as positions with no origin, given the [origins] a 0.7.5 ledger held per parent
+         * (design §7.1, "0.7.6 reads format 1 by translating"). 0.7.5 picked on
+         * `stored − ⌊O · w · G⌋`, so each gauge under a parent with an origin `O` puts the share
+         * back rounded up: `stored − ⌊O · w · G⌋ + ⌈O · w · G⌉`. A child whose grid `O` is whole on
+         * keeps its stored position, and any other moves up one tick, once: penalty, never credit
+         * (§10.5). An edge with no gauge has no position, and an edge with no single record no
+         * weight, so neither moves.
+         */
+        private fun withOriginsTranslated(
+            gauges: Map<AttachmentId, Gauge>,
+            records: Map<AttachmentId, Set<AttachmentRecord>>,
+            origins: Map<GroupId, Int128>,
+        ): Map<AttachmentId, Gauge> {
+            if (origins.values.all { it == Int128.ZERO }) return gauges
+            return gauges.mapValues { (id, gauge) ->
+                val record = records[id]?.singleOrNull() ?: return@mapValues gauge
+                val origin = origins[record.parent] ?: return@mapValues gauge
+                val lift = originTicks(origin, record.weight, Rounding.CEILING) - originTicks(origin, record.weight)
+                if (lift == Int128.ZERO) gauge else gaugeAt(gauge.ticks + lift, gauge.folded)
+            }
+        }
     }
 }
 
