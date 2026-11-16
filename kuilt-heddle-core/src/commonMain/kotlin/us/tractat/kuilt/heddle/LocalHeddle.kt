@@ -1358,12 +1358,12 @@ public class LocalHeddle private constructor(
             moved[lease.lease.id] = path
         }
 
-        // Every open lease's path is its leaf's one live lineage: no lease crosses a retired edge, and
+        // Every open lease's path is its leaf's one live lineage, from the root: no lease crosses a retired edge, and
         // the reload left no leaf with two live inbound edges, a divergent record or a cycle, which
         // `observeAndDelegate` and `releaseUp` throw on. An engine bug if not; the ledger is not swapped.
         for (lease in open.values) {
             val path = moved[lease.lease.id] ?: lease.path
-            check(local.lineageOf(lease.lease.leaf) == path) {
+            check(local.lineageOf(lease.lease.leaf) == path && local.record(path.first())?.parent == root) {
                 "a reload left lease ${lease.lease.id} on ${path.map { it.value }}, not ${lease.lease.leaf.value}'s lineage " +
                     "${local.lineageOf(lease.lease.leaf)?.map { it.value }}"
             }

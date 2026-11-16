@@ -96,11 +96,11 @@ internal fun EntitlementLedger.isLeasable(group: GroupId, root: GroupId, leasabl
 
 /**
  * Every group of [groups] a lease can end at and a delegation from [root] can reach — leasable,
- * with every edge of its lineage ACTIVE — together with every group on those lineages: the lift
- * a demand view, an admission and an explanation all read.
+ * with every edge of its lineage ACTIVE and the lineage ending at [root] — together with every
+ * group on those lineages: the lift a demand view, an admission and an explanation all read.
  */
 internal fun EntitlementLedger.reachable(groups: Collection<GroupId>, root: GroupId, leasable: Leasable): Set<GroupId> =
-    withDelegableLineages(groups.filter { isLeasable(it, root, leasable) })
+    withDelegableLineages(groups.filter { isLeasable(it, root, leasable) }, root)
 
 /** Whether a lease can end at [group] and a delegation reach it: [isLeasable], through ACTIVE edges only. */
 internal fun EntitlementLedger.canEndAt(group: GroupId, root: GroupId, leasable: Leasable): Boolean =
