@@ -373,4 +373,26 @@ class FairShareAllocatorRefusalTest {
             { assertNotNull(allocator.virtualTime(cell.current, root, wants), "and so does the front") },
         )
     }
+
+    /**
+     * A clock planted past the limit refuses every pick at its parent (design §7.1): the step's clock
+     * must stay within the limit of zero. One planted exactly at the limit, which nobody asking moves,
+     * still picks.
+     */
+    @Test
+    fun aClockPastTheLimitRefusesEveryPickAndOneAtItStillPicks() {
+        val start = seatedAt(seatedAt(flat(mint = 100L), e1, 0L), e2, 0L)
+        fun outcomes(clock: Int128): List<AllocationOutcome> {
+            val memory = AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = emptyMap(), clocks = mapOf(root to clock))
+            val allocator = FairShareAllocator(self, policy, memory)
+            val cell = CountingCell(start)
+            return List(2) { allocator.schedule(root, cell, earmarked = 0L) { hungry } }
+        }
+        val past = outcomes(POSITION_LIMIT + Int128.of(1L))
+        val at = outcomes(POSITION_LIMIT)
+        assertAll(
+            { assertEquals(List(2) { AllocationOutcome.LifetimeExhausted(root) }, past, "every pick past the limit is refused") },
+            { assertTrue(at.first() is AllocationOutcome.Delegated, "a clock exactly at the limit still picks: $at") },
+        )
+    }
 }
