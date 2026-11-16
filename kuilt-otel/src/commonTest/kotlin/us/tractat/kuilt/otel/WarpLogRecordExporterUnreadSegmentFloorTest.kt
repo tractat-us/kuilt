@@ -176,6 +176,100 @@ class WarpLogRecordExporterUnreadSegmentFloorTest {
     }
 
     /**
+     * A peer's `Compact` over this replica's dots, above the hole a refused segment left. Peer B
+     * merges the degraded A, windows A's records away with exports of its own, and A merges B
+     * back, so A holds compacted own seqs on both sides of the hole. The compacted seqs must
+     * neither license A's floor across the hole nor block it: A's own drops keep folding, nothing
+     * is pinned, and the store stops growing while the key stays refused. Measured on the round-2
+     * walk, which let a compacted seq block: 33/63/93 keys and 31/61/91 pinned at 300/600/900.
+     */
+    @Test
+    fun aPeersCompactAboveTheHoleNeitherLicensesNorBlocksTheFloor() = runTest {
+        val backing = RecordingStore()
+        val writer = exporterFor(backing)
+        repeat(16) { assertEquals(ExportResult.Success, writer.export(record(it))) }
+        val refusing = ReadRefusingStore(backing, StoreKey(segmentKeyForTest(1L)))
+        val restarted = exporterFor(refusing)
+        restarted.recover()
+        val peer = WarpLogRecordExporter(ReplicaId("B"), RecordingStore(), maxRecords = MAX_RECORDS, segmentOps = SEGMENT_OPS)
+        assertEquals(ExportResult.Success, peer.merge(restarted.snapshot()))
+        repeat(25) { assertEquals(ExportResult.Success, peer.export(record(50_000 + it))) }
+        val peerLog = peer.snapshot()
+        assertEquals(ExportResult.Success, restarted.merge(peerLog))
+        repeat(300) { assertEquals(ExportResult.Success, restarted.export(record(1000 + it))) }
+        val atThreeHundred = layoutOf(backing, restarted.snapshot())
+        repeat(300) { assertEquals(ExportResult.Success, restarted.export(record(2000 + it))) }
+        val atSixHundred = layoutOf(backing, restarted.snapshot())
+        val log = restarted.snapshot()
+        assertAll(
+            // The rig: the read was refused and the peer's log carries Compacts over A's seqs.
+            { assertTrue(refusing.refusals >= 1, "segment 1's read was refused") },
+            { assertTrue(peerLog.compactedIds.any { it.replicaId == replica }, "the peer compacted none of A's seqs") },
+            // The property.
+            { assertEquals(0, atSixHundred.compactCarrying - atThreeHundred.compactCarrying, "pinned segments kept growing") },
+            { assertEquals(atThreeHundred.segmentKeys, atSixHundred.segmentKeys, "the key count kept growing") },
+            {
+                assertTrue(
+                    log.compactedBelow[replica] >= log.seqHighWater(replica) - 2 * MAX_RECORDS,
+                    "the floor stopped at ${log.compactedBelow[replica]} of seq ${log.seqHighWater(replica)}",
+                )
+            },
+        )
+    }
+
+    /**
+     * What the arrival-order widening rests on, checked after every export: the own records the
+     * log keeps, visible or tombstoned, are the newest by seq, so their seqs form one unbroken run
+     * and nothing dropped is newer than anything kept; and the visible ones number at most
+     * [MAX_RECORDS], exactly `min(MAX_RECORDS, exported)` on a log with no hole. Run on a log with
+     * no hole, where list order is already arrival order, and after a segment read back early,
+     * where it is not.
+     */
+    @Test
+    fun theOwnRecordsKeptAreAlwaysTheNewestBySeq() = runTest {
+        val breaches = mutableListOf<String>()
+        var checks = 0
+        fun check(label: String, log: Rga<LogRecord>, exported: Int?) {
+            checks++
+            val kept = log.sequence.filter { it.replicaId == replica }.map { it.seq }.sorted()
+            if (kept.isNotEmpty() && kept.last() - kept.first() + 1 != kept.size.toLong()) {
+                breaches += "$label: kept own seqs are not one run: $kept"
+            }
+            val visible = log.entries().count { it.first.replicaId == replica }
+            if (visible > MAX_RECORDS) breaches += "$label: $visible visible"
+            if (exported != null && visible != minOf(MAX_RECORDS, exported)) {
+                breaches += "$label: $visible visible after $exported exports"
+            }
+        }
+        val plain = exporterFor(RecordingStore())
+        repeat(300) {
+            plain.export(record(it))
+            check("no hole, export $it", plain.snapshot(), it + 1)
+        }
+        val backing = RecordingStore()
+        val writer = exporterFor(backing)
+        repeat(16) { writer.export(record(it)) }
+        val refusing = ReadRefusingStore(backing, StoreKey(segmentKeyForTest(1L)))
+        val restarted = exporterFor(refusing)
+        restarted.recover()
+        refusing.heal()
+        repeat(5) { restarted.export(record(100 + it)) }
+        val clean = exporterFor(backing)
+        clean.recover()
+        val reordered = clean.snapshot().sequence.filter { it.replicaId == replica }.map { it.seq }
+        repeat(300) {
+            clean.export(record(1000 + it))
+            check("read back early, export $it", clean.snapshot(), null)
+        }
+        assertAll(
+            // The rig: the read-back log really was out of seq order, and the checks ran.
+            { assertTrue(reordered != reordered.sorted(), "the read-back log was in seq order: $reordered") },
+            { assertTrue(checks > 400, "only $checks checks") },
+            { assertEquals(emptyList(), breaches.take(5)) },
+        )
+    }
+
+    /**
      * A sealed key the store refuses for good: the floor still walks past its seqs, so nothing
      * own is pinned, and the layout stops growing. The key itself stays named, since nothing was
      * read out of it.
