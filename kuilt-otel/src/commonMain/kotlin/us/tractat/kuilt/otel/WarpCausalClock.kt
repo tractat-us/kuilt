@@ -74,15 +74,15 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * carries only the own dots the exporter has seen. A merge raises the floor from the remote set,
  * and an export raises it from an explicit stamp of this replica's.
  *
- * The floor misses a used dot in three cases. Both entries corrupt: it starts at zero. A dot that
- * reached a peer from [WarpSpanExporter.snapshot] before its turn's clock write landed, and the crash
- * came first: no key need be corrupt, since the restart reads a sound clock entry below that dot and a
- * carried mark no higher, so the next [tick] mints it again until the peer hands it back. That is
- * #1053's crash window plus gossip, and #3517 tracks it; the log exporter's twin claims ahead of the mint. And a corrupt
+ * The floor misses a used dot in two cases. Both entries corrupt: it starts at zero. And a corrupt
  * span entry over a dot a [WarpSpanExporter.merge] wrote durably ahead of any clock write: a merge
  * never writes the clock, so the sound clock entry does not cover it. The floor takes every stored or
  * merged dot's `seq` as given, so one claiming `Long.MAX_VALUE` leaves the clock
  * [ClockTick.Exhausted] (#3432).
+ *
+ * A dot no key holds yet cannot reach a peer to be handed back: [WarpSpanExporter] shows an export's
+ * span in [WarpSpanExporter.snapshot] only once the turn's clock and span writes have both returned
+ * (#3517). A dot a turn minted and never published leaves a gap, which nothing reads as missing.
  *
  * ## Thread-safety
  *
