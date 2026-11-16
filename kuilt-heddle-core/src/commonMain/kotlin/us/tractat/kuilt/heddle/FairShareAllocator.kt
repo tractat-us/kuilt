@@ -670,6 +670,30 @@ public class FairShareAllocator(
         return loadFitsAt(s, parent, demand)
     }
 
+    /**
+     * Whether [edge], active in [s], could be seated level with the furthest-ahead of its active
+     * siblings and leave its parent's load within the [POSITION_LIMIT] (design §7.1). The same test
+     * a pick's step runs, asked early, for [LocalHeddle.apply]; it is not the guarantee, which is
+     * the step's own.
+     */
+    internal fun seatFitsBesideFurthest(s: EntitlementLedger, edge: AttachmentId): Boolean = try {
+        val record = checkNotNull(s.record(edge)) { "an activated edge ${edge.value} has no record" }
+        val siblings = policyEdges(s, record.parent) { Demand.NONE }.filter { it.record.id != edge }
+        if (siblings.isEmpty()) {
+            true
+        } else {
+            val top = siblings.maxWith { x, y ->
+                compareVirtualWide(HeddlePolicy.effectiveTicksWide(x), x.record.weight, HeddlePolicy.effectiveTicksWide(y), y.record.weight)
+            }
+            when (val seat = VirtualTime.of(HeddlePolicy.effectiveTicksWide(top), top.record.weight).ticksForWide(record.weight)) {
+                is Ticks.Fits -> loadFits(siblings.asSequence().map(HeddlePolicy::effectiveTicksWide) + seat.value)
+                Ticks.PastLimit -> false
+            }
+        }
+    } catch (_: ArithmeticException) {
+        false
+    }
+
     /** Whether the load of [parent]'s active children in [s] fits the [POSITION_LIMIT]. */
     private fun loadFitsAt(s: EntitlementLedger, parent: GroupId, demand: (AttachmentId) -> Demand): Boolean =
         try {

@@ -1266,7 +1266,11 @@ public class LocalHeddle private constructor(
             // the set too fine for one full lease: the ledger would take it, and every pick at that
             // parent would then throw, or one under-charged lease could carry a child past its ceiling (#3313, #3353).
             val overBudget = stepped != null && step is TopologyStep.Activate && !stepped.activationFitsTheBudget(step.edge)
-            val next = if (overBudget) null else stepped
+            // The position limit, asked early: a joiner whose seat beside the furthest-ahead sibling would
+            // not fit is refused alone, and its siblings go on being leased (design §7.1).
+            val pastLimit = !overBudget && stepped != null && step is TopologyStep.Activate &&
+                !allocator.seatFitsBesideFurthest(stepped, step.edge)
+            val next = if (overBudget || pastLimit) null else stepped
             if (overBudget) unfit += checkNotNull(stepped.record(step.edge)) { "an activation the budget refused has no record" }.parent
             if (next != null) {
                 local = next
@@ -1276,6 +1280,8 @@ public class LocalHeddle private constructor(
             val reason = when {
                 below != null -> "${below.value}, below it, did not retire"
                 overBudget -> "its weight would put its siblings' weight arithmetic out of Long, or let one full lease carry a child past its ceiling"
+                pastLimit -> "seated level with the furthest-ahead of its siblings, it would carry its parent past the position limit; " +
+                    "remove it, or wait for its siblings' share to be spent on a fresh parent"
                 else -> "the ledger refused it"
             }
             if (child in replaced.values) {
