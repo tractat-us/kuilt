@@ -40,11 +40,8 @@ public class PNCounterDouble private constructor(
 
     // In `init`, so the generated decoder runs it too. Each half already refuses a negative or NaN slot.
     init {
-        for (half in listOf(inc, dec)) {
-            for ((replica, count) in half.slots) {
-                require(count.isFinite()) { "PNCounterDouble slot $replica must be finite, was $count" }
-            }
-        }
+        requireFiniteSlots(inc)
+        requireFiniteSlots(dec)
     }
 
     /** The sum of every replica's [count], in canonical replica order. */
@@ -112,5 +109,12 @@ public class PNCounterDouble private constructor(
                 )
             }
         }
+    }
+}
+
+/** Top-level rather than in the companion, so [PNCounterDouble.ZERO]'s own construction never waits on it. */
+private fun requireFiniteSlots(half: GCounterDouble) {
+    for ((replica, count) in half.slots) {
+        require(count.isFinite()) { "PNCounterDouble slot $replica must be finite, was $count" }
     }
 }

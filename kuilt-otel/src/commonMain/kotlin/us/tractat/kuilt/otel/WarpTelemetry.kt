@@ -41,7 +41,10 @@ import us.tractat.kuilt.store.InMemoryDurableStore
  * - **Platform WALs** for iOS/macOS (#724) and wasmJs/IndexedDB (#725) are
  *   deferred; pass [InMemoryDurableStore] until those land.
  *
- * @param replica Stable, unique identity for this device/process (use a UUID).
+ * @param replica Stable, unique identity for this device/process (use a UUID). Keep it, with
+ *   [store], across restarts: an up-down sum's share lives in this replica's slot, so an id minted
+ *   per launch leaves every earlier launch's share in the sum, and the level is counted again after
+ *   each restart.
  * @param store Durable persistence backend. [InMemoryDurableStore] in tests;
  *   a platform-specific WAL in production.
  * @param maxSpans Maximum number of spans buffered in memory.
