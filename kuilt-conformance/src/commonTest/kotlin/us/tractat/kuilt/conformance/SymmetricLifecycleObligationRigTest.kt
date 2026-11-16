@@ -152,7 +152,7 @@ class SymmetricLifecycleObligationRigTest {
                 DecoratingJoinerLoom(InMemoryLoom()) { seam ->
                     SeamWhoseIncomingNeverCompletes(seam) { joinerCollections++ }
                 },
-            ).runIncomingCompletesWhenSeamCloses(this)
+            ).runIncomingCompletesWhenSeamCloses(this@runTest)
         }
         assertAll(
             {
