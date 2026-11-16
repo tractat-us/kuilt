@@ -664,13 +664,13 @@ who was waiting.
 
 | Call | Answers | Never refused for |
 |---|---|---|
-| `acquire` | `AcquireOutcome`: `Acquired`, `NothingEligible` (empty eligible set, or every eligible leaf capped), `SupplyExhausted` (no capacity reconciled), `NoLiveLineage(root)`, `LifetimeExhausted(parent)` (the lifetime limit) | — |
+| `acquire` | `AcquireOutcome`: `Acquired`, `NothingEligible` (empty eligible set, or every eligible leaf capped), `SupplyExhausted` (no capacity reconciled), `NoLiveLineage(root)`, `LifetimeExhausted(parent)` (the lifetime limit, or a child landing at `parent` past the position limit) | — |
 | `admit` | `AdmitOutcome`: `Acquired`, `NoLiveLineage(leaf)`; past the lifetime limit `Acquired` with `reserved` 0 | supply, a concurrency ceiling, the lifetime limit |
 | `extend` | `LeaseOutcome`: `Done` (with `unrecorded` the whole amount past the lifetime limit), `PathDraining(edge)` (a reload is closing the path), `SupplyExhausted`, `Unknown`, `Stale(currentEpoch)` | a concurrency ceiling, the lifetime limit |
 | `complete` | `LeaseOutcome`: `Done(charged, overrun, unrecorded)`, `Unknown`, `Stale(currentEpoch)` | anything: a draining path, an overrun, a ceiling, the lifetime limit |
 | `cancel` | `LeaseOutcome`: `Done`, `Unknown`, `Stale(currentEpoch)` | anything |
 | `fromTopology` | `LocalHeddle.Boot(heddle, result)`: the engine, and an `ApplyResult` naming every group the boot left out, each a `StepRefusal.Refused` | — |
-| `apply`, `attach`, `detach` | `ApplyResult(applied, refusals)`, each refusal a `StepRefusal.Draining` (waits on open leases) or `StepRefusal.Refused` (the ledger will not take it) | — |
+| `apply`, `attach`, `detach` | `ApplyResult(applied, refusals)`, each refusal a `StepRefusal.Draining` (waits on open leases) or `StepRefusal.Refused` (the ledger will not take it, or a joiner seated beside its furthest-ahead sibling would pass the position limit: that joiner alone) | — |
 | `decode` | `RestoreResult`: `Restored`, `UnsupportedVersion`, `Corrupt` | — |
 
 `Unknown` is an id from this engine's epoch that holds no open lease, a second `complete`

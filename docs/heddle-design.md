@@ -1396,8 +1396,10 @@ origins, which is a layout 0.7.5 already reads, so the format number and
   - The bridge, by public calls only: `1/2¹⁴` leased 160 times at the largest
     size, 4 joins and is leased, the fine lane leaves, `2⁵⁸` is applied.
     `LocalHeddle.apply` refuses the heavy lane alone, the lane of weight 4 is
-    still leased, and no call throws. At 64 leases the heavy lane lands and is
-    picked. #3500's `W1BridgeProbeTest` is this row, retargeted from "no
+    still leased, and no call throws. At 16 leases the heavy lane lands and is
+    picked: its seat is about `2¹²⁴` ticks. (At 64 its seat is about `2¹²⁶`,
+    which the limit refuses; 64 was where the picks stopped throwing before
+    the limit.) #3500's `W1BridgeProbeTest` is this row, retargeted from "no
     throw" to the typed refusal.
   - The same bridge on `FairShareAllocator` and on `HeddleNode`, where no
     `apply` asks early: `schedule` answers `LifetimeExhausted(parent)`, the
@@ -1525,7 +1527,10 @@ origins, which is a layout 0.7.5 already reads, so the format number and
    `origins` and `PolicyEdge.origin` stay, deprecated. The format number does
    not change. Docs: §7.1, §10.5, both `module.md`s,
    `Writerside/topics/heddle-local.md`.
-5. **The position limit.** `POSITION_LIMIT`, the sealed result of the
+5. **The position limit.** In progress (#3500): built so far are the limit, the
+   sealed results, the refusal on `acquire` and `schedule`, the charging-call
+   path rule and the early check in `apply`, with the bridge, waker and
+   two-sides rows. `POSITION_LIMIT`, the sealed result of the
    seat-and-wake step and of `VirtualTime.ticksForWide`, the refusal on
    `acquire` and `schedule`, the path rule for a charging call, and the early
    check in `LocalHeddle.apply`. `weightsFitTheBudget` does not change.
