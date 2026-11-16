@@ -48,7 +48,7 @@ class WarpMetricExporterHistogramTotalOverflowTest {
 
     /** The count the bridge would export for [latency] right now, or `null` if it would skip the series. */
     private fun WarpMetricExporter.renderedCount(): Long? =
-        renderMetricPoints(snapshotAll(), nowEpochNanos = 1L, FirstSightings(), FirstSightings())
+        renderMetricPoints(snapshotAll(), nowEpochNanos = 1L, FirstSightings(), FirstSightings(), FirstSightings())
             .filterIsInstance<MetricPoint.ExponentialHistogram>()
             .singleOrNull { it.key == latency }
             ?.count

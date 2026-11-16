@@ -35,7 +35,7 @@ class WarpMetricExporterSumTotalOverflowTest {
 
     /** The value the bridge would export for [requests] right now, or `null` if it would skip the series. */
     private fun WarpMetricExporter.renderedSum(): Long? =
-        renderMetricPoints(snapshotAll(), nowEpochNanos = 1L, FirstSightings(), FirstSightings())
+        renderMetricPoints(snapshotAll(), nowEpochNanos = 1L, FirstSightings(), FirstSightings(), FirstSightings())
             .filterIsInstance<MetricPoint.Sum>()
             .singleOrNull { it.key == requests }
             ?.value
