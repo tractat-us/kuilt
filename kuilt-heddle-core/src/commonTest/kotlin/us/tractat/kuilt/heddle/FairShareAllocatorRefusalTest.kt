@@ -292,4 +292,61 @@ class FairShareAllocatorRefusalTest {
             { assertEquals(1, cell.writes, "in a single patch") },
         )
     }
+
+    /** [ledger] with [edge] seated at the wide position [ticks]. */
+    private fun seatedAtWide(ledger: EntitlementLedger, edge: AttachmentId, ticks: Int128): EntitlementLedger =
+        ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to gaugeAt(ticks, folded = 0L))))
+
+    /** `2^n` as an [Int128], for `n` in `64..126`. */
+    private fun twoTo(n: Int): Int128 = Int128.fromTwosComplement(1L shl (n - 64), 0L)
+
+    /**
+     * The position limit on [FairShareAllocator.schedule], where no `apply` asks early (design
+     * §7.1): `e1` at weight 1 stands at `2⁹⁴` ticks, a front of `2⁹⁰`, and a newborn `e3` at
+     * `2⁴⁰` would be seated there at `2¹³⁴` ticks. The call answers `LifetimeExhausted(root)`, writes
+     * nothing to the ledger, and leaves the wake memory as it was.
+     */
+    @Test
+    fun aNewbornWhoseSeatWouldPassThePositionLimitRefusesTheCallAndWritesNothing() {
+        val e3 = AttachmentId("e3")
+        val start = withChildren(
+            seatedAtWide(flat(mint = 100L), e1, twoTo(94)),
+            AttachmentRecord(e3, root, GroupId("g3"), Weight.of(1L shl 40)),
+        )
+        val cell = CountingCell(start)
+        val allocator = FairShareAllocator(self, policy)
+        val before = allocator.memory
+        val wants = { edge: AttachmentId -> if (edge == e2) Demand.NONE else hungry }
+        val outcome = allocator.schedule(root, cell, earmarked = 0L, wants)
+        assertAll(
+            { assertEquals(null, start.gauge(e3), "the rig: e3 is a newborn") },
+            { assertEquals(AllocationOutcome.LifetimeExhausted(root), outcome, "the step would pass the limit") },
+            { assertEquals(0, cell.writes, "and nothing was written") },
+            { assertEquals(before, allocator.memory, "nor the wake memory") },
+        )
+    }
+
+    /**
+     * Both sides of the limit on a newborn's landing. `e1` at weight 1 stands at `P` and `e3`, a
+     * newborn at weight 1, is seated level with it, so the load after is `2P`. At `P = 2¹²⁴` the load
+     * is exactly `2¹²⁵` and the landing is kept; one tick more and it is refused.
+     */
+    @Test
+    fun aLandingThatLeavesTheLoadAtTheLimitIsKeptAndOneTickMoreIsRefused() {
+        val e3 = AttachmentId("e3")
+        fun outcomeAt(position: Int128): AllocationOutcome {
+            val start = withChildren(
+                seatedAtWide(flat(mint = 100L), e1, position),
+                AttachmentRecord(e3, root, GroupId("g3"), Weight.ONE),
+            )
+            val wants = { edge: AttachmentId -> if (edge == e2) Demand.NONE else hungry }
+            return FairShareAllocator(self, policy).schedule(root, CountingCell(start), earmarked = 0L, wants)
+        }
+        val atLimit = outcomeAt(twoTo(124))
+        val past = outcomeAt(twoTo(124) + Int128.of(1L))
+        assertAll(
+            { assertTrue(atLimit is AllocationOutcome.Delegated, "a load of exactly 2^125 lands: $atLimit") },
+            { assertEquals(AllocationOutcome.LifetimeExhausted(root), past, "one tick more is refused") },
+        )
+    }
 }
