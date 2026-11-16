@@ -92,6 +92,7 @@ class WarpSpanExporterPublishAfterWriteTest {
         store.parking = false
         store.release()
         val results = listOf(holder.await(), cleared.await(), queued.await())
+        val durable = durableIds(backing)
 
         assertAll(
             // The rig: only the holder reached a span write before the clear and the export queued.
@@ -99,7 +100,7 @@ class WarpSpanExporterPublishAfterWriteTest {
             { assertEquals(List(3) { ExportResult.Success }, results) },
             // The property: the export after the clear holds its span, in memory and in the store.
             { assertEquals(setOf(span(2).spanId), ids(exporter), "the export queued behind the clear lost its span") },
-            { assertEquals(setOf(span(2).spanId), durableIds(backing), "the store lacks the span its export reported saved") },
+            { assertEquals(setOf(span(2).spanId), durable, "the store lacks the span its export reported saved") },
         )
     }
 
@@ -117,6 +118,7 @@ class WarpSpanExporterPublishAfterWriteTest {
         store.parking = false
         store.release()
         val results = listOf(holder.await(), merged.await())
+        val durable = durableIds(backing)
 
         assertAll(
             // The rig: the merge joined while the holder's write was parked, before it published.
@@ -125,7 +127,7 @@ class WarpSpanExporterPublishAfterWriteTest {
             { assertEquals(List(2) { ExportResult.Success }, results) },
             // The property: publishing joins the candidate into the merged set rather than replacing it.
             { assertEquals(setOf(span(1).spanId, span(50).spanId), ids(exporter), "the publish dropped the merged span") },
-            { assertEquals(setOf(span(1).spanId, span(50).spanId), durableIds(backing)) },
+            { assertEquals(setOf(span(1).spanId, span(50).spanId), durable, "the store lacks a span") },
         )
     }
 }
