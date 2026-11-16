@@ -1564,75 +1564,56 @@ public abstract class SeamConformanceSuite {
     // whose ends share one spool object — but no in-tree harness does, because `incoming` is
     // single-collection per seam by contract (ADR-034).
     //
-    // **`withTimeoutOrNull`, not `withTimeout` (#2601).** The bound is unchanged; what changed is
-    // what a breach reports. `withTimeout` cancels the collector and the raw
-    // `TimeoutCancellationException` escapes `await()` — a red that names no end, which was
-    // tolerable while there was only one. With two collectors, `null` plus a named assertion is the
-    // difference between "something hung" and "the joiner's flow never terminated". The virtual-
-    // time caveat is identical either way: this body runs on `runTest`'s clock, so the 5 s is
-    // virtual and bounds the *trajectory*, not the host. That caveat is not academic — see the
-    // collector-ordering comment in the body, which is there because it bit this obligation once.
+    // **Unbounded, and `runTest`'s wall-clock ceiling is the backstop (#3519).** Each end's wait used
+    // to sit inside `withTimeoutOrNull(5.seconds)` so a breach could name the end that hung (#2601).
+    // That bound was VIRTUAL: once the collector parks and nothing else is queued, the scheduler jumps
+    // the clock to it. A fabric whose reader completes `incoming` on its own thread after `close()`
+    // returns therefore read `null` in a few ms of real time while it was working fine — the shape
+    // #3483 fixed in `incomingCompletesOnInjectedMidSessionDeath`, and the reason the other waits in
+    // this suite that a real-IO harness answers on the wall clock are unbounded too (see that
+    // obligation, `flushDeclarationIsHonest` and `wovenSeamCapabilityIsHonest`).
+    // `IncomingCompletesWallClockRigTest` forces the losing side on each end, and reds if a bound
+    // returns first.
+    //
+    // **What that costs.** A flow that never terminates now reds through the 30 s backstop as a bare
+    // `UncompletedCoroutinesError` rather than as an arm naming its end. There is no wall-clock
+    // bound to keep the name on: this body runs inside `runTest`, and a real-time wait here would
+    // mean a production dispatcher in a conformance body, which every in-memory harness would pay for
+    // without becoming any stricter. The waits stay SEQUENTIAL, host first, so a hang is still
+    // attributable by position: `SymmetricLifecycleObligationRigTest` proves a never-terminating
+    // joiner parks the joiner's wait with the host's already settled.
 
     internal suspend fun runIncomingCompletesWhenSeamCloses(scope: TestScope) {
         if (!capabilities().terminatesIncomingOnClose) return
         scope.connectedPair { host, joiner ->
-            // **The two collectors are started SEQUENTIALLY, and that is load-bearing (#2601).**
-            // The obvious shape — start both, close both, await both — is wrong on a real-IO
-            // harness, and it reds one: `NwBridgeLoopbackConformanceTest` runs real TLS-PSK sockets
-            // through `libkuilt.dylib` with its weave on a real dispatcher, precisely because (its
-            // own KDoc) a virtual-clock bound "would fast-forward past the real socket connect". So
-            // while `hostCollecting.await()` suspends on a real callback, `runTest` finds nothing to
-            // run and advances VIRTUAL time — spending the joiner collector's whole 5 s budget
-            // before `joiner.close()` is ever called. The joiner arm then reds on a seam that was
-            // still live and had never been asked to close: a measurement bug wearing a defect's
-            // clothes, and it is invisible on every in-memory harness because there the host's await
-            // returns without the clock moving at all.
+            // **The two collectors are started SEQUENTIALLY (#2601).** Each collector is live before
+            // its end's `close()`, so the property is the one a consumer relies on — a flow already
+            // being collected completes on close — and the joiner's collection starts only once the
+            // host's has settled, which leaves the host arm's preconditions byte-identical to the
+            // host-only form. If the host's close already completed the joiner's flow remotely —
+            // conforming, and what a role-split fabric does — the late collection sees an
+            // already-closed spool and returns immediately, which is a pass.
             //
-            // Starting the joiner's collector only after the host arm has settled gives each end its
-            // own budget, and leaves the host arm's preconditions byte-identical to the host-only
-            // form. If the host's close already completed the joiner's flow remotely — conforming,
-            // and what a role-split fabric does — the late collection sees an already-closed spool
-            // and returns immediately, which is a pass.
-            val hostCollecting = async { withTimeoutOrNull(5.seconds) { host.incoming.toList() } }
+            // The awaits ARE the completion assertions: each returns only once its end's `incoming`
+            // has completed.
+            val hostCollecting = async { host.incoming.toList() }
             host.close()
-            val hostFrames = hostCollecting.await()
+            hostCollecting.await()
 
-            val joinerCollecting = async { withTimeoutOrNull(5.seconds) { joiner.incoming.toList() } }
+            val joinerCollecting = async { joiner.incoming.toList() }
             joiner.close()
-            val joinerFrames = joinerCollecting.await()
+            joinerCollecting.await()
 
-            assertAll(
-                {
-                    assertNotNull(
-                        hostFrames,
-                        "the HOST's incoming must COMPLETE once the seam is Torn — a consumer that " +
-                            "self-cleans via onCompletion never runs otherwise",
-                    )
-                },
-                {
-                    assertNotNull(
-                        joinerFrames,
-                        "the JOINER's incoming must COMPLETE once the seam is Torn too — a role-split " +
-                            "fabric ships a different Seam on each end, so the host's termination proves " +
-                            "nothing about this one (#2601), and the leak lands on the joining device " +
-                            "while the host tears down looking healthy",
-                    )
-                },
-                { assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()") },
-                // There is deliberately NO `assertIs<Torn>(joiner.state.value)` arm here, and the
-                // asymmetry is tracked rather than silent: it would duplicate the claim
-                // `closeDrivesStateTornNormal` owns, and reporting one defect as reds on two rows is
-                // exactly the diagnosability #2601 asks a per-row split to preserve. That is a
-                // permanent reason, not the #2372 hold it used to also carry: the channel view now
-                // latches its own `Torn`, so the arm would pass — it still belongs on the row that
-                // owns the claim, added there by #2601 and not here.
-            )
+            // There is deliberately NO `assertIs<Torn>(joiner.state.value)` arm here: it would
+            // duplicate the claim `closeDrivesStateTornNormal` owns, and reporting one defect as reds
+            // on two rows is exactly the diagnosability #2601 asks a per-row split to preserve.
+            assertIs<SeamState.Torn>(host.state.value, "host state must be Torn after close()")
         }
     }
 
     @Test
     public fun incomingCompletesWhenSeamCloses(): TestResult =
-        runTest { runIncomingCompletesWhenSeamCloses(this) }
+        runTest(timeout = TEST_WEDGE_BACKSTOP) { runIncomingCompletesWhenSeamCloses(this) }
 
     // ── (13) send on a Torn seam throws IllegalStateException ────────────────
     //
