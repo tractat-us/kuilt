@@ -64,7 +64,7 @@ import kotlin.test.assertEquals
  * | `Histogram.buckets` | [HISTOGRAM] |
  * | `DDSketch.positive` | [DDSKETCH] |
  * | `DDSketch.negative` | [DDSKETCH] |
- * | `GCounterDouble.counts` | [GCOUNTER_DOUBLE] |
+ * | `GCounterDouble.counts` | [GCOUNTER_DOUBLE], [PNCOUNTER_DOUBLE] |
  *
  * The `cloud`, `RgaSerializer` and `FugueSerializer` rows closed #2038: `cloud` is empty in
  * [ORSET], [ORMAP] and [MV_REGISTER], so its sort had no vector at all, and `Rga`, `Fugue` and
@@ -155,6 +155,7 @@ class CanonicalGoldenVectorTest {
             { assertEquals(DDSKETCH, hex(DDSketch.serializer(), ddSketch()), "DDSketch") },
             { assertEquals(GCOUNTER_DOUBLE, hex(GCounterDouble.serializer(), gCounterDouble()), "GCounterDouble") },
             { assertEquals(PNCOUNTER, hex(PNCounter.serializer(), pnCounter()), "PNCounter") },
+            { assertEquals(PNCOUNTER_DOUBLE, hex(PNCounterDouble.serializer(), pnCounterDouble()), "PNCounterDouble") },
             {
                 assertEquals(
                     LWWMAP,
@@ -517,6 +518,16 @@ class CanonicalGoldenVectorTest {
             .piece(PNCounter.ZERO.decrement(zulu, 1L))
             .piece(PNCounter.ZERO.increment(mike, 3L))
             .piece(PNCounter.ZERO.decrement(alpha, 4L))
+
+    /** Both `GCounterDouble` halves are three-entry and absorbed in different, non-sorted orders. */
+    private fun pnCounterDouble(): PNCounterDouble =
+        PNCounterDouble.ZERO
+            .piece(PNCounterDouble.ZERO.increment(zulu, 5.5))
+            .piece(PNCounterDouble.ZERO.decrement(mike, 2.5))
+            .piece(PNCounterDouble.ZERO.increment(alpha, 7.25))
+            .piece(PNCounterDouble.ZERO.decrement(zulu, 1.0))
+            .piece(PNCounterDouble.ZERO.increment(mike, 3.0))
+            .piece(PNCounterDouble.ZERO.decrement(alpha, 4.75))
 
     /**
      * Four keys written by three replicas — including one tombstone, so a `null`-valued
@@ -984,6 +995,10 @@ class CanonicalGoldenVectorTest {
         const val PNCOUNTER =
             "bf63696e63bf66636f756e7473bf65616c70686107646d696b6503647a756c7505ffff63646563bf66636f756e7473bf" +
                 "65616c70686104646d696b6502647a756c7501ffffff"
+        const val PNCOUNTER_DOUBLE =
+            "bf63696e63bf66636f756e7473bf65616c706861fb401d000000000000646d696b65fb4008000000000000647a756c75fb40" +
+                "16000000000000ffff63646563bf66636f756e7473bf65616c706861fb4013000000000000646d696b65fb40040000000000" +
+                "00647a756c75fb3ff0000000000000ffffff"
         const val LWWMAP =
             "bf6563656c6c73bf65616c706861bf6974696d657374616d7002666f726967696e65616c7068616576616c756502ff65" +
                 "64656c7461bf6974696d657374616d7004666f726967696e6564656c74616576616c7565f6ff646d696b65bf6974696d" +
