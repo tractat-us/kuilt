@@ -456,12 +456,13 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
         val claims = backing.operations()
             .filter { it.kind == StoreOpKind.WRITE && it.key == INDEX_KEY_FOR_TEST }
             .map { decodeIndexForTest(requireNotNull(it.bytes)) }
+        val claimOnDisk = indexOf(backing).seqHighWater
         val lowered = claims.zipWithNext().filter { (a, b) -> b.seqHighWater < a.seqHighWater || b.lamportHighWater < a.lamportHighWater }
         assertAll(
             { assertEquals(1, store.fired(), "the rig: one index write landed and was reported refused") },
             { assertTrue(minted > claimBefore, "the rig: the restart minted past the claim it read") },
             { assertEquals(emptyList(), lowered, "an index write lowered the claim") },
-            { assertTrue(indexOf(backing).seqHighWater >= minted, "the claim on disk is below the minted seq $minted") },
+            { assertTrue(claimOnDisk >= minted, "the claim on disk, $claimOnDisk, is below the minted seq $minted") },
         )
     }
 }
