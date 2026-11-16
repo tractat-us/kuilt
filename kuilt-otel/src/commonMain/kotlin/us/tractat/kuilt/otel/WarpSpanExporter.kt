@@ -103,8 +103,10 @@ public class WarpSpanExporter(
     private var spans: ORSet<SpanRecord> = ORSet.empty()
 
     /**
-     * The set dots that failed export turns minted and never published: a set holding no span whose
-     * context witnesses exactly those dots. Guarded by [lock], written only under [ioMutex].
+     * The set dots that failed export turns minted and never published, held as the last failed
+     * turn's starting set with its dot joined in, or empty when none is kept: its context witnesses
+     * those dots, and every span it holds is one [spans] has already seen ([keepUnpublished] says why
+     * that shape). Guarded by [lock], written only under [ioMutex].
      *
      * `ORSet.add` mints from the set's context, and a failed turn publishes nothing (#3517), so
      * without this the next export would mint the failed turn's dot again for a different span. That
@@ -719,12 +721,22 @@ public class WarpSpanExporter(
 
     /**
      * Keep the set dot [candidate] minted, since its turn failed or was cancelled and published
-     * nothing. Joined, not replaced: a run of failed turns keeps every dot, and a context mints past
-     * its contiguous run only, so a hole left by a replaced one would be minted again. Must be called
-     * under [ioMutex], which every writer of [unpublished] holds.
+     * nothing. Must be called under [ioMutex], which every writer of [unpublished] holds.
+     *
+     * Kept as the turn's whole [Candidate.start] with the dot joined in, not as the dot alone. The
+     * start already holds every dot kept before, so a run of failed turns keeps them all; a context
+     * mints past its contiguous run only, so one dropped would be minted again. And the start's
+     * context has this replica's run up to the set's own, so each kept dot extends that run and
+     * compacts into it: what a long outage keeps stays the size of one set rather than growing a dot
+     * per failure. The start is taken before the eviction, so it drops no span memory still shows.
+     *
+     * Joining the start back in later changes nothing but the kept dots. Every path into [spans] is a
+     * join or an inflation of it ([publish], [merge], [clear], the read that lands), so the set the next
+     * turn starts from already dominates this start, a [clear]'s removals included: a span the clear
+     * dropped is one whose dot the cleared set has seen, and the start's copy cannot outweigh that.
      */
     private fun keepUnpublished(candidate: Candidate) {
-        lock.withLock { unpublished = unpublished.piece(candidate.minted) }
+        lock.withLock { unpublished = candidate.start.piece(candidate.minted) }
     }
 
     /**
@@ -960,8 +972,11 @@ public class WarpSpanExporter(
      */
     private fun candidateFor(span: SpanRecord, clock: WarpCausalClock?): Candidate {
         val base = spans
-        // Past every set dot a failed turn kept, so this add never mints one of them again. The join
-        // removes nothing: those dots are on no span, so no element of [base] carries one.
+        // Past every set dot a failed turn kept, so this add never mints one of them again. Outside the
+        // late-commit residual the join removes nothing and adds no span: the kept dots are on no span
+        // this process has shown, and the rest of [unpublished] is a set [base] already dominates.
+        // Inside it a peer can hand back a span on a kept dot, and the join then drops it; see
+        // [snapshot].
         val start = if (unpublished == ORSet.empty<SpanRecord>()) base else base.piece(unpublished)
         val victim = if (start.elements.size >= maxSpans) victimOf(start.elements) else null
         val evicted = victim?.let { chosen -> start.piece { it.remove(chosen) } } ?: start
@@ -981,7 +996,7 @@ public class WarpSpanExporter(
             raiseHighWater(usedSeq)
             causalClock?.raiseFloor(usedSeq)
         }
-        return Candidate(base, added, victim, stamping, minted)
+        return Candidate(base, start, added, victim, stamping, minted)
     }
 
     /**
@@ -1078,14 +1093,15 @@ private class ClockReadTurn(val refusal: Throwable?, val skipped: RefusedReadBac
 private class Stamping(val span: SpanRecord, val exhausted: Boolean)
 
 /**
- * One export's turn, built under the write section and not yet visible: [set] is [base], the set the
- * turn read, joined with the dots failed turns kept, with [victim] evicted and [stamping]'s span
- * added. [WarpSpanExporter] writes [set], and publishes it only once the writes have returned
+ * One export's turn, built under the write section and not yet visible: [base] is the set the turn
+ * read and [start] that set joined with what failed turns kept, and [set] is [start] with [victim]
+ * evicted and [stamping]'s span added. [WarpSpanExporter] writes [set], and publishes it only once the writes have returned
  * (#3517). [minted] is a set holding no span whose context witnesses the one dot the add minted,
  * which a failed turn keeps so the next one mints past it.
  */
 private class Candidate(
     val base: ORSet<SpanRecord>,
+    val start: ORSet<SpanRecord>,
     val set: ORSet<SpanRecord>,
     val victim: SpanRecord?,
     val stamping: Stamping,
