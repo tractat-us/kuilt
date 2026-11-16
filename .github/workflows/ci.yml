@@ -26,10 +26,12 @@ name: ci
 # the JVM test forks on one 16 GB runner (see #320 / the build-job comments):
 #   - build-jvm:    full `build koverXmlReport` MINUS the wasm-browser + K/N test
 #                   *executions* (JVM + Android tests, lint, kover, assemble).
-#   - build-native: ONLY the wasm + macOS + iOS-sim test executions (wasm-opt /
-#                   Binaryen / Karma-Chrome / K/N test exes), with no JVM forks.
+#   - build-native: ONLY the wasm test executions (wasm-opt / Binaryen /
+#                   Karma-Chrome), with no JVM forks. It names macosArm64Test and
+#                   iosSimulatorArm64Test too, but on Linux those are SKIPPED (#3115).
 # Their task graphs union to exactly the old single `build koverXmlReport` graph
-# (proven by --dry-run set-diff), so no platform loses coverage.
+# (proven by --dry-run set-diff), so the split loses no platform. No Kotlin/Native
+# test runs on a PR at all: see APPLE COVERAGE below.
 #
 # ci-required (if: !cancelled()) is the SOLE required status check that branch
 # protection looks for. It passes when detect + both build jobs all
@@ -45,9 +47,9 @@ name: ci
 # The per-PR lane is Linux-only because the cinterop-bearing Apple targets need a
 # Mac host, and GitHub caps a plan at FIVE concurrent macOS jobs (a hard
 # concurrency ceiling, not a cost one — this repo is public, so standard hosted
-# runners are free at every size). This workflow fires ~25 runs/hour, and the
-# nightly Apple job takes ~11.5 min, so an unconditional macOS job would saturate
-# that 5-job cap and queue every PR behind it. The shipped library's own Apple K/N
+# runners are free at every size). This workflow fires ~25 runs/hour, and one Apple
+# target's K/N tests take 40-50 min (#3115), so an unconditional macOS job would
+# saturate that 5-job cap and queue every PR behind it. The shipped library's own Apple K/N
 # test executions therefore run out of band in apple-nightly.yml, NOT here (see
 # that file's header, and #933). `spike-compile` is the one macOS job in this lane
 # and it is PATH-FILTERED to `:spike` sources on a PR precisely so it does not put a
@@ -400,11 +402,11 @@ jobs:
             build/jstack-dumps/
 
   # ── build-native ─────────────────────────────────────────────────────────
-  # The wasm/native half of the build: ONLY the wasm + macOS + iOS-sim test
-  # *executions*. Each task pulls in its own platform compile transitively, so
-  # this job runs the Binaryen wasm-opt + Karma headless-Chrome (wasmJsBrowserTest)
-  # and the Kotlin/Native test executables — the memory-heavy codegen burst —
-  # with NO forked JVM test JVMs sharing the box. Combined with build-jvm's task
+  # The wasm/native half of the build: the wasm test *executions*. Each task pulls
+  # in its own platform compile transitively, so this job runs the Binaryen wasm-opt
+  # + Karma headless-Chrome (wasmJsBrowserTest) — the memory-heavy codegen burst —
+  # with NO forked JVM test JVMs sharing the box. It runs no Kotlin/Native test; see
+  # the step comment below. Combined with build-jvm's task
   # graph this is exactly the old single `build koverXmlReport` graph (proven by
   # --dry-run set-diff: union is identical, zero tasks dropped). Skipped on
   # docs-only.
@@ -501,9 +503,12 @@ jobs:
           echo "=== load ===" && uptime
 
       - name: wasm + native tests
-        # wasmJsTest (incl. wasmJsBrowserTest — Binaryen wasm-opt + Karma Chrome),
-        # macosArm64Test and iosSimulatorArm64Test cover every non-JVM/Android test
-        # target. No JVM test forks run here, so the heavy codegen burst has the
+        # wasmJsTest (incl. wasmJsBrowserTest — Binaryen wasm-opt + Karma Chrome) is the
+        # only test that RUNS here. On Linux, macosArm64Test, iosSimulatorArm64Test and
+        # their linkDebugTest tasks are SKIPPED: all 45 of each in run 43810075540 (#3115).
+        # They stay named because they still compile each module's Apple test sources,
+        # except in the cinterop modules. The Apple tests run in apple-nightly.yml.
+        # No JVM test forks run here, so the heavy codegen burst has the
         # whole 16 GB to itself. Same --max-workers=2 + 3 GB daemon caps as build-jvm
         # for parity and conservative headroom; this job has no JVM forks, so the
         # caps can likely relax once the split is proven, but stay conservative now.

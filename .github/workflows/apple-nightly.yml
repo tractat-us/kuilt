@@ -24,7 +24,8 @@ name: apple-nightly
 #   "~10x Linux" was simply wrong. The real ceiling is that GitHub caps a plan at
 #   FIVE concurrent macOS jobs regardless of visibility. ci.yml fires ~25 runs/hour.
 #   On green scheduled `main` runs from Oct 26 to Nov 13 2026 the Apple tests took
-#   15-54 min as one job, and on Nov 14 and 15 they hit its 60-min limit (#3115).
+#   15-54 min as one job, and on Nov 14 and 15 they hit its 60-min limit (#3115). Split per
+#   target, each leg takes 39-50 min under a 90-min limit.
 #   Putting that lane on every PR would sit permanently at the cap and queue every
 #   merge behind it. A scheduled run fills the cap on its own: the two `apple`
 #   targets, `apple-extras`, `abi` and `webkit` are five macOS jobs at 07:00.
@@ -82,12 +83,20 @@ jobs:
   #
   # `fail-fast: false` and `--continue` for the same reason: one red must not hide the rest. In
   # run 43736319946 a single macOS failure stopped Gradle, and iosSimulatorArm64Test never ran.
+  #
+  # 90 minutes, not 60 (#3115). Split, a leg's test step took 39-50 min on `main` and on
+  # branches alike, and :kuilt-heddle-core alone took 27-31 min of that in one test binary.
+  # A leg killed at its limit gives no verdict, so the extra time costs a macOS slot only on a
+  # run that would otherwise be wasted.
+  # Every job here writes the Gradle cache from `main` only, as ci.yml has since #3496. A branch
+  # dispatch reads `main`'s entries. Writing its own would evict them from the full 10 GB store,
+  # and an evicted cache is what made the slow branch runs slow (#3115).
   apple:
     # A dispatch with update_abi wants the dumps, not the tests, so this job sits it out.
     if: ${{ !inputs.update_abi && !inputs.webkit_only }}
     name: apple (${{ matrix.target }})
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -107,7 +116,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: wrapper
-          cache-read-only: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # Kotlin/Native toolchain + dependencies. setup-gradle caches ~/.gradle but
       # not ~/.konan, so without this every run re-downloads konan and recompiles
@@ -186,7 +195,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: wrapper
-          cache-read-only: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Cache Kotlin/Native (~/.konan)
         uses: actions/cache@v6
@@ -362,7 +371,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: wrapper
-          cache-read-only: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Cache Kotlin/Native (~/.konan)
         uses: actions/cache@v6
@@ -424,7 +433,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: wrapper
-          cache-read-only: false
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # playwright-core is a devNpm dependency of :kuilt-identity's wasmJs tests, so the npm
       # install puts it in build/wasm/node_modules; its own CLI then fetches the WebKit build that
