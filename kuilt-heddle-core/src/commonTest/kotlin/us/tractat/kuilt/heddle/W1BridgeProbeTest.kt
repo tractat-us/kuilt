@@ -157,6 +157,49 @@ class W1BridgeProbeTest {
         )
     }
 
+    /**
+     * The bridge through a runtime `attach` rather than a reload (design §7.1): the early check sits
+     * in the same step loop, so an attached joiner whose seat would pass the limit is refused alone,
+     * like an applied one. `fine` and `four` live under `g`, whose template attaches at `2⁵⁸`. At 160
+     * leases the attach is refused and `four` still leases; at 16 it lands and is picked. No call
+     * throws.
+     */
+    @Test
+    fun anAttachedHeavyJoinerPastTheLimitIsRefusedAloneAndUnderItLands() {
+        fun under(vararg lanes: Pair<String, Weight>) = draft("p") {
+            group("g") {
+                for ((name, w) in lanes) lane(name, w)
+                template(heavy)
+            }
+        }
+        fun run(leases: Int): Triple<ApplyResult, AcquireOutcome, Topology> {
+            val first = under("fine" to fine)
+            val h = LocalHeddle.bootWhole(first, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+            val f = first.groupId("g", "fine")
+            h.mintSupply(1L shl 53)
+            repeat(leases) { lease(h, setOf(f), f, it.toLong()) }
+            val withFour = under("fine" to fine, "four" to four)
+            val m = withFour.groupId("g", "four")
+            check(h.apply(withFour, generation = 1L).refusals.isEmpty()) { "the rig: four joined" }
+            lease(h, setOf(f, m), m, 1_000L)
+            check(h.apply(under("four" to four), generation = 2L).refusals.isEmpty()) { "the rig: fine left" }
+            val attached = h.attach(listOf("g"), "heavy", generation = 3L)
+            val x = GroupId(m.value.substringBeforeLast('/') + "/heavy")
+            val next = h.acquire(setOf(m, x), setOf(m, x), startedAt = 2_000L, reservation = MAX)
+            return Triple(attached, next, withFour)
+        }
+        val (refused, afterRefusal, shape) = run(leases = 160)
+        val (landed, afterLanding, _) = run(leases = 16)
+        val m = shape.groupId("g", "four")
+        assertAll(
+            { assertEquals(1, refused.refusals.size, "at 160 leases the attach is refused: ${refused.refusals}") },
+            { assertTrue(refused.refusals.single() is StepRefusal.Refused, "as a refusal, alone") },
+            { assertEquals(m, assertIs<AcquireOutcome.Acquired>(afterRefusal, "four still leases").lease.leaf) },
+            { assertEquals(emptyList(), landed.refusals, "at 16 leases the attach lands") },
+            { assertEquals("heavy", assertIs<AcquireOutcome.Acquired>(afterLanding, "and the heavy lane is picked").lease.leaf.value.substringAfterLast('/')) },
+        )
+    }
+
     private companion object {
         const val MAX: Long = LocalHeddle.MAX_RESERVATION
     }
