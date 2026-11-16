@@ -206,7 +206,15 @@ class WarpLogRecordExporterAppliedOpsTest {
                         "and the sink holds the record anyway — a superset, which is the point",
                     )
                 },
-                { assertEquals(listOf("publish", "write"), order, "published BEFORE the write was attempted") },
+                // The index write claiming the record's id comes first (#3452); the store refuses
+                // it too, and the turn mints and publishes anyway, before its own write.
+                {
+                    assertEquals(
+                        listOf("write", "publish", "write"),
+                        order,
+                        "the claim, then the publication, then the turn's write",
+                    )
+                },
                 { assertEquals(emptyList(), fresh.snapshot().toList(), "while the store recovered nothing") },
                 { assertEquals(emptyList(), recovered.snapshot().toList(), "control: an untouched store is empty too") },
             )
