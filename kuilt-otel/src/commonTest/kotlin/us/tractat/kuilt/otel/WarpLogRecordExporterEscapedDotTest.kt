@@ -156,7 +156,7 @@ class WarpLogRecordExporterEscapedDotTest {
     }
 
     /**
-     * **Pins today's residual, so a fix has a red to turn** (#3518). Recovery leaves no claim
+     * **Pins today's residual, so a fix has a red to turn** (#3521). Recovery leaves no claim
      * headroom, so the first turn of every incarnation must claim before its mints are covered.
      * Restart twice inside an outage that refuses the index write too, and each incarnation mints
      * `claim + 1` with nothing behind it: the record the first one published shares its dot with the
