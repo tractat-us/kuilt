@@ -754,7 +754,9 @@ v_raw(e) = raw(e) / (G · w(e))
 A position is how much service an edge has had, counted from its start, and it only
 goes up. Until step B the ledger also kept a per-parent **origin**, a replicated
 max-register every child read its position less of, which the rebase raised; it is
-gone from the ledger and the wire (#3472, below).
+gone from the ledger and the wire (#3472, below). Snapshot format 1 reads a 0.7.5
+ledger through a frozen surrogate that still holds the origins, and translates each
+into its children's positions, rounded up.
 
 Which is design §7.1's `b(e) + committedService(e) / w(e)` with `b` supplied by the
 gauge — and with the **base** issuance as the fold axis, deliberately not the effective
@@ -1444,10 +1446,14 @@ origins, which is a layout 0.7.5 already reads, so the format number and
   an unseated edge and a wake offset. The row asserts the origin it read is
   above zero. Restored, the whole-grid children read their stored positions,
   the other reads one tick more, and offsets and clock are equal. Over the
-  picks that follow, the restored engine and a 0.7.5 twin fed the same calls
-  pick the same leaves. A snapshot 0.7.6 writes holds no origin. Mutations
-  that must red: the origin dropped with no translation, on a rig where that
-  tick decides a pick; the share added a second time; the share rounded down.
+  picks that follow, the restored engine and a 0.7.5 twin with no origin, fed
+  the same history and the same calls, pick the same leaves. A 0.7.5 twin
+  with the origin does not, and is not meant to: it seated the not-whole child
+  with its share rounded down, a fraction of a tick of credit the translation
+  takes back. A snapshot 0.7.6 writes holds no origin. Mutations that must red:
+  the origin dropped with no translation, on a rig where that tick decides a
+  pick; the share added a second time; the share rounded down.
+  Built (#3498): `LocalHeddlePersistenceTest.aFormat1SnapshotWithAnOriginIsReadByTranslatingIt`.
 - **Nothing public breaks (slices 3 to 6).** The API dumps of
   `:kuilt-heddle-core` and `:kuilt-heddle` gain lines and lose none in each
   slice's diff, and each PR says so. A test compiled against the deprecated
@@ -1513,9 +1519,11 @@ origins, which is a layout 0.7.5 already reads, so the format number and
    long-run rows are retargeted to "never refused, and fair". Docs: this
    section, §7.2, §10.5, §10.9, both `module.md`s, the cookbook.
 4. **The origin leaves the ledger and the wire, and format 1 is read by
-   translating.** `ParentRecord`, the canonical-encoding arm, and the reader
-   above. `EntitlementLedger.origin` and `PolicyEdge.origin` stay, deprecated.
-   The format number does not change. Docs: §7.1, §10.5, both `module.md`s,
+   translating.** Built (#3498). `ParentRecord` and the canonical-encoding arm
+   are gone; format 1 reads its ledger through the frozen `LedgerFormat1`,
+   which translates. `EntitlementLedger.origin`, `EntitlementLedger.of`'s
+   `origins` and `PolicyEdge.origin` stay, deprecated. The format number does
+   not change. Docs: §7.1, §10.5, both `module.md`s,
    `Writerside/topics/heddle-local.md`.
 5. **The position limit.** `POSITION_LIMIT`, the sealed result of the
    seat-and-wake step and of `VirtualTime.ticksForWide`, the refusal on
