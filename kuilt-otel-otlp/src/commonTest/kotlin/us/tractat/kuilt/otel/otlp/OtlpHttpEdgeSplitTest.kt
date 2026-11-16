@@ -540,6 +540,42 @@ class OtlpHttpEdgeSplitTest {
         assertAll(*checks.toTypedArray())
     }
 
+    /**
+     * Two stamped copies of one span id, far apart in the batch, go in one request. Delivery is
+     * recorded by span id, so copies split across requests could see the first acknowledged and the
+     * second refused, and the refused copy would then count as sent and never be retried.
+     */
+    @Test
+    fun copiesOfOneSpanIdGoInOneRequest() = runTest {
+        val dup = 50
+        val checks = mutableListOf<() -> Unit>()
+        for (wire in OtlpWireFormat.entries) {
+            val collector = collectorFor(wire) { _, post ->
+                if (post.names.any { it.endsWith("restamped") }) HttpStatusCode.InternalServerError else HttpStatusCode.OK
+            }
+            val store = CountingStore()
+            val spans = LinkedHashSet<SpanRecord>().apply {
+                addAll((1..10).map { span(it) })
+                add(span(dup))
+                addAll((11..29).map { span(it) })
+                add(span(dup).copy(name = "span-$dup-restamped"))
+            }
+            val outcome = runCatchingCancellable { edge(collector, store, wire, cap = 2048).send(spans, emptyList()) }
+            val disk = onDisk(store, Signal.SPANS)
+            val carrying = collector.posts.filter { dup in it.items }
+            checks += listOf(
+                { assertTrue(collector.posts.size >= 2, "$wire: precondition, the spans split, ${collector.posts.size} POSTs") },
+                { assertTrue(HttpStatusCode.InternalServerError in collector.statuses, "$wire: precondition, the restamped copy was refused") },
+                { assertTrue(disk.isNotEmpty(), "$wire: precondition, a request was acknowledged before the refusal") },
+                { assertEquals(1, carrying.size, "$wire: one request carries span $dup: ${collector.posts.map { it.items }}") },
+                { assertEquals(listOf(dup, dup), carrying.firstOrNull()?.items?.filter { it == dup }, "$wire: both copies of it") },
+                { assertTrue(outcome.isFailure, "$wire: the refusal fails the send") },
+                { assertTrue(dup !in disk, "$wire: span $dup stays unrecorded, so the next drain resends both copies") },
+            )
+        }
+        assertAll(*checks.toTypedArray())
+    }
+
     // ── 8. Metric resend after a lost write ─────────────────────────────────────
 
     @Test
@@ -701,6 +737,8 @@ private class Post(
     val scope: Pair<String, String>?,
     /** Each span's links, in span order; unlike [links], keeps two copies of one span id apart. */
     val linkLists: List<List<Int>> = emptyList(),
+    /** Each span's name, in span order. */
+    val names: List<String> = emptyList(),
 )
 
 private fun decode(path: String, wire: OtlpWireFormat, raw: ByteArray): Post = when (wire) {
@@ -712,6 +750,7 @@ private fun decode(path: String, wire: OtlpWireFormat, raw: ByteArray): Post = w
                 ss.spans.filter { it.links.isNotEmpty() }.associate { s -> s.spanId.hexIndex() to s.links.map { it.spanId.hexIndex() } },
                 emptyMap(), jsonAttrs(rs.resource?.attributes), ss.scope?.let { it.name to it.version },
                 linkLists = ss.spans.map { s -> s.links.map { it.spanId.hexIndex() } },
+                names = ss.spans.map { it.name },
             )
         }
         "/v1/logs" -> lenient.decodeFromString(LogsRequest.serializer(), raw.decodeToString()).resourceLogs.single().let { rl ->
@@ -739,6 +778,7 @@ private fun decode(path: String, wire: OtlpWireFormat, raw: ByteArray): Post = w
                 ss.spans.filter { it.links.isNotEmpty() }.associate { s -> s.spanId.index() to s.links.map { it.spanId.index() } },
                 emptyMap(), protoAttrs(rs.resource?.attributes), ss.scope?.let { it.name to it.version },
                 linkLists = ss.spans.map { s -> s.links.map { it.spanId.index() } },
+                names = ss.spans.map { it.name },
             )
         }
         "/v1/logs" -> ProtoBuf.decodeFromByteArray(ProtoLogsRequest.serializer(), raw).resourceLogs.single().let { rl ->
