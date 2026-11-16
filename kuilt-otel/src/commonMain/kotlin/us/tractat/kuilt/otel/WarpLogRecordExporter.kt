@@ -393,32 +393,19 @@ public class WarpLogRecordExporter(
     // Every write to `log` must update these in the same locked section. The events
     // that move them out from under the cache — a merge whose remote inserts sort after
     // the local tail, a window pass, and a recover() that replaces the log wholesale —
-    // are pinned by WarpLogRecordExporterTailCacheTest. An eviction comes only in the turn
-    // of the insert it makes room for, and that insert sets `tail`, so no eviction leaves
-    // `tail` on a record it tombstoned.
+    // are pinned by WarpLogRecordExporterTailCacheTest. An eviction comes only in the
+    // turn of the insert it makes room for, and that insert sets `tail`.
 
     /**
-     * Predecessor for the next append. Read the list's trailing run of tombstones: the anchor is
-     * the last **foreign** tombstone that comes before any of this replica's own in that run;
-     * failing one, the last visible record; failing that, [RgaId.HEAD].
+     * Predecessor for the next append: the last visible element, or [RgaId.HEAD] when empty.
      *
-     * **Another author's trailing tombstone is an anchor.** A merge can sort a foreign subtree its
-     * author fully tombstoned after every visible record. An append after the last visible record
-     * lands inside that record's subtree, ahead of the run, and the window keeps every tombstone
-     * something visible follows, so the run stayed in the log for good (#3528). Appending after it
-     * puts the new record behind the run, where the window's cut reaches it. A foreign id leaves
-     * only through that cut, which takes everything before it too, and its `RgaOp.Compact` keeps
-     * its position for a successor.
-     *
-     * **This replica's own trailing tombstone is not, and neither is anything behind one.** An own
-     * trailing tombstone is the #3447 shape: an older record sorting after newer ones.
-     * [withOlderOwn] drops it while it is still inside the window, through the floor, which keeps
-     * no position. A record appended after it then re-roots to the head of the list, ahead of
-     * older survivors, and DROP_OLDEST evicts it first. A foreign tombstone behind it in the run
-     * may hang off it and re-root the same way, so the run is not used past the first own one.
-     * [withOlderOwn] bounds own tombstones already (#3511). Once it has dropped them, the next
-     * rebuild finds the foreign rest of the run and anchors on it, so a mixed run takes one more
-     * pass to clear, not forever.
+     * **Never a tombstone, and in particular never another author's.** A foreign tombstone can
+     * leave this log through a [merge] as well as through the window: its author's own pass
+     * arrives as a floor, which keeps no position, and a third replica's `RgaOp.Compact` keeps
+     * only the predecessor, which for a run rooted at the head of the list is the head. A record
+     * appended after one would re-root there on its higher lamport, ahead of older records, and
+     * DROP_OLDEST would evict it first. A trailing run of foreign tombstones, which no append
+     * reaches, is cut by [windowPass] instead (#3528).
      */
     private var tail: RgaId = RgaId.HEAD
 
@@ -1217,9 +1204,9 @@ public class WarpLogRecordExporter(
             // Raising past seqs the loaded log lacks leaves a hole, which the window's floor
             // crosses (windowPass); see LogSegmentIndex.seqHighWater.
             val raised = recovered.log.advanceClock(replica, recovered.lamportHighWater, recovered.seqHighWater)
-            val derived = DerivedState.of(raised, replica)
+            val entries = raised.entries()
             val suppression = Suppression.of(raised)
-            lock.withLock { install(recovered, raised, derived, suppression) }
+            lock.withLock { install(recovered, raised, entries, suppression) }
         }.onFailure { cause ->
             logger.error(cause) { "otel.logs: recovered state could not be installed, starting fresh" }
             // Start fresh on the RECORDS, never on the numbering. Leaving the segment
@@ -1594,11 +1581,11 @@ public class WarpLogRecordExporter(
         indexPersisted = false
     }
 
-    /** Install a [RecoveredState] and its already-materialized [DerivedState]. Must hold [lock]. */
+    /** Install a [RecoveredState] and its already-materialized entries. Must hold [lock]. */
     private fun install(
         recovered: RecoveredState,
         raised: Rga<LogRecord>,
-        derived: DerivedState,
+        entries: List<Pair<RgaId, LogRecord>>,
         suppression: Suppression,
     ) {
         log = raised
@@ -1620,7 +1607,7 @@ public class WarpLogRecordExporter(
         // A ledger the recovered index named is stale the moment its sweep lands, so leave the
         // index dirty and let the next turn rewrite it without the confirmed deletions.
         indexPersisted = !recovered.ledgerDirty
-        installDerivedState(derived)
+        installDerivedState(entries)
     }
 
     /**
@@ -3271,9 +3258,9 @@ public class WarpLogRecordExporter(
         evictionsSincePass >= maxRecords || visibleCount > maxRecords
 
     /**
-     * Drop everything outside the retained window from the in-memory log, and absorb the
-     * resulting compaction record into the active segment. Returns whether anything moved.
-     * Must hold [lock].
+     * Drop everything outside the retained window from the in-memory log, together with another
+     * author's trailing tombstones ([trailingForeignTombstones]), and absorb the resulting
+     * compaction record into the active segment. Returns whether anything moved. Must hold [lock].
      *
      * **Grouped, not per-eviction**, and the reason is the derived-state caches: a pass reads
      * [Rga.sequence], which is a cold lazy on every new [Rga] instance, so it costs a full
@@ -3293,7 +3280,10 @@ public class WarpLogRecordExporter(
      */
     private fun windowPass(retain: Int = maxRecords): Boolean {
         evictionsSincePass = 0
-        val dropped = withOlderOwn(idsOutsideWindow(retain) ?: return false)
+        // Foreign ids carry no seq this replica can order by, so they are added after
+        // withOlderOwn rather than handed to it.
+        val dropped = withOlderOwn(idsOutsideWindow(retain).orEmpty()) + trailingForeignTombstones()
+        if (dropped.isEmpty()) return false
         // PastUnheld, not dropWindow: a recovery that raised the seq past an unread segment left
         // a hole in this replica's seqs, and dropWindow's floor stops at it, turning every later
         // own drop into a Compact that pins its segment for good (#3447). withOlderOwn is what
@@ -3368,6 +3358,31 @@ public class WarpLogRecordExporter(
     }
 
     /**
+     * Another author's ids in [log]'s trailing run of tombstones — the ids after its last visible
+     * element, or every id when nothing is visible. Must hold [lock].
+     *
+     * The window cannot reach them: it keeps every tombstone that something visible follows, and
+     * an append goes after the last visible element ([tail]), so nothing ever follows these. A
+     * merge puts them there when it sorts a foreign subtree its author fully tombstoned after
+     * every visible record, and without this they stay in the log for good (#3528).
+     *
+     * Dropping them re-roots nothing visible: anything that hangs off one is later in the list,
+     * so it is in the same trailing run, a tombstone too. They leave through an `RgaOp.Compact`,
+     * as the window's foreign drops do, which keeps each one suppressed, so a peer still holding
+     * them cannot merge them back in, and keeps its predecessor, so a remote insert after one
+     * still finds a place. This replica's own trailing tombstones are left to [withOlderOwn]:
+     * taking them ahead of the newer own records the window keeps would hold the floor below
+     * those records and turn the drop into a `Compact` that pins its segment (#3447), and
+     * [withOlderOwn] takes them with the first newer own record the window drops.
+     */
+    private fun trailingForeignTombstones(): Set<RgaId> {
+        val tombstones = log.tombstones
+        return log.sequence
+            .takeLastWhile { id -> id in tombstones }
+            .filterTo(mutableSetOf()) { id -> id.replicaId != replica }
+    }
+
+    /**
      * Recompute [tail], [visibleCount] and [seenIds] from [log] in one pass.
      *
      * The entry point for the two events that rewrite the log under the caches — [merge] and a
@@ -3377,10 +3392,11 @@ public class WarpLogRecordExporter(
      *
      * Must be called with [lock] held.
      */
-    private fun rebuildDerivedState(): Unit = installDerivedState(DerivedState.of(log, replica))
+    private fun rebuildDerivedState(): Unit = installDerivedState(log.entries())
 
     /**
-     * Assign [tail], [visibleCount] and [seenIds] from an already-materialized [DerivedState].
+     * Assign [tail], [visibleCount] and [seenIds] from an already-materialized
+     * [Rga.entries] list.
      *
      * Split out from [rebuildDerivedState] so [recover] can do the O(N) walk
      * *outside* the lock and leave only this assignment inside it: the walk can
@@ -3389,30 +3405,11 @@ public class WarpLogRecordExporter(
      *
      * Must be called with [lock] held.
      */
-    private fun installDerivedState(derived: DerivedState) {
-        tail = derived.tail
-        visibleCount = derived.entries.size
+    private fun installDerivedState(entries: List<Pair<RgaId, LogRecord>>) {
+        tail = entries.lastOrNull()?.first ?: RgaId.HEAD
+        visibleCount = entries.size
         seenIds.clear()
-        derived.entries.forEach { (rgaId, record) -> seenIds[record.recordId] = rgaId }
-    }
-
-    /**
-     * What [installDerivedState] assigns, read off one [Rga] by a walk that may throw and writes
-     * no field. [tail] follows the rule on the field, for the replica [self]. [entries] are the
-     * visible records.
-     */
-    private class DerivedState(val tail: RgaId, val entries: List<Pair<RgaId, LogRecord>>) {
-        companion object {
-            fun of(log: Rga<LogRecord>, self: ReplicaId): DerivedState {
-                val sequence = log.sequence
-                val tombstones = log.tombstones
-                val trailing = sequence.takeLastWhile { id -> id in tombstones }
-                val anchor = trailing.takeWhile { id -> id.replicaId != self }.lastOrNull()
-                    ?: sequence.getOrNull(sequence.size - trailing.size - 1)
-                    ?: RgaId.HEAD
-                return DerivedState(tail = anchor, entries = log.entries())
-            }
-        }
+        entries.forEach { (rgaId, record) -> seenIds[record.recordId] = rgaId }
     }
 }
 
