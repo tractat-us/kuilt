@@ -4,6 +4,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.bytestring.ByteString
+import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.store.DurableStore
@@ -176,6 +177,45 @@ class WarpSpanExporterLateCommitTest {
             { assertEquals(ExportResult.Success, next) },
             { assertEquals(setOf(span(1).spanId, span(2).spanId), held, "the next turn dropped the held copy") },
         )
+    }
+
+    /**
+     * A store that refuses every write keeps failing turns for as long as it stays broken. What they
+     * keep must not grow with their number: each kept dot follows the last, so the kept context folds
+     * them into one run rather than holding a dot apiece. Measured as the encoded size of what is kept,
+     * after a short outage and after a long one.
+     */
+    @Test
+    fun whatFailedTurnsKeepStaysTheSameSizeHoweverManyFail() = runTest {
+        val store = LateCommitStore(InMemoryDurableStore(), spansKey)
+        val writer = WarpSpanExporter(replica, store).apply { recover() }
+        repeat(5) { assertEquals(ExportResult.Success, writer.export(span(it)), "the rig: export $it") }
+        store.refusing = LONG_OUTAGE
+        val early = (0 until SHORT_OUTAGE).map { writer.export(span(1_000 + it)) }
+        val keptEarly = encodedSize(writer.unpublishedForTest())
+        val late = (SHORT_OUTAGE until LONG_OUTAGE).map { writer.export(span(1_000 + it)) }
+        val keptLate = encodedSize(writer.unpublishedForTest())
+        assertAll(
+            { assertTrue((early + late).all { it is ExportResult.Failure }, "the rig: an export landed during the outage") },
+            { assertEquals(LONG_OUTAGE, store.held.size, "the rig: the store did not refuse every write") },
+            {
+                assertTrue(
+                    keptLate - keptEarly <= SIZE_SLACK,
+                    "what failed turns keep grew from $keptEarly to $keptLate bytes over ${LONG_OUTAGE - SHORT_OUTAGE} more failures",
+                )
+            },
+        )
+    }
+
+    private fun encodedSize(set: ORSet<SpanRecord>): Int =
+        Cbor { alwaysUseByteString = true }.encodeToByteArray(ORSet.serializer(SpanRecord.serializer()), set).size
+
+    private companion object {
+        const val SHORT_OUTAGE = 20
+        const val LONG_OUTAGE = 300
+
+        /** A few bytes for a counter that needs a wider CBOR integer after more failures. */
+        const val SIZE_SLACK = 8
     }
 
     /**

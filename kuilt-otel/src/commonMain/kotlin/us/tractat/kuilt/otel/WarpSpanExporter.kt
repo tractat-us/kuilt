@@ -124,6 +124,9 @@ public class WarpSpanExporter(
      */
     private var unpublished: ORSet<SpanRecord> = ORSet.empty()
 
+    /** [unpublished] as it stands, so a test can measure what a run of failed turns keeps. */
+    internal fun unpublishedForTest(): ORSet<SpanRecord> = lock.withLock { unpublished }
+
     /**
      * The highest `seq` of this replica's dots that this exporter knows is used, guarded by [lock]
      * (#3435). Every span write carries it in the bytes, so a later process whose clock entry is
