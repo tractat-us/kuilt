@@ -395,4 +395,41 @@ class FairShareAllocatorRefusalTest {
             { assertTrue(at.first() is AllocationOutcome.Delegated, "a clock exactly at the limit still picks: $at") },
         )
     }
+
+    /**
+     * A returner whose shift would pass the limit (design §7.1). `e3`, at `2⁴⁰`, left at clock zero
+     * and comes back to a clock planted at `2¹⁰⁵` ticks, so its shift on its own grid is about
+     * `2¹²⁵·⁵` ticks: past the limit and inside 128 bits. The pick is refused and writes nothing,
+     * and with `e3` not asking, `e1` is picked. At a clock of `2¹⁰⁴` the shift, about `2¹²⁴·⁵`,
+     * lands.
+     */
+    @Test
+    fun aReturnerWhoseShiftWouldPassTheLimitIsRefused() {
+        val e3 = AttachmentId("e3")
+        val start = withChildren(
+            EntitlementLedger.bootstrap(root, mapOf(self to 100L), nonce = "genesis"),
+            AttachmentRecord(e1, root, GroupId("g1"), Weight.ONE),
+            AttachmentRecord(e3, root, GroupId("g3"), Weight.of(1L shl 40)),
+        ).let { seatedAt(seatedAt(it, e1, 0L), e3, 0L) }
+        fun allocator(clock: Int128) = FairShareAllocator(
+            self,
+            policy,
+            AllocatorMemory(
+                wakeOffsets = emptyMap(),
+                demandingObserved = mapOf(e1 to false, e3 to false),
+                clocks = mapOf(root to clock),
+                departures = mapOf(e3 to Int128.ZERO),
+            ),
+        )
+        val pastCell = CountingCell(start)
+        val past = allocator(twoTo(105)).schedule(root, pastCell, earmarked = 0L) { hungry }
+        val withoutE3 = allocator(twoTo(105)).schedule(root, CountingCell(start), earmarked = 0L) { if (it == e3) Demand.NONE else hungry }
+        val under = allocator(twoTo(104)).schedule(root, CountingCell(start), earmarked = 0L) { hungry }
+        assertAll(
+            { assertEquals(AllocationOutcome.LifetimeExhausted(root), past, "the returner's shift would pass the limit") },
+            { assertEquals(0, pastCell.writes, "and nothing was written") },
+            { assertTrue(withoutE3 is AllocationOutcome.Delegated, "with e3 not asking, e1 is picked: $withoutE3") },
+            { assertTrue(under is AllocationOutcome.Delegated, "a shift under the limit lands: $under") },
+        )
+    }
 }
