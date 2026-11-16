@@ -236,23 +236,32 @@ class WarpSpanExporterLateCommitTest {
     }
 
     /**
-     * At the cap, a failed turn chose a victim it never evicted from memory. What it keeps must not
-     * evict it either, or the next turn would drop two spans for its one add.
+     * At the cap, a failed turn chose a victim it never evicted. What it keeps must not evict that
+     * span later either. Here a merge then brings in a span older than every other, so the next
+     * export's own eviction takes that one, and the failed turn's victim must still be there.
      */
     @Test
-    fun aFailedTurnAtTheCapEvictsNothingFromTheNextOne() = runTest {
+    fun aFailedTurnAtTheCapDropsNoSpanItNeverEvicted() = runTest {
         val store = LateCommitStore(InMemoryDurableStore(), spansKey)
         val writer = WarpSpanExporter(replica, store, maxSpans = 3).apply { recover() }
-        repeat(3) { assertEquals(ExportResult.Success, writer.export(span(it)), "the rig: export $it") }
+        repeat(3) { assertEquals(ExportResult.Success, writer.export(span(it + 10)), "the rig: export ${it + 10}") }
         store.refusing = 1
         val failed = writer.export(span(100))
         val heldAfterFailure = ids(writer.snapshot())
+        val merged = writer.merge(ORSet.empty<SpanRecord>().piece { it.add(ReplicaId("b"), span(1)) })
         val next = writer.export(span(200))
         assertAll(
             { assertTrue(failed is ExportResult.Failure, "the rig: the armed export landed: $failed") },
-            { assertEquals((0 until 3).map { span(it).spanId }.toSet(), heldAfterFailure, "the failed turn evicted a span") },
+            { assertEquals(setOf(10, 11, 12).map { span(it).spanId }.toSet(), heldAfterFailure, "the failed turn evicted a span") },
+            { assertEquals(ExportResult.Success, merged, "the rig: the older span was not merged") },
             { assertEquals(ExportResult.Success, next) },
-            { assertEquals(setOf(1, 2, 200).map { span(it).spanId }.toSet(), ids(writer.snapshot()), "the next export evicted more than one span") },
+            {
+                assertEquals(
+                    setOf(10, 11, 12, 200).map { span(it).spanId }.toSet(),
+                    ids(writer.snapshot()),
+                    "the next export dropped a span other than the oldest",
+                )
+            },
         )
     }
 
