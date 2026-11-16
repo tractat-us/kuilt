@@ -76,7 +76,8 @@ internal fun positionFloor(w: Weight): Long = -positionCeiling(w)
 /**
  * A sixteenth of [w]'s [positionCeiling]: the position past which the engine once rebased a parent
  * (#3329, #3353). Nothing rebases now (#3472); the weight budget's P1′ still measures its lease
- * room from here ([weightsFitTheBudget]), until W1 replaces it.
+ * room from here ([weightsFitTheBudget]). P1′ stays: it is the set of weights an apply accepts,
+ * and the position limit (step B, slice 5) sits beside it rather than replacing it.
  */
 internal fun rebaseThreshold(w: Weight): Long = positionCeiling(w) / 16
 

@@ -856,8 +856,9 @@ below shows.
 The rebase fired only once a child passed its `R`, so a child that an
 under-charged `complete` parked between `C − H` and `R` (`H = MAX_RESERVATION · G`)
 was never rebased, yet its next full lease passed `C`, where the reads saturate.
-With no rebase that reasoning has nothing left to protect, and W1 replaces it
-(slice 5).
+With no rebase that reasoning has nothing left to protect. P1′ stays all the
+same, as the set of weights an apply accepts (slice 5 keeps it, and adds the
+position limit beside it, not in its place).
 Before picks were wide, `acquire` refused there for good. The review measured `{1/30,721, 1/30,722}`:
 one lease charged `1.172 · 10¹²` and every later acquire refused, while
 `1.1715 · 10¹²` ran. So the budget also asks, for every child `i` of the set,
@@ -1547,9 +1548,13 @@ origins, which is a layout 0.7.5 already reads, so the format number and
 
 Slice 2 goes first so that slice 3 leaves the restarted scheduler's row green.
 Slices 1, 2 and 7 ship in 0.7.5. Slices 4, 5 and 6 follow 3 and do not depend
-on each other, and 0.7.6 is not cut without slice 5. Slice 3 does not open the
-gap slice 5 closes: the bridge overflows on `main` with the rebase in place,
-at the same absolute value.
+on each other, and 0.7.6 is not cut without slice 5. For one joiner, slice 3
+does not open the gap slice 5 closes: the bridge overflows on `main` with the
+rebase in place, at the same absolute value. For a parent's **load** it does.
+With no rebase a front sums absolute positions, so two `2⁵⁷` joiners seated
+where a `1/2¹⁴` lane ran up the front put that sum past 128 bits, and every
+acquire throws for good, where the rebasing engine kept picking. So slices 3
+to 5 land together, never 3 alone (#3495 review).
 
 #### Settled — don't reopen
 

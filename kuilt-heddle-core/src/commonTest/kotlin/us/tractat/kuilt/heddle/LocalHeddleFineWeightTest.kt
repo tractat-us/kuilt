@@ -86,7 +86,7 @@ class LocalHeddleFineWeightTest {
      * lease carried `a` past `C`, where the public reads saturate. It used to refuse every acquire
      * after the first. Nothing rebases now (#3472), so a cost a hair lower carries `a` past its
      * ceiling too, and the band no longer separates the two: both run every acquire, since a pick
-     * orders the wide position. P1′ is what still refuses the set, until W1 replaces it.
+     * orders the wide position. P1′ is what still refuses the set, and it stays (design §7.1).
      */
     @Test
     fun aBandSetHandedPastApplyRunsPastItsCeilingAfterOneUnderChargedLease() {
