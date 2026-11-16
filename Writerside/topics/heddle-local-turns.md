@@ -252,8 +252,8 @@ wake in one string, identical on every target.
 |---|---|---:|---:|
 | backlogged | overall share against 3 : 1 : 1 | 0.01 | 0.000222 |
 | backlogged | worst 500-step window | 0.05 | 0.023810 |
-| churn | overall share against the share of whoever was waiting | 0.03 | 0.016677 |
-| churn | worst 500-step window | 0.15 | 0.089246 |
+| churn | overall share against the share of whoever was waiting | 0.03 | 0.007225 |
+| churn | worst 500-step window | 0.15 | 0.062730 |
 
 **Scale.** `LeaseScaleProbe` times one `acquire` when a lane has 5,000 children
 and 50,000 retired ones. *Served* rows' retired children once did work, which the

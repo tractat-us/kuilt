@@ -97,5 +97,4 @@ which needs no network and no coroutines. The distributed node lives in
   back a silent machine's share automatically, since it might still be
   spending it.
 
-Each limit has its arithmetic and its tracking issue on the page that
-covers it.
+Each limit has its arithmetic on the page that covers it.

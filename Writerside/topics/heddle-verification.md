@@ -41,7 +41,8 @@ would diverge there.
 eventually reach their ceiling, so before that the engine moves every
 child down by the same amount: a **rebase**.
 `LocalHeddleRebasePropertyTest.aBusyParentRebasesBeforeItsCeilingAndPicksAsAnUnrebasedTwin`
-runs seven lanes at the largest lease size beside a twin engine with the
+runs seven lanes plus a nested group of two, every lease at the largest
+size, beside a twin engine with the
 rebase switched off. The twin must pass its ceiling inside the run, which
 proves the run reaches the regime the rebase is for. Every pick the twin
 makes must match the rebasing engine's, past the ceiling too. Halfway
@@ -51,8 +52,10 @@ the restored copy must keep matching. In `:kuilt-heddle`,
 makes the same comparison for a three-peer governed cluster.
 
 **A pick never throws at a reachable state.**
-`LocalHeddleOverflowPropertyTest` changes the waiting set at every step,
-so children keep waking up against different averages. Its weights are
+In two arms of `LocalHeddleOverflowPropertyTest`, the waiting set changes
+at every step, so children keep waking up against different averages.
+Its other arms push fractional weights past the old service ceiling and
+churn attached children. Its weights are
 mixed on purpose: 60 against 1, and fractions such as 3/7, 2/5 and 5/3 whose
 denominators share no factor. Before the tick grid, such a run overflowed
 `Long` within tens of steps. Each arm asserts its own loop count, and that
@@ -69,8 +72,8 @@ its rig fired.
 `LocalHeddleFairnessTest` also pins the count of every pick, extend,
 overrun and wake in one string, identical on every target.
 [How fast, how fair](heddle-local-turns.md#how-fast-how-fair) gives its
-measured values against each bar. The largest is 0.089 against a bar of
-0.15, for the worst 500-step window while lanes come and go.
+measured values against each bar. The largest is 0.063 against a
+bar of 0.15, for the worst 500-step window while lanes come and go.
 
 ## The books balance
 

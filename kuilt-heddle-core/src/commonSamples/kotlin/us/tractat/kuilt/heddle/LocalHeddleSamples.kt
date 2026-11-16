@@ -825,8 +825,7 @@ internal fun sampleRunnerPool() {
         served[job.leaf] = served.getValue(job.leaf) + 1
         check(onJobDone(job, minutes = 10L, everyone) is LeaseOutcome.Done)
     }
-    // Paid gets three quarters, within one job, and the free tier the last quarter.
-    check(served.getValue(acme) + served.getValue(apps) in 299..301 && served.getValue(hobby) in 99..101)
+    // Paid gets 299 of the 400 against an ideal of 300, and the free tier 101 against 100.
     // The 24 minutes apps spent on the Macs count against it here, so acme ran more of these jobs.
-    check(served.getValue(apps) < served.getValue(acme))
+    check(served == mapOf(acme to 151, apps to 148, hobby to 101))
 }

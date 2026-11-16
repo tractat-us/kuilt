@@ -1,6 +1,6 @@
 # `:kuilt-heddle` — weighted fair-share scheduling over kuilt
 
-> **Status: design spec, built (pre-1.0, Playground).** All six phases of §15 have
+> **Status: design spec, built (pre-1.0, Beta).** All six phases of §15 have
 > shipped; where the code settled a question differently from this text, the section
 > says so (§11 maps the sketch onto what shipped). A kuilt-native design for a
 > distributed weighted fair-share scheduler — a hierarchical EEVDF-inspired

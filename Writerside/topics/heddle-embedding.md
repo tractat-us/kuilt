@@ -120,7 +120,8 @@ check(onJobDone(macJobs[0], minutes = 14L, everyone) == LeaseOutcome.Done(charge
 check(onJobDone(macJobs[1], minutes = 10L, everyone) == LeaseOutcome.Done(charged = 10L, overrun = 0L, unrecorded = 0L))
 ```
 
-`complete` is never refused: work that already ran is charged in full.
+`complete` is never refused: work that already ran is charged in full,
+unless `Done.unrecorded` says otherwise.
 Guessing low cannot dodge the charge, though it can win a turn early, as
 [How fair is it?](heddle-local.md#how-fair-is-it) explains. A job that
 finishes early is charged what it used, and the rest goes back.
@@ -137,14 +138,13 @@ repeat(400) { i ->
     served[job.leaf] = served.getValue(job.leaf) + 1
     check(onJobDone(job, minutes = 10L, everyone) is LeaseOutcome.Done)
 }
-// Paid gets three quarters, within one job, and the free tier the last quarter.
-check(served.getValue(acme) + served.getValue(apps) in 299..301 && served.getValue(hobby) in 99..101)
+// Paid gets 299 of the 400 against an ideal of 300, and the free tier 101 against 100.
 // The 24 minutes apps spent on the Macs count against it here, so acme ran more of these jobs.
-check(served.getValue(apps) < served.getValue(acme))
+check(served == mapOf(acme to 151, apps to 148, hobby to 101))
 ```
 
-The run measured 151 jobs for acme, 148 for apps and 101 for hobby. The
-paid tier took 299 of 400 against an ideal of 300. Inside it, apps ran
+The sample checks the exact split: 151 jobs for acme, 148 for apps and 101
+for hobby. The paid tier took 299 of 400 against an ideal of 300. Inside it, apps ran
 fewer Linux jobs than acme because its Mac minutes were already on its
 books. Share is counted in time across every runner, not in jobs on one.
 
@@ -180,7 +180,8 @@ check(restored.complete(orphan.lease.id, orphan.defaultSettlement, waiting = emp
 check(restored.complete(running.id, actualCost = 3L, waiting = emptySet()) == LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L))
 ```
 
-The restored engine picks exactly as the old one would have. Open leases
+Given the same policy, the restored engine picks exactly as the old one
+would have. Open leases
 come back under their old ids, so jobs that kept running complete as
 normal. An id from before the restart that is no longer open answers
 `Stale`, not `Unknown`. The saved form is a JSON or CBOR array,
