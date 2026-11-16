@@ -219,8 +219,9 @@ class WarpLogRecordExporterUnreadSegmentFloorTest {
 
     /**
      * What the arrival-order widening rests on, checked after every export: the own records the
-     * log keeps, visible or tombstoned, are the newest by seq, so their seqs form one unbroken run
-     * and nothing dropped is newer than anything kept; and the visible ones number at most
+     * log keeps, visible or tombstoned, are the newest by seq: no own record seen in the log and
+     * since dropped is newer than one still kept. (Not "one unbroken run": a claim ahead of the
+     * mint leaves seqs that were never minted.) And the visible ones number at most
      * [MAX_RECORDS], exactly `min(MAX_RECORDS, exported)` on a log with no hole. Run on a log with
      * no hole, where list order is already arrival order, and after a segment read back early,
      * where it is not.
@@ -229,11 +230,15 @@ class WarpLogRecordExporterUnreadSegmentFloorTest {
     fun theOwnRecordsKeptAreAlwaysTheNewestBySeq() = runTest {
         val breaches = mutableListOf<String>()
         var checks = 0
+        val seen = mutableSetOf<Long>()
         fun check(label: String, log: Rga<LogRecord>, exported: Int?) {
             checks++
-            val kept = log.sequence.filter { it.replicaId == replica }.map { it.seq }.sorted()
-            if (kept.isNotEmpty() && kept.last() - kept.first() + 1 != kept.size.toLong()) {
-                breaches += "$label: kept own seqs are not one run: $kept"
+            val kept = log.sequence.filter { it.replicaId == replica }.map { it.seq }.toSet()
+            seen += kept
+            val newestDropped = (seen - kept).maxOrNull()
+            val oldestKept = kept.minOrNull()
+            if (newestDropped != null && oldestKept != null && newestDropped > oldestKept) {
+                breaches += "$label: dropped $newestDropped while keeping $oldestKept: ${kept.sorted()}"
             }
             val visible = log.entries().count { it.first.replicaId == replica }
             if (visible > MAX_RECORDS) breaches += "$label: $visible visible"
@@ -242,6 +247,7 @@ class WarpLogRecordExporterUnreadSegmentFloorTest {
             }
         }
         val plain = exporterFor(RecordingStore())
+        seen.clear()
         repeat(300) {
             plain.export(record(it))
             check("no hole, export $it", plain.snapshot(), it + 1)
@@ -256,6 +262,7 @@ class WarpLogRecordExporterUnreadSegmentFloorTest {
         repeat(5) { restarted.export(record(100 + it)) }
         val clean = exporterFor(backing)
         clean.recover()
+        seen.clear()
         val reordered = clean.snapshot().sequence.filter { it.replicaId == replica }.map { it.seq }
         repeat(300) {
             clean.export(record(1000 + it))
