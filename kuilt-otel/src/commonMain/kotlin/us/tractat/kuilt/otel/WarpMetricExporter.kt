@@ -38,8 +38,8 @@ import kotlin.math.abs
 private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExporter")
 
 /**
- * A CRDT-backed metric exporter for cumulative sums, gauges, cardinality estimates, and
- * exponential histograms.
+ * A CRDT-backed metric exporter for cumulative sums, gauges, cardinality estimates, exponential
+ * histograms and up-down sums.
  *
  * Each metric kind is backed by a different CRDT chosen to match its semantics:
  *
@@ -70,10 +70,18 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  *   already bucketed — one interval of an SDK's exponential histogram — as a
  *   [MetricUpdate.AddExponentialHistogram] at [histogramScale] or finer.
  *
+ * - **Up-down sum** — a [PNCounter] per [MetricKey], or a [PNCounterDouble] for fractions: a level
+ *   that goes both ways and adds up across replicas, such as in-flight requests across a fleet
+ *   (#3307). Each replica sets **its own share** to the level it reports ([setUpDownSum]), so the
+ *   series reads the sum of every replica's level, the same level set again writes nothing, and a
+ *   restart that keeps [replica] and the store counts nothing twice. Only a slot's owner moves it,
+ *   so a replica that never returns keeps its last share in the sum.
+ *
  * ## Key inversion
  *
  * Every mutating method — [incrementSum], [incrementSumDouble], [setGauge], [addCardinality],
- * [recordHistogram], their `merge*` twins, the batch form [record], and [clear] — reports success
+ * [recordHistogram], [setUpDownSum] and its siblings, their `merge*` twins, the batch form [record], and
+ * [clear] — reports success
  * only once the updated CRDT is **durably written to [DurableStore]**, never when it is delivered to
  * any backend. Delivery is asynchronous and eventually consistent.
  *
@@ -117,7 +125,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * write, forever.
  *
  * The outage is tracked as the **set of store keys currently being refused**, and the line is
- * emitted only by the failure that makes that set non-empty. All five metric kinds therefore share
+ * emitted only by the failure that makes that set non-empty. All seven stored kinds therefore share
  * one outage, and — the part a boolean latch gets wrong — a store that refuses one key while
  * accepting another stays a single outage rather than re-reporting on every alternation. The next
  * line comes only once the store has taken back every key it was refusing. Every failure is still
@@ -192,7 +200,7 @@ public class WarpMetricExporter(
     // Two-tier locking, both explicit primitives (repo policy: correctness must hold under a real
     // multi-threaded dispatcher; limitedParallelism(1) confinement is BANNED).
     //
-    //  - `lock` (atomicfu reentrant) guards the five CRDT maps only. No suspend call is ever made
+    //  - `lock` (atomicfu reentrant) guards the seven CRDT maps only. No suspend call is ever made
     //    inside it — CBOR encode/decode and CRDT mutations are pure.
     //  - `writeMutex` (coroutine Mutex) serializes the whole *durable-write* critical section: the
     //    mutate-and-encode and the store write form one ordered unit. [recover] and the read a turn
@@ -254,7 +262,7 @@ public class WarpMetricExporter(
      * ## What the population is, and why that is the whole design
      *
      * Exactly [persist] — the single function through which every mutating method on this exporter,
-     * across all five metric kinds and all five store keys, performs its durable write, and the
+     * across all seven stored kinds and all seven store keys, performs its durable write, and the
      * single function that emits a `"durable write failed for metric"` line.
      *
      * ## Why it holds a SET of keys rather than a boolean
@@ -293,7 +301,7 @@ public class WarpMetricExporter(
      *
      * ## Concurrency
      *
-     * The set is bounded by the five store keys, so it cannot grow.
+     * The set is bounded by the seven store keys, so it cannot grow.
      *
      * ## Concurrency
      *
@@ -412,8 +420,8 @@ public class WarpMetricExporter(
      * is unwanted, not unseen, and a read would bring back the series the clear dropped.
      *
      * **Why a turn of an owed kind admits nothing, rather than applying in memory and skipping only
-     * the write.** Three of the five kinds count per replica — [GCounter], [GCounterDouble] and
-     * [DDSketch]'s bucket cells — and their join is the per-replica **maximum**. An update applied
+     * the write.** Five of the seven kinds count per replica — [GCounter], [GCounterDouble], [DDSketch]'s bucket
+     * cells and the two up-down counters' halves — and their join is the per-replica **maximum**. An update applied
      * to the fresh map a refused read left would start this replica's slot again from zero beside
      * the durable one: a second history of the same slot. The heal's join keeps the larger of the
      * two and silently drops the other (a durable `5` and an unread-time `+10` join to `10`, not
@@ -658,7 +666,7 @@ public class WarpMetricExporter(
     // ── Clearing ──────────────────────────────────────────────────────────────
 
     /**
-     * Drop every metric series this exporter holds and delete its five persisted keys (#2208).
+     * Drop every metric series this exporter holds and delete its seven persisted keys (#2208).
      *
      * **Local-only, and it cannot be otherwise.** [GCounter] and [HyperLogLog] are monotonic
      * join-semilattices: a merge takes the element-wise maximum, so a peer holding the
@@ -759,7 +767,7 @@ public class WarpMetricExporter(
      *   the first refusal would leave the later kinds off disk, which applying the updates one by
      *   one never does. A refused write makes the result a [MetricExportResult.Partial] too, with
      *   the store's refusal among its `causes`, after the unread kinds' and in the fixed kind order
-     *   sums, double sums, gauges, cardinalities, histograms.
+     *   sums, double sums, gauges, cardinalities, histograms, up-down sums, double up-down sums.
      * - A refused write means "not yet durable", not "not counted": its updates stay in memory, are
      *   not in `uncounted`, and the next successful write of a refused kind persists them. So the
      *   batch is **not atomic** on disk — a kind the store took is durable even when another kind
@@ -770,13 +778,17 @@ public class WarpMetricExporter(
      *   turn counts as failed. A refused batch is no turn of any kind and moves nothing.
      *
      * In memory the exporter ends where applying [updates] one by one through [incrementSum],
-     * [incrementSumDouble], [setGauge], [addCardinality] and [recordHistogram] — or, for a
-     * [MetricUpdate.AddExponentialHistogram], through a batch of that one update — would leave it,
+     * [incrementSumDouble], [setGauge], [addCardinality], [recordHistogram] and the up-down methods —
+     * or, for a [MetricUpdate.AddExponentialHistogram] or a [MetricUpdate.Forget], through a batch of
+     * that one update — would leave it,
      * eviction included: the [maxMetrics] cap is decided per update, in order. On disk, a touched
      * kind holds its state as of the **end** of the batch. The one place that differs from the
      * single-point sequence is a kind whose series a *later* update of another kind evicted: written
      * one by one, the evicted series lingers on disk until that kind's next write; here it is
      * already gone. A kind the batch never touched is not rewritten, as before.
+     * An update that changes nothing — an up-down level set to the share it already holds, or a
+     * [MetricUpdate.Forget] of a series the exporter does not hold — touches no kind, so a batch of
+     * only those writes nothing and counts no turn.
      *
      * An empty [updates] is [MetricExportResult.Success] and touches neither memory nor the store.
      * Each [MetricUpdate] validates its own arguments at construction. Before **any** update is
@@ -786,8 +798,7 @@ public class WarpMetricExporter(
      *    coarser than [histogramScale], or one whose count lists the caller has since made negative —
      *    is checked for **every** update and **thrown** as [IllegalArgumentException], since it is
      *    a caller's mistake. Nothing in memory or on disk changes.
-     * 2. Whether an update would carry a sum or histogram series' total over every replica past
-     *    [Long.MAX_VALUE] is
+     * 2. Whether an update would carry a sum, histogram or up-down sum series past what it holds is
      *    checked for the whole batch, counting its earlier updates to the same series, against the
      *    series as they stand. For a [MetricUpdate.IncrementSum] that is its sum series' total —
      *    every replica's slot, a peer's merged in included — which is the value the OTLP bridge
@@ -796,9 +807,13 @@ public class WarpMetricExporter(
      *    replica's slots, a peer's merged in included, across both signs' buckets and the zero
      *    counter — which is the count the OTLP bridge exports (#3403); and with it this replica's
      *    slot in each bucket the update touches, in the zero and overflow counters, and the sum of
-     *    counts that fold onto one bucket (#3354). A weighted count can get there on its own. Such a batch is
+     *    counts that fold onto one bucket (#3354). A weighted count can get there on its own. An
+     *    up-down update is checked by making it, as for a histogram: refused when it would move one of
+     *    this replica's slots past what it holds, or leave an integer series' total over every
+     *    replica outside a `Long` (#3307). Such a batch is
      *    **refused**: it returns a [MetricExportResult.Refused] whose `overflow` names the series,
-     *    a [MetricSumOverflowException] or a [MetricHistogramOverflowException], and nothing from it
+     *    a [MetricSumOverflowException], [MetricHistogramOverflowException] or
+     *    [MetricUpDownSumOverflowException], and nothing from it
      *    is applied or written, the kinds that were read included. The refusal is logged at WARN the
      *    first time a series causes one and at DEBUG after that.
      *
@@ -921,6 +936,9 @@ public class WarpMetricExporter(
      * Checked against the series as they stand before the batch. An eviction the batch triggers can
      * only remove a series, never raise a count, so this never accepts a batch [applyLocked] would
      * refuse part-way; at worst it refuses one that would just fit after such an eviction.
+     * An up-down series an eviction or a [MetricUpdate.Forget] resets starts again from zero, where
+     * any update this check accepts fits: a share of zero moved to any level but [Long.MIN_VALUE], which
+     * no slot can reach from any state, holds it.
      */
     private fun firstOverflowLocked(updates: List<MetricUpdate>): MetricOverflowException? {
         val runningSums = HashMap<MetricKey, Long>()
@@ -1544,7 +1562,7 @@ public class WarpMetricExporter(
     public fun metricCount(): Int = lock.withLock { totalCount() }
 
     /**
-     * A converged snapshot of **every** metric series across all five kinds, as one
+     * A converged snapshot of **every** metric series across all seven maps, as one
      * replicable [MetricCatalog]. The metric analogue of the log buffer's `snapshot()`;
      * the tap host offers this value to a joining puller.
      */
@@ -1664,7 +1682,7 @@ public class WarpMetricExporter(
      * If [key] is new (not present in [map]) and [totalCount] has reached [maxMetrics],
      * evict one series from the combined pool according to [bufferPolicy].
      *
-     * Eviction selects from whichever of the four maps holds the oldest/newest entry
+     * Eviction selects from whichever of the seven maps holds the oldest/newest entry
      * by insertion order. The evicted key is always logged at WARN.
      */
     private fun <V> maybeEvictForNewKey(key: MetricKey, map: LinkedHashMap<MetricKey, V>) {
@@ -1700,8 +1718,8 @@ public class WarpMetricExporter(
 
     /**
      * The eviction victim under DROP_OLDEST: the first key of the first non-empty map in
-     * fixed map order (sums → sumsDouble → gauges → cardinalities → histograms). NOT a
-     * true cross-map insertion-oldest — insertion time is not comparable across the five
+     * fixed map order (sums → sumsDouble → gauges → cardinalities → histograms → upDownSums →
+     * upDownSumsDouble). NOT a true cross-map insertion-oldest — insertion time is not comparable across the seven
      * LinkedHashMaps.
      */
     private fun pickDropOldestVictim(): MetricKey? =
@@ -1731,7 +1749,7 @@ public class WarpMetricExporter(
     }
 }
 
-/** The five maps a [WarpMetricExporter] persists, one store key each, in the fixed order a batch writes them. */
+/** The seven maps a [WarpMetricExporter] persists, one store key each, in the fixed order a batch writes them. */
 internal enum class StoredKind(val storeKey: StoreKey) {
     SUMS(StoreKey("otel.metrics.sums")),
     SUMS_DOUBLE(StoreKey("otel.metrics.sums.double")),
@@ -1845,8 +1863,9 @@ public class MetricKindUnreadException internal constructor(
  * [MetricExportResult.Refused], and the batch that carried it applied nothing.
  *
  * Which kind of series [key] names is the subclass: [MetricSumOverflowException] for a sum,
- * [MetricHistogramOverflowException] for a histogram. A sum and a histogram can share a
- * [MetricKey], so a caller leaving the series out of a retry needs both. Only the exporter
+ * [MetricHistogramOverflowException] for a histogram, [MetricUpDownSumOverflowException] for an
+ * up-down sum. Series of different kinds can share a [MetricKey], so a caller leaving the series out
+ * of a retry needs both. Only the exporter
  * constructs one; a consumer only receives it.
  */
 public sealed class MetricOverflowException(message: String) : ArithmeticException(message) {

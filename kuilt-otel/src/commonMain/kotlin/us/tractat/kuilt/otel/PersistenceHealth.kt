@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * Counts complete persistence turns, not records, series, bytes, or individual store calls.
  * A turn is acknowledged only after all its writes return; a partial write is one failed turn.
  *
- * **For metrics a turn is one kind's write.** [WarpMetricExporter] persists each of its five kinds
+ * **For metrics a turn is one kind's write.** [WarpMetricExporter] persists each of its seven kinds
  * under its own key, so a [WarpMetricExporter.record] batch counts **one turn per kind it touched**:
  * five updates over three kinds is three turns, not one and not five. A batch the store partly
  * refuses therefore moves both counters — [acknowledged] for each kind that landed, [failed] for
