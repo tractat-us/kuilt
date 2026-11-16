@@ -367,6 +367,76 @@ class OtlpHttpEdgeSplitTest {
         assertAll(*checks.toTypedArray())
     }
 
+    /**
+     * Ruling 1 folds a `413` on a lone record only when that record is bigger than this edge's own
+     * cap. A record inside the cap that is still refused means something in front of the collector
+     * caps bodies below [OtlpHttpEdge]'s `maxRequestBytes`. Folding it would halve every chunk down
+     * to single records, record them all as sent, and report the drain a success while the collector
+     * holds nothing. Two ways to reach a lone record: halving a refused chunk, and a one-record
+     * batch on the fast path.
+     */
+    @Test
+    fun a413OnALoneRecordInsideTheCapFailsTheSignal() = runTest {
+        val cap = 2048
+        val checks = mutableListOf<() -> Unit>()
+        for (count in listOf(40, 1)) {
+            val collector = Collector(OtlpWireFormat.JSON) { _, _ -> HttpStatusCode.PayloadTooLarge }
+            val store = CountingStore()
+            val t = WarpTelemetry(ReplicaId("device-3286"), InMemoryDurableStore()).also { it.recover() }
+            t.logs.export((1..count).map { log(it) })
+            val result = WarpOtlpBridge(t, clock).drain(edge(collector, store, OtlpWireFormat.JSON, cap))
+            val disk = onDisk(store, Signal.LOGS)
+            val last = collector.posts.lastOrNull()
+            val tag = "$count records"
+            checks += listOf(
+                {
+                    val reached = if (count == 1) collector.posts.size == 1 else collector.posts.first().items.size > 1
+                    assertTrue(reached, "$tag: precondition, the fast path or a halved chunk: ${collector.posts.map { it.items.size }}")
+                },
+                { assertEquals(1, last?.items?.size, "$tag: precondition, a 413 reached a lone record") },
+                { assertTrue((last?.bytes ?: Int.MAX_VALUE) <= cap, "$tag: precondition, and that record is inside the cap") },
+                { assertTrue(collector.statuses.all { it == HttpStatusCode.PayloadTooLarge }, "$tag: precondition, every POST got a 413") },
+                { assertIs<DrainResult.Failure>(result, "$tag: the drain fails, not Success: $result") },
+                { assertEquals(emptySet(), disk, "$tag: nothing is recorded as sent") },
+            )
+        }
+        assertAll(*checks.toTypedArray())
+    }
+
+    /**
+     * A proxy that takes the normal records but refuses one bigger record, still inside this edge's
+     * cap. The chunks acknowledged before it are recorded; the refused record is not, and the send
+     * stops there and fails, so the next drain retries it.
+     */
+    @Test
+    fun a413OnALoneRecordInsideTheCapKeepsTheDeliveredChunks() = runTest {
+        val cap = 4096
+        val proxyLimit = 1200
+        val big = 20
+        val collector = Collector(OtlpWireFormat.JSON) { _, post ->
+            if (post.bytes > proxyLimit) HttpStatusCode.PayloadTooLarge else HttpStatusCode.OK
+        }
+        val store = CountingStore()
+        val records = (1..40).mapTo(LinkedHashSet()) { i ->
+            if (i == big) LogRecord(recordId = id8(big), body = "log-$big-" + "大".repeat(400)) else log(i)
+        }
+        val outcome = runCatchingCancellable { edge(collector, store, OtlpWireFormat.JSON, cap).sendLogs(records) }
+        val disk = onDisk(store, Signal.LOGS)
+        val refusedAlone = collector.posts.filterIndexed { i, post ->
+            post.items == listOf(big) && collector.statuses[i] == HttpStatusCode.PayloadTooLarge
+        }
+        val delivered = collector.accepted.flatMap { it.items }
+        assertAll(
+            { assertEquals(1, refusedAlone.size, "precondition: the big record was refused on its own") },
+            { assertTrue(refusedAlone.single().bytes in (proxyLimit + 1)..cap, "precondition: over the proxy's limit, inside the cap") },
+            { assertTrue(delivered.isNotEmpty(), "precondition: chunks were acknowledged before it") },
+            { assertTrue(outcome.isFailure, "the send fails") },
+            { assertEquals(listOf(big), collector.posts.last().items, "and stops at the refused record") },
+            { assertEquals(delivered.toSet(), disk, "the acknowledged chunks are recorded, the refused record is not") },
+            { assertEquals(mapOf("logs" to 1), store.writes, "in one write") },
+        )
+    }
+
     // ── 7. Links travel with their span ──────────────────────────────────────────
 
     @Test

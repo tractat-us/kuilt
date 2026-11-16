@@ -54,6 +54,9 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.ktor.serverTestHost)
             implementation(libs.ktor.serverNetty)
+            // Compile access, so OtlpHttpEdgeLone413WarnTest can attach a logback ListAppender and
+            // assert the WARN a folded oversized record logs, rather than take it on trust.
+            implementation(libs.logback)
         }
     }
 }
