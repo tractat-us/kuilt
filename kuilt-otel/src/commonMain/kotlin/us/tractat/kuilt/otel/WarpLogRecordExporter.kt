@@ -393,18 +393,32 @@ public class WarpLogRecordExporter(
     // Every write to `log` must update these in the same locked section. The events
     // that move them out from under the cache — a merge whose remote inserts sort after
     // the local tail, a window pass, and a recover() that replaces the log wholesale —
-    // are pinned by WarpLogRecordExporterTailCacheTest. An eviction only tombstones, and
-    // a tombstone is still a position, so no eviction moves `tail`.
+    // are pinned by WarpLogRecordExporterTailCacheTest. An eviction comes only in the turn
+    // of the insert it makes room for, and that insert sets `tail`, so no eviction leaves
+    // `tail` on a record it tombstoned.
 
     /**
-     * Predecessor for the next append: the last element of [log]'s sequence, **tombstone or not**,
-     * or [RgaId.HEAD] when the sequence is empty.
+     * Predecessor for the next append. Read the list's trailing run of tombstones: the anchor is
+     * the last **foreign** tombstone that comes before any of this replica's own in that run;
+     * failing one, the last visible record; failing that, [RgaId.HEAD].
      *
-     * Not the last *visible* element. A merge can sort another author's fully tombstoned subtree
-     * after every visible record, and an append after the last visible one lands inside that
-     * record's subtree, ahead of the run. The window keeps every tombstone that something visible
-     * follows, so the run then stayed in the log for good (#3528). Appending after the last element
-     * puts the new record behind the run, where the window's cut reaches it.
+     * **Another author's trailing tombstone is an anchor.** A merge can sort a foreign subtree its
+     * author fully tombstoned after every visible record. An append after the last visible record
+     * lands inside that record's subtree, ahead of the run, and the window keeps every tombstone
+     * something visible follows, so the run stayed in the log for good (#3528). Appending after it
+     * puts the new record behind the run, where the window's cut reaches it. A foreign id leaves
+     * only through that cut, which takes everything before it too, and its `RgaOp.Compact` keeps
+     * its position for a successor.
+     *
+     * **This replica's own trailing tombstone is not, and neither is anything behind one.** An own
+     * trailing tombstone is the #3447 shape: an older record sorting after newer ones.
+     * [withOlderOwn] drops it while it is still inside the window, through the floor, which keeps
+     * no position. A record appended after it then re-roots to the head of the list, ahead of
+     * older survivors, and DROP_OLDEST evicts it first. A foreign tombstone behind it in the run
+     * may hang off it and re-root the same way, so the run is not used past the first own one.
+     * [withOlderOwn] bounds own tombstones already (#3511). Once it has dropped them, the next
+     * rebuild finds the foreign rest of the run and anchors on it, so a mixed run takes one more
+     * pass to clear, not forever.
      */
     private var tail: RgaId = RgaId.HEAD
 
@@ -1203,7 +1217,7 @@ public class WarpLogRecordExporter(
             // Raising past seqs the loaded log lacks leaves a hole, which the window's floor
             // crosses (windowPass); see LogSegmentIndex.seqHighWater.
             val raised = recovered.log.advanceClock(replica, recovered.lamportHighWater, recovered.seqHighWater)
-            val derived = DerivedState.of(raised)
+            val derived = DerivedState.of(raised, replica)
             val suppression = Suppression.of(raised)
             lock.withLock { install(recovered, raised, derived, suppression) }
         }.onFailure { cause ->
@@ -3356,13 +3370,14 @@ public class WarpLogRecordExporter(
     /**
      * Recompute [tail], [visibleCount] and [seenIds] from [log] in one pass.
      *
-     * The entry point for the two events that replace the log wholesale — [recover]
-     * and [merge] — where nothing can be threaded forward. Tombstoned entries are
-     * excluded by [Rga.entries], so an evicted record's dedup slot is freed for re-use.
+     * The entry point for the two events that rewrite the log under the caches — [merge] and a
+     * [windowPass] — where nothing can be threaded forward. [recover] does the same walk outside
+     * the lock and calls [installDerivedState] itself. Tombstoned entries are excluded by
+     * [Rga.entries], so an evicted record's dedup slot is freed for re-use.
      *
      * Must be called with [lock] held.
      */
-    private fun rebuildDerivedState(): Unit = installDerivedState(DerivedState.of(log))
+    private fun rebuildDerivedState(): Unit = installDerivedState(DerivedState.of(log, replica))
 
     /**
      * Assign [tail], [visibleCount] and [seenIds] from an already-materialized [DerivedState].
@@ -3383,13 +3398,20 @@ public class WarpLogRecordExporter(
 
     /**
      * What [installDerivedState] assigns, read off one [Rga] by a walk that may throw and writes
-     * no field. [tail] is the last element of the sequence, tombstones included (see the field);
-     * [entries] are the visible ones.
+     * no field. [tail] follows the rule on the field, for the replica [self]. [entries] are the
+     * visible records.
      */
     private class DerivedState(val tail: RgaId, val entries: List<Pair<RgaId, LogRecord>>) {
         companion object {
-            fun of(log: Rga<LogRecord>): DerivedState =
-                DerivedState(tail = log.sequence.lastOrNull() ?: RgaId.HEAD, entries = log.entries())
+            fun of(log: Rga<LogRecord>, self: ReplicaId): DerivedState {
+                val sequence = log.sequence
+                val tombstones = log.tombstones
+                val trailing = sequence.takeLastWhile { id -> id in tombstones }
+                val anchor = trailing.takeWhile { id -> id.replicaId != self }.lastOrNull()
+                    ?: sequence.getOrNull(sequence.size - trailing.size - 1)
+                    ?: RgaId.HEAD
+                return DerivedState(tail = anchor, entries = log.entries())
+            }
         }
     }
 }

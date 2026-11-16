@@ -444,8 +444,15 @@ class WarpLogRecordExporterTailCacheTest {
             return sequence.subList(0, cut).toSet()
         }
 
-        // The last element, tombstones included, as production's tail is (#3528).
-        private fun tailId(): RgaId = log.sequence.lastOrNull() ?: RgaId.HEAD
+        // Production's rule (#3528): the last foreign tombstone ahead of any own one in the trailing
+        // run of tombstones, else the last visible record, else HEAD.
+        private fun tailId(): RgaId {
+            val sequence = log.sequence
+            val trailing = sequence.takeLastWhile { id -> id in log.tombstones }
+            return trailing.takeWhile { id -> id.replicaId != replica }.lastOrNull()
+                ?: sequence.getOrNull(sequence.size - trailing.size - 1)
+                ?: RgaId.HEAD
+        }
     }
 
     private companion object {
