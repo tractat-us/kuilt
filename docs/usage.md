@@ -798,17 +798,27 @@ throwable first and reading as a load-dependent flake.
 ### Why kuilt does not just stop logging traces
 
 The obvious alternative is for kuilt to stop attaching throwables to its own log
-lines. It is the wrong trade, because the cost is **one-time per process**: any
-one of the ~40 throwable-attached log sites in the library could be the one that
-pays it, so removing the exposure would mean converting essentially *all* of them.
-That trades away stack traces everywhere, permanently, to avoid a single
-tens-of-milliseconds cost — and it only helps a consumer who has not already set
-`libbacktrace`, which is flat under load anyway.
+lines. Against the first-trace spike it is the wrong trade, because that spike is
+**one-time per process**: any one of the ~40 throwable-attached log sites in the
+library could be the one that pays it, so removing the exposure would mean
+converting essentially *all* of them. That trades away stack traces everywhere,
+permanently, to avoid a single cost — and it only helps a consumer who has not
+already set `libbacktrace`, which is flat under load anyway.
+
+The per-trace cost is different: it is paid at every site, every time. A site
+that fires once on an unexpected failure pays ~25 ms once, which buys the trace
+that explains the failure. A site that fires on every event of a routine kind
+pays it per event, and that is the site where the trade has to be weighed.
 
 So kuilt drops the trace only where the failure is routine and the exception's
 type and message say everything the trace would (an unreachable telemetry
 collector; a log entry that was never meant to decode). Everywhere the failure is
-genuinely unexpected, the trace stays.
+genuinely unexpected, or the throwable came out of your own code, the trace
+stays. `SpeculativeSequencer` is the case that tests the rule: when your `apply`
+refuses a committed action it logs the refusal with the throwable, so an app
+whose `apply` refuses often pays a trace per refusal on Apple debug builds. It
+keeps the throwable (#3537), because that trace points into your `apply`, and it
+is the one place that says why the action was refused.
 
 ## For coding agents
 
