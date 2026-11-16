@@ -50,10 +50,13 @@ name: ci
 # that 5-job cap and queue every PR behind it. The shipped library's own Apple K/N
 # test executions therefore run out of band in apple-nightly.yml, NOT here (see
 # that file's header, and #933). `spike-compile` is the one macOS job in this lane
-# and it is PATH-FILTERED to `:spike` sources precisely so it does not put a macOS
-# runner on every PR. The complementary half — a change to :kuilt-core/:kuilt-session/
+# and it is PATH-FILTERED to `:spike` sources on a PR precisely so it does not put a
+# macOS runner on every PR. The complementary half — a change to :kuilt-core/:kuilt-session/
 # :kuilt-nw that breaks :spike without touching spike/ — is caught by the same
 # apple-nightly lane, which files a tracking issue on failure (#1796).
+# A merge group is the exception, on purpose (#3478): `detect` classifies no paths there,
+# so every group runs everything, the macOS spike compile included. That catches the
+# complementary half before it merges, at the cost of a macOS job per group.
 
 on:
   push:
@@ -117,6 +120,8 @@ jobs:
         #   spike-inputs — any changed path is `:spike` Gradle-compiled source
         #                  (spike/src/** or spike/build.gradle.kts); the Apple-only
         #                  spike compile runs on a macOS runner (#1796).
+        # The path classification is for pull_request and push. merge_group falls to the
+        # catch-all arm, which sets all three to run everything (#3478).
         # They are independent: a module.md-only PR is docs-only=true AND
         # dokka-inputs=true — it skips the build but MUST still pass Dokka, because a
         # bad module.md header silently freezes the whole Pages deploy (#1061).
@@ -135,6 +140,7 @@ jobs:
               FILES=$(git diff --name-only "$BEFORE" "${{ github.event.after }}" 2>/dev/null || echo "")
               ;;
             *)
+              # merge_group lands here deliberately: a group runs everything (#3478).
               echo "${{ github.event_name }} — treating as not docs-only, run Dokka + spike compile."
               { echo "docs-only=false"; echo "dokka-inputs=true"; echo "spike-inputs=true"; } >> "$GITHUB_OUTPUT"; exit 0
               ;;
@@ -173,7 +179,7 @@ jobs:
             # (the Xcode project — never built by Gradle, needs signing), and not
             # spike/*.md or spike/*.sh. Narrow on purpose: this flag is the ONLY thing
             # keeping a macOS runner off every PR, and macOS runners are capped at 5
-            # concurrent jobs plan-wide (#1796).
+            # concurrent jobs plan-wide (#1796). A merge group never reaches this loop.
             if [[ "$file" == spike/src/* ]] || [[ "$file" == spike/build.gradle.kts ]]; then
               SPIKE_INPUTS=true
             fi
@@ -1164,7 +1170,7 @@ jobs:
   # ── spike-compile ───────────────────────────────────────────────────────────
   # Compiles `:spike` — the two-iPhone hardware-validation harness — for its Apple
   # targets. THE ONLY macOS job in the per-PR lane, and path-filtered so it stays
-  # that way (#1796).
+  # that way (#1796). Every merge group runs it, unfiltered (#3478).
   #
   # WHY IT WAS INVISIBLE. `:spike` is excluded from the root Gradle graph unless
   # `-PincludeSpike` is passed (settings.gradle.kts), and no workflow ever passed it,
