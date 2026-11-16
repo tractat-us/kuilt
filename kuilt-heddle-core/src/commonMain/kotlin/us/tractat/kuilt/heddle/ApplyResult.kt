@@ -19,8 +19,9 @@ public sealed interface StepRefusal {
     public val child: GroupId
 
     /**
-     * [child]'s [edge] still carries [outstanding] units, so it cannot retire yet: the change
-     * waits for that work to finish. [blockingLeases] are this engine's open leases whose path
+     * [edge], which is [child]'s own edge or that of a waiting group above [child] (see below),
+     * still carries [outstanding] units, so it cannot retire yet: the change waits for that work
+     * to finish. [blockingLeases] are this engine's open leases whose path
      * crosses [edge], in id order; complete or cancel them, or settle them through
      * [LocalHeddle.reconcileLeases] if their work is gone, and apply again.
      *
@@ -46,6 +47,10 @@ public sealed interface StepRefusal {
      * still carries units after the engine released every one of its own there. Or [child] sits
      * beneath a group the root does not reach, a new one this apply or an earlier one left out, so
      * no delegation could reach it; [reason] names that group. [child] is left as it was before this apply.
+     *
+     * One such case is curable by waiting. An [LocalHeddle.attach] under a group that is still
+     * draining from an earlier call comes back `Refused`, not [Draining], because only the drains
+     * of the current call are known to it. Attach again once that group's leases settle.
      */
     public data class Refused(
         override val child: GroupId,
