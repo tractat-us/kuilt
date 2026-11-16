@@ -20,6 +20,11 @@ import kotlin.test.assertTrue
  * Every call answers, no pick is refused, and a closing stretch in which every lane waits hands
  * each lane its weight's share ([assertFairShares]).
  *
+ * **These rows are the pin on pick order past the old ceiling** (design §7.1). A pick compare
+ * narrowed back to `Long` reds three of them and nothing else in the module. The governed match in
+ * `:kuilt-heddle`'s `HeddleAcceptanceTest` does not pin it: both of its sides call
+ * [HeddlePolicy.pick], so a mutation there moves both alike (#3504).
+ *
  * The generators walk only [List]s they built themselves, in declaration order, so the same seed
  * takes the same trajectory on every target.
  */
