@@ -107,6 +107,7 @@ public class OtlpHttpEdge(
     @IntroducedAt("0.7.5") resource: Map<String, String> = emptyMap(),
     @IntroducedAt("0.7.5") scopeName: String = "",
     @IntroducedAt("0.7.5") scopeVersion: String = "",
+    @IntroducedAt("0.7.6") private val maxRequestBytes: Int = DEFAULT_MAX_REQUEST_BYTES,
 ) : OtlpEdge {
 
     private val base: String = endpoint.trimEnd('/')
@@ -301,6 +302,9 @@ public class OtlpHttpEdge(
     public companion object {
         /** Default cap on the span/log producer-local sent-set (drop-oldest). */
         public const val DEFAULT_MAX_SENT_IDS: Int = 50_000
+
+        /** Default cap on one request's body, in bytes: 1 MiB. */
+        public const val DEFAULT_MAX_REQUEST_BYTES: Int = 1 shl 20
 
         /**
          * Bytes of SHA-256 kept for the endpoint tag. 128 bits makes a collision
