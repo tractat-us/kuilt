@@ -166,6 +166,31 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * not attempted here. `WarpLogRecordExporterWindowingTest` measures both terms against
  * each other.
  *
+ * **A third term: another author's tombstones that trail the list.** A pass cuts a leading
+ * prefix of the list, and the next export goes after the last *visible* record. A merge can
+ * deliver a run that another author wrote and then tombstoned whole, sorted after every visible
+ * record: appended after our newest record at a higher clock, say, or rooted at the head behind
+ * our own records. Every later export lands ahead of that run, so no ordinary window pass reaches
+ * it, and its `Insert`s, bodies included, stay in [log] with their tombstones. [clear] is the
+ * exception: its pass retains nothing, so it cuts the run with everything else and accepts the
+ * re-root below, as [dropUnheldOwn] does for its own ids.
+ *
+ * An ordinary pass does not cut them, on purpose. Cutting them is an [RgaOp.Compact], and a
+ * replica that still holds one of those ids visible may append after it. That record re-roots
+ * through the run's predecessor, and to the head of the list once that predecessor is floored,
+ * which here is the usual case. Either way it sorts ahead of older records under the same parent
+ * and is the one DROP_OLDEST evicts. No local rule can tell when that is safe without a
+ * causal-stability witness, which this class does not have.
+ *
+ * Instead the run clears when the **author's own** window pass reaches it and arrives here by
+ * [merge]: the author drops the ids through its floor, by its cut or by [withOlderOwn] (#3511) when
+ * they trail its list too, and [Rga.piece] purges them under that floor. That is not a safe path
+ * either. A floor records no positions, so a third replica's record anchored on a run id re-roots
+ * to the head unconditionally when the floor merges in: the reordering [Rga.compactedBelow] already
+ * accepts for every floor drop. The ruling only declines to add a second, *local* source of it. The
+ * run stays only while its author never passes those ids. #3528 is where this was ruled;
+ * `WarpLogRecordExporterForeignTombstoneResidueTest` pins both halves.
+ *
  * **[Rga.compact] is not the mechanism, and could not be.** It is the obvious candidate — it is
  * the reclamation this codebase already had — and it reclaims *nothing at all* here, for a
  * structural reason rather than a tuning one. Its condition 4 refuses to collect a tombstone that
@@ -398,8 +423,15 @@ public class WarpLogRecordExporter(
     // WarpLogRecordExporterTailCacheTest. Eviction is the *only* thing that can remove
     // an element on the export path, and it only ever removes a leading prefix of the
     // visible sequence, so no export can invalidate `tail` while the log is non-empty.
+    // An eviction that empties it needs no reset either: every eviction is paired with an
+    // admitted insert, and applyTurn sets `tail` to that insert after committing both.
 
-    /** Predecessor for the next append: the last visible element, or [RgaId.HEAD] when empty. */
+    /**
+     * Predecessor for the next append: the last visible element, or [RgaId.HEAD] when empty.
+     *
+     * Visible, not last: a merged run of another author's tombstones that sorts after it stays
+     * behind every later export, which is the residue the class KDoc describes (#3528).
+     */
     private var tail: RgaId = RgaId.HEAD
 
     /** Number of visible (non-tombstoned) records in [log] — the eviction gate. */
@@ -2079,7 +2111,6 @@ public class WarpLogRecordExporter(
         eviction.evicted.forEach { record -> seenIds.remove(record.recordId) }
         visibleCount -= count
         evictionsSincePass += count
-        if (visibleCount == 0) tail = RgaId.HEAD
     }
 
     /** Count [count] [BufferPolicy.DROP_OLDEST] evictions. Must hold [lock]; see [commitEviction]. */
@@ -3361,7 +3392,10 @@ public class WarpLogRecordExporter(
      *
      * Tombstones inside the window are retained along with it and counted against nothing;
      * tombstones in the prefix are dropped with it, which is the point — an evicted record's
-     * `Insert` *and* its `Remove` both leave the log.
+     * `Insert` *and* its `Remove` both leave the log. A run of another author's tombstones that
+     * trails every visible record is never in the prefix while `retain > 0`, and no other rule
+     * here cuts it; its author's own pass clears it (#3528, and the class KDoc). At `retain = 0`
+     * ([clear]) it is cut with everything else, below.
      *
      * At `retain = 0` the loop breaks on its first iteration with `cut` still at
      * `sequence.size`, so every id comes back — which is what makes [clear] the same pass
@@ -3385,8 +3419,10 @@ public class WarpLogRecordExporter(
     /**
      * Recompute [tail], [visibleCount] and [seenIds] from [log] in one pass.
      *
-     * The entry point for the two events that replace the log wholesale — [recover]
-     * and [merge] — where nothing can be threaded forward. Tombstoned entries are
+     * The entry point for the events that change the log in ways nothing can thread forward:
+     * a [merge], and a drop installed by [installDrop], which a [windowPass] and [clear]'s
+     * [dropUnheldOwn] both reach. [recover] does not call it: it walks the entries outside the
+     * lock and assigns them through [installDerivedState]. Tombstoned entries are
      * excluded by [Rga.entries], so an evicted record's dedup slot is freed for re-use.
      *
      * Must be called with [lock] held.
