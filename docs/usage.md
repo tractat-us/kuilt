@@ -724,9 +724,11 @@ service, off in another process. When the machine is quiet the answer comes back
 in a few hundredths of a second. When the machine is busy, that service is
 competing for the same CPU as everything else, and the answer can take **seconds**.
 
-It happens once per app launch — every later stack trace is fast either way. But
-"the machine is busy and the network is misbehaving" is one situation, not two,
-so the once is reasonably likely to land at the worst moment.
+That slow first answer happens once per app launch. But "the machine is busy and
+the network is misbehaving" is one situation, not two, so the once is reasonably
+likely to land at the worst moment. Every later trace is not free either: on a
+debug build each one costs tens of milliseconds, so code that attaches a trace to
+every event pays that on every event.
 
 There is a one-line build setting that removes the variability, and it costs you
 nothing: your traces still have function names and `file:line`, they are just
