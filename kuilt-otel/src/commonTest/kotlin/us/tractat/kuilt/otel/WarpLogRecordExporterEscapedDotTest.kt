@@ -134,8 +134,8 @@ class WarpLogRecordExporterEscapedDotTest {
         restarted.recover()
         // More than the window holds, so the tombstones ahead of the returned record outnumber one pass.
         repeat(150) { assertEquals(ExportResult.Success, restarted.export(record(200 + it)), "the rig: export $it") }
+        val floorBeforeMerge = restarted.snapshot().compactedBelow[replica]
         assertEquals(ExportResult.Success, restarted.merge(escape.gossiped), "the merge back")
-        val returned = restarted.snapshot().entries().map { it.first }
         repeat(400) { assertEquals(ExportResult.Success, restarted.export(record(1000 + it)), "export ${1000 + it}") }
         val log = restarted.snapshot()
         val segments = escape.backing.keys().filter { it.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }
@@ -143,8 +143,9 @@ class WarpLogRecordExporterEscapedDotTest {
             decodeSegmentForTest(requireNotNull(escape.backing.read(StoreKey(it)))).compactOpCount > 0
         }
         assertAll(
-            // The rig: the merge really brought the escaped record back.
-            { assertTrue(escape.escaped in returned, "the merge did not bring the escaped record back") },
+            // The rig: nothing had floored the escaped record yet, so the merge really brought it
+            // back. The merge's own window pass may drop it at once, which is the arrival order.
+            { assertTrue(floorBeforeMerge < escape.escaped.seq, "the floor was at $floorBeforeMerge before the merge") },
             { assertEquals(0, log.compactedIds.count { it.replicaId == replica }, "an own drop kept a Compact") },
             { assertEquals(0, pinned, "a segment is pinned by a Compact") },
             { assertTrue(log.compactedBelow[replica] > escape.escaped.seq, "the floor never passed the escaped record") },
