@@ -3,6 +3,7 @@ package us.tractat.kuilt.otel
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.PNCounter
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -30,7 +31,7 @@ class WarpMetricExporterUpDownSumTest {
 
     private suspend fun exporter(
         replica: ReplicaId,
-        store: RecordingStore = RecordingStore(),
+        store: DurableStore = RecordingStore(),
         maxMetrics: Int = DEFAULT_MAX_METRICS,
     ) = WarpMetricExporter(replica = replica, store = store, maxMetrics = maxMetrics).also { it.recover() }
 
@@ -95,6 +96,60 @@ class WarpMetricExporterUpDownSumTest {
             { assertEquals(before + 1, afterFirst, "the first set wrote") },
             { assertEquals(afterFirst, store.writeCount(), "the second set wrote nothing") },
             { assertEquals(5L, onA.upDownSumValue(inFlight)) },
+        )
+    }
+
+    /**
+     * A refused write leaves this replica's new share in memory only. The same level reported again
+     * finds nothing to move, yet must write that share again rather than call it settled: otherwise
+     * it never reaches disk, a restart reads the older share back, and the refused turn stays
+     * outstanding while every later set returns a success. The old gauge mapping rewrote every
+     * collection and so healed by itself (#3307).
+     */
+    @Test
+    fun aSteadyLevelWritesAgainTheShareARefusedWriteLeftInMemory() = runTest {
+        val backing = RecordingStore()
+        val store = WriteRefusingStore(backing) { it.name == "otel.metrics.updown" }
+        val onA = exporter(a, store)
+        onA.set(inFlight, 3L)
+        store.refuseWrites()
+        val refused = onA.setUpDownSum(inFlight, 5L)
+        store.allowWrites()
+        val writesBefore = backing.writeCount()
+        val retried = onA.setUpDownSum(inFlight, 5L)
+        val writesAfter = backing.writeCount()
+        val again = onA.setUpDownSum(inFlight, 5L)
+        assertAll(
+            { assertIs<MetricExportResult.Partial>(refused, "the rig: the store refused the set to 5") },
+            { assertEquals(1, store.refusedWrites(), "the rig: exactly one write was refused") },
+            { assertEquals(MetricExportResult.Success, retried) },
+            { assertEquals(writesBefore + 1, writesAfter, "the steady level wrote the share again") },
+            { assertEquals(MetricExportResult.Success, again) },
+            { assertEquals(writesAfter, backing.writeCount(), "once on disk, the steady level writes nothing") },
+            { assertEquals(0L, onA.health.value.outstandingFailures, "the refused turn is resolved") },
+            { assertEquals(5L, exporter(a, backing).upDownSumValue(inFlight), "the share is durable") },
+        )
+    }
+
+    /** The fractional twin of [aSteadyLevelWritesAgainTheShareARefusedWriteLeftInMemory]. */
+    @Test
+    fun aSteadyDoubleLevelWritesAgainTheShareARefusedWriteLeftInMemory() = runTest {
+        val backing = RecordingStore()
+        val store = WriteRefusingStore(backing) { it.name == "otel.metrics.updown.double" }
+        val onA = exporter(a, store)
+        assertEquals(MetricExportResult.Success, onA.setUpDownSumDouble(inFlight, 0.5))
+        store.refuseWrites()
+        val refused = onA.setUpDownSumDouble(inFlight, 1.5)
+        store.allowWrites()
+        val writesBefore = backing.writeCount()
+        val retried = onA.setUpDownSumDouble(inFlight, 1.5)
+        assertAll(
+            { assertIs<MetricExportResult.Partial>(refused, "the rig: the store refused the set to 1.5") },
+            { assertEquals(1, store.refusedWrites(), "the rig: exactly one write was refused") },
+            { assertEquals(MetricExportResult.Success, retried) },
+            { assertEquals(writesBefore + 1, backing.writeCount(), "the steady level wrote the share again") },
+            { assertEquals(0L, onA.health.value.outstandingFailures, "the refused turn is resolved") },
+            { assertEquals(1.5, exporter(a, backing).upDownSumDoubleValue(inFlight), "the share is durable") },
         )
     }
 

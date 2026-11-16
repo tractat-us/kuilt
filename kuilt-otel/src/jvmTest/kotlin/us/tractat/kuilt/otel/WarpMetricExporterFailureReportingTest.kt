@@ -124,6 +124,50 @@ class WarpMetricExporterFailureReportingTest {
      * A latch per store key — or per kind — would pass the arm above and fail this one, which is
      * why it is here: the arm above only ever touches `SUM`.
      */
+    /**
+     * An up-down level reported again after its write was refused moves nothing in memory, yet it
+     * must still write, or the refused key never leaves the outage set: every later outage, on any
+     * kind, would then be swallowed as a repeat of one the store has long recovered from (#3307).
+     * `retried` is asserted a success, so the second half cannot pass on a store that never came back.
+     */
+    @Test
+    fun aSteadyUpDownLevelClosesTheOutageItsRefusedWriteOpened() = runTest {
+        val store = WriteRefusingStore(RecordingStore())
+        val upDown = MetricKey("in_flight", MetricKind.UP_DOWN_SUM, emptyMap())
+        var refused: MetricExportResult = MetricExportResult.Success
+        var retried: MetricExportResult = MetricExportResult.Success
+        var sumRefused: MetricExportResult = MetricExportResult.Success
+        var afterFirstOutage = 0
+        var afterSecondOutage = 0
+
+        capturingLogsOf(METRIC_EXPORTER_LOGGER) { captured ->
+            val exporter = exporterFor(store)
+            exporter.setUpDownSum(upDown, 3L)
+            store.refuseWrites()
+            refused = exporter.setUpDownSum(upDown, 5L)
+            afterFirstOutage = captured.naming(WRITE_FRAGMENT).size
+            store.allowWrites()
+            retried = exporter.setUpDownSum(upDown, 5L)
+            store.refuseWrites()
+            sumRefused = exporter.incrementSum(sumKey("requests"))
+            afterSecondOutage = captured.naming(WRITE_FRAGMENT).size
+        }
+
+        assertAll(
+            { assertIs<MetricExportResult.Partial>(refused, "precondition: the first outage never happened") },
+            { assertIs<MetricExportResult.Partial>(sumRefused, "precondition: the second outage never happened") },
+            { assertEquals(1, afterFirstOutage, "precondition: the first outage was not reported") },
+            { assertEquals(MetricExportResult.Success, retried) },
+            {
+                assertEquals(
+                    2,
+                    afterSecondOutage,
+                    "the sums outage was swallowed as a repeat of the up-down one the store recovered from",
+                )
+            },
+        )
+    }
+
     @Test
     fun oneOutageIsOneLineAcrossEveryMetricKind() = runTest {
         val store = WriteRefusingStore(RecordingStore())
