@@ -22,6 +22,7 @@ import us.tractat.kuilt.crdt.RgaOp
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.VersionVector
 import us.tractat.kuilt.crdt.piece
+import us.tractat.kuilt.math.plusOrNull
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.store.StoreKey
@@ -550,6 +551,24 @@ public class WarpLogRecordExporter(
      */
     private var durableSeqHighWater: Long = 0L
 
+    /**
+     * The seq and lamport an index on disk has claimed for this replica's mints, and so the
+     * highest of each a restart can mint past. Guarded by [lock]; it only rises.
+     *
+     * **Every id this exporter mints lies at or below both, before it is minted** (#3452). A turn
+     * publishes its ops to [appliedOps] before its write, and [snapshot] shows them as soon as they
+     * are in [log], so a record whose write never lands can already be held elsewhere. A restart
+     * that minted from what the keys hold would hand its id out again, to a different record:
+     * measured, the two records then carried one identical `RgaId`, and a union kept one of them.
+     * So [exportTurn] first writes an index claiming past every id it can mint ([claimMintsAhead]),
+     * and recovery raises the log to the claim it reads back.
+     *
+     * Raised only once the write carrying it has returned, and by recovery to what it read. Every
+     * index write restates it ([encodeIndex]), so a later one cannot lower the claim on disk below
+     * an id already minted.
+     */
+    private var mintClaim: MintClaim = MintClaim.NONE
+
     private var activeNumber: Long = 0
     private var activeOpCount: Int = 0
     private var nextSegmentNumber: Long = 1
@@ -670,6 +689,20 @@ public class WarpLogRecordExporter(
         private const val OPS_PER_RECORD = 2
 
         /**
+         * How far past the next turn's mints a claim reaches ([claimMintsAhead]), in seqs and
+         * lamports alike. A turn writes a new claim when less than half of it is left, so in steady
+         * state that is one small index write per `MINT_LEASE / 2` records, plus one before the
+         * first mint after each start.
+         *
+         * The cost of a larger lease is the gap a restart leaves: up to this many seqs this replica
+         * never mints, which the window's floor crosses ([Rga.dropWindowPastUnheld]), and as many
+         * lamports. The cost of a smaller one is an outage that also refuses the index write: a turn
+         * whose claim is refused mints nothing, so such an outage admits at least half a lease of
+         * records and then refuses them, where without a claim it admitted every one.
+         */
+        private const val MINT_LEASE = 1L shl 16
+
+        /**
          * How many drops-plus-refusals between summary lines — one line per buffer-worth of
          * churn at [DEFAULT_MAX_LOG_RECORDS].
          *
@@ -680,10 +713,32 @@ public class WarpLogRecordExporter(
         private const val DROP_REPORT_INTERVAL = 10_000L
     }
 
+    /** A seq and a lamport this replica may mint up to; see [mintClaim]. */
+    private data class MintClaim(val seq: Long, val lamport: Long) {
+        fun covers(other: MintClaim): Boolean = seq >= other.seq && lamport >= other.lamport
+
+        fun atLeast(other: MintClaim): MintClaim = MintClaim(maxOf(seq, other.seq), maxOf(lamport, other.lamport))
+
+        /** Both counters raised by [by], stopping at [Long.MAX_VALUE] rather than wrapping. */
+        fun plus(by: Long): MintClaim =
+            MintClaim(seq.plusOrNull(by) ?: Long.MAX_VALUE, lamport.plusOrNull(by) ?: Long.MAX_VALUE)
+
+        companion object {
+            val NONE = MintClaim(0L, 0L)
+        }
+    }
+
     /** One durable-store mutation. */
     private sealed interface StoreAction {
         /** Write [bytes] under [key]. */
         class Put(val key: StoreKey, val bytes: ByteArray) : StoreAction
+
+        /**
+         * Write the index [bytes], which claim [claim], and only once that write has returned raise
+         * [mintClaim] to it. The bytes restate the layout as it stands, so the write also leaves the
+         * index current.
+         */
+        class CommitClaim(val bytes: ByteArray, val claim: MintClaim) : StoreAction
 
         /**
          * Write [segment]'s [bytes] under [key], and only once that write has returned, advance durable
@@ -1470,6 +1525,7 @@ public class WarpLogRecordExporter(
         log = log.advanceClock(replica, recovered.lamportHighWater, recovered.seqHighWater)
         // The index on disk already claims it, so restating it claims nothing new.
         durableSeqHighWater = maxOf(durableSeqHighWater, recovered.seqHighWater)
+        mintClaim = mintClaim.atLeast(MintClaim(recovered.seqHighWater, recovered.lamportHighWater))
         sealedSegments.clear()
         sealedSegments.addAll(recovered.sealedSegments)
         if (recovered.activeNumber !in sealedSegments) sealedSegments += recovered.activeNumber
@@ -1498,6 +1554,8 @@ public class WarpLogRecordExporter(
         log = raised
         // What the index read claimed, or more where a segment read holds more: on disk either way.
         durableSeqHighWater = maxOf(durableSeqHighWater, recovered.seqHighWater)
+        // Read back from the store, so already durable: the claim the next turn must stay under.
+        mintClaim = mintClaim.atLeast(MintClaim(recovered.seqHighWater, recovered.lamportHighWater))
         durableSuppression = suppression
         sealedSegments.clear()
         sealedSegments.addAll(recovered.sealedSegments)
@@ -1644,6 +1702,11 @@ public class WarpLogRecordExporter(
      * which a [recover] against a store written with a larger [segmentOps] can produce.
      */
     private suspend fun exportTurn(records: List<LogRecord>, from: Int): TurnOutcome {
+        // Before anything is minted: a refused claim refuses the rest of the batch, as a refused
+        // read does, and the next call claims again.
+        claimMintsAhead(records.size - from)?.let { refused ->
+            return TurnOutcome(consumed = records.size - from, result = refused)
+        }
         var consumed = 0
         var accepted = 0
         var applied: List<RgaOp<LogRecord>> = emptyList()
@@ -1757,6 +1820,34 @@ public class WarpLogRecordExporter(
             consumed = consumed,
             result = if (result is ExportResult.Success) success(accepted) else result,
         )
+    }
+
+    /**
+     * Make sure an index on disk claims past every id a turn over [pending] records can mint, and
+     * return the [ExportResult.Failure] of the write when it had to make one and the store refused
+     * it. Must hold [writeMutex], and runs before the turn takes [lock] to mint (#3452).
+     *
+     * A turn mints at most `min(pending, maxRecords)` ids ([fitsInTurn]), each one seq and one
+     * lamport past the last. While the claim on disk reaches half a [MINT_LEASE] past that, this
+     * writes nothing. Otherwise it writes the index with the claim raised a whole lease past it,
+     * and only once that write returns may the turn mint: so an id is never in [log], in
+     * [snapshot] or on its way to [appliedOps] before a restart is bound to mint past it.
+     *
+     * A claim that cannot rise further, both counters at [Long.MAX_VALUE], writes nothing, and
+     * the insert then refuses the turn itself (#3431).
+     */
+    private suspend fun claimMintsAhead(pending: Int): ExportResult.Failure? {
+        val claim = lock.withLock {
+            val mints = minOf(pending, maxRecords).toLong()
+            val needed = MintClaim(log.seqHighWater(replica), log.lamport).plus(mints)
+            if (mintClaim.covers(needed.plus(MINT_LEASE / 2))) return null
+            val target = mintClaim.atLeast(needed.plus(MINT_LEASE))
+            StoreAction.CommitClaim(encodeIndex(claim = target), target)
+        }
+        val result = commit(listOf(claim)) { cause ->
+            logger.error(cause) { "WarpLogRecordExporter: the index write claiming the next ids failed; nothing is minted" }
+        }
+        return result as? ExportResult.Failure
     }
 
     /**
@@ -2347,6 +2438,10 @@ public class WarpLogRecordExporter(
         actions.forEach { action ->
             when (action) {
                 is StoreAction.Put -> store.write(action.key, action.bytes)
+                is StoreAction.CommitClaim -> {
+                    store.write(INDEX_KEY, action.bytes)
+                    lock.withLock { mintClaim = mintClaim.atLeast(action.claim) }
+                }
                 is StoreAction.CommitActive -> {
                     store.write(action.key, action.bytes)
                     lock.withLock {
@@ -2847,6 +2942,7 @@ public class WarpLogRecordExporter(
         active: Long = activeNumber,
         next: Long = nextSegmentNumber,
         seqHighWater: Long = durableSeqHighWater,
+        claim: MintClaim = mintClaim,
     ): ByteArray = cbor.encodeToByteArray(
         indexSerializer,
         LogSegmentIndex(
@@ -2854,8 +2950,8 @@ public class WarpLogRecordExporter(
             active = active,
             next = next,
             retired = retired.sorted(),
-            lamportHighWater = log.lamport,
-            seqHighWater = seqHighWater,
+            lamportHighWater = maxOf(log.lamport, claim.lamport),
+            seqHighWater = maxOf(seqHighWater, claim.seq),
         ),
     )
 
