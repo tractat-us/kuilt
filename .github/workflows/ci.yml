@@ -133,7 +133,7 @@ jobs:
         # dokka-inputs=true — it skips the build but MUST still pass Dokka, because a
         # bad module.md header silently freezes the whole Pages deploy (#1061).
         env:
-          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
           MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
@@ -150,20 +150,27 @@ jobs:
               FILES=$(git diff --name-only "$BEFORE" "${{ github.event.after }}" 2>/dev/null || echo "")
               ;;
             merge_group)
-              # The group commit against the `main` it was built on: every entry in the group,
-              # and nothing already on `main` (#3478). There is no PR diff on this event.
-              # Unlike the two arms above, a failed diff here does NOT fall through to "no
-              # changed files", which would also clear dokka-inputs and spike-inputs and so skip
-              # the Dokka and spike gates. The group is the last check before `main`, so it
-              # fails safe and runs everything.
-              BASE="$MERGE_GROUP_BASE_SHA"; HEAD_SHA="$MERGE_GROUP_HEAD_SHA"
-              # The checkout holds 50 commits of the group branch, and a group is at most a
-              # handful of squashes over its base, so BASE is normally present already. Fetch it
-              # if not: a two-commit diff needs only the two commits, not the history between.
-              git cat-file -e "${BASE}^{commit}" 2>/dev/null \
-                || git fetch --no-tags --depth=1 origin "$BASE" || true
-              if ! FILES=$(git diff --name-only "$BASE" "$HEAD_SHA"); then
-                echo "::warning::merge_group: could not diff $BASE..$HEAD_SHA — treating as not docs-only, run Dokka + spike compile."
+              # The group commit against `main`, which is everything this run's success would
+              # merge (#3478). NOT against `merge_group.base_sha`: in a queue of several
+              # entries that is the PREVIOUS entry's group commit, so the diff would hold only
+              # this entry's own files. Under HEADGREEN a passing head merges every entry ahead
+              # of it, so a docs-only head over code entries would skip the build and land them
+              # unbuilt. The merge-base with the fetched base branch is the `main` the queue
+              # stacked on, so the diff spans every entry not yet on `main`. An entry ahead that
+              # has since merged is on `main`, and was built when it was the head.
+              #
+              # Unlike the two arms above, a failure here does NOT fall through to "no changed
+              # files", which would also clear dokka-inputs and spike-inputs and skip those
+              # gates. The group is the last check before `main`, so a failed fetch, merge-base
+              # or diff runs everything.
+              HEAD_SHA="$MERGE_GROUP_HEAD_SHA"; BASE_REF="$MERGE_GROUP_BASE_REF"
+              # 50 commits of each side covers a queue of entries over a `main` that has moved.
+              if git fetch --no-tags --depth=50 origin "$BASE_REF" \
+                && BASE=$(git merge-base "$HEAD_SHA" FETCH_HEAD) \
+                && FILES=$(git diff --name-only "$BASE" "$HEAD_SHA"); then
+                echo "merge_group: diffing $BASE..$HEAD_SHA, the merge-base with $BASE_REF."
+              else
+                echo "::warning::merge_group: could not diff $HEAD_SHA against $BASE_REF — treating as not docs-only, run Dokka + spike compile."
                 { echo "docs-only=false"; echo "dokka-inputs=true"; echo "spike-inputs=true"; } >> "$GITHUB_OUTPUT"; exit 0
               fi
               ;;
@@ -271,8 +278,9 @@ jobs:
       # the native targets cold. build-jvm still compiles the native main sources
       # (via assemble/build), so it needs the toolchain too. Keyed on the
       # toolchain-defining files; shared key with build-native (same cache).
-      - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v6
+      - name: Restore Kotlin/Native (~/.konan)
+        id: konan
+        uses: actions/cache/restore@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -394,6 +402,18 @@ jobs:
           -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
+      # Only `main` writes ~/.konan, as with the Gradle cache above (#3478, #3115). A plain
+      # actions/cache step saves on any key miss whatever the ref. On 2026-11-16 two PR runs
+      # had each written a 404 MB konan-Linux entry under their refs/pull/<N>/merge, which
+      # nothing else can read, while the store sat at 11.6 GB against its 10 GB limit and
+      # evicted `main`'s entries to make room. A merge-group ref would do the same.
+      - name: Save Kotlin/Native (~/.konan)
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
+
       - name: Stamp invariance — a changed version re-runs only what reads it (#3464)
         # The second pass over the build above: the same compile and JVM test tasks again at a
         # different -Pversion, failing on any task outside .github/stamp-invariance-allowlist.txt
@@ -458,8 +478,9 @@ jobs:
           gradle-version: wrapper
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
-      - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v6
+      - name: Restore Kotlin/Native (~/.konan)
+        id: konan
+        uses: actions/cache/restore@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -539,6 +560,14 @@ jobs:
           -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
+      # Only `main` writes ~/.konan; build-jvm's save step says why (#3478, #3115).
+      - name: Save Kotlin/Native (~/.konan)
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
+
       - name: Kill jstack heartbeat
         if: always()
         run: |
@@ -607,8 +636,9 @@ jobs:
 
       # Dokka analyses every target's main sources (incl. the native source sets),
       # so it needs the Kotlin/Native toolchain — same konan cache as the build jobs.
-      - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v6
+      - name: Restore Kotlin/Native (~/.konan)
+        id: konan
+        uses: actions/cache/restore@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -629,6 +659,14 @@ jobs:
         # NOT the full-site `dokkaGenerate` (which also runs the cross-module link/merge
         # pass) — the module-doc build is what parses module.md + KDoc and is far faster.
         run: ./gradlew dokkaGenerateModuleHtml --max-workers=2
+
+      # Only `main` writes ~/.konan; build-jvm's save step says why (#3478, #3115).
+      - name: Save Kotlin/Native (~/.konan)
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
 
   # ── test-result-parity ──────────────────────────────────────────────────────
   # The one place a JVM result and a wasm result exist on the same machine (#2185).
@@ -1258,8 +1296,9 @@ jobs:
       # here normally restores a toolchain the nightly already warmed. No Android SDK
       # step: the macos-latest image ships one, and apple-nightly.yml configures the
       # same Android library modules without it.
-      - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v6
+      - name: Restore Kotlin/Native (~/.konan)
+        id: konan
+        uses: actions/cache/restore@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -1278,6 +1317,14 @@ jobs:
           --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      # Only `main` writes ~/.konan; build-jvm's save step says why (#3478, #3115).
+      - name: Save Kotlin/Native (~/.konan)
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
 
   # ── ci-required ────────────────────────────────────────────────────────────
   # The SOLE required status check. Aggregates detect + build-jvm + build-native
@@ -1373,8 +1420,10 @@ jobs:
           fi
           # merge_group, push and workflow_dispatch carry no pull_request payload, so the draft
           # expression above renders empty and those runs fall through to the gate below,
-          # judged by exactly the rules a ready PR is (#3478). The queue merges a group only on
-          # this job's success on the group commit, so this is the check the ruleset names.
+          # judged by exactly the rules a ready PR is (#3478). The queue waits on this job for
+          # each entry's group commit, and under HEADGREEN the head entry's success alone merges
+          # every entry ahead of it too. That is why `detect` classifies a group against `main`
+          # rather than against the entry before it.
           echo "event: ${{ github.event_name }}"
 
           DETECT="${{ needs.detect.result }}"
