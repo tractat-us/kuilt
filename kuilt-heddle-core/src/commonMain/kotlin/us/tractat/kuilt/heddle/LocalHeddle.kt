@@ -762,7 +762,10 @@ public class LocalHeddle private constructor(
         // and the cost arrives as an overrun at complete.
         val (funded, minted) = (if (base.roomFor(path, reservation)) fund(base, reservation) else null)
             ?: return@atomically AcquireOutcome.Acquired(open(leaf, path, reservation = 0L, startedAt))
-        ledger = observeAndDelegate(funded, path, reservation, seen)
+        val delegated = observeAndDelegate(funded, path, reservation, seen)
+        // An edge whose seat would pass the position limit has no room: the lease opens at zero (design §7.1).
+        if (delegated.through < path.size) return@atomically AcquireOutcome.Acquired(open(leaf, path, reservation = 0L, startedAt))
+        ledger = delegated.ledger
         forcedMints += minted
         AcquireOutcome.Acquired(open(leaf, path, reservation, startedAt))
     }
@@ -801,8 +804,12 @@ public class LocalHeddle private constructor(
             Supply.Exhausted -> return@atomically doesNotFit
         }
         if (!base.roomFor(current.path, amount)) return@atomically doesNotFit
+        // An edge no seat could be made for, which only a lease admitted at zero crosses (design §7.1).
+        if (current.path.any { base.gauge(it) == null }) return@atomically doesNotFit
         val seen = observedWaiting(base, waiting, running = current.lease.leaf, amount)
-        ledger = observeAndDelegate(funded, current.path, amount, seen)
+        ledger = observeAndDelegate(funded, current.path, amount, seen).also {
+            check(it.through == current.path.size) { "the extension of $lease down a seated path stopped at edge ${it.through}" }
+        }.ledger
         open[lease] = current.copy(lease = current.lease.copy(reserved = checkedAdd(current.lease.reserved, amount)))
         LeaseOutcome.Done(charged = 0L, overrun = 0L, unrecorded = 0L)
     }
@@ -845,16 +852,21 @@ public class LocalHeddle private constructor(
         val funding = if (overrun in 1L..MAX_RECORDED_OVERRUN && reach.isNotEmpty()) fund(ledger, overrun) else null
         // What the overrun is recorded down: [reach], unless it is above the cap or the root cannot
         // fund it in whole, when it is recorded nowhere. The lease still closes either way.
-        val recorded = if (overrun > 0L && funding == null) emptyList() else reach
-        val unrecorded = if (overrun > 0L && recorded.isEmpty()) overrun else 0L
-        val toLeaf = recorded.size == path.size
+        var recorded = if (overrun > 0L && funding == null) emptyList() else reach
         var local = ledger
         var minted = 0
         if (funding != null) {
             val seen = observedWaiting(local, waiting, running = current.lease.leaf, overrun)
-            minted = funding.second
-            local = observeAndDelegate(funding.first, recorded, overrun, seen)
+            val delegated = observeAndDelegate(funding.first, recorded, overrun, seen)
+            // An edge no seat could be made for stops the overrun above it (design §7.1).
+            recorded = recorded.subList(0, delegated.through)
+            if (recorded.isNotEmpty()) {
+                minted = funding.second
+                local = delegated.ledger
+            }
         }
+        val unrecorded = if (overrun > 0L && recorded.isEmpty()) overrun else 0L
+        val toLeaf = recorded.size == path.size
         // What the leaf holds for this lease, and what of it is charged there; the rest goes back up.
         val atLeafHeld = if (toLeaf) checkedAdd(reserved, overrun) else reserved
         val atLeafCharged = if (toLeaf) actualCost else reserved
@@ -883,25 +895,37 @@ public class LocalHeddle private constructor(
     /**
      * [amount] delegated down [path] from [start], observing [seen] at each group first: the seat
      * and wake step the acquire's pick runs there ([FairShareAllocator.settle]), then the
-     * delegation, which seats an unseated edge against [seen] too. A refusal is a bug: [path] is a
-     * live lineage the caller checked.
+     * delegation, which seats an unseated edge against [seen] too.
+     *
+     * It stops, and never throws, at the first edge no seat can be made for, since that seat would
+     * pass the position limit (design §7.1): [Delegated.through] is how many edges it crossed, and
+     * [Delegated.ledger] holds those. Any other refusal is a bug: [path] is a live lineage the
+     * caller checked.
      */
     private fun observeAndDelegate(
         start: EntitlementLedger,
         path: List<AttachmentId>,
         amount: Long,
         seen: (AttachmentId) -> Demand,
-    ): EntitlementLedger {
+    ): Delegated {
         var local = start
-        for (edge in path) {
+        for ((index, edge) in path.withIndex()) {
             val parent = checkNotNull(local.record(edge)) { "charged path edge ${edge.value} has no record" }.parent
             local = allocator.settle(parent, local, seen)
+            if (local.gauge(edge) == null) {
+                val seated = allocator.seatUnseated(parent, local, seen)
+                if (seated.gauge(edge) == null) return Delegated(local, index)
+                local = seated
+            }
             local = checkNotNull(seatThenDelegate(local, listOf(edge), amount, seen)) {
                 "the delegation of $amount down ${edge.value}, a live lineage, was refused"
             }
         }
-        return local
+        return Delegated(local, path.size)
     }
+
+    /** [observeAndDelegate]'s answer: the ledger, delegated down the first [through] edges of the path. */
+    private class Delegated(val ledger: EntitlementLedger, val through: Int)
 
     /**
      * Close [lease] without charging it: everything reserved goes back up the path.
