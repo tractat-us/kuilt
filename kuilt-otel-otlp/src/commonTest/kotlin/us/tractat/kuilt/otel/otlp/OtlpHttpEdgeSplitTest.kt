@@ -12,6 +12,7 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import kotlinx.io.bytestring.ByteString
 import kotlinx.io.bytestring.toHexString
 import kotlinx.serialization.ExperimentalSerializationApi
@@ -91,16 +92,25 @@ class OtlpHttpEdgeSplitTest {
         val accepted: List<Post> get() = posts.filterIndexed { i, _ -> statuses.getOrNull(i)?.isSuccess() == true }
     }
 
-    /** Counts durable writes per sent-set key family (`spans`, `logs`, `metrics`). */
+    /**
+     * Counts durable writes per sent-set key family (`spans`, `logs`, `metrics`). Every read and
+     * write first yields, as a real store suspends on I/O: so a cancelled caller is refused at the
+     * store unless it is shielded, and two sends on one edge interleave unless something serializes
+     * them. An in-memory store never suspends, and would hide both.
+     */
     private class CountingStore(private val delegate: DurableStore = InMemoryDurableStore()) : DurableStore {
         val writes = mutableMapOf<String, Int>()
         var refuseNextMetricWrite = false
         var refusedWrites = 0
             private set
 
-        override suspend fun read(key: StoreKey): ByteArray? = delegate.read(key)
+        override suspend fun read(key: StoreKey): ByteArray? {
+            yield()
+            return delegate.read(key)
+        }
 
         override suspend fun write(key: StoreKey, bytes: ByteArray) {
+            yield()
             val family = key.name.removePrefix("otlp.sent.").substringBefore('@')
             if (family == "metrics" && refuseNextMetricWrite) {
                 refuseNextMetricWrite = false
@@ -384,6 +394,27 @@ class OtlpHttpEdgeSplitTest {
         assertAll(*checks.toTypedArray())
     }
 
+    /**
+     * Two stamped copies of one span id can sit in one batch (see [SpanRecord]). Each must carry the
+     * span's links once, as an unsplit request always did, not once per copy.
+     */
+    @Test
+    fun twoCopiesOfOneSpanIdEachCarryItsLinksOnce() = runTest {
+        val checks = mutableListOf<() -> Unit>()
+        for (wire in OtlpWireFormat.entries) {
+            val collector = Collector(wire)
+            val copies = linkedSetOf(span(7), span(7).copy(name = "span-7-restamped"))
+            val link = SpanLink(fromSpanId = id8(7), linkedTraceId = ByteString(ByteArray(16) { 1 }), linkedSpanId = id8(6))
+            edge(collector, CountingStore(), wire, cap = 2048).send(copies, listOf(link))
+            val post = collector.posts.single()
+            checks += listOf(
+                { assertEquals(listOf(7, 7), post.items, "$wire: precondition, both copies went in one request") },
+                { assertEquals(listOf(listOf(6), listOf(6)), post.linkLists, "$wire: each copy carries the link once") },
+            )
+        }
+        assertAll(*checks.toTypedArray())
+    }
+
     // ── 8. Metric resend after a lost write ─────────────────────────────────────
 
     @Test
@@ -434,6 +465,30 @@ class OtlpHttpEdgeSplitTest {
     }
 
     // ── A concurrent writer between chunks ───────────────────────────────────────
+
+    /**
+     * Two sends on one edge at once, each recording its ids. The store yields inside every read and
+     * write, so unless the edge serializes its read-merge-write the two interleave: both read the
+     * same set, and the second write drops the first's ids.
+     */
+    @Test
+    fun twoConcurrentSendsOnOneEdgeKeepEachOthersIds() = runTest {
+        val collector = Collector(OtlpWireFormat.JSON)
+        val store = CountingStore()
+        val edge = edge(collector, store, OtlpWireFormat.JSON, cap = 2048)
+        val a = (1..40).toList()
+        val b = (101..140).toList()
+        val first = launch { edge.sendSignal(Signal.LOGS, a) }
+        val second = launch { edge.sendSignal(Signal.LOGS, b) }
+        first.join()
+        second.join()
+        val disk = onDisk(store, Signal.LOGS)
+        assertAll(
+            { assertTrue(collector.posts.size >= 6, "precondition: both sends split, ${collector.posts.size} POSTs") },
+            { assertEquals(2, store.writes["logs"], "precondition: each send wrote once") },
+            { assertEquals((a + b).toSet(), disk, "neither send's write drops the other's ids") },
+        )
+    }
 
     /**
      * A second edge on the same store and endpoint (#1053) writes while the first is between
@@ -516,6 +571,8 @@ private class Post(
     val values: Map<Int, String>,
     val resource: Map<String, String>?,
     val scope: Pair<String, String>?,
+    /** Each span's links, in span order; unlike [links], keeps two copies of one span id apart. */
+    val linkLists: List<List<Int>> = emptyList(),
 )
 
 private fun decode(path: String, wire: OtlpWireFormat, raw: ByteArray): Post = when (wire) {
@@ -526,6 +583,7 @@ private fun decode(path: String, wire: OtlpWireFormat, raw: ByteArray): Post = w
                 path, raw.size, ss.spans.map { it.spanId.hexIndex() },
                 ss.spans.filter { it.links.isNotEmpty() }.associate { s -> s.spanId.hexIndex() to s.links.map { it.spanId.hexIndex() } },
                 emptyMap(), jsonAttrs(rs.resource?.attributes), ss.scope?.let { it.name to it.version },
+                linkLists = ss.spans.map { s -> s.links.map { it.spanId.hexIndex() } },
             )
         }
         "/v1/logs" -> lenient.decodeFromString(LogsRequest.serializer(), raw.decodeToString()).resourceLogs.single().let { rl ->
@@ -552,6 +610,7 @@ private fun decode(path: String, wire: OtlpWireFormat, raw: ByteArray): Post = w
                 path, raw.size, ss.spans.map { it.spanId.index() },
                 ss.spans.filter { it.links.isNotEmpty() }.associate { s -> s.spanId.index() to s.links.map { it.spanId.index() } },
                 emptyMap(), protoAttrs(rs.resource?.attributes), ss.scope?.let { it.name to it.version },
+                linkLists = ss.spans.map { s -> s.links.map { it.spanId.index() } },
             )
         }
         "/v1/logs" -> ProtoBuf.decodeFromByteArray(ProtoLogsRequest.serializer(), raw).resourceLogs.single().let { rl ->
