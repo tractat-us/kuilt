@@ -29,6 +29,7 @@ class WarpLogRecordExporterUnreadSegmentFloorTest {
 
     private companion object {
         const val MAX_RECORDS = 10
+        const val SEGMENT_OPS = 8
     }
 
     private val replica = ReplicaId("A")
@@ -46,7 +47,7 @@ class WarpLogRecordExporterUnreadSegmentFloorTest {
         store = store,
         maxRecords = MAX_RECORDS,
         bufferPolicy = BufferPolicy.DROP_OLDEST,
-        segmentOps = 8,
+        segmentOps = SEGMENT_OPS,
     )
 
     /** What the store and the log look like at the end of a run. */
@@ -75,7 +76,7 @@ class WarpLogRecordExporterUnreadSegmentFloorTest {
         return Layout(segments.size, compactCarrying, store.residentBytes(), log.compactedIds.size)
     }
 
-    private suspend fun run(refuseOnce: Boolean): Run {
+    private suspend fun run(refuseOnce: Boolean, between: Int = 300, after: Int = 300): Run {
         val backing = RecordingStore()
         val writer = exporterFor(backing)
         var failures = 0
@@ -85,12 +86,12 @@ class WarpLogRecordExporterUnreadSegmentFloorTest {
         val restarted = exporterFor(refusing)
         restarted.recover()
         refusing.heal()
-        repeat(300) { if (restarted.export(record(100 + it)) != ExportResult.Success) failures++ }
+        repeat(between) { if (restarted.export(record(100 + it)) != ExportResult.Success) failures++ }
         val before = restarted.snapshot()
 
         val clean = exporterFor(backing)
         clean.recover()
-        repeat(300) { if (clean.export(record(1000 + it)) != ExportResult.Success) failures++ }
+        repeat(after) { if (clean.export(record(1000 + it)) != ExportResult.Success) failures++ }
         val after = clean.snapshot()
         return Run(
             refusals = refusing.refusals,
@@ -130,6 +131,48 @@ class WarpLogRecordExporterUnreadSegmentFloorTest {
             { assertEquals(control.layout, refused.layout, "the refused run ends in the control's layout") },
             { assertEquals(control.visible, refused.visible, "and holds the same records") },
         )
+    }
+
+    /**
+     * The unread segment comes back **before** the window has turned over: [between] exports, fewer
+     * than [MAX_RECORDS], between the refused start and the clean one. At the default buffer of
+     * 10,000 records this is the common case. The returned records sort after everything minted
+     * since the refused start, since they are siblings with a lower lamport, so the window reaches
+     * newer records first. Measured before the fix at 5 exports: 34 keys, 30 pinned, 286 Compact
+     * ids, and the count still growing, 34/64/94 keys at 300/600/900 exports; at 1 export, 5 keys
+     * with nothing pinned, which is the pass phase and stays flat.
+     */
+    @Test
+    fun aSegmentReadBackBeforeTheWindowTurnsEndsInTheControlsLayout() = runTest {
+        for (between in listOf(1, 5, 9)) {
+            val control = run(refuseOnce = false, between = between, after = 600)
+            val refused = run(refuseOnce = true, between = between, after = 600)
+            val longer = run(refuseOnce = true, between = between, after = 900)
+            assertAll(
+                { assertEquals(1, refused.refusals, "the rig at $between: segment 1's read was refused once") },
+                { assertEquals(0, refused.failures + control.failures, "every export succeeded at $between") },
+                { assertEquals(0, control.layout.compactCarrying, "the control pins nothing at $between") },
+                // Not the control's layout byte for byte: the refused run's window passes land on
+                // other exports, so up to a pass's worth of tombstones, 2 * MAX_RECORDS ops, may
+                // still be waiting in sealed segments the control has already retired.
+                { assertEquals(0, refused.layout.compactCarrying, "a segment is pinned at $between") },
+                { assertEquals(0, refused.layout.compactedIds, "an own drop became a Compact at $between") },
+                {
+                    assertTrue(
+                        refused.layout.segmentKeys <= control.layout.segmentKeys + 2 * MAX_RECORDS / SEGMENT_OPS + 1,
+                        "${refused.layout.segmentKeys} keys against the control's ${control.layout.segmentKeys} at $between",
+                    )
+                },
+                { assertEquals(control.visible, refused.visible, "and holds the same records at $between") },
+                {
+                    assertEquals(
+                        refused.layout.segmentKeys,
+                        longer.layout.segmentKeys,
+                        "the key count kept growing at $between",
+                    )
+                },
+            )
+        }
     }
 
     /**

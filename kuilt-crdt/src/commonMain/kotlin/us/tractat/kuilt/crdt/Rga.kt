@@ -858,9 +858,13 @@ public class Rga<V> private constructor(
      * one `(RgaId -> RgaId)` pair each.
      *
      * Only [self]'s floor entry is ever raised. Raising a foreign author's would annihilate a
-     * dot that author may not have minted yet; this replica, by contrast, can never hold an
-     * undelivered dot of its own. (The reason is *not* that a single-author log is somehow
-     * safe — see [compactedBelow], where the reorder is shown to bite within one author too.)
+     * dot that author may not have minted yet. [self]'s own dots, by contrast, were all minted
+     * here, so every one at or below a seq it drops exists. Some may not be held: a state rebuilt
+     * from part of its log and raised by [advanceClock] lacks the rest, and they can arrive later.
+     * That is why this walk stops at the first one it does not hold; [dropWindowPastUnheld]
+     * crosses them for a caller that drops in arrival order. (The reason is *not* that a
+     * single-author log is somehow safe — see [compactedBelow], where the reorder is shown to bite
+     * within one author too.)
      *
      * **The floor's positional reroot degrades to [RgaId.HEAD].** A floor writes no
      * [RgaOp.Compact.positions], so a survivor whose predecessor this call floored away
@@ -897,16 +901,20 @@ public class Rga<V> private constructor(
      * has a hole in [self]'s seqs at each of them, and [dropWindow]'s floor walk stops at the first
      * hole: every later own drop is recorded as an explicit [RgaOp.Compact], one pair per id, for as
      * long as the ops stay away, and the pairs already recorded stay after they return. Here the
-     * walk crosses a run of held-nowhere seqs when the next seq above the run is one being dropped
-     * (or already compacted), and so a windowed log keeps its O(authors) floor through the hole.
+     * walk crosses a run of held-nowhere seqs when the next seq above the run is one this call drops,
+     * and so a windowed log keeps its O(authors) floor through the hole. A seq already compacted
+     * does not license a crossing, since a `Compact` may be a peer's, over drops nobody here
+     * chose; it extends the floor only where it is contiguous with it, as in [dropWindow].
      *
      * **What it costs: the ops in a crossed hole are dropped too.** When they come back — a later
      * [piece] with the store or the peer that holds them — the floor purges them, and a peer that
      * absorbs the floor purges its copy as well. That is the right answer only for a caller whose
      * window drops this replica's records **oldest-minted first**, so that a held-nowhere record
      * minted before a dropped one would have been dropped before it. Seq order is mint order for one
-     * author, so the caller's drop order is what decides it, and this state cannot see that order.
-     * A drop-oldest buffer of records appended at the tail is the case it was made for.
+     * author, but the list need not be: a state rebuilt past a hole inserts its next records after
+     * the tail it loaded, and the hole's ops, pieced back, sort after them. So a caller means it
+     * only if it drops in arrival order, every own op minted before one it drops included;
+     * `WarpLogRecordExporter` widens each window pass to do exactly that.
      *
      * A run with no dropped seq above it is left alone, so a hole whose ops are newer than every
      * drop stays open and its ops are admitted when they return. Only [self]'s entry moves, as in
@@ -959,9 +967,11 @@ public class Rga<V> private constructor(
         }
         val known = (steppable + held).filter { it > floorSeq }.sorted()
         for (seq in known) {
-            val contiguous = seq == floorSeq + 1L
-            if (!contiguous && walk == OwnFloorWalk.CONTIGUOUS) break
-            if (seq !in steppable) break
+            // A gap is crossed only to a seq THIS call drops: a Compact, possibly a peer's over
+            // this replica's dots, records a drop someone made earlier, not one the caller chose
+            // now, so it may extend the floor only where it is contiguous with it.
+            val licensed = if (seq == floorSeq + 1L) seq in steppable else walk == OwnFloorWalk.ACROSS_UNHELD && seq in ownSeqs
+            if (!licensed) break
             floorSeq = seq
         }
         return floorSeq

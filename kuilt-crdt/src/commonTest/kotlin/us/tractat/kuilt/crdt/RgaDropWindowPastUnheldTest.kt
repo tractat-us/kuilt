@@ -88,17 +88,40 @@ class RgaDropWindowPastUnheldTest {
         )
     }
 
-    /** The wedge already recorded heals: a hole below an own seq a Compact took is crossed too. */
+    /**
+     * A seq already compacted does not license a crossing: only a seq this call drops does. The
+     * `Compact` here is a peer's, which held this replica's 5 and 6 and windowed them away, so
+     * nobody here chose to drop 2 to 4. Crossing to 5 would floor them, and when they came back
+     * they would be purged.
+     */
     @Test
-    fun theFloorCrossesAHoleBelowAnAlreadyCompactedSeq() {
-        val (state, minted) = holed(1, 4, 5, 6)
-        val (wedged, _) = requireNotNull(state.dropWindow(me, ids(minted, 4)))
-        val (healed, _) = requireNotNull(wedged.dropWindowPastUnheld(me, ids(minted, 1)))
+    fun aPeersCompactOverOwnDotsDoesNotLicenseACrossing() {
+        val (state, minted) = holed(1)
+        val peerHeld = minted.filter { it.id.seq >= 5L }.fold(Rga.empty<String>()) { s, op -> s.apply(op) }
+        val (_, peerPatch) = requireNotNull(peerHeld.dropWindow(peer, ids(minted, 5, 6)))
+        val merged = state.piece(peerPatch.delta)
+        val (withNew, _) = merged.insertAllAfter(me, minted.first().id, listOf("7"))
+        val (dropped, _) = requireNotNull(withNew.dropWindowPastUnheld(me, ids(minted, 1)))
+        val returned = minted.filter { it.id.seq in 2L..4L }.fold(Rga.empty<String>()) { s, op -> s.apply(op) }
         assertAll(
-            { assertEquals(0L, wedged.compactedBelow[me], "the rig: seq 4 went to a Compact") },
-            { assertEquals(ids(minted, 4), wedged.compactedIds) },
-            { assertEquals(4L, healed.compactedBelow[me], "the floor crosses the hole to the compacted 4") },
-            { assertEquals(listOf("5", "6"), healed.toList()) },
+            // The rig: the peer's Compact took 5 and 6, and 2 to 4 are a hole between them and 1.
+            { assertEquals(ids(minted, 5, 6), merged.compactedIds, "the peer's Compact took 5 and 6") },
+            { assertEquals(listOf("1"), merged.toList()) },
+            // The property.
+            { assertEquals(1L, dropped.compactedBelow[me], "the floor stops at the dropped 1") },
+            { assertEquals(setOf("2", "3", "4", "7"), dropped.piece(returned).toList().toSet(), "2 to 4 are admitted when they return") },
+        )
+    }
+
+    /** A compacted seq contiguous with the floor still extends it, as in [Rga.dropWindow]. */
+    @Test
+    fun aCompactedSeqContiguousWithTheFloorStillExtendsIt() {
+        val (state, minted) = holed(1, 2, 5, 6)
+        val (compacted, _) = requireNotNull(state.dropWindow(me, ids(minted, 2)))
+        val (dropped, _) = requireNotNull(compacted.dropWindowPastUnheld(me, ids(minted, 1)))
+        assertAll(
+            { assertEquals(ids(minted, 2), compacted.compactedIds, "the rig: 2 went to a Compact") },
+            { assertEquals(2L, dropped.compactedBelow[me], "the floor steps 1 then the compacted 2, and stops at the hole") },
         )
     }
 

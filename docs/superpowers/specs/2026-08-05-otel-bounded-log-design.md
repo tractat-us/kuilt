@@ -191,6 +191,21 @@ halve the bytes and is equivalent *for a prefix drop*. It is unsound: `piece` me
 (`Rga.kt:216-220`). A replica recording HEAD and a peer recording the real `after` collide,
 last-writer-wins, and the two replicas diverge.
 
+### Addendum (#3447): drop order is arrival order, not list order
+
+This section assumed the window drops records in the order they arrived, which is mint order
+for one author. It drops in **list** order, and a restart can reorder the list. A replica
+rebuilt past an unread segment is raised past that segment's seqs (#3410), and inserts its next
+records after the tail it loaded. When the segment is read back, its records are siblings of those
+newer records with a lower lamport, so they sort after them. The floor walk then stops at the hole
+while it is unread, and at the returned records once they are back. Every own drop becomes a
+`Compact`, and every segment carrying one stays pinned.
+
+The intent is arrival order, so the exporter now makes it explicit. Each window pass also drops
+every own record that arrived before one it drops. It drops through `Rga.dropWindowPastUnheld`,
+whose floor crosses own seqs the state does not hold. A crossing is licensed only by a seq that
+pass drops, never by a `Compact` that may be a peer's.
+
 ## 4. `Quilted.causalFloor()` — a capability, not an `Rga` patch
 
 `Quilter` recomputes `contiguousFrontier(_state.value.causalDots())` on **every state
