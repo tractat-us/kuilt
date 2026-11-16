@@ -547,7 +547,9 @@ public class WarpSpanExporter(
      * conflate their causal links, and two adds sharing the set's dot make a merge drop **both** spans.
      *
      * A failed or cancelled turn publishes nothing, so memory never holds a span the turn could not
-     * write, and there is nothing to roll back. The clock is not rolled back either: its sequence stays
+     * write, and there is nothing to roll back. It does keep the set dot it minted, privately, so the
+     * next span never shares it with a failed write that commits late; the next span's write carries
+     * that dot. The clock is not rolled back either: its sequence stays
      * advanced and its frontier keeps the unpublished dot, so the next stamp can name a predecessor that
      * never resolves. That loses a real edge too: [WarpCausalClock.tick] collapses the frontier, so the
      * next span's only path to earlier spans ran through that dot. The lost edge is tracked by #3028.
