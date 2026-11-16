@@ -4,6 +4,7 @@ import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.crdt.PNCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.store.DurableStore
+import us.tractat.kuilt.store.StoreKey
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -186,6 +187,49 @@ class WarpMetricExporterUpDownSumTest {
             { assertEquals(0L, before, "the rig: nothing read yet") },
             { assertEquals(7L, restarted.upDownSumValue(inFlight)) },
         )
+    }
+
+    /**
+     * A refused read of an up-down kind admits no set of it (#3390, #3453, for the new kinds). A set
+     * applied to the fresh map a refused read leaves would start this replica's slot again from
+     * nothing beside the durable one, and its write would replace the durable share: a share of 7
+     * read back as 3. One arm per map; each asserts its rig refused the read and that the durable
+     * share was there to lose.
+     */
+    @Test
+    fun aRefusedReadOfEitherUpDownKindAdmitsNoSetAndLeavesTheDurableShare() = runTest {
+        class Arm(val storeKey: String, val seed: suspend WarpMetricExporter.() -> Unit, val update: MetricUpdate, val read: (WarpMetricExporter) -> Double)
+        val arms = listOf(
+            Arm("otel.metrics.updown", { set(inFlight, 7L) }, MetricUpdate.SetUpDownSum(inFlight, 3L)) {
+                it.upDownSumValue(inFlight).toDouble()
+            },
+            Arm("otel.metrics.updown.double", { setUpDownSumDouble(inFlight, 7.0) }, MetricUpdate.SetUpDownSumDouble(inFlight, 3.0)) {
+                it.upDownSumDoubleValue(inFlight)
+            },
+        )
+        val checks = arms.flatMap { arm ->
+            val backing = RecordingStore()
+            exporter(a, backing).apply { arm.seed(this) }
+            val store = ReadRefusingStore(backing, StoreKey(arm.storeKey))
+            // No recover: the kind's first turn reads it, and the store refuses that read.
+            val onA = WarpMetricExporter(replica = a, store = store)
+            val writesBefore = backing.operations().count { it.kind == StoreOpKind.WRITE && it.key.name == arm.storeKey }
+            val result = onA.record(listOf(arm.update))
+            val writes = backing.operations().count { it.kind == StoreOpKind.WRITE && it.key.name == arm.storeKey } - writesBefore
+            val inMemory = arm.read(onA)
+            val restarted = arm.read(exporter(a, backing))
+            listOf<() -> Unit>(
+                { assertEquals(1, store.refusals, "${arm.storeKey}: the rig refused ${store.refusals} reads, not 1") },
+                {
+                    val partial = assertIs<MetricExportResult.Partial>(result, "${arm.storeKey}: a set over an unread kind reported $result")
+                    assertEquals(listOf(arm.update), partial.uncounted, "${arm.storeKey}: the set was counted")
+                },
+                { assertEquals(0.0, inMemory, "${arm.storeKey}: the set was applied to the map the refused read left") },
+                { assertEquals(0, writes, "${arm.storeKey}: the kind was written while its read was refused") },
+                { assertEquals(7.0, restarted, "${arm.storeKey}: the durable share was replaced") },
+            )
+        }
+        assertAll(*checks.toTypedArray())
     }
 
     /** Note test 4: an evicted series comes back at the level, not at the change. */

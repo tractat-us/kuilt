@@ -107,6 +107,63 @@ class WarpMetricExporterBatchTest {
         )
     }
 
+    private val inFlight = MetricKey("in_flight", MetricKind.UP_DOWN_SUM, mapOf("route" to "/a"))
+    private val inFlightB = MetricKey("in_flight", MetricKind.UP_DOWN_SUM, mapOf("route" to "/b"))
+    private val inFlightTwin = MetricKey("in_flight", MetricKind.GAUGE, mapOf("route" to "/a"))
+
+    /**
+     * Up-down sets and adds, both maps, and [MetricUpdate.Forget]s mixed with the other kinds,
+     * including a forget followed by a set of the very key it forgot, and a set that moves nothing
+     * (#3307). The batch must end where the same updates one by one end, in memory and on disk.
+     * Both exporters start from the same state, so each forget has a series to drop.
+     */
+    @Test
+    fun aBatchWithUpDownUpdatesAndForgetsEndsWhereOneByOneEnds() = runTest {
+        val seed = listOf(
+            MetricUpdate.SetUpDownSum(inFlight, 9L),
+            MetricUpdate.SetUpDownSumDouble(inFlightB, 2.5),
+            MetricUpdate.SetGauge(inFlightTwin, 9.0, timestamp = 1L),
+            MetricUpdate.IncrementSum(requests, 4L),
+        )
+        val batch = listOf(
+            MetricUpdate.SetUpDownSum(inFlight, 3L),
+            MetricUpdate.IncrementSum(requests, 1L),
+            MetricUpdate.Forget(inFlightTwin),
+            MetricUpdate.AddUpDownSum(inFlightB, -4L),
+            MetricUpdate.SetUpDownSumDouble(inFlightB, 0.75),
+            MetricUpdate.Forget(inFlight),
+            MetricUpdate.SetUpDownSum(inFlight, 5L),
+            MetricUpdate.SetGauge(queue, 2.0, timestamp = 2L),
+            MetricUpdate.AddUpDownSumDouble(inFlight, -1.25),
+            MetricUpdate.Forget(requests),
+            MetricUpdate.IncrementSum(requests, 2L),
+            MetricUpdate.SetUpDownSum(inFlightB, -4L),
+        )
+        val referenceStore = RecordingStore()
+        val reference = exporter(referenceStore).also { it.record(seed) }
+        val referenceResult = reference.applyOneByOne(batch)
+
+        val store = RecordingStore()
+        val batched = exporter(store).also { it.record(seed) }
+        val seeded = batched.snapshotAll()
+        val result = batched.record(batch)
+        val recovered = exporter(store).also { it.recover() }
+
+        assertAll(
+            { assertEquals(setOf(inFlight), seeded.upDownSums.keys, "the rig: the forgotten up-down series was held") },
+            { assertEquals(setOf(inFlightTwin), seeded.gauges.keys, "the rig: the gauge twin was held") },
+            { assertEquals(null, referenceResult, "control: one by one, every update succeeded") },
+            { assertEquals(MetricExportResult.Success, result) },
+            { assertEquals(reference.snapshotAll(), batched.snapshotAll(), "in memory") },
+            { assertEquals(reference.snapshotAll(), recovered.snapshotAll(), "on disk") },
+            { assertEquals(5L, batched.upDownSumValue(inFlight), "the set after the forget started from nothing") },
+            { assertEquals(-1.25, batched.upDownSumDoubleValue(inFlight)) },
+            { assertEquals(2L, batched.sumValue(requests), "the increment after the forget started from nothing") },
+            { assertEquals(-4L, batched.upDownSumValue(inFlightB)) },
+            { assertEquals(null, batched.gaugeValue(inFlightTwin), "the twin is gone") },
+        )
+    }
+
     @Test
     fun aBatchWritesNoKindItDoesNotTouch() = runTest {
         val store = RecordingStore()
