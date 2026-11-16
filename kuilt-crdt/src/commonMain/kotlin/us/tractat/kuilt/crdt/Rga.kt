@@ -902,9 +902,10 @@ public class Rga<V> private constructor(
      * hole: every later own drop is recorded as an explicit [RgaOp.Compact], one pair per id, for as
      * long as the ops stay away, and the pairs already recorded stay after they return. Here the
      * walk crosses a run of held-nowhere seqs when the next seq above the run is one this call drops,
-     * and so a windowed log keeps its O(authors) floor through the hole. A seq already compacted
-     * does not license a crossing, since a `Compact` may be a peer's, over drops nobody here
-     * chose; it extends the floor only where it is contiguous with it, as in [dropWindow].
+     * and so a windowed log keeps its O(authors) floor through the hole. A seq already compacted is
+     * crossable inside such a gap but never licenses a crossing by itself, since a `Compact` may be
+     * a peer's, over drops nobody here chose; on its own it extends the floor only where it is
+     * contiguous with it, as in [dropWindow].
      *
      * **What it costs: the ops in a crossed hole are dropped too.** When they come back — a later
      * [piece] with the store or the peer that holds them — the floor purges them, and a peer that
@@ -956,23 +957,22 @@ public class Rga<V> private constructor(
         // filter below tolerates. Without these the walk cannot step over them and the floor
         // wedges below the first one FOREVER (see the wedge test).
         val ownCompacted = compactedIds.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
-        val steppable = ownSeqs + ownCompacted
         var floorSeq = compactedBelow[self]
-        // Every own seq above the floor this state knows of, ascending. Under ACROSS_UNHELD the
-        // held ones join them, so a held, retained seq blocks a crossing rather than being skipped.
-        val held = if (walk == OwnFloorWalk.ACROSS_UNHELD) {
-            insertsById.keys.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
-        } else {
-            emptySet()
+        fun extendContiguous() {
+            while ((floorSeq + 1L) in ownSeqs || (floorSeq + 1L) in ownCompacted) floorSeq++
         }
-        val known = (steppable + held).filter { it > floorSeq }.sorted()
-        for (seq in known) {
-            // A gap is crossed only to a seq THIS call drops: a Compact, possibly a peer's over
-            // this replica's dots, records a drop someone made earlier, not one the caller chose
-            // now, so it may extend the floor only where it is contiguous with it.
-            val licensed = if (seq == floorSeq + 1L) seq in steppable else walk == OwnFloorWalk.ACROSS_UNHELD && seq in ownSeqs
-            if (!licensed) break
-            floorSeq = seq
+        extendContiguous()
+        if (walk == OwnFloorWalk.ACROSS_UNHELD) {
+            // Only a seq THIS call drops licenses a crossing. A compacted seq is no candidate at
+            // all: it may be a peer's Compact over this replica's dots, a drop nobody here chose,
+            // so it can neither license a crossing nor block one; inside a gap it is crossed with
+            // the rest. A held seq the call keeps does block, since the floor would purge it.
+            val held = insertsById.keys.mapNotNullTo(mutableSetOf()) { if (it.replicaId == self) it.seq else null }
+            for (seq in (ownSeqs + held).filter { it > floorSeq }.sorted()) {
+                if (seq !in ownSeqs) break
+                floorSeq = seq
+            }
+            extendContiguous()
         }
         return floorSeq
     }
