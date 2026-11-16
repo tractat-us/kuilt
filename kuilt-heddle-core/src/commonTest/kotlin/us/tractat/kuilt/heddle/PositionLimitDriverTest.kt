@@ -20,16 +20,20 @@ import kotlin.test.assertTrue
  * test reads the wake offsets out of [LocalHeddleState.allocatorMemory] and builds the sum itself,
  * rather than calling the production expression it is checking. Summing the stored `ticks` alone,
  * as this test first did (#3538), misses the issuance since the last checkpoint, the returns and
- * every wake offset. The run asserts that a wake offset was present at some step, so that part of
- * the sum is exercised.
+ * every wake offset. The run asserts that a wake offset was added into the load at some step, so
+ * that part of the sum is exercised. It counts only an offset [loadOf] actually adds, on an active
+ * child of the root: a departed edge keeps its offset in the allocator's memory until the next step
+ * at its parent, so "the memory holds an offset" can be true while no offset reaches the sum.
  *
  * The bound is §7.1's too: a landing is kept only if the load after it is at most `2¹²⁵` ticks,
  * and the step's own charge can then add one grant and one overrun on top. That is
  * [STEP_CHARGE]. The limit is written out here, not read from [POSITION_LIMIT], so a weakened
  * constant reds this test instead of moving its bound along with it. "Inside 128 bits", the bound
- * this test first used, is four times the limit. Even with every load check in production deleted,
- * this run peaks at about 0.59 of the limit (#3538). The targeted tests in
- * `FairShareAllocatorRefusalTest` are what pin the load check itself.
+ * this test first used, is four times the limit. The driver sees the per-seat limit, not the load
+ * check: with every load check in production deleted, the per-seat check at each landing
+ * ([Ticks.PastLimit]) still holds the heavy newborns down, and this run peaks at about 0.59 of the
+ * limit (#3538, measured on the JVM). The targeted tests in `FairShareAllocatorRefusalTest` are what
+ * pin the load check itself.
  *
  * Every draw walks a [List] built here, sorted, never a `Set` or a map view (#2592), so a seed
  * takes the same trajectory on every target.
@@ -51,7 +55,7 @@ class PositionLimitDriverTest {
     fun noCallThrowsTheBooksStayValidAndTheLimitRefuses() {
         var refusals = 0
         var calls = 0
-        var stepsWithWakeOffsets = 0
+        var stepsWithAnOffsetInTheLoad = 0
         for (seed in 0 until SEEDS) {
             val rng = Random(seed)
             val pick = { list: List<Weight> -> list[rng.nextInt(list.size)] }
@@ -91,36 +95,46 @@ class PositionLimitDriverTest {
                 assertEquals(emptyList(), state.ledger.validate(), "seed $seed, step $step: the books are valid")
                 val load = loadOf(state, GroupId("p"))
                 assertTrue(
-                    load != null && load <= LIMIT + STEP_CHARGE,
-                    "seed $seed, step $step: the root's load $load is within the limit and one step's charge",
+                    load.ticks != null && load.ticks <= LIMIT + STEP_CHARGE,
+                    "seed $seed, step $step: the root's load ${load.ticks} is within the limit and one step's charge",
                 )
-                if (state.allocatorMemory.wakeOffsets.isNotEmpty()) stepsWithWakeOffsets++
+                if (load.offsetsAdded > 0) stepsWithAnOffsetInTheLoad++
             }
         }
         assertAll(
             { assertEquals(SEEDS * STEPS, calls, "the rig: every step ran") },
             { assertTrue(refusals > 0, "the rig: the position limit refused at least once ($refusals)") },
-            { assertTrue(stepsWithWakeOffsets > 0, "the rig: a wake offset was in the load at some step") },
+            { assertTrue(stepsWithAnOffsetInTheLoad > 0, "the rig: a wake offset was added into the load at some step") },
         )
     }
 
     /**
      * [parent]'s load in [state], design §7.1: the sum of its active children's effective positions,
-     * raw plus wake offset, each counted by its size. `null` when the sum leaves 128 bits.
+     * raw plus wake offset, each counted by its size. [Load.ticks] is `null` when the sum leaves
+     * 128 bits; [Load.offsetsAdded] counts the children whose wake offset went into the sum.
      */
-    private fun loadOf(state: LocalHeddleState, parent: GroupId): Int128? = try {
-        val ledger = state.ledger
-        ledger.activeChildren(parent).sortedBy { it.attachment.value }.fold(Int128.ZERO) { load, summary ->
-            val id = summary.attachment
-            val base = ledger.baseIssuance(id)
-            val gross = ledger.gauge(id)?.let { g -> Int128.fromTwosComplement(g.ticksHigh, g.ticksLow) + (base - g.folded).timesWide(TICKS_PER_UNIT) }
-                ?: base.timesWide(TICKS_PER_UNIT)
-            val effective = gross - summary.returned.timesWide(TICKS_PER_UNIT) + (state.allocatorMemory.wakeOffsets[id] ?: Int128.ZERO)
-            load + if (effective < Int128.ZERO) Int128.ZERO - effective else effective
+    private fun loadOf(state: LocalHeddleState, parent: GroupId): Load {
+        var offsetsAdded = 0
+        val ticks = try {
+            val ledger = state.ledger
+            ledger.activeChildren(parent).sortedBy { it.attachment.value }.fold(Int128.ZERO) { load, summary ->
+                val id = summary.attachment
+                val base = ledger.baseIssuance(id)
+                val gross = ledger.gauge(id)?.let { g -> Int128.fromTwosComplement(g.ticksHigh, g.ticksLow) + (base - g.folded).timesWide(TICKS_PER_UNIT) }
+                    ?: base.timesWide(TICKS_PER_UNIT)
+                // A stored offset is never zero (`AllocatorMemory` refuses one), so one found here moves the sum.
+                val offset = state.allocatorMemory.wakeOffsets[id]
+                if (offset != null) offsetsAdded++
+                val effective = gross - summary.returned.timesWide(TICKS_PER_UNIT) + (offset ?: Int128.ZERO)
+                load + if (effective < Int128.ZERO) Int128.ZERO - effective else effective
+            }
+        } catch (_: ArithmeticException) {
+            null
         }
-    } catch (_: ArithmeticException) {
-        null
+        return Load(ticks, offsetsAdded)
     }
+
+    private class Load(val ticks: Int128?, val offsetsAdded: Int)
 
     private companion object {
         const val SEEDS = 6
