@@ -9,6 +9,8 @@ import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.HyperLogLog
 import us.tractat.kuilt.crdt.LWWRegister
+import us.tractat.kuilt.crdt.PNCounter
+import us.tractat.kuilt.crdt.PNCounterDouble
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.test.assertAll
@@ -48,15 +50,25 @@ class MetricCatalogCanonicalEncodingTest {
         Arm("histograms", HISTOGRAMS.map { MetricCatalog(histograms = mapOf(it to QUANTILES)) }),
     )
 
+    /**
+     * The up-down maps (#3307), kept out of [arms] because [goldenOperands] draws on it, and the
+     * golden predates them: an empty map is not encoded, so a catalog without them still matches it.
+     */
+    private val upDownArms: List<Arm> = listOf(
+        Arm("upDownSums", UP_DOWN_SUMS.map { MetricCatalog(upDownSums = mapOf(it to UP_DOWN_COUNTER)) }),
+        Arm("doubleUpDownSums", UP_DOWN_SUMS.map { MetricCatalog(doubleUpDownSums = mapOf(it to DOUBLE_UP_DOWN_COUNTER)) }),
+    )
+
     /** Every map, merged both ways round, so a field that escapes canonical ordering names itself. */
     @Test
     fun everyFieldEncodesTheSameWhicheverOrderItsOperandsMerged() {
         assertAll(
-            *arms.map { arm ->
+            *(arms + upDownArms).map { arm ->
                 {
                     val forward = fold(arm.operands)
                     val backward = fold(arm.operands.reversed())
                     assertEquals(forward, backward, "${arm.name}: the merge itself disagrees, so bytes prove nothing")
+                    assertNotEquals(hex(MetricCatalog()), hex(forward), "${arm.name}: the field never reached the wire")
                     assertEquals(hex(forward), hex(backward), "${arm.name}: the merge order reached the wire")
                 }
             }.toTypedArray(),
@@ -159,6 +171,7 @@ class MetricCatalogCanonicalEncodingTest {
         val GAUGES = NAMES.map { MetricKey(it, MetricKind.GAUGE) }
         val CARDINALITIES = NAMES.map { MetricKey(it, MetricKind.CARDINALITY) }
         val HISTOGRAMS = NAMES.map { MetricKey(it, MetricKind.EXPONENTIAL_HISTOGRAM) }
+        val UP_DOWN_SUMS = NAMES.map { MetricKey(it, MetricKind.UP_DOWN_SUM) }
 
         /** Sorts after [SUMS] by name, and its attributes must come out sorted too. */
         val LABELLED = MetricKey("labelled", MetricKind.SUM, linkedMapOf("a" to "1", "b" to "2"))
@@ -166,6 +179,8 @@ class MetricCatalogCanonicalEncodingTest {
         val REPLICA = ReplicaId("r")
         val COUNTER = GCounter.of(REPLICA to 1L)
         val DOUBLE_COUNTER = GCounterDouble.of(REPLICA to 1.5)
+        val UP_DOWN_COUNTER = PNCounter.ZERO.let { it.piece(it.decrement(REPLICA, 2L)) }
+        val DOUBLE_UP_DOWN_COUNTER = PNCounterDouble.ZERO.let { it.piece(it.decrement(REPLICA, 0.5)) }
         val REGISTER = LWWRegister.empty<Double>().set(REPLICA, 1L, 21.0)
 
         /** Precision 4 is the smallest legal sketch: 12 bytes, against 12 KiB at the default. */
