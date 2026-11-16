@@ -927,6 +927,29 @@ public class Rga<V> private constructor(
     public fun dropWindowPastUnheld(self: ReplicaId, dropped: Set<RgaId>): Pair<Rga<V>, Patch<Rga<V>>>? =
         dropWindow(self, dropped, OwnFloorWalk.ACROSS_UNHELD)
 
+    /**
+     * Every id [self] has minted dropped, held here or not: [self]'s floor entry raised to
+     * [seqHighWater], purging every op of [self]'s this state holds and every one that returns.
+     * `null` when the floor is already there.
+     *
+     * For a caller forgetting everything it ever minted. [dropWindowPastUnheld] cannot express that
+     * when the newest of [self]'s seqs are held nowhere: its walk crosses a hole only below a seq
+     * the call drops, so a hole above every held seq stays open, and its ops are admitted when they
+     * return. A state raised past a part of its log it could not read has exactly that hole.
+     *
+     * The floor's costs are [dropWindow]'s: an op another author anchored on one of these ids
+     * re-roots to [RgaId.HEAD], and only [self]'s entry moves, so a foreign author's dots are left
+     * to [dropWindow].
+     *
+     * @return as [dropWindow], or `null` when nothing rises.
+     */
+    @CrdtInternalApi
+    public fun dropAllOwn(self: ReplicaId): Pair<Rga<V>, Patch<Rga<V>>>? {
+        val newFloor = compactedBelow.ceilWith(VersionVector.of(mapOf(self to currentSeqFor(self))))
+        if (newFloor == compactedBelow) return null
+        return withCompactedBelow(newFloor) to Patch(deltaOf<V>(newFloor, null))
+    }
+
     /** How far [dropWindow]'s walk up [self]'s own seqs may go; see [dropWindowPastUnheld]. */
     private enum class OwnFloorWalk { CONTIGUOUS, ACROSS_UNHELD }
 
