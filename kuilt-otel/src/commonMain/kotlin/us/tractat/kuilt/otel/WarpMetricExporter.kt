@@ -1433,6 +1433,109 @@ public class WarpMetricExporter(
         histograms[key] ?: histogramPrototype
     }
 
+    // ── Up-down sum (PNCounter / PNCounterDouble) ─────────────────────────────
+
+    /**
+     * Set this replica's share of the up-down sum for [key] to [level], the way an OpenTelemetry
+     * UpDownCounter reports its level each collection (#3307). This replica's slot moves by
+     * `level − its share`, so the series' value is the sum of every replica's level: two replicas at
+     * 3 and 4 read 7 once merged. Setting the level it already holds writes nothing.
+     *
+     * A restart that kept [replica] and the store gets its share back from [recover], or from the
+     * kind's first turn, so the same level reported after a restart moves nothing. Two things stay in
+     * the sum until someone moves them: a series this replica does not report again keeps its last
+     * level, and a replica that never comes back keeps its share, since only a slot's owner moves it.
+     *
+     * Returns a [MetricExportResult.Refused] whose `overflow` is a [MetricUpDownSumOverflowException],
+     * having applied and written nothing, when the move would carry this replica's slot past
+     * [Long.MAX_VALUE] or leave a total over every replica that does not fit in a `Long`.
+     */
+    public suspend fun setUpDownSum(key: MetricKey, level: Long): MetricExportResult =
+        record(listOf(MetricUpdate.SetUpDownSum(key, level)))
+
+    /**
+     * Move this replica's share of the up-down sum for [key] by [by], up or down: the change form of
+     * [setUpDownSum], for a caller counting arrivals and departures itself.
+     *
+     * @throws IllegalArgumentException if [by] is `0` or [Long.MIN_VALUE].
+     */
+    public suspend fun addUpDownSum(key: MetricKey, by: Long): MetricExportResult =
+        record(listOf(MetricUpdate.AddUpDownSum(key, by)))
+
+    /**
+     * Merge a remote [PNCounter] snapshot into this exporter's up-down sum for [key].
+     *
+     * Idempotent: a lattice join. Not refused when the join leaves a total that does not fit in a
+     * `Long`, for the reason [mergeSum] gives; the OTLP bridge skips the series instead.
+     */
+    public suspend fun mergeUpDownSum(key: MetricKey, remote: PNCounter): MetricWriteResult =
+        writeTurn(StoredKind.UP_DOWN_SUMS) {
+            val encoded = lock.withLock {
+                upDownSums[key] = upDownSums[key]?.piece(remote) ?: remote
+                encodeUpDownSums()
+            }
+            persistUpDownSums(encoded, key)
+        }
+
+    /**
+     * The up-down sum for [key]: the sum of every replica's share, or 0 if none has been set.
+     *
+     * @throws ArithmeticException if the shares add up past a `Long`; [upDownSumSnapshot] and
+     *   [PNCounter.valueOrNull] read it without throwing.
+     */
+    public fun upDownSumValue(key: MetricKey): Long = lock.withLock {
+        upDownSums[key]?.value ?: 0L
+    }
+
+    /** Return a snapshot of the [PNCounter] for [key] (for gossip/anti-entropy). */
+    public fun upDownSumSnapshot(key: MetricKey): PNCounter = lock.withLock {
+        upDownSums[key] ?: PNCounter.ZERO
+    }
+
+    /**
+     * Set this replica's share of the fractional up-down sum for [key] to [level]: the double twin of
+     * [setUpDownSum].
+     *
+     * A share is a difference of two growing totals, so it carries a rounding error that grows with
+     * how far it has moved in all, and a set can land a rounding step off its level. A set that would
+     * bring the share no closer moves nothing, so a level reported again settles after at most one
+     * more write. Returns a [MetricExportResult.Refused] when the move would take one of this
+     * replica's slots past [Double.MAX_VALUE].
+     *
+     * @throws IllegalArgumentException if [level] is NaN or infinite.
+     */
+    public suspend fun setUpDownSumDouble(key: MetricKey, level: Double): MetricExportResult =
+        record(listOf(MetricUpdate.SetUpDownSumDouble(key, level)))
+
+    /**
+     * Move this replica's share of the fractional up-down sum for [key] by [by]: the double twin of
+     * [addUpDownSum].
+     *
+     * @throws IllegalArgumentException if [by] is zero, NaN or infinite.
+     */
+    public suspend fun addUpDownSumDouble(key: MetricKey, by: Double): MetricExportResult =
+        record(listOf(MetricUpdate.AddUpDownSumDouble(key, by)))
+
+    /** Merge a remote [PNCounterDouble] snapshot into this exporter's fractional up-down sum for [key]. Idempotent. */
+    public suspend fun mergeUpDownSumDouble(key: MetricKey, remote: PNCounterDouble): MetricWriteResult =
+        writeTurn(StoredKind.UP_DOWN_SUMS_DOUBLE) {
+            val encoded = lock.withLock {
+                upDownSumsDouble[key] = upDownSumsDouble[key]?.piece(remote) ?: remote
+                encodeUpDownSumsDouble()
+            }
+            persistUpDownSumsDouble(encoded, key)
+        }
+
+    /** The fractional up-down sum for [key], or 0.0 if none has been set. */
+    public fun upDownSumDoubleValue(key: MetricKey): Double = lock.withLock {
+        upDownSumsDouble[key]?.value ?: 0.0
+    }
+
+    /** Return a snapshot of the [PNCounterDouble] for [key] (for gossip/anti-entropy). */
+    public fun upDownSumDoubleSnapshot(key: MetricKey): PNCounterDouble = lock.withLock {
+        upDownSumsDouble[key] ?: PNCounterDouble.ZERO
+    }
+
     // ── Diagnostics ───────────────────────────────────────────────────────────
 
     /** Total number of distinct [MetricKey]s tracked across all kinds. */
