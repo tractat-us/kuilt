@@ -1440,9 +1440,12 @@ origins, which is a layout 0.7.5 already reads, so the format number and
     reweights, cancels and overruns: no call throws, `validate()` is empty
     after each, and the load, wake offsets included, is at most `2¹²⁵` plus
     one step's charge after each (#3538). It asserts the refusal fired at least
-    once and a wake offset was in the load, and sorts what it walks (#2592).
-    It cannot see the load check itself: with every load check deleted the run
-    peaks at about 0.59 of the limit. The other rows pin that.
+    once and that a wake offset was added into the load, on an active child, at
+    some step, and sorts what it walks (#2592). The driver sees the per-seat
+    limit, not the load check: with every load check deleted, the per-seat
+    check at each landing still holds heavy newborns down, and the run peaks at
+    about 0.59 of the limit (measured on the JVM). The other rows pin the load
+    check.
   - The budget did not move: `HeddleWeightBudgetTest` passes unchanged, with
     `{1/30,718, 1/30,719}` accepted, `{1/30,719, 1/30,720}` refused and
     `{1, k}` accepted up to the edge it has today.
