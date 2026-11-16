@@ -1644,6 +1644,17 @@ public class EntitlementLedger private constructor(
     }
 
     /**
+     * [seat] at a [VirtualTime] front, `⌈V · w · G⌉` on the edge's own grid (design §7.1). `null`
+     * as [seat] answers it, and `null` too when that seat would pass the position limit, where no
+     * child lands.
+     */
+    public fun seat(edge: AttachmentId, front: VirtualTime): Patch<EntitlementLedger>? {
+        val record = recordOf(edge) ?: return null
+        val ticks = (front.ticksForWide(record.weight) as? Ticks.Fits)?.value ?: return null
+        return seatAtWide(edge, ticks)
+    }
+
+    /**
      * [seat] at a position: [ticks] of [edge]'s own service, `⌈V · w · G⌉` for the front `V` a
      * scheduler read (#3353). The position written is
      * `max(ticks, baseIssued · G)`, taken in 128 bits and stored in the gauge's ticks exactly, with

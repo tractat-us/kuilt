@@ -487,12 +487,25 @@ public class FairShareAllocator(
      * A **diagnostic**: it depends on [demand] and on this allocator's non-replicated wake clamps,
      * so two peers legitimately read different values at the same instant.
      */
+    @Deprecated("A Rational read sticks at the ceiling once nothing rebases (design §7.1); read virtualTimeWide(ledger, parent, demand), a VirtualTime, instead.", ReplaceWith("virtualTimeWide(ledger, parent, demand)"))
     public fun virtualTime(
         ledger: EntitlementLedger,
         parent: GroupId,
         demand: (AttachmentId) -> Demand,
     ): Rational? =
         if (childWeightsFit(ledger, parent)) heldFront(policyEdges(ledger, parent, demand)) else null
+
+    /**
+     * [virtualTime] as a [VirtualTime], exact and never held (design §7.1): the demanding
+     * children's weighted mean, or the furthest-ahead child when none is demanding. `null` as
+     * [virtualTime] answers it, and over a merged load whose sum leaves 128 bits.
+     */
+    public fun virtualTimeWide(
+        ledger: EntitlementLedger,
+        parent: GroupId,
+        demand: (AttachmentId) -> Demand,
+    ): VirtualTime? =
+        if (childWeightsFit(ledger, parent)) HeddlePolicy.frontWide(policyEdges(ledger, parent, demand)) else null
 
     /**
      * [HeddlePolicy.front] over [edges], each position read inside its window, for a diagnostic

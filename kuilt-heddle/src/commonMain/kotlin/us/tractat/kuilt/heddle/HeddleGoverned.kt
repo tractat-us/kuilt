@@ -270,7 +270,12 @@ public class GovernedHeddleNode internal constructor(
      * evidence that [parent] has no children, and nothing needs it to be: seating is the
      * scheduler's [Gauge] bump, not something a caller carries into a record (issue #1752).
      */
+    @Deprecated("A Rational read sticks at the ceiling once nothing rebases (design §7.1); read parentVirtualTimeWide(parent), a VirtualTime, instead.", ReplaceWith("parentVirtualTimeWide(parent)"))
+    @Suppress("DEPRECATION")
     public fun parentVirtualTime(parent: GroupId): Rational? = node.parentVirtualTime(parent)
+
+    /** [parentVirtualTime] as a [VirtualTime], exact and never held (design §7.1). */
+    public fun parentVirtualTimeWide(parent: GroupId): VirtualTime? = node.parentVirtualTimeWide(parent)
 
     // ── control plane (design §9 — serialized through the Raft log) ──────────────────
 
