@@ -1660,12 +1660,14 @@ final class us.tractat.kuilt.crdt/PNCounter : us.tractat.kuilt.crdt/Quilted<us.t
     final val value // us.tractat.kuilt.crdt/PNCounter.value|{}value[0]
         final fun <get-value>(): kotlin/Long // us.tractat.kuilt.crdt/PNCounter.value.<get-value>|<get-value>(){}[0]
 
+    final fun count(us.tractat.kuilt.crdt/ReplicaId): kotlin/Long // us.tractat.kuilt.crdt/PNCounter.count|count(us.tractat.kuilt.crdt.ReplicaId){}[0]
     final fun decrement(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long = ...): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/PNCounter> // us.tractat.kuilt.crdt/PNCounter.decrement|decrement(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.crdt/PNCounter.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.crdt/PNCounter.hashCode|hashCode(){}[0]
     final fun increment(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long = ...): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/PNCounter> // us.tractat.kuilt.crdt/PNCounter.increment|increment(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long){}[0]
     final fun piece(us.tractat.kuilt.crdt/PNCounter): us.tractat.kuilt.crdt/PNCounter // us.tractat.kuilt.crdt/PNCounter.piece|piece(us.tractat.kuilt.crdt.PNCounter){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.crdt/PNCounter.toString|toString(){}[0]
+    final fun valueOrNull(): kotlin/Long? // us.tractat.kuilt.crdt/PNCounter.valueOrNull|valueOrNull(){}[0]
 
     final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.crdt/PNCounter> { // us.tractat.kuilt.crdt/PNCounter.$serializer|null[0]
         final val descriptor // us.tractat.kuilt.crdt/PNCounter.$serializer.descriptor|{}descriptor[0]
@@ -1681,6 +1683,39 @@ final class us.tractat.kuilt.crdt/PNCounter : us.tractat.kuilt.crdt/Quilted<us.t
             final fun <get-ZERO>(): us.tractat.kuilt.crdt/PNCounter // us.tractat.kuilt.crdt/PNCounter.Companion.ZERO.<get-ZERO>|<get-ZERO>(){}[0]
 
         final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.crdt/PNCounter> // us.tractat.kuilt.crdt/PNCounter.Companion.serializer|serializer(){}[0]
+    }
+}
+
+final class us.tractat.kuilt.crdt/PNCounterDouble : us.tractat.kuilt.crdt/Quilted<us.tractat.kuilt.crdt/PNCounterDouble> { // us.tractat.kuilt.crdt/PNCounterDouble|null[0]
+    final val totalDecrement // us.tractat.kuilt.crdt/PNCounterDouble.totalDecrement|{}totalDecrement[0]
+        final fun <get-totalDecrement>(): kotlin/Double // us.tractat.kuilt.crdt/PNCounterDouble.totalDecrement.<get-totalDecrement>|<get-totalDecrement>(){}[0]
+    final val totalIncrement // us.tractat.kuilt.crdt/PNCounterDouble.totalIncrement|{}totalIncrement[0]
+        final fun <get-totalIncrement>(): kotlin/Double // us.tractat.kuilt.crdt/PNCounterDouble.totalIncrement.<get-totalIncrement>|<get-totalIncrement>(){}[0]
+    final val value // us.tractat.kuilt.crdt/PNCounterDouble.value|{}value[0]
+        final fun <get-value>(): kotlin/Double // us.tractat.kuilt.crdt/PNCounterDouble.value.<get-value>|<get-value>(){}[0]
+
+    final fun count(us.tractat.kuilt.crdt/ReplicaId): kotlin/Double // us.tractat.kuilt.crdt/PNCounterDouble.count|count(us.tractat.kuilt.crdt.ReplicaId){}[0]
+    final fun decrement(us.tractat.kuilt.crdt/ReplicaId, kotlin/Double = ...): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/PNCounterDouble> // us.tractat.kuilt.crdt/PNCounterDouble.decrement|decrement(us.tractat.kuilt.crdt.ReplicaId;kotlin.Double){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.crdt/PNCounterDouble.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.crdt/PNCounterDouble.hashCode|hashCode(){}[0]
+    final fun increment(us.tractat.kuilt.crdt/ReplicaId, kotlin/Double = ...): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/PNCounterDouble> // us.tractat.kuilt.crdt/PNCounterDouble.increment|increment(us.tractat.kuilt.crdt.ReplicaId;kotlin.Double){}[0]
+    final fun piece(us.tractat.kuilt.crdt/PNCounterDouble): us.tractat.kuilt.crdt/PNCounterDouble // us.tractat.kuilt.crdt/PNCounterDouble.piece|piece(us.tractat.kuilt.crdt.PNCounterDouble){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.crdt/PNCounterDouble.toString|toString(){}[0]
+
+    final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.crdt/PNCounterDouble> { // us.tractat.kuilt.crdt/PNCounterDouble.$serializer|null[0]
+        final val descriptor // us.tractat.kuilt.crdt/PNCounterDouble.$serializer.descriptor|{}descriptor[0]
+            final fun <get-descriptor>(): kotlinx.serialization.descriptors/SerialDescriptor // us.tractat.kuilt.crdt/PNCounterDouble.$serializer.descriptor.<get-descriptor>|<get-descriptor>(){}[0]
+
+        final fun childSerializers(): kotlin/Array<kotlinx.serialization/KSerializer<*>> // us.tractat.kuilt.crdt/PNCounterDouble.$serializer.childSerializers|childSerializers(){}[0]
+        final fun deserialize(kotlinx.serialization.encoding/Decoder): us.tractat.kuilt.crdt/PNCounterDouble // us.tractat.kuilt.crdt/PNCounterDouble.$serializer.deserialize|deserialize(kotlinx.serialization.encoding.Decoder){}[0]
+        final fun serialize(kotlinx.serialization.encoding/Encoder, us.tractat.kuilt.crdt/PNCounterDouble) // us.tractat.kuilt.crdt/PNCounterDouble.$serializer.serialize|serialize(kotlinx.serialization.encoding.Encoder;us.tractat.kuilt.crdt.PNCounterDouble){}[0]
+    }
+
+    final object Companion { // us.tractat.kuilt.crdt/PNCounterDouble.Companion|null[0]
+        final val ZERO // us.tractat.kuilt.crdt/PNCounterDouble.Companion.ZERO|{}ZERO[0]
+            final fun <get-ZERO>(): us.tractat.kuilt.crdt/PNCounterDouble // us.tractat.kuilt.crdt/PNCounterDouble.Companion.ZERO.<get-ZERO>|<get-ZERO>(){}[0]
+
+        final fun serializer(): kotlinx.serialization/KSerializer<us.tractat.kuilt.crdt/PNCounterDouble> // us.tractat.kuilt.crdt/PNCounterDouble.Companion.serializer|serializer(){}[0]
     }
 }
 

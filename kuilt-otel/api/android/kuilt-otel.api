@@ -291,16 +291,18 @@ public final class us/tractat/kuilt/otel/MetricBufferPolicyKt {
 public final class us/tractat/kuilt/otel/MetricCatalog : us/tractat/kuilt/crdt/Quilted {
 	public static final field Companion Lus/tractat/kuilt/otel/MetricCatalog$Companion;
 	public fun <init> ()V
-	public fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;)V
-	public synthetic fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun causalDots ()Ljava/util/Set;
 	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCardinalities ()Ljava/util/Map;
 	public final fun getDoubleSums ()Ljava/util/Map;
+	public final fun getDoubleUpDownSums ()Ljava/util/Map;
 	public final fun getGauges ()Ljava/util/Map;
 	public final fun getHistograms ()Ljava/util/Map;
 	public final fun getSums ()Ljava/util/Map;
+	public final fun getUpDownSums ()Ljava/util/Map;
 	public fun hashCode ()I
 	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
 	public fun piece (Lus/tractat/kuilt/otel/MetricCatalog;)Lus/tractat/kuilt/otel/MetricCatalog;
@@ -403,6 +405,7 @@ public final class us/tractat/kuilt/otel/MetricKind : java/lang/Enum {
 	public static final field EXPONENTIAL_HISTOGRAM Lus/tractat/kuilt/otel/MetricKind;
 	public static final field GAUGE Lus/tractat/kuilt/otel/MetricKind;
 	public static final field SUM Lus/tractat/kuilt/otel/MetricKind;
+	public static final field UP_DOWN_SUM Lus/tractat/kuilt/otel/MetricKind;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lus/tractat/kuilt/otel/MetricKind;
 	public static fun values ()[Lus/tractat/kuilt/otel/MetricKind;
@@ -451,6 +454,24 @@ public final class us/tractat/kuilt/otel/MetricPoint$DoubleSum : us/tractat/kuil
 	public final fun component4 ()J
 	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;DJJ)Lus/tractat/kuilt/otel/MetricPoint$DoubleSum;
 	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricPoint$DoubleSum;Lus/tractat/kuilt/otel/MetricKey;DJJILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricPoint$DoubleSum;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getStartEpochNanos ()J
+	public final fun getTimeEpochNanos ()J
+	public final fun getValue ()D
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public fun valueHash ()J
+}
+
+public final class us/tractat/kuilt/otel/MetricPoint$DoubleUpDownSum : us/tractat/kuilt/otel/MetricPoint {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;DJJ)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component2 ()D
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;DJJ)Lus/tractat/kuilt/otel/MetricPoint$DoubleUpDownSum;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricPoint$DoubleUpDownSum;Lus/tractat/kuilt/otel/MetricKey;DJJILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricPoint$DoubleUpDownSum;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
 	public final fun getStartEpochNanos ()J
@@ -527,10 +548,32 @@ public final class us/tractat/kuilt/otel/MetricPoint$Sum : us/tractat/kuilt/otel
 	public fun valueHash ()J
 }
 
+public final class us/tractat/kuilt/otel/MetricPoint$UpDownSum : us/tractat/kuilt/otel/MetricPoint {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;JJJ)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;JJJ)Lus/tractat/kuilt/otel/MetricPoint$UpDownSum;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricPoint$UpDownSum;Lus/tractat/kuilt/otel/MetricKey;JJJILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricPoint$UpDownSum;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getStartEpochNanos ()J
+	public final fun getTimeEpochNanos ()J
+	public final fun getValue ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+	public fun valueHash ()J
+}
+
 public final class us/tractat/kuilt/otel/MetricSumOverflowException : us/tractat/kuilt/otel/MetricOverflowException {
 	public final fun getBy ()J
 	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
 	public final fun getTotal ()Ljava/lang/Long;
+}
+
+public final class us/tractat/kuilt/otel/MetricUpDownSumOverflowException : us/tractat/kuilt/otel/MetricOverflowException {
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
 }
 
 public abstract interface class us/tractat/kuilt/otel/MetricUpdate {
@@ -569,6 +612,43 @@ public final class us/tractat/kuilt/otel/MetricUpdate$AddExponentialHistogram : 
 	public final fun getPositiveOffset ()I
 	public final fun getScale ()I
 	public final fun getZeroCount ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/MetricUpdate$AddUpDownSum : us/tractat/kuilt/otel/MetricUpdate {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;J)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component2 ()J
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;J)Lus/tractat/kuilt/otel/MetricUpdate$AddUpDownSum;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricUpdate$AddUpDownSum;Lus/tractat/kuilt/otel/MetricKey;JILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricUpdate$AddUpDownSum;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBy ()J
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/MetricUpdate$AddUpDownSumDouble : us/tractat/kuilt/otel/MetricUpdate {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;D)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component2 ()D
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;D)Lus/tractat/kuilt/otel/MetricUpdate$AddUpDownSumDouble;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricUpdate$AddUpDownSumDouble;Lus/tractat/kuilt/otel/MetricKey;DILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricUpdate$AddUpDownSumDouble;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBy ()D
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/MetricUpdate$Forget : us/tractat/kuilt/otel/MetricUpdate {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/otel/MetricUpdate$Forget;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricUpdate$Forget;Lus/tractat/kuilt/otel/MetricKey;ILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricUpdate$Forget;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -624,6 +704,32 @@ public final class us/tractat/kuilt/otel/MetricUpdate$SetGauge : us/tractat/kuil
 	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
 	public final fun getTimestamp ()J
 	public final fun getValue ()D
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/MetricUpdate$SetUpDownSum : us/tractat/kuilt/otel/MetricUpdate {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;J)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component2 ()J
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;J)Lus/tractat/kuilt/otel/MetricUpdate$SetUpDownSum;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricUpdate$SetUpDownSum;Lus/tractat/kuilt/otel/MetricKey;JILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricUpdate$SetUpDownSum;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getLevel ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/otel/MetricUpdate$SetUpDownSumDouble : us/tractat/kuilt/otel/MetricUpdate {
+	public fun <init> (Lus/tractat/kuilt/otel/MetricKey;D)V
+	public final fun component1 ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun component2 ()D
+	public final fun copy (Lus/tractat/kuilt/otel/MetricKey;D)Lus/tractat/kuilt/otel/MetricUpdate$SetUpDownSumDouble;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/otel/MetricUpdate$SetUpDownSumDouble;Lus/tractat/kuilt/otel/MetricKey;DILjava/lang/Object;)Lus/tractat/kuilt/otel/MetricUpdate$SetUpDownSumDouble;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
+	public final fun getLevel ()D
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -897,6 +1003,8 @@ public final class us/tractat/kuilt/otel/WarpMetricExporter {
 	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/MetricBufferPolicy;Lus/tractat/kuilt/crdt/DDSketch;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic fun <init> (Ljava/lang/String;Lus/tractat/kuilt/store/DurableStore;ILus/tractat/kuilt/otel/MetricBufferPolicy;Lus/tractat/kuilt/crdt/DDSketch;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun addCardinality (Lus/tractat/kuilt/otel/MetricKey;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun addUpDownSum (Lus/tractat/kuilt/otel/MetricKey;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun addUpDownSumDouble (Lus/tractat/kuilt/otel/MetricKey;DLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun cardinalityEstimate (Lus/tractat/kuilt/otel/MetricKey;)J
 	public final fun cardinalitySnapshot (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/crdt/HyperLogLog;
 	public final fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -916,14 +1024,22 @@ public final class us/tractat/kuilt/otel/WarpMetricExporter {
 	public final fun mergeHistogram (Lus/tractat/kuilt/otel/MetricKey;Lus/tractat/kuilt/crdt/DDSketch;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun mergeSum (Lus/tractat/kuilt/otel/MetricKey;Lus/tractat/kuilt/crdt/GCounter;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun mergeSumDouble (Lus/tractat/kuilt/otel/MetricKey;Lus/tractat/kuilt/crdt/GCounterDouble;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun mergeUpDownSum (Lus/tractat/kuilt/otel/MetricKey;Lus/tractat/kuilt/crdt/PNCounter;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun mergeUpDownSumDouble (Lus/tractat/kuilt/otel/MetricKey;Lus/tractat/kuilt/crdt/PNCounterDouble;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun metricCount ()I
 	public final fun record (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun recordHistogram (Lus/tractat/kuilt/otel/MetricKey;DLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun recover (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun setGauge (Lus/tractat/kuilt/otel/MetricKey;DJLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun setUpDownSum (Lus/tractat/kuilt/otel/MetricKey;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun setUpDownSumDouble (Lus/tractat/kuilt/otel/MetricKey;DLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun snapshotAll ()Lus/tractat/kuilt/otel/MetricCatalog;
 	public final fun sumSnapshot (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/crdt/GCounter;
 	public final fun sumValue (Lus/tractat/kuilt/otel/MetricKey;)J
+	public final fun upDownSumDoubleSnapshot (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/crdt/PNCounterDouble;
+	public final fun upDownSumDoubleValue (Lus/tractat/kuilt/otel/MetricKey;)D
+	public final fun upDownSumSnapshot (Lus/tractat/kuilt/otel/MetricKey;)Lus/tractat/kuilt/crdt/PNCounter;
+	public final fun upDownSumValue (Lus/tractat/kuilt/otel/MetricKey;)J
 }
 
 public final class us/tractat/kuilt/otel/WarpOtlpBridge {

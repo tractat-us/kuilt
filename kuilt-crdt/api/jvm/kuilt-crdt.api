@@ -1434,6 +1434,7 @@ public final class us/tractat/kuilt/crdt/PNCounter : us/tractat/kuilt/crdt/Quilt
 	public static final field Companion Lus/tractat/kuilt/crdt/PNCounter$Companion;
 	public fun causalDots ()Ljava/util/Set;
 	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun count-81S8jZI (Ljava/lang/String;)J
 	public final fun decrement-V4bVmxY (Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
 	public static synthetic fun decrement-V4bVmxY$default (Lus/tractat/kuilt/crdt/PNCounter;Ljava/lang/String;JILjava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
 	public fun equals (Ljava/lang/Object;)Z
@@ -1446,6 +1447,7 @@ public final class us/tractat/kuilt/crdt/PNCounter : us/tractat/kuilt/crdt/Quilt
 	public fun piece (Lus/tractat/kuilt/crdt/PNCounter;)Lus/tractat/kuilt/crdt/PNCounter;
 	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
 	public fun toString ()Ljava/lang/String;
+	public final fun valueOrNull ()Ljava/lang/Long;
 }
 
 public final synthetic class us/tractat/kuilt/crdt/PNCounter$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
@@ -1461,6 +1463,41 @@ public final synthetic class us/tractat/kuilt/crdt/PNCounter$$serializer : kotli
 
 public final class us/tractat/kuilt/crdt/PNCounter$Companion {
 	public final fun getZERO ()Lus/tractat/kuilt/crdt/PNCounter;
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/PNCounterDouble : us/tractat/kuilt/crdt/Quilted {
+	public static final field Companion Lus/tractat/kuilt/crdt/PNCounterDouble$Companion;
+	public fun causalDots ()Ljava/util/Set;
+	public fun causalFloor ()Lus/tractat/kuilt/crdt/VersionVector;
+	public final fun count-81S8jZI (Ljava/lang/String;)D
+	public final fun decrement-V4bVmxY (Ljava/lang/String;D)Lus/tractat/kuilt/crdt/Quilted;
+	public static synthetic fun decrement-V4bVmxY$default (Lus/tractat/kuilt/crdt/PNCounterDouble;Ljava/lang/String;DILjava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTotalDecrement ()D
+	public final fun getTotalIncrement ()D
+	public final fun getValue ()D
+	public fun hashCode ()I
+	public final fun increment-V4bVmxY (Ljava/lang/String;D)Lus/tractat/kuilt/crdt/Quilted;
+	public static synthetic fun increment-V4bVmxY$default (Lus/tractat/kuilt/crdt/PNCounterDouble;Ljava/lang/String;DILjava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun piece (Lus/tractat/kuilt/crdt/PNCounterDouble;)Lus/tractat/kuilt/crdt/PNCounterDouble;
+	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class us/tractat/kuilt/crdt/PNCounterDouble$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lus/tractat/kuilt/crdt/PNCounterDouble$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lus/tractat/kuilt/crdt/PNCounterDouble;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/crdt/PNCounterDouble;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class us/tractat/kuilt/crdt/PNCounterDouble$Companion {
+	public final fun getZERO ()Lus/tractat/kuilt/crdt/PNCounterDouble;
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
