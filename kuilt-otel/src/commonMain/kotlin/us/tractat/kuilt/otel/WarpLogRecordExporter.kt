@@ -170,18 +170,26 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * prefix of the list, and the next export goes after the last *visible* record. A merge can
  * deliver a run that another author wrote and then tombstoned whole, sorted after every visible
  * record: appended after our newest record at a higher clock, say, or rooted at the head behind
- * our own records. Every later export lands ahead of that run, so no local pass ever reaches it,
- * and its `Insert`s, bodies included, stay in [log] with their tombstones.
+ * our own records. Every later export lands ahead of that run, so no ordinary window pass reaches
+ * it, and its `Insert`s, bodies included, stay in [log] with their tombstones. [clear] is the
+ * exception: its pass retains nothing, so it cuts the run with everything else and accepts the
+ * re-root below, as [dropUnheldOwn] does for its own ids.
  *
- * They are not cut here, on purpose. Cutting them is an [RgaOp.Compact], and a replica that still
- * holds one of those ids visible may append after it; that record re-roots to the front of the
- * list, ahead of older records, and is the one DROP_OLDEST evicts. No local rule can tell when
- * that is safe without a causal-stability witness, which this class does not have. Instead the run
- * clears when the **author's own** window pass reaches it and arrives here by [merge]: the author
- * drops the ids through its floor, by its cut or by [withOlderOwn] (#3511) when they trail its list
- * too, and [Rga.piece] purges them under that floor. The run stays only while its author never
- * passes those ids. #3528 is where this was ruled; `WarpLogRecordExporterForeignTombstoneResidueTest`
- * pins both halves.
+ * An ordinary pass does not cut them, on purpose. Cutting them is an [RgaOp.Compact], and a
+ * replica that still holds one of those ids visible may append after it. That record re-roots
+ * through the run's predecessor, and to the head of the list once that predecessor is floored,
+ * which here is the usual case. Either way it sorts ahead of older records under the same parent
+ * and is the one DROP_OLDEST evicts. No local rule can tell when that is safe without a
+ * causal-stability witness, which this class does not have.
+ *
+ * Instead the run clears when the **author's own** window pass reaches it and arrives here by
+ * [merge]: the author drops the ids through its floor, by its cut or by [withOlderOwn] (#3511) when
+ * they trail its list too, and [Rga.piece] purges them under that floor. That is not a safe path
+ * either. A floor records no positions, so a third replica's record anchored on a run id re-roots
+ * to the head unconditionally when the floor merges in: the reordering [Rga.compactedBelow] already
+ * accepts for every floor drop. The ruling only declines to add a second, *local* source of it. The
+ * run stays only while its author never passes those ids. #3528 is where this was ruled;
+ * `WarpLogRecordExporterForeignTombstoneResidueTest` pins both halves.
  *
  * **[Rga.compact] is not the mechanism, and could not be.** It is the obvious candidate — it is
  * the reclamation this codebase already had — and it reclaims *nothing at all* here, for a
@@ -3385,8 +3393,9 @@ public class WarpLogRecordExporter(
      * Tombstones inside the window are retained along with it and counted against nothing;
      * tombstones in the prefix are dropped with it, which is the point — an evicted record's
      * `Insert` *and* its `Remove` both leave the log. A run of another author's tombstones that
-     * trails every visible record is never in the prefix, and is deliberately not cut by any other
-     * rule here; its author's own pass clears it (#3528, and the class KDoc).
+     * trails every visible record is never in the prefix while `retain > 0`, and no other rule
+     * here cuts it; its author's own pass clears it (#3528, and the class KDoc). At `retain = 0`
+     * ([clear]) it is cut with everything else, below.
      *
      * At `retain = 0` the loop breaks on its first iteration with `cut` still at
      * `sequence.size`, so every id comes back — which is what makes [clear] the same pass

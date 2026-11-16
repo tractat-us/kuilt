@@ -17,9 +17,10 @@ import kotlin.test.assertTrue
  * **after** every visible record stay in the log through any number of local window passes, and
  * leave it when the author's own window pass over them arrives by [WarpLogRecordExporter.merge].
  *
- * The local pass is not allowed to cut them. Doing so is a `Compact` rooted at the head of the
- * list, and a peer that still holds those ids visible may append after one; that record re-roots
- * to the head and is the one DROP_OLDEST evicts. Three attempts on #3533 each reordered records
+ * An ordinary local pass is not allowed to cut them. Doing so is a `Compact`; its dependants
+ * re-root through the run's predecessor, to HEAD once that is floored. So a peer that still holds
+ * those ids visible may append after one, and that record sorts ahead of older records and is the
+ * one DROP_OLDEST evicts. Three attempts on #3533 each reordered records
  * that way. These arms pin the behaviour as it stands, so a fourth attempt has to move them on
  * purpose.
  *
