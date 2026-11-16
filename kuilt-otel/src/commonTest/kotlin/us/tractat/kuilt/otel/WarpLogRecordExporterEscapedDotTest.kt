@@ -120,6 +120,36 @@ class WarpLogRecordExporterEscapedDotTest {
         )
     }
 
+    /**
+     * The escaped record comes back through [WarpLogRecordExporter.merge] after the restart. It
+     * sorts after everything minted since (a lower lamport than its siblings), so a window in list
+     * order would reach the newer records first, and each held own record it kept would block the
+     * floor: every own drop a `Compact`, every segment carrying one pinned. The window drops in
+     * arrival order (#3447), so the escaped record goes with the newer ones and nothing is pinned.
+     */
+    @Test
+    fun anEscapedRecordMergedBackLeavesNoCompactResidue() = runTest {
+        val escape = escapeOne(AppliedOpSink.Discarding)
+        val restarted = exporterFor(escape.backing)
+        restarted.recover()
+        repeat(20) { assertEquals(ExportResult.Success, restarted.export(record(200 + it)), "the rig: export $it") }
+        assertEquals(ExportResult.Success, restarted.merge(escape.gossiped), "the merge back")
+        val returned = restarted.snapshot().entries().map { it.first }
+        repeat(400) { assertEquals(ExportResult.Success, restarted.export(record(1000 + it)), "export ${1000 + it}") }
+        val log = restarted.snapshot()
+        val segments = escape.backing.keys().filter { it.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST) }
+        val pinned = segments.count {
+            decodeSegmentForTest(requireNotNull(escape.backing.read(StoreKey(it)))).compactOpCount > 0
+        }
+        assertAll(
+            // The rig: the merge really brought the escaped record back.
+            { assertTrue(escape.escaped in returned, "the merge did not bring the escaped record back") },
+            { assertEquals(0, log.compactedIds.count { it.replicaId == replica }, "an own drop kept a Compact") },
+            { assertEquals(0, pinned, "a segment is pinned by a Compact") },
+            { assertTrue(log.compactedBelow[replica] > escape.escaped.seq, "the floor never passed the escaped record") },
+        )
+    }
+
     @Test
     fun aRecordPublishedBeforeItsWriteLandedKeepsItsDotAfterARestart() = runTest {
         val sink = Collecting()
