@@ -335,11 +335,13 @@ class FairShareAllocatorRefusalTest {
     fun aLandingThatLeavesTheLoadAtTheLimitIsKeptAndOneTickMoreIsRefused() {
         val e3 = AttachmentId("e3")
         fun outcomeAt(position: Int128): AllocationOutcome {
-            val start = withChildren(
-                seatedAtWide(flat(mint = 100L), e1, position),
-                AttachmentRecord(e3, root, GroupId("g3"), Weight.ONE),
+            // e1 and e3 alone under the root, so nothing else is seated beside them.
+            val alone = withChildren(
+                EntitlementLedger.bootstrap(root, mapOf(self to 100L), nonce = "genesis"),
+                AttachmentRecord(e1, root, GroupId("g1"), Weight.ONE),
             )
-            val wants = { edge: AttachmentId -> if (edge == e2) Demand.NONE else hungry }
+            val start = withChildren(seatedAtWide(alone, e1, position), AttachmentRecord(e3, root, GroupId("g3"), Weight.ONE))
+            val wants = { _: AttachmentId -> hungry }
             return FairShareAllocator(self, policy).schedule(root, CountingCell(start), earmarked = 0L, wants)
         }
         val atLimit = outcomeAt(twoTo(124))
