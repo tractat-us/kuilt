@@ -59,7 +59,8 @@ The adapter reserves allowance before running the job and charges its cost
 afterward. A job that runs twice is charged twice, since both runs used the
 pool. Insufficient allowance defers the job. **Untagged tasks bypass
 this gate**, so label every task whose share you intend to control.
-[Inside Heddle](heddle-accounting.md) follows the accounting.
+[Inside Heddle](heddle-accounting.md) follows the accounting, and
+[Scheduling](scheduling.md) covers Heddle in full.
 
 ## Choose where it may run
 
