@@ -94,8 +94,8 @@ class WarpLogRecordExporterTailCacheTest {
 
     @Test
     fun singleElementLogSurvivesEvictThenAppend() = runTest {
-        // maxRecords = 1: every export evicts the only element, emptying the log, so the
-        // tail must fall back to HEAD rather than stay pinned to the tombstoned id.
+        // maxRecords = 1: every export evicts the only element, emptying the log, and appends
+        // after the id it just tombstoned (#3522). Only the newest record may stay visible.
         val exporter = exporterFor(maxRecords = 1, bufferPolicy = BufferPolicy.DROP_OLDEST)
         (1..4).forEach { exporter.export(record(it.toByte())) }
         assertEquals(listOf("body-4"), bodies(exporter.snapshot().toList()))
@@ -222,9 +222,9 @@ class WarpLogRecordExporterTailCacheTest {
     @Test
     fun scriptedRunMatchesPreOptimisationReference() = runTest {
         // cap 1 is not just a small cap: under DROP_OLDEST every eviction empties the log, so
-        // the append predecessor has to fall back to HEAD. Appending after the tombstoned id
-        // instead still yields the right visible order — only the op-log, and therefore the
-        // bytes, give it away. cap 4 keeps the log non-empty throughout. Under DROP_NEWEST
+        // the append predecessor is the id the same turn tombstones, not HEAD (#3522). Appending
+        // after HEAD instead still yields the right visible order — only the op-log, and
+        // therefore the bytes, give it away. cap 4 keeps the log non-empty throughout. Under DROP_NEWEST
         // both caps saturate instead and the script's later exports are all refused, which is
         // its own thing worth pinning: a merge can push the log PAST the cap, and the gate
         // has to keep refusing afterwards rather than reading a stale count.
@@ -383,8 +383,11 @@ class WarpLogRecordExporterTailCacheTest {
 
         fun export(record: LogRecord) {
             if (record.recordId in seenIds) return
+            // Read before the eviction: at cap 1 it tombstones the tail, and the arrival still
+            // goes after it (#3522).
+            val after = tailId()
             if (!admit()) return
-            val (newLog, insertOp) = log.insertAfter(replica = replica, after = tailId(), value = record)
+            val (newLog, insertOp) = log.insertAfter(replica = replica, after = after, value = record)
             log = newLog
             seenIds = seenIds + (record.recordId to insertOp.id)
             if (windowPassDue()) windowPass()
@@ -419,8 +422,7 @@ class WarpLogRecordExporterTailCacheTest {
             evictionsSincePass = 0
             val outside = idsOutsideWindow() ?: return
             // The window drops in arrival order, as production's does (#3447): every own record
-            // that arrived before one it drops goes too. At `cap = 1` that is the tombstones the
-            // newest record sorts ahead of, since each insert re-roots after HEAD.
+            // that arrived before one it drops goes too.
             val newestDropped = outside.filter { it.replicaId == replica }.maxOfOrNull { it.seq } ?: 0L
             val dropped = outside + log.sequence.filter { it.replicaId == replica && it.seq < newestDropped }
             val (newLog, _) = log.dropWindowPastUnheld(replica, dropped) ?: return
