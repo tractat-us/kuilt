@@ -16,13 +16,18 @@ import kotlin.test.assertTrue
  * Another author's tombstones that a merge sorts **after** every visible record must still leave
  * the log once the window moves past them (#3528).
  *
- * The window is cut in list order and keeps the trailing [WarpLogRecordExporter]'s `maxRecords`
- * visible records, with every tombstone among them. So a tombstone stays only while something
- * visible follows it. New exports are the something: they are appended after the predecessor the
- * exporter keeps, and while that predecessor was the last *visible* record, an export landed inside
- * that record's subtree, ahead of a trailing run of tombstones behind it. The run then sat at the
- * end of the list for good. For this replica's own records #3511 drops them by arrival order;
- * nothing did the same for a foreign author's.
+ * The window is cut in list order and keeps the trailing `maxRecords` visible records, with every
+ * tombstone among them. New exports go after the last *visible* record, inside its subtree and
+ * ahead of a trailing run of tombstones behind it, so nothing ever follows that run and the cut
+ * never reaches it. For this replica's own records #3511 drops them by arrival order; for a foreign
+ * author's, the window pass now cuts the trailing run itself.
+ *
+ * **Why not append behind the run instead.** Two earlier shapes of this fix moved the append
+ * anchor onto a trailing tombstone, and each reordered records: the tombstone can leave through
+ * the floor (this replica's own, via `withOlderOwn`, or the author's own pass arriving by merge)
+ * or through a third replica's `Compact` rooted at the list's head, and a record appended after
+ * it then re-roots to the head on its higher lamport and is the one DROP_OLDEST evicts. The arms
+ * named `…KeepsArrivalOrder` and `…IsNotTheAnchor…` pin each of those.
  *
  * **The peer is an [Rga], not a second exporter.** An exporter never tombstones its own newest
  * record — a turn whose eviction takes the whole buffer still appends after it (#3522) — so a
@@ -111,8 +116,7 @@ class WarpLogRecordExporterForeignTrailingTombstoneTest {
      * records that arrived before newer own records but sort after them, and `withOlderOwn` drops
      * them through the floor, which keeps no position. A record appended after one of them then
      * re-roots to the list's head when the pass drops it, jumps ahead of older survivors, and is
-     * the record DROP_OLDEST evicts next. So the anchor skips them and falls back to the last
-     * visible record, as before #3528.
+     * the record DROP_OLDEST evicts next. So the next export goes after the last visible record.
      *
      * The own records arrive through [WarpLogRecordExporter.merge], built on an [Rga] so that the
      * older pair (seqs 1 and 2) carries the lower lamports and sorts after the newer three.
@@ -157,9 +161,9 @@ class WarpLogRecordExporterForeignTrailingTombstoneTest {
     }
 
     /**
-     * Own then foreign, the foreign run a sibling: `[N1 N2 N3 U1† U2† P1† P2†]`. The first own
-     * tombstone stops the run, so the anchor is N3 until a pass drops U1 and U2. Then the next
-     * rebuild anchors on P2 and the run goes on a later pass.
+     * Own then foreign, the foreign run a sibling: `[N1 N2 N3 U1† U2† P1† P2†]`. The first pass
+     * cuts P1 and P2 as the trailing foreign run and leaves U1 and U2 to the older-own drop, which
+     * takes them with N1.
      */
     @Test
     fun aRunOfOwnThenForeignTombstonesLeavesTheLog() = runTest {
@@ -177,8 +181,8 @@ class WarpLogRecordExporterForeignTrailingTombstoneTest {
     }
 
     /**
-     * Foreign then own: `[N1 N2 N3 Z1† Z2† U1† U2†]`. The run starts foreign, so Z2 is the anchor.
-     * The export goes behind it and ahead of U1, which the older-own drop takes on the first pass.
+     * Foreign then own: `[N1 N2 N3 Z1† Z2† U1† U2†]`. The first pass cuts Z1 and Z2 out of the
+     * middle of the trailing run, and the older-own drop takes U1 and U2.
      */
     @Test
     fun aRunOfForeignThenOwnTombstonesLeavesTheLog() = runTest {
@@ -199,7 +203,7 @@ class WarpLogRecordExporterForeignTrailingTombstoneTest {
      * P1 inserted after U2 at a lamport above every N. Anchoring on P1 would put the next export
      * in P1's subtree. The pass drops U2 through the floor, P1 re-roots to the head of the list on
      * its higher lamport, and the export goes with it, ahead of N3, so DROP_OLDEST evicts the newer
-     * record. This is why the run is not read past its first own tombstone.
+     * record. Cutting P1 instead re-roots nothing visible.
      */
     @Test
     fun aForeignTombstoneBehindAnOwnOneIsNotTheAnchor() = runTest {
@@ -281,6 +285,34 @@ class WarpLogRecordExporterForeignTrailingTombstoneTest {
             listOf("body-2", "body-3", "body-4"),
             exporter.snapshot().toList().map { it.body },
             "DROP_OLDEST must evict r1, the oldest, not r3",
+        )
+    }
+
+    /**
+     * After the pass cuts the peer's trailing run: a peer still holding it cannot merge it back,
+     * and the peer's next record, inserted after a tombstone that is gone here, still arrives and
+     * shows.
+     */
+    @Test
+    fun theCutRunStaysOutAndARecordAfterItStillArrives() = runTest {
+        val exporter = exporterAtCap3()
+        exporter.export(record(1))
+        exporter.export(record(2))
+        val peerLog = tombstonedRoot(peer, listOf(record(201), record(202)))
+        exporter.merge(peerLog)
+        // Four exports at cap 3 evict three records, which makes a pass due.
+        (3..6).forEach { exporter.export(record(it)) }
+        assertTrue(exporter.snapshot().sequence.none { it.replicaId == peer }, "precondition: the pass cut the run")
+
+        exporter.merge(peerLog)
+        assertTrue(exporter.snapshot().sequence.none { it.replicaId == peer }, "a re-merged run must stay out")
+
+        val (peerNext, _) = peerLog.insertAllAfter(replica = peer, after = peerLog.sequence.last(), values = listOf(record(203)))
+        exporter.merge(peerNext)
+        val bodies = exporter.snapshot().toList().map { it.body }
+        assertAll(
+            { assertTrue("body-203" in bodies, "the peer's next record must show; got $bodies") },
+            { assertEquals(bodies.filter { it != "body-203" }.sortedBy { it?.removePrefix("body-")?.toInt() }, bodies.filter { it != "body-203" }) },
         )
     }
 

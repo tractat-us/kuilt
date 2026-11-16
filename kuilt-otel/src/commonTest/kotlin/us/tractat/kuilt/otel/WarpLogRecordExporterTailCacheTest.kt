@@ -420,11 +420,14 @@ class WarpLogRecordExporterTailCacheTest {
 
         private fun windowPass() {
             evictionsSincePass = 0
-            val outside = idsOutsideWindow() ?: return
+            val outside = idsOutsideWindow().orEmpty()
             // The window drops in arrival order, as production's does (#3447): every own record
             // that arrived before one it drops goes too.
             val newestDropped = outside.filter { it.replicaId == replica }.maxOfOrNull { it.seq } ?: 0L
-            val dropped = outside + log.sequence.filter { it.replicaId == replica && it.seq < newestDropped }
+            // And another author's trailing tombstones, which the window cannot reach (#3528).
+            val trailingForeign = log.sequence.takeLastWhile { it in log.tombstones }.filter { it.replicaId != replica }
+            val dropped = outside + log.sequence.filter { it.replicaId == replica && it.seq < newestDropped } + trailingForeign
+            if (dropped.isEmpty()) return
             val (newLog, _) = log.dropWindowPastUnheld(replica, dropped) ?: return
             log = newLog
             seenIds = log.entries().associate { (rgaId, record) -> record.recordId to rgaId }
