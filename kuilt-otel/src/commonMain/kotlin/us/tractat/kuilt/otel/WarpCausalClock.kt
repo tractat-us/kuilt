@@ -78,7 +78,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpCausalClock
  * reached a peer from [WarpSpanExporter.snapshot] before its turn's clock write landed, and the crash
  * came first: no key need be corrupt, since the restart reads a sound clock entry below that dot and a
  * carried mark no higher, so the next [tick] mints it again until the peer hands it back. That is
- * #1053's crash window plus gossip, and #3452 tracks it with the log exporter's twin. And a corrupt
+ * #1053's crash window plus gossip, and #3517 tracks it; the log exporter's twin claims ahead of the mint. And a corrupt
  * span entry over a dot a [WarpSpanExporter.merge] wrote durably ahead of any clock write: a merge
  * never writes the clock, so the sound clock entry does not cover it. The floor takes every stored or
  * merged dot's `seq` as given, so one claiming `Long.MAX_VALUE` leaves the clock

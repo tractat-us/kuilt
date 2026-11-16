@@ -383,7 +383,9 @@ class WarpLogRecordExporterConcurrencyTest {
     // in-memory log can, straight through `snapshot()`.
 
     /**
-     * A store whose **first** [write] parks: it completes [entered], then awaits [release].
+     * A store whose **first segment** [write] parks: it completes [entered], then awaits [release].
+     * A segment write, because the index write claiming a turn's ids lands before the turn mints
+     * (#3452), and a turn parked there has nothing in the log to see.
      *
      * That holds exactly one turn open inside its commit, on a real thread, so a test can start a
      * second turn and look at what it has done by the time it settles.
@@ -403,7 +405,8 @@ class WarpLogRecordExporterConcurrencyTest {
         override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
 
         override suspend fun write(key: StoreKey, bytes: ByteArray) {
-            val park = lock.withLock { if (parkTaken) false else true.also { parkTaken = true } }
+            val segment = key.name.startsWith(SEGMENT_KEY_PREFIX_FOR_TEST)
+            val park = lock.withLock { if (parkTaken || !segment) false else true.also { parkTaken = true } }
             if (park) {
                 entered.complete(Unit)
                 release.await()
