@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -74,6 +75,39 @@ class W1BridgeProbeTest {
             { assertEquals(listOf(emptyList<StepRefusal>(), emptyList()), b.applies.map { it.refusals }, "the rig: four joined and fine left") },
             { assertEquals(emptyList(), b.heavyApply.refusals, "heavy lands") },
             { assertEquals(x, assertIs<AcquireOutcome.Acquired>(picked, "and is picked").lease.leaf) },
+        )
+    }
+
+    /**
+     * The waker (design §7.1): a child already active, seen idle, that asks again at a front its
+     * clamp cannot reach inside the limit is never seen by `apply`, so the step refuses it. `light`'s
+     * position is planted at `2⁹⁴` ticks, a write any peer could make, so the front is `2⁹⁰`, and
+     * `heavy`'s clamp there is `2⁹⁰ · 2⁴⁰ · 16 = 2¹³⁴` ticks. Asking for `heavy` answers
+     * `LifetimeExhausted(root)` and changes nothing, the wake memory included. With `heavy` left out
+     * of the waiting set, `light` leases.
+     */
+    @Test
+    fun aWakerWhoseClampWouldPassTheLimitIsRefusedAndChangesNothing() {
+        val shape = tree("light" to Weight.ONE, "heavy" to Weight.of(1L shl 40))
+        val l = shape.groupId("light")
+        val x = shape.groupId("heavy")
+        val h = LocalHeddle.bootWhole(shape, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+        h.mintSupply(1L shl 20)
+        lease(h, setOf(l, x), x, 0L)
+        repeat(2) { lease(h, setOf(l), l, 1L + it) }
+        val edge = checkNotNull(h.snapshot().ledger.lineageOf(l)).last()
+        h.reshapeForTest { ledger ->
+            ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to gaugeAt(Int128.fromTwosComplement(1L shl 30, 0L), folded = ledger.baseIssuance(edge)))))
+        }
+        val before = h.snapshot()
+        val refused = h.acquire(setOf(l, x), setOf(x), startedAt = 10L, reservation = 1L)
+        val after = h.snapshot()
+        val light = h.acquire(setOf(l), setOf(l), startedAt = 11L, reservation = 1L)
+        assertAll(
+            { assertEquals(false, before.allocatorMemory.demandingObserved[checkNotNull(before.ledger.lineageOf(x)).last()], "the rig: heavy was seen idle") },
+            { assertEquals(AcquireOutcome.LifetimeExhausted(GroupId("p")), refused, "heavy's clamp would pass the limit") },
+            { assertEquals(before, after, "and nothing changed, the wake memory included") },
+            { assertEquals(l, assertIs<AcquireOutcome.Acquired>(light, "light still leases").lease.leaf) },
         )
     }
 
