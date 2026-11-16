@@ -53,6 +53,20 @@ public class MetricCatalog(
     public val doubleUpDownSums: Map<MetricKey, PNCounterDouble> = emptyMap(),
 ) : Quilted<MetricCatalog> {
 
+    /**
+     * The five-map constructor this class had before the up-down maps, kept so code compiled
+     * against it still links. Hidden, so new code resolves to the primary constructor, and the
+     * serializer uses the primary too.
+     */
+    @Deprecated("Binary compatibility only; use the primary constructor.", level = DeprecationLevel.HIDDEN)
+    public constructor(
+        sums: Map<MetricKey, GCounter> = emptyMap(),
+        doubleSums: Map<MetricKey, GCounterDouble> = emptyMap(),
+        gauges: Map<MetricKey, LWWRegister<Double>> = emptyMap(),
+        cardinalities: Map<MetricKey, HyperLogLog> = emptyMap(),
+        histograms: Map<MetricKey, DDSketch> = emptyMap(),
+    ) : this(sums, doubleSums, gauges, cardinalities, histograms, emptyMap(), emptyMap())
+
     override fun piece(other: MetricCatalog): MetricCatalog = MetricCatalog(
         sums = mergeMaps(sums, other.sums),
         doubleSums = mergeMaps(doubleSums, other.doubleSums),

@@ -291,6 +291,8 @@ public final class us/tractat/kuilt/otel/MetricBufferPolicyKt {
 public final class us/tractat/kuilt/otel/MetricCatalog : us/tractat/kuilt/crdt/Quilted {
 	public static final field Companion Lus/tractat/kuilt/otel/MetricCatalog$Companion;
 	public fun <init> ()V
+	public synthetic fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;)V
 	public synthetic fun <init> (Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun causalDots ()Ljava/util/Set;
