@@ -141,7 +141,7 @@ class WarpSpanExporterStoreMintedCancellationTest {
     }
 
     @Test
-    fun aCancellationTheStoreMintsOnTheClockPersistFailsTheExportAndRollsTheStampBack() = runTest {
+    fun aCancellationTheStoreMintsOnTheClockPersistFailsTheExportAndPublishesNothing() = runTest {
         val store = CancellationScriptedStore(RecordingStore())
         val exporter = WarpSpanExporter(replica, store, causalClock = WarpCausalClock(replica))
 

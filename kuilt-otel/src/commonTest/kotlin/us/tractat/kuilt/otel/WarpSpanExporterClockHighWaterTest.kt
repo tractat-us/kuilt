@@ -277,7 +277,7 @@ class WarpSpanExporterClockHighWaterTest {
 
     /**
      * The clock's entry is ahead of every span: it minted ten dots no stored span holds, as a stamp
-     * rolled back from a refused write leaves one. A write that mints nothing, a merge here, still
+     * minted for a write that was refused, and so never published, leaves one. A write that mints nothing, a merge here, still
      * carries the clock's `seq`, so a later corrupt entry floors above all ten.
      */
     @Test

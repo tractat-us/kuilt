@@ -32,7 +32,7 @@ class IndeterminateWriteAuditTest {
     )
 
     @Test
-    fun stampedSpanRollbackDoesNotUndoTheDurableWriteAndRestartRetryDuplicates() = runTest {
+    fun aFailedExportPublishesNothingYetItsLandedWriteIsRecoveredAndARestartRetryDuplicates() = runTest {
         for (mode in CommitMode.entries) {
             val store = CommitThenFailStore(StoreKey("otel.spans"), mode)
             val clock = WarpCausalClock(replica)
@@ -57,7 +57,7 @@ class IndeterminateWriteAuditTest {
             val retried = recovered.snapshot().elements
             assertAll(
                 { assertEquals(1, store.injections, "$mode: span commit-before-failure injection must fire") },
-                { assertEquals(0, live.size, "$mode: a refused or cancelled export rolls the minted stamp back") },
+                { assertEquals(0, live.size, "$mode: a refused or cancelled export publishes nothing") },
                 { assertEquals(1, durable.size, "$mode: an unacknowledged export may still have been persisted") },
                 { assertEquals(2, retried.size, "audit: retry after recovery creates another stamped copy") },
                 { assertEquals(2, retried.map { it.causalStamp?.dot }.toSet().size, "recovery must not reuse the dot") },
@@ -71,7 +71,7 @@ class IndeterminateWriteAuditTest {
      * leave one stamped copy rather than the two a kept stamp used to produce.
      */
     @Test
-    fun exportCancelledInsideTheWriteRollsBackSoARetryDoesNotDuplicate() = runTest {
+    fun exportCancelledInsideTheWritePublishesNothingSoARetryDoesNotDuplicate() = runTest {
         val spansKey = StoreKey("otel.spans")
         val store = ParkingStore(spansKey)
         val exporter = WarpSpanExporter(replica, store, causalClock = WarpCausalClock(replica))

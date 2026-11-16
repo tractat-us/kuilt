@@ -548,9 +548,9 @@ class WarpSpanExporterRefusedReadBackoffTest {
     }
 
     /**
-     * A recovered exporter tries its add before the write section, and at the span set's clock ceiling
-     * (#3441) that add is refused and the export returns there. The clock's skip was already decided,
-     * so the refused export must spend it too: otherwise every later export decides the same window
+     * A recovered exporter tries its add inside the write section (#3517), and at the span set's clock
+     * ceiling (#3441) that add is refused and the export returns there. The clock's skip was already
+     * decided, so the refused export must spend it too: otherwise every later export decides the same window
      * again, and the clock is never read for as long as the set stays at the ceiling.
      */
     @Test
