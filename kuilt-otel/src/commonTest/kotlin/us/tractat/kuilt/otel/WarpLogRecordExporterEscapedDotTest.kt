@@ -132,7 +132,8 @@ class WarpLogRecordExporterEscapedDotTest {
         val escape = escapeOne(AppliedOpSink.Discarding)
         val restarted = exporterFor(escape.backing)
         restarted.recover()
-        repeat(20) { assertEquals(ExportResult.Success, restarted.export(record(200 + it)), "the rig: export $it") }
+        // More than the window holds, so the tombstones ahead of the returned record outnumber one pass.
+        repeat(150) { assertEquals(ExportResult.Success, restarted.export(record(200 + it)), "the rig: export $it") }
         assertEquals(ExportResult.Success, restarted.merge(escape.gossiped), "the merge back")
         val returned = restarted.snapshot().entries().map { it.first }
         repeat(400) { assertEquals(ExportResult.Success, restarted.export(record(1000 + it)), "export ${1000 + it}") }
