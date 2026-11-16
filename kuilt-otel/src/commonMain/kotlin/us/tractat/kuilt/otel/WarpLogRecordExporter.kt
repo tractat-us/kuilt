@@ -1873,7 +1873,7 @@ public class WarpLogRecordExporter(
      * before its mints are covered. A process that restarts inside an outage that refuses the index
      * write too, as a full disk crash-looping the app does, therefore mints `claim + 1` on every
      * incarnation without a claim behind it. Each such record that escapes, to a sink or a peer,
-     * shares its dot with the next incarnation's. `WarpLogRecordExporterEscapedDotTest` pins that
+     * shares its dot with the next incarnation's (#3521). `WarpLogRecordExporterEscapedDotTest` pins that
      * behaviour as it stands.
      */
     private suspend fun claimMintsAhead(records: List<LogRecord>, from: Int) {
