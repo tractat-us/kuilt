@@ -762,10 +762,14 @@ its `ApplyResult`.
 
 **The position ceiling.** Each child's progress is a count of sixteenths of a unit, stored exactly
 in 128 bits and compared by a pick in 128 bits too, so no position ever refuses a pick. It has a
-ceiling all the same, past which the public virtual-time reads (`virtualService` and its kin)
+ceiling all the same, past which the public `Rational` reads (`virtualService` and its kin)
 report the ceiling, the penalty side. Nothing brings a busy parent's positions back down, so a
 long-running parent passes it, and a heavy child joining lighter ones lands far up its own grid
-at once. The picks carry on exactly there; only the reads saturate.
+at once. The picks carry on exactly there; only the reads saturate. **Read the wide siblings
+instead**: `virtualServiceWide`, `grossVirtualServiceWide`, `frontWide`, `virtualTimeWide`,
+`parentVirtualTimeWide`, and `BehindAtLevel`'s `leafSideVirtualServiceWide`, `frontWide` and
+`eligibleFrontWide`. Each answers a `VirtualTime`, exact at every position the limit allows,
+comparable, with `toDouble()` for a log line. The `Rational` reads stay, deprecated.
 
 **The lifetime limit.** What a long-lived engine meets first is two of the ledger's `Long`
 counters: an edge's effective issuance, which counts every reservation, extension and overrun

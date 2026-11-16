@@ -487,12 +487,25 @@ public class FairShareAllocator(
      * A **diagnostic**: it depends on [demand] and on this allocator's non-replicated wake clamps,
      * so two peers legitimately read different values at the same instant.
      */
+    @Deprecated("A Rational read sticks at the ceiling once nothing rebases (design §7.1); read virtualTimeWide(ledger, parent, demand), a VirtualTime, instead.", ReplaceWith("virtualTimeWide(ledger, parent, demand)"))
     public fun virtualTime(
         ledger: EntitlementLedger,
         parent: GroupId,
         demand: (AttachmentId) -> Demand,
     ): Rational? =
         if (childWeightsFit(ledger, parent)) heldFront(policyEdges(ledger, parent, demand)) else null
+
+    /**
+     * [virtualTime] as a [VirtualTime], exact and never held (design §7.1): the demanding
+     * children's weighted mean, or the furthest-ahead child when none is demanding. `null` as
+     * [virtualTime] answers it, and over a merged load whose sum leaves 128 bits.
+     */
+    public fun virtualTimeWide(
+        ledger: EntitlementLedger,
+        parent: GroupId,
+        demand: (AttachmentId) -> Demand,
+    ): VirtualTime? =
+        if (childWeightsFit(ledger, parent)) HeddlePolicy.frontWide(policyEdges(ledger, parent, demand)) else null
 
     /**
      * [HeddlePolicy.front] over [edges], each position read inside its window, for a diagnostic
@@ -509,7 +522,14 @@ public class FairShareAllocator(
         val demanding = edges.filter { HeddlePolicy.isDemanding(it) }
         if (demanding.isEmpty()) return edges.maxOf { readVirtual(HeddlePolicy.effectiveTicksWide(it), it.record.weight) }
         val held = demanding.map { Int128.of(inWindow(HeddlePolicy.effectiveTicksWide(it), it.record.weight)) }
-        return VirtualTime.mean(held, demanding.map { it.record.weight }).toRational()
+        // The exact mean of children held at their ceilings need not reduce into a `Long` Rational
+        // (#3523 review): the deprecated read then saturates on the penalty side, at the furthest
+        // held child, rather than throw. The wide read, virtualTimeWide, stays exact.
+        return try {
+            VirtualTime.mean(held, demanding.map { it.record.weight }).toRational()
+        } catch (_: ArithmeticException) {
+            demanding.maxOf { readVirtual(HeddlePolicy.effectiveTicksWide(it), it.record.weight) }
+        }
     }
 
     /**
@@ -517,6 +537,12 @@ public class FairShareAllocator(
      * [HeddlePolicy.virtualService] plus this allocator's stored wake clamp. `null` when [edge] is
      * not an active child of [parent]. A diagnostic, like [virtualTime]: it observes nothing.
      */
+    /** [effectiveVirtualService] as a [VirtualTime], exact and never held. */
+    internal fun effectiveVirtualTime(ledger: EntitlementLedger, parent: GroupId, edge: AttachmentId): VirtualTime? =
+        policyEdges(ledger, parent, demand = { Demand.NONE })
+            .firstOrNull { it.record.id == edge }
+            ?.let { VirtualTime.of(HeddlePolicy.effectiveTicksWide(it), it.record.weight) }
+
     internal fun effectiveVirtualService(ledger: EntitlementLedger, parent: GroupId, edge: AttachmentId): Rational? =
         policyEdges(ledger, parent, demand = { Demand.NONE })
             .firstOrNull { it.record.id == edge }

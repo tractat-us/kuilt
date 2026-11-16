@@ -433,8 +433,13 @@ public class HeddleNode internal constructor(
      *
      * @see prepare for the divergence hazard of two peers preparing one id on the ungoverned path.
      */
+    @Deprecated("A Rational read sticks at the ceiling once nothing rebases (design §7.1); read parentVirtualTimeWide(parent), a VirtualTime, instead.", ReplaceWith("parentVirtualTimeWide(parent)"))
     public fun parentVirtualTime(parent: GroupId): Rational? =
-        lock.withLock { allocator.virtualTime(ledger.value, parent, demand = ::liveDemand) }
+        lock.withLock { @Suppress("DEPRECATION") allocator.virtualTime(ledger.value, parent, demand = ::liveDemand) }
+
+    /** [parentVirtualTime] as a [VirtualTime], exact and never held (design §7.1). */
+    public fun parentVirtualTimeWide(parent: GroupId): VirtualTime? =
+        lock.withLock { allocator.virtualTimeWide(ledger.value, parent, demand = ::liveDemand) }
 
     /**
      * The current §8.2 bound metrics at [parent], from the merged ledger, the roster (live

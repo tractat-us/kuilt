@@ -101,11 +101,43 @@ public sealed interface WaitExplanation {
     public data class BehindAtLevel(
         public val parent: GroupId,
         public val nextChild: GroupId,
+        @Deprecated("Held at the ceiling once nothing rebases (design §7.1); read leafSideVirtualServiceWide.", ReplaceWith("leafSideVirtualServiceWide"))
         public val leafSideVirtualService: Rational,
+        @Deprecated("Held at the ceiling once nothing rebases (design §7.1); read frontWide.", ReplaceWith("frontWide"))
         public val front: Rational,
+        @Deprecated("Held at the ceiling once nothing rebases (design §7.1); read eligibleFrontWide.", ReplaceWith("eligibleFrontWide"))
         public val eligibleFront: Rational,
     ) : WaitExplanation {
         override val kind: Kind get() = Kind.BEHIND_AT_LEVEL
+
+        /**
+         * [leafSideVirtualService], exact and never held (design §7.1). Set by [LocalHeddle.explain];
+         * `null` on a value a caller built itself, and on any [copy], which carries only the
+         * constructor's values. Not part of [equals] or the components, so a caller compiled
+         * against the three `Rational`s is unaffected.
+         */
+        public var leafSideVirtualServiceWide: VirtualTime? = null
+            private set
+
+        /** [front], exact and never held; as [leafSideVirtualServiceWide]. */
+        public var frontWide: VirtualTime? = null
+            private set
+
+        /** [eligibleFront], exact and never held; as [leafSideVirtualServiceWide]. */
+        public var eligibleFrontWide: VirtualTime? = null
+            private set
+
+        internal constructor(
+            parent: GroupId,
+            nextChild: GroupId,
+            leafSide: Pair<Rational, VirtualTime>,
+            front: Pair<Rational, VirtualTime?>,
+            eligibleFront: Pair<Rational, VirtualTime?>,
+        ) : this(parent, nextChild, leafSide.first, front.first, eligibleFront.first) {
+            leafSideVirtualServiceWide = leafSide.second
+            frontWide = front.second
+            eligibleFrontWide = eligibleFront.second
+        }
     }
 
     /** The next acquire, on these sets and this reservation, picks this leaf. */

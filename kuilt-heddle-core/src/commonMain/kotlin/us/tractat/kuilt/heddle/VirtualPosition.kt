@@ -310,12 +310,18 @@ internal tailrec fun gcdOf(a: Long, b: Long): Long = if (b == 0L) a else gcdOf(b
  *
  * The one thing read off it is [ticksForWide], a joiner's position on its own grid, so the
  * comparison a pick makes and the position a seat writes are the same expression.
+ *
+ * **A public read since step B, slice 6** (design §7.1). With no origin, a virtual time is absolute,
+ * and a `Long` [Rational] runs out after about `2⁵⁹ / d` units, one largest lease at a fine weight.
+ * So each `Rational` read has a sibling that answers a `VirtualTime`, exact at every value the
+ * position limit allows: compare two with [compareTo], show one with [toDouble]. Only this module
+ * builds one.
  */
-internal class VirtualTime(
+public class VirtualTime internal constructor(
     private val ticks: Int128,
     private val weightNumerator: Long,
     private val weightDenominator: Long,
-) {
+) : Comparable<VirtualTime> {
     init {
         require(weightNumerator > 0L && weightDenominator > 0L) { "weight must be positive" }
     }
@@ -336,12 +342,17 @@ internal class VirtualTime(
      * @throws ArithmeticException if a weight product does not fit in a `Long`, which
      *   [weightsFitTheBudget] rules out for a topology [LocalHeddle.apply] accepted.
      */
-    fun ticksForWide(w: Weight): Ticks {
+    internal fun ticksForWide(w: Weight): Ticks {
         val multiplier = checkedMul(weightDenominator, w.numerator)
         val divisor = checkedMul(weightNumerator, w.denominator)
         val value = mulDiv(ticks, multiplier, divisor, Rounding.CEILING) ?: return Ticks.PastLimit
         return if (value > POSITION_LIMIT || value < Int128.ZERO - POSITION_LIMIT) Ticks.PastLimit else Ticks.Fits(value)
     }
+
+    /** This time on the grid of weight [w], rounded down: `⌊V · w · G⌋` ticks. */
+    internal fun floorTicksFor(w: Weight): Int128 =
+        mulDiv(ticks, checkedMul(weightDenominator, w.numerator), checkedMul(weightNumerator, w.denominator), Rounding.FLOOR)
+            ?: throw ArithmeticException("Int128 overflow: a virtual time read on the grid of $w")
 
     /**
      * Whether [position], ticks on the grid of weight [w], is at or below this time read on that
@@ -349,19 +360,19 @@ internal class VirtualTime(
      * Exact for every pair, with no position limit: a bound past 128 bits is above every position
      * when this time is positive and below every one when it is negative.
      */
-    fun admits(position: Int128, w: Weight): Boolean {
+    internal fun admits(position: Int128, w: Weight): Boolean {
         val bound = mulDiv(ticks, checkedMul(weightDenominator, w.numerator), checkedMul(weightNumerator, w.denominator), Rounding.CEILING)
             ?: return ticks > Int128.ZERO
         return position <= bound
     }
 
     /** This time in whole units of virtual time, rounded down: `⌊ticks / (G · w)⌋`. */
-    fun unitsFloor(): Int128 =
+    internal fun unitsFloor(): Int128 =
         mulDiv(ticks, weightDenominator, checkedMul(TICKS_PER_UNIT, weightNumerator), Rounding.FLOOR)
             ?: throw ArithmeticException("Int128 overflow: $ticks · $weightDenominator / (G · $weightNumerator)")
 
     /** This time as an exact [Rational], for diagnostics. Throws when it does not fit one. */
-    fun toRational(): Rational {
+    internal fun toRational(): Rational {
         val denominator = checkedMul(TICKS_PER_UNIT, weightNumerator)
         val g = gcd(denominator, absRemainder128(ticks, denominator))
         val numerator = ticks.divideOrNull(g, Rounding.FLOOR) // exact: g divides ticks
@@ -369,7 +380,23 @@ internal class VirtualTime(
         return Rational.of(checkedMul(numerator, weightDenominator), denominator / g)
     }
 
-    companion object {
+    /** The order of the two virtual times, exactly, however far either has run. */
+    override fun compareTo(other: VirtualTime): Int =
+        compareVirtualWide(ticks, Weight.of(weightNumerator, weightDenominator), other.ticks, Weight.of(other.weightNumerator, other.weightDenominator))
+
+    /** This time in units of virtual time, as the nearest `Double`: for display, never for a decision. */
+    public fun toDouble(): Double = ticks.toDouble() * weightDenominator.toDouble() / (TICKS_PER_UNIT.toDouble() * weightNumerator.toDouble())
+
+    /** Equal when the two stand for the same virtual time, however each was formed. */
+    override fun equals(other: Any?): Boolean = other is VirtualTime && compareTo(other) == 0
+
+    /** From the whole units, which two equal times share. */
+    override fun hashCode(): Int =
+        mulDiv(ticks, weightDenominator, checkedMul(TICKS_PER_UNIT, weightNumerator), Rounding.FLOOR)?.hashCode() ?: 0
+
+    override fun toString(): String = "VirtualTime(${toDouble()})"
+
+    internal companion object {
         /**
          * The weighted mean of [positions] over [weights]: `Σ p / (G · Σ w)` (design §7.3 step 2).
          * The weights are brought to one denominator, their least common multiple `L`, so
