@@ -246,8 +246,9 @@ jobs:
       # the native targets cold. build-jvm still compiles the native main sources
       # (via assemble/build), so it needs the toolchain too. Keyed on the
       # toolchain-defining files; shared key with build-native (same cache).
-      - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v6
+      - name: Restore Kotlin/Native (~/.konan)
+        id: konan
+        uses: actions/cache/restore@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -369,6 +370,16 @@ jobs:
           -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
+      # Only `main` writes ~/.konan (#3115). A plain actions/cache step also saves from a PR or
+      # a merge group, on a miss or a restore-keys prefix hit, and each such entry evicts
+      # `main`'s from the full 10 GB store.
+      - name: Save Kotlin/Native (~/.konan)
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
+
       - name: Stamp invariance — a changed version re-runs only what reads it (#3464)
         # The second pass over the build above: the same compile and JVM test tasks again at a
         # different -Pversion, failing on any task outside .github/stamp-invariance-allowlist.txt
@@ -433,8 +444,9 @@ jobs:
           gradle-version: wrapper
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
-      - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v6
+      - name: Restore Kotlin/Native (~/.konan)
+        id: konan
+        uses: actions/cache/restore@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -517,6 +529,14 @@ jobs:
           -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
+      # Only `main` writes ~/.konan; build-jvm's save step says why (#3115).
+      - name: Save Kotlin/Native (~/.konan)
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
+
       - name: Kill jstack heartbeat
         if: always()
         run: |
@@ -585,8 +605,9 @@ jobs:
 
       # Dokka analyses every target's main sources (incl. the native source sets),
       # so it needs the Kotlin/Native toolchain — same konan cache as the build jobs.
-      - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v6
+      - name: Restore Kotlin/Native (~/.konan)
+        id: konan
+        uses: actions/cache/restore@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -607,6 +628,14 @@ jobs:
         # NOT the full-site `dokkaGenerate` (which also runs the cross-module link/merge
         # pass) — the module-doc build is what parses module.md + KDoc and is far faster.
         run: ./gradlew dokkaGenerateModuleHtml --max-workers=2
+
+      # Only `main` writes ~/.konan; build-jvm's save step says why (#3115).
+      - name: Save Kotlin/Native (~/.konan)
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
 
   # ── test-result-parity ──────────────────────────────────────────────────────
   # The one place a JVM result and a wasm result exist on the same machine (#2185).
@@ -1236,8 +1265,9 @@ jobs:
       # here normally restores a toolchain the nightly already warmed. No Android SDK
       # step: the macos-latest image ships one, and apple-nightly.yml configures the
       # same Android library modules without it.
-      - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v6
+      - name: Restore Kotlin/Native (~/.konan)
+        id: konan
+        uses: actions/cache/restore@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -1256,6 +1286,14 @@ jobs:
           --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      # Only `main` writes ~/.konan; build-jvm's save step says why (#3115).
+      - name: Save Kotlin/Native (~/.konan)
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
 
   # ── ci-required ────────────────────────────────────────────────────────────
   # The SOLE required status check. Aggregates detect + build-jvm + build-native

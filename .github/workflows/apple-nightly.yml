@@ -122,8 +122,9 @@ jobs:
       # not ~/.konan, so without this every run re-downloads konan and recompiles
       # the native targets cold. Keyed on the toolchain-defining files, matching
       # ci.yml's konan cache step (macOS-scoped runner.os key).
-      - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v6
+      - name: Restore Kotlin/Native (~/.konan)
+        id: konan
+        uses: actions/cache/restore@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -155,6 +156,14 @@ jobs:
           ./gradlew ${{ matrix.target }}Test --continue --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      # Only `main` writes ~/.konan, as in ci.yml (#3115).
+      - name: Save Kotlin/Native (~/.konan)
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
 
       # Per-module wall time for every test task, in the run's summary, with a warning on any task
       # over 15 min. One module's tests reached 32 min per target without a word until the job
@@ -197,8 +206,9 @@ jobs:
           gradle-version: wrapper
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
-      - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v6
+      - name: Restore Kotlin/Native (~/.konan)
+        id: konan
+        uses: actions/cache/restore@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -213,6 +223,14 @@ jobs:
           ./gradlew stampProbeTargets -Pkuilt.stampProbe.family=apple --continue --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      # Only `main` writes ~/.konan, as in ci.yml (#3115).
+      - name: Save Kotlin/Native (~/.konan)
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
 
       # The Apple-native half of ci.yml's stamp-invariance step (#3464): the step above is the
       # first pass, and this re-runs its macosArm64 and iosSimulatorArm64 compilations at a
@@ -373,8 +391,9 @@ jobs:
           gradle-version: wrapper
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
-      - name: Cache Kotlin/Native (~/.konan)
-        uses: actions/cache@v6
+      - name: Restore Kotlin/Native (~/.konan)
+        id: konan
+        uses: actions/cache/restore@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
@@ -388,6 +407,14 @@ jobs:
           ./gradlew checkKotlinAbi --continue --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
+
+      # Only `main` writes ~/.konan, as in ci.yml (#3115).
+      - name: Save Kotlin/Native (~/.konan)
+        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.konan
+          key: ${{ steps.konan.outputs.cache-primary-key }}
 
       - name: Regenerate the ABI dumps
         if: ${{ inputs.update_abi || failure() }}
