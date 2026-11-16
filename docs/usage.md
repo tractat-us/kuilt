@@ -817,8 +817,9 @@ genuinely unexpected, or the throwable came out of your own code, the trace
 stays. `SpeculativeSequencer` is the case that tests the rule: when your `apply`
 refuses a committed action it logs the refusal with the throwable, so an app
 whose `apply` refuses often pays a trace per refusal on Apple debug builds. It
-keeps the throwable (#3537), because that trace points into your `apply`, and it
-is the one place that says why the action was refused.
+keeps the throwable (#3537): it was thrown by your `apply`, so its trace is the
+diagnostic. If refusals are routine in your app, `libbacktrace` will not remove
+the per-trace cost, but a release build may differ and is worth measuring.
 
 ## For coding agents
 
