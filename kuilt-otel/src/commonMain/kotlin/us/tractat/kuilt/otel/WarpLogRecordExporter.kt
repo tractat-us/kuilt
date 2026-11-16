@@ -696,9 +696,8 @@ public class WarpLogRecordExporter(
          *
          * The cost of a larger lease is the gap a restart leaves: up to this many seqs this replica
          * never mints, which the window's floor crosses ([Rga.dropWindowPastUnheld]), and as many
-         * lamports. The cost of a smaller one is an outage that also refuses the index write: a turn
-         * whose claim is refused mints nothing, so such an outage admits at least half a lease of
-         * records and then refuses them, where without a claim it admitted every one.
+         * lamports. The cost of a smaller one is more index writes, and a shorter run of records
+         * covered ahead of an outage that refuses the index write too.
          */
         private const val MINT_LEASE = 1L shl 16
 
@@ -1702,11 +1701,8 @@ public class WarpLogRecordExporter(
      * which a [recover] against a store written with a larger [segmentOps] can produce.
      */
     private suspend fun exportTurn(records: List<LogRecord>, from: Int): TurnOutcome {
-        // Before anything is minted: a refused claim refuses the rest of the batch, as a refused
-        // read does, and the next call claims again.
-        claimMintsAhead(records.size - from)?.let { refused ->
-            return TurnOutcome(consumed = records.size - from, result = refused)
-        }
+        // Before anything is minted, so no id this turn mints is visible ahead of a claim past it.
+        claimMintsAhead(records, from)
         var consumed = 0
         var accepted = 0
         var applied: List<RgaOp<LogRecord>> = emptyList()
@@ -1823,31 +1819,50 @@ public class WarpLogRecordExporter(
     }
 
     /**
-     * Make sure an index on disk claims past every id a turn over [pending] records can mint, and
-     * return the [ExportResult.Failure] of the write when it had to make one and the store refused
-     * it. Must hold [writeMutex], and runs before the turn takes [lock] to mint (#3452).
+     * Make sure an index on disk claims past every id the turn over `records[from …]` can mint
+     * before it mints them, so none of them is in [log], in [snapshot] or on its way to
+     * [appliedOps] ahead of a claim a restart is bound to mint past (#3452). Must hold
+     * [writeMutex], and runs before the turn takes [lock] to mint.
      *
-     * A turn mints at most `min(pending, maxRecords)` ids ([fitsInTurn]), each one seq and one
-     * lamport past the last. While the claim on disk reaches half a [MINT_LEASE] past that, this
-     * writes nothing. Otherwise it writes the index with the claim raised a whole lease past it,
-     * and only once that write returns may the turn mint: so an id is never in [log], in
-     * [snapshot] or on its way to [appliedOps] before a restart is bound to mint past it.
+     * The turn mints at most one id per record [seenIds] does not already hold, and at most
+     * [maxRecords] ([fitsInTurn]), each one seq and one lamport past the last. While the claim
+     * reaches half a [MINT_LEASE] past that, this writes nothing, and a turn that can mint
+     * nothing never writes. Otherwise it writes the index with the claim raised a whole lease past
+     * it. A turn the insert will refuse at the clock ceiling writes nothing either (#3431).
      *
-     * A claim that cannot rise further, both counters at [Long.MAX_VALUE], writes nothing, and
-     * the insert then refuses the turn itself (#3431).
+     * **Best effort, and that is the residual.** A refused claim does not refuse the turn: the turn
+     * mints, publishes and attempts its write as before, so a store that refuses every write still
+     * hands each record to [appliedOps] before refusing it, as [AppliedOpSink] promises. The ids
+     * such a turn mints are covered by the next claim that lands, which the next turn to mint
+     * writes first, since a claim is taken from [log]'s own counters. What stays open is an outage
+     * that refuses the index write too, a record that escapes during it, and a crash before a later
+     * claim lands: that record's dot can be minted again after the restart.
      */
-    private suspend fun claimMintsAhead(pending: Int): ExportResult.Failure? {
+    private suspend fun claimMintsAhead(records: List<LogRecord>, from: Int) {
         val claim = lock.withLock {
-            val mints = minOf(pending, maxRecords).toLong()
-            val needed = MintClaim(log.seqHighWater(replica), log.lamport).plus(mints)
-            if (mintClaim.covers(needed.plus(MINT_LEASE / 2))) return null
+            val mints = records.subList(from, records.size).asSequence()
+                .filter { it.recordId !in seenIds }
+                .take(maxRecords)
+                .count()
+                .toLong()
+            if (mints == 0L) return
+            // Past the ceiling the insert refuses the turn, which must then have written nothing.
+            val seq = log.seqHighWater(replica).plusOrNull(mints) ?: return
+            val lamport = log.lamport.plusOrNull(mints) ?: return
+            val needed = MintClaim(seq, lamport)
+            if (mintClaim.covers(needed.plus(MINT_LEASE / 2))) return
             val target = mintClaim.atLeast(needed.plus(MINT_LEASE))
             StoreAction.CommitClaim(encodeIndex(claim = target), target)
         }
-        val result = commit(listOf(claim)) { cause ->
-            logger.error(cause) { "WarpLogRecordExporter: the index write claiming the next ids failed; nothing is minted" }
+        // Not through [commit]: a refused claim is not a refused export, so it neither counts on
+        // [health] nor opens the outage latch. The turn's own write reports the outage.
+        val swept = mutableListOf<Long>()
+        val outcome = attemptStoreTurn(listOf(claim), swept)
+        // A refused index write may have landed in part, so the next turn rewrites it.
+        lock.withLock { ledgerSwept(swept, turnFailed = outcome.isFailure) }
+        outcome.onFailure { cause ->
+            logger.debug { "WarpLogRecordExporter: the index write claiming the next ids was refused; minting anyway: $cause" }
         }
-        return result as? ExportResult.Failure
     }
 
     /**
