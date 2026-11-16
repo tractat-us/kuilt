@@ -16,6 +16,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.io.bytestring.ByteString
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
@@ -2329,6 +2330,9 @@ public class WarpLogRecordExporter(
         val actions = runCatchingCancellable {
             lock.withLock {
                 windowPass(retain = 0)
+                // The pass's floor stops at the highest own seq it held; ids recovery could not
+                // read may lie above it (#3513).
+                dropUnheldOwn()
                 // Unconditional, and NOT gated on whether the pass moved anything. Gating is
                 // the obvious optimisation and it silently breaks the retry: a clear whose
                 // commit failed has already dropped everything in memory, so the retry's pass
@@ -3284,11 +3288,35 @@ public class WarpLogRecordExporter(
         // ids already under the floor, or never delivered here — comes back as this very
         // state with an inert delta. Persisting that would rewrite the segment for nothing.
         if (newLog === log) return false
+        installDrop(newLog, delta)
+        return true
+    }
+
+    /**
+     * Raise this replica's floor to its seq high-water, past ids it does not hold. [clear]'s second
+     * step, after a pass at `retain = 0` has dropped everything held. Must hold [lock].
+     *
+     * The pass's floor walk ends at the highest own seq it drops. A recovery that could not read a
+     * sealed segment raised the seq past that segment's ids, and when the segment holds this
+     * replica's newest ids no dropped seq lies above them, so the walk leaves them open
+     * ([Rga.dropWindowPastUnheld]). Their records would then come back when a later start reads
+     * the segment, or when a peer that holds them merges (#3513). Here the clear forgets them too.
+     *
+     * Every id under the high-water was minted here, so the raise annihilates nothing unminted. A
+     * peer's record anchored on one of them re-roots to HEAD, as one anchored on a held id the pass
+     * dropped already does.
+     */
+    private fun dropUnheldOwn() {
+        val (newLog, delta) = log.dropAllOwn(replica) ?: return
+        installDrop(newLog, delta)
+    }
+
+    /** Install a drop's new [log] and put its [delta] into [activeSegment]. Must hold [lock]. */
+    private fun installDrop(newLog: Rga<LogRecord>, delta: Patch<Rga<LogRecord>>) {
         log = newLog
         activeSegment = activeSegment.piece(delta)
         activeOpCount = opCountOf(activeSegment)
         rebuildDerivedState()
-        return true
     }
 
     /**
