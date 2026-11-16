@@ -1150,7 +1150,10 @@ class LocalHeddlePersistenceTest {
      * [GOLDEN_FORMAT_1_ORIGIN]'s origin is 3 units at `golden`: whole on the grids of `a`, `b` and
      * `c`, which keep their stored ticks, and `3 · 16 / 5` on `d`'s, which comes back one tick
      * higher. `e` has no gauge, and `c`'s wake offset is a distance, so neither moves. A restored
-     * engine then picks what a restored 0.7.5 engine picked, and what it writes holds no origin.
+     * engine then picks what 0.7.5 picked on the same history with no origin raised, the no-rebase
+     * twin. It does not pick what 0.7.5 picked with the origin, and the row asserts that too: 0.7.5
+     * read `d` 0.6 of a tick low, credit its own rounding gave it, and the translation takes it back.
+     * What 0.7.6 writes holds no origin.
      */
     @Test
     fun aFormat1SnapshotWithAnOriginIsReadByTranslatingIt() {
@@ -1179,7 +1182,8 @@ class LocalHeddlePersistenceTest {
             { assertEquals(Int128.of(19L), ticksOf(gd), "d, not whole on its grid, comes back one tick higher than its stored 18") },
             { assertEquals(null, ticksOf(ge), "e has no gauge, so no position to move") },
             { assertEquals(mapOf(checkNotNull(ledger.lineageOf(gc)).last() to Int128.of(72L)), snapshot.allocatorMemory.wakeOffsets, "c's wake offset, a distance, is as written") },
-            { assertEquals(GOLDEN_FORMAT_1_ORIGIN_PICKS, picks, "the restored engine picks what a restored 0.7.5 engine picked") },
+            { assertEquals(GOLDEN_FORMAT_1_NO_ORIGIN_TWIN_PICKS, picks, "the restored engine picks as 0.7.5's no-origin twin did") },
+            { assertTrue(GOLDEN_FORMAT_1_ORIGIN_PICKS != picks, "the rig: d's sub-tick decides a pick, so the origin's rounding shows") },
             { assertTrue("\"parents\"" !in written, "what 0.7.6 writes holds no origin") },
             { assertIs<RestoreResult.Restored>(LocalHeddle.decode(written, Json), "and reads back") },
         )

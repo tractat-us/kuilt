@@ -47,5 +47,18 @@ internal const val GOLDEN_FORMAT_1_CBOR: String = "9f01bf6565706f6368006a746f746
  */
 internal const val GOLDEN_FORMAT_1_ORIGIN: String = """[1,{"epoch":1,"totalSlots":1,"ledger":{"records":{"golden/a@1:1#0":[{"id":"golden/a@1:1#0","parent":"golden","child":"golden/a","weight":{"numerator":1,"denominator":1}}],"golden/b@1:3#0":[{"id":"golden/b@1:3#0","parent":"golden","child":"golden/b","weight":{"numerator":1,"denominator":3}}],"golden/c@1:1#0":[{"id":"golden/c@1:1#0","parent":"golden","child":"golden/c","weight":{"numerator":1,"denominator":1}}],"golden/d@1:5#2":[{"id":"golden/d@1:5#2","parent":"golden","child":"golden/d","weight":{"numerator":1,"denominator":5}}],"golden/e@1:1#3":[{"id":"golden/e@1:1#3","parent":"golden","child":"golden/e","weight":{"numerator":1,"denominator":1}}]},"minted":{"local#1":{"root":"golden","holder":"local","amount":13}},"issued":{"golden/a@1:1#0":{"counts":{"local":7}},"golden/b@1:3#0":{"counts":{"local":2}},"golden/c@1:1#0":{"counts":{"local":2}}},"returned":{},"leafSpent":{"golden/a@1:1#0":{"counts":{"local":7}},"golden/b@1:3#0":{"counts":{"local":2}},"golden/c@1:1#0":{"counts":{"local":2}}},"rollupSpent":{},"transfers":{},"lifecycle":{"golden/a@1:1#0":"ACTIVE","golden/b@1:3#0":"ACTIVE","golden/c@1:1#0":"ACTIVE","golden/d@1:5#2":"ACTIVE","golden/e@1:1#3":"ACTIVE"},"gauges":{"golden/a@1:1#0":{"folded":7,"ticksLow":112},"golden/b@1:3#0":{"folded":2,"ticksLow":32},"golden/c@1:1#0":{"folded":2,"ticksLow":32},"golden/d@1:5#2":{"folded":0,"ticksLow":18}},"parents":{"golden":{"originLow":3}}},"allocatorMemory":{"wakeOffsets":{"golden/c@1:1#0":{"low":72}},"demandingObserved":{"golden/a@1:1#0":true,"golden/b@1:3#0":true,"golden/c@1:1#0":true,"golden/d@1:5#2":true},"clocks":{"golden":{"low":71269996}},"served":{"golden/a@1:1#0":6,"golden/b@1:3#0":2,"golden/c@1:1#0":2,"golden/d@1:5#2":0}},"leases":[],"lastApplied":{"root":"golden","children":[{"type":"lane","name":"a"},{"type":"lane","name":"b","weight":"1/3"},{"type":"lane","name":"c"},{"type":"lane","name":"d","weight":"1/5"},{"type":"lane","name":"e"}]}}]"""
 
-/** The leaves a 0.7.5 engine restored from [GOLDEN_FORMAT_1_ORIGIN] picked, one per call, as its run printed them. */
+/**
+ * The leaves a 0.7.5 engine restored from [GOLDEN_FORMAT_1_ORIGIN] picked, one per call, as its run
+ * printed them. 0.7.6 does not repeat them, and is not meant to: 0.7.5 seated `d` at
+ * `⌊3 · 16 / 5⌋ + 9 = 18` ticks, a share rounded down, so it read `d` 0.6 of a tick below where the
+ * same history puts it with no origin. That is credit, and the translation takes it back (§10.5).
+ */
 internal val GOLDEN_FORMAT_1_ORIGIN_PICKS: List<String> = "golden/e,golden/c,golden/a,golden/b,golden/e,golden/a,golden/d,golden/c,golden/e,golden/a,golden/e,golden/a,golden/b,golden/c,golden/e,golden/a,golden/e,golden/c,golden/a,golden/e,golden/a,golden/b,golden/c,golden/e,golden/a,golden/e,golden/d,golden/a,golden/c,golden/e".split(",")
+
+/**
+ * The leaves a 0.7.5 engine picked on the same history as [GOLDEN_FORMAT_1_ORIGIN] with no origin
+ * raised, restored and called alike: the twin the step B engine must match. That run seated `d` at
+ * 19 ticks, where the translation puts it, and its snapshot differs from the golden only there and
+ * in the origin.
+ */
+internal val GOLDEN_FORMAT_1_NO_ORIGIN_TWIN_PICKS: List<String> = "golden/e,golden/c,golden/a,golden/b,golden/e,golden/a,golden/e,golden/c,golden/a,golden/d,golden/e,golden/a,golden/b,golden/c,golden/e,golden/a,golden/e,golden/c,golden/a,golden/e,golden/a,golden/b,golden/c,golden/e,golden/a,golden/e,golden/d,golden/a,golden/c,golden/e".split(",")
