@@ -2,15 +2,18 @@
 
 package us.tractat.kuilt.otel.otlp
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.client.HttpClient
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
-import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.io.bytestring.ByteString
 import kotlinx.io.bytestring.toHexString
 import kotlinx.serialization.builtins.MapSerializer
@@ -25,13 +28,17 @@ import us.tractat.kuilt.otel.LogDigest
 import us.tractat.kuilt.otel.LogRecord
 import us.tractat.kuilt.otel.MetricDigest
 import us.tractat.kuilt.otel.MetricKey
+import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.MetricPoint
 import us.tractat.kuilt.otel.OtlpEdge
 import us.tractat.kuilt.otel.SpanDigest
+import us.tractat.kuilt.otel.SpanKind
 import us.tractat.kuilt.otel.SpanLink
 import us.tractat.kuilt.otel.SpanRecord
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.StoreKey
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.otlp.OtlpHttpEdge")
 
 /** Which OTLP/HTTP wire encoding an [OtlpHttpEdge] emits. */
 public enum class OtlpWireFormat {
@@ -69,6 +76,29 @@ public enum class OtlpWireFormat {
  * sent-set cannot grow without bound; choose a cap that exceeds the device's realistic
  * offline window.
  *
+ * ## One signal, several requests
+ *
+ * A signal whose request would be bigger than [maxRequestBytes] is split into several,
+ * each under the cap, sent one after another in the order the batch iterates. A span
+ * travels with the links it owns, and every request carries the resource and scope.
+ * A request's records count as delivered only once that request is acknowledged, and
+ * the sent-set is written **once per signal**, after the last request, from a fresh
+ * read. So a refused request, a transport failure or a cancellation part-way still
+ * records the requests that were acknowledged, and the next drain sends only the rest.
+ * The send then throws, so the bridge reports that signal failed with a count of 0,
+ * although the collector holds part of it (see [OtlpEdge]). A process killed before
+ * that write resends the signal's whole batch on the next drain, the bound an unsplit
+ * request already had.
+ *
+ * Too big is decided by this edge's own measurement and by a `413` answer, never by a
+ * `400`: a collector may answer an oversized body with either, and answers a malformed
+ * one with `400` too. A `413` on a request of several records halves it and sends the
+ * halves; the smaller size is not remembered. A record bigger than the cap on its own
+ * is sent alone, after every other request is acknowledged, because the cap is a guess
+ * and the collector may still take it. A `413` on any single record records it as
+ * delivered, with a WARN naming it and its size: the same bytes would be refused again,
+ * and keeping it would fail the signal on every drain until the buffer evicts it.
+ *
  * @param client caller-owned Ktor [HttpClient] — it owns the engine, timeouts, TLS,
  *   and any auth headers. kuilt does not create or close it, and this module ships no
  *   engine: depend on one (`ktor-client-okhttp`, `ktor-client-java`, `ktor-client-darwin`, …)
@@ -97,6 +127,13 @@ public enum class OtlpWireFormat {
  * @param scopeVersion the instrumentation scope's version. When both [scopeName] and
  *   [scopeVersion] are empty, the default, no `scope` is sent; OTLP reads an empty name as
  *   an unknown scope either way.
+ * @param maxRequestBytes the largest body, in bytes before any compression the client
+ *   applies, that one request may carry; a batch over it is split. Defaults to
+ *   [DEFAULT_MAX_REQUEST_BYTES], 1 MiB, the limit a reverse proxy commonly enforces in
+ *   front of a collector, which itself defaults to 20 MiB. It must hold one minimal record
+ *   inside this edge's resource and scope, or construction throws
+ *   [IllegalArgumentException]: an envelope that fills the cap would otherwise send every
+ *   record alone.
  */
 public class OtlpHttpEdge(
     private val client: HttpClient,
@@ -115,6 +152,19 @@ public class OtlpHttpEdge(
     // Copied, so a caller mutating the map it passed cannot change what later requests say.
     private val envelope = OtlpEnvelope(resource.toMap(), scopeName, scopeVersion)
     private val json = Json { encodeDefaults = false }
+
+    init {
+        // A minimal record of each signal, inside this edge's own envelope.
+        val minimal = listOf(
+            encodeTraces(listOf(MINIMAL_SPAN), emptyList()),
+            encodeLogs(listOf(MINIMAL_LOG)),
+            encodeMetrics(listOf(MINIMAL_METRIC)),
+        ).maxOf { it.bytes }
+        require(maxRequestBytes >= minimal) {
+            "maxRequestBytes = $maxRequestBytes cannot hold one minimal record under this edge's resource and " +
+                "scope, which needs $minimal bytes"
+        }
+    }
 
     // Per-endpoint sent-set keys, tagged by a 128-bit SHA-256 of the *trimmed* base —
     // the same URL the POSTs use. Three properties ride on that one expression:
@@ -157,43 +207,36 @@ public class OtlpHttpEdge(
     // ── Sends (POST, then fold into the sent-set on success) ───────────────────
 
     override suspend fun send(spans: Set<SpanRecord>, links: List<SpanLink>) {
-        post(
-            "/v1/traces",
-            when (wire) {
-                OtlpWireFormat.JSON ->
-                    json.encodeToString(TracesRequest.serializer(), tracesRequestOf(spans, links, envelope))
-                OtlpWireFormat.PROTOBUF ->
-                    protobuf.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(spans, links, envelope))
-            },
-        )
-        recordIds(spanKey, spans.map { it.spanId.toHexString() })
+        val linksByFrom = links.groupBy { it.fromSpanId }
+        deliver(
+            path = "/v1/traces",
+            items = spans.toList(),
+            // A span's links travel with it. Two stamped copies of one span id can share a chunk,
+            // so the ids are made distinct first, or each copy would carry the links twice.
+            encode = { chunk -> encodeTraces(chunk, chunk.map { it.spanId }.distinct().flatMap { linksByFrom[it].orEmpty() }) },
+            describe = { "span ${it.spanId.toHexString()}" },
+        ) { delivered -> recordIds(spanKey, delivered.map { it.spanId.toHexString() }) }
     }
 
     override suspend fun sendLogs(logs: Set<LogRecord>) {
-        post(
-            "/v1/logs",
-            when (wire) {
-                OtlpWireFormat.JSON ->
-                    json.encodeToString(LogsRequest.serializer(), logsRequestOf(logs, envelope))
-                OtlpWireFormat.PROTOBUF ->
-                    protobuf.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(logs, envelope))
-            },
-        )
-        recordIds(logKey, logs.map { it.recordId.toHexString() })
+        deliver(
+            path = "/v1/logs",
+            items = logs.toList(),
+            encode = ::encodeLogs,
+            describe = { "log record ${it.recordId.toHexString()}" },
+        ) { delivered -> recordIds(logKey, delivered.map { it.recordId.toHexString() }) }
     }
 
     override suspend fun sendMetrics(points: Set<MetricPoint>) {
-        post(
-            "/v1/metrics",
-            when (wire) {
-                OtlpWireFormat.JSON ->
-                    json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(points, envelope))
-                OtlpWireFormat.PROTOBUF ->
-                    protobuf.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(points, envelope))
-            },
-        )
-        val updates = points.associate { it.key to it.valueHash() }
-        sentVersionsLock.withLock { commitSentVersions(refreshSentVersions().versions + updates) }
+        deliver(
+            path = "/v1/metrics",
+            items = points.toList(),
+            encode = ::encodeMetrics,
+            describe = { "metric series ${it.key.name}" },
+        ) { delivered ->
+            val updates = delivered.associate { it.key to it.valueHash() }
+            sentVersionsLock.withLock { commitSentVersions(refreshSentVersions().versions + updates) }
+        }
     }
 
     override suspend fun retainMetrics(live: Set<MetricKey>) {
@@ -208,24 +251,172 @@ public class OtlpHttpEdge(
         }
     }
 
+    // ── Encoding ───────────────────────────────────────────────────────────────
+
+    /** A request body ready to POST, a JSON `String` or a protobuf `ByteArray`, and its size in bytes. */
+    private class Encoded(val body: Any, val bytes: Int)
+
+    private fun encodeTraces(spans: List<SpanRecord>, links: List<SpanLink>): Encoded {
+        val set = spans.toCollection(LinkedHashSet())
+        return when (wire) {
+            OtlpWireFormat.JSON ->
+                json.encodeToString(TracesRequest.serializer(), tracesRequestOf(set, links, envelope)).encoded()
+            OtlpWireFormat.PROTOBUF ->
+                protobuf.encodeToByteArray(ProtoTracesRequest.serializer(), tracesProtoOf(set, links, envelope)).encoded()
+        }
+    }
+
+    private fun encodeLogs(logs: List<LogRecord>): Encoded {
+        val set = logs.toCollection(LinkedHashSet())
+        return when (wire) {
+            OtlpWireFormat.JSON -> json.encodeToString(LogsRequest.serializer(), logsRequestOf(set, envelope)).encoded()
+            OtlpWireFormat.PROTOBUF ->
+                protobuf.encodeToByteArray(ProtoLogsRequest.serializer(), logsProtoOf(set, envelope)).encoded()
+        }
+    }
+
+    private fun encodeMetrics(points: List<MetricPoint>): Encoded {
+        val set = points.toCollection(LinkedHashSet())
+        return when (wire) {
+            OtlpWireFormat.JSON -> json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(set, envelope)).encoded()
+            OtlpWireFormat.PROTOBUF ->
+                protobuf.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(set, envelope)).encoded()
+        }
+    }
+
+    private fun String.encoded() = Encoded(this, utf8Size())
+
+    private fun ByteArray.encoded() = Encoded(this, size)
+
+    // ── Sending one signal, split by size (#3286) ──────────────────────────────
+
+    /**
+     * POSTs [items] in as many requests as [maxRequestBytes] needs, then hands every record an
+     * acknowledged request carried to [record], once. [record] runs whatever ended the sends: the
+     * last acknowledgement, a refused request, a transport failure, or this coroutine's own
+     * cancellation. It runs shielded, so what the collector acknowledged is written down even while
+     * the caller is being cancelled, and the failure, if any, is rethrown after it.
+     *
+     * [record] builds its write from a fresh read of the store, after the last request, so another
+     * edge's write that lands between two requests is kept rather than overwritten.
+     */
+    private suspend fun <T> deliver(
+        path: String,
+        items: List<T>,
+        encode: (List<T>) -> Encoded,
+        describe: (T) -> String,
+        record: suspend (List<T>) -> Unit,
+    ) {
+        val delivered = ArrayList<T>(items.size)
+        // Caught to be rethrown below, after the write: whatever ended the sends, own cancellation
+        // included, the acknowledged requests are recorded first.
+        val failure: Throwable? = try {
+            Chunker(path, encode, describe, delivered).send(items)
+            null
+        } catch (failure: Throwable) {
+            failure
+        }
+        if (delivered.isNotEmpty()) {
+            withContext(NonCancellable) {
+                if (failure == null) {
+                    record(delivered)
+                } else {
+                    // Shielded, so a CancellationException reaching here was minted by the store; the
+                    // failure that ended the sends is the one the caller needs to see.
+                    try {
+                        record(delivered)
+                    } catch (recordFailure: Throwable) {
+                        failure.addSuppressed(recordFailure)
+                    }
+                }
+            }
+        }
+        if (failure != null) throw failure
+    }
+
+    /** One signal's sends: appends each acknowledged request's records to [delivered], in order. */
+    private inner class Chunker<T>(
+        private val path: String,
+        private val encode: (List<T>) -> Encoded,
+        private val describe: (T) -> String,
+        private val delivered: MutableList<T>,
+    ) {
+        suspend fun send(items: List<T>) {
+            // The fast path: a batch under the cap is one encode and one request, as before #3286.
+            val whole = encode(items)
+            if (whole.bytes <= maxRequestBytes) return sendChunk(items, whole)
+
+            // Measure each record inside an otherwise empty request, so its cost includes what the
+            // wire adds around it, then pack greedily. Every chunk is encoded for real before it is
+            // sent, and halved if the estimate fell short.
+            val emptyBytes = encode(emptyList()).bytes
+            val fitting = ArrayList<Pair<T, Int>>(items.size)
+            val oversized = ArrayList<Pair<T, Encoded>>()
+            for (item in items) {
+                val alone = encode(listOf(item))
+                if (alone.bytes > maxRequestBytes) oversized += item to alone else fitting += item to alone.bytes - emptyBytes
+            }
+            for (chunk in pack(fitting, emptyBytes)) sendChunk(chunk, encode(chunk))
+            // Last, so a record the collector may refuse holds back nothing else.
+            for ((item, alone) in oversized) sendChunk(listOf(item), alone)
+        }
+
+        private fun pack(fitting: List<Pair<T, Int>>, emptyBytes: Int): List<List<T>> {
+            val budget = maxRequestBytes - PACKING_SLACK_BYTES
+            val chunks = ArrayList<List<T>>()
+            var current = ArrayList<T>()
+            var bytes = emptyBytes
+            for ((item, cost) in fitting) {
+                // One byte more per record: JSON's comma between array elements.
+                if (current.isNotEmpty() && bytes + cost + 1 > budget) {
+                    chunks += current
+                    current = ArrayList()
+                    bytes = emptyBytes
+                }
+                current += item
+                bytes += cost + 1
+            }
+            if (current.isNotEmpty()) chunks += current
+            return chunks
+        }
+
+        private suspend fun sendChunk(chunk: List<T>, body: Encoded) {
+            if (chunk.size > 1 && body.bytes > maxRequestBytes) return sendHalves(chunk)
+            val status = post(path, body)
+            when {
+                status.isSuccess() -> delivered += chunk
+                status != HttpStatusCode.PayloadTooLarge -> error("OTLP POST $path failed: $status")
+                chunk.size > 1 -> sendHalves(chunk)
+                else -> {
+                    logger.warn {
+                        "OTLP POST $path: the collector refused ${describe(chunk.single())} (${body.bytes} bytes) as too " +
+                            "large on its own; recording it as sent, since the same bytes would be refused on every drain"
+                    }
+                    delivered += chunk
+                }
+            }
+        }
+
+        private suspend fun sendHalves(chunk: List<T>) {
+            val mid = chunk.size / 2
+            for (half in listOf(chunk.subList(0, mid), chunk.subList(mid, chunk.size))) sendChunk(half, encode(half))
+        }
+    }
+
     // ── HTTP ───────────────────────────────────────────────────────────────────
 
     // body is a JSON String or a protobuf ByteArray; Ktor's default transformers set
     // the entity from either. contentType is keyed to the selected wire.
-    private suspend fun post(path: String, body: Any) {
-        val response: HttpResponse = client.post(base + path) {
+    private suspend fun post(path: String, body: Encoded): HttpStatusCode =
+        client.post(base + path) {
             contentType(
                 when (wire) {
                     OtlpWireFormat.JSON -> ContentType.Application.Json
                     OtlpWireFormat.PROTOBUF -> ContentType("application", "x-protobuf")
                 },
             )
-            setBody(body)
-        }
-        if (!response.status.isSuccess()) {
-            error("OTLP POST $path failed: ${response.status}")
-        }
-    }
+            setBody(body.body)
+        }.status
 
     // ── Producer-local sent-set persistence (CBOR) ─────────────────────────────
 
@@ -236,7 +427,12 @@ public class OtlpHttpEdge(
         }.getOrDefault(emptySet())
     }
 
-    private suspend fun recordIds(key: StoreKey, hexIds: List<String>) {
+    // Makes each id-set read-merge-write one step on this edge, so two concurrent sends cannot each
+    // merge onto the same read and lose the other's ids. Another edge's write between this read and
+    // this write is still lost, as for the metric map below.
+    private val idSetLock = Mutex()
+
+    private suspend fun recordIds(key: StoreKey, hexIds: List<String>) = idSetLock.withLock {
         // Preserve insertion order for drop-oldest; new ids appended after existing.
         val merged = LinkedHashSet(readIdSet(key))
         merged.addAll(hexIds)
@@ -303,8 +499,20 @@ public class OtlpHttpEdge(
         /** Default cap on the span/log producer-local sent-set (drop-oldest). */
         public const val DEFAULT_MAX_SENT_IDS: Int = 50_000
 
-        /** Default cap on one request's body, in bytes: 1 MiB. */
+        /** Default cap on one request's body, in bytes: 1 MiB. See `maxRequestBytes`. */
         public const val DEFAULT_MAX_REQUEST_BYTES: Int = 1 shl 20
+
+        /**
+         * Headroom a packed chunk leaves under the cap. A record measured alone pays a one-byte
+         * length prefix on each enclosing protobuf message; a full chunk's prefixes are a few bytes
+         * longer in all. Without it a packed chunk could overshoot by those bytes and be halved.
+         */
+        private const val PACKING_SLACK_BYTES = 16
+
+        private val MINIMAL_SPAN =
+            SpanRecord(ByteString(ByteArray(16)), ByteString(ByteArray(8)), null, "", SpanKind.INTERNAL, 0L, 0L)
+        private val MINIMAL_LOG = LogRecord(recordId = ByteString(ByteArray(8)))
+        private val MINIMAL_METRIC = MetricPoint.Sum(MetricKey("m", MetricKind.SUM), 0L, 0L, 0L)
 
         /**
          * Bytes of SHA-256 kept for the endpoint tag. 128 bits makes a collision
@@ -323,4 +531,27 @@ public class OtlpHttpEdge(
         private val idSetSerializer = SetSerializer(String.serializer())
         private val versionsSerializer = MapSerializer(MetricKey.serializer(), Long.serializer())
     }
+}
+
+/**
+ * This string's length in UTF-8 bytes, without encoding it. An unpaired surrogate counts as three,
+ * the most any encoder writes for one, so the count never undershoots the body on the wire.
+ */
+internal fun String.utf8Size(): Int {
+    var bytes = 0
+    var i = 0
+    while (i < length) {
+        val c = this[i]
+        bytes += when {
+            c.code < 0x80 -> 1
+            c.code < 0x800 -> 2
+            c.isHighSurrogate() && i + 1 < length && this[i + 1].isLowSurrogate() -> {
+                i++
+                4
+            }
+            else -> 3
+        }
+        i++
+    }
+    return bytes
 }
