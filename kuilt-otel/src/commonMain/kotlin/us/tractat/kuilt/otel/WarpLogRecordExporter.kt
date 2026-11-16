@@ -2277,15 +2277,18 @@ public class WarpLogRecordExporter(
      * Drop every record this exporter holds and delete the segments that held them —
      * a supported reset the same live instance keeps exporting into (#2208).
      *
-     * The forgetting goes through [Rga.dropWindow], not [Rga.empty], and the difference is
-     * the whole design. A reset to empty re-mints `RgaId`s this replica has already used —
+     * The forgetting goes through a window pass ([Rga.dropWindowPastUnheld]) and then
+     * [Rga.dropAllOwn], not [Rga.empty], and the difference is the whole design. A reset to empty re-mints `RgaId`s this replica has already used —
      * `maxSeqByReplica` and the Lamport clock both restart — so a later [merge] with a peer
      * holding the pre-clear ops resolves two different records onto one id by map-put order.
      * A window pass instead raises the compaction **floor**, which carries the seq high-water
      * forward and *suppresses* the dropped dots, so a peer holding the raw `Insert`s cannot
      * push the records back either: [Rga.piece] merges the floor and re-purges beneath it.
-     * The floor is raised to this replica's seq high-water, not only past what it holds, so the
-     * records of a sealed segment recovery could not read are forgotten as well (#3513).
+     * The floor is raised to this replica's seq high-water, not only past what it holds, so this
+     * replica's **own** records in a sealed segment recovery could not read are forgotten as well
+     * (#3513). The floor is this replica's alone: another author's records in an unread
+     * [merge]-adopted segment are covered by neither it nor the pass's `Compact`, and they return
+     * when that segment is read.
      *
      * **The store settles to two small keys, not zero.** The index and one active segment
      * remain, the latter carrying the floor. That floor is what buys the paragraph above;
@@ -2301,7 +2304,9 @@ public class WarpLogRecordExporter(
      * **Reclamation is total only on the export path.** A segment carrying an
      * [RgaOp.Compact] is never retired and a [merge]-adopted segment is pinned entire, so a
      * gossip-fed replica keeps residue after a clear. A replica fed only by [export] mints
-     * only its own dots, which fold into the floor, so every sealed segment becomes retirable.
+     * only its own dots, which fold into the floor, so every sealed segment it has read becomes
+     * retirable. One recovery could not read stays pinned for the run: the floor purges its records
+     * once a later start reads it.
      *
      * Not a CRDT delete: this replica forgets, and so does any peer that merges from it
      * afterwards, but the clear does not travel to a peer that never does.

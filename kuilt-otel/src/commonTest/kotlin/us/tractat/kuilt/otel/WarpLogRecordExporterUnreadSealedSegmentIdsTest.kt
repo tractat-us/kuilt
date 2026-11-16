@@ -232,13 +232,15 @@ class WarpLogRecordExporterUnreadSealedSegmentIdsTest {
         )
     }
 
-    // ── A clear forgets an unread segment's records too ─────────────────────────────────────
+    // ── A clear forgets an unread segment's own records too ─────────────────────────────────
 
     /**
-     * A clear made while a sealed segment is unread forgets that segment's records as well (#3513).
-     * The segment holds this replica's newest ids, so they sit above every id the clear can see: a
-     * floor that rises only as far as the highest dropped seq leaves them open, and the next start
-     * that reads the segment admits its records again.
+     * A clear made while a sealed segment is unread forgets this replica's own records in it as
+     * well (#3513). The segment holds this replica's newest ids, so they sit above every id the
+     * clear can see: a floor that rises only as far as the highest dropped seq leaves them open, and
+     * the next start that reads the segment admits its records again. The floor is this replica's
+     * alone, so another author's records in an unread adopted segment are not covered; this arm's
+     * segment holds only its own.
      */
     @Test
     fun aClearMadeWhileASealedSegmentIsUnreadForgetsItsRecords() = runTest {
