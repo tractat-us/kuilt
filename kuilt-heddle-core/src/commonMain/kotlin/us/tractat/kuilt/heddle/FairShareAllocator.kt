@@ -530,6 +530,12 @@ public class FairShareAllocator(
      * [HeddlePolicy.virtualService] plus this allocator's stored wake clamp. `null` when [edge] is
      * not an active child of [parent]. A diagnostic, like [virtualTime]: it observes nothing.
      */
+    /** [effectiveVirtualService] as a [VirtualTime], exact and never held. */
+    internal fun effectiveVirtualTime(ledger: EntitlementLedger, parent: GroupId, edge: AttachmentId): VirtualTime? =
+        policyEdges(ledger, parent, demand = { Demand.NONE })
+            .firstOrNull { it.record.id == edge }
+            ?.let { VirtualTime.of(HeddlePolicy.effectiveTicksWide(it), it.record.weight) }
+
     internal fun effectiveVirtualService(ledger: EntitlementLedger, parent: GroupId, edge: AttachmentId): Rational? =
         policyEdges(ledger, parent, demand = { Demand.NONE })
             .firstOrNull { it.record.id == edge }
