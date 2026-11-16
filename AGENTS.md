@@ -515,15 +515,22 @@ the evidence, which is the fifth shape applied to itself.
   trace *is* the diagnostic: keep it. Interpolate (`"… : ${r.exceptionOrNull()}"`) rather than
   attach when you do drop it — type and message survive, and it stays inside the lazy lambda.
 
-  The cost, recorded so nobody re-derives it as an argument for a broad sweep: on Apple targets the
+  The cost has two parts, and only the first argues against a sweep. On Apple targets the
   **first** stack trace a process materializes pays a one-time symbolizer init that collapses under
-  load (~65 ms idle, ~6 s saturated; later traces ~2–3 ms either way, and a throwable-free
-  `logger.warn { … }` never symbolizes at all). Because it is **one-time**, no single site can be
-  "the expensive one" — trimming a handful removes nothing, and only a near-total sweep would, at
-  the price of stack traces everywhere. The real lever is not in this codebase: it is the consuming
-  app's `sourceInfoType=libbacktrace` (flat under load, `file:line` preserved), documented in
-  `docs/usage.md`. Measured on a debug `.kexe` on a dev Mac under synthetic saturation; unverified
-  on a real device in a release build.
+  load (~65 ms idle, ~6 s saturated; measured on a debug `.kexe` on a dev Mac under synthetic
+  saturation). Because that part is **one-time**, no single site can be "the expensive one" —
+  trimming a handful removes none of it, and the lever is the consuming app's
+  `sourceInfoType=libbacktrace` (flat under load, `file:line` preserved), documented in
+  `docs/usage.md`. The second part is **per trace**, and it is not small: measured during #3532 in
+  a `macosArm64` debug test binary, every rendered trace cost ~25 ms with `libbacktrace` and ~23 ms
+  with `coresymbolication` on a dev Mac, and 50–70 ms on the 3-vCPU apple-nightly runner (448
+  refused commits: 12.2 s with the throwable, 0.03 s without). `libbacktrace` does not remove it; a
+  throwable-free `logger.warn { … }` never symbolizes at all. So a site that logs a throwable
+  **per event** on a routine path pays that per event, and that site — not a sweep — is where
+  dropping the trace is worth weighing. The rule above still decides it: `SpeculativeSequencer`'s
+  `onCommit` logs a refusal from the consumer's own `apply` once per refused commit, and keeps the
+  throwable because the trace is the consumer's diagnostic (#3537). A release build and a real
+  device are unmeasured for both parts.
 
 - **Debugging bugs a local suite can't see** (hardware/network/contention-only) follows the
   process rules in [`docs/debugging-process.md`](docs/debugging-process.md): don't `closes #N` a
