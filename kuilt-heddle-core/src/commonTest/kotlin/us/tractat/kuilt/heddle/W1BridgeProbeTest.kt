@@ -93,7 +93,7 @@ class W1BridgeProbeTest {
         val x = shape.groupId("heavy")
         val h = LocalHeddle.bootWhole(shape, LocalPolicy(defaultReservation = 1L), epoch = 1L)
         h.mintSupply(1L shl 50)
-        lease(h, setOf(l, x), x, 0L)
+        // heavy is idle from the start, so it is a waker, never a returner by the clock.
         repeat(2) { lease(h, setOf(l), l, 1L + it) }
         val edge = checkNotNull(h.snapshot().ledger.lineageOf(l)).last()
         h.reshapeForTest { ledger ->
