@@ -1097,9 +1097,11 @@ public class WarpMetricExporter(
      *
      * A share is a difference of two growing totals, so a set can land a rounding step off its level.
      * A [MetricUpdate.SetUpDownSumDouble] that would bring the share no closer to the level than it
-     * already is moves nothing. Each write that lands brings it strictly closer, so a level reported
-     * again settles within a few writes (three at most over 400,000 random states) rather than
-     * rewriting the series every collection, which a plain `level − share` move can do forever.
+     * already is moves nothing. Each write that lands brings it strictly closer, and a distance
+     * between doubles cannot fall forever, so a level reported again stops writing, rather than
+     * rewriting the series every collection, which a plain `level − share` move can do. How many
+     * writes that takes is not proven: an unrecorded random search saw at most three, and
+     * `aRepeatedDoubleLevelSettlesForEveryLevel` holds 200 levels to three.
      */
     private fun upDownSumDoubleNextOrNull(current: PNCounterDouble, update: MetricUpdate): PNCounterDouble? {
         val share = current.count(replica)

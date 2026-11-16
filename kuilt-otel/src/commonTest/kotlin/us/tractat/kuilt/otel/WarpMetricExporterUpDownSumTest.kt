@@ -281,8 +281,8 @@ class WarpMetricExporterUpDownSumTest {
     /**
      * A share is a difference of two growing totals, so it can land a rounding step off the level.
      * Whatever the level, setting it again settles within a few writes: each one must bring the
-     * share strictly closer, so they end. Three was the most a level took over 400,000 random
-     * states, so the fourth to sixth sets of each level here must write nothing. Run over many
+     * share strictly closer, so they end. An unrecorded random search never saw a level take more
+     * than three, so the fourth to sixth sets of each level here must write nothing. Run over many
      * levels so a rounding that lands on either side of the level is reached.
      */
     @Test
