@@ -509,6 +509,13 @@ public class EntitlementLedger private constructor(
     @Suppress("UNUSED_PARAMETER")
     public fun origin(parent: GroupId): Int128 = Int128.ZERO
 
+    /** This ledger in [LocalHeddleSnapshot] format 1's frozen shape, with no origins. */
+    internal fun toFormat1(): LedgerFormat1 = LedgerFormat1(
+        records, minted, issued, returned, leafSpent, rollupSpent, transfers, lifecycle,
+        issuedRelocIn, leafRelocIn, leafRelocOut, rollupRelocIn, rollupRelocOut, gauges,
+        transferRelocIn, transferRelocOut, parents = emptyMap(), forgotten = forgotten,
+    )
+
     /**
      * The [Lifecycle] of [id], or `null` if [id] is entirely unknown to this ledger.
      * A known edge with no explicit register entry reads as [Lifecycle.ACTIVE] (the
