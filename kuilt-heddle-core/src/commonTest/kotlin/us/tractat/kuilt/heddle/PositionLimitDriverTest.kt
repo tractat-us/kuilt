@@ -1,6 +1,7 @@
 package us.tractat.kuilt.heddle
 
 import us.tractat.kuilt.math.Int128
+import us.tractat.kuilt.math.timesWide
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -10,9 +11,25 @@ import kotlin.test.assertTrue
 /**
  * A seeded driver over weights at the budget's edges (design §7.1, the position limit): joins,
  * leaves and reweights by reload, leases at the largest size, cancels, and overruns. After every
- * call nothing has thrown, `validate()` is empty, and the root's load, the sum of its active
- * children's stored positions, is inside 128 bits. Across the seeds the limit refuses at least
- * once, so the run reached the state it exists to test.
+ * call nothing has thrown, `validate()` is empty, and the root's **load** is within the limit.
+ * Across the seeds the limit refuses at least once, so the run reached the state it exists to test.
+ *
+ * The load is §7.1's: the sum of the active children's *effective* positions, each counted by its
+ * size. An effective position is the raw one, `ticks + (baseIssued − folded) · G − returned · G`,
+ * plus the allocator's wake offset, which lives in its memory and never in the ledger. So this
+ * test reads the wake offsets out of [LocalHeddleState.allocatorMemory] and builds the sum itself,
+ * rather than calling the production expression it is checking. Summing the stored `ticks` alone,
+ * as this test first did (#3538), misses the issuance since the last checkpoint, the returns and
+ * every wake offset. The run asserts that a wake offset was present at some step, so that part of
+ * the sum is exercised.
+ *
+ * The bound is §7.1's too: a landing is kept only if the load after it is at most `2¹²⁵` ticks,
+ * and the step's own charge can then add one grant and one overrun on top. That is
+ * [STEP_CHARGE]. The limit is written out here, not read from [POSITION_LIMIT], so a weakened
+ * constant reds this test instead of moving its bound along with it. "Inside 128 bits", the bound
+ * this test first used, is four times the limit. Even with every load check in production deleted,
+ * this run peaks at about 0.59 of the limit (#3538). The targeted tests in
+ * `FairShareAllocatorRefusalTest` are what pin the load check itself.
  *
  * Every draw walks a [List] built here, sorted, never a `Set` or a map view (#2592), so a seed
  * takes the same trajectory on every target.
@@ -34,6 +51,7 @@ class PositionLimitDriverTest {
     fun noCallThrowsTheBooksStayValidAndTheLimitRefuses() {
         var refusals = 0
         var calls = 0
+        var stepsWithWakeOffsets = 0
         for (seed in 0 until SEEDS) {
             val rng = Random(seed)
             val pick = { list: List<Weight> -> list[rng.nextInt(list.size)] }
@@ -69,29 +87,49 @@ class PositionLimitDriverTest {
                         }
                     }
                 }
-                val ledger = h.snapshot().ledger
-                assertEquals(emptyList(), ledger.validate(), "seed $seed, step $step: the books are valid")
-                assertTrue(loadInside128Bits(ledger, GroupId("p")), "seed $seed, step $step: the root's load is inside 128 bits")
+                val state = h.snapshot()
+                assertEquals(emptyList(), state.ledger.validate(), "seed $seed, step $step: the books are valid")
+                val load = loadOf(state, GroupId("p"))
+                assertTrue(
+                    load != null && load <= LIMIT + STEP_CHARGE,
+                    "seed $seed, step $step: the root's load $load is within the limit and one step's charge",
+                )
+                if (state.allocatorMemory.wakeOffsets.isNotEmpty()) stepsWithWakeOffsets++
             }
         }
         assertAll(
             { assertEquals(SEEDS * STEPS, calls, "the rig: every step ran") },
             { assertTrue(refusals > 0, "the rig: the position limit refused at least once ($refusals)") },
+            { assertTrue(stepsWithWakeOffsets > 0, "the rig: a wake offset was in the load at some step") },
         )
     }
 
-    /** Whether the sum of [parent]'s active children's stored positions forms inside 128 bits. */
-    private fun loadInside128Bits(ledger: EntitlementLedger, parent: GroupId): Boolean = try {
-        ledger.activeChildren(parent).map { it.attachment }.sortedBy { it.value }
-            .mapNotNull { ledger.gauge(it)?.let { g -> Int128.fromTwosComplement(g.ticksHigh, g.ticksLow) } }
-            .fold(Int128.ZERO) { sum, p -> sum + p }
-        true
+    /**
+     * [parent]'s load in [state], design §7.1: the sum of its active children's effective positions,
+     * raw plus wake offset, each counted by its size. `null` when the sum leaves 128 bits.
+     */
+    private fun loadOf(state: LocalHeddleState, parent: GroupId): Int128? = try {
+        val ledger = state.ledger
+        ledger.activeChildren(parent).sortedBy { it.attachment.value }.fold(Int128.ZERO) { load, summary ->
+            val id = summary.attachment
+            val base = ledger.baseIssuance(id)
+            val gross = ledger.gauge(id)?.let { g -> Int128.fromTwosComplement(g.ticksHigh, g.ticksLow) + (base - g.folded).timesWide(TICKS_PER_UNIT) }
+                ?: base.timesWide(TICKS_PER_UNIT)
+            val effective = gross - summary.returned.timesWide(TICKS_PER_UNIT) + (state.allocatorMemory.wakeOffsets[id] ?: Int128.ZERO)
+            load + if (effective < Int128.ZERO) Int128.ZERO - effective else effective
+        }
     } catch (_: ArithmeticException) {
-        false
+        null
     }
 
     private companion object {
         const val SEEDS = 6
         const val STEPS = 400
+
+        /** The position limit, `2¹²⁵` ticks (design §7.1), written out rather than read from production. */
+        val LIMIT: Int128 = Int128.fromTwosComplement(1L shl 61, 0L)
+
+        /** The most one step charges past a landing: a grant of the largest size, and an overrun of up to `2²⁰` units. */
+        val STEP_CHARGE: Int128 = (LocalHeddle.MAX_RESERVATION + (1L shl 20)).timesWide(TICKS_PER_UNIT)
     }
 }
