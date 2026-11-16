@@ -143,7 +143,7 @@ class WpldProbeTest {
     @Test
     fun limitStats() {
         val slack = (LocalHeddle.MAX_RESERVATION + (1L shl 20)).timesWide(16L)
-        val bound = POSITION_LIMIT + slack
+        val bound = Int128.fromTwosComplement(1L shl 61, 0L) + slack
         var over = 0
         var overNoOff = 0
         var maxNew = Int128.ZERO
@@ -160,7 +160,7 @@ class WpldProbeTest {
 
     @Test
     fun limitAssertion() {
-        val bound = POSITION_LIMIT + (LocalHeddle.MAX_RESERVATION + (1L shl 20)).timesWide(16L)
+        val bound = Int128.fromTwosComplement(1L shl 61, 0L) + (LocalHeddle.MAX_RESERVATION + (1L shl 20)).timesWide(16L)
         val failures = ArrayList<String>()
         drive { s, seed, step -> val n = load(s, GroupId("p")); if (n == null || n > bound) failures += "$seed/$step" }
         assertTrue(failures.isEmpty(), "WPLD limit: ${failures.size} failing steps, first ${failures.take(3)}")
@@ -168,7 +168,7 @@ class WpldProbeTest {
 
     @Test
     fun storedLimitAssertion() {
-        val bound = POSITION_LIMIT + (LocalHeddle.MAX_RESERVATION + (1L shl 20)).timesWide(16L)
+        val bound = Int128.fromTwosComplement(1L shl 61, 0L) + (LocalHeddle.MAX_RESERVATION + (1L shl 20)).timesWide(16L)
         val failures = ArrayList<String>()
         drive { s, seed, step -> val n = storedSum(s.ledger, GroupId("p")); if (n == null || n > bound) failures += "$seed/$step" }
         assertTrue(failures.isEmpty(), "WPLD storedLimit: ${failures.size} failing steps, first ${failures.take(3)}")
