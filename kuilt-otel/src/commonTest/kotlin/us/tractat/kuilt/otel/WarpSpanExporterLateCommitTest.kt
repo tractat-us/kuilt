@@ -79,17 +79,17 @@ class WarpSpanExporterLateCommitTest {
     private fun ids(set: ORSet<SpanRecord>): Set<ByteString> = set.elements.map { it.spanId }.toSet()
 
     /**
-     * Five spans written, then [failures] exports whose writes fail to their callers, then span 200,
-     * which lands and which a peer takes. The first failed write then commits late, the process
-     * restarts over what the store holds, and merges the peer's snapshot back.
+     * Five spans written, then an export of each of [failing] whose write fails to its caller, then
+     * span 200, which lands and which a peer takes. The first failed write then commits late, the
+     * process restarts over what the store holds, and merges the peer's snapshot back.
      */
-    private suspend fun failThenLandLate(failures: Int): Outcome {
+    private suspend fun failThenLandLate(failing: List<Int>): Outcome {
         val backing = InMemoryDurableStore()
         val store = LateCommitStore(backing, spansKey)
         val writer = WarpSpanExporter(replica, store).apply { recover() }
         repeat(5) { assertEquals(ExportResult.Success, writer.export(span(it)), "the rig: export $it") }
-        store.refusing = failures
-        val failed = (0 until failures).map { writer.export(span(100 + it)) }
+        store.refusing = failing.size
+        val failed = failing.map { writer.export(span(it)) }
         val landed = writer.export(span(200))
         val gossiped = writer.snapshot()
         store.commitFirstHeld()
@@ -110,15 +110,15 @@ class WarpSpanExporterLateCommitTest {
         val afterMerge: Set<ByteString>,
     )
 
-    private fun assertTheLandedSpanSurvives(outcome: Outcome, failures: Int) {
+    private fun assertTheLandedSpanSurvives(outcome: Outcome, failing: List<Int>) {
         assertAll(
             // The rig: every armed write failed to its caller, the next export landed and was taken by
             // the peer, and the late commit put the first failed span in the store in its place.
             { assertTrue(outcome.failed.all { it is ExportResult.Failure }, "the rig: an armed export landed: ${outcome.failed}") },
-            { assertEquals(failures, outcome.heldWrites, "the rig: the store did not hold every armed write") },
+            { assertEquals(failing.size, outcome.heldWrites, "the rig: the store did not hold every armed write") },
             { assertEquals(ExportResult.Success, outcome.landed, "the rig: span 200 was not saved") },
             { assertTrue(span(200).spanId in outcome.gossiped, "the rig: the peer did not take span 200") },
-            { assertTrue(span(100).spanId in outcome.heldAfterRestart, "the rig: the late commit did not land") },
+            { assertTrue(span(failing.first()).spanId in outcome.heldAfterRestart, "the rig: the late commit did not land") },
             { assertTrue(span(200).spanId !in outcome.heldAfterRestart, "the rig: the late commit did not overwrite span 200") },
             { assertEquals(ExportResult.Success, outcome.merged, "the merge after the restart") },
             // The property: span 200 kept a dot of its own, so the merge keeps it.
@@ -128,7 +128,8 @@ class WarpSpanExporterLateCommitTest {
 
     @Test
     fun aFailedWriteThatCommitsLateSharesNoSetDotWithTheNextSpan() = runTest {
-        assertTheLandedSpanSurvives(failThenLandLate(failures = 1), failures = 1)
+        val failing = listOf(100)
+        assertTheLandedSpanSurvives(failThenLandLate(failing), failing)
     }
 
     /**
@@ -137,7 +138,21 @@ class WarpSpanExporterLateCommitTest {
      */
     @Test
     fun twoFailedWritesInARowLeaveBothDotsTaken() = runTest {
-        assertTheLandedSpanSurvives(failThenLandLate(failures = 2), failures = 2)
+        val failing = listOf(100, 101)
+        assertTheLandedSpanSurvives(failThenLandLate(failing), failing)
+    }
+
+    /**
+     * The failed export re-exports span 1, a value the set already holds, so its dot is kept from an
+     * add of a renamed copy rather than from the add's own delta. The late commit holds span 1 on that
+     * dot, and the next export must not mint it again. Span 1 itself does not survive the merge: the
+     * late re-add superseded its old dot, and the peer has seen the new one without the element. That
+     * is the late-commit residual (#3544), and `main` loses span 1 the same way.
+     */
+    @Test
+    fun aFailedReExportOfAHeldValueThatCommitsLateSharesNoSetDotWithTheNextSpan() = runTest {
+        val failing = listOf(1)
+        assertTheLandedSpanSurvives(failThenLandLate(failing), failing)
     }
 
     /**
@@ -188,6 +203,7 @@ class WarpSpanExporterLateCommitTest {
             { assertEquals(1, store.held.size, "the rig: the abandoned write was not held") },
             { assertEquals(ExportResult.Success, landed, "the rig: span 200 was not saved") },
             { assertTrue(span(100).spanId in heldAfterRestart, "the rig: the late commit did not land") },
+            { assertTrue(span(200).spanId !in heldAfterRestart, "the rig: the late commit did not overwrite span 200") },
             { assertEquals(ExportResult.Success, merged, "the merge after the restart") },
             { assertTrue(span(200).spanId in afterMerge, "the merge dropped the span that landed") },
         )
