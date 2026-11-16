@@ -32,7 +32,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 /** Whether [SpeculativeGame.apply] refuses `action` against `state`. */
 private typealias Rule = (state: List<Int>, action: Int) -> Boolean
@@ -439,20 +439,19 @@ class SpeculativeSequencerPendingTest {
     // ── Any interleaving converges ────────────────────────────────────────────
 
     @Test
-    fun anyInterleavingConverges() = walkSeeds(NOTHING_REJECTED)
+    fun anyInterleavingConverges() = walkSeeds(TEST_WEDGE_BACKSTOP, NOTHING_REJECTED)
 
     /** Refuses by position and value, so a replay on a new base often disagrees with the propose. */
     @Test
-    fun anyInterleavingConvergesWhenApplyRejects() = walkSeeds { state, action ->
+    fun anyInterleavingConvergesWhenApplyRejects() = walkSeeds(SEEDED_WALK_BACKSTOP) { state, action ->
         action == 2 && state.size % 2 == 1
     }
 
-    private fun walkSeeds(rejects: Rule) = runTest(timeout = SEEDED_WALK_BACKSTOP) {
-        var rejected = 0
+    /** [backstop] is per arm: only a walk whose commits `apply` refuses pays for rendering traces. */
+    private fun walkSeeds(backstop: Duration, rejects: Rule) = runTest(timeout = backstop) {
         var refusedCommits = 0
-        val counting: Rule = { state, action -> rejects(state, action).also { if (it) rejected++ } }
-        for (seed in 0 until SEEDS) refusedCommits += walk(seed, counting, rejects)
-        if (rejects !== NOTHING_REJECTED) assertTrue(rejected > 0, "rig: the rule must have refused something")
+        for (seed in 0 until SEEDS) refusedCommits += walk(seed, rejects)
+        if (rejects !== NOTHING_REJECTED) assertTrue(refusedCommits > 0, "rig: the rule must have refused a commit")
         assertTrue(
             refusedCommits <= MAX_REFUSED_COMMITS,
             "$refusedCommits refused commits, each logged with its stack trace: " +
@@ -465,14 +464,14 @@ class SpeculativeSequencerPendingTest {
      * snapshot installs, then lets everything land. Values come from a small domain so equal values
      * meet constantly.
      *
-     * [reference] is deliberately not the game under test: the expected state is folded here over
-     * the commits in delivery order, without the sequencer's help. Every step also checks the bound
+     * The expected state is folded here with [rule] over the commits in delivery order, without
+     * the sequencer's help. Every step also checks the bound
      * that makes the convergence argument work: there are never more pending entries than proposals
      * whose own outcome has yet to retire one.
      *
-     * Returns how many commits [reference] refused: each is a WARN with a stack trace in the sequencer.
+     * Returns how many commits [rule] refused: each is a WARN with a stack trace in the sequencer.
      */
-    private suspend fun TestScope.walk(seed: Int, rule: Rule, reference: Rule): Int {
+    private suspend fun TestScope.walk(seed: Int, rule: Rule): Int {
         val random = Random(seed)
         val rig = Rig(this, rule)
         val inFlight = mutableListOf<Call>()
@@ -483,7 +482,7 @@ class SpeculativeSequencerPendingTest {
 
         suspend fun commit(value: Int) {
             rig.commit(value)
-            if (reference(expected, value)) refusedCommits++ else expected = expected + value
+            if (rule(expected, value)) refusedCommits++ else expected = expected + value
         }
 
         suspend fun resolve(call: Call, mode: Int) {
@@ -554,14 +553,15 @@ class SpeculativeSequencerPendingTest {
 
         /**
          * The most refused commits [SEEDED_WALK_BACKSTOP] is sized for. These seeds produce 448, the
-         * same on the JVM, `macosArm64` and `iosSimulatorArm64`. The walk asserts the count stays under
+         * same on the JVM, `macosArm64` and `iosSimulatorArm64`. The walk asserts the count is at most
          * this, so a change to the seeds, the steps or the rule that adds traces fails here rather
          * than at the ceiling on the slowest runner.
          */
         const val MAX_REFUSED_COMMITS = 500
 
         /**
-         * Wall-clock backstop for the seeded walks, sized to the real work the rejecting one does.
+         * Wall-clock backstop for the rejecting seeded walk, sized to the real work it does. The
+         * walk that refuses nothing renders no traces and keeps [TEST_WEDGE_BACKSTOP].
          *
          * Nearly all of that work is in the logger, not the sequencer. Each commit that `apply`
          * refuses makes [SpeculativeSequencer] log a WARN with the exception attached, and on
@@ -571,9 +571,13 @@ class SpeculativeSequencerPendingTest {
          * `iosSimulatorArm64`, which normally skips it, costs the same 12 s. On the 3-vCPU nightly
          * runner it took 23–31 s, 50–70 ms a trace, against [TEST_WEDGE_BACKSTOP]'s 30 s.
          *
-         * The seeds fix the work, so this is about four times the slowest run seen. A wedge still
-         * fails here, two minutes in instead of thirty seconds.
+         * The seeds fix the work, so this is about three times the slowest run seen (30.8 s). It
+         * must stay clearly under 120 s, the wasmJs per-test ceiling: the generated Karma config
+         * sets Mocha's `timeout` and `browserNoActivityTimeout` to 120 000 ms. Mocha's timer starts
+         * before this one, so at or past 120 s a wedge on wasm reports a bare Mocha timeout with no
+         * `UncompletedCoroutinesError` dump, and can disconnect the browser for the whole module.
+         * A wedge still fails here, 90 s in instead of 30 s.
          */
-        val SEEDED_WALK_BACKSTOP: Duration = 2.minutes
+        val SEEDED_WALK_BACKSTOP: Duration = 90.seconds
     }
 }
