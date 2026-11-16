@@ -78,7 +78,7 @@ jobs:
   # :kuilt-heddle-core's K/N tests went from 0 to 32 min per target (601 tests, macosArm64,
   # run 43688308596) between Nov 13 and 15. On this 3-vCPU runner at --max-workers=2 that left
   # the test step needing an estimated 75-85 min. Split per target, each leg pays for one target's
-  # compile and tests, and gets its own 60 minutes. The steps that are not tests moved to
+  # compile and tests, and gets its own limit, now 90 minutes. The steps that are not tests moved to
   # `apple-extras`, so they no longer eat into a test budget either.
   #
   # `fail-fast: false` and `--continue` for the same reason: one red must not hide the rest. In
@@ -366,7 +366,7 @@ jobs:
   # caused it.
   #
   # A separate job, not a step of `apple`: the dump compiles every target of every module, and an
-  # `apple` leg has its own tests to fit in 60 min. Out of band like the rest of this file.
+  # `apple` leg has its own tests to fit in its limit. Out of band like the rest of this file.
   #
   # On a red check, or on a dispatch with update_abi, it runs `updateKotlinAbi` and uploads the
   # result as the `abi-dumps` artifact. To refresh: download that artifact over the repo root, read
@@ -407,14 +407,6 @@ jobs:
           ./gradlew checkKotlinAbi --continue --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
-
-      # Only `main` writes ~/.konan, as in ci.yml (#3115).
-      - name: Save Kotlin/Native (~/.konan)
-        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ~/.konan
-          key: ${{ steps.konan.outputs.cache-primary-key }}
 
       - name: Regenerate the ABI dumps
         if: ${{ inputs.update_abi || failure() }}

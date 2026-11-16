@@ -27,11 +27,10 @@ name: ci
 #   - build-jvm:    full `build koverXmlReport` MINUS the wasm-browser + K/N test
 #                   *executions* (JVM + Android tests, lint, kover, assemble).
 #   - build-native: ONLY the wasm test executions (wasm-opt / Binaryen /
-#                   Karma-Chrome), with no JVM forks. It names macosArm64Test and
-#                   iosSimulatorArm64Test too, but on Linux those are SKIPPED (#3115).
-# Their task graphs union to exactly the old single `build koverXmlReport` graph
-# (proven by --dry-run set-diff), so the split loses no platform. No Kotlin/Native
-# test runs on a PR at all: see APPLE COVERAGE below.
+#                   Karma-Chrome), with no JVM forks.
+# Together they run every test the old single `build koverXmlReport` ran on Linux.
+# No Kotlin/Native test runs on a PR at all: on Linux macosArm64Test and
+# iosSimulatorArm64Test are SKIPPED (#3115). See APPLE COVERAGE below.
 #
 # ci-required (if: !cancelled()) is the SOLE required status check that branch
 # protection looks for. It passes when detect + both build jobs all
@@ -197,10 +196,11 @@ jobs:
   # wasm-browser + Kotlin/Native test *executions* excluded. This still runs the
   # whole compile/assemble graph (all platforms' main compile incl.
   # compileKotlinIosArm64, the Android AAR, the wasmJs jar), Android lint, JVM +
-  # Android unit tests, and the kover report + verify. It drops only the
-  # wasm-opt/Karma-Chrome and K/N test-executable runs — those move to
-  # build-native so they never co-reside with the forked JVM test JVMs (the
-  # documented OOM cause; see #320 and the daemon-heap note below). Skipped on
+  # Android unit tests, the Apple test-source compiles, and the kover report +
+  # verify. It drops the wasm-opt/Karma-Chrome runs, which move to build-native so
+  # they never co-reside with the forked JVM test JVMs (the documented OOM cause;
+  # see #320 and the daemon-heap note below), and the Apple K/N test tasks, which
+  # Linux SKIPS anyway and which run only in apple-nightly.yml (#3115). Skipped on
   # docs-only.
   build-jvm:
     needs: detect
@@ -243,9 +243,9 @@ jobs:
 
       # Kotlin/Native toolchain + dependencies. setup-gradle caches ~/.gradle but
       # not ~/.konan, so without this every run re-downloads konan and recompiles
-      # the native targets cold. build-jvm still compiles the native main sources
-      # (via assemble/build), so it needs the toolchain too. Keyed on the
-      # toolchain-defining files; shared key with build-native (same cache).
+      # the native targets cold. build-jvm compiles the native main and test sources
+      # (via assemble/build), so it needs the toolchain. Keyed on the
+      # toolchain-defining files; dokka and spike-compile share the key.
       - name: Restore Kotlin/Native (~/.konan)
         id: konan
         uses: actions/cache/restore@v6
@@ -351,11 +351,11 @@ jobs:
         #    3 GB/3 GB completes with no OutOfMemoryError, same wall time as 4 GB.
         #
         # The structural fix for #320 is the job split itself: excluding the
-        # wasm-browser + K/N test *executions* (-x below) removes the Binaryen
-        # wasm-opt + Karma headless-Chrome + native test-executable burst that
-        # used to fire concurrently with these forked JVM test JVMs and tip the
-        # committed footprint over 16 GB. That burst now runs alone in
-        # build-native. The 3 GB cap is retained conservatively — this job still
+        # wasm-browser test *executions* (-x below) removes the Binaryen wasm-opt +
+        # Karma headless-Chrome burst that used to fire concurrently with these
+        # forked JVM test JVMs and tip the committed footprint over 16 GB. That
+        # burst now runs alone in build-native. The Apple test tasks are excluded
+        # too; on Linux they never run (#3115). The 3 GB cap is retained conservatively — this job still
         # compiles the native main sources alongside the JVM forks; relaxing back
         # toward 4 GB can follow once the split is proven over several cold builds.
         #
@@ -413,14 +413,11 @@ jobs:
             build/jstack-dumps/
 
   # ── build-native ─────────────────────────────────────────────────────────
-  # The wasm/native half of the build: the wasm test *executions*. Each task pulls
-  # in its own platform compile transitively, so this job runs the Binaryen wasm-opt
-  # + Karma headless-Chrome (wasmJsBrowserTest) — the memory-heavy codegen burst —
-  # with NO forked JVM test JVMs sharing the box. It runs no Kotlin/Native test; see
-  # the step comment below. Combined with build-jvm's task
-  # graph this is exactly the old single `build koverXmlReport` graph (proven by
-  # --dry-run set-diff: union is identical, zero tasks dropped). Skipped on
-  # docs-only.
+  # The wasm half of the build: the wasm test *executions*. Each task pulls in its
+  # own compile transitively, so this job runs the Binaryen wasm-opt + Karma
+  # headless-Chrome (wasmJsBrowserTest) — the memory-heavy codegen burst — with NO
+  # forked JVM test JVMs sharing the box. No Kotlin/Native test runs here or anywhere
+  # else on a PR (#3115). Skipped on docs-only.
   build-native:
     needs: detect
     if: needs.detect.outputs.docs-only != 'true'
@@ -444,22 +441,14 @@ jobs:
           gradle-version: wrapper
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
-      - name: Restore Kotlin/Native (~/.konan)
-        id: konan
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/.konan
-          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle.kts') }}
-          restore-keys: konan-${{ runner.os }}-
-
       - name: Start jstack heartbeat
         # Same background watchdog as build-jvm — kept in lockstep (see #329, #891).
         # First dump at 90s, then a steady 120s cadence so a fresh dump always landed
         # within the last ~2 min before the 15-min per-Test task timeout kills a hung
-        # K/N test or wasm-browser run, even on a timeout kill. jstack-summary.txt
-        # distils the forked test JVM's "Test worker" stack (top non-JDK frames) to a
-        # one-glance read; the Gradle orchestrating JVM is still captured in full for
-        # K/N / wasm hangs that don't run on a JVM "Test worker" thread.
+        # wasm-browser run, even on a timeout kill. jstack-summary.txt distils the
+        # forked test JVM's "Test worker" stack (top non-JDK frames) to a one-glance
+        # read; the Gradle orchestrating JVM is still captured in full for wasm hangs
+        # that don't run on a JVM "Test worker" thread.
         # Self-guarded (|| true) so it never fails the job.
         run: |
           mkdir -p build/jstack-dumps
@@ -514,28 +503,17 @@ jobs:
           echo "=== disk ===" && df -h /
           echo "=== load ===" && uptime
 
-      - name: wasm + native tests
-        # wasmJsTest (incl. wasmJsBrowserTest — Binaryen wasm-opt + Karma Chrome) is the
-        # only test that RUNS here. On Linux, macosArm64Test, iosSimulatorArm64Test and
-        # their linkDebugTest tasks are SKIPPED: all 45 of each in run 43810075540 (#3115).
-        # They stay named because they still compile each module's Apple test sources,
-        # except in the cinterop modules. The Apple tests run in apple-nightly.yml.
-        # No JVM test forks run here, so the heavy codegen burst has the
-        # whole 16 GB to itself. Same --max-workers=2 + 3 GB daemon caps as build-jvm
+      - name: wasm tests
+        # wasmJsTest (incl. wasmJsBrowserTest — Binaryen wasm-opt + Karma Chrome). No
+        # JVM test forks run here, so the heavy codegen burst has the whole 16 GB to
+        # itself. Same --max-workers=2 + 3 GB daemon caps as build-jvm
         # for parity and conservative headroom; this job has no JVM forks, so the
         # caps can likely relax once the split is proven, but stay conservative now.
         run: >-
-          ./gradlew wasmJsTest macosArm64Test iosSimulatorArm64Test --max-workers=2
+          ./gradlew wasmJsTest --max-workers=2
           -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
-      # Only `main` writes ~/.konan; build-jvm's save step says why (#3115).
-      - name: Save Kotlin/Native (~/.konan)
-        if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ~/.konan
-          key: ${{ steps.konan.outputs.cache-primary-key }}
 
       - name: Kill jstack heartbeat
         if: always()
@@ -1223,8 +1201,8 @@ jobs:
   # filter's justification from a billing multiplier, and do not delete the filter on
   # discovering the bill is zero. What binds is that GitHub caps a plan at FIVE
   # concurrent macOS jobs regardless of visibility, on the smallest runner in the fleet
-  # (3 vCPU / 7 GB). This workflow fires ~25 runs/hour and the nightly Apple job takes
-  # ~11.5 min: an unconditional macOS job here would sit permanently at that 5-job
+  # (3 vCPU / 7 GB). This workflow fires ~25 runs/hour and one nightly Apple leg takes
+  # 40-50 min (#3115): an unconditional macOS job here would sit permanently at that 5-job
   # ceiling and queue every PR behind a lane that gates a HARNESS, while the shipped
   # library's own Apple targets stay ungated. So the coverage is split:
   #   - this job (gating)  — a PR that edits :spike sources compiles them, on that PR.
