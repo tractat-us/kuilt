@@ -2687,11 +2687,12 @@ public abstract class SeamConformanceSuite {
             val injected = injectSelfDial(host, joiner)
             if (!injected) return@connectedPair // meta-test reds on Proven-without-injection.
 
-            // **The two probes run SEQUENTIALLY, and that is load-bearing (#2601)** — the same trap
-            // `runIncomingCompletesWhenSeamCloses` records. Each probe spends a 2 s *virtual* window
-            // waiting for an echo that must never arrive, so running them concurrently on a real-IO
-            // harness lets the first `broadcast`'s suspension on a real socket fast-forward the clock
-            // through the second window before its `broadcast` is reached. That failure is a false
+            // **The two probes run SEQUENTIALLY, and that is load-bearing (#2601)** — the trap
+            // `runIncomingCompletesWhenSeamCloses` hit while it still had virtual bounds (until
+            // #3519). Each probe spends a 2 s *virtual* window waiting for an echo that must never
+            // arrive, so running them concurrently on a real-IO harness lets the first `broadcast`'s
+            // suspension on a real socket fast-forward the clock through the second window before
+            // its `broadcast` is reached. That failure is a false
             // GREEN, not a flake: an unspent window returns `null`, which is this arm's PASS. Giving
             // each end its own window costs virtual time and nothing else, and leaves the host arms
             // byte-identical to the host-only form.
