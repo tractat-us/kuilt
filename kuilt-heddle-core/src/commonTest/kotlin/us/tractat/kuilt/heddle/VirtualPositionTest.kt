@@ -40,8 +40,8 @@ class VirtualPositionTest {
     fun aNegativeSumRoundsUpToTheGrid() {
         val v = VirtualTime(Int128.of(-1L), 2L, 1L) // −1 tick over a total weight of 2
         assertAll(
-            { assertEquals(Int128.ZERO, v.ticksForWide(Weight.ONE)) },
-            { assertEquals(Int128.of(-1L), VirtualTime(Int128.of(-3L), 2L, 1L).ticksForWide(Weight.ONE)) },
+            { assertEquals(Int128.ZERO, (v.ticksForWide(Weight.ONE) as Ticks.Fits).value) },
+            { assertEquals(Int128.of(-1L), (VirtualTime(Int128.of(-3L), 2L, 1L).ticksForWide(Weight.ONE) as Ticks.Fits).value) },
             { assertEquals(Rational.of(-1L, 32L), v.toRational()) },
         )
     }
