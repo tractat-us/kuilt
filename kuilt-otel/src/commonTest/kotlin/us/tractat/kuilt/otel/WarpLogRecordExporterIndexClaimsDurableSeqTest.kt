@@ -1,5 +1,6 @@
 package us.tractat.kuilt.otel
 
+import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.test.runTest
 import kotlinx.io.bytestring.ByteString
 import us.tractat.kuilt.crdt.ReplicaId
@@ -405,6 +406,62 @@ class WarpLogRecordExporterIndexClaimsDurableSeqTest {
             { assertTrue(retiredSomething, "no window pass retired a segment") },
             // The property.
             { assertEquals(emptyList(), breaches) },
+        )
+    }
+
+    /** Lands the next index write once [arm] is called, then throws as if the store refused it. */
+    private class LandThenRefuseIndexStore(private val backing: DurableStore) : DurableStore {
+        private val lock = kotlinx.atomicfu.locks.reentrantLock()
+        private var armed = false
+        private var fired = 0
+
+        fun arm(): Unit = lock.withLock { armed = true }
+
+        fun fired(): Int = lock.withLock { fired }
+
+        override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
+
+        override suspend fun write(key: StoreKey, bytes: ByteArray) {
+            backing.write(key, bytes)
+            val refuse = lock.withLock {
+                (armed && key == INDEX_KEY_FOR_TEST).also { if (it) { armed = false; fired++ } }
+            }
+            if (refuse) throw IllegalStateException("simulated refusal of a write that landed")
+        }
+
+        override suspend fun delete(key: StoreKey): Unit = backing.delete(key)
+    }
+
+    /**
+     * A claim write that lands while the store reports it refused, as a store's own timeout can
+     * leave one. The turn mints under the landed claim, so no later index write may restate a
+     * lower one: each restates the highest claim attempted, never only the confirmed one.
+     *
+     * Right after a restart the claim has no headroom, so the first export's first index write is
+     * the claim, and that is the one the store lands and refuses.
+     */
+    @Test
+    fun aClaimThatLandedWhileRefusedIsNeverLoweredOnDisk() = runTest {
+        val backing = RecordingStore()
+        val store = LandThenRefuseIndexStore(backing)
+        val writer = shortLeaseExporterFor(store)
+        writer.recover()
+        repeat(12) { assertEquals(ExportResult.Success, writer.export(record(it)), "the rig: export $it") }
+        val restarted = shortLeaseExporterFor(store)
+        restarted.recover()
+        val claimBefore = indexOf(backing).seqHighWater
+        store.arm()
+        repeat(6) { restarted.export(record(100 + it)) }
+        val minted = restarted.snapshot().seqHighWater(replica)
+        val claims = backing.operations()
+            .filter { it.kind == StoreOpKind.WRITE && it.key == INDEX_KEY_FOR_TEST }
+            .map { decodeIndexForTest(requireNotNull(it.bytes)) }
+        val lowered = claims.zipWithNext().filter { (a, b) -> b.seqHighWater < a.seqHighWater || b.lamportHighWater < a.lamportHighWater }
+        assertAll(
+            { assertEquals(1, store.fired(), "the rig: one index write landed and was reported refused") },
+            { assertTrue(minted > claimBefore, "the rig: the restart minted past the claim it read") },
+            { assertEquals(emptyList(), lowered, "an index write lowered the claim") },
+            { assertTrue(indexOf(backing).seqHighWater >= minted, "the claim on disk is below the minted seq $minted") },
         )
     }
 }
