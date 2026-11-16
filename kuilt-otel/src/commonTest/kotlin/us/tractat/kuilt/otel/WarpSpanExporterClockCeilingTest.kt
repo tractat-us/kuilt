@@ -97,8 +97,8 @@ class WarpSpanExporterClockCeilingTest {
     }
 
     /**
-     * The add on a recovered exporter, before the write section: at the ceiling it evicted a span
-     * and threw out of [WarpSpanExporter.export].
+     * The add on a recovered exporter, built inside the write section (#3517): at the ceiling it once
+     * evicted a span and threw out of [WarpSpanExporter.export].
      */
     @Test
     fun aRecoveredExportRefusedAtTheCeilingMutatesNothing() = runTest(timeout = TEST_WEDGE_BACKSTOP) {

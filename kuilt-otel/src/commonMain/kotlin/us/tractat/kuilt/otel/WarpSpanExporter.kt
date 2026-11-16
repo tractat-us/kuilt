@@ -5,7 +5,6 @@ package us.tractat.kuilt.otel
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,12 +48,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpSpanExporte
  * inserts: the earliest by [SpanRecord.startEpochNanos] under [BufferPolicy.DROP_OLDEST], the
  * latest under [BufferPolicy.DROP_NEWEST]. The victim is chosen from the spans already held,
  * so an export's own eviction never takes the span it is adding, and it is committed only with
- * the add, so an export whose add is refused evicts nothing (#3441). That is all the cap promises
- * the incoming span. A recovered exporter adds before the durable-write section, so at the cap a
- * concurrent export's eviction can take this export's span before this export encodes, and this
- * export then returns [ExportResult.Success] for a snapshot that does not carry it. An export
- * that makes the landing read adds and encodes in one step, so its own snapshot always carries its
- * span. [merge] does not evict. The read of the stored spans
+ * the add, so an export whose add is refused evicts nothing (#3441). An export builds its add and
+ * its eviction inside the durable-write section, writes them, and makes them visible only once the
+ * write has returned (#3517), so the bytes an export writes always carry its own span, and an export
+ * whose write fails evicts nothing from memory either. A later export's eviction can take it. That
+ * is all the cap promises the incoming span. [merge] does not evict. The read of the stored spans
  * that lands, in [recover] or in the first write turn after a refused one, evicts whatever its
  * join brought in beyond [maxSpans] in one batch, by the same policy, before that turn's own
  * insert. **Every eviction is logged** with enough detail to correlate against a backend's
@@ -105,6 +103,33 @@ public class WarpSpanExporter(
     private var spans: ORSet<SpanRecord> = ORSet.empty()
 
     /**
+     * The set dots that failed export turns minted and never published, held as the last failed
+     * turn's starting set with its dot joined in, or empty when none is kept: its context witnesses
+     * those dots, and every span it holds is one [spans] has already seen ([keepUnpublished] says why
+     * that shape). Guarded by [lock], written only under [ioMutex].
+     *
+     * `ORSet.add` mints from the set's context, and a failed turn publishes nothing (#3517), so
+     * without this the next export would mint the failed turn's dot again for a different span. That
+     * matters because a failed write can still commit, after its caller stopped waiting and over
+     * newer bytes ([DurableStore.write]): the store would then hold the failed span on the dot a peer
+     * has from the next span, and a merge after a restart would drop both.
+     *
+     * So the next turn builds on [spans] joined with this, mints past it, and its bytes carry these
+     * dots durably; it is emptied when that turn publishes. It is **never** joined into [spans]
+     * directly: a context-only dot in [snapshot] before any write carries it would itself escape, as
+     * a removal a peer applies to whatever span a restart mints on it.
+     *
+     * A restart loses it, which is safe: no peer was shown one of these dots, and a store that holds
+     * one, through a late commit, holds it in its own context, so recovery mints past it. A [merge] or
+     * [clear] write in between does not carry it, and does not need to: if it overwrites a late
+     * commit, the dot is in no store and no peer's set.
+     */
+    private var unpublished: ORSet<SpanRecord> = ORSet.empty()
+
+    /** [unpublished] as it stands, so a test can measure what a run of failed turns keeps. */
+    internal fun unpublishedForTest(): ORSet<SpanRecord> = lock.withLock { unpublished }
+
+    /**
      * The highest `seq` of this replica's dots that this exporter knows is used, guarded by [lock]
      * (#3435). Every span write carries it in the bytes, so a later process whose clock entry is
      * corrupt floors above dots no stored span still holds: one evicted past [maxSpans], one [clear]
@@ -129,9 +154,9 @@ public class WarpSpanExporter(
      *
      * Until then a local export adds nothing to [spans]. An `ORSet` add mints the next dot from the
      * set's own context, and before the read that context lacks every stored dot, so the add would
-     * reuse a dot a stored span already holds and the join would conflate the two. So [export] adds
-     * only inside [ioMutex], after the read has landed and joined the stored set, and then takes the
-     * live path exactly. A refused read leaves it nothing to undo.
+     * reuse a dot a stored span already holds and the join would conflate the two. [export] builds
+     * its add only inside [ioMutex], after this turn's read has landed and joined the stored set, as
+     * every export does. A refused read leaves it nothing to undo.
      */
     private var readState: SpanReadState = SpanReadState.Unread
     private val persistence = PersistenceHealthTracker<StoreKey>()
@@ -302,6 +327,9 @@ public class WarpSpanExporter(
     private companion object {
         private val STORE_KEY = StoreKey("otel.spans")
 
+        /** Appended to a span's name to find a value the set does not hold; see `mintedDotOf`. */
+        private const val UNPUBLISHED_PROBE_SUFFIX = "\u0000"
+
         /** The cause a turn that wanted a dot from an exhausted clock is counted with: it had none left. */
         private fun exhaustedClock(): Throwable =
             IllegalStateException("otel.causal.clock: seq is Long.MAX_VALUE, so spans are saved unstamped")
@@ -443,8 +471,8 @@ public class WarpSpanExporter(
      * cleared, or held only by a peer. Once this replica's span is evicted, a remote span that observed
      * it may be the only evidence its dot was minted, and re-minting it would resolve that predecessor
      * to a new span. The floor is raised before the state turns [SpanReadState.Recovered], in the same
-     * hold of [lock], and [export] mints before its write section only from a recovered exporter under
-     * that lock, so no stamp is minted below it. A clock whose own entry was corrupt starts at `seq=0`
+     * hold of [lock], and [export] mints only from a recovered exporter under that lock, so no stamp is
+     * minted below it. A clock whose own entry was corrupt starts at `seq=0`
      * and would otherwise re-mint those dots.
      *
      * An undecodable entry, the bare set this key held before #3435 included, starts fresh and loses
@@ -482,14 +510,14 @@ public class WarpSpanExporter(
     }
 
     /**
-     * Encode [spans] with the high-water mark this write carries (#3435). A configured clock's `seq`
-     * is folded in first, so the mark covers every dot it minted, a rolled-back stamp's and an evicted
-     * span's included, and the clock entry this process read. Every dot in the snapshot was minted
-     * before this encode, so the mark is at least each of them. Must be called with [lock] held.
+     * Encode [set] with the high-water mark this write carries (#3435). A configured clock's `seq`
+     * is folded in first, so the mark covers every dot it minted, an unpublished turn's and an evicted
+     * span's included, and the clock entry this process read. Every dot in [set] was minted before
+     * this encode, so the mark is at least each of them. Must be called with [lock] held.
      */
-    private fun encodeSpans(): ByteArray {
+    private fun encodeSpans(set: ORSet<SpanRecord>): ByteArray {
         causalClock?.highWater()?.let(::raiseHighWater)
-        return cbor.encodeToByteArray(storedSerializer, StoredSpans(spans, ownHighWater))
+        return cbor.encodeToByteArray(storedSerializer, StoredSpans(set, ownHighWater))
     }
 
     /**
@@ -513,6 +541,29 @@ public class WarpSpanExporter(
      * floors the clock above it, so a dot whose span was since evicted or cleared is not minted again
      * (#3435).
      *
+     * ## The span is published only after its writes return (#3517)
+     *
+     * The whole turn runs inside an internal write section: the stamp, the add and the eviction are
+     * built on a **candidate** set, the candidate is written, and only once both writes have returned
+     * is it joined into the set [snapshot] and [merge] read. So no dot this turn mints is visible
+     * before the store holds it. The span carries two of this replica's dots, its [CausalStamp]'s and
+     * the one the `ORSet` mints for the add, and either one shown to a peer ahead of its write could
+     * be minted again by a restart whose store never held it. Two spans sharing the stamp's dot
+     * conflate their causal links, and two adds sharing the set's dot make a merge drop **both** spans.
+     *
+     * A failed or cancelled turn publishes nothing, so memory never holds a span the turn could not
+     * write, and there is nothing to roll back. It does keep the set dot it minted, privately, so the
+     * next span never shares it with a failed write that commits late; the next span's write carries
+     * that dot. The clock is not rolled back either: its sequence stays
+     * advanced and its frontier keeps the unpublished dot, so the next stamp can name a predecessor that
+     * never resolves. That loses a real edge too: [WarpCausalClock.tick] collapses the frontier, so the
+     * next span's only path to earlier spans ran through that dot. The lost edge is tracked by #3028.
+     *
+     * A failed or cancelled write may already have committed, or may commit later. The store then
+     * holds a span memory never published, until the next write replaces the snapshot. A restart in
+     * that window recovers it, and retrying the original unstamped span mints another dot and creates
+     * a second stamped copy.
+     *
      * ## Crash-window invariant (#1053)
      *
      * The clock is persisted **before** the span's durable write, establishing the
@@ -527,43 +578,27 @@ public class WarpSpanExporter(
      * multi-threaded dispatcher**: the clock persist and the span write are serialized as
      * one ordered unit by an internal coroutine `Mutex`, so the last durable clock write
      * always reflects a `seq` ≥ every durable span's dot rather than being clobbered by an
-     * older concurrent snapshot. The span snapshot is re-encoded inside that section, so a
-     * concurrent add is never dropped by a stale snapshot either.
+     * older concurrent snapshot. The candidate is built from the latest set inside that section, so
+     * a concurrent add is never dropped by a stale snapshot either, and a [merge] that joins a remote
+     * set while the writes are in flight is kept, since publishing joins rather than replaces.
      *
-     * On a failure or a cancellation, a freshly stamped span is removed from the in-memory
-     * set, whether cancellation arrives inside the write or while waiting for the write
-     * section, and the cancellation then propagates. So a caller that cancels an export
-     * (through its own timeout, say) and retries the unstamped span holds one stamped copy,
-     * and an export that is cancelled or fails with no retry **loses its span from memory**.
-     * The clock is not rolled back: its sequence stays advanced and its frontier keeps the
-     * removed dot, so the next stamp can name a predecessor that never resolves. That loses a
-     * real edge too: [WarpCausalClock.tick] collapses the frontier, so the next span's only
-     * path to earlier spans ran through the removed dot. The lost edge is tracked by #3028.
+     * Until a read of the stored spans has landed, the export makes that read first inside the write
+     * section (#3390), or refuses without it inside the backoff window [recover] describes (#3436).
+     * While the store refuses the read, the export returns [ExportResult.Failure] having changed
+     * nothing, the clock included: its span is in neither memory nor the store, so the caller's retry
+     * is its only copy. The read that lands joins the stored set and raises the clock above every dot
+     * of this replica's it found (#3407), and the export then builds, writes and publishes its span
+     * as any other does.
      *
-     * This only undoes the live add. A failed or cancelled write may already have committed,
-     * or may commit later, and because a recovered exporter's stamp enters memory before the
-     * write section, a concurrent export's successful write can carry it as well. The store then
-     * holds a copy memory has dropped, until the next write replaces the snapshot. A restart in
-     * that window recovers it, and retrying the original unstamped span mints another dot and
-     * creates a second stamped copy.
-     *
-     * Until a read of the stored spans has landed, the export stamps and adds nothing before the
-     * write section, and inside it makes that read first (#3390), or refuses without it inside the
-     * backoff window [recover] describes (#3436). While the store refuses the read,
-     * the export returns [ExportResult.Failure] having changed nothing, the clock included: its span
-     * is in neither memory nor the store, so the caller's retry is its only copy. The read that lands
-     * joins the stored set and raises the clock above every dot of this replica's it found (#3407),
-     * and the export then stamps, adds and writes its span exactly as a recovered one does.
-     *
-     * Returns [ExportResult.Success] after the durable write returns. A failure in that section
-     * returns [ExportResult.Failure], and so does a `CancellationException` the [store] mints at
-     * this live caller from its own `withTimeout`: only the caller's own cancellation propagates
-     * (#3388). Neither failure nor cancellation establishes that the span was not persisted. See [DurableStore.write]
-     * for the indeterminate commit outcome.
+     * Returns [ExportResult.Success] after the durable write returns, with the span in [snapshot]. A
+     * failure in that section returns [ExportResult.Failure], and so does a `CancellationException`
+     * the [store] mints at this live caller from its own `withTimeout`: only the caller's own
+     * cancellation propagates (#3388). Neither failure nor cancellation establishes that the span was
+     * not persisted. See [DurableStore.write] for the indeterminate commit outcome.
      *
      * When the buffer is full, the eviction policy picks a victim among the spans already held and
-     * the new span is inserted, so this export's own eviction never takes it. A concurrent export's
-     * eviction can; see the class's buffer cap section.
+     * the new span is inserted, so this export's own eviction never takes it, and the bytes it writes
+     * always carry it. A later export's eviction can take it.
      *
      * **An add the set refuses changes nothing.** Past the set's own clock ceiling, which a [merge]
      * of a peer's set naming this replica's dot near [Long.MAX_VALUE] can bring within reach, the
@@ -585,96 +620,71 @@ public class WarpSpanExporter(
         // read below (#3436).
         val clockRead = causalClock?.takeIf { !it.isArmed }?.let { ioMutex.withLock { retryClockRead(it) } }
         val clockRefusal = clockRead?.refusal
-        // A recovered exporter stamps and adds before the write section, as it always has, in one hold
-        // of `lock`: the read that made it recovered raised the clock's floor under that lock first, so
-        // the stamp is above every stamp the stored spans carry (#3407). One whose read has not landed
-        // stamps and adds nothing yet: the add would reuse a dot a stored span holds (#3390), and the
-        // stamp could re-mint one a stored span carries, so both wait for the read inside the section.
-        // `null` until this export has stamped.
-        var stamped: Stamping? = try {
-            lock.withLock { if (readState == SpanReadState.Recovered) insert(span, clock) else null }
-        } catch (refused: CeilingRefusal) {
-            // Nothing moved: not the set, not the clock, not the store (#3441). The turn's reads are
-            // done, so a skip of the clock's read is spent here, as the section below spends it: a set
-            // at the ceiling refuses every export, and one that never spent would skip the clock's read
-            // for good (#3436).
+        // Serialize the durable-write section across concurrent export()/merge()/clear() so the clock
+        // persist and the span write are one ordered unit (#1053), and so nothing this turn mints is
+        // published before both have returned (#3517).
+        return ioMutex.withLock {
+            // Never write over spans a refused read missed (#3390). A refusal leaves nothing to
+            // undo: the span was neither stamped nor added. The span read is the turn's last, so
+            // a skip of the clock's read is spent after it, refused or not (#3436).
+            val unread = readBeforeWrite()
             spendClockSkip(causalClock, clockRead)
-            return refusedAtCeiling(refused.ceiling)
-        }
-        val addedEarly = stamped != null
-        // Serialize the durable-write section across concurrent export()/merge() so the
-        // clock persist and the span write are one ordered unit (#1053).
-        return try {
-            ioMutex.withLock {
-                // Never write over spans a refused read missed (#3390). A refusal leaves nothing to
-                // undo: the span was neither stamped nor added. The span read is the turn's last, so
-                // a skip of the clock's read is spent after it, refused or not (#3436).
-                val unread = readBeforeWrite()
-                spendClockSkip(causalClock, clockRead)
-                unread?.let { return@withLock it }
-                // Why this turn's clock work failed though its writes ran, or `null` when it did not.
-                var clockFailure: Throwable? = null
-                val written = try {
-                    // Re-encode the *latest* spans inside the section so no concurrent add is
-                    // dropped by a stale snapshot; encoding before the persist keeps the
-                    // persisted seq ≥ every dot in this snapshot (seq is monotonic).
-                    val encoded = lock.withLock {
-                        // The read has landed, joined the stored set and raised the clock's floor, so
-                        // this stamp mints above every stored dot (#3407), and this add mints above the
-                        // set's dots and evicts from it as the live path does. It shares one hold of
-                        // `lock` with the encode: the read made the exporter recovered, so a concurrent
-                        // export can already add before the section, and at the cap that add could
-                        // evict this span between a separate add and encode, leaving a Success for a
-                        // span the snapshot never carried.
-                        if (!addedEarly) stamped = insert(span, clock)
-                        encodeSpans()
-                    }
-                    // Persist the clock BEFORE the span so the durable clock seq is always ≥
-                    // every durable span's dot — a crash between the two writes can only lose
-                    // the span, never re-mint its dot on recover (#1053). An unrecovered clock
-                    // writes nothing, and no dot in this snapshot came from it (#3390). A turn that
-                    // wanted a dot from an exhausted clock writes the clock, and still failed its clock
-                    // work: its span is saved unstamped (#3426).
-                    clockFailure = causalClock?.let { persistClock(it, clockRefusal) }
-                        ?: if (stamped?.exhausted == true) exhaustedClock() else null
-                    store.write(STORE_KEY, encoded)
-                    Result.success(Unit)
-                } catch (refused: CeilingRefusal) {
-                    // The add was refused before anything moved or was written: a refused turn, not
-                    // a refused write, so it opens no write outage (#3441).
-                    return@withLock refusedAtCeiling(refused.ceiling)
-                } catch (cause: Throwable) {
-                    // Only this coroutine's own cancellation propagates, to the rollback below. One
-                    // the store minted from its own `withTimeout` is a refused write (#3388).
-                    currentCoroutineContext().ensureActive()
-                    Result.failure(cause)
+            unread?.let { return@withLock it }
+            // What this turn built, to publish once its writes return; `null` until it is built.
+            var candidate: Candidate? = null
+            // Why this turn's clock work failed though its writes ran, or `null` when it did not.
+            var clockFailure: Throwable? = null
+            val written = try {
+                val encoded = lock.withLock {
+                    // The read has landed, joined the stored set and raised the clock's floor, so
+                    // this stamp mints above every stored dot (#3407), and this add mints above the
+                    // set's dots and evicts from it. Built from the latest set, so no concurrent add
+                    // is dropped by a stale snapshot, and encoded in the same hold of `lock`.
+                    val built = candidateFor(span, clock)
+                    candidate = built
+                    encodeSpans(built.set)
                 }
-                written.fold(
-                    onSuccess = {
-                        countTurn(writeFailure = null, clockFailure)
-                        durableWriteSucceeded()
-                        ExportResult.Success
-                    },
-                    onFailure = { cause ->
-                        countTurn(writeFailure = cause, clockFailure)
-                        stamped?.let { rollBackMinted(span, it.span) }
-                        // Roll back before the outage report; the health count above records the turn
-                        // either way. The caller's own cancellation propagates past this fold, so it is
-                        // counted as neither acknowledged nor failed; reporting only opens an outage once.
-                        durableWriteFailed(cause) {
-                            logger.error(it) { "WarpSpanExporter: durable write failed for span ${span.spanId}" }
-                        }
-                    },
-                )
+                // Persist the clock BEFORE the span so the durable clock seq is always ≥
+                // every durable span's dot — a crash between the two writes can only lose
+                // the span, never re-mint its dot on recover (#1053). An unrecovered clock
+                // writes nothing, and no dot in this snapshot came from it (#3390). A turn that
+                // wanted a dot from an exhausted clock writes the clock, and still failed its clock
+                // work: its span is saved unstamped (#3426).
+                clockFailure = causalClock?.let { persistClock(it, clockRefusal) }
+                    ?: if (candidate?.stamping?.exhausted == true) exhaustedClock() else null
+                store.write(STORE_KEY, encoded)
+                Result.success(Unit)
+            } catch (refused: CeilingRefusal) {
+                // The add was refused before anything moved or was written: a refused turn, not
+                // a refused write, so it opens no write outage (#3441).
+                return@withLock refusedAtCeiling(refused.ceiling)
+            } catch (cause: Throwable) {
+                // The write may still commit, so the next turn must not mint this turn's set dot
+                // again, whether the turn failed or its caller was cancelled. Kept before the
+                // cancellation check, and with no suspension point, so a cancelled turn keeps it too.
+                candidate?.let(::keepUnpublished)
+                // Only this coroutine's own cancellation propagates, publishing nothing. One the
+                // store minted from its own `withTimeout` is a refused write (#3388).
+                currentCoroutineContext().ensureActive()
+                Result.failure(cause)
             }
-        } catch (cancelled: CancellationException) {
-            // Around the whole section, not the write: a recovered waiter on ioMutex has its stamp in
-            // memory too, and a healing turn stamps and adds inside the section. A turn cancelled before
-            // it stamped holds `null` and has nothing to remove; stamping and adding share one hold of
-            // `lock`, so a stamped value was added. The removal takes no suspension point, so it
-            // completes while this coroutine is cancelled.
-            stamped?.let { rollBackMinted(span, it.span) }
-            throw cancelled
+            written.fold(
+                onSuccess = {
+                    // Both writes returned, so every dot the candidate minted is durable: only now
+                    // may a peer see it (#3517). No suspension point lies between the write and here.
+                    candidate?.let(::publish)
+                    countTurn(writeFailure = null, clockFailure)
+                    durableWriteSucceeded()
+                    ExportResult.Success
+                },
+                onFailure = { cause ->
+                    // Nothing was published, so there is nothing to roll back; the set dot was kept.
+                    countTurn(writeFailure = cause, clockFailure)
+                    durableWriteFailed(cause) {
+                        logger.error(it) { "WarpSpanExporter: durable write failed for span ${span.spanId}" }
+                    }
+                },
+            )
         }
     }
 
@@ -692,20 +702,41 @@ public class WarpSpanExporter(
     }
 
     /**
-     * Remove [stamped] from memory if this export minted its stamp. A fresh dot was minted only when
-     * `copy()` produced a new instance; an explicit or absent stamp is [span] itself, and re-adding
-     * the same full value is idempotent, so it needs no rollback.
+     * Make [candidate] the set [snapshot] and [merge] read, once its writes have returned (#3517).
+     * Must be called under [ioMutex]: no other turn can then have changed [spans] since the candidate
+     * was built except a [merge]'s join of a remote set, which runs before its own write section. So
+     * the candidate replaces an unchanged set outright, and is joined into a merged one, which keeps
+     * the remote spans and still drops the candidate's victim, whose dots the candidate has seen.
+     *
+     * The candidate was built on [unpublished] too, so its bytes carried every dot a failed turn kept,
+     * and those are now durable: [unpublished] empties with the publish.
      */
-    private fun rollBackMinted(span: SpanRecord, stamped: SpanRecord) {
-        if (stamped !== span) removeFromMemory(stamped)
+    private fun publish(candidate: Candidate) {
+        lock.withLock {
+            spans = if (spans === candidate.base) candidate.set else spans.piece(candidate.set)
+            unpublished = ORSet.empty()
+        }
+        candidate.victim?.let(::logEviction)
     }
 
     /**
-     * Remove a freshly stamped value from memory. This does not undo a landed store write or prevent
-     * a duplicate on retry after recovery. `remove` leaves concurrent adds of different spans alone.
+     * Keep the set dot [candidate] minted, since its turn failed or was cancelled and published
+     * nothing. Must be called under [ioMutex], which every writer of [unpublished] holds.
+     *
+     * Kept as the turn's whole [Candidate.start] with the dot joined in, not as the dot alone. The
+     * start already holds every dot kept before, so a run of failed turns keeps them all; a context
+     * mints past its contiguous run only, so one dropped would be minted again. And the start's
+     * context has this replica's run up to the set's own, so each kept dot extends that run and
+     * compacts into it: what a long outage keeps stays the size of one set rather than growing a dot
+     * per failure. The start is taken before the eviction, so it drops no span memory still shows.
+     *
+     * Joining the start back in later changes nothing but the kept dots. Every path into [spans] is a
+     * join or an inflation of it ([publish], [merge], [clear], the read that lands), so the set the next
+     * turn starts from already dominates this start, a [clear]'s removals included: a span the clear
+     * dropped is one whose dot the cleared set has seen, and the start's copy cannot outweigh that.
      */
-    private fun removeFromMemory(stamped: SpanRecord) {
-        lock.withLock { spans = spans.piece { set -> set.remove(stamped) } }
+    private fun keepUnpublished(candidate: Candidate) {
+        lock.withLock { unpublished = candidate.start.piece(candidate.minted) }
     }
 
     /**
@@ -715,6 +746,22 @@ public class WarpSpanExporter(
      * remote set [merge]d and every span exported since, less the buffer cap's evictions and what
      * [clear] dropped. Until then it holds only the remote sets merged meanwhile: neither the
      * stored spans nor any local export, which waits for that read (#3390).
+     *
+     * A local export shows here only once its writes have returned (#3517), so every dot this
+     * process's exports minted that the set holds was durable when it showed. An export whose writes
+     * are in flight, or failed, is not here.
+     *
+     * Durable is not final, though. A failed write can still commit after its caller stopped waiting,
+     * over newer bytes ([DurableStore.write]). The exporter keeps such a turn's set dot, so the span
+     * shown next never shares it. What that leaves open: a restart over the late commit reads a set
+     * context that lacks the set dots of spans shown after the failed one, so an export it makes
+     * before a peer hands those spans back can mint one of them again. It also reaches them by a
+     * second route: an export that fails in that window keeps the dot it minted, and if a peer then
+     * hands back a span on that same dot, the next export's turn drops it, since the kept context has
+     * seen the dot and holds no span on it. A successful export in that window loses the handed-back
+     * span as well, so this route widens the residual rather than opening it (#3544). The clock's dots
+     * are not affected, since the clock key is written ahead of each span write and only after it
+     * returns.
      */
     public fun snapshot(): ORSet<SpanRecord> = lock.withLock { spans }
 
@@ -730,8 +777,9 @@ public class WarpSpanExporter(
      * or names, in the same hold of `lock` as the join (#3407). A peer can hand back spans this
      * replica minted and then lost, and a stamp minted after they land must not collide with one. The
      * high-water mark the span bytes carry (#3435) already covers every own dot that was in memory
-     * when a span write was encoded, so a stamp minted before the merge collides only with a dot that
-     * reached the peer from [snapshot] before any write carrying it landed, and the crash came first.
+     * when a span write was encoded, and [snapshot] shows an export only once its writes have landed
+     * (#3517), so a stamp minted before the merge collides only with a dot whose durable record this
+     * store has since lost, as a corrupt entry does.
      * The raise takes the peer's `seq` as given: a dot at `Long.MAX_VALUE` leaves the clock
      * [ClockTick.Exhausted], so later spans are saved unstamped. Whether a merge should refuse such
      * a dot is #3432.
@@ -760,7 +808,7 @@ public class WarpSpanExporter(
             // The remote spans stay in memory; the write waits for a read to land (#3390).
             readBeforeWrite()?.let { return@withLock it }
             val written = try {
-                val encoded = lock.withLock { encodeSpans() }
+                val encoded = lock.withLock { encodeSpans(spans) }
                 store.write(STORE_KEY, encoded)
                 Result.success(Unit)
             } catch (cause: Throwable) {
@@ -827,7 +875,7 @@ public class WarpSpanExporter(
      * **On a failed write, [snapshot] already reads empty while the store still holds every span**, and
      * a configured clock's [WarpCausalClock.frontier] likewise reads empty while the persisted
      * one still names the pre-clear dots. Both mutations precede the writes and — unlike
-     * [export], which rolls a freshly-minted stamp back out — neither is undone. A caller that
+     * [export], which publishes its span only once its writes return — neither is undone. A caller that
      * uses the span count as a baseline must treat any non-[ExportResult.Success] as *count
      * unknown* rather than as zero. On success the count reads zero synchronously, because the
      * drop precedes the write.
@@ -847,7 +895,7 @@ public class WarpSpanExporter(
             val encoded = lock.withLock {
                 spans = spans.piece { it.removeAll(it.elements) }
                 // The high-water mark is not reset: the removed spans' dots stay used (#3435).
-                encodeSpans()
+                encodeSpans(spans)
             }
             // The frontier belongs to this method, not to the facade — so a caller reaching this
             // exporter directly, rather than through WarpTelemetry.clear(), gets it too. It names
@@ -906,11 +954,12 @@ public class WarpSpanExporter(
     }
 
     /**
-     * The live insert: stamp [span] by [clock], evict one span if the set is at the cap, and add the
-     * stamped span, so this insert never evicts the span it adds; a later insert may. Returns what it
-     * saved. Must be called with [lock] held, on a recovered exporter.
+     * Build this turn's [Candidate] from [spans]: stamp [span] by [clock], evict one span if the set
+     * is at the cap, and add the stamped span, so this turn never evicts the span it adds; a later one
+     * may. [spans] itself is left alone: [publish] makes the candidate visible once its writes have
+     * returned (#3517). Must be called with [lock] held, under [ioMutex], on a recovered exporter.
      *
-     * ## Refuse first, then build, then commit
+     * ## Refuse first, then build
      *
      * [ORSet.add] throws `ArithmeticException` once this replica's seq in the set's context is at
      * [Long.MAX_VALUE] (#3429), and a [merge] can put it there. In the old order (evict, then add) a
@@ -923,30 +972,54 @@ public class WarpSpanExporter(
      * would, even when the store's dots are not all in its context. The clock has no
      * way to take a tick back, which is why the trial comes before it rather than a rollback after.
      *
-     * The eviction and the real add are then built on locals, and [spans] is written once, after
-     * both have returned, as `WarpLogRecordExporter.applyTurn` builds its turn. Everything after the
-     * add is a log line, field writes and floor raises (`maxOf`), none of which can throw; keep it that way.
+     * Everything after the add is field writes and floor raises (`maxOf`), none of which can throw;
+     * keep it that way.
      */
-    private fun insert(span: SpanRecord, clock: WarpCausalClock?): Stamping {
-        val victim = if (spans.elements.size >= maxSpans) victimOf(spans.elements) else null
-        val evicted = victim?.let { chosen -> spans.piece { it.remove(chosen) } } ?: spans
-        try {
+    private fun candidateFor(span: SpanRecord, clock: WarpCausalClock?): Candidate {
+        val base = spans
+        // Past every set dot a failed turn kept, so this add never mints one of them again. Outside the
+        // late-commit residual the join removes nothing and adds no span: the kept dots are on no span
+        // this process has shown, and the rest of [unpublished] is a set [base] already dominates.
+        // Inside it a peer can hand back a span on a kept dot, and the join then drops it; see
+        // [snapshot].
+        val start = if (unpublished == ORSet.empty<SpanRecord>()) base else base.piece(unpublished)
+        val victim = if (start.elements.size >= maxSpans) victimOf(start.elements) else null
+        val evicted = victim?.let { chosen -> start.piece { it.remove(chosen) } } ?: start
+        val trial = try {
             evicted.add(replica, span)
         } catch (ceiling: ArithmeticException) {
             throw CeilingRefusal(ceiling)
         }
         val stamping = stampOf(span, clock)
         val added = evicted.piece { it.add(replica, stamping.span) }
-        victim?.let(::logEviction)
-        spans = added
+        val minted = mintedDotOf(evicted, trial.delta)
         // An explicit stamp of this replica's is a used dot the clock did not mint: raise the clock
         // now, so it never mints that dot, and the mark, so a restart floors above it once its span is
         // evicted (#3435). A minted stamp is the clock's `seq`, so for one this leaves the clock alone.
+        // Raised before the writes, and kept if they fail: a raise only ever costs a gap.
         highestOwnDot(listOf(stamping.span))?.let { usedSeq ->
             raiseHighWater(usedSeq)
             causalClock?.raiseFloor(usedSeq)
         }
-        return stamping
+        return Candidate(base, start, added, victim, stamping, minted)
+    }
+
+    /**
+     * A set holding no span whose context witnesses exactly the dot an add to [evicted] mints, built
+     * from [trialAdd], the delta of the trial add of the unstamped span on [evicted]. An add's dot
+     * comes from the context alone, so it is the dot the real add minted too.
+     *
+     * The add's delta also witnesses the dots it supersedes when the set already holds that very
+     * value, and kept as a removal those would drop the held copy from the next turn. So in that case
+     * the dot is taken from an add of a value the set does not hold: a copy of the span renamed until
+     * it is absent, which the finite set guarantees. Neither value ever enters [spans] or the store.
+     */
+    private fun mintedDotOf(evicted: ORSet<SpanRecord>, trialAdd: ORSet<SpanRecord>): ORSet<SpanRecord> {
+        val added = trialAdd.elements.single()
+        val absent = generateSequence(added) { it.copy(name = it.name + UNPUBLISHED_PROBE_SUFFIX) }
+            .first { it !in evicted.elements }
+        val delta = if (absent === added) trialAdd else evicted.add(replica, absent).delta
+        return delta.piece { it.remove(absent) }
     }
 
     /** The [bufferPolicy]'s victim among [current], or `null` when it is empty. */
@@ -977,7 +1050,7 @@ public class WarpSpanExporter(
         val excess = current.size - maxSpans
         if (excess <= 0) return
         // Stable sorts, so ties go in iteration order, as minBy/maxBy break them in victimOf. A
-        // removal mints no dot, so unlike insert's add this cannot meet the ceiling (#3441).
+        // removal mints no dot, so unlike candidateFor's add this cannot meet the ceiling (#3441).
         val victims = when (bufferPolicy) {
             BufferPolicy.DROP_OLDEST -> current.sortedBy { it.startEpochNanos }
             BufferPolicy.DROP_NEWEST -> current.sortedByDescending { it.startEpochNanos }
@@ -1023,6 +1096,22 @@ private class ClockReadTurn(val refusal: Throwable?, val skipped: RefusedReadBac
  * unstamped: the one case of a landed clock write whose clock work still failed (#3426).
  */
 private class Stamping(val span: SpanRecord, val exhausted: Boolean)
+
+/**
+ * One export's turn, built under the write section and not yet visible: [base] is the set the turn
+ * read and [start] that set joined with what failed turns kept, and [set] is [start] with [victim]
+ * evicted and [stamping]'s span added. [WarpSpanExporter] writes [set], and publishes it only once the writes have returned
+ * (#3517). [minted] is a set holding no span whose context witnesses the one dot the add minted,
+ * which a failed turn keeps so the next one mints past it.
+ */
+private class Candidate(
+    val base: ORSet<SpanRecord>,
+    val start: ORSet<SpanRecord>,
+    val set: ORSet<SpanRecord>,
+    val victim: SpanRecord?,
+    val stamping: Stamping,
+    val minted: ORSet<SpanRecord>,
+)
 
 /** Whether a [WarpSpanExporter] has read its stored spans. */
 private sealed interface SpanReadState {

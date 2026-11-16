@@ -32,7 +32,7 @@ class IndeterminateWriteAuditTest {
     )
 
     @Test
-    fun stampedSpanRollbackDoesNotUndoTheDurableWriteAndRestartRetryDuplicates() = runTest {
+    fun aFailedExportPublishesNothingYetItsLandedWriteIsRecoveredAndARestartRetryDuplicates() = runTest {
         for (mode in CommitMode.entries) {
             val store = CommitThenFailStore(StoreKey("otel.spans"), mode)
             val clock = WarpCausalClock(replica)
@@ -57,7 +57,7 @@ class IndeterminateWriteAuditTest {
             val retried = recovered.snapshot().elements
             assertAll(
                 { assertEquals(1, store.injections, "$mode: span commit-before-failure injection must fire") },
-                { assertEquals(0, live.size, "$mode: a refused or cancelled export rolls the minted stamp back") },
+                { assertEquals(0, live.size, "$mode: a refused or cancelled export publishes nothing") },
                 { assertEquals(1, durable.size, "$mode: an unacknowledged export may still have been persisted") },
                 { assertEquals(2, retried.size, "audit: retry after recovery creates another stamped copy") },
                 { assertEquals(2, retried.map { it.causalStamp?.dot }.toSet().size, "recovery must not reuse the dot") },
@@ -71,7 +71,7 @@ class IndeterminateWriteAuditTest {
      * leave one stamped copy rather than the two a kept stamp used to produce.
      */
     @Test
-    fun exportCancelledInsideTheWriteRollsBackSoARetryDoesNotDuplicate() = runTest {
+    fun exportCancelledInsideTheWritePublishesNothingSoARetryDoesNotDuplicate() = runTest {
         val spansKey = StoreKey("otel.spans")
         val store = ParkingStore(spansKey)
         val exporter = WarpSpanExporter(replica, store, causalClock = WarpCausalClock(replica))
@@ -94,9 +94,14 @@ class IndeterminateWriteAuditTest {
         )
     }
 
-    /** Cancelled while queued for the write section, the case a catch around only the write misses. */
+    /**
+     * Cancelled while queued for the write section, the case a catch around only the write misses. An
+     * export builds its add inside the section and shows it only once its writes return (#3517), so
+     * neither the parked holder's span nor the waiter's is visible meanwhile, and the cancelled waiter
+     * leaves nothing behind.
+     */
     @Test
-    fun exportCancelledWhileWaitingForTheWriteRollsBackSoARetryDoesNotDuplicate() = runTest {
+    fun exportCancelledWhileWaitingForTheWriteLeavesNothingSoARetryDoesNotDuplicate() = runTest {
         val store = ParkingStore(StoreKey("otel.spans"))
         val exporter = WarpSpanExporter(replica, store, causalClock = WarpCausalClock(replica))
         val holder = launch { exporter.export(otherSpan(2)) }
@@ -110,22 +115,27 @@ class IndeterminateWriteAuditTest {
         store.parking = false
         store.release()
         holder.join()
+        val idsAfterHolder = exporter.snapshot().elements.map { it.spanId }.toSet()
         assertIs<ExportResult.Success>(exporter.export(span))
         val copies = exporter.snapshot().elements.filter { it.spanId == span.spanId }
         val durable = WarpSpanExporter(replica, store).also { it.recover() }.snapshot().elements
         assertAll(
-            // The rig: the stamp is in memory and the waiter never reached the write.
-            { assertEquals(setOf(otherSpan(2).spanId, span.spanId), idsWhileWaiting) },
+            // The rig: the holder is inside the write section and the waiter never reached it.
             { assertEquals(1, parkedWhileWaiting, "only the holder may be inside the write section") },
-            { assertEquals(setOf(otherSpan(2).spanId), idsAfterCancel, "the holder's span must survive the rollback") },
+            { assertEquals(emptySet(), idsWhileWaiting, "a span showed before its writes landed") },
+            { assertEquals(emptySet(), idsAfterCancel, "the cancelled waiter left a span behind") },
+            { assertEquals(setOf(otherSpan(2).spanId), idsAfterHolder, "the holder's span shows once its write lands") },
             { assertEquals(1, copies.size, "the retry must leave one stamped copy") },
             { assertEquals(1, durable.count { it.spanId == span.spanId }, "one copy reaches the store") },
         )
     }
 
-    /** Without a minted stamp a retry re-adds one full value, so a cancelled export has nothing to undo. */
+    /**
+     * A cancelled export publishes nothing, whether or not it minted a stamp (#3517): the span shows
+     * only once its writes return. The retry then holds the one copy.
+     */
     @Test
-    fun cancelledExportKeepsASpanItDidNotStamp() = runTest {
+    fun aCancelledExportPublishesNothingStampedOrNot() = runTest {
         val explicit = span.copy(causalStamp = CausalStamp(Dot(replica, 99L), emptySet()))
         val cases = listOf(span to null, explicit to WarpCausalClock(replica))
         for ((exported, clock) in cases) {
@@ -137,20 +147,22 @@ class IndeterminateWriteAuditTest {
             assertIs<ExportResult.Success>(exporter.export(exported))
             assertAll(
                 { assertNull(timedOut, "the first export must time out") },
-                { assertEquals(setOf(exported), liveAfterCancel, "nothing was minted, so nothing rolls back") },
+                { assertEquals(1, store.parked, "the rig: the first export never parked in its write") },
+                { assertEquals(emptySet(), liveAfterCancel, "the cancelled export published its span") },
                 { assertEquals(setOf(exported), exporter.snapshot().elements, "the retry is the same value") },
             )
         }
     }
 
     /**
-     * The stamp enters memory before the write section, so a concurrent export's write can carry a
-     * stamp this export then rolls back. Cancellation and failure share this: the store holds a copy
-     * memory has dropped until the next write replaces the snapshot, and a restart inside that
-     * window recovers it, which is the duplicate no rollback reaches.
+     * No other turn's write can carry a span its export never published (#3517). Before, the stamp
+     * entered memory ahead of the write section, so a concurrent export's write could persist a stamp
+     * this export then rolled back, and a restart inside that window recovered a copy no rollback
+     * reached. The export now builds its add inside the section, after the carrier's write, so the
+     * carrier's bytes cannot hold it; on cancellation and on failure alike, the store never holds it.
      */
     @Test
-    fun aConcurrentWriteCanPersistAStampTheExportThenRollsBack() = runTest {
+    fun aConcurrentWriteNeverCarriesASpanItsExportDidNotPublish() = runTest {
         for (cancel in listOf(true, false)) {
             val store = ParkingStore(StoreKey("otel.spans"))
             val exporter = WarpSpanExporter(replica, store, causalClock = WarpCausalClock(replica))
@@ -160,10 +172,10 @@ class IndeterminateWriteAuditTest {
             testScheduler.runCurrent()
             val exporting = launch { exporter.export(span) }
             testScheduler.runCurrent()
-            // The holder lands; the carrier encodes a snapshot holding the export's stamp and parks.
+            // The holder lands; the carrier encodes its snapshot and parks, with the export queued.
             store.release()
             testScheduler.runCurrent()
-            val parkedBeforeRollback = store.parked
+            val parkedBeforeTheExport = store.parked
             if (cancel) exporting.cancelAndJoin() else store.refuseTargetWriteNumber = 3
             store.release()
             holder.join()
@@ -171,25 +183,27 @@ class IndeterminateWriteAuditTest {
             exporting.join()
             val live = exporter.snapshot().elements.map { it.spanId }
             val durable = WarpSpanExporter(replica, store).also { it.recover() }.snapshot().elements
-            // A restart inside the window, taken before the live retry replaces the snapshot.
+            // A restart taken before the live retry replaces the snapshot.
             val recoveredClock = WarpCausalClock(replica).also { it.recover(store) }
             val recovered = WarpSpanExporter(replica, store, causalClock = recoveredClock).also { it.recover() }
+            val recoveredBeforeRetry = recovered.snapshot().elements.count { it.spanId == span.spanId }
 
             store.parking = false
             assertIs<ExportResult.Success>(exporter.export(span))
             val healed = WarpSpanExporter(replica, store).also { it.recover() }.snapshot().elements
             assertIs<ExportResult.Success>(recovered.export(span))
             assertAll(
-                { assertEquals(2, parkedBeforeRollback, "holder and carrier must both have reached the write") },
+                { assertEquals(2, parkedBeforeTheExport, "holder and carrier must both have reached the write") },
                 { assertEquals(if (cancel) 0 else 1, store.refused, "only the failure arm refuses a write") },
-                { assertEquals(false, span.spanId in live, "the export rolled its stamp out of memory") },
-                { assertEquals(1, durable.count { it.spanId == span.spanId }, "the carrier persisted the stamp") },
-                { assertEquals(1, healed.count { it.spanId == span.spanId }, "the next write replaces the copy") },
+                { assertEquals(setOf(otherSpan(2).spanId, otherSpan(3).spanId), live.toSet(), "memory holds the export's span") },
+                { assertEquals(0, durable.count { it.spanId == span.spanId }, "a write carried the unpublished span") },
+                { assertEquals(0, recoveredBeforeRetry, "a restart recovered the unpublished span") },
+                { assertEquals(1, healed.count { it.spanId == span.spanId }, "the retry writes one copy") },
                 {
                     assertEquals(
-                        2,
+                        1,
                         recovered.snapshot().elements.count { it.spanId == span.spanId },
-                        "audit: a restart inside the window recovers the copy, so its retry duplicates",
+                        "a restart's retry holds one copy",
                     )
                 },
             )

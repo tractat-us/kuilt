@@ -52,11 +52,10 @@ class WarpSpanExporterFailureReportingTest {
         ORSet.empty<SpanRecord>().piece { it.add(ReplicaId("B"), span(id)) }
 
     /**
-     * No `causalClock` and the default buffer cap, deliberately: both are knobs that would switch
-     * *off* part of what is under test. A clock makes `export` roll its in-memory add back on
-     * failure, and a cap small enough to evict adds a second population of lines to the capture —
-     * neither changes the retry this class is about, and both would make the counts below harder to
-     * read for no gain.
+     * No `causalClock` and the default buffer cap, deliberately. A clock adds a second write to every
+     * turn (a failed export publishes nothing either way, since #3517), and a cap small enough to evict
+     * adds a second population of lines to the capture — neither changes the retry this class is
+     * about, and both would make the counts below harder to read for no gain.
      */
     private fun exporterFor(store: WriteRefusingStore) = WarpSpanExporter(
         replica = ReplicaId("A"),
