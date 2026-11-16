@@ -311,7 +311,7 @@ class FairShareAllocatorRefusalTest {
         val e3 = AttachmentId("e3")
         val start = withChildren(
             seatedAtWide(flat(mint = 100L), e1, twoTo(94)),
-            AttachmentRecord(e3, root, GroupId("g3"), Weight.of(1L shl 20)),
+            AttachmentRecord(e3, root, GroupId("g3"), Weight.of(1L shl 40)),
         )
         val cell = CountingCell(start)
         val allocator = FairShareAllocator(self, policy)
