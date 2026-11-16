@@ -1438,8 +1438,14 @@ origins, which is a layout 0.7.5 already reads, so the format number and
     refuses, typed, and every read answers.
   - A seeded driver over weights at the budget's edges, with joins, leaves,
     reweights, cancels and overruns: no call throws, `validate()` is empty
-    after each, and the load is below `2¹²⁷` after each. It asserts the refusal
-    fired at least once, and sorts what it walks (#2592).
+    after each, and the load, wake offsets included, is at most `2¹²⁵` plus
+    one step's charge after each (#3538). It asserts the refusal fired at least
+    once and that a wake offset was added into the load, on an active child, at
+    some step, and sorts what it walks (#2592). The driver sees the per-seat
+    limit, not the load check: with every load check deleted, the per-seat
+    check at each landing still holds heavy newborns down, and the run peaks at
+    about 0.59 of the limit (measured on the JVM). The other rows pin the load
+    check.
   - The budget did not move: `HeddleWeightBudgetTest` passes unchanged, with
     `{1/30,718, 1/30,719}` accepted, `{1/30,719, 1/30,720}` refused and
     `{1, k}` accepted up to the edge it has today.
