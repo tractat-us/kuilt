@@ -352,7 +352,7 @@ class WarpLogRecordExporterTailCacheTest {
 
     /**
      * `WarpLogRecordExporter`'s derived-state handling **without** the incremental caches:
-     * the tail recomputed by filtering the whole [Rga.sequence], the admission gate reading
+     * the tail recomputed from the whole [Rga.sequence], the admission gate reading
      * [Rga.size], the evicted record read via `toList()[0]`, and the dedup map copied on
      * every append. Drives the same [Rga] mutations in the same order, so the resulting
      * op-log — and therefore the encoded bytes — must be identical.
@@ -444,10 +444,8 @@ class WarpLogRecordExporterTailCacheTest {
             return sequence.subList(0, cut).toSet()
         }
 
-        private fun tailId(): RgaId {
-            val visible = log.sequence.filter { it !in log.tombstones }
-            return visible.lastOrNull() ?: RgaId.HEAD
-        }
+        // The last element, tombstones included, as production's tail is (#3528).
+        private fun tailId(): RgaId = log.sequence.lastOrNull() ?: RgaId.HEAD
     }
 
     private companion object {
