@@ -54,14 +54,13 @@ class PNCounterDoubleTest {
     @Test
     fun incrementAndDecrementRefuseAByThatIsNotPositiveAndFinite() {
         val refused = listOf(0.0, -0.0, -1.0, Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)
-        assertAll(
-            refused.flatMap { by ->
-                listOf(
-                    { assertFailsWith<IllegalArgumentException>("increment by $by") { PNCounterDouble.ZERO.increment(a, by) } },
-                    { assertFailsWith<IllegalArgumentException>("decrement by $by") { PNCounterDouble.ZERO.decrement(a, by) } },
-                )
-            },
-        )
+        val arms: List<() -> Unit> = refused.flatMap { by ->
+            listOf(
+                { assertFailsWith<IllegalArgumentException>("increment by $by") { PNCounterDouble.ZERO.increment(a, by) } },
+                { assertFailsWith<IllegalArgumentException>("decrement by $by") { PNCounterDouble.ZERO.decrement(a, by) } },
+            )
+        }
+        assertAll(*arms.toTypedArray())
     }
 
     /**
