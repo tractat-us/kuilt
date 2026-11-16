@@ -483,10 +483,10 @@ class OtlpHttpEdgeSplitTest {
         val delivered = collector.accepted.flatMap { it.items }
         assertAll(
             { assertEquals(1, refusedAlone.size, "precondition: the big record was refused on its own") },
-            { assertTrue(refusedAlone.single().bytes in (proxyLimit + 1)..cap, "precondition: over the proxy's limit, inside the cap") },
+            { assertTrue((refusedAlone.singleOrNull()?.bytes ?: -1) in (proxyLimit + 1)..cap, "precondition: over the proxy's limit, inside the cap") },
             { assertTrue(delivered.isNotEmpty(), "precondition: chunks were acknowledged before it") },
             { assertTrue(outcome.isFailure, "the send fails") },
-            { assertEquals(listOf(big), collector.posts.last().items, "and stops at the refused record") },
+            { assertEquals(listOf(big), collector.posts.lastOrNull()?.items, "and stops at the refused record") },
             { assertEquals(delivered.toSet(), disk, "the acknowledged chunks are recorded, the refused record is not") },
             { assertEquals(mapOf("logs" to 1), store.writes, "in one write") },
         )
