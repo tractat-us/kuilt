@@ -47,6 +47,39 @@ internal const val TICKS_PER_UNIT: Long = 16L
 internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS_PER_UNIT
 
 /**
+ * The position limit, `2¹²⁵` ticks (design §7.1, step B): the most a parent's **load**, the sum of
+ * its active children's effective positions each on its own grid, may reach after a child lands
+ * there, and the furthest its clock may run either way from zero. A landing that would pass it is
+ * not made ([Ticks.PastLimit]). It sits two bits under `2¹²⁷`, so every value a pick then forms
+ * stays inside 128 bits with a bit to spare.
+ */
+internal val POSITION_LIMIT: Int128 = Int128.fromTwosComplement(1L shl 61, 0L)
+
+/** A position formed for a landing: one that fits the [POSITION_LIMIT], or one that does not. */
+internal sealed interface Ticks {
+    /** [value] ticks, at most [POSITION_LIMIT] either way from zero. */
+    class Fits(val value: Int128) : Ticks
+
+    /** Past the [POSITION_LIMIT], or outside 128 bits altogether. */
+    data object PastLimit : Ticks
+}
+
+/**
+ * Whether [positions], each counted by its size, sum to at most [POSITION_LIMIT]. Formed so that it
+ * never overflows: the sum stays at or below the limit, so the room left never goes negative.
+ */
+internal fun loadFits(positions: Sequence<Int128>): Boolean {
+    var load = Int128.ZERO
+    for (p in positions) {
+        if (p < Int128.ZERO - POSITION_LIMIT || p > POSITION_LIMIT) return false
+        val size = if (p < Int128.ZERO) Int128.ZERO - p else p
+        if (size > POSITION_LIMIT - load) return false
+        load += size
+    }
+    return true
+}
+
+/**
  * The highest position, in ticks, the public virtual-time reads of an edge of weight [w] report
  * exactly: `(Long.MAX_VALUE −` [POSITION_HEADROOM]`) / w.denominator`. A position read as a virtual
  * time is `ticks / (G · w)`, whose numerator is at most `ticks · w.denominator` ([ticksToVirtual]),
@@ -296,15 +329,30 @@ internal class VirtualTime(
      * `V · w · G = ticks · (wDen · w.num) / (wNum · w.den)`, formed by [mulDiv] in 192 bits so only
      * the result has to fit.
      *
+     * It never throws on how far the time has run: a result past the [POSITION_LIMIT], or one that
+     * leaves 128 bits, is [Ticks.PastLimit], and there is no throwing form, so no landing can be
+     * formed without handling it (design §7.1).
+     *
      * @throws ArithmeticException if a weight product does not fit in a `Long`, which
-     *   [weightsFitTheBudget] rules out for a topology [LocalHeddle.apply] accepted, or the result
-     *   leaves 128 bits.
+     *   [weightsFitTheBudget] rules out for a topology [LocalHeddle.apply] accepted.
      */
-    fun ticksForWide(w: Weight): Int128 {
+    fun ticksForWide(w: Weight): Ticks {
         val multiplier = checkedMul(weightDenominator, w.numerator)
         val divisor = checkedMul(weightNumerator, w.denominator)
-        return mulDiv(ticks, multiplier, divisor, Rounding.CEILING)
-            ?: throw ArithmeticException("Int128 overflow: $ticks · $multiplier / $divisor")
+        val value = mulDiv(ticks, multiplier, divisor, Rounding.CEILING) ?: return Ticks.PastLimit
+        return if (value > POSITION_LIMIT || value < Int128.ZERO - POSITION_LIMIT) Ticks.PastLimit else Ticks.Fits(value)
+    }
+
+    /**
+     * Whether [position], ticks on the grid of weight [w], is at or below this time read on that
+     * grid rounded up: `position ≤ ⌈V · w · G⌉`, the eligibility test of a pick (design §7.3 step 3).
+     * Exact for every pair, with no position limit: a bound past 128 bits is above every position
+     * when this time is positive and below every one when it is negative.
+     */
+    fun admits(position: Int128, w: Weight): Boolean {
+        val bound = mulDiv(ticks, checkedMul(weightDenominator, w.numerator), checkedMul(weightNumerator, w.denominator), Rounding.CEILING)
+            ?: return ticks > Int128.ZERO
+        return position <= bound
     }
 
     /** This time in whole units of virtual time, rounded down: `⌊ticks / (G · w)⌋`. */

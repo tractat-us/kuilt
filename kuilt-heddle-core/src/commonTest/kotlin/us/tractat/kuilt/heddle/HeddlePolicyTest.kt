@@ -581,7 +581,7 @@ class HeddlePolicyTest {
         check(!atCeiling(top.edge()) && atCeiling(saturated.edge())) { "the rig: only x is saturated" }
         val front = checkNotNull(HeddlePolicy.frontTime(listOf(saturated.edge(), top.edge())))
         // y's virtual time, 10¹³ · 1000 / 16, on weight 1's grid: 10¹⁶ ticks.
-        assertEquals(Int128.of(10_000_000_000_000_000L), front.ticksForWide(Weight.ONE))
+        assertEquals(Int128.of(10_000_000_000_000_000L), (front.ticksForWide(Weight.ONE) as Ticks.Fits).value)
     }
 
     /** Whether [edge]'s effective position is at or past its ceiling, where the public reads saturate. */

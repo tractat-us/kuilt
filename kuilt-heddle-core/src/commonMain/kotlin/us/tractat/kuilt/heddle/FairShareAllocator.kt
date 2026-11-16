@@ -272,6 +272,8 @@ public class FairShareAllocator(
                 // Before each pick, on the state it lands on: the clock over the last grant, and any
                 // child that grant filled seen leaving at it, not at the next call (#3416 review).
                 markDepartures(parent, policyEdges(s, parent, demand))
+                // A merge between rounds can carry the load past the limit; the next call's first round names it.
+                if (!stepFits(parent, s, demand)) return@mutateOrSkip null
                 val grant = pickOne(s, parent, earmarked, demand) ?: return@mutateOrSkip null
                 // A full edge stops the call here; the next call's first round names it (#3475).
                 if (!grantFits(s, grant)) return@mutateOrSkip null
@@ -339,7 +341,8 @@ public class FairShareAllocator(
         // set no single write would have admitted (#3353), and a pick over it throws.
         if (!fork.childWeightsFit(s, parent)) return FirstRound.OverBudget
         val cell = ValueCell(s)
-        fork.settleJoiners(parent, cell, demand)
+        // A step past the position limit refuses the whole call, as a full lifetime counter does (design §7.1).
+        if (fork.settleJoiners(parent, cell, demand) == Landing.PastLimit) return FirstRound.LifetimeExhausted
         val picked = fork.pickOne(cell.current, parent, earmarked, demand)
         // After the pick, on this peer's view, before anything is written (#3475).
         if (picked != null && !grantFits(cell.current, picked)) return FirstRound.LifetimeExhausted
@@ -397,17 +400,44 @@ public class FairShareAllocator(
      * @param eligible each child edge's appetite for this pick: [Demand.NONE] for a child that
      *   cannot take this grant. A child [eligible] wants should also be one [waiting] wants.
      * @return the seated ledger and the grant, or `null` when no child can be granted anything:
-     *   none is eligible, none is seated, or [parent] holds nothing.
+     *   none is eligible, none is seated, [parent] holds nothing, or the seat and wake step there
+     *   would pass the position limit ([pickChildStep] tells that one apart).
      */
     public fun pickChild(
         parent: GroupId,
         ledger: EntitlementLedger,
         waiting: (AttachmentId) -> Demand,
         eligible: (AttachmentId) -> Demand,
-    ): ChildPick? {
-        val seated = settle(parent, ledger, waiting)
-        val grant = pickOne(seated, parent, earmarked = 0L, eligible) ?: return null
-        return ChildPick(seated, grant)
+    ): ChildPick? = (pickChildStep(parent, ledger, waiting, eligible) as? ChildStep.Picked)?.pick
+
+    /**
+     * [pickChild], with the third answer it folds into `null`: the seat and wake step at [parent]
+     * did not fit the [POSITION_LIMIT] (design §7.1), so nothing was seated, clamped or observed
+     * there. [LocalHeddle] answers that as `LifetimeExhausted(parent)`.
+     */
+    internal fun pickChildStep(
+        parent: GroupId,
+        ledger: EntitlementLedger,
+        waiting: (AttachmentId) -> Demand,
+        eligible: (AttachmentId) -> Demand,
+    ): ChildStep {
+        val cell = ValueCell(ledger)
+        if (settleJoiners(parent, cell, waiting) == Landing.PastLimit) return ChildStep.PastLimit
+        val seated = cell.current
+        val grant = pickOne(seated, parent, earmarked = 0L, eligible) ?: return ChildStep.NoPick
+        return ChildStep.Picked(ChildPick(seated, grant))
+    }
+
+    /** What [pickChildStep] found at a parent. */
+    internal sealed interface ChildStep {
+        /** The step landed and a child was picked. */
+        class Picked(val pick: ChildPick) : ChildStep
+
+        /** The step landed and no child could be granted anything. */
+        data object NoPick : ChildStep
+
+        /** The step did not fit the [POSITION_LIMIT]: nothing was written. */
+        data object PastLimit : ChildStep
     }
 
     /**
@@ -415,7 +445,8 @@ public class FairShareAllocator(
      * wakers at [parent], reading [waiting], and observe who was waiting. For a delegation that is
      * not a pick but must leave the wake memory as the pick would have ([LocalHeddle.admit] with a
      * waiting set, #3320). A seat or a clamp is exact and wide wherever it lands. Returns the seated
-     * ledger; [ledger] is not changed.
+     * ledger; [ledger] is not changed. A step past the [POSITION_LIMIT] observes nothing and returns
+     * [ledger] as it was: a charging call is never refused for it (design §7.1).
      */
     internal fun settle(parent: GroupId, ledger: EntitlementLedger, waiting: (AttachmentId) -> Demand): EntitlementLedger {
         val cell = ValueCell(ledger)
@@ -439,8 +470,12 @@ public class FairShareAllocator(
         val unseated = edges.filter { it.gauge == null }.mapTo(HashSet()) { it.record.id }
         if (unseated.isEmpty()) return ledger
         val front = joinFront(edges, joiners = unseated)
-        val patch = seatPatch(ledger, unseated, front) ?: return ledger
-        return ledger.piece(patch.delta)
+        val seats = seatPatch(ledger, unseated, front)
+        if (seats !is Seats.Fit) return ledger
+        val patch = seats.patch ?: return ledger
+        val seated = ledger.piece(patch.delta)
+        // The seats are landings too: kept only if the parent's load still fits (design §7.1).
+        return if (loadFitsAt(seated, parent, demand)) seated else ledger
     }
 
     /**
@@ -591,13 +626,91 @@ public class FairShareAllocator(
      * low reading is absorbed rather than frozen.
      *
      * Publishes at most one patch.
+     *
+     * **It is kept only if it fits the [POSITION_LIMIT]** (design §7.1). The step is worked out on a
+     * [fork] and a copy of the ledger value, and adopted only when every value it formed stayed in
+     * 128 bits, the parent's load after it is at most the limit, and its clock is within the limit
+     * of zero. Otherwise it answers [Landing.PastLimit] and writes nothing at [parent], the wake
+     * memory included.
      */
-    private fun settleJoiners(parent: GroupId, ledger: LedgerCell, demand: (AttachmentId) -> Demand) {
+    private fun settleJoiners(parent: GroupId, ledger: LedgerCell, demand: (AttachmentId) -> Demand): Landing {
+        val trial = fork()
+        val cell = ValueCell(ledger.current)
+        val landed = try {
+            trial.landJoiners(parent, cell, demand) && trial.stepFits(parent, cell.current, demand)
+        } catch (_: ArithmeticException) {
+            // A value the step formed left 128 bits: past the limit, refused rather than thrown.
+            false
+        }
+        if (!landed) return Landing.PastLimit
+        cell.written?.let { delta -> ledger.mutateOrSkip { Patch(delta) } }
+        adoptMemoryOf(trial)
+        return Landing.Kept
+    }
+
+    /** Where a seat and wake step at a parent stands against the [POSITION_LIMIT]. */
+    internal enum class Landing {
+        /** Kept: it fits, and it was written. */
+        Kept,
+
+        /** Past the limit: nothing was written. */
+        PastLimit,
+    }
+
+    /**
+     * Whether [parent]'s state in [s], as this allocator reads it, is one a pick may take its step
+     * in: the load of its active children's effective positions at most the [POSITION_LIMIT], and
+     * its clock within the limit of zero. A load that cannot be formed at all, which only a merged
+     * or restored state can hold, does not fit.
+     */
+    private fun stepFits(parent: GroupId, s: EntitlementLedger, demand: (AttachmentId) -> Demand): Boolean {
+        val clock = clocks[parent] ?: Int128.ZERO
+        if (clock > POSITION_LIMIT || clock < Int128.ZERO - POSITION_LIMIT) return false
+        return loadFitsAt(s, parent, demand)
+    }
+
+    /**
+     * Whether [edge], active in [s], could be seated level with the furthest-ahead of its seated
+     * siblings and leave its parent's load within the [POSITION_LIMIT] (design §7.1). Every sibling
+     * not yet seated is counted where it will be seated too, at that same front on its own grid, so
+     * two joiners that each fit alone but not together are told apart: the second is refused. The
+     * same test a pick's step runs, asked early, for [LocalHeddle.apply]; it is not the guarantee,
+     * which is the step's own.
+     */
+    internal fun seatFitsBesideFurthest(s: EntitlementLedger, edge: AttachmentId): Boolean = try {
+        val record = checkNotNull(s.record(edge)) { "an activated edge ${edge.value} has no record" }
+        val siblings = policyEdges(s, record.parent) { Demand.NONE }.filter { it.record.id != edge }
+        val (seated, joining) = siblings.partition { it.gauge != null }
+        if (seated.isEmpty()) {
+            true
+        } else {
+            val top = seated.maxWith { x, y ->
+                compareVirtualWide(HeddlePolicy.effectiveTicksWide(x), x.record.weight, HeddlePolicy.effectiveTicksWide(y), y.record.weight)
+            }
+            val front = VirtualTime.of(HeddlePolicy.effectiveTicksWide(top), top.record.weight)
+            val landings = (joining.map { it.record.weight } + record.weight).map { front.ticksForWide(it) }
+            landings.all { it is Ticks.Fits } &&
+                loadFits(seated.asSequence().map(HeddlePolicy::effectiveTicksWide) + landings.asSequence().map { (it as Ticks.Fits).value })
+        }
+    } catch (_: ArithmeticException) {
+        false
+    }
+
+    /** Whether the load of [parent]'s active children in [s] fits the [POSITION_LIMIT]. */
+    private fun loadFitsAt(s: EntitlementLedger, parent: GroupId, demand: (AttachmentId) -> Demand): Boolean =
+        try {
+            loadFits(policyEdges(s, parent, demand).asSequence().map(HeddlePolicy::effectiveTicksWide))
+        } catch (_: ArithmeticException) {
+            false
+        }
+
+    /** [settleJoiners]' step itself, on this allocator: `false` when a landing it formed was past the limit. */
+    private fun landJoiners(parent: GroupId, ledger: LedgerCell, demand: (AttachmentId) -> Demand): Boolean {
         val edges = policyEdges(ledger.current, parent, demand)
         forgetDepartedChildren(edges, ledger.current, parent)
         if (edges.isEmpty()) {
             clocks.remove(parent)
-            return
+            return true
         }
 
         val clock = markDepartures(parent, edges)
@@ -611,14 +724,17 @@ public class FairShareAllocator(
             // A returner is counted in the front where it lands, not left out as a joiner (#3446).
             val front = joinFront(landed(edges, shifts), joiners - returners)
             if (unseated.isNotEmpty()) {
-                ledger.mutateOrSkip { state -> seatPatch(state, unseated, front) }
+                val seats = seatPatch(ledger.current, unseated, front)
+                if (seats !is Seats.Fit) return false
+                seats.patch?.let { patch -> ledger.mutateOrSkip { patch } }
             }
             // An unseated waker is a newborn: its seat puts it at the front, and a clamp would count
             // the front twice (#3454 review).
-            clampWakers(edges, wakers - returners - unseated, front)
+            if (!clampWakers(edges, wakers - returners - unseated, front)) return false
             moveReturners(edges, shifts)
         }
         for (edge in edges) demandingObserved[edge.record.id] = HeddlePolicy.isDemanding(edge)
+        return true
     }
 
     /**
@@ -669,15 +785,26 @@ public class FairShareAllocator(
         s: EntitlementLedger,
         unseated: Set<AttachmentId>,
         front: VirtualTime,
-    ): Patch<EntitlementLedger>? {
+    ): Seats {
         val gauges = LinkedHashMap<AttachmentId, Gauge>()
         for (id in unseated.sorted()) {
             val record = s.record(id) ?: continue
-            val seat = s.seatAtWide(id, front.ticksForWide(record.weight)) ?: continue
+            // On the newborn's own grid (#3353); a seat past the position limit is not made (design §7.1).
+            val absolute = when (val ticks = front.ticksForWide(record.weight)) {
+                is Ticks.Fits -> ticks.value
+                Ticks.PastLimit -> return Seats.PastLimit
+            }
+            val seat = s.seatAtWide(id, absolute) ?: continue
             gauges[id] = checkNotNull(seat.delta.gauge(id)) { "a seat patch for ${id.value} carries no gauge" }
         }
-        if (gauges.isEmpty()) return null
-        return Patch(EntitlementLedger.of(gauges = gauges))
+        return Seats.Fit(if (gauges.isEmpty()) null else Patch(EntitlementLedger.of(gauges = gauges)))
+    }
+
+    /** [seatPatch]'s answer: the seats, `null` when none was needed, or a seat past the limit. */
+    private sealed interface Seats {
+        class Fit(val patch: Patch<EntitlementLedger>?) : Seats
+
+        data object PastLimit : Seats
     }
 
     /**
@@ -805,13 +932,31 @@ public class FairShareAllocator(
         val carried = shiftRemainders[id]?.also { r ->
             check(r.denominator == d) { "a shift remainder on ${id.value} was taken at denominator ${r.denominator}, not its weight's $d" }
         }?.numerator ?: Int128.ZERO
-        // The run less the carry, in units of 1 / (CLOCK_GRID · d) of a tick, so it is a whole number.
-        val owed = wide(mulDiv(clock - left, w.numerator, 1L, Rounding.FLOOR), clock, w) - carried
-        // ⌈owed / (CLOCK_GRID · d)⌉ in two exact steps, since CLOCK_GRID · d can pass a Long.
-        val ticks = wide(mulDiv(wide(mulDiv(owed, 1L, CLOCK_GRID, Rounding.CEILING), clock, w), 1L, d, Rounding.CEILING), clock, w)
-        val past = wide(mulDiv(wide(mulDiv(ticks, CLOCK_GRID, 1L, Rounding.FLOOR), clock, w), d, 1L, Rounding.FLOOR), clock, w) - owed
-        val remainder = if (past == Int128.ZERO) null else ShiftRemainder(past, d)
+        // The run times the weight's numerator, in units of 1 / K of a tick with K = CLOCK_GRID · d,
+        // less the carry. It is never formed whole: run · n can leave 128 bits long before the shift
+        // it stands for nears the position limit, which refused a return sooner than design §7.1
+        // allows. So it is split as q · K + r, q by one 192-bit mulDiv and r by modular arithmetic,
+        // and only the shift and its remainder, each a fraction of the run, are formed.
+        // K fits a Long for every weight the budget accepts (denominators at most 30,719).
+        val k = checkedMul(CLOCK_GRID, d)
+        val run = clock - left
+        val q = wide(mulDiv(run, w.numerator, k, Rounding.FLOOR), clock, w)
+        val r = productMod(run, w.numerator, k)
+        val c = checkNotNull(carried.toLongOrNull()) { "a shift remainder on ${id.value} past its grid: $carried" }
+        // run · n − c = q · K + (r − c), with r − c in (−K, K): the shift is ⌈that / K⌉.
+        val extra = r - c
+        val ticks = if (extra > 0L) q + Int128.of(1L) else q
+        // What the shift ran past the clock, `ticks · K − (run · n − c)`, in [0, K).
+        val past = if (extra > 0L) k - extra else -extra
+        val remainder = if (past == 0L) null else ShiftRemainder(Int128.of(past), d)
         return Shift(maxOf(Int128.ZERO, ticks), remainder)
+    }
+
+    /** `(a · n) mod k`, in `[0, k)`, without forming `a · n`. */
+    private fun productMod(a: Int128, n: Long, k: Long): Long {
+        val am = (a % k).let { if (it < 0L) it + k else it }
+        val product = checkNotNull(mulDiv(Int128.of(am), n % k, 1L, Rounding.FLOOR)) { "two residues under $k multiply inside 128 bits" }
+        return product % k
     }
 
     /** [value], or an [ArithmeticException] naming the clock read when it overflowed 128 bits. */
@@ -906,19 +1051,24 @@ public class FairShareAllocator(
      * from where it stands, and at the next entry it is moved by the clock's whole run since it
      * stopped on top of the grants it took meanwhile, which is the penalty side.
      */
-    private fun clampWakers(edges: List<PolicyEdge>, wakers: Set<AttachmentId>, front: VirtualTime) {
+    private fun clampWakers(edges: List<PolicyEdge>, wakers: Set<AttachmentId>, front: VirtualTime): Boolean {
         for (edge in edges) {
             if (edge.record.id !in wakers) continue
             val weight = edge.record.weight
             // Wide, both sides (#3353): a waker idle for long sits far below its siblings, and a
             // clamp narrowed before it is taken would leave it there.
             val raw = HeddlePolicy.rawTicks(edge)
-            val computed = HeddlePolicy.clampTicks(frontTicks = front.ticksForWide(weight), rawTicks = raw, sleeperCredit = policy.sleeperCredit)
+            val frontTicks = when (val ticks = front.ticksForWide(weight)) {
+                is Ticks.Fits -> ticks.value
+                Ticks.PastLimit -> return false
+            }
+            val computed = HeddlePolicy.clampTicks(frontTicks = frontTicks, rawTicks = raw, sleeperCredit = policy.sleeperCredit)
             // Written, not joined: a seated waker with no departure holds no offset (see above).
             // Both sides are on the waker's grid, and the result is stored on it, so a stored offset
             // never carries a front's denominator into the next one (#3313).
             writeWakeOffset(edge.record.id, computed)
         }
+        return true
     }
 
     /** Store [offset] as [edge]'s wake offset, or drop the entry when it is zero, the value an absent one reads as. */

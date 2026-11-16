@@ -1549,6 +1549,33 @@ class HeddleNodeTest {
     }
 
     /** The static multi-peer rig, lifted into `HeddleClusterTestSupport` and rooted at [root]. */
+    /**
+     * The position limit on [HeddleNode.schedule], where no `apply` asks early (design §7.1). `light`
+     * at weight 1 stands at `2⁹⁴` ticks, planted through the control sink as a merge could land it,
+     * and `heavy`, a newborn at `2⁴⁰`, would be seated level with it at `2¹³⁴` ticks. The call
+     * answers [ScheduleOutcome.LifetimeExhausted] for the root, publishes nothing, and throws nothing.
+     */
+    @Test
+    fun scheduleRefusesANewbornWhoseSeatWouldPassThePositionLimit() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val light = AttachmentRecord(AttachmentId("light"), root, GroupId("g-light"), Weight.ONE)
+        val heavy = AttachmentRecord(AttachmentId("heavy"), root, GroupId("g-heavy"), Weight.of(1L shl 40))
+        val h = harness(peers = 1, mint = mapOf(0 to MAX_GRANT), topology = listOf(light, heavy), quantum = MAX_GRANT)
+        h.pump()
+        val node = h.peers[0].node
+        node.asControlSink().publish(us.tractat.kuilt.crdt.Patch(EntitlementLedger.of(gauges = mapOf(light.id to Gauge(folded = 0L, ticksHigh = 1L shl 30, ticksLow = 0L)))))
+        for (edge in listOf(light, heavy)) node.advertise(edge.id, Demand(4L * MAX_GRANT, MAX_GRANT))
+        val before = node.ledger.value
+        val outcome = node.schedule(root)
+        assertAll(
+            { assertEquals(null, before.gauge(heavy.id), "the rig: heavy is a newborn") },
+            { assertEquals(ScheduleOutcome.LifetimeExhausted(root), outcome, "the seat would pass the limit") },
+            { assertEquals(before, node.ledger.value, "and nothing was published") },
+        )
+    }
+
     private suspend fun TestScope.harness(
         peers: Int,
         mint: Map<Int, Long>,

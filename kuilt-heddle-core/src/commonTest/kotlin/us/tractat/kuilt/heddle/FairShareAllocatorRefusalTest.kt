@@ -292,4 +292,148 @@ class FairShareAllocatorRefusalTest {
             { assertEquals(1, cell.writes, "in a single patch") },
         )
     }
+
+    /** [ledger] with [edge] seated at the wide position [ticks]. */
+    private fun seatedAtWide(ledger: EntitlementLedger, edge: AttachmentId, ticks: Int128): EntitlementLedger =
+        ledger.piece(EntitlementLedger.of(gauges = mapOf(edge to gaugeAt(ticks, folded = 0L))))
+
+    /** `2^n` as an [Int128], for `n` in `64..126`. */
+    private fun twoTo(n: Int): Int128 = Int128.fromTwosComplement(1L shl (n - 64), 0L)
+
+    /**
+     * The position limit on [FairShareAllocator.schedule], where no `apply` asks early (design
+     * §7.1): `e1` at weight 1 stands at `2⁹⁴` ticks, a front of `2⁹⁰`, and a newborn `e3` at
+     * `2⁴⁰` would be seated there at `2¹³⁴` ticks. The call answers `LifetimeExhausted(root)`, writes
+     * nothing to the ledger, and leaves the wake memory as it was.
+     */
+    @Test
+    fun aNewbornWhoseSeatWouldPassThePositionLimitRefusesTheCallAndWritesNothing() {
+        val e3 = AttachmentId("e3")
+        val start = withChildren(
+            seatedAtWide(flat(mint = 100L), e1, twoTo(94)),
+            AttachmentRecord(e3, root, GroupId("g3"), Weight.of(1L shl 40)),
+        )
+        val cell = CountingCell(start)
+        val allocator = FairShareAllocator(self, policy)
+        val before = allocator.memory
+        val wants = { edge: AttachmentId -> if (edge == e2) Demand.NONE else hungry }
+        val outcome = allocator.schedule(root, cell, earmarked = 0L, wants)
+        assertAll(
+            { assertEquals(null, start.gauge(e3), "the rig: e3 is a newborn") },
+            { assertEquals(AllocationOutcome.LifetimeExhausted(root), outcome, "the step would pass the limit") },
+            { assertEquals(0, cell.writes, "and nothing was written") },
+            { assertEquals(before, allocator.memory, "nor the wake memory") },
+        )
+    }
+
+    /**
+     * Both sides of the limit on a newborn's landing. `e1` at weight 1 stands at `P` and `e3`, a
+     * newborn at weight 1, is seated level with it, so the load after is `2P`. At `P = 2¹²⁴` the load
+     * is exactly `2¹²⁵` and the landing is kept; one tick more and it is refused.
+     */
+    @Test
+    fun aLandingThatLeavesTheLoadAtTheLimitIsKeptAndOneTickMoreIsRefused() {
+        val e3 = AttachmentId("e3")
+        fun outcomeAt(position: Int128): AllocationOutcome {
+            // e1 and e3 alone under the root, so nothing else is seated beside them.
+            val alone = withChildren(
+                EntitlementLedger.bootstrap(root, mapOf(self to 100L), nonce = "genesis"),
+                AttachmentRecord(e1, root, GroupId("g1"), Weight.ONE),
+            )
+            val start = withChildren(seatedAtWide(alone, e1, position), AttachmentRecord(e3, root, GroupId("g3"), Weight.ONE))
+            val wants = { _: AttachmentId -> hungry }
+            return FairShareAllocator(self, policy).schedule(root, CountingCell(start), earmarked = 0L, wants)
+        }
+        val atLimit = outcomeAt(twoTo(124))
+        val past = outcomeAt(twoTo(124) + Int128.of(1L))
+        assertAll(
+            { assertTrue(atLimit is AllocationOutcome.Delegated, "a load of exactly 2^125 lands: $atLimit") },
+            { assertEquals(AllocationOutcome.LifetimeExhausted(root), past, "one tick more is refused") },
+        )
+    }
+
+    /**
+     * Two peers that each land a child high, then merge (design §7.1): each position is one a peer
+     * checked, so each fits, but their load does not. `e1` and `e2` stand at `2¹²⁴ + 2¹²³` each, a
+     * load of `3 · 2¹²⁴`, past the limit and inside 128 bits. The next pick forms the load, refuses
+     * typed, and writes nothing, and every read still answers.
+     */
+    @Test
+    fun aMergedLoadPastTheLimitRefusesThePickAndEveryReadAnswers() {
+        val high = twoTo(124) + twoTo(123)
+        val start = seatedAtWide(seatedAtWide(flat(mint = 100L), e1, high), e2, high)
+        val cell = CountingCell(start)
+        val allocator = FairShareAllocator(self, policy)
+        val wants = { _: AttachmentId -> hungry }
+        val outcome = allocator.schedule(root, cell, earmarked = 0L, wants)
+        assertAll(
+            { assertEquals(AllocationOutcome.LifetimeExhausted(root), outcome, "the merged load is past the limit") },
+            { assertEquals(0, cell.writes, "and nothing was written") },
+            { assertNotNull(cell.current.virtualService(e1), "the virtual-service read answers") },
+            { assertNotNull(allocator.virtualTime(cell.current, root, wants), "and so does the front") },
+        )
+    }
+
+    /**
+     * A clock planted past the limit refuses every pick at its parent (design §7.1): the step's clock
+     * must stay within the limit of zero. One planted exactly at the limit, which nobody asking moves,
+     * still picks.
+     */
+    @Test
+    fun aClockPastTheLimitRefusesEveryPickAndOneAtItStillPicks() {
+        val start = seatedAt(seatedAt(flat(mint = 100L), e1, 0L), e2, 0L)
+        fun outcomes(clock: Int128): List<AllocationOutcome> {
+            val memory = AllocatorMemory(wakeOffsets = emptyMap(), demandingObserved = emptyMap(), clocks = mapOf(root to clock))
+            val allocator = FairShareAllocator(self, policy, memory)
+            val cell = CountingCell(start)
+            return List(2) { allocator.schedule(root, cell, earmarked = 0L) { hungry } }
+        }
+        val past = outcomes(POSITION_LIMIT + Int128.of(1L))
+        val at = outcomes(POSITION_LIMIT)
+        assertAll(
+            { assertEquals(List(2) { AllocationOutcome.LifetimeExhausted(root) }, past, "every pick past the limit is refused") },
+            { assertTrue(at.first() is AllocationOutcome.Delegated, "a clock exactly at the limit still picks: $at") },
+        )
+    }
+
+    /**
+     * A returner's shift reaches the limit, and no sooner (design §7.1). `e3`, at `2⁴⁰`, left at
+     * clock zero. Back at a clock planted at `2¹⁰⁴` ticks, its shift is about `2¹²⁴·⁵` ticks on its
+     * own grid, under the limit, and it lands, although run times numerator, `2¹⁴⁴`, is past 128
+     * bits: a shift formed by multiplying first refused it. Back at `2¹⁰⁵`, the shift is about
+     * `2¹²⁵·⁵`, past the limit: the pick is refused and writes nothing, and with `e3` not asking,
+     * `e1` is picked.
+     */
+    @Test
+    fun aReturnerLandsUpToTheLimitAndIsRefusedPastIt() {
+        val e3 = AttachmentId("e3")
+        val start = withChildren(
+            EntitlementLedger.bootstrap(root, mapOf(self to 100L), nonce = "genesis"),
+            AttachmentRecord(e1, root, GroupId("g1"), Weight.ONE),
+            AttachmentRecord(e3, root, GroupId("g3"), Weight.of(1L shl 40)),
+        ).let { seatedAt(seatedAt(it, e1, 0L), e3, 0L) }
+        fun allocator(clock: Int128) = FairShareAllocator(
+            self,
+            policy,
+            AllocatorMemory(
+                wakeOffsets = emptyMap(),
+                demandingObserved = mapOf(e1 to false, e3 to false),
+                clocks = mapOf(root to clock),
+                departures = mapOf(e3 to Int128.ZERO),
+            ),
+        )
+        val pastCell = CountingCell(start)
+        val past = allocator(twoTo(105)).schedule(root, pastCell, earmarked = 0L) { hungry }
+        val withoutE3 = allocator(twoTo(105)).schedule(root, CountingCell(start), earmarked = 0L) { if (it == e3) Demand.NONE else hungry }
+        val under = allocator(twoTo(104)).schedule(root, CountingCell(start), earmarked = 0L) { hungry }
+        // At 2^110 the shift itself leaves 128 bits: refused, not thrown.
+        val overflowing = allocator(twoTo(110)).schedule(root, CountingCell(start), earmarked = 0L) { hungry }
+        assertAll(
+            { assertEquals(AllocationOutcome.LifetimeExhausted(root), past, "a shift past the limit is refused") },
+            { assertEquals(0, pastCell.writes, "and nothing was written") },
+            { assertTrue(withoutE3 is AllocationOutcome.Delegated, "with e3 not asking, e1 is picked: $withoutE3") },
+            { assertTrue(under is AllocationOutcome.Delegated, "a shift under the limit lands, though run times numerator is past 128 bits: $under") },
+            { assertEquals(AllocationOutcome.LifetimeExhausted(root), overflowing, "a shift past 128 bits is refused, not thrown") },
+        )
+    }
 }

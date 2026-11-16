@@ -208,6 +208,11 @@ charge that still does not fit is recorded whole or not at all, never in part, a
 reported in `LeaseOutcome.Done.unrecorded`, and an overrun above
 `LocalHeddle.MAX_RECORDED_OVERRUN` is never recorded, so one wrong cost cannot end
 an engine. No call throws at either counter (#3475).
+A parent's load, the sum of its children's positions, is held at or below the
+position limit, `2^125` ticks, wherever a child lands: a seat, a wake clamp or a
+return that would pass it is not made, and a pick answers `LifetimeExhausted(parent)`
+instead, with nothing written. `LocalHeddle.apply` refuses such a joiner alone, up
+front (design §7.1).
 A position does still have a
 ceiling, past which the public virtual-time reads saturate, the penalty side.
 Nothing rebases a busy parent (#3472): a position only counts up from its edge's
