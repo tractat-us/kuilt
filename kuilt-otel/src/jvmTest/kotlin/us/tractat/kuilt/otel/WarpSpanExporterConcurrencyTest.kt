@@ -1,13 +1,17 @@
 package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.newFixedThreadPoolContext // ALLOW-realDispatcher: `WarpSpanExporter` advertises correctness under a real multi-threaded dispatcher, and #1053 is two concurrent `export()`s whose durable-write sections interleave so an older clock snapshot lands last (re-minted dot on recover) or a stale encoded spans snapshot drops a span. Both are properties OF overlapping calls; serialise them onto one thread and the ordering `Mutex` this pins becomes unobservable.
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.io.bytestring.ByteString
+import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.store.StoreKey
@@ -31,6 +35,7 @@ import kotlin.test.assertTrue
 class WarpSpanExporterConcurrencyTest {
 
     private val replicaA = ReplicaId("A")
+    private val replicaB = ReplicaId("B")
     private fun traceId(i: Int) = ByteString(ByteArray(16) { i.toByte() })
     private fun spanId(i: Int) = ByteString(ByteArray(8) { i.toByte() })
     private fun span(i: Int) = SpanRecord(
@@ -109,6 +114,49 @@ class WarpSpanExporterConcurrencyTest {
         } finally {
             dispatcher.close()
         }
+    }
+
+    /**
+     * Exports and merges interleaved on a real pool (#3517). An export publishes its span only once its
+     * writes return, by joining its candidate into whatever the set holds then, so a merge that joined
+     * a remote set between the export's build and its publish must survive it, in memory and in the
+     * store: the last write in the section's order encodes everything.
+     */
+    @OptIn(DelicateCoroutinesApi::class)
+    @Test
+    fun concurrentExportsAndMergesKeepEverySpan() {
+        val dispatcher = newFixedThreadPoolContext(THREADS, "otel-export-merge-stress")
+        var iterations = 0
+        try {
+            runBlocking {
+                repeat(REPEATS) { iter ->
+                    val store = VariableLatencyStore(seed = iter)
+                    val clock = WarpCausalClock(replicaA)
+                    val exp = WarpSpanExporter(replicaA, store, causalClock = clock)
+                    val remotes = (0 until CONCURRENT).map { i ->
+                        ORSet.empty<SpanRecord>().piece { it.add(replicaB, span(CONCURRENT + i)) }
+                    }
+
+                    val results = (0 until CONCURRENT).flatMap { i ->
+                        listOf(
+                            async(dispatcher) { exp.export(span(i)) },
+                            async(dispatcher) { exp.merge(remotes[i]) },
+                        )
+                    }.awaitAll()
+
+                    val expected = (0 until 2 * CONCURRENT).map { spanId(it) }.toSet()
+                    val live = exp.snapshot().elements.map { it.spanId }.toSet()
+                    val durable = WarpSpanExporter(replicaA, store).also { it.recover() }.snapshot().elements.map { it.spanId }.toSet()
+                    assertTrue(results.all { it == ExportResult.Success }, "iter $iter: a call failed: $results")
+                    assertEquals(expected, live, "iter $iter: memory lost a span")
+                    assertEquals(expected, durable, "iter $iter: the store lost a span")
+                    iterations++
+                }
+            }
+        } finally {
+            dispatcher.close()
+        }
+        assertEquals(REPEATS, iterations, "the stress loop did not run every iteration")
     }
 
     private companion object {
