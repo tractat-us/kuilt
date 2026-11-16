@@ -390,15 +390,22 @@ public class WarpLogRecordExporter(
     // the eviction gate and the tail filter. Maintaining them incrementally makes
     // the common (non-evicting) export path touch the sequence not at all.
     //
-    // Every write to `log` must update these in the same locked section. The three
-    // events that move them out from under the cache — a DROP_OLDEST eviction that
-    // empties the log, a merge whose remote inserts sort after the local tail, and a
-    // recover() that replaces the log wholesale — are pinned by
-    // WarpLogRecordExporterTailCacheTest. Eviction is the *only* thing that can remove
-    // an element on the export path, and it only ever removes a leading prefix of the
-    // visible sequence, so no export can invalidate `tail` while the log is non-empty.
+    // Every write to `log` must update these in the same locked section. The events
+    // that move them out from under the cache — a merge whose remote inserts sort after
+    // the local tail, a window pass, and a recover() that replaces the log wholesale —
+    // are pinned by WarpLogRecordExporterTailCacheTest. An eviction only tombstones, and
+    // a tombstone is still a position, so no eviction moves `tail`.
 
-    /** Predecessor for the next append: the last visible element, or [RgaId.HEAD] when empty. */
+    /**
+     * Predecessor for the next append: the last element of [log]'s sequence, **tombstone or not**,
+     * or [RgaId.HEAD] when the sequence is empty.
+     *
+     * Not the last *visible* element. A merge can sort another author's fully tombstoned subtree
+     * after every visible record, and an append after the last visible one lands inside that
+     * record's subtree, ahead of the run. The window keeps every tombstone that something visible
+     * follows, so the run then stayed in the log for good (#3528). Appending after the last element
+     * puts the new record behind the run, where the window's cut reaches it.
+     */
     private var tail: RgaId = RgaId.HEAD
 
     /** Number of visible (non-tombstoned) records in [log] — the eviction gate. */
@@ -1196,9 +1203,9 @@ public class WarpLogRecordExporter(
             // Raising past seqs the loaded log lacks leaves a hole, which the window's floor
             // crosses (windowPass); see LogSegmentIndex.seqHighWater.
             val raised = recovered.log.advanceClock(replica, recovered.lamportHighWater, recovered.seqHighWater)
-            val entries = raised.entries()
+            val derived = DerivedState.of(raised)
             val suppression = Suppression.of(raised)
-            lock.withLock { install(recovered, raised, entries, suppression) }
+            lock.withLock { install(recovered, raised, derived, suppression) }
         }.onFailure { cause ->
             logger.error(cause) { "otel.logs: recovered state could not be installed, starting fresh" }
             // Start fresh on the RECORDS, never on the numbering. Leaving the segment
@@ -1573,11 +1580,11 @@ public class WarpLogRecordExporter(
         indexPersisted = false
     }
 
-    /** Install a [RecoveredState] and its already-materialized entries. Must hold [lock]. */
+    /** Install a [RecoveredState] and its already-materialized [DerivedState]. Must hold [lock]. */
     private fun install(
         recovered: RecoveredState,
         raised: Rga<LogRecord>,
-        entries: List<Pair<RgaId, LogRecord>>,
+        derived: DerivedState,
         suppression: Suppression,
     ) {
         log = raised
@@ -1599,7 +1606,7 @@ public class WarpLogRecordExporter(
         // A ledger the recovered index named is stale the moment its sweep lands, so leave the
         // index dirty and let the next turn rewrite it without the confirmed deletions.
         indexPersisted = !recovered.ledgerDirty
-        installDerivedState(entries)
+        installDerivedState(derived)
     }
 
     /**
@@ -2078,7 +2085,6 @@ public class WarpLogRecordExporter(
         eviction.evicted.forEach { record -> seenIds.remove(record.recordId) }
         visibleCount -= count
         evictionsSincePass += count
-        if (visibleCount == 0) tail = RgaId.HEAD
     }
 
     /** Count [count] [BufferPolicy.DROP_OLDEST] evictions. Must hold [lock]; see [commitEviction]. */
@@ -3356,11 +3362,10 @@ public class WarpLogRecordExporter(
      *
      * Must be called with [lock] held.
      */
-    private fun rebuildDerivedState(): Unit = installDerivedState(log.entries())
+    private fun rebuildDerivedState(): Unit = installDerivedState(DerivedState.of(log))
 
     /**
-     * Assign [tail], [visibleCount] and [seenIds] from an already-materialized
-     * [Rga.entries] list.
+     * Assign [tail], [visibleCount] and [seenIds] from an already-materialized [DerivedState].
      *
      * Split out from [rebuildDerivedState] so [recover] can do the O(N) walk
      * *outside* the lock and leave only this assignment inside it: the walk can
@@ -3369,11 +3374,23 @@ public class WarpLogRecordExporter(
      *
      * Must be called with [lock] held.
      */
-    private fun installDerivedState(entries: List<Pair<RgaId, LogRecord>>) {
-        tail = entries.lastOrNull()?.first ?: RgaId.HEAD
-        visibleCount = entries.size
+    private fun installDerivedState(derived: DerivedState) {
+        tail = derived.tail
+        visibleCount = derived.entries.size
         seenIds.clear()
-        entries.forEach { (rgaId, record) -> seenIds[record.recordId] = rgaId }
+        derived.entries.forEach { (rgaId, record) -> seenIds[record.recordId] = rgaId }
+    }
+
+    /**
+     * What [installDerivedState] assigns, read off one [Rga] by a walk that may throw and writes
+     * no field. [tail] is the last element of the sequence, tombstones included (see the field);
+     * [entries] are the visible ones.
+     */
+    private class DerivedState(val tail: RgaId, val entries: List<Pair<RgaId, LogRecord>>) {
+        companion object {
+            fun of(log: Rga<LogRecord>): DerivedState =
+                DerivedState(tail = log.sequence.lastOrNull() ?: RgaId.HEAD, entries = log.entries())
+        }
     }
 }
 
