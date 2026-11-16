@@ -316,7 +316,8 @@ public class OtlpHttpEdge(
         } catch (failure: Throwable) {
             failure
         }
-        if (delivered.isNotEmpty()) {
+        // An empty batch still writes on success, as an unsplit send always did.
+        if (failure == null || delivered.isNotEmpty()) {
             withContext(NonCancellable) {
                 if (failure == null) {
                     record(delivered)

@@ -238,7 +238,7 @@ class OtlpHttpEdgeSplitTest {
 
         assertAll(
             { assertEquals(2, postsInFirstDrain, "precondition: the first drain stopped at the refused chunk") },
-            { assertEquals(HttpStatusCode.InternalServerError, collector.statuses[1], "precondition: the 500 fired") },
+            { assertEquals(HttpStatusCode.InternalServerError, collector.statuses.getOrNull(1), "precondition: the 500 fired") },
             { assertTrue(firstChunk.size in 3 until items.size, "precondition: chunk 1 is a real chunk, $firstChunk") },
             { assertIs<DrainResult.Failure>(failed, "the refused chunk fails the log leg") },
             { assertEquals(OtlpSignal.LOGS, (failed as DrainResult.Failure).failures.single().signal) },
@@ -500,7 +500,8 @@ private fun String.hexIndex(): Int = toLong(16).toInt()
 
 private fun String.logIndex(): Int = substringAfter("log-").substringBefore('-').toInt()
 
-private fun String.metricIndex(): Int = substringAfter("m.").substringBefore('.').toInt()
+/** The index a [metricKey] name carries, or -1 for a series the builders did not make. */
+private fun String.metricIndex(): Int = if (startsWith("m.")) substringAfter("m.").substringBefore('.').toInt() else -1
 
 private fun jsonAttrs(attrs: List<KeyValue>?): Map<String, String>? = attrs?.associate { it.key to it.value.stringValue }
 
