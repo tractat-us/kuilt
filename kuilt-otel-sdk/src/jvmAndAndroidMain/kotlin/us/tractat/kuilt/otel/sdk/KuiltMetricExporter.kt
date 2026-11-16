@@ -286,8 +286,9 @@ public class KuiltMetricExporter @JvmOverloads constructor(
     }
 
     /**
-     * Cumulative for an UpDownCounter, whose point becomes a gauge level; delta for everything
-     * else, so a counter's point is the increment `incrementSum` adds. See the class KDoc.
+     * Cumulative for an UpDownCounter, whose point is a level that sets this replica's share of an
+     * up-down sum; delta for everything else, so a counter's point is the increment `incrementSum`
+     * adds. See the class KDoc.
      */
     override fun getAggregationTemporality(instrumentType: InstrumentType): AggregationTemporality =
         when (instrumentType) {
