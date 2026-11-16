@@ -37,15 +37,36 @@ One encode and one durable write per metric kind the list touches, instead of on
 
 <!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpMetricExporterBatch -->
 ```kotlin
-// Three updates over two kinds: one write of the sums, one of the gauges.
+// Three updates over two kinds: one write of the sums, one of the up-down sums.
 val result = exporter.record(
     listOf(
         MetricUpdate.IncrementSum(ok, by = 40L),
         MetricUpdate.IncrementSum(notFound, by = 2L),
-        MetricUpdate.SetGauge(inFlight, value = 7.0, timestamp = 1_000L),
+        MetricUpdate.SetUpDownSum(inFlight, level = 7L),
     ),
 )
 check(result == MetricExportResult.Success) // every kind it touched is on disk
+```
+
+**Intent:** a level that should add up across peers — in-flight requests or queue depth across a fleet — without a `setGauge`, which keeps whichever peer wrote last rather than the sum.
+**Primitive:** `WarpMetricExporter.setUpDownSum` (`:kuilt-otel`) under a `MetricKind.UP_DOWN_SUM` key, or `MetricUpdate.SetUpDownSum` in a `record` batch; `addUpDownSum` for a change rather than a level, and the `…Double` twins for fractions. `KuiltMetricExporter` (`:kuilt-otel-sdk`) already maps an OpenTelemetry UpDownCounter this way.
+
+Each replica sets its own share of a `PNCounter`, so the same level reported again writes nothing, a restart that keeps the replica id and store counts nothing twice, and merged replicas read the sum of their levels. Only a slot's owner moves it, so a replica that never comes back keeps its last share in the sum. OTLP gets a cumulative, non-monotonic Sum.
+
+<!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpMetricExporterUpDownSum -->
+```kotlin
+val inFlight = MetricKey("http.in_flight", MetricKind.UP_DOWN_SUM)
+val serverA = WarpMetricExporter(ReplicaId("server-a"), InMemoryDurableStore())
+val serverB = WarpMetricExporter(ReplicaId("server-b"), InMemoryDurableStore())
+
+// Each server reports its current level, as often as it likes: a level set again moves nothing.
+serverA.setUpDownSum(inFlight, level = 3L)
+serverA.setUpDownSum(inFlight, level = 3L)
+serverB.setUpDownSum(inFlight, level = 4L)
+
+// Merged, the fleet's figure is the sum of the levels. A gauge would keep just one of them.
+serverA.mergeUpDownSum(inFlight, serverB.upDownSumSnapshot(inFlight))
+check(serverA.upDownSumValue(inFlight) == 7L)
 ```
 
 **Intent:** keep histogram counts that arrive already bucketed — an OpenTelemetry SDK's histogram, one interval at a time — without unrolling each bucket into `recordHistogram` calls, and without `mergeHistogram`, which joins instead of adding.

@@ -1449,6 +1449,8 @@ public class WarpMetricExporter(
      * Returns a [MetricExportResult.Refused] whose `overflow` is a [MetricUpDownSumOverflowException],
      * having applied and written nothing, when the move would carry this replica's slot past
      * [Long.MAX_VALUE] or leave a total over every replica that does not fit in a `Long`.
+     *
+     * @sample us.tractat.kuilt.otel.sampleWarpMetricExporterUpDownSum
      */
     public suspend fun setUpDownSum(key: MetricKey, level: Long): MetricExportResult =
         record(listOf(MetricUpdate.SetUpDownSum(key, level)))

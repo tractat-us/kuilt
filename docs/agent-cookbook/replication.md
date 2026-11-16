@@ -59,6 +59,30 @@ counter = counter.piece(counter.decrement(b, 3))
 check(counter.value == 7L)
 ```
 
+**Intent:** the same counter in fractions — gigabytes buffered per node, a balance — without scaling to a fixed point, and with each peer reporting the level it holds rather than a change.
+**Primitive:** `PNCounterDouble` (`us.tractat.kuilt.crdt`). `count(replica)` is one peer's share; a peer moves its share to a level with an `increment` or `decrement` of `level − count(replica)`, and `value` is the sum of the shares.
+
+A share is a difference of two totals that only grow, so its rounding error grows with how far it has moved in all. Treat a gap of a few ulps as none. A slot never reaches infinity: the step that would take it there throws.
+
+<!-- verbatim from kuilt-crdt/src/commonSamples/kotlin/us/tractat/kuilt/crdt/CrdtSamples.kt#samplePNCounterDouble -->
+```kotlin
+val a = ReplicaId("A")
+val b = ReplicaId("B")
+
+// Each node reports how many gigabytes it has buffered: a level, not a change.
+var onA = PNCounterDouble.ZERO
+onA = onA.piece(onA.increment(a, 1.5))
+onA = onA.piece(onA.decrement(a, 0.25)) // A's level falls to 1.25
+
+var onB = PNCounterDouble.ZERO
+onB = onB.piece(onB.increment(b, 2.0))
+
+// Merge either direction: the fleet holds the sum of the levels.
+val fleet = onA.piece(onB)
+check(fleet.count(a) == 1.25)
+check(fleet.value == 3.25)
+```
+
 **Intent:** a shared set where peers add and remove concurrently, and a concurrent re-add should beat a concurrent remove rather than silently vanishing.
 **Primitive:** `ORSet` (`us.tractat.kuilt.crdt`).
 
