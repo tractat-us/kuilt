@@ -235,6 +235,27 @@ class WarpSpanExporterLateCommitTest {
         )
     }
 
+    /**
+     * At the cap, a failed turn chose a victim it never evicted from memory. What it keeps must not
+     * evict it either, or the next turn would drop two spans for its one add.
+     */
+    @Test
+    fun aFailedTurnAtTheCapEvictsNothingFromTheNextOne() = runTest {
+        val store = LateCommitStore(InMemoryDurableStore(), spansKey)
+        val writer = WarpSpanExporter(replica, store, maxSpans = 3).apply { recover() }
+        repeat(3) { assertEquals(ExportResult.Success, writer.export(span(it)), "the rig: export $it") }
+        store.refusing = 1
+        val failed = writer.export(span(100))
+        val heldAfterFailure = ids(writer.snapshot())
+        val next = writer.export(span(200))
+        assertAll(
+            { assertTrue(failed is ExportResult.Failure, "the rig: the armed export landed: $failed") },
+            { assertEquals((0 until 3).map { span(it).spanId }.toSet(), heldAfterFailure, "the failed turn evicted a span") },
+            { assertEquals(ExportResult.Success, next) },
+            { assertEquals(setOf(1, 2, 200).map { span(it).spanId }.toSet(), ids(writer.snapshot()), "the next export evicted more than one span") },
+        )
+    }
+
     /** A remote set merged after a failed turn is kept when the next export publishes. */
     @Test
     fun aMergeAfterAFailedTurnIsKeptWhenTheNextExportLands() = runTest {
