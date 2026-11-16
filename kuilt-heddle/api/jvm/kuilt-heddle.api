@@ -223,6 +223,7 @@ public final class us/tractat/kuilt/heddle/GovernedHeddleNode : us/tractat/kuilt
 	public final fun mint-BPmJkpc (Ljava/lang/String;JLkotlin/time/Duration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun mint-BPmJkpc$default (Lus/tractat/kuilt/heddle/GovernedHeddleNode;Ljava/lang/String;JLkotlin/time/Duration;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun parentVirtualTime-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun parentVirtualTimeWide-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/VirtualTime;
 	public final fun pendingAcks-dq4I9ps (Ljava/lang/String;)Ljava/util/Set;
 	public final fun prepare-Kx4hsE0 (Lus/tractat/kuilt/heddle/AttachmentRecord;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun prepare-Kx4hsE0$default (Lus/tractat/kuilt/heddle/GovernedHeddleNode;Lus/tractat/kuilt/heddle/AttachmentRecord;Lkotlin/time/Duration;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
@@ -281,6 +282,7 @@ public final class us/tractat/kuilt/heddle/HeddleNode : us/tractat/kuilt/heddle/
 	public final fun getSelf-ffK6qZA ()Ljava/lang/String;
 	public final fun getUnreachable ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun parentVirtualTime-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun parentVirtualTimeWide-9eHOidQ (Ljava/lang/String;)Lus/tractat/kuilt/heddle/VirtualTime;
 	public final fun prepare (Lus/tractat/kuilt/heddle/AttachmentRecord;)Z
 	public fun reserve-jc7CSWg (Ljava/lang/String;J)Lus/tractat/kuilt/heddle/ReserveOutcome;
 	public final fun retire-dq4I9ps (Ljava/lang/String;)Z

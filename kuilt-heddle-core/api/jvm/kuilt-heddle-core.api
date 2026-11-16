@@ -306,6 +306,7 @@ public final class us/tractat/kuilt/heddle/EntitlementLedger : us/tractat/kuilt/
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun gauge-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Gauge;
 	public final fun grossVirtualService-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun grossVirtualServiceWide-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/VirtualTime;
 	public final fun hasForgotten ()Z
 	public fun hashCode ()I
 	public final fun holdings-uxjWRQo (Ljava/lang/String;Ljava/lang/String;)J
@@ -330,6 +331,7 @@ public final class us/tractat/kuilt/heddle/EntitlementLedger : us/tractat/kuilt/
 	public final fun retire-opnvhLk (Ljava/lang/String;)Lus/tractat/kuilt/crdt/Quilted;
 	public final fun retiredInboundEdges-9eHOidQ (Ljava/lang/String;)Ljava/util/List;
 	public final fun seat-3yQkkuw (Ljava/lang/String;Lus/tractat/kuilt/heddle/Rational;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun seat-3yQkkuw (Ljava/lang/String;Lus/tractat/kuilt/heddle/VirtualTime;)Lus/tractat/kuilt/crdt/Quilted;
 	public final fun spend-TBVd7Xg (Ljava/lang/String;Ljava/lang/String;J)Lus/tractat/kuilt/crdt/Quilted;
 	public final fun spendCaptured-zS3D_YY (Ljava/lang/String;Ljava/util/List;J)Lus/tractat/kuilt/crdt/Quilted;
 	public final fun storedSlot-mEDNAQ8 (Lus/tractat/kuilt/heddle/CounterFamily;Ljava/lang/String;Ljava/lang/String;)J
@@ -338,6 +340,7 @@ public final class us/tractat/kuilt/heddle/EntitlementLedger : us/tractat/kuilt/
 	public final fun transfersAt-gD9ucxk (Ljava/lang/String;)Ljava/util/Map;
 	public final fun validate ()Ljava/util/List;
 	public final fun virtualService-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun virtualServiceWide-dq4I9ps (Ljava/lang/String;)Lus/tractat/kuilt/heddle/VirtualTime;
 }
 
 public final synthetic class us/tractat/kuilt/heddle/EntitlementLedger$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
@@ -372,6 +375,7 @@ public final class us/tractat/kuilt/heddle/FairShareAllocator {
 	public final fun schedule-mLLTQY0 (Ljava/lang/String;Lus/tractat/kuilt/heddle/LedgerCell;JLkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/heddle/AllocationOutcome;
 	public final fun setRebaseEnabled (Z)V
 	public final fun virtualTime-3ggexMs (Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/lang/String;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun virtualTimeWide-3ggexMs (Lus/tractat/kuilt/heddle/EntitlementLedger;Ljava/lang/String;Lkotlin/jvm/functions/Function1;)Lus/tractat/kuilt/heddle/VirtualTime;
 }
 
 public final class us/tractat/kuilt/heddle/Gauge {
@@ -478,10 +482,14 @@ public final class us/tractat/kuilt/heddle/HeddlePolicy {
 	public static final field INSTANCE Lus/tractat/kuilt/heddle/HeddlePolicy;
 	public final fun front (Ljava/util/List;Ljava/util/Set;)Lus/tractat/kuilt/heddle/Rational;
 	public static synthetic fun front$default (Lus/tractat/kuilt/heddle/HeddlePolicy;Ljava/util/List;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun frontWide (Ljava/util/List;Ljava/util/Set;)Lus/tractat/kuilt/heddle/VirtualTime;
+	public static synthetic fun frontWide$default (Lus/tractat/kuilt/heddle/HeddlePolicy;Ljava/util/List;Ljava/util/Set;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/VirtualTime;
 	public final fun isDemanding (Lus/tractat/kuilt/heddle/PolicyEdge;)Z
 	public final fun pick (Ljava/util/List;Lus/tractat/kuilt/heddle/PolicyConfig;J)Lus/tractat/kuilt/heddle/Grant;
 	public final fun virtualService (Lus/tractat/kuilt/heddle/PolicyEdge;)Lus/tractat/kuilt/heddle/Rational;
+	public final fun virtualServiceWide (Lus/tractat/kuilt/heddle/PolicyEdge;)Lus/tractat/kuilt/heddle/VirtualTime;
 	public final fun wakeOffset (Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Weight;J)Lus/tractat/kuilt/math/Int128;
+	public final fun wakeOffset (Lus/tractat/kuilt/heddle/VirtualTime;Lus/tractat/kuilt/heddle/VirtualTime;Lus/tractat/kuilt/heddle/Weight;J)Lus/tractat/kuilt/math/Int128;
 }
 
 public final class us/tractat/kuilt/heddle/Lease {
@@ -1723,6 +1731,15 @@ public final class us/tractat/kuilt/heddle/TopologyWeightSerializer : kotlinx/se
 	public fun serialize (Lkotlinx/serialization/encoding/Encoder;Lus/tractat/kuilt/heddle/Weight;)V
 }
 
+public final class us/tractat/kuilt/heddle/VirtualTime : java/lang/Comparable {
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/VirtualTime;)I
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public final fun toDouble ()D
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface class us/tractat/kuilt/heddle/WaitExplanation {
 	public abstract fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
 }
@@ -1752,9 +1769,12 @@ public final class us/tractat/kuilt/heddle/WaitExplanation$BehindAtLevel : us/tr
 	public static synthetic fun copy-WmD6BgY$default (Lus/tractat/kuilt/heddle/WaitExplanation$BehindAtLevel;Ljava/lang/String;Ljava/lang/String;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;Lus/tractat/kuilt/heddle/Rational;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/WaitExplanation$BehindAtLevel;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getEligibleFront ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun getEligibleFrontWide ()Lus/tractat/kuilt/heddle/VirtualTime;
 	public final fun getFront ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun getFrontWide ()Lus/tractat/kuilt/heddle/VirtualTime;
 	public fun getKind ()Lus/tractat/kuilt/heddle/WaitExplanation$Kind;
 	public final fun getLeafSideVirtualService ()Lus/tractat/kuilt/heddle/Rational;
+	public final fun getLeafSideVirtualServiceWide ()Lus/tractat/kuilt/heddle/VirtualTime;
 	public final fun getNextChild-urUY4Jo ()Ljava/lang/String;
 	public final fun getParent-urUY4Jo ()Ljava/lang/String;
 	public fun hashCode ()I

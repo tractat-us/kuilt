@@ -726,6 +726,13 @@ sealed interface us.tractat.kuilt.heddle/WaitExplanation { // us.tractat.kuilt.h
         final val parent // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.parent|{}parent[0]
             final fun <get-parent>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.parent.<get-parent>|<get-parent>(){}[0]
 
+        final var eligibleFrontWide // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.eligibleFrontWide|{}eligibleFrontWide[0]
+            final fun <get-eligibleFrontWide>(): us.tractat.kuilt.heddle/VirtualTime? // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.eligibleFrontWide.<get-eligibleFrontWide>|<get-eligibleFrontWide>(){}[0]
+        final var frontWide // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.frontWide|{}frontWide[0]
+            final fun <get-frontWide>(): us.tractat.kuilt.heddle/VirtualTime? // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.frontWide.<get-frontWide>|<get-frontWide>(){}[0]
+        final var leafSideVirtualServiceWide // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.leafSideVirtualServiceWide|{}leafSideVirtualServiceWide[0]
+            final fun <get-leafSideVirtualServiceWide>(): us.tractat.kuilt.heddle/VirtualTime? // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.leafSideVirtualServiceWide.<get-leafSideVirtualServiceWide>|<get-leafSideVirtualServiceWide>(){}[0]
+
         final fun component1(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component1|component1(){}[0]
         final fun component2(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component2|component2(){}[0]
         final fun component3(): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/WaitExplanation.BehindAtLevel.component3|component3(){}[0]
@@ -979,6 +986,7 @@ final class us.tractat.kuilt.heddle/EntitlementLedger : us.tractat.kuilt.crdt/Qu
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/EntitlementLedger.equals|equals(kotlin.Any?){}[0]
     final fun gauge(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/Gauge? // us.tractat.kuilt.heddle/EntitlementLedger.gauge|gauge(us.tractat.kuilt.heddle.AttachmentId){}[0]
     final fun grossVirtualService(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/EntitlementLedger.grossVirtualService|grossVirtualService(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun grossVirtualServiceWide(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/VirtualTime? // us.tractat.kuilt.heddle/EntitlementLedger.grossVirtualServiceWide|grossVirtualServiceWide(us.tractat.kuilt.heddle.AttachmentId){}[0]
     final fun hasForgotten(): kotlin/Boolean // us.tractat.kuilt.heddle/EntitlementLedger.hasForgotten|hasForgotten(){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/EntitlementLedger.hashCode|hashCode(){}[0]
     final fun holdings(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.crdt/ReplicaId): kotlin/Long // us.tractat.kuilt.heddle/EntitlementLedger.holdings|holdings(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.crdt.ReplicaId){}[0]
@@ -1002,6 +1010,7 @@ final class us.tractat.kuilt.heddle/EntitlementLedger : us.tractat.kuilt.crdt/Qu
     final fun retire(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.retire|retire(us.tractat.kuilt.heddle.AttachmentId){}[0]
     final fun retiredInboundEdges(us.tractat.kuilt.heddle/GroupId): kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId> // us.tractat.kuilt.heddle/EntitlementLedger.retiredInboundEdges|retiredInboundEdges(us.tractat.kuilt.heddle.GroupId){}[0]
     final fun seat(us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Rational): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.seat|seat(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.Rational){}[0]
+    final fun seat(us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/VirtualTime): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.seat|seat(us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.heddle.VirtualTime){}[0]
     final fun spend(us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.heddle/GroupId, kotlin/Long): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.spend|spend(us.tractat.kuilt.crdt.ReplicaId;us.tractat.kuilt.heddle.GroupId;kotlin.Long){}[0]
     final fun spendCaptured(us.tractat.kuilt.crdt/ReplicaId, kotlin.collections/List<us.tractat.kuilt.heddle/AttachmentId>, kotlin/Long): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.heddle/EntitlementLedger>? // us.tractat.kuilt.heddle/EntitlementLedger.spendCaptured|spendCaptured(us.tractat.kuilt.crdt.ReplicaId;kotlin.collections.List<us.tractat.kuilt.heddle.AttachmentId>;kotlin.Long){}[0]
     final fun storedSlot(us.tractat.kuilt.heddle/CounterFamily, us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.crdt/ReplicaId): kotlin/Long // us.tractat.kuilt.heddle/EntitlementLedger.storedSlot|storedSlot(us.tractat.kuilt.heddle.CounterFamily;us.tractat.kuilt.heddle.AttachmentId;us.tractat.kuilt.crdt.ReplicaId){}[0]
@@ -1010,6 +1019,7 @@ final class us.tractat.kuilt.heddle/EntitlementLedger : us.tractat.kuilt.crdt/Qu
     final fun transfersAt(us.tractat.kuilt.heddle/PathKey): kotlin.collections/Map<us.tractat.kuilt.crdt/ReplicaId, us.tractat.kuilt.crdt/GCounter> // us.tractat.kuilt.heddle/EntitlementLedger.transfersAt|transfersAt(us.tractat.kuilt.heddle.PathKey){}[0]
     final fun validate(): kotlin.collections/List<us.tractat.kuilt.heddle/LedgerConflict> // us.tractat.kuilt.heddle/EntitlementLedger.validate|validate(){}[0]
     final fun virtualService(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/EntitlementLedger.virtualService|virtualService(us.tractat.kuilt.heddle.AttachmentId){}[0]
+    final fun virtualServiceWide(us.tractat.kuilt.heddle/AttachmentId): us.tractat.kuilt.heddle/VirtualTime? // us.tractat.kuilt.heddle/EntitlementLedger.virtualServiceWide|virtualServiceWide(us.tractat.kuilt.heddle.AttachmentId){}[0]
 
     final object $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.heddle/EntitlementLedger> { // us.tractat.kuilt.heddle/EntitlementLedger.$serializer|null[0]
         final val descriptor // us.tractat.kuilt.heddle/EntitlementLedger.$serializer.descriptor|{}descriptor[0]
@@ -1049,6 +1059,7 @@ final class us.tractat.kuilt.heddle/FairShareAllocator { // us.tractat.kuilt.hed
     final fun pickChild(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/EntitlementLedger, kotlin/Function1<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand>, kotlin/Function1<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand>): us.tractat.kuilt.heddle/ChildPick? // us.tractat.kuilt.heddle/FairShareAllocator.pickChild|pickChild(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.EntitlementLedger;kotlin.Function1<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>;kotlin.Function1<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>){}[0]
     final fun schedule(us.tractat.kuilt.heddle/GroupId, us.tractat.kuilt.heddle/LedgerCell, kotlin/Long, kotlin/Function1<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand>): us.tractat.kuilt.heddle/AllocationOutcome // us.tractat.kuilt.heddle/FairShareAllocator.schedule|schedule(us.tractat.kuilt.heddle.GroupId;us.tractat.kuilt.heddle.LedgerCell;kotlin.Long;kotlin.Function1<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>){}[0]
     final fun virtualTime(us.tractat.kuilt.heddle/EntitlementLedger, us.tractat.kuilt.heddle/GroupId, kotlin/Function1<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand>): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/FairShareAllocator.virtualTime|virtualTime(us.tractat.kuilt.heddle.EntitlementLedger;us.tractat.kuilt.heddle.GroupId;kotlin.Function1<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>){}[0]
+    final fun virtualTimeWide(us.tractat.kuilt.heddle/EntitlementLedger, us.tractat.kuilt.heddle/GroupId, kotlin/Function1<us.tractat.kuilt.heddle/AttachmentId, us.tractat.kuilt.heddle/Demand>): us.tractat.kuilt.heddle/VirtualTime? // us.tractat.kuilt.heddle/FairShareAllocator.virtualTimeWide|virtualTimeWide(us.tractat.kuilt.heddle.EntitlementLedger;us.tractat.kuilt.heddle.GroupId;kotlin.Function1<us.tractat.kuilt.heddle.AttachmentId,us.tractat.kuilt.heddle.Demand>){}[0]
 }
 
 final class us.tractat.kuilt.heddle/Gauge { // us.tractat.kuilt.heddle/Gauge|null[0]
@@ -1812,6 +1823,14 @@ final class us.tractat.kuilt.heddle/TopologyProblem { // us.tractat.kuilt.heddle
     }
 }
 
+final class us.tractat.kuilt.heddle/VirtualTime : kotlin/Comparable<us.tractat.kuilt.heddle/VirtualTime> { // us.tractat.kuilt.heddle/VirtualTime|null[0]
+    final fun compareTo(us.tractat.kuilt.heddle/VirtualTime): kotlin/Int // us.tractat.kuilt.heddle/VirtualTime.compareTo|compareTo(us.tractat.kuilt.heddle.VirtualTime){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/VirtualTime.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/VirtualTime.hashCode|hashCode(){}[0]
+    final fun toDouble(): kotlin/Double // us.tractat.kuilt.heddle/VirtualTime.toDouble|toDouble(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/VirtualTime.toString|toString(){}[0]
+}
+
 final class us.tractat.kuilt.heddle/Weight : kotlin/Comparable<us.tractat.kuilt.heddle/Weight> { // us.tractat.kuilt.heddle/Weight|null[0]
     final val denominator // us.tractat.kuilt.heddle/Weight.denominator|{}denominator[0]
         final fun <get-denominator>(): kotlin/Long // us.tractat.kuilt.heddle/Weight.denominator.<get-denominator>|<get-denominator>(){}[0]
@@ -1977,10 +1996,13 @@ sealed class us.tractat.kuilt.heddle/TopologyDraft { // us.tractat.kuilt.heddle/
 
 final object us.tractat.kuilt.heddle/HeddlePolicy { // us.tractat.kuilt.heddle/HeddlePolicy|null[0]
     final fun front(kotlin.collections/List<us.tractat.kuilt.heddle/PolicyEdge>, kotlin.collections/Set<us.tractat.kuilt.heddle/AttachmentId> = ...): us.tractat.kuilt.heddle/Rational? // us.tractat.kuilt.heddle/HeddlePolicy.front|front(kotlin.collections.List<us.tractat.kuilt.heddle.PolicyEdge>;kotlin.collections.Set<us.tractat.kuilt.heddle.AttachmentId>){}[0]
+    final fun frontWide(kotlin.collections/List<us.tractat.kuilt.heddle/PolicyEdge>, kotlin.collections/Set<us.tractat.kuilt.heddle/AttachmentId> = ...): us.tractat.kuilt.heddle/VirtualTime? // us.tractat.kuilt.heddle/HeddlePolicy.frontWide|frontWide(kotlin.collections.List<us.tractat.kuilt.heddle.PolicyEdge>;kotlin.collections.Set<us.tractat.kuilt.heddle.AttachmentId>){}[0]
     final fun isDemanding(us.tractat.kuilt.heddle/PolicyEdge): kotlin/Boolean // us.tractat.kuilt.heddle/HeddlePolicy.isDemanding|isDemanding(us.tractat.kuilt.heddle.PolicyEdge){}[0]
     final fun pick(kotlin.collections/List<us.tractat.kuilt.heddle/PolicyEdge>, us.tractat.kuilt.heddle/PolicyConfig, kotlin/Long): us.tractat.kuilt.heddle/Grant? // us.tractat.kuilt.heddle/HeddlePolicy.pick|pick(kotlin.collections.List<us.tractat.kuilt.heddle.PolicyEdge>;us.tractat.kuilt.heddle.PolicyConfig;kotlin.Long){}[0]
     final fun virtualService(us.tractat.kuilt.heddle/PolicyEdge): us.tractat.kuilt.heddle/Rational // us.tractat.kuilt.heddle/HeddlePolicy.virtualService|virtualService(us.tractat.kuilt.heddle.PolicyEdge){}[0]
+    final fun virtualServiceWide(us.tractat.kuilt.heddle/PolicyEdge): us.tractat.kuilt.heddle/VirtualTime // us.tractat.kuilt.heddle/HeddlePolicy.virtualServiceWide|virtualServiceWide(us.tractat.kuilt.heddle.PolicyEdge){}[0]
     final fun wakeOffset(us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Rational, us.tractat.kuilt.heddle/Weight, kotlin/Long): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.heddle/HeddlePolicy.wakeOffset|wakeOffset(us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Rational;us.tractat.kuilt.heddle.Weight;kotlin.Long){}[0]
+    final fun wakeOffset(us.tractat.kuilt.heddle/VirtualTime, us.tractat.kuilt.heddle/VirtualTime, us.tractat.kuilt.heddle/Weight, kotlin/Long): us.tractat.kuilt.math/Int128 // us.tractat.kuilt.heddle/HeddlePolicy.wakeOffset|wakeOffset(us.tractat.kuilt.heddle.VirtualTime;us.tractat.kuilt.heddle.VirtualTime;us.tractat.kuilt.heddle.Weight;kotlin.Long){}[0]
 }
 
 final object us.tractat.kuilt.heddle/TopologyWeightSerializer : kotlinx.serialization/KSerializer<us.tractat.kuilt.heddle/Weight> { // us.tractat.kuilt.heddle/TopologyWeightSerializer|null[0]
