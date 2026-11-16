@@ -48,12 +48,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpSpanExporte
  * inserts: the earliest by [SpanRecord.startEpochNanos] under [BufferPolicy.DROP_OLDEST], the
  * latest under [BufferPolicy.DROP_NEWEST]. The victim is chosen from the spans already held,
  * so an export's own eviction never takes the span it is adding, and it is committed only with
- * the add, so an export whose add is refused evicts nothing (#3441). That is all the cap promises
- * the incoming span. A recovered exporter adds before the durable-write section, so at the cap a
- * concurrent export's eviction can take this export's span before this export encodes, and this
- * export then returns [ExportResult.Success] for a snapshot that does not carry it. An export
- * that makes the landing read adds and encodes in one step, so its own snapshot always carries its
- * span. [merge] does not evict. The read of the stored spans
+ * the add, so an export whose add is refused evicts nothing (#3441). An export builds its add and
+ * its eviction inside the durable-write section, writes them, and makes them visible only once the
+ * write has returned (#3517), so the bytes an export writes always carry its own span, and an export
+ * whose write fails evicts nothing from memory either. A later export's eviction can take it. That
+ * is all the cap promises the incoming span. [merge] does not evict. The read of the stored spans
  * that lands, in [recover] or in the first write turn after a refused one, evicts whatever its
  * join brought in beyond [maxSpans] in one batch, by the same policy, before that turn's own
  * insert. **Every eviction is logged** with enough detail to correlate against a backend's
