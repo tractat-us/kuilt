@@ -12,8 +12,9 @@ import kotlinx.serialization.encoding.Encoder
  *
  * The exporter no longer keeps its whole op-log under one key. It keeps it in
  * segments — `otel.logs.seg.<n>` — and this index, under `otel.logs.idx`, names
- * which of them are live. It is small and is rewritten only when the set of
- * segments changes (a roll, a reclamation, a merge), never on the per-record path.
+ * which of them are live. It is small and is rewritten when the set of segments
+ * changes (a roll, a reclamation, a merge), and when the mint claim it carries runs
+ * low ([seqHighWater]): once per half-lease of records, not once per record.
  *
  * The index is also the **commit point** of the one-time migration off the legacy
  * single-blob `otel.logs` key: its presence means the migration finished, so a
