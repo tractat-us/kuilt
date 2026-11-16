@@ -16,30 +16,26 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Pins that a span which escaped before its turn's clock write landed never shares its dot with a
- * span minted after a restart (#3517), the span twin of #3452.
+ * Pins that a span is never visible to a peer before its turn's writes land, so a restart never
+ * mints one of its dots again for a different span (#3517), the span twin of #3452.
  *
- * An export stamps its span and adds it to the set before the turn writes the clock, so [snapshot]
- * shows the stamped span while the durable clock is still below its dot. If a peer gossips that
- * snapshot and the process dies before the clock write lands, the restart reads the older clock
- * entry, the span bytes carry no higher mark, and the next export mints the same `(replica, seq)`
- * for a different span.
+ * Before the fix an export stamped its span and added it to the set ahead of the turn's writes, so
+ * [WarpSpanExporter.snapshot] showed it while the store still lacked it. If a peer gossiped that
+ * snapshot and the process died before the writes landed, the restart minted the escaped span's
+ * dots again. **There are two dots.** The span's [CausalStamp] dot comes from the [WarpCausalClock],
+ * and two spans sharing it conflate their causal links. The `ORSet` mints a second dot of its own for
+ * every add, from the set's causal context, and two adds sharing it make a merge drop **both** spans:
+ * each side's context has seen the dot, and each side lacks the other's element under it. The third
+ * arm has no clock at all, which is why a claim written ahead on the clock's key could not close this.
  *
- * The rig models the crash precisely: the store lets every write through until the first clock
- * write made while the escaping span is visible, takes the peer's snapshot there, and refuses it.
- * Keyed on what the snapshot holds rather than on a write's index, so a claim written ahead of the
- * mint is a write the rig lets through, as a crash after it would.
+ * The rig models the crash: the store lets every write through until the first write of its key made
+ * while span 100's export is in flight, takes the snapshot a peer would gossip at that moment, and
+ * refuses the write, as the process dies there. Each arm then restarts over what the store holds,
+ * exports once more and merges the peer's snapshot back.
  *
- * One arm per place an export mints: before its write section, once the exporter's read has landed,
- * and inside the section, on the turn whose read lands.
- *
- * **There are two dots, and the clock owns only one.** The span's [CausalStamp] dot comes from the
- * [WarpCausalClock]; the `ORSet` mints a second dot of its own for every add, from the set's causal
- * context, and that one escapes in the same window. A restart whose stored set never held the
- * escaped add mints the same set dot for the next add, and a merge then drops **both** spans: each
- * side's context has seen the dot, and each side lacks the other's element under it. The third arm
- * shows this with no clock configured at all, so a claim written ahead on the clock's key cannot
- * reach it.
+ * One arm per place an export can die with its dots minted: at the clock write of a turn on an
+ * exporter whose read had landed, at the clock write of the turn whose read lands, and, with no
+ * clock, at the span write.
  */
 class WarpSpanExporterEscapedDotTest {
 
@@ -58,21 +54,20 @@ class WarpSpanExporterEscapedDotTest {
     )
 
     /**
-     * Delegates to [backing]. While [crash] is set, a write of [crashKey] calls it first: a non-null
-     * answer is the snapshot a peer took at that moment, kept in [gossiped], and the write is refused,
-     * as the process dies there. A `null` answer lets the write through.
+     * Delegates to [backing]. Once [peer] is set, the next write of [crashKey] takes the snapshot it
+     * answers, kept in [gossiped], and is refused, as the process dies there.
      */
     private class CrashAtWriteStore(private val backing: DurableStore, private val crashKey: StoreKey) : DurableStore {
-        var crash: (() -> ORSet<SpanRecord>?)? = null
+        var peer: (() -> ORSet<SpanRecord>)? = null
         var gossiped: ORSet<SpanRecord>? = null
 
         override suspend fun read(key: StoreKey): ByteArray? = backing.read(key)
 
         override suspend fun write(key: StoreKey, bytes: ByteArray) {
             if (key == crashKey) {
-                crash?.invoke()?.let { snapshot ->
-                    gossiped = snapshot
-                    crash = null
+                peer?.let { take ->
+                    gossiped = take()
+                    peer = null
                     throw IllegalStateException("the process died writing ${key.name}")
                 }
             }
@@ -83,18 +78,25 @@ class WarpSpanExporterEscapedDotTest {
     }
 
     /** A process over [store]: its clock recovered, as [WarpTelemetry.recover] does, and its spans read when [readSpans]. */
-    private suspend fun start(store: DurableStore, readSpans: Boolean = true): WarpSpanExporter {
-        val clock = WarpCausalClock(replica)
+    private suspend fun start(store: DurableStore, clocked: Boolean = true, readSpans: Boolean = true): WarpSpanExporter {
+        val clock = if (clocked) WarpCausalClock(replica) else null
         val exporter = WarpSpanExporter(replica, store, causalClock = clock)
-        exporter.clockRecovered(clock.recover(store))
+        clock?.let { exporter.clockRecovered(it.recover(store)) }
         if (readSpans) exporter.recover()
         return exporter
     }
 
-    /** Arm [store] to die at the first write of its key made while [exporter]'s snapshot shows span [id]. */
-    private fun dieOnceSpanIsVisible(store: CrashAtWriteStore, exporter: WarpSpanExporter, id: Int) {
-        store.crash = { exporter.snapshot().takeIf { set -> set.elements.any { it.spanId == span(id).spanId } } }
+    /**
+     * Export span 100 through [writer] with [store] armed to die at its key's next write, and return
+     * what the turn reported with the snapshot a peer took as it died.
+     */
+    private suspend fun dieExporting(store: CrashAtWriteStore, writer: WarpSpanExporter): Died {
+        store.peer = { writer.snapshot() }
+        val result = writer.export(span(100))
+        return Died(result, assertNotNull(store.gossiped, "the rig: the turn never made the armed write"))
     }
+
+    private class Died(val result: ExportResult, val gossiped: ORSet<SpanRecord>)
 
     /** Every own dot that two different spans of [spans] carry, each with the span ids holding it. */
     private fun sharedDots(spans: Collection<SpanRecord>): Map<Dot, List<ByteString>> = spans
@@ -107,13 +109,13 @@ class WarpSpanExporterEscapedDotTest {
      * Restart over [backing], export one more span, and merge back what the peer took from the dead
      * process: the outcome every arm asserts on.
      */
-    private suspend fun restartAndMergeBack(backing: DurableStore, gossiped: ORSet<SpanRecord>): AfterRestart {
-        val restarted = start(backing)
+    private suspend fun restartAndMergeBack(backing: DurableStore, gossiped: ORSet<SpanRecord>, clocked: Boolean): AfterRestart {
+        val restarted = start(backing, clocked)
         val heldAfterRestart = restarted.snapshot().elements.map { it.spanId }.toSet()
         val next = restarted.export(span(200))
         val both = gossiped.elements + restarted.snapshot().elements
         val merged = restarted.snapshot().piece(gossiped)
-        return AfterRestart(heldAfterRestart, next, both, merged.elements)
+        return AfterRestart(heldAfterRestart, next, both, merged.elements.map { it.spanId }.toSet())
     }
 
     /**
@@ -124,92 +126,63 @@ class WarpSpanExporterEscapedDotTest {
         val heldAfterRestart: Set<ByteString>,
         val next: ExportResult,
         val both: Set<SpanRecord>,
-        val merged: Set<SpanRecord>,
+        val merged: Set<ByteString>,
     )
 
-    private fun escapedDot(gossiped: ORSet<SpanRecord>?): Dot? =
-        gossiped?.elements?.singleOrNull { it.spanId == span(100).spanId }?.causalStamp?.dot
+    /** What every arm asserts once the process has died exporting span 100 and restarted. */
+    private fun assertNoDotEscaped(died: Died, after: AfterRestart) {
+        val gossipedIds = died.gossiped.elements.map { it.spanId }.toSet()
+        assertAll(
+            // The rig: the turn died at the armed write, the peer took a snapshot of five spans, and
+            // the store does not hold span 100.
+            { assertTrue(died.result is ExportResult.Failure, "the export that died was reported ${died.result}") },
+            { assertTrue((0 until 5).all { span(it).spanId in gossipedIds }, "the rig: the peer's snapshot lacks a written span") },
+            { assertTrue(span(100).spanId !in after.heldAfterRestart, "the rig: the store holds span 100") },
+            { assertEquals(ExportResult.Success, after.next, "the export after the restart") },
+            // The property.
+            { assertTrue(span(100).spanId !in gossipedIds, "span 100 was visible before its writes landed") },
+            { assertEquals(emptyMap(), sharedDots(after.both), "two spans share a dot") },
+            { assertEquals(gossipedIds + span(200).spanId, after.merged, "the merge dropped a span") },
+        )
+    }
 
     @Test
-    fun aSpanGossipedBeforeItsClockWriteLandedKeepsItsDotAfterARestart() = runTest {
+    fun aSpanWhoseClockWriteNeverLandedSharesNoDotAfterARestart() = runTest {
         val backing = InMemoryDurableStore()
         val store = CrashAtWriteStore(backing, clockKey)
         val writer = start(store)
         repeat(5) { assertEquals(ExportResult.Success, writer.export(span(it)), "the rig: export $it") }
-        dieOnceSpanIsVisible(store, writer, 100)
-        val died = writer.export(span(100))
-        val gossiped = store.gossiped
-
-        val after = restartAndMergeBack(backing, assertNotNull(gossiped, "the rig: no clock write ran while span 100 was visible"))
-        assertAll(
-            // The rig: the turn died at its clock write, span 100 had escaped stamped, and no key holds it.
-            { assertTrue(died is ExportResult.Failure, "the export that died was reported $died") },
-            { assertNotNull(escapedDot(gossiped), "the rig: span 100 escaped unstamped") },
-            { assertTrue(span(100).spanId !in after.heldAfterRestart, "the rig: the store holds span 100") },
-            { assertEquals(ExportResult.Success, after.next, "the export after the restart") },
-            // The property.
-            { assertEquals(emptyMap(), sharedDots(after.both), "two spans share a dot") },
-            { assertEquals(7, after.merged.size, "the merged set holds every span once") },
-        )
+        val died = dieExporting(store, writer)
+        assertNoDotEscaped(died, restartAndMergeBack(backing, died.gossiped, clocked = true))
     }
 
     /**
      * A process whose spans were never read: its first export reads them inside the write section, and
-     * stamps and adds there, so the stamp is visible while that turn's clock write is pending too.
+     * builds its add there.
      */
     @Test
-    fun aSpanStampedOnTheTurnWhoseReadLandsKeepsItsDotAfterARestart() = runTest {
+    fun aSpanStampedOnTheTurnWhoseReadLandsSharesNoDotAfterARestart() = runTest {
         val backing = InMemoryDurableStore()
         val previous = start(backing)
         repeat(5) { assertEquals(ExportResult.Success, previous.export(span(it)), "the rig: export $it") }
         val store = CrashAtWriteStore(backing, clockKey)
         val writer = start(store, readSpans = false)
         val heldBeforeTheTurn = writer.snapshot().elements.size
-        dieOnceSpanIsVisible(store, writer, 100)
-        val died = writer.export(span(100))
-        val gossiped = store.gossiped
-
-        val after = restartAndMergeBack(backing, assertNotNull(gossiped, "the rig: no clock write ran while span 100 was visible"))
+        val died = dieExporting(store, writer)
         assertAll(
-            // The rig: the turn read the stored spans itself, died at its clock write, and span 100 escaped.
             { assertEquals(0, heldBeforeTheTurn, "the rig: the exporter had read its spans before the turn") },
-            { assertTrue(died is ExportResult.Failure, "the export that died was reported $died") },
-            { assertNotNull(escapedDot(gossiped), "the rig: span 100 escaped unstamped") },
-            { assertTrue(span(100).spanId !in after.heldAfterRestart, "the rig: the store holds span 100") },
-            { assertEquals(ExportResult.Success, after.next, "the export after the restart") },
-            // The property.
-            { assertEquals(emptyMap(), sharedDots(after.both), "two spans share a dot") },
-            { assertEquals(7, after.merged.size, "the merged set holds every span once") },
+            { assertNoDotEscaped(died, restartAndMergeBack(backing, died.gossiped, clocked = true)) },
         )
     }
 
-    /**
-     * No clock: the span is unstamped, so only the set's own add dot can escape. The process dies at
-     * its span write, while span 100 is visible.
-     */
+    /** No clock: the span is unstamped, so only the set's own add dot can escape. */
     @Test
-    fun anUnstampedSpanGossipedBeforeItsWriteLandedSurvivesAMergeAfterARestart() = runTest {
+    fun anUnstampedSpanWhoseWriteNeverLandedSurvivesAMergeAfterARestart() = runTest {
         val backing = InMemoryDurableStore()
         val store = CrashAtWriteStore(backing, spansKey)
-        val writer = WarpSpanExporter(replica, store).apply { recover() }
+        val writer = start(store, clocked = false)
         repeat(5) { assertEquals(ExportResult.Success, writer.export(span(it)), "the rig: export $it") }
-        dieOnceSpanIsVisible(store, writer, 100)
-        val died = writer.export(span(100))
-        val gossiped = assertNotNull(store.gossiped, "the rig: no span write ran while span 100 was visible")
-
-        val restarted = WarpSpanExporter(replica, backing).apply { recover() }
-        val heldAfterRestart = restarted.snapshot().elements.map { it.spanId }.toSet()
-        val next = restarted.export(span(200))
-        val merged = restarted.snapshot().piece(gossiped).elements.map { it.spanId }.toSet()
-        assertAll(
-            // The rig: the turn died at its span write, span 100 had escaped, and no key holds it.
-            { assertTrue(died is ExportResult.Failure, "the export that died was reported $died") },
-            { assertTrue(gossiped.elements.any { it.spanId == span(100).spanId }, "the rig: span 100 did not escape") },
-            { assertTrue(span(100).spanId !in heldAfterRestart, "the rig: the store holds span 100") },
-            { assertEquals(ExportResult.Success, next, "the export after the restart") },
-            // The property.
-            { assertTrue(span(100).spanId in merged, "the merge dropped the escaped span") },
-            { assertTrue(span(200).spanId in merged, "the merge dropped the span exported after the restart") },
-        )
+        val died = dieExporting(store, writer)
+        assertNoDotEscaped(died, restartAndMergeBack(backing, died.gossiped, clocked = false))
     }
 }
