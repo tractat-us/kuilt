@@ -53,9 +53,9 @@ internal const val POSITION_HEADROOM: Long = LocalHeddle.MAX_RESERVATION * TICKS
  * so dividing by the denominator keeps it a [Rational]. Past it a read reports the ceiling
  * ([inWindow]), the penalty side.
  *
- * **No pick reads it.** A pick orders the full 128-bit effective position, relative to the parent's
- * origin, so a child past its ceiling is ordered exactly and nothing is refused there. A gauge's
- * stored position, the origin, the raw position, the front and a wake clamp are all 128-bit too.
+ * **No pick reads it.** A pick orders the full 128-bit effective position, so a child past its
+ * ceiling is ordered exactly and nothing is refused there. A gauge's stored position, the raw
+ * position, the front and a wake clamp are all 128-bit too.
  * Nothing rebases a busy parent's positions back down (#3472), so a long-running one passes it and
  * only those reads saturate. What it still sizes is the weight budget's P1′ ([rebaseThreshold]).
  */
@@ -289,7 +289,7 @@ internal class VirtualTime(
 
     /**
      * This time on the grid of an edge of weight [w], exactly: `⌈V · w · G⌉` ticks, in 128 bits.
-     * Where a newborn of weight [w] is seated, relative to its parent's origin, where a waker is
+     * Where a newborn of weight [w] is seated, where a waker is
      * clamped to, and the highest position at which an edge of weight [w] is still eligible for a
      * pick (design §7.3 step 3, read at grid resolution). Nothing caps it (#3353).
      *

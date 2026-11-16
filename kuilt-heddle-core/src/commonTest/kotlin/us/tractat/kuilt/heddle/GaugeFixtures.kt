@@ -92,13 +92,13 @@ internal fun ticksAt(v: Rational, w: Weight, rounding: Rounding = Rounding.CEILI
     saturated(wideTicksAt(v, w, rounding), w)
 
 /**
- * Whether [edge]'s raw position, relative to its parent's origin, is at or past its
+ * Whether [edge]'s raw position is at or past its
  * [positionCeiling], where the public virtual-time reads saturate. Test support only: no pick reads
  * the ceiling. `false` for an edge this ledger does not know.
  */
 internal fun EntitlementLedger.isAtPositionCeiling(edge: AttachmentId): Boolean {
     val record = record(edge) ?: return false
-    val raw = gauge(edge).rawTicksAt(baseIssuance(edge), this.edge(edge)?.returned ?: 0L, record.weight, origin(record.parent))
+    val raw = gauge(edge).rawTicksAt(baseIssuance(edge), this.edge(edge)?.returned ?: 0L)
     return raw >= Int128.of(positionCeiling(record.weight))
 }
 

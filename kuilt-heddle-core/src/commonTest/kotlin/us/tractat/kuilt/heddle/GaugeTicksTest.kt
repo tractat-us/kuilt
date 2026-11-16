@@ -147,28 +147,15 @@ class GaugeTicksTest {
     }
 
     /**
-     * Ticks past `Long` are narrowed only after the parent's origin is subtracted (#3353): with no
-     * origin the public read saturates at the ceiling and never throws, and with an origin that
-     * brings the position back below it, the same stored ticks read exactly.
+     * Ticks past `Long` read the ceiling in the public read, the penalty side, and never throw
+     * (#3353). Nothing brings a position back below it now (#3472); a pick reads it wide.
      */
     @Test
-    fun ticksPastLongAreNarrowedOnlyAfterTheOrigin() {
+    fun ticksPastLongReadTheCeiling() {
         val pastLong = Gauge(0L, ticksHigh = 1L, ticksLow = 0L)
-        // 2⁶⁴ ticks less an origin of 2⁶⁰ units (2⁶⁴ ticks at weight 1), plus 3 units issued.
-        val origin = Int128.of(1L shl 60)
-        assertAll(
-            {
-                assertEquals(
-                    ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE),
-                    ledgerWith(Weight.ONE, issued = 3L, gauge = pastLong).grossVirtualService(EDGE),
-                )
-            },
-            {
-                assertEquals(
-                    Rational.of(3L),
-                    ledgerWith(Weight.ONE, issued = 3L, gauge = pastLong, origin = origin).grossVirtualService(EDGE),
-                )
-            },
+        assertEquals(
+            ticksToVirtual(positionCeiling(Weight.ONE), Weight.ONE),
+            ledgerWith(Weight.ONE, issued = 3L, gauge = pastLong).grossVirtualService(EDGE),
         )
     }
 
@@ -176,7 +163,7 @@ class GaugeTicksTest {
      * A stored position at the ceiling is exact, so it reads exactly through its fold (#3353). Before
      * slice 6 the read held a stored position at the ceiling there whatever the fold said, since a
      * seat could store a front narrowed to the ceiling. Nothing stores a narrowed position now, and
-     * the hold on an absolute value would turn into credit once an origin passed it.
+     * the hold would be a cap on an absolute value.
      */
     @Test
     fun ticksAtTheCeilingReadExactlyThroughTheirFold() {
@@ -211,12 +198,11 @@ class GaugeTicksTest {
 
     // ── fixtures ─────────────────────────────────────────────────────────────────────────
 
-    private fun ledgerWith(weight: Weight, issued: Long = 0L, gauge: Gauge? = null, origin: Int128 = Int128.ZERO): EntitlementLedger =
+    private fun ledgerWith(weight: Weight, issued: Long = 0L, gauge: Gauge? = null): EntitlementLedger =
         EntitlementLedger.of(
             records = mapOf(EDGE to setOf(AttachmentRecord(EDGE, PARENT, CHILD, weight))),
             issued = if (issued == 0L) emptyMap() else mapOf(EDGE to GCounter.of(GRANTOR to issued)),
             gauges = gauge?.let { mapOf(EDGE to it) } ?: emptyMap(),
-            origins = if (origin == Int128.ZERO) emptyMap() else mapOf(PARENT to origin),
         )
 
     private fun fundedLedgerWith(weight: Weight): EntitlementLedger {

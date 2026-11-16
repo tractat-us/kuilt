@@ -8,8 +8,7 @@ import us.tractat.kuilt.math.timesWide
  * One immediate child, as the policy sees it: the immutable attachment metadata
  * ([record] — parent, child and weight), the parent-facing accounting ([summary] —
  * issued/returned/spent), the child's advertised [demand], the replicated virtual-time seat
- * ([gauge] paired with [baseIssued]), its parent's replicated [origin], and the scheduler-local
- * wake clamp ([offsetTicks]).
+ * ([gauge] paired with [baseIssued]), and the scheduler-local wake clamp ([offsetTicks]).
  *
  * The record and summary must describe the **same** edge; [HeddlePolicy] rejects a
  * mismatch rather than schedule against inconsistent inputs.
@@ -18,7 +17,7 @@ import us.tractat.kuilt.math.timesWide
  * @property summary the edge's cumulative issued/returned/spent (design §4.5).
  * @property demand how much more the child could usefully take (design §6).
  * @property gauge the edge's replicated virtual-time seat, or `null` when nothing has seated it
- *   yet — in which case the edge reads from its own origin, exactly as an unseated edge should.
+ *   yet — in which case the edge reads from its own start, exactly as an unseated edge should.
  *   Absence is meaningful (it is the seat-bump predicate, see [EntitlementLedger.seat]), so it is
  *   a required parameter: a caller assembling a policy input has to say which it holds.
  * @property baseIssued the edge's **base** issuance — the [Gauge]'s fold axis, and deliberately
@@ -26,6 +25,9 @@ import us.tractat.kuilt.math.timesWide
  *   the effective value here would make a relocation-receiving edge appear to have consumed its
  *   whole re-homed strand the instant it arrived (issue #1752, F2); it is also what makes the seat
  *   arrival-order independent. Necessarily `0 ≤ baseIssued ≤ summary.issued`.
+ * @property origin deprecated, and zero from every engine since design §7.1 step B, where
+ *   positions are absolute. 0.7.5 published it. A caller that sets it reads every position less
+ *   `⌊origin · w · G⌋`, as 0.7.5 did. Non-negative.
  * @property offsetTicks scheduler-local forward clamp applied on wake so an idle child cannot
  *   bank a backlog of virtual time (design §7.2), in ticks of the edge's own service and wide
  *   (#3353). Zero for a child that never slept; computed on an idle→demand edge —
@@ -33,9 +35,6 @@ import us.tractat.kuilt.math.timesWide
  *   returner's shift only ever adds to it (#3376), so a re-wake into a lower front can never
  *   refund an earlier clamp (issue #1714). Deliberately *not* replicated — divergent
  *   offsets reorder locally but never touch conservation. Non-negative.
- * @property origin the parent's origin in whole virtual-time units ([EntitlementLedger.origin]):
- *   every child of the parent reads its position less `⌊origin · w · G⌋` (#3353). Zero for a parent
- *   no rebase has moved. Non-negative.
  */
 public data class PolicyEdge(
     public val record: AttachmentRecord,
@@ -44,6 +43,7 @@ public data class PolicyEdge(
     public val gauge: Gauge?,
     public val baseIssued: Long,
     public val offsetTicks: Int128 = Int128.ZERO,
+    @Deprecated("No engine sets an origin since design §7.1 step B: positions are absolute. Leave it at zero.")
     public val origin: Int128 = Int128.ZERO,
 ) {
     init {
@@ -52,6 +52,7 @@ public data class PolicyEdge(
         }
         require(baseIssued >= 0L) { "PolicyEdge baseIssued must be non-negative, was $baseIssued" }
         require(offsetTicks >= Int128.ZERO) { "PolicyEdge offsetTicks must be non-negative, was $offsetTicks" }
+        @Suppress("DEPRECATION")
         require(origin >= Int128.ZERO) { "PolicyEdge origin must be non-negative, was $origin" }
         require(baseIssued <= summary.issued) {
             "PolicyEdge baseIssued $baseIssued exceeds effective issued ${summary.issued} on ${record.id} — " +
@@ -151,7 +152,7 @@ public object HeddlePolicy {
      * @param localHoldings service this peer may itself delegate right now; caps the quantum.
      * Every position here is the full 128-bit one and nothing narrows it: the mean, the eligibility
      * bound and the deadline `p + q · G` are all compared wide ([compareVirtualWide]), so a pick
-     * orders exactly however far a child stands from its parent's origin, and there is no position
+     * orders exactly however far a child has climbed, and there is no position
      * past which it refuses. What bounds a parent's life instead is the `Long` lifetime counters the
      * positions are read from, each edge's issuance among them.
      *
@@ -223,11 +224,12 @@ public object HeddlePolicy {
     public fun virtualService(edge: PolicyEdge): Rational = readVirtual(rawTicks(edge), edge.record.weight)
 
     /**
-     * [virtualService] as a position: whole ticks of the edge's own service, relative to the
-     * parent's origin, wide and never narrowed ([rawTicksAt], #3353).
+     * [virtualService] as a position: whole ticks of the edge's own service, wide and never
+     * narrowed ([rawTicksAt], #3353).
      */
     internal fun rawTicks(edge: PolicyEdge): Int128 =
-        edge.gauge.rawTicksAt(edge.baseIssued, edge.summary.returned, edge.record.weight, edge.origin)
+        @Suppress("DEPRECATION")
+        edge.gauge.rawTicksAt(edge.baseIssued, edge.summary.returned) - originTicks(edge.origin, edge.record.weight)
 
     /**
      * The effective position, wide: [rawTicks] plus the scheduler-local wake clamp, in ticks. The
@@ -350,8 +352,7 @@ public object HeddlePolicy {
      * [sleeperCredit] whole units it may keep, and never below zero. Sleeper credit is in service
      * units, not virtual time, so it scales onto the grid by `G` like any other service.
      *
-     * Nothing here is narrowed (#3353): a waker idle since long before the parent's origin was
-     * raised sits far below its siblings, and the clamp has to carry it the whole way up, or it
+     * Nothing here is narrowed (#3353): a waker idle for long sits far below its siblings, and the clamp has to carry it the whole way up, or it
      * would keep the difference as credit.
      */
     internal fun clampTicks(frontTicks: Int128, rawTicks: Int128, sleeperCredit: Long): Int128 =
