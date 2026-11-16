@@ -34,7 +34,7 @@ class WarpMetricExporterUpDownSumTest {
         maxMetrics: Int = DEFAULT_MAX_METRICS,
     ) = WarpMetricExporter(replica = replica, store = store, maxMetrics = maxMetrics).also { it.recover() }
 
-    private fun RecordingStore.writes(): Int = operations().count { it.kind == StoreOpKind.WRITE }
+    private fun RecordingStore.writeCount(): Int = operations().count { it.kind == StoreOpKind.WRITE }
 
     private suspend fun WarpMetricExporter.set(key: MetricKey, level: Long) =
         assertEquals(MetricExportResult.Success, setUpDownSum(key, level), "set $key to $level")
@@ -87,13 +87,13 @@ class WarpMetricExporterUpDownSumTest {
     fun theSameLevelSetTwiceIsOneWrite() = runTest {
         val store = RecordingStore()
         val onA = exporter(a, store)
-        val before = store.writes()
+        val before = store.writeCount()
         onA.set(inFlight, 5L)
-        val afterFirst = store.writes()
+        val afterFirst = store.writeCount()
         onA.set(inFlight, 5L)
         assertAll(
             { assertEquals(before + 1, afterFirst, "the first set wrote") },
-            { assertEquals(afterFirst, store.writes(), "the second set wrote nothing") },
+            { assertEquals(afterFirst, store.writeCount(), "the second set wrote nothing") },
             { assertEquals(5L, onA.upDownSumValue(inFlight)) },
         )
     }
@@ -108,12 +108,12 @@ class WarpMetricExporterUpDownSumTest {
         exporter(a, store).set(inFlight, 7L)
         val restarted = exporter(a, store)
         val recovered = restarted.upDownSumSnapshot(inFlight).count(a)
-        val writesBefore = store.writes()
+        val writesBefore = store.writeCount()
         restarted.set(inFlight, 7L)
         assertAll(
             { assertEquals(7L, recovered, "the rig: the share came back from the store") },
             { assertEquals(7L, restarted.upDownSumValue(inFlight)) },
-            { assertEquals(writesBefore, store.writes(), "nothing to move, so nothing written") },
+            { assertEquals(writesBefore, store.writeCount(), "nothing to move, so nothing written") },
         )
     }
 
@@ -168,12 +168,12 @@ class WarpMetricExporterUpDownSumTest {
         assertEquals(MetricExportResult.Success, onA.addUpDownSumDouble(inFlight, -0.25))
         val afterAdds = onA.upDownSumDoubleValue(inFlight)
         assertEquals(MetricExportResult.Success, onA.setUpDownSumDouble(inFlight, 0.3))
-        val afterFirstSet = store.writes()
+        val afterFirstSet = store.writeCount()
         repeat(3) { assertEquals(MetricExportResult.Success, onA.setUpDownSumDouble(inFlight, 0.3)) }
         assertAll(
             { assertEquals(1.25, afterAdds) },
             { assertEquals(0.3, onA.upDownSumDoubleValue(inFlight), 1e-15) },
-            { assertEquals(afterFirstSet, store.writes(), "re-setting 0.3 wrote nothing after the first") },
+            { assertEquals(afterFirstSet, store.writeCount(), "re-setting 0.3 wrote nothing after the first") },
         )
     }
 
@@ -190,14 +190,14 @@ class WarpMetricExporterUpDownSumTest {
             val level = i * 0.1 - 7.3
             onA.setUpDownSumDouble(inFlight, level)
             onA.setUpDownSumDouble(inFlight, level)
-            val settled = store.writes()
+            val settled = store.writeCount()
             onA.setUpDownSumDouble(inFlight, level)
             onA.setUpDownSumDouble(inFlight, level)
-            if (store.writes() == settled) null else level
+            if (store.writeCount() == settled) null else level
         }
         assertAll(
-            { assertTrue(store.writes() >= 200, "the rig: every new level wrote, ${store.writes()} writes") },
-            { assertEquals(emptyList(), unsettled, "levels still writing on their third and fourth set") },
+            { assertTrue(store.writeCount() >= 200, "the rig: every new level wrote, ${store.writeCount()} writes") },
+            { assertEquals(emptyList<Double>(), unsettled, "levels still writing on their third and fourth set") },
         )
     }
 
@@ -206,12 +206,12 @@ class WarpMetricExporterUpDownSumTest {
     @Test
     fun updatesRefuseWhatTheirCounterCannotHold() {
         val arms: List<() -> Unit> = listOf<() -> Unit>(
-            { assertFailsWith<IllegalArgumentException> { MetricUpdate.AddUpDownSum(inFlight, 0L) } },
-            { assertFailsWith<IllegalArgumentException> { MetricUpdate.AddUpDownSum(inFlight, Long.MIN_VALUE) } },
+            { assertFailsWith<IllegalArgumentException> { MetricUpdate.AddUpDownSum(inFlight, 0L) }; Unit },
+            { assertFailsWith<IllegalArgumentException> { MetricUpdate.AddUpDownSum(inFlight, Long.MIN_VALUE) }; Unit },
         ) + listOf(0.0, -0.0, Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY).map { by ->
-            { assertFailsWith<IllegalArgumentException>("add $by") { MetricUpdate.AddUpDownSumDouble(inFlight, by) } }
+            { assertFailsWith<IllegalArgumentException>("add $by") { MetricUpdate.AddUpDownSumDouble(inFlight, by) }; Unit }
         } + listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY).map { level ->
-            { assertFailsWith<IllegalArgumentException>("set $level") { MetricUpdate.SetUpDownSumDouble(inFlight, level) } }
+            { assertFailsWith<IllegalArgumentException>("set $level") { MetricUpdate.SetUpDownSumDouble(inFlight, level) }; Unit }
         }
         assertAll(*arms.toTypedArray())
     }
@@ -225,13 +225,13 @@ class WarpMetricExporterUpDownSumTest {
         val onA = exporter(a, store)
         onA.set(inFlight, Long.MAX_VALUE)
         onA.set(inFlight, 0L)
-        val writesBefore = store.writes()
+        val writesBefore = store.writeCount()
         val refused = onA.record(listOf(MetricUpdate.SetUpDownSum(other, 1L), MetricUpdate.SetUpDownSum(inFlight, 1L)))
         assertAll(
             { assertEquals(0L, onA.upDownSumValue(inFlight), "the rig: the increment slot is at Long.MAX_VALUE") },
             { assertEquals(inFlight, assertIs<MetricUpDownSumOverflowException>(assertIs<MetricExportResult.Refused>(refused).overflow).key) },
             { assertNull(onA.snapshotAll().upDownSums[other], "nothing of the batch was applied") },
-            { assertEquals(writesBefore, store.writes(), "nothing was written") },
+            { assertEquals(writesBefore, store.writeCount(), "nothing was written") },
         )
     }
 
@@ -280,13 +280,13 @@ class WarpMetricExporterUpDownSumTest {
         onA.setGauge(realGauge, 21.0, 1L)
         val held = onA.snapshotAll().gauges.keys
         assertEquals(MetricExportResult.Success, onA.record(listOf(MetricUpdate.Forget(oldTwin))))
-        val afterForget = store.writes()
+        val afterForget = store.writeCount()
         assertEquals(MetricExportResult.Success, onA.record(listOf(MetricUpdate.Forget(oldTwin))))
         val restarted = exporter(a, store)
         assertAll(
             { assertEquals(setOf(oldTwin, realGauge), held, "the rig: both gauges held") },
             { assertEquals(setOf(realGauge), onA.snapshotAll().gauges.keys) },
-            { assertEquals(afterForget, store.writes(), "a second forget found nothing and wrote nothing") },
+            { assertEquals(afterForget, store.writeCount(), "a second forget found nothing and wrote nothing") },
             { assertEquals(setOf(realGauge), restarted.snapshotAll().gauges.keys, "the forget is durable") },
         )
     }

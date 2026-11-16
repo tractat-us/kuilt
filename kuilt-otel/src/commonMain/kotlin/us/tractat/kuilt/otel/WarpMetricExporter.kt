@@ -1026,7 +1026,7 @@ public class WarpMetricExporter(
         // Nothing in here suspends, and ArithmeticException is not a CancellationException, so this
         // narrow catch cannot swallow a cancellation.
         val next = try {
-            current.piece(if (move > 0L) current.increment(replica, move) else current.decrement(replica, -move))
+            current.piece((if (move > 0L) current.increment(replica, move) else current.decrement(replica, -move)).delta)
         } catch (_: ArithmeticException) {
             return null
         }
@@ -1054,7 +1054,7 @@ public class WarpMetricExporter(
         if (!move.isFinite()) return null
         // Nothing in here suspends; see upDownSumNextOrNull.
         val next = try {
-            current.piece(if (move > 0.0) current.increment(replica, move) else current.decrement(replica, -move))
+            current.piece((if (move > 0.0) current.increment(replica, move) else current.decrement(replica, -move)).delta)
         } catch (_: ArithmeticException) {
             return null
         }
