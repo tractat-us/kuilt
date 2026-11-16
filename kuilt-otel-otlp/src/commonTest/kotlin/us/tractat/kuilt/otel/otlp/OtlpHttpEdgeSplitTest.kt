@@ -4,14 +4,22 @@ package us.tractat.kuilt.otel.otlp
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
+import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.request.HttpRequestData
+import io.ktor.client.request.HttpResponseData
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlinx.io.bytestring.ByteString
 import kotlinx.io.bytestring.toHexString
@@ -41,6 +49,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
@@ -60,9 +69,14 @@ class OtlpHttpEdgeSplitTest {
 
     private enum class Signal(val path: String) { SPANS("/v1/traces"), LOGS("/v1/logs"), METRICS("/v1/metrics") }
 
-    /** Answers each POST with [answer], recording the request and the status it was given. */
+    /**
+     * Answers each POST with [answer], recording the request and the status it was given. Its engine
+     * runs every POST on [postsOn], the test's own scheduler, so concurrent sends interleave
+     * deterministically and [posts] and [statuses] are only ever touched from one thread.
+     */
     private class Collector(
         private val wire: OtlpWireFormat,
+        postsOn: CoroutineDispatcher,
         var answer: (index: Int, post: Post) -> HttpStatusCode = { _, _ -> HttpStatusCode.OK },
     ) {
         val posts = mutableListOf<Post>()
@@ -72,21 +86,23 @@ class OtlpHttpEdgeSplitTest {
         var during: (suspend (index: Int) -> Unit)? = null
 
         val client: HttpClient = HttpClient(
-            MockEngine { req ->
-                val raw = when (val b = req.body) {
-                    is TextContent -> b.text.encodeToByteArray()
-                    is OutgoingContent.ByteArrayContent -> b.bytes()
-                    else -> error("unexpected body ${b::class}")
-                }
-                val post = decode(req.url.encodedPath, wire, raw)
-                val index = posts.size
-                posts += post
-                during?.invoke(index)
-                val status = answer(index, post)
-                statuses += status
-                respond("{}", status)
-            },
+            MockEngine(MockEngineConfig().apply { dispatcher = postsOn; addHandler { req -> handle(req) } }),
         )
+
+        private suspend fun MockRequestHandleScope.handle(req: HttpRequestData): HttpResponseData {
+            val raw = when (val b = req.body) {
+                is TextContent -> b.text.encodeToByteArray()
+                is OutgoingContent.ByteArrayContent -> b.bytes()
+                else -> error("unexpected body ${b::class}")
+            }
+            val post = decode(req.url.encodedPath, wire, raw)
+            val index = posts.size
+            posts += post
+            during?.invoke(index)
+            val status = answer(index, post)
+            statuses += status
+            return respond("{}", status)
+        }
 
         /** The posts this collector answered with a 2xx. */
         val accepted: List<Post> get() = posts.filterIndexed { i, _ -> statuses.getOrNull(i)?.isSuccess() == true }
@@ -104,14 +120,39 @@ class OtlpHttpEdgeSplitTest {
         var refusedWrites = 0
             private set
 
+        /**
+         * When set, the first read of this key family, once it has its bytes, is held until a second
+         * read of the family arrives, or for [GATE_TIMEOUT] of virtual time. So two read-merge-writes
+         * that are not serialized certainly both read the same set; serialized ones cost one timeout.
+         */
+        var gateFamily: String? = null
+        var gateHeld = 0
+            private set
+
+        /** Whether the held read was released by a second read (true) or by the timeout (false). */
+        var gateReleasedByRead: Boolean? = null
+            private set
+        private var gatedReads = 0
+        private val secondRead = CompletableDeferred<Unit>()
+
         override suspend fun read(key: StoreKey): ByteArray? {
             yield()
-            return delegate.read(key)
+            val bytes = delegate.read(key)
+            if (key.family == gateFamily) {
+                gatedReads++
+                if (gatedReads == 1) {
+                    gateHeld++
+                    gateReleasedByRead = withTimeoutOrNull(GATE_TIMEOUT) { secondRead.await() } != null
+                } else {
+                    secondRead.complete(Unit)
+                }
+            }
+            return bytes
         }
 
         override suspend fun write(key: StoreKey, bytes: ByteArray) {
             yield()
-            val family = key.name.removePrefix("otlp.sent.").substringBefore('@')
+            val family = key.family
             if (family == "metrics" && refuseNextMetricWrite) {
                 refuseNextMetricWrite = false
                 refusedWrites++
@@ -122,7 +163,21 @@ class OtlpHttpEdgeSplitTest {
         }
 
         override suspend fun delete(key: StoreKey) = delegate.delete(key)
+
+        private val StoreKey.family: String get() = name.removePrefix("otlp.sent.").substringBefore('@')
+
+        private companion object {
+            val GATE_TIMEOUT = 1.seconds
+        }
     }
+
+    private fun TestScope.collectorFor(
+        wire: OtlpWireFormat,
+        answer: (index: Int, post: Post) -> HttpStatusCode = { _, _ -> HttpStatusCode.OK },
+    ) = Collector(wire, StandardTestDispatcher(testScheduler), answer)
+
+    /** A client for an edge that only reads its sent-set; it never posts. */
+    private val readOnlyClient = HttpClient(MockEngine { error("this edge only reads its sent-set") })
 
     // ── Builders: item i carries its index in its id, body or name ─────────────
 
@@ -161,7 +216,7 @@ class OtlpHttpEdgeSplitTest {
 
     /** What the sent-set on disk holds for [signal], read through a fresh edge with no cache. */
     private suspend fun onDisk(store: DurableStore, signal: Signal): Set<Int> {
-        val fresh = OtlpHttpEdge(Collector(OtlpWireFormat.JSON).client, endpoint, store)
+        val fresh = OtlpHttpEdge(readOnlyClient, endpoint, store)
         return when (signal) {
             Signal.SPANS -> fresh.digest().spanIds.mapTo(HashSet()) { it.index() }
             Signal.LOGS -> fresh.logDigest().recordIds.mapTo(HashSet()) { it.index() }
@@ -176,7 +231,7 @@ class OtlpHttpEdgeSplitTest {
     @Test
     fun aRequestUnderTheCapGoesInOnePost() = runTest {
         for (wire in OtlpWireFormat.entries) {
-            val collector = Collector(wire)
+            val collector = collectorFor(wire)
             val store = CountingStore()
             val cap = 4096
             edge(collector, store, wire, cap).sendSignal(Signal.LOGS, (1..5).toList())
@@ -196,7 +251,7 @@ class OtlpHttpEdgeSplitTest {
         val items = (1..60).toList()
         val checks = mutableListOf<() -> Unit>()
         for (wire in OtlpWireFormat.entries) for (signal in Signal.entries) {
-            val collector = Collector(wire)
+            val collector = collectorFor(wire)
             val store = CountingStore()
             edge(collector, store, wire, cap).sendSignal(signal, items)
             val posts = collector.posts
@@ -228,7 +283,7 @@ class OtlpHttpEdgeSplitTest {
 
     @Test
     fun aRefusedChunkKeepsOnlyTheDeliveredChunksAndTheNextDrainSendsTheRest() = runTest {
-        val collector = Collector(OtlpWireFormat.JSON) { index, _ ->
+        val collector = collectorFor(OtlpWireFormat.JSON) { index, _ ->
             if (index == 1) HttpStatusCode.InternalServerError else HttpStatusCode.OK
         }
         val store = CountingStore()
@@ -262,7 +317,7 @@ class OtlpHttpEdgeSplitTest {
 
     @Test
     fun aCancellationBetweenChunksStillRecordsTheDeliveredChunks() = runTest {
-        val collector = Collector(OtlpWireFormat.JSON)
+        val collector = collectorFor(OtlpWireFormat.JSON)
         val store = CountingStore()
         val edge = edge(collector, store, OtlpWireFormat.JSON, cap = 2048)
         val reached = CompletableDeferred<Unit>()
@@ -299,7 +354,7 @@ class OtlpHttpEdgeSplitTest {
         val items = (1..20).toList() + big
         val checks = mutableListOf<() -> Unit>()
         for (status in listOf(HttpStatusCode.OK, HttpStatusCode.PayloadTooLarge, HttpStatusCode.BadRequest, HttpStatusCode.InternalServerError)) {
-            val collector = Collector(OtlpWireFormat.JSON) { _, post ->
+            val collector = collectorFor(OtlpWireFormat.JSON) { _, post ->
                 if (big in post.items) status else HttpStatusCode.OK
             }
             val store = CountingStore()
@@ -331,7 +386,7 @@ class OtlpHttpEdgeSplitTest {
     @Test
     fun aProxyLimitBelowTheCapIsMetByHalvingOn413() = runTest {
         val proxyLimit = 1200
-        val collector = Collector(OtlpWireFormat.JSON) { _, post ->
+        val collector = collectorFor(OtlpWireFormat.JSON) { _, post ->
             if (post.bytes > proxyLimit) HttpStatusCode.PayloadTooLarge else HttpStatusCode.OK
         }
         val store = CountingStore()
@@ -352,7 +407,7 @@ class OtlpHttpEdgeSplitTest {
     fun a400IsNeverReadAsTooBig() = runTest {
         val checks = mutableListOf<() -> Unit>()
         for (count in listOf(5, 40)) {
-            val collector = Collector(OtlpWireFormat.JSON) { _, _ -> HttpStatusCode.BadRequest }
+            val collector = collectorFor(OtlpWireFormat.JSON) { _, _ -> HttpStatusCode.BadRequest }
             val store = CountingStore()
             val outcome = runCatchingCancellable {
                 edge(collector, store, OtlpWireFormat.JSON, cap = 2048).sendSignal(Signal.LOGS, (1..count).toList())
@@ -380,7 +435,7 @@ class OtlpHttpEdgeSplitTest {
         val cap = 2048
         val checks = mutableListOf<() -> Unit>()
         for (count in listOf(40, 1)) {
-            val collector = Collector(OtlpWireFormat.JSON) { _, _ -> HttpStatusCode.PayloadTooLarge }
+            val collector = collectorFor(OtlpWireFormat.JSON) { _, _ -> HttpStatusCode.PayloadTooLarge }
             val store = CountingStore()
             val t = WarpTelemetry(ReplicaId("device-3286"), InMemoryDurableStore()).also { it.recover() }
             t.logs.export((1..count).map { log(it) })
@@ -413,7 +468,7 @@ class OtlpHttpEdgeSplitTest {
         val cap = 4096
         val proxyLimit = 1200
         val big = 20
-        val collector = Collector(OtlpWireFormat.JSON) { _, post ->
+        val collector = collectorFor(OtlpWireFormat.JSON) { _, post ->
             if (post.bytes > proxyLimit) HttpStatusCode.PayloadTooLarge else HttpStatusCode.OK
         }
         val store = CountingStore()
@@ -446,7 +501,7 @@ class OtlpHttpEdgeSplitTest {
         val links = items.drop(1).map { SpanLink(fromSpanId = id8(it), linkedTraceId = ByteString(ByteArray(16) { 1 }), linkedSpanId = id8(it - 1)) }
         val checks = mutableListOf<() -> Unit>()
         for (wire in OtlpWireFormat.entries) {
-            val collector = Collector(wire)
+            val collector = collectorFor(wire)
             edge(collector, CountingStore(), wire, cap = 2048).sendSignal(Signal.SPANS, items, links)
             val sentLinks = collector.posts.flatMap { post -> post.links.flatMap { (from, to) -> to.map { from to it } } }
             checks += listOf(
@@ -472,7 +527,7 @@ class OtlpHttpEdgeSplitTest {
     fun twoCopiesOfOneSpanIdEachCarryItsLinksOnce() = runTest {
         val checks = mutableListOf<() -> Unit>()
         for (wire in OtlpWireFormat.entries) {
-            val collector = Collector(wire)
+            val collector = collectorFor(wire)
             val copies = linkedSetOf(span(7), span(7).copy(name = "span-7-restamped"))
             val link = SpanLink(fromSpanId = id8(7), linkedTraceId = ByteString(ByteArray(16) { 1 }), linkedSpanId = id8(6))
             edge(collector, CountingStore(), wire, cap = 2048).send(copies, listOf(link))
@@ -489,7 +544,7 @@ class OtlpHttpEdgeSplitTest {
 
     @Test
     fun aMetricResendAfterALostWriteCarriesTheSameTotals() = runTest {
-        val collector = Collector(OtlpWireFormat.JSON)
+        val collector = collectorFor(OtlpWireFormat.JSON)
         val store = CountingStore()
         val edge = edge(collector, store, OtlpWireFormat.JSON, cap = 2048)
         val t = WarpTelemetry(ReplicaId("device-3286"), InMemoryDurableStore(), maxMetrics = 100).also { it.recover() }
@@ -521,7 +576,7 @@ class OtlpHttpEdgeSplitTest {
 
     @Test
     fun aCapTooSmallForOneRecordFailsAtConstruction() {
-        val client = Collector(OtlpWireFormat.JSON).client
+        val client = readOnlyClient
         assertAll(
             { assertFailsWith<IllegalArgumentException> { OtlpHttpEdge(client, endpoint, InMemoryDurableStore(), maxRequestBytes = 16) } },
             {
@@ -537,14 +592,15 @@ class OtlpHttpEdgeSplitTest {
     // ── A concurrent writer between chunks ───────────────────────────────────────
 
     /**
-     * Two sends on one edge at once, each recording its ids. The store yields inside every read and
-     * write, so unless the edge serializes its read-merge-write the two interleave: both read the
-     * same set, and the second write drops the first's ids.
+     * Two sends on one edge at once, each recording its ids. The store holds the first id-set read
+     * until a second one arrives, so unless the edge serializes its read-merge-write both read the
+     * same set, and the second write drops the first's ids. Serialized, the second read waits for
+     * the first write and the held read is released by its timeout instead.
      */
     @Test
     fun twoConcurrentSendsOnOneEdgeKeepEachOthersIds() = runTest {
-        val collector = Collector(OtlpWireFormat.JSON)
-        val store = CountingStore()
+        val collector = collectorFor(OtlpWireFormat.JSON)
+        val store = CountingStore().apply { gateFamily = "logs" }
         val edge = edge(collector, store, OtlpWireFormat.JSON, cap = 2048)
         val a = (1..40).toList()
         val b = (101..140).toList()
@@ -556,6 +612,8 @@ class OtlpHttpEdgeSplitTest {
         assertAll(
             { assertTrue(collector.posts.size >= 6, "precondition: both sends split, ${collector.posts.size} POSTs") },
             { assertEquals(2, store.writes["logs"], "precondition: each send wrote once") },
+            { assertEquals(1, store.gateHeld, "precondition: the first id-set read was held") },
+            { assertEquals(false, store.gateReleasedByRead, "the second read waited for the first write") },
             { assertEquals((a + b).toSet(), disk, "neither send's write drops the other's ids") },
         )
     }
@@ -568,8 +626,8 @@ class OtlpHttpEdgeSplitTest {
     @Test
     fun aWriteByAnotherEdgeBetweenChunksIsKept() = runTest {
         val store = CountingStore()
-        val firstCollector = Collector(OtlpWireFormat.JSON)
-        val secondCollector = Collector(OtlpWireFormat.JSON)
+        val firstCollector = collectorFor(OtlpWireFormat.JSON)
+        val secondCollector = collectorFor(OtlpWireFormat.JSON)
         val first = edge(firstCollector, store, OtlpWireFormat.JSON, cap = 2048)
         val second = edge(secondCollector, store, OtlpWireFormat.JSON, cap = 2048, url = "$endpoint/")
         val items = (1..40).toList()
@@ -593,7 +651,7 @@ class OtlpHttpEdgeSplitTest {
             }
         }
         first.sendSignal(Signal.METRICS, items)
-        val versions = OtlpHttpEdge(Collector(OtlpWireFormat.JSON).client, endpoint, store).metricDigest().versions
+        val versions = OtlpHttpEdge(readOnlyClient, endpoint, store).metricDigest().versions
 
         assertAll(
             { assertTrue(postsBeforeMetrics >= 3, "precondition: the log send split, $postsBeforeMetrics POSTs") },
