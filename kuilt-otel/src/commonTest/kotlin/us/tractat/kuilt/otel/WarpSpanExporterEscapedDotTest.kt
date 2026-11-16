@@ -169,9 +169,10 @@ class WarpSpanExporterEscapedDotTest {
         val writer = start(store, readSpans = false)
         val heldBeforeTheTurn = writer.snapshot().elements.size
         val died = dieExporting(store, writer)
+        val after = restartAndMergeBack(backing, died.gossiped, clocked = true)
         assertAll(
             { assertEquals(0, heldBeforeTheTurn, "the rig: the exporter had read its spans before the turn") },
-            { assertNoDotEscaped(died, restartAndMergeBack(backing, died.gossiped, clocked = true)) },
+            { assertNoDotEscaped(died, after) },
         )
     }
 
