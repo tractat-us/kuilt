@@ -1389,7 +1389,13 @@ origins, which is a layout 0.7.5 already reads, so the format number and
   multiple of the grid step, and an `originTicks` that rounds up: each breaks
   the translation, and the twin must diverge. In the final engine, a pick
   compare narrowed back to `Long`, a `clampTicks` with its `max(0, …)`
-  dropped, and a returner's shift removed.
+  dropped, and a returner's shift removed. Measured on slice 3, JVM, against
+  `:kuilt-heddle-core`'s 643 tests: the narrowed compare reds 3, all in
+  `LocalHeddleLongRunTest`, the dropped `max` reds 10, and the removed shift
+  reds 30. `LocalHeddleLongRunTest` is therefore the pin on pick order past
+  the old ceiling. `HeddleAcceptanceTest`'s governed match does not pin it,
+  since both of its sides call `HeddlePolicy.pick`: a mutation there moves
+  both alike (#3504).
 - **The pick goldens do not move.** `HeddlePolicyGoldenVectorTest` and
   `HeddlePolicyOracleTest` pass unchanged through every slice.
 - **The position limit (slice 5).** Every row asserts its rig before it acts:
