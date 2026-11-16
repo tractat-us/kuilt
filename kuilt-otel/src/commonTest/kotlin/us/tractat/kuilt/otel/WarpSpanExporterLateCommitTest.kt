@@ -7,6 +7,7 @@ import kotlinx.io.bytestring.ByteString
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.crdt.ORSet
 import us.tractat.kuilt.crdt.ReplicaId
+import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.InMemoryDurableStore
 import us.tractat.kuilt.store.StoreKey
@@ -202,6 +203,57 @@ class WarpSpanExporterLateCommitTest {
                 assertTrue(
                     keptLate - keptEarly <= SIZE_SLACK,
                     "what failed turns keep grew from $keptEarly to $keptLate bytes over ${LONG_OUTAGE - SHORT_OUTAGE} more failures",
+                )
+            },
+        )
+    }
+
+    /**
+     * What a failed turn keeps is the set it started from, so the next turn joins those spans back in.
+     * A clear in between must win: the cleared set has seen every span the kept set holds, so the join
+     * brings none of them back, in memory or in the store.
+     */
+    @Test
+    fun aClearAfterAFailedTurnStaysClearedWhenTheNextExportLands() = runTest {
+        val backing = InMemoryDurableStore()
+        val store = LateCommitStore(backing, spansKey)
+        val writer = WarpSpanExporter(replica, store).apply { recover() }
+        repeat(5) { assertEquals(ExportResult.Success, writer.export(span(it)), "the rig: export $it") }
+        store.refusing = 1
+        val failed = writer.export(span(100))
+        val keptBeforeClear = ids(writer.unpublishedForTest())
+        val cleared = writer.clear()
+        val next = writer.export(span(200))
+        val durable = ids(WarpSpanExporter(replica, backing).apply { recover() }.snapshot())
+        assertAll(
+            { assertTrue(failed is ExportResult.Failure, "the rig: the armed export landed: $failed") },
+            { assertEquals((0 until 5).map { span(it).spanId }.toSet(), keptBeforeClear, "the rig: the failed turn kept no spans to bring back") },
+            { assertEquals(ExportResult.Success, cleared) },
+            { assertEquals(ExportResult.Success, next) },
+            { assertEquals(setOf(span(200).spanId), ids(writer.snapshot()), "the next export brought cleared spans back") },
+            { assertEquals(setOf(span(200).spanId), durable, "the store holds cleared spans again") },
+        )
+    }
+
+    /** A remote set merged after a failed turn is kept when the next export publishes. */
+    @Test
+    fun aMergeAfterAFailedTurnIsKeptWhenTheNextExportLands() = runTest {
+        val store = LateCommitStore(InMemoryDurableStore(), spansKey)
+        val writer = WarpSpanExporter(replica, store).apply { recover() }
+        repeat(5) { assertEquals(ExportResult.Success, writer.export(span(it)), "the rig: export $it") }
+        store.refusing = 1
+        val failed = writer.export(span(100))
+        val merged = writer.merge(ORSet.empty<SpanRecord>().piece { it.add(ReplicaId("b"), span(50)) })
+        val next = writer.export(span(200))
+        assertAll(
+            { assertTrue(failed is ExportResult.Failure, "the rig: the armed export landed: $failed") },
+            { assertEquals(ExportResult.Success, merged) },
+            { assertEquals(ExportResult.Success, next) },
+            {
+                assertEquals(
+                    ((0 until 5) + 50 + 200).map { span(it).spanId }.toSet(),
+                    ids(writer.snapshot()),
+                    "the next export lost a span",
                 )
             },
         )
