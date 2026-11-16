@@ -35,7 +35,6 @@ import kotlin.test.assertTrue
 class WarpSpanExporterConcurrencyTest {
 
     private val replicaA = ReplicaId("A")
-    private val replicaB = ReplicaId("B")
     private fun traceId(i: Int) = ByteString(ByteArray(16) { i.toByte() })
     private fun spanId(i: Int) = ByteString(ByteArray(8) { i.toByte() })
     private fun span(i: Int) = SpanRecord(
@@ -134,7 +133,8 @@ class WarpSpanExporterConcurrencyTest {
                     val clock = WarpCausalClock(replicaA)
                     val exp = WarpSpanExporter(replicaA, store, causalClock = clock)
                     val remotes = (0 until CONCURRENT).map { i ->
-                        ORSet.empty<SpanRecord>().piece { it.add(replicaB, span(CONCURRENT + i)) }
+                        // One peer per remote: two adds from one peer's empty set would share its first dot.
+                        ORSet.empty<SpanRecord>().piece { it.add(ReplicaId("peer-$i"), span(CONCURRENT + i)) }
                     }
 
                     val results = (0 until CONCURRENT).flatMap { i ->
