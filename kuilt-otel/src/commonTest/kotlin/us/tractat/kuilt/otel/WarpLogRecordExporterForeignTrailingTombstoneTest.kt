@@ -101,4 +101,54 @@ class WarpLogRecordExporterForeignTrailingTombstoneTest {
             },
         )
     }
+
+    /**
+     * This replica's **own** trailing tombstones are not an anchor. They are the #3447 shape:
+     * records that arrived before newer own records but sort after them, and `withOlderOwn` drops
+     * them through the floor, which keeps no position. A record appended after one of them then
+     * re-roots to the list's head when the pass drops it, jumps ahead of older survivors, and is
+     * the record DROP_OLDEST evicts next. So the anchor skips them and falls back to the last
+     * visible record, as before #3528.
+     *
+     * The own records arrive through [WarpLogRecordExporter.merge], built on an [Rga] so that the
+     * older pair (seqs 1 and 2) carries the lower lamports and sorts after the newer three.
+     */
+    @Test
+    fun anOwnTrailingTombstoneIsNotTheAnchorForTheNextExport() = runTest {
+        val exporter = WarpLogRecordExporter(
+            replica = local,
+            store = InMemoryDurableStore(),
+            maxRecords = 3,
+            bufferPolicy = BufferPolicy.DROP_OLDEST,
+            segmentOps = 8,
+        )
+        val (older, _) = Rga.empty<LogRecord>()
+            .insertAllAfter(replica = local, after = RgaId.HEAD, values = listOf(record(1), record(2)))
+        val (olderTombstoned, _) = older.removeFirst(2)
+        val (ownLog, _) = olderTombstoned
+            .insertAllAfter(replica = local, after = RgaId.HEAD, values = listOf(record(11), record(12), record(13)))
+        exporter.merge(ownLog)
+
+        val merged = exporter.snapshot()
+        val olderIds = merged.sequence.filter { it.seq <= 2L }
+        assertAll(
+            { assertEquals(olderIds, merged.sequence.takeLast(2), "the older own pair must trail the list") },
+            { assertTrue(merged.tombstones.containsAll(olderIds), "the older own pair must be tombstoned") },
+            { assertEquals(listOf("body-11", "body-12", "body-13"), merged.toList().map { it.body }) },
+        )
+
+        exporter.export(record(100))
+        // One foreign record pushes the buffer past the cap, so the merge runs a pass. It drops
+        // the oldest own records, and with them the older pair, through the floor.
+        val (foreign, _) = Rga.empty<LogRecord>()
+            .insertAllAfter(replica = peer, after = RgaId.HEAD, values = listOf(record(500)))
+        exporter.merge(foreign)
+        exporter.export(record(101))
+
+        assertEquals(
+            listOf("body-100", "body-500", "body-101"),
+            exporter.snapshot().toList().map { it.body },
+            "DROP_OLDEST must evict the oldest record, 13, and keep the newer 100",
+        )
+    }
 }
