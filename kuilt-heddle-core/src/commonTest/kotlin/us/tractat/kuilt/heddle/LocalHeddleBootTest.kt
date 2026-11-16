@@ -178,4 +178,36 @@ class LocalHeddleBootTest {
             { assertEquals(setOf(after.groupId("q", "a"), after.groupId("b")), engine.leasable(after)) },
         )
     }
+
+    /**
+     * A reload that adds a sibling set made only of new children, which fit alone but not
+     * together, leaves out the whole new set, as a boot does, whichever id sorts last (#3465). The
+     * running lane `b` keeps running, and nothing that ran is retired. Before the fix the reload
+     * refused only `q/z`, the id that sorts last, and ran `q/a`.
+     */
+    @Test
+    fun aReloadLeavesOutANewSiblingSetThatDoesNotFitTogetherWhole() {
+        fun reload(first: Pair<String, Weight>, second: Pair<String, Weight>): Pair<List<GroupId>, Boolean> {
+            val running = draft("p") { lane("b") }
+            val boot = LocalHeddle.fromTopology(running, policy, epoch = 1L)
+            check(boot.result.refusals.isEmpty()) { "the rig: b boots" }
+            val h = boot.heddle.apply { reconcileCapacity(4L) }
+            val next = underQ(first, second)
+            val result = h.apply(next, generation = 1L)
+            val b = next.groupId("b")
+            val bLeases = h.acquire(setOf(b), setOf(b), startedAt = 0L) is AcquireOutcome.Acquired
+            return result.refusals.map { it.child }.sortedBy { it.value } to bLeases
+        }
+        val next = underQ("z" to heavy, "a" to third)
+        val q = next.groupId("q")
+        val (qa, qz) = listOf("a", "z").map { next.groupId("q", it) }
+        val heavyLast = reload("z" to heavy, "a" to third)
+        val heavyFirst = reload("a" to heavy, "z" to third)
+        assertAll(
+            { assertTrue(!weightsFitTheBudget(listOf(heavy, third)) && weightsFitTheBudget(listOf(heavy)) && weightsFitTheBudget(listOf(third)), "the rig: each fits alone, not together") },
+            { assertEquals(listOf(q, qa, qz).sortedBy { it.value }, heavyLast.first, "the whole new set is left out") },
+            { assertEquals(heavyLast.first, heavyFirst.first, "whichever name the heavy lane has") },
+            { assertTrue(heavyLast.second && heavyFirst.second, "and the running lane b keeps leasing") },
+        )
+    }
 }
