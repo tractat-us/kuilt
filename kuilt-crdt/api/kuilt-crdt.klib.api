@@ -458,7 +458,7 @@ final class <#A: kotlin/Any?, #B: us.tractat.kuilt.crdt/Quilted<#B>> us.tractat.
     final fun remove(#A): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/ORMap<#A, #B>> // us.tractat.kuilt.crdt/ORMap.remove|remove(1:0){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.crdt/ORMap.toString|toString(){}[0]
 
-    final class <#A1: kotlin/Any?, #B1: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.crdt/ORMap<#A1, #B1>> { // us.tractat.kuilt.crdt/ORMap.$serializer|null[0]
+    final class <#A1: kotlin/Any?, #B1: us.tractat.kuilt.crdt/Quilted<#B1>> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.crdt/ORMap<#A1, #B1>> { // us.tractat.kuilt.crdt/ORMap.$serializer|null[0]
         constructor <init>(kotlinx.serialization/KSerializer<#A1>, kotlinx.serialization/KSerializer<#B1>) // us.tractat.kuilt.crdt/ORMap.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>;kotlinx.serialization.KSerializer<1:1>){}[0]
 
         final val descriptor // us.tractat.kuilt.crdt/ORMap.$serializer.descriptor|{}descriptor[0]
@@ -910,6 +910,7 @@ final class <#A: kotlin/Any?> us.tractat.kuilt.crdt/Rga : us.tractat.kuilt.crdt/
     final fun compact(us.tractat.kuilt.crdt/VersionVector, us.tractat.kuilt.crdt/VersionVector, us.tractat.kuilt.crdt/VersionVector): kotlin/Pair<us.tractat.kuilt.crdt/Rga<#A>, us.tractat.kuilt.crdt/RgaOp.Compact>? // us.tractat.kuilt.crdt/Rga.compact|compact(us.tractat.kuilt.crdt.VersionVector;us.tractat.kuilt.crdt.VersionVector;us.tractat.kuilt.crdt.VersionVector){}[0]
     final fun dotOf(us.tractat.kuilt.crdt/RgaId): us.tractat.kuilt.crdt/Dot // us.tractat.kuilt.crdt/Rga.dotOf|dotOf(us.tractat.kuilt.crdt.RgaId){}[0]
     final fun dropWindow(us.tractat.kuilt.crdt/ReplicaId, kotlin.collections/Set<us.tractat.kuilt.crdt/RgaId>): kotlin/Pair<us.tractat.kuilt.crdt/Rga<#A>, us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/Rga<#A>>>? // us.tractat.kuilt.crdt/Rga.dropWindow|dropWindow(us.tractat.kuilt.crdt.ReplicaId;kotlin.collections.Set<us.tractat.kuilt.crdt.RgaId>){}[0]
+    final fun dropWindowPastUnheld(us.tractat.kuilt.crdt/ReplicaId, kotlin.collections/Set<us.tractat.kuilt.crdt/RgaId>): kotlin/Pair<us.tractat.kuilt.crdt/Rga<#A>, us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/Rga<#A>>>? // us.tractat.kuilt.crdt/Rga.dropWindowPastUnheld|dropWindowPastUnheld(us.tractat.kuilt.crdt.ReplicaId;kotlin.collections.Set<us.tractat.kuilt.crdt.RgaId>){}[0]
     final fun entries(): kotlin.collections/List<kotlin/Pair<us.tractat.kuilt.crdt/RgaId, #A>> // us.tractat.kuilt.crdt/Rga.entries|entries(){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.crdt/Rga.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.crdt/Rga.hashCode|hashCode(){}[0]
@@ -1015,7 +1016,7 @@ final class <#A: us.tractat.kuilt.crdt/DotStore<#A>> us.tractat.kuilt.crdt/Causa
     final fun piece(us.tractat.kuilt.crdt/Causal<#A>): us.tractat.kuilt.crdt/Causal<#A> // us.tractat.kuilt.crdt/Causal.piece|piece(us.tractat.kuilt.crdt.Causal<1:0>){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.crdt/Causal.toString|toString(){}[0]
 
-    final class <#A1: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.crdt/Causal<#A1>> { // us.tractat.kuilt.crdt/Causal.$serializer|null[0]
+    final class <#A1: us.tractat.kuilt.crdt/DotStore<#A1>> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.crdt/Causal<#A1>> { // us.tractat.kuilt.crdt/Causal.$serializer|null[0]
         constructor <init>(kotlinx.serialization/KSerializer<#A1>) // us.tractat.kuilt.crdt/Causal.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>){}[0]
 
         final val descriptor // us.tractat.kuilt.crdt/Causal.$serializer.descriptor|{}descriptor[0]
@@ -1053,7 +1054,7 @@ final class <#A: us.tractat.kuilt.crdt/Quilted<#A>, #B: us.tractat.kuilt.crdt/Qu
     final fun piece(us.tractat.kuilt.crdt/LatticeProduct<#A, #B>): us.tractat.kuilt.crdt/LatticeProduct<#A, #B> // us.tractat.kuilt.crdt/LatticeProduct.piece|piece(us.tractat.kuilt.crdt.LatticeProduct<1:0,1:1>){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.crdt/LatticeProduct.toString|toString(){}[0]
 
-    final class <#A1: kotlin/Any?, #B1: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.crdt/LatticeProduct<#A1, #B1>> { // us.tractat.kuilt.crdt/LatticeProduct.$serializer|null[0]
+    final class <#A1: us.tractat.kuilt.crdt/Quilted<#A1>, #B1: us.tractat.kuilt.crdt/Quilted<#B1>> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.crdt/LatticeProduct<#A1, #B1>> { // us.tractat.kuilt.crdt/LatticeProduct.$serializer|null[0]
         constructor <init>(kotlinx.serialization/KSerializer<#A1>, kotlinx.serialization/KSerializer<#B1>) // us.tractat.kuilt.crdt/LatticeProduct.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>;kotlinx.serialization.KSerializer<1:1>){}[0]
 
         final val descriptor // us.tractat.kuilt.crdt/LatticeProduct.$serializer.descriptor|{}descriptor[0]

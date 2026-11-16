@@ -6,10 +6,7 @@ import io.ktor.network.sockets.ServerSocket
 import io.ktor.network.sockets.Socket
 import io.ktor.network.sockets.aSocket
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: real-network loopback conformance harness — a TCP socket needs a real IO dispatcher
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import us.tractat.kuilt.conformance.CapabilityGaps
 import us.tractat.kuilt.conformance.FlushFixture
 import us.tractat.kuilt.conformance.JoinerRosterOrigin
@@ -24,7 +21,6 @@ import us.tractat.kuilt.core.Tag
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
-import kotlin.time.Duration.Companion.seconds
 
 /**
  * Verifies that the TCP fabric ([TcpLoom]) satisfies every invariant in
@@ -58,15 +54,6 @@ class TcpConformanceTest : SeamConformanceSuite() {
          * and anything `> 1` means a stale socket from an earlier pair leaked into the count.
          */
         const val THE_ONE_LINK = 1
-
-        /**
-         * How long [injectMidSessionDeath]'s barrier waits, in **real** time, for a loopback FIN to
-         * reach two read loops — microseconds of work, so this is a wedge backstop and not an
-         * assertion. Generous on purpose: a tight bound here would measure the *host* rather than
-         * the code, and a saturated box would red a fabric that was working fine. Nothing is proven
-         * by it expiring; the obligation is what fails in that case.
-         */
-        val TEAR_BARRIER = 10.seconds
     }
 
     private val selector = SelectorManager(Dispatchers.IO)
@@ -134,24 +121,6 @@ class TcpConformanceTest : SeamConformanceSuite() {
      * sockets it **actually** severed (the `FakeNwRadio.dropAllLinks` pattern). Anything but
      * [THE_ONE_LINK] leaves this honestly `false`, so the harness reads as unproven and
      * [midSessionDeathDeclarationIsHonest] reds — never falsely green.
-     *
-     * ## Why the wait below is real time, and why it is only a barrier
-     *
-     * The four rigs converted in #2637 all drive an in-process fake, so the seam is `Torn` before the
-     * injector returns. A real socket is not: the FIN crosses loopback and two read loops notice it
-     * on `Dispatchers.IO`, *asynchronously*. The suite's own `withTimeout(5.seconds)` runs on
-     * `runTest`'s **virtual** clock, which fast-forwards the whole bound the instant the test
-     * coroutine parks — measured here at `Timed out after 5s of _virtual_ time`, `time="0.008"`. That
-     * is the timing mismatch #1442 recorded as the blocker, and it is why the wait has to change
-     * dispatcher: [withContext] to [Dispatchers.IO] swaps the interceptor for one with no `Delay`, so
-     * [withTimeoutOrNull] falls back to the default (real) delay.
-     *
-     * It is deliberately **`OrNull` and deliberately not part of the return value.** This is a
-     * synchronisation barrier, never the verdict: if a future regression stops TCP tearing on a dead
-     * socket, the barrier expires quietly, the injector still reports the socket it severed, and the
-     * *obligation* reds on its own terms. Folding the wait into the boolean would move the verdict
-     * into the meta-test and leave `incomingCompletesOnInjectedMidSessionDeath` unable to fail —
-     * asserting the instrument instead of the outcome.
      */
     override suspend fun injectMidSessionDeath(host: Seam, joiner: Seam): Boolean {
         check(host.state.value !is SeamState.Torn && joiner.state.value !is SeamState.Torn) {
@@ -159,12 +128,7 @@ class TcpConformanceTest : SeamConformanceSuite() {
                 "closed, or the obligation would pass on a tear this rig did not cause; got " +
                 "host=${host.state.value}, joiner=${joiner.state.value}"
         }
-        val severed = serverSocket.severAccepted()
-        withContext(Dispatchers.IO) {
-            withTimeoutOrNull(TEAR_BARRIER) { host.state.first { it is SeamState.Torn } }
-            withTimeoutOrNull(TEAR_BARRIER) { joiner.state.first { it is SeamState.Torn } }
-        }
-        return severed == THE_ONE_LINK
+        return serverSocket.severAccepted() == THE_ONE_LINK
     }
 
     /** Proven: this harness closes the accepted socket under a live pair, so no gap (#1442). */
