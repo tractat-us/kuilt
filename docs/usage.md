@@ -780,8 +780,9 @@ device has been measured.
 This is a measured effect with a known lever, **not a confirmed shipped defect** —
 be sceptical of it in the following ways:
 
-- The numbers are from a **debug `.kexe` on a development Mac** (macosArm64,
-  16-core). A release build for a real device may behave differently.
+- The numbers are from **debug binaries on a development Mac** (macosArm64,
+  16-core), plus a 3-vCPU CI runner for the per-trace cost. A release build for a
+  real device may behave differently.
 - The "saturated" column used **synthetic CPU saturation** (`yes > /dev/null` ×32).
   Whether a real iOS device under realistic load starves the same system service
   comparably is **unverified**.
