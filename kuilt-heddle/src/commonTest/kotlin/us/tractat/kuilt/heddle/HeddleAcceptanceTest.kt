@@ -125,6 +125,58 @@ class HeddleAcceptanceTest {
     }
 
     /**
+     * The twin under scarcity (#3504): each call mints exactly one grant to each cluster, so each
+     * call's single grant goes where the policy's order puts it, and the comparison sees pick order.
+     * The run above meets every waiting lane's demand on every call, so it cannot.
+     */
+    @Test
+    fun aNoRebaseTwinPicksAsTheRebasingClusterUnderScarcity() = runTest(
+        StandardTestDispatcher(),
+        timeout = TEST_WEDGE_BACKSTOP,
+    ) {
+        val started = TimeSource.Monotonic.markNow()
+        val rebasing = bootedCluster(mint = emptyMap())
+        val twin = bootedCluster(mint = emptyMap())
+        twin.peers[0].node.rebaseForTest = false
+        val node = rebasing.peers[0].node.asSchedulingPeer()
+        val twinNode = twin.peers[0].node.asSchedulingPeer()
+        val a = MixedWeightRun(root, lanes, MAX_GRANT, Random(3504))
+        val b = MixedWeightRun(root, lanes, MAX_GRANT, Random(3504))
+        val divergences = ArrayList<String>()
+        var scarce = 0
+        var twinPeak = 0.0
+        repeat(SCARCE_TWIN_CALLS) { call ->
+            rebasing.applied("mint one grant") { rebasing.peers[0].node.mint(rebasing.peers[0].replica, MAX_GRANT) }
+            twin.applied("mint one grant") { twin.peers[0].node.mint(twin.peers[0].replica, MAX_GRANT) }
+            val waiting = a.drawWaiting()
+            check(b.drawWaiting() == waiting) { "the two runs drew different waiting sets" }
+            if (waiting.size > 1) scarce++
+            val before = a.issuedByLane(node)
+            val twinBefore = b.issuedByLane(twinNode)
+            a.advertise(node, waiting)
+            b.advertise(twinNode, waiting)
+            val outcome = a.schedule(node)
+            val twinOutcome = b.schedule(twinNode)
+            a.chargeBelowReservation(node)
+            b.chargeBelowReservation(twinNode)
+            val picked = lanes.indices.filter { a.issuedByLane(node)[it] > before[it] }
+            val twinPicked = lanes.indices.filter { b.issuedByLane(twinNode)[it] > twinBefore[it] }
+            if (outcome != twinOutcome || picked != twinPicked) {
+                if (divergences.size < MAX_REPORTED) divergences += "call ${call + 1}: $outcome to $picked, twin $twinOutcome to $twinPicked"
+            }
+            twinPeak = maxOf(twinPeak, twinNode.boundMetrics(root).peakPositionFraction)
+        }
+        println("[${started.elapsedNow()}] scarce twin: $SCARCE_TWIN_CALLS calls, $scarce scarce, twin peak $twinPeak, ${node.rebases()} rebases")
+        assertAll(
+            { assertTrue(scarce > SCARCE_TWIN_CALLS / 2, "the rig: most calls had more than one lane waiting for one grant ($scarce)") },
+            { assertTrue(twinPeak >= 1.0, "the rig: the twin passed its ceiling, $twinPeak") },
+            { assertEquals(0, twinNode.rebases(), "the rig: the twin never rebased") },
+            { assertTrue(node.rebases() > 0, "the rig: the rebasing cluster rebased") },
+            { assertEquals(emptyList<String>(), divergences, "every call picked the same lane on both sides") },
+        )
+    }
+
+    /**
      * Where the design says the two engines agree, they do: one scheduling peer, a converged view,
      * one level and one grant per call. Each call mints exactly one grant through the log, so the
      * scheduler can make exactly one; [LocalHeddle] gets the same waiting set and picks once. The
@@ -663,6 +715,9 @@ class HeddleAcceptanceTest {
 
         /** Calls the match run makes, one grant each: past the old ceiling and many rebases. */
         const val MATCH_CALLS: Int = 180
+
+        /** Calls the scarce twin run makes, one grant minted to each cluster per call. */
+        const val SCARCE_TWIN_CALLS: Int = 180
 
         /** Calls each scheduler makes before the partition and again after it heals. */
         const val TOGETHER_CALLS: Int = 140
