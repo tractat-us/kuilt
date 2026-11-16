@@ -157,6 +157,82 @@ class W1BridgeProbeTest {
         )
     }
 
+    /**
+     * The bridge through a runtime `attach` rather than a reload (design §7.1): the early check sits
+     * in the same step loop, so an attached joiner whose seat would pass the limit is refused alone,
+     * like an applied one. `fine` and `four` live under `g`, whose template attaches at `2⁵⁸`. At 160
+     * leases the attach is refused and `four` still leases; at 16 it lands and is picked. No call
+     * throws.
+     */
+    @Test
+    fun anAttachedHeavyJoinerPastTheLimitIsRefusedAloneAndUnderItLands() {
+        fun under(vararg lanes: Pair<String, Weight>) = draft("p") {
+            group("g") {
+                for ((name, w) in lanes) lane(name, w)
+                template(heavy)
+            }
+        }
+        fun run(leases: Int): Triple<ApplyResult, AcquireOutcome, Topology> {
+            val first = under("fine" to fine)
+            val h = LocalHeddle.bootWhole(first, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+            val f = first.groupId("g", "fine")
+            h.mintSupply(1L shl 53)
+            repeat(leases) { lease(h, setOf(f), f, it.toLong()) }
+            val withFour = under("fine" to fine, "four" to four)
+            val m = withFour.groupId("g", "four")
+            check(h.apply(withFour, generation = 1L).refusals.isEmpty()) { "the rig: four joined" }
+            lease(h, setOf(f, m), m, 1_000L)
+            check(h.apply(under("four" to four), generation = 2L).refusals.isEmpty()) { "the rig: fine left" }
+            val attached = h.attach(listOf("g"), "heavy", generation = 3L)
+            // An attached child's id is the engine's to mint; read it off what the attach applied.
+            val x = attached.applied.map { it.child }.distinct().singleOrNull()
+            val all = setOfNotNull(m, x)
+            val next = h.acquire(all, all, startedAt = 2_000L, reservation = MAX)
+            return Triple(attached, next, withFour)
+        }
+        val (refused, afterRefusal, shape) = run(leases = 160)
+        val (landed, afterLanding, _) = run(leases = 16)
+        val m = shape.groupId("g", "four")
+        assertAll(
+            { assertEquals(1, refused.refusals.size, "at 160 leases the attach is refused: ${refused.refusals}") },
+            { assertTrue(refused.refusals.single() is StepRefusal.Refused, "as a refusal, alone") },
+            { assertEquals(m, assertIs<AcquireOutcome.Acquired>(afterRefusal, "four still leases").lease.leaf) },
+            { assertEquals(emptyList(), landed.refusals, "at 16 leases the attach lands") },
+            { assertTrue(assertIs<AcquireOutcome.Acquired>(afterLanding, "the attached lane leases").lease.leaf.value.endsWith("heavy"), "and it is the one picked: $afterLanding") },
+        )
+    }
+
+    /**
+     * A charging call is never refused at the limit (design §7.1). `heavy`, at `2⁴⁰`, is active and
+     * unseated beside `light`, planted at `2⁹⁴` ticks, so no seat can be made for it. `admit` opens
+     * its lease at zero rather than refusing, and `complete` reports the cost as unrecorded, since
+     * the only group above `heavy`'s edge is the root. Nothing throws. A pick at the root stalls
+     * and says so, `LifetimeExhausted`, until `heavy` is removed: its seat is part of every step there.
+     */
+    @Test
+    fun aChargingCallAcrossAnEdgeThatCannotBeSeatedOpensAtZeroAndNeverRefuses() {
+        val shape = tree("light" to Weight.ONE, "heavy" to Weight.of(1L shl 40))
+        val l = shape.groupId("light")
+        val x = shape.groupId("heavy")
+        val h = LocalHeddle.bootWhole(shape, LocalPolicy(defaultReservation = 1L), epoch = 1L)
+        h.mintSupply(1L shl 20)
+        val lightEdge = checkNotNull(h.snapshot().ledger.lineageOf(l)).last()
+        val heavyEdge = checkNotNull(h.snapshot().ledger.lineageOf(x)).last()
+        h.reshapeForTest { ledger ->
+            ledger.piece(EntitlementLedger.of(gauges = mapOf(lightEdge to gaugeAt(Int128.fromTwosComplement(1L shl 30, 0L), folded = 0L))))
+        }
+        val admitted = h.admit(x, waiting = setOf(x), startedAt = 0L)
+        val lease = assertIs<AcquireOutcome.Acquired>(admitted, "admit is never refused: $admitted").lease
+        val done = h.complete(lease.id, actualCost = 3L, waiting = emptySet())
+        val light = h.acquire(setOf(l), setOf(l), startedAt = 1L, reservation = 1L)
+        assertAll(
+            { assertEquals(null, h.snapshot().ledger.gauge(heavyEdge), "the rig: heavy's edge was never seated") },
+            { assertEquals(0L, lease.reserved, "the lease opens at zero") },
+            { assertEquals(LeaseOutcome.Done(charged = 0L, overrun = 3L, unrecorded = 3L), done, "and its cost is reported, unrecorded") },
+            { assertEquals(AcquireOutcome.LifetimeExhausted(GroupId("p")), light, "a pick at the root stalls, typed, while heavy cannot be seated") },
+        )
+    }
+
     private companion object {
         const val MAX: Long = LocalHeddle.MAX_RESERVATION
     }
