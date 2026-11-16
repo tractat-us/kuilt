@@ -1,6 +1,5 @@
 package us.tractat.kuilt.heddle
 
-import us.tractat.kuilt.math.Int128
 import kotlinx.serialization.BinaryFormat
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.cbor.Cbor
@@ -14,6 +13,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.modules.SerializersModule
+import us.tractat.kuilt.math.Int128
 import us.tractat.kuilt.test.assertAll
 import kotlin.random.Random
 import kotlin.test.Test
@@ -807,8 +807,9 @@ class LocalHeddlePersistenceTest {
 
     /**
      * This release writes and reads format 1 alone (#3489). Format 2 is what development builds of
-     * 0.7.5 wrote, and format 3 a later release's: both are refused by name with nothing past the
-     * version read.
+     * 0.7.5 wrote, and 3 stands for a number no release writes yet: both are refused by name with
+     * nothing past the version read. Step B keeps format 1, with its origins translated on read,
+     * rather than numbering a format 3 (design §7.1).
      */
     @Test
     fun unsupportedVersionIsNamed() {
@@ -1141,6 +1142,47 @@ class LocalHeddlePersistenceTest {
 
         override fun <T> decodeFromByteArray(deserializer: DeserializationStrategy<T>, bytes: ByteArray): T =
             Json.decodeFromString(deserializer, bytes.decodeToString())
+    }
+
+    /**
+     * 0.7.6 reads a format 1 snapshot the v0.7.5 tag wrote with an origin in it by translating each
+     * origin into its children's positions, rounded up, never by dropping it (design §7.1).
+     * [GOLDEN_FORMAT_1_ORIGIN]'s origin is 5 units at `golden`: whole on the grids of `a` and `c`,
+     * which keep their stored ticks, and `5 · 16 / 3` on `b`'s, which comes back one tick higher.
+     * `d` has no gauge, and `c`'s wake offset is a distance, so neither moves. The restored engine
+     * then picks what 0.7.5 picked from the same state, and what it writes holds no origin.
+     */
+    @Test
+    fun aFormat1SnapshotWithAnOriginIsReadByTranslatingIt() {
+        val topology = draft("golden") {
+            lane("a", Weight.ONE)
+            lane("b", Weight.of(1L, 3L))
+            lane("c", Weight.ONE)
+            lane("d", Weight.of(1L, 5L))
+        }
+        val (ga, gb, gc, gd) = listOf("a", "b", "c", "d").map { topology.groupId(it) }
+        val snapshot = decoded(GOLDEN_FORMAT_1_ORIGIN)
+        val ledger = snapshot.ledger
+        fun ticksOf(lane: GroupId) = ledger.gauge(checkNotNull(ledger.lineageOf(lane)).last())?.let { Int128.fromTwosComplement(it.ticksHigh, it.ticksLow) }
+        val h = LocalHeddle.restore(snapshot, LocalPolicy(defaultReservation = 1L), epoch = snapshot.epoch + 1)
+        val picks = (0 until GOLDEN_FORMAT_1_ORIGIN_PICKS.size).map { i ->
+            val waiting = if (i % 3 == 0) setOf(ga, gb, gd) else setOf(ga, gb, gc, gd)
+            val lease = assertIs<AcquireOutcome.Acquired>(h.acquire(waiting, waiting, startedAt = 100L + i), "call $i").lease
+            h.complete(lease.id, actualCost = 1L, waiting = emptySet())
+            lease.leaf.value
+        }
+        val written = encode(h.persist())
+        assertAll(
+            { assertTrue("\"parents\":{\"golden\":{\"originLow\":5}}" in GOLDEN_FORMAT_1_ORIGIN, "the rig: 0.7.5 wrote an origin of 5 at the root") },
+            { assertEquals(Int128.of(96L), ticksOf(ga), "a, whole on its grid, keeps its stored ticks") },
+            { assertEquals(Int128.of(32L), ticksOf(gc), "and so does c") },
+            { assertEquals(Int128.of(33L), ticksOf(gb), "b, not whole on its grid, comes back one tick higher than its stored 32") },
+            { assertEquals(null, ticksOf(gd), "d has no gauge, so no position to move") },
+            { assertEquals(mapOf(checkNotNull(ledger.lineageOf(gc)).last() to Int128.of(72L)), snapshot.allocatorMemory.wakeOffsets, "c's wake offset, a distance, is as written") },
+            { assertEquals(GOLDEN_FORMAT_1_ORIGIN_PICKS, picks, "the restored engine picks what 0.7.5 picked") },
+            { assertTrue("\"parents\"" !in written, "what 0.7.6 writes holds no origin") },
+            { assertIs<RestoreResult.Restored>(LocalHeddle.decode(written, Json), "and reads back") },
+        )
     }
 
     private companion object {
