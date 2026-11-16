@@ -2284,6 +2284,8 @@ public class WarpLogRecordExporter(
      * A window pass instead raises the compaction **floor**, which carries the seq high-water
      * forward and *suppresses* the dropped dots, so a peer holding the raw `Insert`s cannot
      * push the records back either: [Rga.piece] merges the floor and re-purges beneath it.
+     * The floor is raised to this replica's seq high-water, not only past what it holds, so the
+     * records of a sealed segment recovery could not read are forgotten as well (#3513).
      *
      * **The store settles to two small keys, not zero.** The index and one active segment
      * remain, the latter carrying the floor. That floor is what buys the paragraph above;
@@ -3302,9 +3304,9 @@ public class WarpLogRecordExporter(
      * ([Rga.dropWindowPastUnheld]). Their records would then come back when a later start reads
      * the segment, or when a peer that holds them merges (#3513). Here the clear forgets them too.
      *
-     * Every id under the high-water was minted here, so the raise annihilates nothing unminted. A
-     * peer's record anchored on one of them re-roots to HEAD, as one anchored on a held id the pass
-     * dropped already does.
+     * The high-water can run past seqs never minted (the index's mint claim), which costs nothing:
+     * this replica mints only past it. A peer's record anchored on one of these ids re-roots to
+     * HEAD, as one anchored on a held id the pass dropped already does.
      */
     private fun dropUnheldOwn() {
         val (newLog, delta) = log.dropAllOwn(replica) ?: return

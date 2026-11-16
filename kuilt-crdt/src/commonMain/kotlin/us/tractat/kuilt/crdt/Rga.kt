@@ -937,9 +937,11 @@ public class Rga<V> private constructor(
      * the call drops, so a hole above every held seq stays open, and its ops are admitted when they
      * return. A state raised past a part of its log it could not read has exactly that hole.
      *
-     * The floor's costs are [dropWindow]'s: an op another author anchored on one of these ids
-     * re-roots to [RgaId.HEAD], and only [self]'s entry moves, so a foreign author's dots are left
-     * to [dropWindow].
+     * Raising [self]'s own entry that far is sound even past seqs never minted, which a high-water
+     * raised by [advanceClock] may include: [self] mints only past [seqHighWater], and the floor
+     * keeps it there. The floor's costs are [dropWindow]'s: an op another author anchored on one of
+     * these ids re-roots to [RgaId.HEAD], and only [self]'s entry moves, so a foreign author's dots
+     * are left to [dropWindow].
      *
      * @return as [dropWindow], or `null` when nothing rises.
      */
