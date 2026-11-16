@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -2565,7 +2566,8 @@ public abstract class SeamConformanceSuite {
             // `stop` returns — so the bound fired in ~16 ms of real time on a fabric that was working
             // fine, whenever the client had not torn before the wait began. That race moved with JIT
             // warmth and load, which made it look like test ordering.
-            // `MidSessionDeathWallClockRigTest` forces the losing side and reds if a bound comes back.
+            // `MidSessionDeathWallClockRigTest` forces the losing side, and reds if a bound returns on the
+            // joiner's `state` wait.
             val hostTorn = host.state.first { it is SeamState.Torn }
             host.incoming.toList()
             val joinerTorn = joiner.state.first { it is SeamState.Torn }
@@ -2594,7 +2596,7 @@ public abstract class SeamConformanceSuite {
 
     @Test
     public fun peersDrainWithoutTearOnInjectedMembershipDrain(): TestResult =
-        runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        runTest {
             connectedPair { host, joiner ->
                 val drainedPeer = joiner.selfId
                 // Declaration first — see incomingCompletesOnInjectedMidSessionDeath for why.
@@ -2602,10 +2604,8 @@ public abstract class SeamConformanceSuite {
                 val injected = injectMembershipDrain(host, joiner)
                 if (!injected) return@connectedPair // meta-test reds on Proven-without-injection.
 
-                // The survivor observes the drained peer leave its roster. Unbounded for the reason
-                // runIncomingCompletesOnInjectedMidSessionDeath gives (#3483): a virtual 5 s bound would
-                // fire at once on a harness that delivers the drain on the wall clock.
-                val peersAfter = host.peers.first { drainedPeer !in it }
+                // Bounded: the survivor observes the drained peer leave its roster (no unbounded advance).
+                val peersAfter = withTimeout(5.seconds) { host.peers.first { drainedPeer !in it } }
 
                 // The defining invariant of a DRAIN (vs a tear): the survivor's state stays Woven.
                 assertAll(
