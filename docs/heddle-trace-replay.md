@@ -1,6 +1,6 @@
 # Heddle's flight recorder: record every decision, replay it later
 
-> **Status: design, for the release after 0.7.5.** Part of #3480. Merging this page decides the
+> **Status: design, for the release after 0.7.6.** Part of #3480. Merging this page decides the
 > design. Nothing in it is built yet, so every type and call named in *The design* is proposed
 > unless it links to source. The heddle model it relies on is
 > [`heddle-design.md`](heddle-design.md); this page does not restate it.
@@ -120,6 +120,7 @@ entry, with no gaps at the source. A gap downstream is therefore always visible.
 | `Begin` | the `streamId` the recording was started with (the adapter mints a random one; core reads no random source), a `recordedBy` label the consumer supplies (say, its `KuiltVersion.VERSION`), and the `LocalPolicy` |
 | `Anchor` | a `LocalHeddleSnapshot` taken by `persist()`, and the engine's next lease sequence number |
 | `Call` | one of the nine calls with its arguments, and its `DecisionOutcome` |
+| `Digest` | a 64-bit hash of the state at this point, written every `digestEvery` calls between anchors (§8) |
 | `End` | written when a recording is closed, so a reader can tell a finished trace from a cut one |
 
 The arguments are copied when the call is made. A caller may reuse one mutable `waiting` set
@@ -193,6 +194,21 @@ cannot put the entry ahead of its format.
   the shape of `HeddleControlLogCodecTest`. A change that moves them bumps `FORMAT_VERSION`. A new
   outcome arm is such a change.
 
+**`waiting` and `eligible` are written as changes,** with the whole set written now and then, the
+way a delta-state CRDT ships deltas and the occasional full state. A tree with thousands of lanes
+would otherwise make every call entry as large as the tree.
+
+- A `Call` entry writes each set as `{added, removed}` against the same set in the previous `Call`
+  of its stretch. A stretch is contiguous by construction, so the chain has no hole to fall into.
+- The whole set is written at the first `Call` after every anchor, every `fullSetEvery` calls,
+  and whenever the change would be larger than the set.
+- At a whole set the reader checks the set it rebuilt from changes against the one written, and a
+  mismatch is `Unreadable`. That turns a bug in the change encoding into a verdict, not a quietly
+  wrong replay. It also means a person scrolling a collector sees a whole set every
+  `fullSetEvery` records.
+- The arguments the engine saw are still copied when the call is made (§2). The change is
+  computed from that copy, so a reused mutable set cannot leak a later state into it.
+
 The record around the body:
 
 | `LogRecord` field | Holds |
@@ -239,10 +255,23 @@ oldest stretch can be partly evicted, and every stretch after it is whole. So at
 `K = 1,000` that is about nine thousand calls. A lease costs two calls, an `acquire` and a
 `complete`.
 
-**The bytes are not measured yet.** A call entry grows with its `waiting` and `eligible` sets.
-Twenty lanes with names around fifteen characters come to under a kilobyte of JSON. That figure
-is arithmetic, not a measurement, and slice 3 measures it, with the cost of recording on the
-engine's call, before any default is set.
+**The recorder is meant to stay on.** The first limit above is that a surprise nobody was recording
+cannot be replayed, so a recorder switched on afterwards always arrives too late. Recording stays
+opt-in in core, which has no buffer to default to, but the guide tells consumers to leave it on,
+once slice 3 shows it meets this budget:
+
+- recording adds at most **10%** to a mutating call's median time on the JVM, for a 1,000-lane tree,
+  counting the sink, the entry's copies and its digest share;
+- a steady-state call entry for that tree, with set changes (§4), is at most **512 bytes** of JSON at
+  the median;
+- the default dedicated buffer keeps at least **an hour** of a farm starting one lease a second.
+
+The numbers are this page's to change, not slice 3's. A slice that misses one reports the miss,
+the guide keeps recording opt-in, and the budget is revisited here.
+
+**The bytes are not measured yet.** Twenty lanes with names around fifteen characters come to
+under a kilobyte of JSON written whole. That figure is arithmetic, not a measurement, and slice 3
+measures it before any default is set.
 
 **For longer than the window, archive it.** The dedicated exporter takes an `AppliedOpSink`, and a
 `BoltDecorator` there keeps every entry past the buffer's cap. Nothing in this design changes for
@@ -280,6 +309,7 @@ The replay surface, sketched (names are proposals):
 ```text
 DecisionTrace.replay(policy = <the recorded one>): ReplayReport
 DecisionTrace.compare(policyA, policyB): ReplayReport
+DecisionTrace.estimate(policies): WorkloadEstimate  // §8, aggregates, calibrated first
 ReplayReport.stretches: List<StretchReplay>      // one per stretch, in seq order
 ReplayReport.firstDivergence: ReplayVerdict.Diverged?
 ReplayReport.unchecked: List<LongRange>           // the gaps, as seq ranges
@@ -316,17 +346,69 @@ A replay checks two things: each call's answer, and the state at each anchor.
   in one field.
 
 A replay never continues past a divergence in the same stretch, because the recorded calls after
-it name leases the twin may not have opened. Whether a *counterfactual* run should carry on with
-its own picks is open (below).
+it name leases the twin may not have opened. Going further is a different tool, below.
+
+**Digests narrow a `StateDiverged` between anchors.** Every `digestEvery` calls the recorder writes a
+`Digest` entry: FNV-1a 64 over the bytes `persist()` would encode at that point, the same hash the
+`recordId` uses. The replay hashes its twin's snapshot at the same `seq`, and a mismatch is
+`StateDiverged(digestSeq)`, narrowed to the `digestEvery` calls since the last check. A digest
+saves buffer space, not work: it still encodes the whole snapshot to hash it, so slice 3 measures
+its cost beside an anchor's. It is evidence, not proof. Two different states share a hash once in
+2⁶⁴, and nothing here is adversarial. It relies on what the anchor check already relies on, that a
+snapshot encodes to the same bytes on every target, and a golden vector pins the hash on JVM,
+native and wasm (§12).
+
+#### Beyond the first difference: the workload, not the picks
+
+Change the policy and the first pick differs within a few calls. After that the recorded calls
+describe a morning the twin did not have. So the counterfactual does not try to follow the
+recording call by call. It reads the **shape of the workload** out of the trace, runs that shape
+through a twin under each policy, and compares the aggregates. The question it answers is "would
+`sleeperCredit = 4` have treated the small team better on a morning like this one?", and the answer
+is a tuning suggestion with error bars, never a prediction of a pick.
+
+**The model is three things the trace already holds:**
+
+- **When each leaf wanted work.** Each recorded `acquire` and `admit` carries `waiting` and the
+  caller's `startedAt`. Together they say which leaves were queued at each moment, on the caller's
+  own clock, in the cost unit.
+- **How long each leaf's work ran.** Each `complete` carries the `actualCost` of a lease on a known
+  leaf. Those are the leaf's run-time samples.
+- **How much capacity there was.** `reconcileCapacity` and the topology calls, as recorded.
+
+**The simulation drives a twin from that model.** It starts at an anchor, under the policy being
+tried. At each recorded moment a slot was offered, it offers the twin the recorded `waiting` and
+`eligible`, and the twin picks. Each lease the twin opens finishes after a run time drawn from its
+leaf's samples, taken in their recorded order so the run reads no random source and gives the same
+numbers on every target. The simulated `complete` lands before the first offer at or after its
+finish time. It is an estimate twice over: run times are resampled, and `waiting` is taken as
+recorded, so a queue that would have drained sooner under the new policy is not modelled.
+
+**What it reports is aggregate,** per leaf and per stretch: the share of cost charged, how long a
+leaf sat in `waiting` before its next pick, and the longest such wait. Those are the numbers a
+tuning decision rests on.
+
+**It checks itself before it advises.** The same simulation, run under the *recorded* policy, has
+to reproduce the recorded aggregates within a tolerance. That calibration run is what makes the
+estimate worth reading. If the model cannot reproduce the morning that actually happened, its
+answer about a different policy is noise. The report then says `Uncalibrated`, with the gap it
+measured, and gives no suggestion. It also gives up when a picked leaf has no run-time sample in
+the trace, since its work would have to be invented.
+
+`compare(policyA, policyB)` is the replay, stopping at the first difference. `estimate(policies)`
+is this, and returns a `WorkloadEstimate`, a separate type from `ReplayReport`, so an estimate
+cannot be read as testimony. A tuning sweep is `estimate` over a list of policies. It cannot cross
+a gap: the next stretch starts from a recorded anchor, which is not the state the simulation
+reached.
 
 ### 9. What step B changes
 
 0.7.6 removes the rebase and the origin and adds a position limit, in
 [`heddle-design.md` §7.1, *Future: positions with no origin (step B)*](heddle-design.md#future-positions-with-no-origin-step-b).
-The recorder is expected to ship in that same release, which fixes one constraint and touches
-four parts of this design.
+Step B has merged. The recorder ships in the release after it, which keeps one constraint and
+touches four parts of this design.
 
-- **No public signature changes.** 0.7.6 breaks none, and its API dumps may only gain lines. So the
+- **No public signature changes.** The recorder breaks none, and its API dumps may only gain lines. So the
   recording hook is a new member or overload on `LocalHeddle`, never a default parameter added to
   `fromTopology` or `restore`, and the public outcome types are not made `@Serializable`.
 - **Anchors.** Slice 4 takes the origin out of the ledger, and 0.7.6 writes format 1 with no
@@ -343,9 +425,8 @@ four parts of this design.
 - **Wide virtual times (slice 6) touch nothing here.** The trace records no virtual time. The
   replay reaches them through `explain` on a snapshot view, as any caller does.
 - **#3480's "never-rebasing twin on real traffic" goes away.** It needs a build that both records
-  and still rebases, and slice 3 (#3495) deletes the rebase. Unless a recorder lands on `main`
-  before slice 3, no such build exists. The twin proof (§7.1, slice 1) stays the synthetic one, and
-  this design does not reorder step B to save it.
+  and still rebases, and slice 3 (#3495) has deleted the rebase, so no such build will exist. The
+  twin proof (§7.1, slice 1) stays the synthetic one.
 
 ### 10. The many-peer form: what it would need
 
@@ -407,13 +488,21 @@ Each names what enforces it. An enforcer that is not built yet names the slice t
 6. **The trace format is independent of the snapshot format.** An anchor nests the snapshot's own
    envelope, read through `LocalHeddle.decode`. Pinned by a golden anchor vector that carries a
    snapshot of format 1 (slice 3).
+7. **A digest is the same number on every target.** A golden digest vector run on JVM,
+   `macosArm64` and `wasmJs`, read as a union (slice 3).
+8. **A set rebuilt from changes equals the set written whole.** Checked by the reader at every
+   whole set, as an `Unreadable` verdict; pinned by a seeded round trip whose sets change on most
+   calls, with `fullSetEvery` large enough that a chain of changes is actually walked (slice 3).
+9. **An estimate is never read as testimony.** `WorkloadEstimate` and `ReplayReport` are separate
+   types, and an estimate whose calibration run misses the record carries no suggestion
+   (slice 5).
 
 ### 13. Slices: issues to file
 
 One behaviour move each, in order. None is filed yet.
 
 1. **Record (`:kuilt-heddle-core`).** `DecisionSink`, the entry and `DecisionOutcome` types and
-   their mapping, the required-parameter `atomically`, the recording hook and anchors. Tests: the
+   their mapping, the required-parameter `atomically`, the recording hook, anchors and digests. Tests: the
    on/off twin (invariant 2), sink drop and throw, an anchor after a drop, a reused mutable
    `waiting` set. ABI dump gains lines only.
 2. **Replay (`:kuilt-heddle-core`).** The `internal` same-epoch resume, `DecisionTrace` and its
@@ -422,23 +511,30 @@ One behaviour move each, in order. None is filed yet.
    walks (#2592). A changed `sleeperCredit` reports `Diverged` at the first differing `seq`, and the
    row asserts that a pick actually differs at that `seq` before it acts. Mutations that must red:
    one call left unrecorded; an anchor resumed under a later epoch; an outcome mapped without its
-   lease id.
+   lease id; a digest compared at the wrong `seq`.
 3. **The wire (`:kuilt-heddle-otel`, created here or by #3184).** The JSON codec with golden
-   vectors, the `LogRecord` mapping, anchor parts, the adapter sink, queue and pump, and
-   `DecisionTraceReader` with gap reporting. A measurement of entry sizes and of recording's cost
-   per call sets `anchorEvery`, the queue size and `ANCHOR_PART_BYTES`. Includes the four edits a
+   vectors, set changes and whole sets, the `LogRecord` mapping, anchor parts, the adapter sink,
+   queue and pump, and `DecisionTraceReader` with gap reporting. A measurement against the budget
+   in §5 sets `anchorEvery`, `digestEvery`, `fullSetEvery`, the queue size and
+   `ANCHOR_PART_BYTES`, and says whether the guide can tell consumers to leave recording on.
+   Includes the four edits a
    new published module needs: `settings.gradle.kts`, its `AGENTS.md` row, its branch in
    `moduleDescription()`, and a regenerated `llms.txt`.
 4. **End to end.** #3480's done-when: a test records a running `LocalHeddle`, pulls the trace
    through `LogTapClient`, replays it with every pick matching, and reports the first differing
    step under a changed policy. A second row drops records from the buffer and asserts the gap is
    reported and the next stretch still replays.
-5. **Routes and the guide.** A symptom→primitive entry in `docs/agent-cookbook/heddle.md`, the
+5. **Estimate (`:kuilt-heddle-core`).** The workload model, the simulation, the calibration run
+   and `WorkloadEstimate` (§8). Tests: a synthetic farm whose small team starves under one
+   `sleeperCredit` and not under another, where `estimate` must name the better one; a trace
+   whose run times are too noisy to calibrate, which must come back `Uncalibrated`; a picked leaf
+   with no sample, which must give up. The calibration tolerance is set from the first of those.
+6. **Routes and the guide.** A symptom→primitive entry in `docs/agent-cookbook/heddle.md`, the
    matching route in the `kuilt-primitives` skill (a trigger in, one out), and a guide topic,
    *When a pick surprises you*, written top-down.
-6. **The many-peer form.** A design first (§10), then `:kuilt-heddle-test`.
+7. **The many-peer form.** A design first (§10), then `:kuilt-heddle-test`.
 
-Slices 1 and 2 can ship before step B's slice 3 or after it; neither depends on the other.
+Slice 5 needs only slices 1 and 2, and can run on synthetic traces before the wire exists.
 
 #### Settled — don't reopen
 
@@ -470,14 +566,20 @@ Slices 1 and 2 can ship before step B's slice 3 or after it; neither depends on 
 - **Reordering step B so a recording build still rebases.** It would delay a release to feed a
   proof that already has synthetic traffic.
 
+- **Recording as a tool you switch on while investigating.** A surprise nobody was recording
+  cannot be replayed. The recorder is meant to stay on, under the budget in §5.
+- **Writing `waiting` and `eligible` whole in every entry.** It makes each entry as large as the
+  tree. Changes with periodic whole sets cost a second encoding, which the reader checks itself.
+- **A counterfactual that follows the recording pick by pick past a difference.** Divergence comes
+  within a few calls, and after it the recorded calls name leases the twin never opened. The
+  counterfactual models the workload's shape instead, and checks the model against the record
+  first.
+- **Only anchors for state checks.** Lowering `anchorEvery` to narrow a `StateDiverged` fills the
+  buffer with snapshots. A digest costs eight bytes.
+
 #### Open
 
-- **Should the guide tell consumers to keep recording on in production?** It depends on the cost
-  slice 3 measures. Until then the recording is opt-in, since core has no buffer to default to.
-- **A diff form for `waiting` and `eligible`.** A tree with thousands of lanes makes every call
-  entry large. A set written as its change from the previous entry in the same stretch loses
-  nothing a gap does not already lose, but it is a second encoding to pin.
-- **Should a counterfactual replay carry on past a divergence with its own picks?** It would need
-  a rule for recorded calls that name leases the twin never opened.
-- **Digests between anchors.** A state digest every few calls would narrow a `StateDiverged`
-  without the cost of a full anchor, at the price of a hash both sides must agree on.
+- **Modelling queues that drain.** The estimate takes `waiting` as recorded, so a leaf whose queue
+  would have emptied sooner under the new policy still looks queued. Calibration bounds the error
+  for the recorded policy only. A queue-depth input would need the caller to report counts, which
+  `acquire` does not take today.
