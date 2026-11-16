@@ -8,7 +8,7 @@ turn. Heddle can say so, and name the team.
 Ask about any lane at any moment. The answer changes nothing, and it always
 agrees with what the engine does next.
 
-> **Playground.** This engine works today, and its API can change.
+> **Beta.** This engine is built and heavily tested, and its API can still change.
 
 This page uses the build farm from [Fair share in one program](heddle-local.md):
 web at three parts, mobile at one, four agents, and builds of about three

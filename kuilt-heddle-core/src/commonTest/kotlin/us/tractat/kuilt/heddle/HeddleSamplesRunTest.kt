@@ -104,4 +104,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun waitReasonHolds() = sampleWaitReason()
+
+    @Test
+    fun runnerPoolHolds() = sampleRunnerPool()
 }

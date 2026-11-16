@@ -4,8 +4,9 @@ A roomful of devices shares a pile of work. Now add a wrinkle: Team A paid
 for twice Team B's share. Heddle honours those shares and lends spare
 capacity to whoever needs it.
 
-> **Playground.** Heddle works today; its API can change. Use it on its own
-> or to give [Warp](warp.md) jobs a fair share.
+> **Beta.** Heddle is built and heavily tested; its API can still change.
+> Use it on its own, or to give [Warp](warp.md) jobs a fair share.
+> [Scheduling](scheduling.md) is the way in.
 
 ## Give each team a budget
 

@@ -768,3 +768,65 @@ internal fun sampleWaitReason() {
 
 /** Two lanes under `pool`, `heavy` at weight 2 beside `light`. */
 private fun twoLanes(): Topology = Topology("pool", listOf(Topology.Lane("heavy", Weight.of(2)), Topology.Lane("light")))
+
+/**
+ * A CI runner pool shared by teams, as a service would embed it: teams attached as they sign up,
+ * under a paid tier or a free one, a ceiling per team, Mac runners that take only the teams that need
+ * one, and two functions the pool calls, one when a runner frees up and one when a job finishes.
+ */
+@Suppress("unused")
+internal fun sampleRunnerPool() {
+    // Paid teams share three parts to the free tier's one. Teams are attached as they sign up.
+    // No paid team holds more than two runners at once, and no free team more than one.
+    val pool = draft("runners") {
+        group("paid", Weight.of(3)) { template(maxConcurrent = 2L) }
+        group("free") { template(maxConcurrent = 1L) }
+    }
+    // A job takes about ten minutes, and minutes are the unit everything is charged in.
+    val (heddle, booted) = LocalHeddle.fromTopology(pool, LocalPolicy(defaultReservation = 10L), epoch = 0L)
+    check(booted.refusals.isEmpty())
+    heddle.reconcileCapacity(totalSlots = 4L)
+
+    var generation = 1L
+    fun signUp(tier: String, team: String): GroupId {
+        check(heddle.attach(listOf(tier), team, generation++).refusals.isEmpty())
+        return pool.attachedChildId(listOf(tier), team)
+    }
+    val acme = signUp("paid", "acme")
+    val apps = signUp("paid", "apps")
+    val hobby = signUp("free", "hobby")
+    // Only the apps team builds for iOS, so only its jobs can run on a Mac.
+    val needsMac = setOf(apps)
+
+    // The pool calls this whenever a runner frees up. A refusal changes nothing: the jobs stay queued.
+    fun onRunnerFree(queued: Set<GroupId>, mac: Boolean, now: Long): Lease? {
+        val eligible = if (mac) queued intersect needsMac else queued
+        return (heddle.acquire(queued, eligible, startedAt = now) as? AcquireOutcome.Acquired)?.lease
+    }
+    // And this when a job finishes, with the minutes it really took.
+    fun onJobDone(lease: Lease, minutes: Long, queued: Set<GroupId>): LeaseOutcome =
+        heddle.complete(lease.id, actualCost = minutes, waiting = queued)
+
+    val everyone = setOf(acme, apps, hobby)
+    // Two Mac runners free up. Both go to apps, the one team that can use them, which fills its ceiling.
+    val macJobs = List(2) { checkNotNull(onRunnerFree(everyone, mac = true, now = 0L)) }
+    check(macJobs.all { it.leaf == apps })
+    check(onRunnerFree(everyone, mac = true, now = 0L) == null)
+    check(heddle.explain(apps, waiting = everyone, eligible = needsMac) == WaitExplanation.AtCeiling(apps, limit = 2L))
+
+    // One Mac job runs long. It pays for every minute, and the four past its estimate are an overrun.
+    check(onJobDone(macJobs[0], minutes = 14L, everyone) == LeaseOutcome.Done(charged = 14L, overrun = 4L, unrecorded = 0L))
+    check(onJobDone(macJobs[1], minutes = 10L, everyone) == LeaseOutcome.Done(charged = 10L, overrun = 0L, unrecorded = 0L))
+
+    // A busy afternoon on one Linux runner: every team keeps work queued for 400 jobs.
+    val served = mutableMapOf(acme to 0, apps to 0, hobby to 0)
+    repeat(400) { i ->
+        val job = checkNotNull(onRunnerFree(everyone, mac = false, now = 30L + i * 10L))
+        served[job.leaf] = served.getValue(job.leaf) + 1
+        check(onJobDone(job, minutes = 10L, everyone) is LeaseOutcome.Done)
+    }
+    // Paid gets three quarters, within one job, and the free tier the last quarter.
+    check(served.getValue(acme) + served.getValue(apps) in 299..301 && served.getValue(hobby) in 99..101)
+    // The 24 minutes apps spent on the Macs count against it here, so acme ran more of these jobs.
+    check(served.getValue(apps) < served.getValue(acme))
+}

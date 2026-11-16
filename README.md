@@ -162,6 +162,13 @@ Replace `<version>` with the latest release shown on the Maven Central badge at 
 |--------|---------|-------------------|
 | `kuilt-otel` | all | Offline-first OpenTelemetry exporter: record traces, metrics, and logs on any device and have them reconcile when connectivity returns. Syncing saved state twice never counts it twice, though retrying a failed export can (`WarpTelemetry`, `WarpOtlpBridge`). See the [Observability guide](https://tractat-us.github.io/kuilt/guide/observability.html). |
 
+**Scheduling** — beta: built and heavily tested; the API can still change between releases.
+
+| Module | Targets | What it gives you |
+|--------|---------|-------------------|
+| `kuilt-heddle-core` | all | A whole weighted fair-share scheduler in one process, with no network: lease a slot, charge its real cost, preview and explain the next picks, and survive a restart (`LocalHeddle`). See the [Scheduling guide](https://tractat-us.github.io/kuilt/guide/scheduling.html). |
+| `kuilt-heddle` | all | The same fair share across peers with no central referee: a mergeable ledger each peer spends from locally, plus a Raft control plane for supply and tree changes. |
+
 **Playground** — pre-1.0, outside the stability surface; API may change, not for production.
 
 | Module | Targets | What it gives you |
@@ -207,6 +214,9 @@ The full documentation suite is published to GitHub Pages on every push to `main
   — the offline-first OpenTelemetry exporter (`kuilt-otel`): record on any device,
   survive being offline, and deliver to your dashboard. Syncing saved state twice never
   counts it twice; retrying a failed export can.
+- **[Scheduling](https://tractat-us.github.io/kuilt/guide/scheduling.html)**
+  — fair-share scheduling with Heddle (`kuilt-heddle-core`, `kuilt-heddle`): in one
+  program or across peers, with an embedding guide and the tests behind each promise.
 - **[Playground → Warp](https://tractat-us.github.io/kuilt/guide/warp.html)**
   — the coordination-free distributed scheduler (`kuilt-warp`) and the research behind it.
 - **[llms.txt](https://tractat-us.github.io/kuilt/llms.txt)** — everything above as one

@@ -9,7 +9,7 @@ It keeps the promise over time, not build by build. A team that sat idle
 does not come back owed a pile of turns. A build that ran long pays for
 every minute.
 
-> **Playground.** This engine works today, and its API can change.
+> **Beta.** This engine is built and heavily tested, and its API can still change.
 
 This page follows one farm from its first build, through a change to its tree,
 to a crash and a restart. Every example is one compiled sample,
