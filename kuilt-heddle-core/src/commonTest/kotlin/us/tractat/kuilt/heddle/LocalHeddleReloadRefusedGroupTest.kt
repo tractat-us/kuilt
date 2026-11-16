@@ -127,7 +127,7 @@ class LocalHeddleReloadRefusedGroupTest {
         assertAll(
             { assertEquals(listOf(farm), reloaded.refusals.map { it.child }, "the rig: farm is refused") },
             { assertEquals(listOf(worker), attached.refusals.map { it.child }, "the attach is refused: ${attached.refusals}") },
-            { assertIs<StepRefusal.Refused>(attached.refusals.single(), "as Refused") },
+            { assertIs<StepRefusal.Refused>(attached.refusals.singleOrNull(), "as Refused") },
             { assertTrue(attached.applied.none { it.child == worker }, "no step of it lands: ${attached.applied}") },
             { assertEquals(emptyList(), engine.orphanParents(listOf(farm)), "no orphan") },
         )
@@ -152,7 +152,7 @@ class LocalHeddleReloadRefusedGroupTest {
         assertAll(
             { assertTrue(team in booted.refusals.map { it.child } && farm in booted.refusals.map { it.child }, "the rig: the boot leaves out team and farm: ${booted.refusals}") },
             { assertEquals(listOf(worker), attached.refusals.map { it.child }, "the attach is refused: ${attached.refusals}") },
-            { assertIs<StepRefusal.Refused>(attached.refusals.single(), "as Refused") },
+            { assertIs<StepRefusal.Refused>(attached.refusals.singleOrNull(), "as Refused") },
             { assertEquals(emptyList(), engine.orphanParents(listOf(team, farm)), "no orphan") },
         )
     }
