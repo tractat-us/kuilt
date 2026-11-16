@@ -1,8 +1,10 @@
 package us.tractat.kuilt.conformance
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
@@ -24,6 +26,7 @@ import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * A fabric whose `close()` returns before its `incoming` completes, and completes it later **on the
@@ -37,21 +40,28 @@ import kotlin.test.assertTrue
  * `incomingCompletesOnInjectedMidSessionDeath`; [MidSessionDeathWallClockRigTest] pins that one.
  *
  * This rig forces the losing side every time, once per end. The decorated seam's `close()` returns
- * at once; a plain thread waits until the obligation is collecting that seam's `incoming`, sleeps a
- * grace period, and only then closes the real seam underneath, which completes the flow. A virtual
- * bound on that wait reds here on every run; an unbounded wait, with `runTest`'s wall-clock ceiling
- * as the backstop, passes.
+ * at once and hands the real close to a plain thread. A virtual bound on the wait reds here on every
+ * run; an unbounded wait, with `runTest`'s wall-clock ceiling as the backstop, passes.
+ *
+ * ## When the thread closes the real seam
+ *
+ * Only once `runTest` is **advancing the virtual clock**, plus [GRACE_MILLIS]. `close()` schedules a
+ * [PARK_TICK] virtual delay; that delay runs only when the obligation has parked and the scheduler
+ * has started skipping time, and the jump to any later virtual bound follows within microseconds.
+ * The thread waits for the tick, then sleeps the grace period, then closes.
+ *
+ * Anchoring the grace to the obligation merely *collecting* is not enough, and it was measured. The
+ * obligation starts each collector `UNDISPATCHED`, so collection begins before `close()` is called.
+ * A grace started there also covers `close()` returning and the scheduler's first pass, and on a
+ * cold JVM that ate the whole 100 ms: a mutant with a 5 s virtual bound on the joiner's wait passed.
  *
  * ## What the rig asserts about itself
  *
  * The rig counts its own firing, or a tear that landed before the wait began would pass on the old,
- * broken obligation too: the late completion fired exactly once, the obligation was already
- * collecting when it did, and the collection was still open at that moment.
- *
- * It also checks the obligation's collector was **already collecting when `close()` was called** —
- * the consumer's shape, which the obligation gets by starting it `UNDISPATCHED`. That arm reds if
- * the collector goes back to being merely queued. The thread still waits on the collecting latch
- * rather than trusting that arm, so the rig ends cleanly and reports the arm even when it is red.
+ * broken obligation too. The late completion fired exactly once. The virtual tick had run when it
+ * did. The collection was still open at that moment. And the obligation was already collecting when
+ * it called `close()`, which is the consumer's shape. That last arm reds if the collector goes back
+ * to being merely queued.
  *
  * JVM-only because the late completion needs a real thread. The harness is an anonymous object for
  * the reason [SymmetricLifecycleObligationRigTest] gives: a named subclass would be collected as a
@@ -68,7 +78,7 @@ class IncomingCompletesWallClockRigTest {
         runTest(timeout = TEST_WEDGE_BACKSTOP) { assertTheLateEndPasses(LateEnd.JOINER) }
 
     private suspend fun TestScope.assertTheLateEndPasses(end: LateEnd) {
-        val rig = LateCompletionRig(end)
+        val rig = LateCompletionRig(end, this)
         try {
             rig.harness.runIncomingCompletesWhenSeamCloses(this)
         } finally {
@@ -78,9 +88,9 @@ class IncomingCompletesWallClockRigTest {
             { assertEquals(1, rig.lateCompletions.get(), "the rig must complete the $end's incoming exactly once") },
             {
                 assertTrue(
-                    rig.suiteWasCollecting,
-                    "the obligation must already be collecting the $end's incoming when the rig completes it, " +
-                        "or the completion did not land late and this rig proves nothing",
+                    rig.clockWasAdvancing,
+                    "the virtual clock must have started advancing before the rig completes the $end's " +
+                        "incoming, or the completion did not land late and this rig proves nothing",
                 )
             },
             {
@@ -103,11 +113,11 @@ class IncomingCompletesWallClockRigTest {
 
     private enum class LateEnd { HOST, JOINER }
 
-    private class LateCompletionRig(end: LateEnd) {
-        private val suiteCollecting = CountDownLatch(1)
+    private class LateCompletionRig(end: LateEnd, private val scope: TestScope) {
+        private val clockAdvancing = CountDownLatch(1)
         private val collectionOpen = AtomicBoolean(false)
 
-        @Volatile var suiteWasCollecting = false
+        @Volatile var clockWasAdvancing = false
             private set
 
         @Volatile var collectionWasOpenWhenCompleted = false
@@ -129,27 +139,27 @@ class IncomingCompletesWallClockRigTest {
 
             override fun capabilities(): SeamCapabilities = SeamCapabilities.FULL.copy(reportsLiveCapability = false)
 
-            override fun capabilityGaps(): Map<String, String> = mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
+            override fun capabilityGaps(): Map<String, String> =
+                mapOf("reportsLiveCapability" to CapabilityGaps.LIVE_CAPABILITY)
 
             override fun joinerRosterOrigin(): JoinerRosterOrigin =
                 JoinerRosterOrigin.FilledByConstruction("a rig over one InMemoryLoom (#3519 positive control)")
         }
 
         fun joinCompleter() {
-            completer?.join(TimeUnit.SECONDS.toMillis(COLLECT_WAIT_SECONDS) + GRACE_MILLIS * 10)
+            completer?.join(TimeUnit.SECONDS.toMillis(TICK_WAIT_SECONDS) + GRACE_MILLIS * 10)
         }
 
         /**
          * A seam whose first `close()` returns at once and hands the real close to a plain thread,
-         * which runs it only after the obligation is collecting `incoming`, plus [GRACE_MILLIS]. Every
-         * later `close()` (the fixture's teardown) delegates directly.
+         * which runs it only after the [PARK_TICK] has run, plus [GRACE_MILLIS]. Every later
+         * `close()` (the fixture's teardown) delegates directly.
          */
         private inner class SeamCompletingIncomingLate(private val delegate: Seam) : Seam by delegate {
             private val closes = AtomicInteger()
 
             override val incoming: Flow<Swatch> = flow {
                 collectionOpen.set(true)
-                suiteCollecting.countDown()
                 try {
                     emitAll(delegate.incoming)
                 } finally {
@@ -163,8 +173,12 @@ class IncomingCompletesWallClockRigTest {
                     return
                 }
                 collectingWhenClosed = collectionOpen.get()
+                scope.backgroundScope.launch {
+                    delay(PARK_TICK)
+                    clockAdvancing.countDown()
+                }
                 completer = thread(name = "incoming-completes-wall-clock-rig") {
-                    suiteWasCollecting = suiteCollecting.await(COLLECT_WAIT_SECONDS, TimeUnit.SECONDS)
+                    clockWasAdvancing = clockAdvancing.await(TICK_WAIT_SECONDS, TimeUnit.SECONDS)
                     Thread.sleep(GRACE_MILLIS)
                     collectionWasOpenWhenCompleted = collectionOpen.get()
                     runBlocking { delegate.close(reason) }
@@ -193,10 +207,16 @@ class IncomingCompletesWallClockRigTest {
     }
 
     private companion object {
+        /**
+         * The rig's own virtual timer. It runs only once the obligation has parked and `runTest` is
+         * skipping time, so it marks the moment a virtual bound would be about to fire.
+         */
+        val PARK_TICK = 1.milliseconds
+
         /** Long enough that a virtual bound has certainly fired first; short enough to cost nothing. */
         const val GRACE_MILLIS = 100L
 
-        /** A ceiling on waiting for the obligation to collect, so a rig that never sees it still ends. */
-        const val COLLECT_WAIT_SECONDS = 10L
+        /** A ceiling on waiting for the tick, so a rig whose tick never runs still ends. */
+        const val TICK_WAIT_SECONDS = 10L
     }
 }
