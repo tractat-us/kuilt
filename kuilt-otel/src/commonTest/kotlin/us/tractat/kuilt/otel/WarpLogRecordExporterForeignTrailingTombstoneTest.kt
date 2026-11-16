@@ -231,6 +231,59 @@ class WarpLogRecordExporterForeignTrailingTombstoneTest {
         )
     }
 
+    /**
+     * The peer's own next window pass, arriving by merge, drops its trailing tombstones through
+     * its **floor**, which keeps no position. A record of ours appended after one of them would
+     * re-root to the head of the list on its higher lamport, ahead of older records, and be the
+     * one DROP_OLDEST evicts. So no export may hang off a foreign tombstone.
+     */
+    @Test
+    fun theAuthorsFloorOverItsTrailingTombstonesKeepsArrivalOrder() = runTest {
+        val peerLog = tombstonedRoot(peer, listOf(record(201), record(202)))
+        assertRemovalKeepsArrivalOrder(peerLog, removal = assertNotNull(peerLog.dropWindow(peer, peerLog.sequence.toSet())).first)
+    }
+
+    /**
+     * A third replica's window pass drops the peer's trailing tombstones as foreign dots, through
+     * an `RgaOp.Compact`. That keeps each dropped id's predecessor, but the run is rooted at the
+     * head of the list, so a record appended after it re-roots there all the same.
+     */
+    @Test
+    fun aThirdReplicasCompactOverTheTrailingTombstonesKeepsArrivalOrder() = runTest {
+        val peerLog = tombstonedRoot(peer, listOf(record(201), record(202)))
+        val third = ReplicaId("third")
+        assertRemovalKeepsArrivalOrder(peerLog, removal = assertNotNull(peerLog.dropWindow(third, peerLog.sequence.toSet())).first)
+    }
+
+    /**
+     * Export r1 and r2, merge [peerLog] (trailing, fully tombstoned), export r3, merge [removal],
+     * export r4 at cap 3: DROP_OLDEST must take r1, the oldest.
+     */
+    private suspend fun assertRemovalKeepsArrivalOrder(peerLog: Rga<LogRecord>, removal: Rga<LogRecord>) {
+        val exporter = exporterAtCap3()
+        exporter.export(record(1))
+        exporter.export(record(2))
+        exporter.merge(peerLog)
+        val merged = exporter.snapshot()
+        assertAll(
+            { assertEquals(listOf(peer, peer), merged.sequence.takeLast(2).map { it.replicaId }, "the run must trail") },
+            { assertTrue(merged.tombstones.containsAll(merged.sequence.takeLast(2)), "the run must be tombstoned") },
+        )
+        exporter.export(record(3))
+        exporter.merge(removal)
+        assertTrue(
+            exporter.snapshot().sequence.none { it.replicaId == peer },
+            "precondition: the merged removal took the peer's run out of the log",
+        )
+        exporter.export(record(4))
+
+        assertEquals(
+            listOf("body-2", "body-3", "body-4"),
+            exporter.snapshot().toList().map { it.body },
+            "DROP_OLDEST must evict r1, the oldest, not r3",
+        )
+    }
+
     private fun exporterAtCap3() = WarpLogRecordExporter(
         replica = local,
         store = InMemoryDurableStore(),
