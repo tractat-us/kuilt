@@ -233,7 +233,9 @@ A collector should expect four things of those points:
 
 If you implement `OtlpEdge` yourself, the same rules apply: `MetricPoint.Sum`,
 `MetricPoint.DoubleSum` and `MetricPoint.ExponentialHistogram` are running totals,
-so send them as cumulative.
+so send them as cumulative. `MetricPoint.UpDownSum` and `MetricPoint.DoubleUpDownSum`
+are cumulative too, but send them with `isMonotonic=false`: their value can fall,
+and a fall is a reading, not a reset.
 
 ## What's here
 
