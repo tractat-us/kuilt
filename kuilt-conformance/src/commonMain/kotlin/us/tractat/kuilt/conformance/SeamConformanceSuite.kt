@@ -686,8 +686,9 @@ public abstract class SeamConformanceSuite {
             val joinerFrames = receivedByJoiner.await()
 
             // The reverse collector starts only after the forward direction has settled, so each
-            // direction gets its own trajectory — the sequencing `incomingCompletesWhenSeamCloses`
-            // adopted for the same reason. Distinct payloads keep a cross-direction leak visible.
+            // direction gets its own trajectory — the sequencing #2601 gave
+            // `incomingCompletesWhenSeamCloses` while its waits still had virtual budgets. Distinct
+            // payloads keep a cross-direction leak visible.
             val receivedByHost = async { host.incoming.drop(joinHandshakeFramesAtHost()).take(1).toList() }
 
             val toHost = byteArrayOf(40, 50, 60)
@@ -1576,31 +1577,37 @@ public abstract class SeamConformanceSuite {
     // returns first.
     //
     // **What that costs.** A flow that never terminates now reds through the 30 s backstop as a bare
-    // `UncompletedCoroutinesError` rather than as an arm naming its end. There is no wall-clock
+    // `UncompletedCoroutinesError`, and that red NAMES NO END: `runTest` dumps the parked coroutines
+    // only when debug probes are installed, which this module does for its stress probes alone. And
+    // a fabric that completes `incoming` only when a virtual timer more than 5 s out fires — a slow
+    // close-handshake timeout, say — used to red here, because the window expired first; now the
+    // scheduler advances to that timer, the flow completes, and the obligation passes. Both are
+    // given up, as #3516 gave them up for the mid-session-death obligation. There is no wall-clock
     // bound to keep the name on: this body runs inside `runTest`, and a real-time wait here would
-    // mean a production dispatcher in a conformance body, which every in-memory harness would pay for
-    // without becoming any stricter. The waits stay SEQUENTIAL, host first, so a hang is still
-    // attributable by position: `SymmetricLifecycleObligationRigTest` proves a never-terminating
-    // joiner parks the joiner's wait with the host's already settled.
+    // mean a production dispatcher in a conformance body, which every in-memory harness would pay
+    // for without becoming any stricter.
 
     internal suspend fun runIncomingCompletesWhenSeamCloses(scope: TestScope) {
         if (!capabilities().terminatesIncomingOnClose) return
         scope.connectedPair { host, joiner ->
-            // **The two collectors are started SEQUENTIALLY (#2601).** Each collector is live before
-            // its end's `close()`, so the property is the one a consumer relies on — a flow already
-            // being collected completes on close — and the joiner's collection starts only once the
-            // host's has settled, which leaves the host arm's preconditions byte-identical to the
-            // host-only form. If the host's close already completed the joiner's flow remotely —
-            // conforming, and what a role-split fabric does — the late collection sees an
-            // already-closed spool and returns immediately, which is a pass.
+            // **Each collector is PARKED on `incoming` before its end's `close()`.** That is the
+            // consumer's shape — a `Quilter` is already collecting when the seam closes — and it
+            // needs `UNDISPATCHED`: a plain `async` under `runTest` is only queued, and a `close()`
+            // that never suspends (the in-memory reference's) would tear the seam before the
+            // collector ran, leaving the obligation to test a late collector on a drained spool.
+            //
+            // **The two ends run SEQUENTIALLY (#2601)**, host first, which leaves the host arm's
+            // preconditions byte-identical to the host-only form. If the host's close already
+            // completed the joiner's flow remotely — conforming, and what a role-split fabric does —
+            // the joiner's collector meets an already-closed spool and returns at once, a pass.
             //
             // The awaits ARE the completion assertions: each returns only once its end's `incoming`
             // has completed.
-            val hostCollecting = async { host.incoming.toList() }
+            val hostCollecting = async(start = CoroutineStart.UNDISPATCHED) { host.incoming.toList() }
             host.close()
             hostCollecting.await()
 
-            val joinerCollecting = async { joiner.incoming.toList() }
+            val joinerCollecting = async(start = CoroutineStart.UNDISPATCHED) { joiner.incoming.toList() }
             joiner.close()
             joinerCollecting.await()
 
