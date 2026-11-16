@@ -1301,6 +1301,18 @@ public class LocalHeddle private constructor(
             // Retires run bottom-up, so a group's retire waits on every group below it whose change did
             // not land: one stopped in this attempt, or one left out of it.
             val below = (stopped.asSequence() + leftOut.asSequence()).filter { it.value.startsWith(child.value + "/") }.minOrNull()
+            // And a group beneath one whose change did not land is left out with it when that group
+            // was not reachable from the root before the reload: a new group, so the lanes under it
+            // would activate below a group with no inbound edge (#3466). A group that was reachable
+            // keeps its edge, so what is beneath it still has a way down from the root.
+            val above = (stopped.asSequence() + leftOut.asSequence())
+                .filter { child.value.startsWith(it.value + "/") && !base.reachesFromRoot(it) }
+                .minOrNull()
+            if (above != null) {
+                leaveOut += StepRefusal.Refused(child, step, "${above.value}, above it, was left out, and nothing above ${child.value} is reachable from the root without it")
+                stopped += child
+                continue
+            }
             val stepped = if (step is TopologyStep.Retire && below != null) null else local.applyStep(step)
             // An activation whose weight would put its parent's weight products out of Long, or make
             // the set too fine for one full lease: the ledger would take it, and every pick at that
@@ -1369,6 +1381,15 @@ public class LocalHeddle private constructor(
             }
         }
         return Trial.Landed(local, applied, draining, moved)
+    }
+
+    /**
+     * Whether a delegation from the [root] reaches [group] here: it has a lineage, every edge of it
+     * ACTIVE, and the lineage starts at the [root]. The root itself does not, having no inbound edge.
+     */
+    private fun EntitlementLedger.reachesFromRoot(group: GroupId): Boolean {
+        val lineage = lineageOf(group) ?: return false
+        return lineage.isNotEmpty() && lineage.all { lifecycle(it) == Lifecycle.ACTIVE } && record(lineage.first())?.parent == root
     }
 
     /**

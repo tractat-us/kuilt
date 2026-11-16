@@ -180,7 +180,11 @@ class EntitlementLedgerLiveLineagesTest {
     }
 
     private companion object {
-        /** Measured at 0 seeds below what 300 seeds reach; see the arm that reads it. */
-        const val ORPHANED_FLOOR = 0
+        /**
+         * Measured on the JVM: 57 of the 300 forests ask for a leaf whose ACTIVE lineage hangs below a
+         * group that is not the root. The floor is half that, so the arm reds when the generator stops
+         * building orphans, not when an edit to it moves the count a little.
+         */
+        const val ORPHANED_FLOOR = 28
     }
 }

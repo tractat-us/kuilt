@@ -6,17 +6,18 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
 /**
- * A lane beneath a group whose activation a reload refused. The reload still activates the lane's
- * own edge, so the lane hangs from a group with no inbound edge, not from the root. No delegation
- * from the root can reach it. `admit` used to read that group as a root, call the lineage live, and
- * throw `IllegalStateException` on the delegation the root could not make.
+ * A lane beneath a group with no inbound edge: the state a 0.7.5 engine persisted when a reload
+ * refused a new group's activation and still activated the lane's own edge beneath it (#3466). A
+ * reload no longer builds it, so the rig lays the lane's edge by hand after the refusal. No
+ * delegation from the root can reach the lane. `admit` used to read that group as a root, call the
+ * lineage live, and throw `IllegalStateException` on the delegation the root could not make.
  */
 class LocalHeddleAdmitRefusedLineageTest {
 
     private val policy = LocalPolicy(defaultReservation = 1_000L)
     private val small = draft("pool") { lane("small", Weight.ONE) }
 
-    /** `huge` is too heavy beside `small`, so its activation is refused; its lane's edge is not. */
+    /** `huge` is too heavy beside `small`, so its activation is refused, and its lane with it. */
     private val withHuge = draft("pool") {
         lane("small", Weight.ONE)
         group("huge", Weight.of(1L shl 62)) { lane("own", Weight.ONE) }
@@ -28,7 +29,12 @@ class LocalHeddleAdmitRefusedLineageTest {
         LocalHeddle.bootWhole(small, policy, epoch = 1L).apply {
             reconcileCapacity(4_000L)
             val refused = apply(withHuge, generation = 1L).refusals.map { it.child }
-            check(refused == listOf(huge)) { "the rig: only huge is refused, was $refused" }
+            check(refused == listOf(huge, lane)) { "the rig: huge and its lane are refused, was $refused" }
+            reshapeForTest { l ->
+                val edge = AttachmentRecord(AttachmentId("own-as-0.7.5-left-it"), huge, lane, Weight.ONE)
+                val prepared = l.piece(checkNotNull(l.prepare(edge)) { "prepare the lane's edge" }.delta)
+                prepared.piece(checkNotNull(prepared.activate(edge.id)) { "activate the lane's edge" }.delta)
+            }
             val active = snapshot().ledger.activeChildren(huge).size
             check(active == 1) { "the rig: huge's lane edge is active beneath it, was $active" }
         }
