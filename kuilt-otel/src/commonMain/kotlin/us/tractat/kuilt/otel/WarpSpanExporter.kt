@@ -127,9 +127,9 @@ public class WarpSpanExporter(
      *
      * Until then a local export adds nothing to [spans]. An `ORSet` add mints the next dot from the
      * set's own context, and before the read that context lacks every stored dot, so the add would
-     * reuse a dot a stored span already holds and the join would conflate the two. So [export] adds
-     * only inside [ioMutex], after the read has landed and joined the stored set, and then takes the
-     * live path exactly. A refused read leaves it nothing to undo.
+     * reuse a dot a stored span already holds and the join would conflate the two. [export] builds
+     * its add only inside [ioMutex], after this turn's read has landed and joined the stored set, as
+     * every export does. A refused read leaves it nothing to undo.
      */
     private var readState: SpanReadState = SpanReadState.Unread
     private val persistence = PersistenceHealthTracker<StoreKey>()
@@ -441,8 +441,8 @@ public class WarpSpanExporter(
      * cleared, or held only by a peer. Once this replica's span is evicted, a remote span that observed
      * it may be the only evidence its dot was minted, and re-minting it would resolve that predecessor
      * to a new span. The floor is raised before the state turns [SpanReadState.Recovered], in the same
-     * hold of [lock], and [export] mints before its write section only from a recovered exporter under
-     * that lock, so no stamp is minted below it. A clock whose own entry was corrupt starts at `seq=0`
+     * hold of [lock], and [export] mints only from a recovered exporter under that lock, so no stamp is
+     * minted below it. A clock whose own entry was corrupt starts at `seq=0`
      * and would otherwise re-mint those dots.
      *
      * An undecodable entry, the bare set this key held before #3435 included, starts fresh and loses
@@ -686,6 +686,11 @@ public class WarpSpanExporter(
      * remote set [merge]d and every span exported since, less the buffer cap's evictions and what
      * [clear] dropped. Until then it holds only the remote sets merged meanwhile: neither the
      * stored spans nor any local export, which waits for that read (#3390).
+     *
+     * A local export shows here only once its writes have returned (#3517), so every dot this
+     * process's exports minted that the set holds is already durable: a peer that gossips from it
+     * cannot hand a restarted process a dot that process would mint again. An export whose writes
+     * are in flight, or failed, is not here.
      */
     public fun snapshot(): ORSet<SpanRecord> = lock.withLock { spans }
 
@@ -701,8 +706,9 @@ public class WarpSpanExporter(
      * or names, in the same hold of `lock` as the join (#3407). A peer can hand back spans this
      * replica minted and then lost, and a stamp minted after they land must not collide with one. The
      * high-water mark the span bytes carry (#3435) already covers every own dot that was in memory
-     * when a span write was encoded, so a stamp minted before the merge collides only with a dot that
-     * reached the peer from [snapshot] before any write carrying it landed, and the crash came first.
+     * when a span write was encoded, and [snapshot] shows an export only once its writes have landed
+     * (#3517), so a stamp minted before the merge collides only with a dot whose durable record this
+     * store has since lost, as a corrupt entry does.
      * The raise takes the peer's `seq` as given: a dot at `Long.MAX_VALUE` leaves the clock
      * [ClockTick.Exhausted], so later spans are saved unstamped. Whether a merge should refuse such
      * a dot is #3432.
@@ -798,7 +804,7 @@ public class WarpSpanExporter(
      * **On a failed write, [snapshot] already reads empty while the store still holds every span**, and
      * a configured clock's [WarpCausalClock.frontier] likewise reads empty while the persisted
      * one still names the pre-clear dots. Both mutations precede the writes and — unlike
-     * [export], which rolls a freshly-minted stamp back out — neither is undone. A caller that
+     * [export], which publishes its span only once its writes return — neither is undone. A caller that
      * uses the span count as a baseline must treat any non-[ExportResult.Success] as *count
      * unknown* rather than as zero. On success the count reads zero synchronously, because the
      * drop precedes the write.
