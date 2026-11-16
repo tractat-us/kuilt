@@ -1133,9 +1133,12 @@ public class LocalHeddle private constructor(
                     val fresh = trial.refusals.filter { it.child !in left }
                     check(fresh.isNotEmpty()) { "an attempt left out only children already left out: ${trial.refusals}" }
                     // The outermost unit first, so a group inside two that do not fit is reported for the outer one.
-                    if (attribution == Attribution.SIBLING_SET) {
-                        for (parent in trial.unfit.sortedWith(compareBy({ it.value.count { c -> c == '/' } }, { it.value }))) {
-                            for (refusal in unitOf(parent, steps)) left.getOrPut(refusal.child) { refusal }
+                    for (parent in trial.unfit.sortedWith(compareBy({ it.value.count { c -> c == '/' } }, { it.value }))) {
+                        // A reload leaves out a sibling set made only of new children whole, as a boot
+                        // does, since which one tips it over turns on how their ids sort (#3465). Beside a
+                        // running sibling it refuses the new child alone, and the running tree stays.
+                        if (attribution == Attribution.SIBLING_SET || ledger.activeChildren(parent).isEmpty()) {
+                            for (refusal in unitOf(parent, steps, attribution)) left.getOrPut(refusal.child) { refusal }
                         }
                     }
                     for (refusal in fresh) left.getOrPut(refusal.child) { refusal }
@@ -1156,9 +1159,10 @@ public class LocalHeddle private constructor(
      * children's weights do not fit the budget together. Every one carries the same reason, so the
      * answer does not depend on which child's activation tipped the set over.
      */
-    private fun unitOf(parent: GroupId, steps: List<TopologyStep>): List<StepRefusal> {
+    private fun unitOf(parent: GroupId, steps: List<TopologyStep>, attribution: Attribution): List<StepRefusal> {
+        val who = if (attribution == Attribution.SIBLING_SET) "the boot" else "the reload"
         val reason = "the weights of ${parent.value}'s children do not fit together: they would put the weight " +
-            "arithmetic out of Long, or let one full lease carry a child past its ceiling, so the boot leaves out " +
+            "arithmetic out of Long, or let one full lease carry a child past its ceiling, so $who leaves out " +
             "${parent.value} and every group beneath it"
         val beneath = parent.value + "/"
         return steps.asSequence()
@@ -1172,7 +1176,8 @@ public class LocalHeddle private constructor(
     private enum class Attribution {
         /**
          * That child alone, as any other refused child is: a reload whose new child does not fit
-         * beside its siblings leaves the tree that was running as it was.
+         * beside its running siblings leaves the tree that was running as it was. A set made only of
+         * new children is left out whole, as [SIBLING_SET] leaves it (#3465): none of it was running.
          */
         CHILD,
 
