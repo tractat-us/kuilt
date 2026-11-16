@@ -269,12 +269,13 @@ class OtlpHttpEdgeSplitTest {
         val postsWhenCancelled = collector.posts.size
         job.cancel()
         job.join()
+        val disk = onDisk(store, Signal.LOGS)
 
         assertAll(
             { assertEquals(2, postsWhenCancelled, "precondition: cancelled inside the second POST") },
             { assertEquals(1, collector.accepted.size, "precondition: exactly one chunk was acknowledged") },
             { assertTrue(job.isCancelled, "precondition: the send was cancelled") },
-            { assertEquals(collector.accepted.single().items.toSet(), onDisk(store, Signal.LOGS), "the delivered chunk is recorded") },
+            { assertEquals(collector.accepted.single().items.toSet(), disk, "the delivered chunk is recorded") },
             { assertEquals(mapOf("logs" to 1), store.writes, "in one write") },
         )
     }
@@ -327,11 +328,12 @@ class OtlpHttpEdgeSplitTest {
         val items = (1..40).toList()
         edge(collector, store, OtlpWireFormat.JSON, cap = 4096).sendSignal(Signal.LOGS, items)
         val accepted = collector.accepted
+        val disk = onDisk(store, Signal.LOGS)
         assertAll(
             { assertTrue(collector.statuses.count { it == HttpStatusCode.PayloadTooLarge } >= 1, "precondition: a 413 fired") },
             { assertTrue(accepted.all { it.bytes <= proxyLimit }, "every accepted body is under the proxy's limit") },
             { assertEquals(items, accepted.flatMap { it.items }.sorted(), "every record is delivered exactly once") },
-            { assertEquals(items.toSet(), onDisk(store, Signal.LOGS), "and recorded") },
+            { assertEquals(items.toSet(), disk, "and recorded") },
             { assertEquals(mapOf("logs" to 1), store.writes, "in one write") },
         )
     }
@@ -345,10 +347,11 @@ class OtlpHttpEdgeSplitTest {
             val outcome = runCatchingCancellable {
                 edge(collector, store, OtlpWireFormat.JSON, cap = 2048).sendSignal(Signal.LOGS, (1..count).toList())
             }
+            val disk = onDisk(store, Signal.LOGS)
             checks += listOf(
                 { assertTrue(outcome.isFailure, "$count records: a 400 fails the send") },
                 { assertEquals(1, collector.posts.size, "$count records: a 400 is not split and retried") },
-                { assertEquals(emptySet(), onDisk(store, Signal.LOGS), "$count records: nothing recorded") },
+                { assertEquals(emptySet(), disk, "$count records: nothing recorded") },
             )
         }
         assertAll(*checks.toTypedArray())
