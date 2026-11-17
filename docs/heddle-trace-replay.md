@@ -119,10 +119,10 @@ entry, with no gaps at the source. A gap downstream is therefore always visible.
 
 | Entry | What it carries |
 |---|---|
-| `Begin` | the `streamId` the recording was started with (the adapter mints a random one; core reads no random source), a `recordedBy` label the consumer supplies (say, its `KuiltVersion.VERSION`), and the `LocalPolicy` |
+| `Begin` | the `streamId` the recording was started with (the adapter mints a random one; core reads no random source), a `recordedBy` label the consumer supplies (say, its `KuiltVersion.VERSION`), the `LocalPolicy`, and the name of the digester the recording's digests are hashed with (§8) |
 | `Anchor` | a `LocalHeddleSnapshot` taken by `persist()`, and the engine's next lease sequence number |
 | `Call` | one of the nine calls with its arguments, and its `DecisionOutcome` |
-| `Digest` | a 64-bit hash of the state at this point, written every `digestEvery` calls between anchors (§8) |
+| `Digest` | a 64-bit hash of the state at this point, by the digester `Begin` names, written every `digestEvery` calls between anchors (§8) |
 | `End` | written when a recording is closed, so a reader can tell a finished trace from a cut one |
 
 The arguments are copied when the call is made. A caller may reuse one mutable `waiting` set
