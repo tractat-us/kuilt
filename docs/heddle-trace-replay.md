@@ -365,14 +365,21 @@ A replay never continues past a divergence in the same stretch, because the reco
 it name leases the twin may not have opened. Going further is a different tool, below.
 
 **Digests narrow a `StateDiverged` between anchors.** Every `digestEvery` calls the recorder writes a
-`Digest` entry: FNV-1a 64 over the bytes `persist()` would encode at that point, the same hash the
-`recordId` uses. The replay hashes its twin's snapshot at the same `seq`, and a mismatch is
-`StateDiverged(digestSeq)`, narrowed to the `digestEvery` calls since the last check. A digest
-saves buffer space, not work: it still encodes the whole snapshot to hash it, so slice 3 measures
-its cost beside an anchor's. It is evidence, not proof. Two different states share a hash once in
-2⁶⁴, and nothing here is adversarial. It relies on what the anchor check already relies on, that a
-snapshot encodes to the same bytes on every target, and a golden vector pins the hash on JVM,
-native and wasm (§12).
+`Digest` entry: a 64-bit hash of the snapshot `persist()` would take at that point. Core has no
+format to encode a snapshot with, so it does not hash one itself. The recording hook takes a
+*digester*, a function from `LocalHeddleSnapshot` to `Long`, as a required parameter, and the
+replay takes one too. `:kuilt-heddle-otel` supplies the one it records with: FNV-1a 64 over the
+snapshot's JSON encoding, the same hash the `recordId` uses. The replay hashes its twin's snapshot
+at the same `seq`, and a mismatch is `StateDiverged(digestSeq)`, narrowed to the `digestEvery`
+calls since the last check. A replay handed a different digester from the recorder's mismatches at
+the first digest, which is loud rather than wrong, and the adapter exposes its own so the two sides
+can name the same one.
+
+A digest saves buffer space, not work: the adapter's digester still encodes the whole snapshot to
+hash it, so slice 3 measures its cost beside an anchor's. It is evidence, not proof. Two different
+states share a hash once in 2⁶⁴, and nothing here is adversarial. It relies on a snapshot encoding
+to the same bytes on every target, and a golden vector pins the hash on JVM, native and wasm
+(§12).
 
 #### Beyond the first difference: the workload, not the picks
 
