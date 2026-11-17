@@ -22,22 +22,20 @@ class WarpMetricExporterUpDownRefusalReportingTest {
     fun eachMapsFirstRefusalOfOneKeyIsWarned() = runTest {
         val exporter = WarpMetricExporter(ReplicaId("A"), InMemoryDurableStore()).also { it.recover() }
         val key = MetricKey("in_flight", MetricKind.UP_DOWN_SUM)
-        // Fill this replica's increment slot in each map, then bring the share back to zero.
+        // This replica's level at the top of each map, where any rise is refused.
         exporter.setUpDownSum(key, Long.MAX_VALUE)
-        exporter.setUpDownSum(key, 0L)
         exporter.setUpDownSumDouble(key, Double.MAX_VALUE)
-        exporter.setUpDownSumDouble(key, 0.0)
 
         capturingLogsOf(METRIC_EXPORTER_LOGGER) { events ->
             val results = listOf(
-                exporter.setUpDownSum(key, 1L),
-                exporter.setUpDownSum(key, 1L),
-                exporter.setUpDownSumDouble(key, Double.MAX_VALUE),
-                exporter.setUpDownSumDouble(key, Double.MAX_VALUE),
+                exporter.addUpDownSum(key, 1L),
+                exporter.addUpDownSum(key, 1L),
+                exporter.addUpDownSumDouble(key, Double.MAX_VALUE),
+                exporter.addUpDownSumDouble(key, Double.MAX_VALUE),
             )
             val lines = events.naming("up-down sum series in_flight")
             assertAll(
-                { results.forEach { assertIs<MetricExportResult.Refused>(it, "the rig: every set was refused") } },
+                { results.forEach { assertIs<MetricExportResult.Refused>(it, "the rig: every add was refused") } },
                 { assertEquals(4, lines.size, "the rig: every refusal was logged") },
                 { assertEquals(listOf(Level.WARN, Level.DEBUG, Level.WARN, Level.DEBUG), lines.map { it.level }) },
             )

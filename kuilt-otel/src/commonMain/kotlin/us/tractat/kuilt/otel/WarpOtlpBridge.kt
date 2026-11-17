@@ -241,8 +241,8 @@ internal fun renderMetricPoints(
         }
         add(point)
     }
-    catalog.upDownSums.forEach { (key, counter) ->
-        val total = counter.valueOrNull()
+    catalog.upDownSums.forEach { (key, levels) ->
+        val total = levels.upDownTotalOrNull()
         if (total == null) {
             skippedUpDownSums.report(logger, key, catalog.upDownSums.keys) {
                 "WarpOtlpBridge: up-down sum series ${key.name} ${key.attributes} skipped: its total does not fit in a Long"
@@ -251,8 +251,8 @@ internal fun renderMetricPoints(
         }
         add(MetricPoint.UpDownSum(key, total, startEpochNanos = 0L, timeEpochNanos = nowEpochNanos))
     }
-    catalog.doubleUpDownSums.forEach { (key, counter) ->
-        add(MetricPoint.DoubleUpDownSum(key, counter.value, startEpochNanos = 0L, timeEpochNanos = nowEpochNanos))
+    catalog.doubleUpDownSums.forEach { (key, levels) ->
+        add(MetricPoint.DoubleUpDownSum(key, levels.upDownTotal(), startEpochNanos = 0L, timeEpochNanos = nowEpochNanos))
     }
 }
 

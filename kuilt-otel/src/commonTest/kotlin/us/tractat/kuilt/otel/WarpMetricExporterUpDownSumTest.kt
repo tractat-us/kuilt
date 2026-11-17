@@ -1,7 +1,6 @@
 package us.tractat.kuilt.otel
 
 import kotlinx.coroutines.test.runTest
-import us.tractat.kuilt.crdt.PNCounter
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.StoreKey
@@ -10,15 +9,16 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * An UpDownCounter is summable across replicas (#3307): the fleet's in-flight count is the sum of
- * every node's level. [MetricKind.UP_DOWN_SUM] holds one [PNCounter] (or
- * [us.tractat.kuilt.crdt.PNCounterDouble]) per series, and each replica keeps **its own share** of it
- * at the level it reports: a [MetricUpdate.SetUpDownSum] moves this replica's slot by
- * `level − own share`.
+ * every node's level. [MetricKind.UP_DOWN_SUM] holds, per series, one level per replica at a version
+ * ([us.tractat.kuilt.crdt.LWWMap] from replica to level), each written only by its owner; a merge
+ * keeps each entry's higher version, and the series reads the sum of the levels. How the version is
+ * minted, so a write supersedes the old entry everywhere, is `WarpMetricExporterUpDownVersionTest`'s.
  *
  * Every arm asserts the state it starts from before it asserts the outcome, so a rig that never
  * reached that state cannot pass.
@@ -36,7 +36,9 @@ class WarpMetricExporterUpDownSumTest {
         maxMetrics: Int = DEFAULT_MAX_METRICS,
     ) = WarpMetricExporter(replica = replica, store = store, maxMetrics = maxMetrics).also { it.recover() }
 
-    private fun RecordingStore.writeCount(): Int = operations().count { it.kind == StoreOpKind.WRITE }
+    /** Writes of the two up-down maps, leaving out the version claim, which a lease writes now and then. */
+    private fun RecordingStore.writeCount(): Int =
+        operations().count { it.kind == StoreOpKind.WRITE && it.key.name != "otel.metrics.updown.version" }
 
     private suspend fun WarpMetricExporter.set(key: MetricKey, level: Long) =
         assertEquals(MetricExportResult.Success, setUpDownSum(key, level), "set $key to $level")
@@ -77,8 +79,8 @@ class WarpMetricExporterUpDownSumTest {
         assertAll(
             { assertEquals(9L, before, "the rig: 5 + 4 before A moves") },
             { assertEquals(6L, onA.upDownSumValue(inFlight)) },
-            { assertEquals(2L, snapshot.count(a)) },
-            { assertEquals(4L, snapshot.count(b), "B's share is B's to move") },
+            { assertEquals(2L, snapshot[a]) },
+            { assertEquals(4L, snapshot[b], "B's level is B's to move") },
         )
     }
 
@@ -161,21 +163,31 @@ class WarpMetricExporterUpDownSumTest {
     }
 
     /**
-     * Note test 3: a restart recovers this replica's share, and the same level reported again moves
-     * nothing. A delta-temporality design would add the level again and read 14.
+     * Note test 3: a restart recovers this replica's level, and the same level reported again does
+     * not count twice: the series still reads 7, where a delta-temporality design would read 14. The
+     * first set of the run writes the level once more, at a fresh version, so a peer that saw a
+     * newer level the old run never landed on disk is overruled (`WarpMetricExporterUpDownVersionTest`);
+     * the next writes nothing.
      */
     @Test
-    fun aRestartRecoversTheShareAndTheSameLevelDoesNotCountTwice() = runTest {
+    fun aRestartRecoversTheLevelAndTheSameLevelDoesNotCountTwice() = runTest {
         val store = RecordingStore()
         exporter(a, store).set(inFlight, 7L)
         val restarted = exporter(a, store)
-        val recovered = restarted.upDownSumSnapshot(inFlight).count(a)
+        val recovered = restarted.upDownSumSnapshot(inFlight)
         val writesBefore = store.writeCount()
         restarted.set(inFlight, 7L)
+        val afterFirst = store.writeCount()
+        restarted.set(inFlight, 7L)
         assertAll(
-            { assertEquals(7L, recovered, "the rig: the share came back from the store") },
+            { assertEquals(7L, recovered[a], "the rig: the level came back from the store") },
             { assertEquals(7L, restarted.upDownSumValue(inFlight)) },
-            { assertEquals(writesBefore, store.writeCount(), "nothing to move, so nothing written") },
+            { assertEquals(writesBefore + 1, afterFirst, "the run's first set wrote the level again") },
+            { assertEquals(afterFirst, store.writeCount(), "the second set wrote nothing") },
+            {
+                val before = assertNotNull(recovered.tagOf(a))
+                assertTrue(assertNotNull(restarted.upDownSumSnapshot(inFlight).tagOf(a)) > before, "at a fresh version")
+            },
         )
     }
 
@@ -258,7 +270,7 @@ class WarpMetricExporterUpDownSumTest {
         assertEquals(MetricExportResult.Success, onA.record(listOf(MetricUpdate.SetUpDownSum(inFlight, 4L))))
         assertAll(
             { assertEquals(4L, onA.upDownSumValue(inFlight)) },
-            { assertEquals(4L, onA.upDownSumSnapshot(inFlight).count(a)) },
+            { assertEquals(4L, onA.upDownSumSnapshot(inFlight)[a]) },
         )
     }
 
@@ -277,55 +289,31 @@ class WarpMetricExporterUpDownSumTest {
         repeat(3) { assertEquals(MetricExportResult.Success, onA.setUpDownSumDouble(inFlight, 0.3)) }
         assertAll(
             { assertEquals(1.25, afterAdds) },
-            { assertEquals(0.3, onA.upDownSumDoubleValue(inFlight), 1e-15) },
+            { assertEquals(0.3, onA.upDownSumDoubleValue(inFlight), "the level is stored exactly") },
             { assertEquals(afterFirstSet, store.writeCount(), "re-setting 0.3 wrote nothing after the first") },
         )
     }
 
-    /**
-     * A share is a difference of two growing totals, so it can land a rounding step off the level.
-     * Whatever the level, setting it again settles within a few writes: each one must bring the
-     * share strictly closer, so they end. An unrecorded random search never saw a level take more
-     * than three, so the fourth to sixth sets of each level here must write nothing. Run over many
-     * levels so a rounding that lands on either side of the level is reached.
-     */
+    /** A level is stored as given, so a steady one matches exactly, and `-0.0` is the same level as `0.0`. */
     @Test
-    fun aRepeatedDoubleLevelSettlesForEveryLevel() = runTest {
+    fun aSteadyDoubleLevelIsAnExactMatchAndNegativeZeroIsZero() = runTest {
         val store = RecordingStore()
         val onA = exporter(a, store)
-        val unsettled = (1..200).mapNotNull { i ->
-            val level = i * 0.1 - 7.3
-            repeat(3) { onA.setUpDownSumDouble(inFlight, level) }
-            val settled = store.writeCount()
-            repeat(3) { onA.setUpDownSumDouble(inFlight, level) }
-            if (store.writeCount() == settled) null else level
+        val levels = listOf(0.1, -7.3, 1e300, Double.MIN_VALUE, 0.0)
+        val start = store.writeCount()
+        val unsettled = levels.filter { level ->
+            onA.setUpDownSumDouble(inFlight, level)
+            val written = store.writeCount()
+            onA.setUpDownSumDouble(inFlight, level)
+            store.writeCount() != written
         }
+        val beforeNegativeZero = store.writeCount()
+        onA.setUpDownSumDouble(inFlight, -0.0)
         assertAll(
-            { assertTrue(store.writeCount() >= 200, "the rig: every new level wrote, ${store.writeCount()} writes") },
-            { assertEquals(emptyList<Double>(), unsettled, "levels still writing on their fourth to sixth set") },
-        )
-    }
-
-    /**
-     * A state found by a random search in which moving the share by `level − share` never lands:
-     * each write rounds to the other side of the level, so without the rule that a set must bring
-     * the share closer, this level is rewritten on every collection, forever. The rig: the first set
-     * really does write.
-     */
-    @Test
-    fun aLevelWhoseEveryMoveOvershootsSettlesAfterOneWrite() = runTest {
-        val store = RecordingStore()
-        val onA = exporter(a, store)
-        onA.addUpDownSumDouble(inFlight, 0.04524733402924585)
-        onA.addUpDownSumDouble(inFlight, -0.013141399650194556)
-        val before = store.writeCount()
-        onA.setUpDownSumDouble(inFlight, -0.0727241849719674)
-        val afterFirst = store.writeCount()
-        repeat(6) { onA.setUpDownSumDouble(inFlight, -0.0727241849719674) }
-        assertAll(
-            { assertEquals(before + 1, afterFirst, "the first set wrote") },
-            { assertEquals(afterFirst, store.writeCount(), "the level settled after that one write") },
-            { assertEquals(-0.0727241849719674, onA.upDownSumDoubleValue(inFlight), 1e-16) },
+            { assertEquals(levels.size, beforeNegativeZero - start, "the rig: each new level wrote once") },
+            { assertEquals(emptyList<Double>(), unsettled, "levels that wrote again when set again") },
+            { assertEquals(beforeNegativeZero, store.writeCount(), "-0.0 after 0.0 wrote") },
+            { assertEquals(0.0.toRawBits(), onA.upDownSumDoubleSnapshot(inFlight)[a]?.toRawBits(), "stored as 0.0") },
         )
     }
 
@@ -346,17 +334,16 @@ class WarpMetricExporterUpDownSumTest {
 
     // ── Overflow ────────────────────────────────────────────────────────────────────────────
 
-    /** A set whose move would carry this replica's slot past [Long.MAX_VALUE] is refused whole. */
+    /** An add that would carry this replica's level past [Long.MAX_VALUE] is refused whole. */
     @Test
-    fun aSetThatWouldOverflowItsSlotIsRefusedWhole() = runTest {
+    fun anAddThatWouldOverflowTheLevelIsRefusedWhole() = runTest {
         val store = RecordingStore()
         val onA = exporter(a, store)
         onA.set(inFlight, Long.MAX_VALUE)
-        onA.set(inFlight, 0L)
         val writesBefore = store.writeCount()
-        val refused = onA.record(listOf(MetricUpdate.SetUpDownSum(other, 1L), MetricUpdate.SetUpDownSum(inFlight, 1L)))
+        val refused = onA.record(listOf(MetricUpdate.SetUpDownSum(other, 1L), MetricUpdate.AddUpDownSum(inFlight, 1L)))
         assertAll(
-            { assertEquals(0L, onA.upDownSumValue(inFlight), "the rig: the increment slot is at Long.MAX_VALUE") },
+            { assertEquals(Long.MAX_VALUE, onA.upDownSumValue(inFlight), "the rig: the level is at Long.MAX_VALUE") },
             { assertEquals(inFlight, assertIs<MetricUpDownSumOverflowException>(assertIs<MetricExportResult.Refused>(refused).overflow).key) },
             { assertNull(onA.snapshotAll().upDownSums[other], "nothing of the batch was applied") },
             { assertEquals(writesBefore, store.writeCount(), "nothing was written") },
@@ -364,7 +351,7 @@ class WarpMetricExporterUpDownSumTest {
     }
 
     /**
-     * Two replicas' shares that each fit can add up past [Long.MAX_VALUE], which the bridge cannot
+     * Two replicas' levels that each fit can add up past [Long.MAX_VALUE], which the bridge cannot
      * export. A set that would leave the series there is refused; one that brings it back is not.
      */
     @Test
@@ -390,7 +377,7 @@ class WarpMetricExporterUpDownSumTest {
         val points = renderMetricPoints(onA.snapshotAll(), nowEpochNanos = 1L, FirstSightings(), FirstSightings(), FirstSightings())
         assertAll(
             { assertEquals(MetricWriteResult.Success, merged) },
-            { assertNull(onA.snapshotAll().upDownSums.getValue(inFlight).valueOrNull(), "the rig: the total passes Long") },
+            { assertNull(onA.snapshotAll().upDownSums.getValue(inFlight).upDownTotalOrNull(), "the rig: the total passes Long") },
             { assertTrue(points.none { it.key == inFlight }, "skipped, not rendered: $points") },
         )
     }
@@ -434,8 +421,8 @@ class WarpMetricExporterUpDownSumTest {
         assertAll(
             { assertTrue("otel.metrics.updown" in reads && "otel.metrics.updown.double" in reads, "$reads") },
             { assertTrue("otel.metrics.updown" in deletes && "otel.metrics.updown.double" in deletes, "$deletes") },
-            { assertEquals(2L, acknowledged, "one health turn per key") },
-            { assertEquals(emptySet(), store.keys()) },
+            { assertEquals(3L, acknowledged, "one health turn per key: the version claim and the two maps") },
+            { assertEquals(setOf("otel.metrics.updown.version"), store.keys(), "the clear keeps only the version claim") },
         )
     }
 }

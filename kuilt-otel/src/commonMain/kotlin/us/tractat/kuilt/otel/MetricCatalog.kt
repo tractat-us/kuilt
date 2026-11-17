@@ -6,10 +6,10 @@ import us.tractat.kuilt.crdt.DDSketch
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.HyperLogLog
+import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.LWWRegister
-import us.tractat.kuilt.crdt.PNCounter
-import us.tractat.kuilt.crdt.PNCounterDouble
 import us.tractat.kuilt.crdt.Quilted
+import us.tractat.kuilt.crdt.ReplicaId
 
 /**
  * A converged snapshot of every metric series a device holds — counters, gauges,
@@ -48,9 +48,9 @@ public class MetricCatalog(
     @Serializable(with = CanonicalMapSerializer::class)
     public val histograms: Map<MetricKey, DDSketch> = emptyMap(),
     @Serializable(with = CanonicalMapSerializer::class)
-    public val upDownSums: Map<MetricKey, PNCounter> = emptyMap(),
+    public val upDownSums: Map<MetricKey, LWWMap<ReplicaId, Long>> = emptyMap(),
     @Serializable(with = CanonicalMapSerializer::class)
-    public val doubleUpDownSums: Map<MetricKey, PNCounterDouble> = emptyMap(),
+    public val doubleUpDownSums: Map<MetricKey, LWWMap<ReplicaId, Double>> = emptyMap(),
 ) : Quilted<MetricCatalog> {
 
     /**

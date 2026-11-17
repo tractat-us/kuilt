@@ -8,9 +8,8 @@ import us.tractat.kuilt.crdt.DDSketch
 import us.tractat.kuilt.crdt.GCounter
 import us.tractat.kuilt.crdt.GCounterDouble
 import us.tractat.kuilt.crdt.HyperLogLog
+import us.tractat.kuilt.crdt.LWWMap
 import us.tractat.kuilt.crdt.LWWRegister
-import us.tractat.kuilt.crdt.PNCounter
-import us.tractat.kuilt.crdt.PNCounterDouble
 import us.tractat.kuilt.crdt.ReplicaId
 import us.tractat.kuilt.crdt.piece
 import us.tractat.kuilt.test.assertAll
@@ -179,8 +178,12 @@ class MetricCatalogCanonicalEncodingTest {
         val REPLICA = ReplicaId("r")
         val COUNTER = GCounter.of(REPLICA to 1L)
         val DOUBLE_COUNTER = GCounterDouble.of(REPLICA to 1.5)
-        val UP_DOWN_COUNTER = PNCounter.ZERO.let { it.piece(it.decrement(REPLICA, 2L)) }
-        val DOUBLE_UP_DOWN_COUNTER = PNCounterDouble.ZERO.let { it.piece(it.decrement(REPLICA, 0.5)) }
+        /** Two replicas' levels, written in the order that does not sort, so the inner map is put in order too. */
+        val UP_DOWN_COUNTER = levels(REPLICA to -2L, ReplicaId("q") to 5L)
+        val DOUBLE_UP_DOWN_COUNTER = levels(REPLICA to -0.5, ReplicaId("q") to 1.25)
+
+        private fun <V> levels(vararg entries: Pair<ReplicaId, V>): LWWMap<ReplicaId, V> =
+            entries.fold(LWWMap.empty()) { map, (owner, level) -> map.piece(map.set(owner, 1L, owner, level).delta) }
         val REGISTER = LWWRegister.empty<Double>().set(REPLICA, 1L, 21.0)
 
         /** Precision 4 is the smallest legal sketch: 12 bytes, against 12 KiB at the default. */
