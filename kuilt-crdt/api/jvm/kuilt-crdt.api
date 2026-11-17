@@ -1607,6 +1607,7 @@ public final class us/tractat/kuilt/crdt/Rga : us/tractat/kuilt/crdt/OpLogCrdt, 
 	public final fun compact (Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;Lus/tractat/kuilt/crdt/VersionVector;)Lkotlin/Pair;
 	public synthetic fun dotOf (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Dot;
 	public fun dotOf (Lus/tractat/kuilt/crdt/RgaId;)Lus/tractat/kuilt/crdt/Dot;
+	public final fun dropAllOwn-81S8jZI (Ljava/lang/String;)Lkotlin/Pair;
 	public final fun dropWindow-8mRuq1Y (Ljava/lang/String;Ljava/util/Set;)Lkotlin/Pair;
 	public final fun dropWindowPastUnheld-8mRuq1Y (Ljava/lang/String;Ljava/util/Set;)Lkotlin/Pair;
 	public final fun entries ()Ljava/util/List;

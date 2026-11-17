@@ -16,6 +16,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.io.bytestring.ByteString
 import kotlinx.serialization.cbor.Cbor
 import us.tractat.kuilt.core.runCatchingCancellable
+import us.tractat.kuilt.crdt.Patch
 import us.tractat.kuilt.crdt.Rga
 import us.tractat.kuilt.crdt.RgaId
 import us.tractat.kuilt.crdt.RgaOp
@@ -164,6 +165,31 @@ internal fun opCountOf(segment: Rga<LogRecord>): Int = segment.opCount
  * Bounding it needs the same causal-stability argument segment retirement does, and is
  * not attempted here. `WarpLogRecordExporterWindowingTest` measures both terms against
  * each other.
+ *
+ * **A third term: another author's tombstones that trail the list.** A pass cuts a leading
+ * prefix of the list, and the next export goes after the last *visible* record. A merge can
+ * deliver a run that another author wrote and then tombstoned whole, sorted after every visible
+ * record: appended after our newest record at a higher clock, say, or rooted at the head behind
+ * our own records. Every later export lands ahead of that run, so no ordinary window pass reaches
+ * it, and its `Insert`s, bodies included, stay in [log] with their tombstones. [clear] is the
+ * exception: its pass retains nothing, so it cuts the run with everything else and accepts the
+ * re-root below, as [dropUnheldOwn] does for its own ids.
+ *
+ * An ordinary pass does not cut them, on purpose. Cutting them is an [RgaOp.Compact], and a
+ * replica that still holds one of those ids visible may append after it. That record re-roots
+ * through the run's predecessor, and to the head of the list once that predecessor is floored,
+ * which here is the usual case. Either way it sorts ahead of older records under the same parent
+ * and is the one DROP_OLDEST evicts. No local rule can tell when that is safe without a
+ * causal-stability witness, which this class does not have.
+ *
+ * Instead the run clears when the **author's own** window pass reaches it and arrives here by
+ * [merge]: the author drops the ids through its floor, by its cut or by [withOlderOwn] (#3511) when
+ * they trail its list too, and [Rga.piece] purges them under that floor. That is not a safe path
+ * either. A floor records no positions, so a third replica's record anchored on a run id re-roots
+ * to the head unconditionally when the floor merges in: the reordering [Rga.compactedBelow] already
+ * accepts for every floor drop. The ruling only declines to add a second, *local* source of it. The
+ * run stays only while its author never passes those ids. #3528 is where this was ruled;
+ * `WarpLogRecordExporterForeignTombstoneResidueTest` pins both halves.
  *
  * **[Rga.compact] is not the mechanism, and could not be.** It is the obvious candidate — it is
  * the reclamation this codebase already had — and it reclaims *nothing at all* here, for a
@@ -397,8 +423,15 @@ public class WarpLogRecordExporter(
     // WarpLogRecordExporterTailCacheTest. Eviction is the *only* thing that can remove
     // an element on the export path, and it only ever removes a leading prefix of the
     // visible sequence, so no export can invalidate `tail` while the log is non-empty.
+    // An eviction that empties it needs no reset either: every eviction is paired with an
+    // admitted insert, and applyTurn sets `tail` to that insert after committing both.
 
-    /** Predecessor for the next append: the last visible element, or [RgaId.HEAD] when empty. */
+    /**
+     * Predecessor for the next append: the last visible element, or [RgaId.HEAD] when empty.
+     *
+     * Visible, not last: a merged run of another author's tombstones that sorts after it stays
+     * behind every later export, which is the residue the class KDoc describes (#3528).
+     */
     private var tail: RgaId = RgaId.HEAD
 
     /** Number of visible (non-tombstoned) records in [log] — the eviction gate. */
@@ -2078,7 +2111,6 @@ public class WarpLogRecordExporter(
         eviction.evicted.forEach { record -> seenIds.remove(record.recordId) }
         visibleCount -= count
         evictionsSincePass += count
-        if (visibleCount == 0) tail = RgaId.HEAD
     }
 
     /** Count [count] [BufferPolicy.DROP_OLDEST] evictions. Must hold [lock]; see [commitEviction]. */
@@ -2276,13 +2308,18 @@ public class WarpLogRecordExporter(
      * Drop every record this exporter holds and delete the segments that held them —
      * a supported reset the same live instance keeps exporting into (#2208).
      *
-     * The forgetting goes through [Rga.dropWindow], not [Rga.empty], and the difference is
-     * the whole design. A reset to empty re-mints `RgaId`s this replica has already used —
+     * The forgetting goes through a window pass ([Rga.dropWindowPastUnheld]) and then
+     * [Rga.dropAllOwn], not [Rga.empty], and the difference is the whole design. A reset to empty re-mints `RgaId`s this replica has already used —
      * `maxSeqByReplica` and the Lamport clock both restart — so a later [merge] with a peer
      * holding the pre-clear ops resolves two different records onto one id by map-put order.
      * A window pass instead raises the compaction **floor**, which carries the seq high-water
      * forward and *suppresses* the dropped dots, so a peer holding the raw `Insert`s cannot
      * push the records back either: [Rga.piece] merges the floor and re-purges beneath it.
+     * The floor is raised to this replica's seq high-water, not only past what it holds, so this
+     * replica's **own** records in a sealed segment recovery could not read are forgotten as well
+     * (#3513). The floor is this replica's alone: another author's records in an unread
+     * [merge]-adopted segment are covered by neither it nor the pass's `Compact`, and they return
+     * when that segment is read.
      *
      * **The store settles to two small keys, not zero.** The index and one active segment
      * remain, the latter carrying the floor. That floor is what buys the paragraph above;
@@ -2298,7 +2335,9 @@ public class WarpLogRecordExporter(
      * **Reclamation is total only on the export path.** A segment carrying an
      * [RgaOp.Compact] is never retired and a [merge]-adopted segment is pinned entire, so a
      * gossip-fed replica keeps residue after a clear. A replica fed only by [export] mints
-     * only its own dots, which fold into the floor, so every sealed segment becomes retirable.
+     * only its own dots, which fold into the floor, so every sealed segment it has read becomes
+     * retirable. One recovery could not read stays pinned for the run: the floor purges its records
+     * once a later start reads it.
      *
      * Not a CRDT delete: this replica forgets, and so does any peer that merges from it
      * afterwards, but the clear does not travel to a peer that never does.
@@ -2329,6 +2368,9 @@ public class WarpLogRecordExporter(
         val actions = runCatchingCancellable {
             lock.withLock {
                 windowPass(retain = 0)
+                // The pass's floor stops at the highest own seq it held; ids recovery could not
+                // read may lie above it (#3513).
+                dropUnheldOwn()
                 // Unconditional, and NOT gated on whether the pass moved anything. Gating is
                 // the obvious optimisation and it silently breaks the retry: a clear whose
                 // commit failed has already dropped everything in memory, so the retry's pass
@@ -3284,11 +3326,35 @@ public class WarpLogRecordExporter(
         // ids already under the floor, or never delivered here — comes back as this very
         // state with an inert delta. Persisting that would rewrite the segment for nothing.
         if (newLog === log) return false
+        installDrop(newLog, delta)
+        return true
+    }
+
+    /**
+     * Raise this replica's floor to its seq high-water, past ids it does not hold. [clear]'s second
+     * step, after a pass at `retain = 0` has dropped everything held. Must hold [lock].
+     *
+     * The pass's floor walk ends at the highest own seq it drops. A recovery that could not read a
+     * sealed segment raised the seq past that segment's ids, and when the segment holds this
+     * replica's newest ids no dropped seq lies above them, so the walk leaves them open
+     * ([Rga.dropWindowPastUnheld]). Their records would then come back when a later start reads
+     * the segment, or when a peer that holds them merges (#3513). Here the clear forgets them too.
+     *
+     * The high-water can run past seqs never minted (the index's mint claim), which costs nothing:
+     * this replica mints only past it. A peer's record anchored on one of these ids re-roots to
+     * HEAD, as one anchored on a held id the pass dropped already does.
+     */
+    private fun dropUnheldOwn() {
+        val (newLog, delta) = log.dropAllOwn(replica) ?: return
+        installDrop(newLog, delta)
+    }
+
+    /** Install a drop's new [log] and put its [delta] into [activeSegment]. Must hold [lock]. */
+    private fun installDrop(newLog: Rga<LogRecord>, delta: Patch<Rga<LogRecord>>) {
         log = newLog
         activeSegment = activeSegment.piece(delta)
         activeOpCount = opCountOf(activeSegment)
         rebuildDerivedState()
-        return true
     }
 
     /**
@@ -3326,7 +3392,10 @@ public class WarpLogRecordExporter(
      *
      * Tombstones inside the window are retained along with it and counted against nothing;
      * tombstones in the prefix are dropped with it, which is the point — an evicted record's
-     * `Insert` *and* its `Remove` both leave the log.
+     * `Insert` *and* its `Remove` both leave the log. A run of another author's tombstones that
+     * trails every visible record is never in the prefix while `retain > 0`, and no other rule
+     * here cuts it; its author's own pass clears it (#3528, and the class KDoc). At `retain = 0`
+     * ([clear]) it is cut with everything else, below.
      *
      * At `retain = 0` the loop breaks on its first iteration with `cut` still at
      * `sequence.size`, so every id comes back — which is what makes [clear] the same pass
@@ -3350,8 +3419,10 @@ public class WarpLogRecordExporter(
     /**
      * Recompute [tail], [visibleCount] and [seenIds] from [log] in one pass.
      *
-     * The entry point for the two events that replace the log wholesale — [recover]
-     * and [merge] — where nothing can be threaded forward. Tombstoned entries are
+     * The entry point for the events that change the log in ways nothing can thread forward:
+     * a [merge], and a drop installed by [installDrop], which a [windowPass] and [clear]'s
+     * [dropUnheldOwn] both reach. [recover] does not call it: it walks the entries outside the
+     * lock and assigns them through [installDerivedState]. Tombstoned entries are
      * excluded by [Rga.entries], so an evicted record's dedup slot is freed for re-use.
      *
      * Must be called with [lock] held.

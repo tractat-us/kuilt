@@ -232,6 +232,106 @@ class WarpLogRecordExporterUnreadSealedSegmentIdsTest {
         )
     }
 
+    // ── A clear forgets an unread segment's own records too ─────────────────────────────────
+
+    /**
+     * A clear made while a sealed segment is unread forgets this replica's own records in it as
+     * well (#3513). The segment holds this replica's newest ids, so they sit above every id the
+     * clear can see: a floor that rises only as far as the highest dropped seq leaves them open, and
+     * the next start that reads the segment admits its records again. The floor is this replica's
+     * alone, so another author's records in an unread adopted segment are not covered; this arm's
+     * segment holds only its own.
+     */
+    @Test
+    fun aClearMadeWhileASealedSegmentIsUnreadForgetsItsRecords() = runTest {
+        val backing = RecordingStore()
+        val writer = exporterFor(backing)
+        repeat(16) { writer.export(record(it)) }
+        val index = indexOf(backing)
+        val (refusing, refusals) = refusingOneRead(backing, 1L, Refusal.THROW)
+        val restarted = exporterFor(refusing)
+        restarted.recover()
+        val heldBeforeClear = restarted.snapshot().toList().map { it.body }
+
+        val cleared = restarted.clear()
+        val afterClear = bodiesAfterRestart(backing)
+        assertEquals(ExportResult.Success, exporterFor(backing).also { it.recover() }.export(record(1000)))
+        val afterExport = bodiesAfterRestart(backing)
+
+        assertAll(
+            // The rig: segment 1 holds ids 9..16 and was not read, so the clear saw only 1..8.
+            { assertEquals(listOf(0L, 1L), index.sealedSegments, "the index names segments 0 and 1 sealed") },
+            { assertEquals(1, refusals(), "recover's read of segment 1 was refused") },
+            { assertEquals((0..7).map { "body-$it" }, heldBeforeClear, "the clear saw only segment 0's records") },
+            { assertEquals(ExportResult.Success, cleared, "the clear succeeded") },
+            // The property: nothing from before the clear comes back, then or after the next export.
+            { assertEquals(emptyList(), afterClear, "a clean start after the clear holds nothing") },
+            { assertEquals(listOf<String?>("body-1000"), afterExport, "a later export is the only record held") },
+        )
+    }
+
+    /**
+     * The order a clear leaves does not depend on whether a segment was unread when it ran. A peer
+     * that merged this replica's log before the clear still holds every record visible, and appends
+     * one of its own after the newest with its clock **ahead** of ours. Merged back after the clear,
+     * the peer's record has lost its anchor either way, so it re-roots to HEAD and sorts ahead of
+     * the records this replica exported since: the shape a clear of records it holds already
+     * leaves. The unread run must not change it, and must not come back through the merge.
+     */
+    @Test
+    fun aPeerMergedAfterAClearLeavesTheSameOrderWhetherOrNotASegmentWasUnread() = runTest {
+        val unread = clearThenMergeAheadPeer(refuseSegment1 = true)
+        val allRead = clearThenMergeAheadPeer(refuseSegment1 = false)
+        val expected = listOf<String?>("body-900", "body-100", "body-101")
+        assertAll(
+            { assertEquals(1, unread.refusals, "the unread arm's read of segment 1 was refused") },
+            { assertEquals(0, allRead.refusals, "the twin read every segment") },
+            { assertTrue(unread.peerLamport > unread.ownLamports.max(), "the peer's clock is ahead: $unread") },
+            { assertEquals(expected, allRead.merged, "the twin's order after the merge") },
+            { assertEquals(expected, unread.merged, "the unread arm's order after the merge") },
+            { assertEquals(expected, unread.restarted, "and after a clean start") },
+        )
+    }
+
+    private class AheadPeerRun(
+        val refusals: Int,
+        val peerLamport: Long,
+        val ownLamports: List<Long>,
+        val merged: List<String?>,
+        val restarted: List<String?>,
+    ) {
+        override fun toString() = "peer $peerLamport, own $ownLamports, merged $merged"
+    }
+
+    private suspend fun clearThenMergeAheadPeer(refuseSegment1: Boolean): AheadPeerRun {
+        val backing = RecordingStore()
+        val writer = exporterFor(backing)
+        repeat(16) { writer.export(record(it)) }
+        val peerHeld = writer.snapshot()
+        val (store, refusals) =
+            if (refuseSegment1) refusingOneRead(backing, 1L, Refusal.THROW) else backing to { 0 }
+        val restarted = exporterFor(store)
+        restarted.recover()
+        assertEquals(ExportResult.Success, restarted.clear())
+        assertEquals(ExportResult.Success, restarted.export(record(100)))
+        assertEquals(ExportResult.Success, restarted.export(record(101)))
+        val ownLamports = restarted.snapshot().entries().map { it.first.lamport }
+
+        val peer = ReplicaId("B")
+        // Ahead of every id this replica has minted, by construction rather than by a constant:
+        // the exporter's clock does not count one per record.
+        val (peerLog, minted) = peerHeld.advanceClock(peer, lamport = ownLamports.max() + 1_000L, seq = 0L)
+            .insertAllAfter(peer, peerHeld.entries().last().first, listOf(record(900)))
+        assertEquals(ExportResult.Success, restarted.merge(peerLog))
+        return AheadPeerRun(
+            refusals = refusals(),
+            peerLamport = minted.single().id.lamport,
+            ownLamports = ownLamports,
+            merged = restarted.snapshot().toList().map { it.body },
+            restarted = bodiesAfterRestart(backing),
+        )
+    }
+
     // ── A clear keeps the high-water ────────────────────────────────────────────────────────
 
     /**
