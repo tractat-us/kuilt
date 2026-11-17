@@ -349,8 +349,10 @@ A replay checks two things: each call's answer, and the state at each anchor.
   `LocalHeddle` this check sees the order of picks, because one `acquire` is one pick. That is the
   property #3504 found a call-for-call comparison over `HeddleNode` lacks, since there one
   `schedule` call meets all demand in any order.
-- **The state.** At each anchor after the first, the twin takes its own snapshot and compares its
-  encoding with the anchor's. A mismatch with every answer matching is `StateDiverged(anchorSeq)`:
+- **The state.** At each anchor after the first, the twin takes its own snapshot and compares it
+  with the anchor's through `LocalHeddleSnapshot.equals`, so core encodes nothing to check it.
+  Equal snapshots encode to equal bytes, so this is the same check as comparing the bytes. A
+  mismatch with every answer matching is `StateDiverged(anchorSeq)`:
   some call between the two anchors changed state that no answer showed yet, such as a wake clamp.
   The replay narrows it to that stretch of `K` calls. Narrowing further needs a closer anchor, so
   a consumer chasing one can lower `anchorEvery`.
