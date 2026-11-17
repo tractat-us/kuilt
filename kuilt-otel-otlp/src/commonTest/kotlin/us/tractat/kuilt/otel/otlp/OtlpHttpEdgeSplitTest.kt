@@ -460,8 +460,9 @@ class OtlpHttpEdgeSplitTest {
 
     /**
      * A proxy that takes the normal records but refuses one bigger record, still inside this edge's
-     * cap. The chunks acknowledged before it are recorded; the refused record is not, and the send
-     * stops there and fails, so the next drain retries it.
+     * cap. That refusal is the same on every drain, so it must not hold back the records behind it:
+     * every other record is delivered and recorded, the refused one is not, and the send still fails,
+     * so the next drain retries it.
      */
     @Test
     fun a413OnALoneRecordInsideTheCapKeepsTheDeliveredChunks() = runTest {
@@ -485,11 +486,46 @@ class OtlpHttpEdgeSplitTest {
             { assertEquals(1, refusedAlone.size, "precondition: the big record was refused on its own") },
             { assertTrue((refusedAlone.singleOrNull()?.bytes ?: -1) in (proxyLimit + 1)..cap, "precondition: over the proxy's limit, inside the cap") },
             { assertTrue(delivered.isNotEmpty(), "precondition: chunks were acknowledged before it") },
-            { assertTrue(outcome.isFailure, "the send fails") },
-            { assertEquals(listOf(big), collector.posts.lastOrNull()?.items, "and stops at the refused record") },
-            { assertEquals(delivered.toSet(), disk, "the acknowledged chunks are recorded, the refused record is not") },
+            { assertTrue(outcome.isFailure, "the send still fails") },
+            { assertEquals((1..40).toList() - big, delivered.sorted(), "every other record is delivered, once") },
+            { assertEquals((1..40).toSet() - big, disk, "and recorded, the refused record not") },
             { assertEquals(mapOf("logs" to 1), store.writes, "in one write") },
         )
+    }
+
+    /**
+     * A record whose request is exactly `maxRequestBytes` is inside the cap. Only a record the edge
+     * measured over the cap is folded on a `413`; this one is refused like any in-cap record, so the
+     * send fails, and the records beside it are still delivered.
+     */
+    @Test
+    fun a413OnARecordExactlyAtTheCapFailsTheSignal() = runTest {
+        val atCap = 99
+        val record = LogRecord(recordId = id8(atCap), body = "log-$atCap-" + "大".repeat(400))
+        val probe = collectorFor(OtlpWireFormat.JSON) { _, _ -> HttpStatusCode.OK }
+        edge(probe, CountingStore(), OtlpWireFormat.JSON, cap = 8192).sendLogs(setOf(record))
+        val cap = probe.posts.single().bytes
+        val checks = mutableListOf<() -> Unit>()
+        for (others in listOf(0, 20)) {
+            val collector = collectorFor(OtlpWireFormat.JSON) { _, post ->
+                if (atCap in post.items) HttpStatusCode.PayloadTooLarge else HttpStatusCode.OK
+            }
+            val store = CountingStore()
+            val records = LinkedHashSet<LogRecord>().apply { add(record); addAll((1..others).map { log(it) }) }
+            val outcome = runCatchingCancellable { edge(collector, store, OtlpWireFormat.JSON, cap).sendLogs(records) }
+            val disk = onDisk(store, Signal.LOGS)
+            val refused = collector.posts.filterIndexed { i, post ->
+                post.items == listOf(atCap) && collector.statuses[i] == HttpStatusCode.PayloadTooLarge
+            }
+            val tag = if (others == 0) "alone" else "beside $others records"
+            checks += listOf(
+                { assertEquals(1, refused.size, "$tag: precondition, the record was refused on its own") },
+                { assertEquals(cap, refused.singleOrNull()?.bytes, "$tag: precondition, and its request is exactly the cap") },
+                { assertTrue(outcome.isFailure, "$tag: the send fails rather than folding the record") },
+                { assertEquals((1..others).toSet(), disk, "$tag: every other record is recorded, this one not") },
+            )
+        }
+        assertAll(*checks.toTypedArray())
     }
 
     // ── 7. Links travel with their span ──────────────────────────────────────────
