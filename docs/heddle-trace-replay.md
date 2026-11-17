@@ -436,11 +436,13 @@ touches four parts of this design.
   `fromTopology` or `restore`, and the public outcome types are not made `@Serializable`.
 - **Anchors.** Slice 4 takes the origin out of the ledger, and 0.7.6 writes format 1 with no
   origins. An anchor needs no change, because it is whatever `persist()` writes in format 1.
-- **A trace recorded before step B, replayed after it, may diverge, and that is correct.** No
-  release before 0.7.6 records, so this arises only for a development build. Slice 4's reader
-  translates a format 1 origin by moving some children up one tick, which can change a close pick.
-  The rows the twin proof names as allowed to differ, a floor landing for one, can too. The replay
-  reports the first such pick, as it should.
+- **An engine restored from a 0.7.5 snapshot records the translated state.** No trace predates
+  step B: the recorder ships after it, so no trace holds an origin. A snapshot 0.7.5 wrote can,
+  and restoring it translates each origin into its children's positions and discards it
+  (`LedgerFormat1` in `:kuilt-heddle-core`), before a recording can start. So that engine's first
+  anchor is written origin-free, and its bytes differ from the snapshot the consumer restored. The
+  replay starts its twin from the anchor, never from the 0.7.5 bytes, so the translation cannot
+  show up as a divergence.
 - **The position limit refuses through existing arms,** `AcquireOutcome.LifetimeExhausted` and
   `StepRefusal.Refused`, so the trace format does not move for it. If §7.1's open question about
   telling a parent stalled at the limit apart from one at a lifetime counter is answered with a
