@@ -34,16 +34,21 @@ class WebCryptoDeviceKeyStoreTest {
         val key = assertIs<WebCryptoDeviceKey>(store(database).deviceKey())
         val stored = assertNotNull(readRecord(database), "precondition: the store kept a record")
         val control = privateKeyOf(cryptoPair { onSuccess, onError -> generateExtractablePair(onSuccess, onError) })
+        val controlJwk = exportRefusal(control, "jwk")
+        val controlPkcs8 = exportRefusal(control, "pkcs8")
+        val keyJwk = exportRefusal(key.privateKey, "jwk")
+        val keyPkcs8 = exportRefusal(key.privateKey, "pkcs8")
+        val storedPkcs8 = exportRefusal(privateKeyOf(stored), "pkcs8")
 
         assertAll(
             { assertTrue(isExtractable(control), "control: the extractable key says so") },
-            { assertNull(exportRefusal(control, "jwk"), "control: an extractable private key exports as a JWK") },
-            { assertNull(exportRefusal(control, "pkcs8"), "control: and as PKCS#8") },
+            { assertNull(controlJwk, "control: an extractable private key exports as a JWK") },
+            { assertNull(controlPkcs8, "control: and as PKCS#8") },
             { assertFalse(isExtractable(key.privateKey), "the store's private key is not extractable") },
-            { assertNotNull(exportRefusal(key.privateKey, "jwk"), "exporting it as a JWK rejects") },
-            { assertNotNull(exportRefusal(key.privateKey, "pkcs8"), "exporting it as PKCS#8 rejects") },
+            { assertNotNull(keyJwk, "exporting it as a JWK rejects") },
+            { assertNotNull(keyPkcs8, "exporting it as PKCS#8 rejects") },
             { assertFalse(isExtractable(privateKeyOf(stored)), "the kept record's private key is not extractable either") },
-            { assertNotNull(exportRefusal(privateKeyOf(stored), "pkcs8"), "and exporting it rejects") },
+            { assertNotNull(storedPkcs8, "and exporting it rejects") },
         )
     }
 
@@ -59,13 +64,17 @@ class WebCryptoDeviceKeyStoreTest {
         val signature = key.sign(message)
         val flipped = signature.copyOf().also { it[17] = (it[17].toInt() xor 0x01).toByte() }
         val stranger = DeviceKey.generate().id
+        val verifies = key.id.verify(message, signature)
+        val flippedVerifies = key.id.verify(message, flipped)
+        val otherMessageVerifies = key.id.verify("admit someone else".encodeToByteArray(), signature)
+        val strangerVerifies = stranger.verify(message, signature)
 
         assertAll(
             { assertEquals(64, signature.size, "raw r ‖ s, not DER") },
-            { assertTrue(key.id.verify(message, signature), "verifies under the key's own name") },
-            { assertFalse(key.id.verify(message, flipped), "a flipped bit does not") },
-            { assertFalse(key.id.verify("admit someone else".encodeToByteArray(), signature), "another message does not") },
-            { assertFalse(stranger.verify(message, signature), "another key's name does not") },
+            { assertTrue(verifies, "verifies under the key's own name") },
+            { assertFalse(flippedVerifies, "a flipped bit does not") },
+            { assertFalse(otherMessageVerifies, "another message does not") },
+            { assertFalse(strangerVerifies, "another key's name does not") },
         )
     }
 
@@ -106,9 +115,10 @@ class WebCryptoDeviceKeyStoreTest {
         val first = DeviceKeyStore.platform(appId).deviceKey().id
         val again = DeviceKeyStore.platform(appId).deviceKey().id
         val stored = assertNotNull(readRecord("kuilt-identity-$appId"), "the record is in the named database")
+        val storedName = independentNameOf(publicKeyOf(stored))
         assertAll(
             { assertEquals(first, again, "two stores over one app id are one device") },
-            { assertEquals(first, independentNameOf(publicKeyOf(stored)), "and the record is that device's key") },
+            { assertEquals(first, storedName, "and the record is that device's key") },
         )
     }
 
