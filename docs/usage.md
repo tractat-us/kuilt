@@ -724,13 +724,16 @@ service, off in another process. When the machine is quiet the answer comes back
 in a few hundredths of a second. When the machine is busy, that service is
 competing for the same CPU as everything else, and the answer can take **seconds**.
 
-It happens once per app launch — every later stack trace is fast either way. But
-"the machine is busy and the network is misbehaving" is one situation, not two,
-so the once is reasonably likely to land at the worst moment.
+That slow first answer happens once per app launch. But "the machine is busy and
+the network is misbehaving" is one situation, not two, so the once is reasonably
+likely to land at the worst moment. Every later trace is not free either: on a
+debug build each rendered one costs tens of milliseconds, so code that attaches a
+trace to every event pays that on every event the logger renders.
 
 There is a one-line build setting that removes the variability, and it costs you
-nothing: your traces still have function names and `file:line`, they are just
-resolved inside your own process instead of by asking a neighbour.
+nothing in debuggability: your traces still have function names and `file:line`, they are just
+resolved inside your own process instead of by asking a neighbour. It does not make
+the later traces any cheaper (see below).
 
 ```kotlin
 // The APP's build.gradle.kts. This configures a final binary, so it belongs in
@@ -757,17 +760,30 @@ in a process — `Throwable.stackTrace`, `stackTraceToString()`, or any
 | `coresymbolication` (default) | ~65 ms (~356 ms cold) | **~6.0–6.5 s** |
 | `libbacktrace` | ~7 ms | **~7 ms — flat** |
 
-Every subsequent trace is ~2–3 ms either way, and a `logger.warn { … }` with no
-throwable never resolves anything at all (~2.5 µs). The ~100× gap under load is
-the whole effect: idle, this is not worth thinking about.
+The ~100× gap under load is the whole of the *first-trace* effect: idle, it is not
+worth thinking about.
+
+Every trace after the first costs its own resolve, and that one does not go away.
+Inside kuilt's own `macosArm64` debug test binary (#3532), every trace — a forced
+`stackTraceToString()`, or the one kotlin-logging renders for a `logger.warn(e) { … }`
+— cost **~25 ms with `libbacktrace` and ~23 ms with `coresymbolication`** on a
+16-core dev Mac at load 8–22, and **50–70 ms** on a 3-vCPU CI runner. A test that logged 448
+throwables took 12.2 s on that Mac with the throwable attached and 0.03 s with it dropped. A
+`logger.warn { … }` with no throwable never resolves anything at all (~2.5 µs).
+
+These were not measured side by side with the first-trace table above, so do not
+read its ~7 ms first trace against the ~25 ms per trace: the binaries differ, and
+so may the depth of the stacks they unwound. Neither a release build nor a real
+device has been measured.
 
 ### What has *not* been confirmed
 
-This is a measured effect with a known lever, **not a confirmed shipped defect** —
+This is a measured effect, with a known lever for the first trace, **not a confirmed shipped defect** —
 be sceptical of it in the following ways:
 
-- The numbers are from a **debug `.kexe` on a development Mac** (macosArm64,
-  16-core). A release build for a real device may behave differently.
+- The numbers are from **debug binaries on a development Mac** (macosArm64,
+  16-core), plus a 3-vCPU CI runner for the per-trace cost. A release build for a
+  real device may behave differently.
 - The "saturated" column used **synthetic CPU saturation** (`yes > /dev/null` ×32).
   Whether a real iOS device under realistic load starves the same system service
   comparably is **unverified**.
@@ -783,17 +799,30 @@ throwable first and reading as a load-dependent flake.
 ### Why kuilt does not just stop logging traces
 
 The obvious alternative is for kuilt to stop attaching throwables to its own log
-lines. It is the wrong trade, because the cost is **one-time per process**: any
-one of the ~40 throwable-attached log sites in the library could be the one that
-pays it, so removing the exposure would mean converting essentially *all* of them.
-That trades away stack traces everywhere, permanently, to avoid a single
-tens-of-milliseconds cost — and it only helps a consumer who has not already set
-`libbacktrace`, which is flat under load anyway.
+lines. Against the first-trace spike it is the wrong trade, because that spike is
+**one-time per process**: any one of the ~40 throwable-attached log sites in the
+library could be the one that pays it, so removing the exposure would mean
+converting essentially *all* of them. That trades away stack traces everywhere,
+permanently, to avoid a single cost — and it only helps a consumer who has not
+already set `libbacktrace`, which is flat under load anyway.
+
+The per-trace cost is different: it is paid at every site, every time. A site
+that fires once on an unexpected failure pays ~25 ms once, which buys the trace
+that explains the failure. A site that fires on every event of a routine kind
+pays it per event, and that is the site where the trade has to be weighed.
 
 So kuilt drops the trace only where the failure is routine and the exception's
 type and message say everything the trace would (an unreachable telemetry
 collector; a log entry that was never meant to decode). Everywhere the failure is
-genuinely unexpected, the trace stays.
+genuinely unexpected, or the throwable came out of your own code, the trace
+stays. `SpeculativeSequencer` is the case that tests the rule: when your `apply`
+refuses a committed action it logs the refusal with the throwable, so an app
+whose `apply` refuses often pays a trace per refusal wherever the logger renders it.
+That was measured on macOS; in kuilt's iOS-simulator test binary os_log had WARN
+disabled, so nothing rendered unless forced, and a forced render cost the same. It
+keeps the throwable (#3537): it was thrown by your `apply`, so its trace is the
+diagnostic. If refusals are routine in your app, `libbacktrace` will not remove
+the per-trace cost, but a release build may differ and is worth measuring.
 
 ## For coding agents
 
