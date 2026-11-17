@@ -145,12 +145,16 @@ class WarpMetricExporterUpDownSumTest {
         store.allowWrites()
         val writesBefore = backing.writeCount()
         val retried = onA.setUpDownSumDouble(inFlight, 1.5)
+        val writesAfter = backing.writeCount()
+        val again = onA.setUpDownSumDouble(inFlight, 1.5)
         val restarted = exporter(a, backing)
         assertAll(
             { assertIs<MetricExportResult.Partial>(refused, "the rig: the store refused the set to 1.5") },
             { assertEquals(1, store.refusedWrites(), "the rig: exactly one write was refused") },
             { assertEquals(MetricExportResult.Success, retried) },
-            { assertEquals(writesBefore + 1, backing.writeCount(), "the steady level wrote the share again") },
+            { assertEquals(writesBefore + 1, writesAfter, "the steady level wrote the share again") },
+            { assertEquals(MetricExportResult.Success, again) },
+            { assertEquals(writesAfter, backing.writeCount(), "once on disk, the steady level writes nothing") },
             { assertEquals(0L, onA.health.value.outstandingFailures, "the refused turn is resolved") },
             { assertEquals(1.5, restarted.upDownSumDoubleValue(inFlight), "the share is durable") },
         )
