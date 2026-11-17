@@ -304,6 +304,46 @@ class KuiltMetricExporterBatchTest {
     }
 
     /**
+     * The up-down twin of [aSaturatedLongSumKeepsTheDoubleSumThatSharesItsKey]: a long and a double
+     * UpDownCounter under one name and attributes are different series, one in each map, and
+     * `record` refuses only the long one. Leaving it out must not take the double one with it.
+     */
+    @Test
+    fun aSaturatedLongUpDownSeriesKeepsTheDoubleUpDownSeriesThatSharesItsKey() = runTest {
+        val exp = WarpMetricExporter(replica = ReplicaId("dev"), store = CountingStore())
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val shared = MetricKey("in_flight", MetricKind.UP_DOWN_SUM, mapOf("route" to "/a"))
+        assertEquals(MetricExportResult.Success, exp.setUpDownSum(shared, Long.MAX_VALUE))
+        assertEquals(MetricExportResult.Success, exp.setUpDownSum(shared, 0L))
+        val rigRefuses = exp.setUpDownSum(shared, 2L)
+        val sharedExport = listOf(
+            metric(
+                "in_flight",
+                MetricDataType.LONG_SUM,
+                ImmutableSumData.create(false, AggregationTemporality.CUMULATIVE, listOf(longPoint(2L, "/a"))),
+            ),
+            metric(
+                "in_flight",
+                MetricDataType.DOUBLE_SUM,
+                ImmutableSumData.create(false, AggregationTemporality.CUMULATIVE, listOf(doublePoint(1.5, "/a"))),
+            ),
+        )
+
+        val code = bridge.export(sharedExport)
+        runCurrent()
+
+        assertAll(
+            {
+                val refusal = assertIs<MetricExportResult.Refused>(rigRefuses, "the rig: the long series really is saturated")
+                assertEquals(shared, assertIs<MetricUpDownSumOverflowException>(refusal.overflow).key)
+            },
+            { assertTrue(code.isDone && code.isSuccess, "a saturated up-down series is not an export failure") },
+            { assertEquals(0L, exp.upDownSumValue(shared), "the saturated long series took nothing") },
+            { assertEquals(1.5, exp.upDownSumDoubleValue(shared), "the double series under the same key was dropped with it") },
+        )
+    }
+
+    /**
      * A long sum and a double sum share a name and attributes but are different counters. Leaving the
      * saturated long one out must not take the double one with it.
      */
