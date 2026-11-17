@@ -533,7 +533,9 @@ Each names what enforces it. An enforcer that is not built yet names the slice t
    snapshot of format 1 (slice 3).
 7. **A digest is the same number on every target.** A golden vector for the adapter's digester,
    run on JVM, `macosArm64` and `wasmJs`, read as a union (slice 3). Core cannot pin it: the
-   digester is a parameter there, and the one that ships is the adapter's.
+   digester is a parameter there, and the one that ships is the adapter's. The vector pins the
+   digester's name beside its output, so a change that moves the output must rename it, the way a
+   layout change bumps `FORMAT_VERSION`.
 8. **A set rebuilt from changes equals the set written whole.** Checked by the reader at every
    whole set, as an `Unreadable` verdict; pinned by a seeded round trip whose sets change on most
    calls, with `fullSetEvery` large enough that a chain of changes is actually walked (slice 3).
@@ -545,6 +547,12 @@ Each names what enforces it. An enforcer that is not built yet names the slice t
     `Kept`, and the next call after that carries it. Enforced by a slice 1 test: a sink that drops
     every entry for fewer than `anchorEvery` calls sees one `persist()`, and the first `Kept` after
     it is followed by an anchor.
+11. **A replay never checks digests made by two digesters.** `Begin` carries the recorder's
+    digester name, and `replay` compares it before it resumes a twin, returning `DigesterMismatch`
+    on a difference. Enforced by a slice 2 test that hands the replay a digester of another name,
+    over a trace whose first call has had its answer altered. A replay that ran any call before
+    checking would find that `Diverged` first, so the result must be `DigesterMismatch`. The
+    check rests on names, so it is only as strong as invariant 7.
 
 ### 13. Slices: issues to file
 
