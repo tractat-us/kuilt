@@ -47,7 +47,7 @@ What is left fits in three small pieces:
 2. **A stream of log records.** `:kuilt-heddle-otel` turns each entry into one `LogRecord` in an
    exporter's buffer, and reads a pulled list of them back into a `DecisionTrace`.
 3. **A replay.** `DecisionTrace.replay(policy)` starts a twin engine from an anchor, asks it each
-   recorded question in order, and answers with one `ReplayReport`: every answer matched, or here
+   recorded question in order, and answers with one report: every answer matched, or here
    is the first that did not, with the twin stopped just before it so you can ask it why.
 
 Turning it on should take a few lines, and so should a replay. The rest of this page is about
@@ -322,7 +322,7 @@ The replay surface, sketched (names are proposals):
 
 ```text
 SnapshotDigester(name: String, digest: (LocalHeddleSnapshot) -> Long)
-DecisionTrace.replay(policy = <the recorded one>, digester): ReplayResult
+DecisionTrace.replay(policy = <the recorded one>, digester = <the recorder's>): ReplayResult
 ReplayResult.DigesterMismatch(recorded: String, given: String)  // §8, before any call
 ReplayResult.Replayed(report: ReplayReport)
 DecisionTrace.compare(policyA, policyB): ReplayReport
