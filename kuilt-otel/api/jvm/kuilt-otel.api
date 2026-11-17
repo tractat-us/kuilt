@@ -575,6 +575,7 @@ public final class us/tractat/kuilt/otel/MetricSumOverflowException : us/tractat
 }
 
 public final class us/tractat/kuilt/otel/MetricUpDownSumOverflowException : us/tractat/kuilt/otel/MetricOverflowException {
+	public final fun getFractional ()Z
 	public fun getKey ()Lus/tractat/kuilt/otel/MetricKey;
 }
 

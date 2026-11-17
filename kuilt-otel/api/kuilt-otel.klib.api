@@ -961,6 +961,8 @@ final class us.tractat.kuilt.otel/MetricSumOverflowException : us.tractat.kuilt.
 }
 
 final class us.tractat.kuilt.otel/MetricUpDownSumOverflowException : us.tractat.kuilt.otel/MetricOverflowException { // us.tractat.kuilt.otel/MetricUpDownSumOverflowException|null[0]
+    final val fractional // us.tractat.kuilt.otel/MetricUpDownSumOverflowException.fractional|{}fractional[0]
+        final fun <get-fractional>(): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpDownSumOverflowException.fractional.<get-fractional>|<get-fractional>(){}[0]
     final val key // us.tractat.kuilt.otel/MetricUpDownSumOverflowException.key|{}key[0]
         final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpDownSumOverflowException.key.<get-key>|<get-key>(){}[0]
 }
