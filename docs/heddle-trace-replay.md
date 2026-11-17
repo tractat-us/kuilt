@@ -321,7 +321,7 @@ Three modules, each doing what its dependencies already allow:
 The replay surface, sketched (names are proposals):
 
 ```text
-DecisionTrace.replay(policy = <the recorded one>): ReplayReport
+DecisionTrace.replay(policy = <the recorded one>, digest = <the recorder's>): ReplayReport
 DecisionTrace.compare(policyA, policyB): ReplayReport
 DecisionTrace.estimate(policies): WorkloadEstimate  // §8, aggregates, calibrated first
 ReplayReport.stretches: List<StretchReplay>      // one per stretch, in seq order
