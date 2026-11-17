@@ -142,6 +142,28 @@ public class LWWMap<K, V> private constructor(
     private fun removePatch(replica: ReplicaId, timestamp: Long, key: K): Patch<LWWMap<K, V>> =
         Patch(LWWMap(mapOf(key to LWWRegister.tagged<V>(replica, timestamp, null))))
 
+    /**
+     * The timestamp half of the tag on [key]'s cell, a [remove]'s tombstone included, or `null`
+     * when this map holds no cell for [key].
+     *
+     * For a writer that mints its own timestamps and has to know where its last write to a key
+     * stands: whether this run wrote it, or what to mint past when its own record of that is lost.
+     */
+    @CrdtInternalApi
+    public fun tagOf(key: K): Long? = cells[key]?.timestamp
+
+    /**
+     * This map with [key]'s cell gone, **with no tombstone**, as if [key] had never been written.
+     *
+     * Not a [remove], and not a lattice move: it can go **down** the lattice, so a later [piece] of
+     * any state that holds [key]'s old cell brings that cell back. For a caller that owns [key]'s
+     * cell outright and must not let a copy of it from elsewhere win over its own: it drops the
+     * key from what it is about to join, and keeps its own cell as the only one for that key.
+     */
+    @CrdtInternalApi
+    public fun without(key: K): LWWMap<K, V> =
+        cells[key]?.let { LWWMap(cells + (key to LWWRegister.tagged<V>(ReplicaId.Bottom, it.timestamp + 1, null))) } ?: this
+
     /** The join: per-key max-tag of the underlying registers. */
     override fun piece(other: LWWMap<K, V>): LWWMap<K, V> =
         LWWMap(cells.mergeValues(other.cells) { mine, theirs -> mine.piece(theirs) })
