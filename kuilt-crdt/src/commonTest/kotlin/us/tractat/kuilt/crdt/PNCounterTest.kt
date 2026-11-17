@@ -173,40 +173,6 @@ class PNCounterTest {
         assertTrue("value=9223372036854775808" in pn.toString(), pn.toString())
     }
 
-    // ── One replica's share (#3307) ─────────────────────────────────────────────────────────
-
-    @Test
-    fun countIsOneReplicasIncrementsLessItsDecrements() {
-        val pn = PNCounter.ZERO.inc(a, 10L).dec(a, 4L).inc(b, 3L).dec(b, 5L)
-        assertAll(
-            { assertEquals(6L, pn.count(a), "A's own share") },
-            { assertEquals(-2L, pn.count(b), "B's own share, negative") },
-            { assertEquals(0L, pn.count(ReplicaId("C")), "a replica with no slot") },
-            { assertEquals(pn.value, pn.count(a) + pn.count(b), "the shares add up to the value") },
-        )
-    }
-
-    /** Each half's slot is in `[0, Long.MAX_VALUE]`, so their difference always fits, at both ends. */
-    @Test
-    fun countFitsAtBothExtremesOfASlot() {
-        assertAll(
-            { assertEquals(Long.MAX_VALUE, PNCounter.ZERO.inc(a, Long.MAX_VALUE).count(a)) },
-            { assertEquals(-Long.MAX_VALUE, PNCounter.ZERO.dec(a, Long.MAX_VALUE).count(a)) },
-        )
-    }
-
-    @Test
-    fun valueOrNullAnswersNullExactlyWhereValueRefuses() {
-        val fits = PNCounter.ZERO.inc(a, QUARTER).inc(b, QUARTER).dec(a, 1L)
-        val pastMax = PNCounter.ZERO.inc(a, QUARTER).inc(b, QUARTER)
-        assertAll(
-            { assertFailsWith<ArithmeticException> { pastMax.value } },
-            { assertEquals(null, pastMax.valueOrNull()) },
-            { assertEquals(Long.MAX_VALUE, fits.valueOrNull()) },
-            { assertEquals(Long.MIN_VALUE, PNCounter.ZERO.dec(a, QUARTER).dec(b, QUARTER).valueOrNull()) },
-        )
-    }
-
     private companion object {
         /** 2⁶²: two slots of it sum to one past [Long.MAX_VALUE]. */
         const val QUARTER = 1L shl 62

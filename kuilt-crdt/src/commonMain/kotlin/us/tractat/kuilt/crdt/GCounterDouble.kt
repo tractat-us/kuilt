@@ -43,9 +43,6 @@ public class GCounterDouble private constructor(
     /** This replica's current count (0.0 if it has never incremented). */
     public fun count(replica: ReplicaId): Double = counts[replica] ?: 0.0
 
-    /** Every slot, for a type composed of these counters to check or walk; [PNCounterDouble] does both. */
-    internal val slots: Map<ReplicaId, Double> get() = counts
-
     /**
      * Increment [replica]'s own slot by [by] (must be > 0). Returns the delta to merge
      * in with [piece]; the receiver is unchanged.
