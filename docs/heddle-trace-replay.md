@@ -221,7 +221,11 @@ The record around the body:
 | `severityNumber`, `severityText` | 1, `TRACE`, so a collector can filter the stream out of an operator's view |
 | `attributes` | `heddle.trace.stream`, `heddle.trace.seq`, `heddle.trace.kind`, `heddle.trace.format` |
 | `body` | the JSON envelope |
-| `timestampEpochNanos` | the adapter's wall clock when it exported the entry. For people only: the engine reads no clock, and the replay never reads this |
+| `timestampEpochNanos` | the adapter's clock when its sink queued the entry, the nearest it gets to when the call was made |
+| `observedEpochNanos` | the adapter's clock when the pump exported the entry, so the difference between the two is time spent in the queue |
+
+Both times come from a clock the adapter is given, so a test can fix them. They are for people
+only: the engine reads no clock, and the replay never reads either.
 
 **An anchor is split into parts.** A snapshot grows with the tree, and one record per anchor
 would make the largest record in the buffer as large as the whole ledger. So an anchor above
