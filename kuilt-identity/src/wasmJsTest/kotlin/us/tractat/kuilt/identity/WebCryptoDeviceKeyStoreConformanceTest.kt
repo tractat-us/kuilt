@@ -192,7 +192,9 @@ private external fun exportRawPublicKey(key: JsAny, onSuccess: (JsAny) -> Unit, 
         const describe = (e) => (e && e.name ? e.name + ': ' + e.message : String(e));
         try {
             const req = indexedDB.open(dbName, 2);
-            req.onblocked = () => onError('blocked: a connection to ' + dbName + ' is still open');
+            // Not a failure: WebKit fires it for a connection whose close is still pending, and the
+            // upgrade goes ahead once it has closed.
+            req.onblocked = () => {};
             req.onerror = (e) => onError(describe(e.target.error));
             req.onsuccess = (e) => { e.target.result.close(); onDone(); };
         } catch (e) { onError(describe(e)); }
@@ -216,14 +218,18 @@ private external fun upgradeToVersion2(dbName: String, onDone: () -> Unit, onErr
             open.onsuccess = (e) => {
                 const db = e.target.result;
                 const keys = [], values = [];
-                const cursor = db.transaction('kv', 'readonly').objectStore('kv').openCursor();
+                const read = db.transaction('kv', 'readonly');
+                const cursor = read.objectStore('kv').openCursor();
                 cursor.onerror = (ev) => { db.close(); fail(ev.target.error); };
                 cursor.onsuccess = (ev) => {
                     const c = ev.target.result;
-                    if (c) { keys.push(c.key); values.push(c.value); c.continue(); return; }
+                    if (c) { keys.push(c.key); values.push(c.value); c.continue(); }
+                };
+                // Deleted only once the read transaction is over, so no connection of ours is open.
+                read.oncomplete = () => {
                     db.close();
                     const del = indexedDB.deleteDatabase(dbName);
-                    del.onblocked = () => onError('blocked: a connection to ' + dbName + ' is still open');
+                    del.onblocked = () => {}; // as above: it waits for a closing connection, then deletes.
                     del.onerror = (dv) => fail(dv.target.error);
                     del.onsuccess = () => {
                         const reopen = indexedDB.open(dbName, 1);
