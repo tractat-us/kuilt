@@ -21,6 +21,23 @@ way. Leave them out and the requests carry neither, exactly as before.
 `OtlpHttpEdge` is the `OtlpEdge` a `WarpOtlpBridge` drains into. Point it at a
 collector URL and call `drain` on each reconnect.
 
+## A long time offline, sent in pieces
+
+A device that was offline all day may have more to send than one request should carry.
+So `OtlpHttpEdge` sends each kind of telemetry in pieces no bigger than
+`maxRequestBytes`, which defaults to `OtlpHttpEdge.DEFAULT_MAX_REQUEST_BYTES`, 1 MiB.
+A piece the collector accepts counts as sent even if another one fails, so the next
+drain sends only what is left.
+
+1 MiB is the body limit a reverse proxy often puts in front of a collector. If yours
+sets a smaller one, set `maxRequestBytes` to match. Until you do, each drain pays a few
+refused requests while the edge halves them down to a size the proxy takes. Only a single
+record bigger than the proxy's limit fails. Everything else still goes through, but that
+kind of telemetry reports failed on every drain, and the error names `maxRequestBytes`,
+not the proxy's limit, which the edge cannot see. A single record bigger than
+`maxRequestBytes` is still sent, alone and last, since the collector may take it; if it
+answers `413`, the edge logs a warning and stops offering that record.
+
 ## Upgrading past this release: one burst of duplicates, once
 
 Worth knowing before you see it in a dashboard.

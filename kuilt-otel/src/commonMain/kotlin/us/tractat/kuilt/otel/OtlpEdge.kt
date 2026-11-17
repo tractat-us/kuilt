@@ -18,6 +18,13 @@ import kotlinx.io.bytestring.ByteString
  * `CancellationException` this edge mints at a live caller, from its own `withTimeout` say, is
  * reported the same way: as that leg's [SignalFailure] (#3392).
  *
+ * A send can fail after delivering part of its batch: an edge that splits a batch into several
+ * requests stops at the first one refused. It throws all the same, so [WarpOtlpBridge] reports
+ * that signal as failed with a count of 0, although the collector holds the part that went
+ * through. Such an edge tries to record the delivered part in its digest before it throws, so the
+ * next drain sends only the rest. That write can fail too: the edge then throws the send's own
+ * failure with the write's attached as suppressed, and the next drain resends the delivered part.
+ *
  * ## Implementations
  *
  * - A Ktor HTTP client that POSTs to `POST /v1/traces` (OTLP/HTTP protobuf).
