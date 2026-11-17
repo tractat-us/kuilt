@@ -2,8 +2,8 @@
 
 package us.tractat.kuilt.session
 
+import us.tractat.kuilt.identity.test.fakeKeyStore
 import kotlinx.coroutines.CoroutineStart
-import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
@@ -215,7 +215,7 @@ class ResumeAckAfterHostLostTest {
             val events = recordEvents(room)
             // The host introduces itself, so the joiner monitors it: a later tear reaches the room only
             // through that detector, since the tear watcher fires for the first tear alone.
-            seam.deliver(AdmitMessage.Welcome(assignedPeerId = hostId.value, displayName = "host", sessionId = hostId.value))
+            seam.deliver(AdmitMessage.Welcome(assignedPeerId = hostId.value, displayName = "host", sessionId = hostId.value, key = TEST_KEY_B))
             runCurrent()
             val monitoredAtStart = room.hasDetector(hostId)
 
@@ -280,7 +280,7 @@ class ResumeAckAfterHostLostTest {
     }
 
     /** A joiner the scripted host has admitted, holding a resume token. [onClock] runs on every clock read. */
-    private fun TestScope.admittedJoiner(seam: ScriptedSeam, onClock: () -> Unit = {}): Pair<SeamRoom, ResumeToken> {
+    private suspend fun TestScope.admittedJoiner(seam: ScriptedSeam, onClock: () -> Unit = {}): Pair<SeamRoom, ResumeToken> {
         val room = SeamRoom(
             seam = seam,
             role = SessionRole.Joiner,
@@ -292,7 +292,7 @@ class ResumeAckAfterHostLostTest {
             },
             heartbeatConfig = config,
             roomId = null,
-            deviceKeyStore = InMemoryDeviceKeyStore(),
+            device = RoomDevice.of(fakeKeyStore(0)),
             reweave = {
                 seam.heal()
                 seam
@@ -306,6 +306,7 @@ class ResumeAckAfterHostLostTest {
                 assignedPeerId = joinerId.value,
                 displayName = "joiner",
                 sessionId = joinerId.value,
+                key = TEST_KEY_B,
                 roomId = "room-1",
                 resumeSecret = ResumeSecret.generate(),
             ),
