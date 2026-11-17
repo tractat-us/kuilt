@@ -494,7 +494,9 @@ Each names what enforces it. An enforcer that is not built yet names the slice t
 
 1. **Every call that changes a `LocalHeddle` is recorded.** Enforced by a required parameter:
    `atomically`, the one block every mutating call already runs in, takes the call's entry, so a
-   mutating call cannot be written without naming one (slice 1). Backed by the round-trip property
+   mutating call cannot be written without naming one (slice 1). The boot and the `internal` test
+   hook, the two runs that are not recorded (§1), say so by name at that parameter, so the exclusion
+   shows at the call site. Backed by the round-trip property
    in slice 2: a seeded driver making every mutating call, whose twin must end in the same
    snapshot as the live engine.
 2. **Recording never changes a decision.** The sink is called after the state is kept, a throwing
