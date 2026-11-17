@@ -103,7 +103,11 @@ kotlin {
             // The Apple stores' one warning: a stored key they could not read back, replaced.
             implementation(libs.kotlin.logging)
         }
-        wasmJsMain.dependencies { implementation(libs.cryptography.provider.webcrypto) }
+        wasmJsMain.dependencies {
+            implementation(libs.cryptography.provider.webcrypto)
+            // WebCryptoDeviceKeyStore's one warning: a stored key pair it could not use, replaced.
+            implementation(libs.kotlin.logging)
+        }
 
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
