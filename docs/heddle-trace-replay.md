@@ -240,8 +240,9 @@ The record makes three hops, and only the last one exists today.
 1. **The engine calls the sink, synchronously, under the caller's lock.** `LocalHeddle` has no
    coroutines and one writer, so the sink must not block and must not suspend. It answers each
    entry `Kept` or `Dropped`. A sink that throws is counted as `Dropped`, and the call's result
-   stands: recording never changes a decision. `Dropped` makes the engine write an anchor at its
-   next call (§3).
+   stands: recording never changes a decision. `Dropped` makes the engine owe an anchor, which it
+   tries at its next call and, if that is dropped too, not again until the sink answers `Kept`
+   (§3).
 2. **The adapter's sink puts the entry on a bounded queue,** and a long-lived pump, launched
    through `Flow.pumpIn`, exports from that queue. When the queue is full the adapter drops the
    arriving entry and counts it. The engine has already numbered the entry, so the drop is a gap
