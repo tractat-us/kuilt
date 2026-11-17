@@ -314,14 +314,17 @@ Three modules, each doing what its dependencies already allow:
 
 | Module | Gains | Why there |
 |---|---|---|
-| `:kuilt-heddle-core` | `DecisionSink`, the entry and outcome types, `DecisionTrace`, the recording hook on `LocalHeddle`, the replay (`DecisionTrace.replay`, `ReplayReport`, `ReplayVerdict`), and the estimate (`DecisionTrace.estimate`, `WorkloadEstimate`) | The recorder has to be inside the engine, and the replay needs the `internal` same-epoch resume. Both need nothing beyond what core already depends on: no coroutines, no format, no network. The one thing that would need a format, hashing a snapshot for a digest, is a function the caller passes in (§8) |
+| `:kuilt-heddle-core` | `DecisionSink`, the entry and outcome types, `DecisionTrace`, `SnapshotDigester`, the recording hook on `LocalHeddle`, the replay (`DecisionTrace.replay`, `ReplayResult`, `ReplayReport`, `ReplayVerdict`), and the estimate (`DecisionTrace.estimate`, `WorkloadEstimate`) | The recorder has to be inside the engine, and the replay needs the `internal` same-epoch resume. Both need nothing beyond what core already depends on: no coroutines, no format, no network. The one thing that would need a format, hashing a snapshot for a digest, is a digester the caller passes in (§8) |
 | `:kuilt-heddle-otel` | the JSON codec, the `LogRecord` mapping, the adapter sink with its queue and pump, the digester the adapter records with, and `DecisionTraceReader` | It depends on `:kuilt-otel`, which core may not. #3184 already plans this module for heddle's metrics and spans. Whichever lands first creates it |
 | `:kuilt-heddle-test` | the many-peer form, later (§10) | It will need `:kuilt-raft-test`'s `MultiNodeRaftSim`, which no production module may depend on |
 
 The replay surface, sketched (names are proposals):
 
 ```text
-DecisionTrace.replay(policy = <the recorded one>, digest = <the recorder's>): ReplayReport
+SnapshotDigester(name: String, digest: (LocalHeddleSnapshot) -> Long)
+DecisionTrace.replay(policy = <the recorded one>, digester): ReplayResult
+ReplayResult.DigesterMismatch(recorded: String, given: String)  // §8, before any call
+ReplayResult.Replayed(report: ReplayReport)
 DecisionTrace.compare(policyA, policyB): ReplayReport
 DecisionTrace.estimate(policies): WorkloadEstimate  // §8, aggregates, calibrated first
 ReplayReport.stretches: List<StretchReplay>      // one per stretch, in seq order
