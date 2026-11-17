@@ -88,10 +88,12 @@ real scheduler does something its rules do not explain. The same three pieces fi
 derived values.
 
 - **The inputs are the calls that change the engine.** Nine public calls do: `apply`, `attach`,
-  `detach`, `reconcileCapacity`, `acquire`, `admit`, `extend`, `complete` and `cancel`. They are
-  exactly the calls that run inside the engine's private `atomically` block in
+  `detach`, `reconcileCapacity`, `acquire`, `admit`, `extend`, `complete` and `cancel`. Each runs
+  inside the engine's private `atomically` block in
   [`LocalHeddle.kt`](../kuilt-heddle-core/src/commonMain/kotlin/us/tractat/kuilt/heddle/LocalHeddle.kt).
-  The policy is the one other input, and it is fixed for an engine's life.
+  Two other things run there and are **not** recorded: `fromTopology`'s boot, which happens before
+  a recording can be attached and which the first anchor captures instead (§3), and an `internal`
+  hook only tests call. The policy is the one other input, and it is fixed for an engine's life.
 - **The answers are kept so the replay has something to check.** Each entry carries the call's
   outcome: the `AcquireOutcome`, `AdmitOutcome`, `LeaseOutcome` or `ApplyResult` it returned, or
   the kind of exception it threw. An answer is derived, and a correct twin would recompute it. It
