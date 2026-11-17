@@ -639,6 +639,10 @@ Slice 5 needs only slices 1 and 2, and can run on synthetic traces before the wi
   first.
 - **Only anchors for state checks.** Lowering `anchorEvery` to narrow a `StateDiverged` fills the
   buffer with snapshots. A digest costs eight bytes.
+- **Reporting a mismatched digester as `StateDiverged`.** Ruled 2026-11-16: `Begin` records the
+  digester's name, and a replay handed another refuses with `DigesterMismatch` before it replays
+  any call. A wrong digester is a mistake in the replay's setup, and a `StateDiverged` would
+  present it as a fault in the engine.
 
 #### Open
 
@@ -646,3 +650,7 @@ Slice 5 needs only slices 1 and 2, and can run on synthetic traces before the wi
   would have emptied sooner under the new policy still looks queued. Calibration bounds the error
   for the recorded policy only. A queue-depth input would need the caller to report counts, which
   `acquire` does not take today.
+- **A trace whose `Begin` was evicted.** `Begin` is the oldest record, and the buffer evicts oldest
+  first (§5), so a recording that outlives its window loses the recorded policy and the digester's
+  name together. What a replay does then is undecided. Copying both onto every `Anchor` is the
+  obvious candidate, at a small cost per stretch.
