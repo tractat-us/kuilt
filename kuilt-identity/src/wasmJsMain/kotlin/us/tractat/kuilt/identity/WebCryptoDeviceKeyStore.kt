@@ -15,7 +15,6 @@ import kotlinx.coroutines.sync.withLock
 import us.tractat.kuilt.store.DurableStore
 import us.tractat.kuilt.store.IndexedDbDurableStore
 import us.tractat.kuilt.store.StoreKey
-import kotlin.concurrent.Volatile
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.js.JsAny
 
@@ -77,7 +76,7 @@ internal class WebCryptoDeviceKeyStore(
 ) : DeviceKeyStore {
     private val inPage: Mutex = mutexFor(database)
 
-    @Volatile
+    /** Read and written only inside [exclusively] or as a plain read: wasmJs runs one thread per page. */
     private var key: DeviceKey? = null
 
     /** Guarded by [inPage]: one warning per store for an unreadable grants record. */
@@ -98,7 +97,7 @@ internal class WebCryptoDeviceKeyStore(
     private suspend fun <T> exclusively(block: suspend () -> T): T = inPage.withLock { withWebLock(database, block) }
 
     private suspend fun readOrMake(): DeviceKey {
-        val stored = idbCall("reading the device key") { onSuccess, onError ->
+        val stored = idbCall<JsAny?>("reading the device key") { onSuccess, onError ->
             idbGetValue(database, DEVICE_KEY, onSuccess, onError)
         } ?: return make()
         return when (val read = readBack(stored)) {
@@ -154,7 +153,7 @@ internal class WebCryptoDeviceKeyStore(
 }
 
 /** How a [WebCryptoDeviceKeyStore] call reaches the grants record: open, run [use]'s block, close. */
-internal fun interface GrantMedium {
+internal interface GrantMedium {
     suspend fun <T> use(block: suspend (DurableStore) -> T): T
 }
 
