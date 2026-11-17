@@ -79,8 +79,10 @@ public enum class OtlpWireFormat {
  * ## One signal, several requests
  *
  * A signal whose request would be bigger than [maxRequestBytes] is split into several,
- * each under the cap, sent one after another in the order the batch iterates. A span
- * travels with the links it owns, and every request carries the resource and scope.
+ * each under the cap, sent one after another. Records that share an id, such as two stamped
+ * copies of one span, are grouped and always ride in one request, placed where that id first
+ * appears in the batch; otherwise the batch's order holds. A span travels with the links it
+ * owns, and every request carries the resource and scope.
  * A request's records count as delivered only once that request is acknowledged, and
  * the sent-set is written **once per signal**, after the last request, from a fresh
  * read. So a refused request, a transport failure or a cancellation part-way still
@@ -98,9 +100,11 @@ public enum class OtlpWireFormat {
  * and the collector may still take it. A `413` on that record records it as delivered,
  * with a WARN naming it and its size: the same bytes would be refused again, and keeping
  * it would fail the signal on every drain until the buffer evicts it. A `413` on a lone
- * record **inside** the cap fails the signal instead, like any other refusal: something in
- * front of the collector limits bodies below [maxRequestBytes], and folding would report
- * records sent that the collector never took. Lower [maxRequestBytes] to that limit.
+ * record **inside** the cap fails the signal instead: something in front of the collector
+ * limits bodies below [maxRequestBytes], and folding would report records sent that the
+ * collector never took. Unlike other refusals it does not stop the sends: the same record is
+ * refused on every drain, so the rest are still offered and recorded, and the signal fails
+ * after them. Lower [maxRequestBytes] to that limit.
  *
  * @param client caller-owned Ktor [HttpClient] — it owns the engine, timeouts, TLS,
  *   and any auth headers. kuilt does not create or close it, and this module ships no
@@ -350,6 +354,13 @@ public class OtlpHttpEdge(
      * each id first appears. Delivery is recorded by id, so two copies of one id split across two
      * requests could see the first acknowledged and the second refused, and the refused copy would
      * then count as sent and never be retried. A span's links already travel with it the same way.
+     * A group of copies over the cap is sent, and on a `413` folded, as a whole.
+     *
+     * Which arm a refused lone group takes is decided once, where [send] measures it: a group over
+     * the cap goes to [sendOversized], the only place that folds, and every other group to
+     * [sendChunk], which never does. A `413` there is remembered and the sends carry on, since the
+     * same bytes are refused on every drain and would otherwise hold back everything behind them;
+     * [send] throws it once the rest has been offered.
      */
     private inner class Chunker<T>(
         private val path: String,
@@ -357,24 +368,29 @@ public class OtlpHttpEdge(
         private val describe: (T) -> String,
         private val delivered: MutableList<T>,
     ) {
+        private var refused: IllegalStateException? = null
+
         suspend fun send(groups: List<List<T>>) {
             // The fast path: a batch under the cap is one encode and one request, as before #3286.
             val whole = encode(groups.flatten())
-            if (whole.bytes <= maxRequestBytes) return sendChunk(groups, whole)
-
-            // Measure each group inside an otherwise empty request, so its cost includes what the
-            // wire adds around it, then pack greedily. Every chunk is encoded for real before it is
-            // sent, and halved if the estimate fell short.
-            val emptyBytes = encode(emptyList()).bytes
-            val fitting = ArrayList<Pair<List<T>, Int>>(groups.size)
-            val oversized = ArrayList<Pair<List<T>, Encoded>>()
-            for (group in groups) {
-                val alone = encode(group)
-                if (alone.bytes > maxRequestBytes) oversized += group to alone else fitting += group to alone.bytes - emptyBytes
+            if (whole.bytes <= maxRequestBytes) {
+                sendChunk(groups, whole)
+            } else {
+                // Measure each group inside an otherwise empty request, so its cost includes what the
+                // wire adds around it, then pack greedily. Every chunk is encoded for real before it
+                // is sent, and halved if the estimate fell short.
+                val emptyBytes = encode(emptyList()).bytes
+                val fitting = ArrayList<Pair<List<T>, Int>>(groups.size)
+                val oversized = ArrayList<Pair<List<T>, Encoded>>()
+                for (group in groups) {
+                    val alone = encode(group)
+                    if (alone.bytes > maxRequestBytes) oversized += group to alone else fitting += group to alone.bytes - emptyBytes
+                }
+                for (chunk in pack(fitting, emptyBytes)) sendChunk(chunk, encode(chunk.flatten()))
+                // Last, so a record the collector may refuse holds back nothing else.
+                for ((group, alone) in oversized) sendOversized(group, alone)
             }
-            for (chunk in pack(fitting, emptyBytes)) sendChunk(chunk, encode(chunk.flatten()))
-            // Last, so a record the collector may refuse holds back nothing else.
-            for ((group, alone) in oversized) sendChunk(listOf(group), alone)
+            refused?.let { throw it }
         }
 
         private fun pack(fitting: List<Pair<List<T>, Int>>, emptyBytes: Int): List<List<List<T>>> {
@@ -404,20 +420,31 @@ public class OtlpHttpEdge(
                 status.isSuccess() -> chunk.forEach { delivered += it }
                 status != HttpStatusCode.PayloadTooLarge -> error("OTLP POST $path failed: $status")
                 chunk.size > 1 -> sendHalves(chunk)
-                // A lone record inside the cap that is still too large: something in front of the
-                // collector caps bodies below maxRequestBytes. Folding it would record every record
-                // as sent while the collector holds none, so the signal fails, every drain, visibly.
-                body.bytes <= maxRequestBytes -> error(
-                    "OTLP POST $path failed: $status on ${describe(chunk.single().first())} (${body.bytes} bytes), " +
-                        "inside maxRequestBytes = $maxRequestBytes; the collector or a proxy in front of it limits " +
-                        "bodies below that",
-                )
+                // A lone group [send] measured inside the cap, still too large: something in front of
+                // the collector caps bodies below maxRequestBytes. Folding it would record records as
+                // sent that the collector never took, so the signal fails, every drain, visibly.
+                else -> if (refused == null) {
+                    refused = IllegalStateException(
+                        "OTLP POST $path failed: $status on ${describe(chunk.single().first())} (${body.bytes} bytes), " +
+                            "inside maxRequestBytes = $maxRequestBytes; the collector or a proxy in front of it limits " +
+                            "bodies below that",
+                    )
+                }
+            }
+        }
+
+        // The one place a 413 is folded: a group [send] measured over the cap on its own.
+        private suspend fun sendOversized(group: List<T>, body: Encoded) {
+            val status = post(path, body)
+            when {
+                status.isSuccess() -> delivered += group
+                status != HttpStatusCode.PayloadTooLarge -> error("OTLP POST $path failed: $status")
                 else -> {
                     logger.warn {
-                        "OTLP POST $path: the collector refused ${describe(chunk.single().first())} (${body.bytes} bytes) " +
+                        "OTLP POST $path: the collector refused ${describe(group.first())} (${body.bytes} bytes) " +
                             "as too large on its own; recording it as sent, since the same bytes would be refused on every drain"
                     }
-                    delivered += chunk.single()
+                    delivered += group
                 }
             }
         }
