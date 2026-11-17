@@ -445,7 +445,7 @@ reached.
 0.7.6 removes the rebase and the origin and adds a position limit, in
 [`heddle-design.md` §7.1, *Future: positions with no origin (step B)*](heddle-design.md#future-positions-with-no-origin-step-b).
 Step B has merged. The recorder ships in the release after it, which keeps one constraint and
-touches four parts of this design.
+has five consequences for this design.
 
 - **No public signature changes.** The recorder breaks none, and its API dumps may only gain lines. So the
   recording hook is a new member or overload on `LocalHeddle`, never a default parameter added to
