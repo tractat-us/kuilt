@@ -181,20 +181,24 @@ public class KuiltMetricExporter @JvmOverloads constructor(
     }
 
     /**
-     * [WarpMetricExporter.record] the export, leaving out each sum or histogram series it refuses
-     * as saturated.
+     * [WarpMetricExporter.record] the export, leaving out each sum, histogram or up-down sum series
+     * it refuses as saturated.
      *
      * `record` refuses a whole batch, applying nothing, when one update would carry a sum or
-     * histogram series' total over every replica past [Long.MAX_VALUE]: a [MetricExportResult.Refused] whose
-     * `overflow` is a [MetricOverflowException]. A delta
-     * counter or histogram that has reached that point sends more in every export, so passing the
+     * histogram series' total over every replica past [Long.MAX_VALUE], or move an up-down sum
+     * series' share past what its slots hold: a [MetricExportResult.Refused] whose `overflow` is a
+     * [MetricOverflowException]. A delta counter or histogram that has reached that point sends more
+     * in every export, and an UpDownCounter re-sends its level in every export, so passing the
      * refusal on would drop every other point of every export from then on. Instead the refused
      * series' updates are taken out and the rest recorded again. A refused attempt applied
      * nothing, so the retry counts every other point exactly once.
      *
      * Only the refused series' updates of the refused kind leave: for a [MetricSumOverflowException]
      * its long increments, since a double sum under the same name and attributes is a different
-     * counter and is not refused; for a [MetricHistogramOverflowException] its histogram updates.
+     * counter and is not refused; for a [MetricHistogramOverflowException] its histogram updates; for
+     * a [MetricUpDownSumOverflowException] the up-down updates of the map it names, long or double by
+     * [MetricUpDownSumOverflowException.fractional], since the other map's series under the same key
+     * is a different series and is not refused.
      * The loop ends: every refusal names a series with such an update still in the batch, and they
      * leave with the retry, so there is at most one retry per distinct series; a `check` pins that a
      * refusal never names anything else. A refused batch was no turn of any kind, so the retry
@@ -241,6 +245,10 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             "this replica's share cannot move to the level without taking one of its slots past what it holds, " +
                 "or the total over every replica outside a Long",
         ),
+        UP_DOWN_SUM_DOUBLE(
+            "double up-down sum series",
+            "this replica's share cannot move to the level without taking one of its slots past Double.MAX_VALUE",
+        ),
     }
 
     /** A series `record` refused as saturated: a sum, histogram or up-down sum series under [key]. */
@@ -252,9 +260,8 @@ public class KuiltMetricExporter @JvmOverloads constructor(
         fun carries(update: MetricUpdate): Boolean = update.key == key && when (update) {
             is MetricUpdate.IncrementSum -> kind == SeriesKind.SUM
             is MetricUpdate.RecordHistogram, is MetricUpdate.AddExponentialHistogram -> kind == SeriesKind.HISTOGRAM
-            is MetricUpdate.AddUpDownSum, is MetricUpdate.SetUpDownSum,
-            is MetricUpdate.AddUpDownSumDouble, is MetricUpdate.SetUpDownSumDouble,
-            -> kind == SeriesKind.UP_DOWN_SUM
+            is MetricUpdate.AddUpDownSum, is MetricUpdate.SetUpDownSum -> kind == SeriesKind.UP_DOWN_SUM
+            is MetricUpdate.AddUpDownSumDouble, is MetricUpdate.SetUpDownSumDouble -> kind == SeriesKind.UP_DOWN_SUM_DOUBLE
             is MetricUpdate.IncrementSumDouble, is MetricUpdate.SetGauge, is MetricUpdate.AddCardinality,
             is MetricUpdate.Forget,
             -> false
@@ -264,7 +271,8 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             fun of(refused: MetricOverflowException): Saturated = when (refused) {
                 is MetricSumOverflowException -> Saturated(refused.key, SeriesKind.SUM)
                 is MetricHistogramOverflowException -> Saturated(refused.key, SeriesKind.HISTOGRAM)
-                is MetricUpDownSumOverflowException -> Saturated(refused.key, SeriesKind.UP_DOWN_SUM)
+                is MetricUpDownSumOverflowException ->
+                    Saturated(refused.key, if (refused.fractional) SeriesKind.UP_DOWN_SUM_DOUBLE else SeriesKind.UP_DOWN_SUM)
             }
         }
     }
@@ -284,7 +292,8 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             when (it.kind) {
                 SeriesKind.SUM -> it.key !in held.sums
                 SeriesKind.HISTOGRAM -> it.key !in held.histograms
-                SeriesKind.UP_DOWN_SUM -> it.key !in held.upDownSums && it.key !in held.doubleUpDownSums
+                SeriesKind.UP_DOWN_SUM -> it.key !in held.upDownSums
+                SeriesKind.UP_DOWN_SUM_DOUBLE -> it.key !in held.doubleUpDownSums
             }
         }
         return dropped.add(series)

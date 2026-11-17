@@ -1978,11 +1978,13 @@ public class MetricHistogramOverflowException internal constructor(
  * total moves both ways.
  *
  * @property key the up-down series that cannot take the update.
+ * @property fractional whether the refused series is the fractional one. An [MetricKind.UP_DOWN_SUM]
+ *   key names a series in both the integer and the fractional map, and only the one named here was
+ *   refused, so a caller leaving the refused series out of a retry keeps the other.
  */
 public class MetricUpDownSumOverflowException internal constructor(
     override val key: MetricKey,
-    /** Whether the refused series is the fractional one; [key] names a series in both maps. */
-    internal val fractional: Boolean,
+    public val fractional: Boolean,
 ) : MetricOverflowException(
     "up-down sum series ${key.name} ${key.attributes}: this batch would move this replica's share past what " +
         "its slots hold, or leave a total over every replica that does not fit in a Long",
