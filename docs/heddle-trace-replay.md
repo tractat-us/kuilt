@@ -515,8 +515,9 @@ Each names what enforces it. An enforcer that is not built yet names the slice t
 6. **The trace format is independent of the snapshot format.** An anchor nests the snapshot's own
    envelope, read through `LocalHeddle.decode`. Pinned by a golden anchor vector that carries a
    snapshot of format 1 (slice 3).
-7. **A digest is the same number on every target.** A golden digest vector run on JVM,
-   `macosArm64` and `wasmJs`, read as a union (slice 3).
+7. **A digest is the same number on every target.** A golden vector for the adapter's digester,
+   run on JVM, `macosArm64` and `wasmJs`, read as a union (slice 3). Core cannot pin it: the
+   digester is a parameter there, and the one that ships is the adapter's.
 8. **A set rebuilt from changes equals the set written whole.** Checked by the reader at every
    whole set, as an `Unreadable` verdict; pinned by a seeded round trip whose sets change on most
    calls, with `fullSetEvery` large enough that a chain of changes is actually walked (slice 3).
