@@ -2,6 +2,8 @@
 
 package us.tractat.kuilt.identity
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import us.tractat.kuilt.conformance.DeviceKeyStoreConformanceSuite
 import us.tractat.kuilt.conformance.DeviceKeyStoreFixture
 import us.tractat.kuilt.conformance.DeviceKeyStoreFixture.KeyWriteInterruption
@@ -81,6 +83,7 @@ class WebCryptoDeviceKeyStoreConformanceTest : DeviceKeyStoreConformanceSuite() 
                     readRecord(database)
                     null
                 } catch (e: IllegalStateException) {
+                    currentCoroutineContext().ensureActive()
                     e
                 }
                 check(probe?.message.orEmpty().contains("VersionError")) { "rig: the upgraded database still opened at version 1 ($probe)" }
