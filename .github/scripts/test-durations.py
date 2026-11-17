@@ -11,9 +11,13 @@ the runner reads workflow commands from the log and not from the summary.
 
 Wall time, not summed time, is what a job's `timeout-minutes` pays for. On Kotlin/Native the two
 are close, because one test binary runs its suites one after another. A task whose wall time is
-over `--warn-minutes` (default 15) also gets a `::warning::` annotation. Between Nov 13 and Nov 15
+over `--warn-minutes` (default 40) also gets a `::warning::` annotation. Between Nov 13 and Nov 15
 one module's tests grew from 0 to 32 minutes per Apple target, and nothing said so until the job
 hit its timeout. This table is what would have said so.
+
+The default was 15 until that module settled at 16-32 minutes a target and warned every night, so
+the warning carried no news. At 40 it sits above the slowest task the nightly has run and still
+fires with about half an hour of the `apple` job's 90 minutes to spare; the workflow says why.
 
 A `0m 00s` row is not evidence that a task was quick. Kotlin/Native on macOS can report
 `time="0.0"` for a run that provably did its work (AGENTS.md, on `-P`-gated probes), so only a
@@ -31,7 +35,7 @@ import re
 
 parser = argparse.ArgumentParser()
 parser.add_argument("root", nargs="?", default=".")
-parser.add_argument("--warn-minutes", type=float, default=15.0)
+parser.add_argument("--warn-minutes", type=float, default=40.0)
 parser.add_argument("--summary", help="file to append the Markdown table to")
 args = parser.parse_args()
 

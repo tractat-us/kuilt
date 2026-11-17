@@ -166,11 +166,16 @@ jobs:
           key: ${{ steps.konan.outputs.cache-primary-key }}
 
       # Per-module wall time for every test task, in the run's summary, with a warning on any task
-      # over 15 min. One module's tests reached 32 min per target without a word until the job
+      # over 40 min. One module's tests reached 32 min per target without a word until the job
       # timed out (#3115). `always()` so a red or timed-out run reports too; it never fails.
+      #
+      # 40, not the first 15. Across six runs on 2026-11-16 :kuilt-heddle-core took 16-32 min a
+      # target, so 15 warned every night; the next slowest task took about 6. The test step took
+      # 25-52 min and the whole leg 31-53, against the 90 above. A task at 40 min puts a leg near
+      # an hour, which still leaves half an hour before the timeout eats the verdict.
       - name: Test-task durations
         if: always()
-        run: python3 .github/scripts/test-durations.py --summary "$GITHUB_STEP_SUMMARY"
+        run: python3 .github/scripts/test-durations.py --warn-minutes 40 --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test reports
         if: always()
