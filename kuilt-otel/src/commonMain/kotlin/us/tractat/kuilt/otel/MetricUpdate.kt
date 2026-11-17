@@ -168,7 +168,8 @@ public sealed interface MetricUpdate {
      *
      * A [MetricKind.SUM] or [MetricKind.UP_DOWN_SUM] key names a series in both the integer and the
      * fractional map, and both are dropped. Forgetting a series the exporter does not hold changes
-     * nothing and writes nothing.
+     * nothing, and writes nothing unless the store refused that kind's last write (see
+     * [WarpMetricExporter.record]).
      *
      * **Forgetting a [MetricKind.SUM] or [MetricKind.UP_DOWN_SUM] series rewinds this replica's slot
      * for any peer that already saw it.** A later update starts the slot again from nothing, while

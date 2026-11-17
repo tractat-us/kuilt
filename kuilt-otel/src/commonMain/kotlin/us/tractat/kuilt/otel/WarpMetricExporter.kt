@@ -73,8 +73,9 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.WarpMetricExpor
  * - **Up-down sum** — a [PNCounter] per [MetricKey], or a [PNCounterDouble] for fractions: a level
  *   that goes both ways and adds up across replicas, such as in-flight requests across a fleet
  *   (#3307). Each replica sets **its own share** to the level it reports ([setUpDownSum]), so the
- *   series reads the sum of every replica's level, the same level set again writes nothing, and a
- *   restart that keeps [replica] and the store counts nothing twice. Only a slot's owner moves it,
+ *   series reads the sum of every replica's level, the same level set again writes nothing (unless
+ *   the store refused that kind's last write; see [record]), and a restart that keeps [replica] and
+ *   the store counts nothing twice. Only a slot's owner moves it,
  *   so a replica that never returns keeps its last share in the sum.
  *
  *   **A slot that starts over misleads every peer that already saw it.** An eviction, a [clear] or
@@ -1128,8 +1129,8 @@ public class WarpMetricExporter(
 
     /**
      * Apply one update to its map, evicting first if it opens a new series, and return the kinds it
-     * changed: none for an update that moved nothing, so its batch writes nothing for it. Called
-     * inside [lock].
+     * changed: none for an update that moved nothing, so its batch writes nothing for it unless
+     * [record] finds that kind's last write refused. Called inside [lock].
      */
     private fun applyLocked(update: MetricUpdate): Set<StoredKind> = when (update) {
         is MetricUpdate.IncrementSum -> {
@@ -1567,8 +1568,8 @@ public class WarpMetricExporter(
      *
      * A share is a difference of two growing totals, so it carries a rounding error that grows with
      * how far it has moved in all, and a set can land a rounding step off its level. A set that would
-     * bring the share no closer moves nothing, so a level reported again settles within a few
-     * writes. Returns a [MetricExportResult.Refused] when the move would take one of this
+     * bring the share no closer moves nothing, so a level reported again stops writing once the share
+     * is as close as it gets. Returns a [MetricExportResult.Refused] when the move would take one of this
      * replica's slots past [Double.MAX_VALUE].
      *
      * @throws IllegalArgumentException if [level] is NaN or infinite.

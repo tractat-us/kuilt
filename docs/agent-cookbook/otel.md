@@ -51,7 +51,7 @@ check(result == MetricExportResult.Success) // every kind it touched is on disk
 **Intent:** a level that should add up across peers — in-flight requests or queue depth across a fleet — without a `setGauge`, which keeps whichever peer wrote last rather than the sum.
 **Primitive:** `WarpMetricExporter.setUpDownSum` (`:kuilt-otel`) under a `MetricKind.UP_DOWN_SUM` key, or `MetricUpdate.SetUpDownSum` in a `record` batch; `addUpDownSum` for a change rather than a level, and the `…Double` twins for fractions. `KuiltMetricExporter` (`:kuilt-otel-sdk`) already maps an OpenTelemetry UpDownCounter this way.
 
-Each replica sets its own share of a `PNCounter`, so the same level reported again writes nothing, a restart that keeps the replica id and store counts nothing twice, and merged replicas read the sum of their levels. Only a slot's owner moves it, so a replica that never comes back keeps its last share in the sum. OTLP gets a cumulative, non-monotonic Sum.
+Each replica sets its own share of a `PNCounter`, so the same level reported again writes nothing (unless the store refused that kind's last write: then it writes again, to land it), a restart that keeps the replica id and store counts nothing twice, and merged replicas read the sum of their levels. Only a slot's owner moves it, so a replica that never comes back keeps its last share in the sum. OTLP gets a cumulative, non-monotonic Sum.
 
 <!-- verbatim from kuilt-otel/src/commonSamples/kotlin/us/tractat/kuilt/otel/Samples.kt#sampleWarpMetricExporterUpDownSum -->
 ```kotlin

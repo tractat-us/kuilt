@@ -53,7 +53,7 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *   replicas and the same level re-sent moves nothing (#3307). Under delta the level would live
  *   only in the buffer, and a process reporting its first observation in full after a restart
  *   would count it twice. A cumulative series is re-sent on every collection; an unchanged one
- *   writes nothing.
+ *   writes nothing, unless the store refused that kind's last write (see `WarpMetricExporter.record`).
  * - **Gauges and histograms** → [AggregationTemporality.DELTA]. A gauge's point is a level
  *   either way; under delta the SDK sends it only when it was recorded in the interval, so
  *   an unchanged gauge is not rewritten with a fresh timestamp each collection. A histogram's
