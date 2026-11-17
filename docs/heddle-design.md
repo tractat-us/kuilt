@@ -2292,10 +2292,9 @@ acquire(waiting, eligible, startedAt, reservation = policy.defaultReservation)
 
 acquire(waiting, eligible, startedAt, lengths: Map<GroupId, Long>, reservation = …)
     B: a length for each head that has one; a leaf absent from the map is unknown
-
-previewPicks(queues: Map<GroupId, List<Long?>>, eligible, reservation = …)
-    each leaf's queue, with null for unknown; each pick pops the picked leaf's head
 ```
+
+The per-leaf preview is already built, in the form §11.3 records.
 
 - `lengths.keys ⊆ waiting` is required, as `eligible ⊆ waiting` is. Each length
   must be in `1..MAX_RESERVATION`, and one out of range throws
@@ -2303,8 +2302,10 @@ previewPicks(queues: Map<GroupId, List<Long?>>, eligible, reservation = …)
   not clamped.
 - The old `acquire` delegates with an empty map, so the slot-length API stays
   compatible in source and in binary. Today's `previewPicks`, with a count per
-  leaf and one reservation per pick, stays too. The per-leaf `previewPicks`
-  overload restores the shape Amendment 7 first named, a list per leaf.
+  leaf and one reservation per pick, stays too. §11.3's
+  `previewPicks(queues: Map<GroupId, List<Long>>, eligible, reservation =
+  defaultReservation)` restores the shape Amendment 7 first named, a list per
+  leaf.
 - `Lease.reserved` and `admit` are unchanged under A and B. Under C,
   `Lease.reserved` is `r(ℓ)`.
 - The caller's contract gains one sentence under B and C: the job run on a lease
