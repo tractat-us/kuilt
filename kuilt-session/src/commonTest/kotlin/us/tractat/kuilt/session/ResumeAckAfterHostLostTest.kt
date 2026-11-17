@@ -3,6 +3,7 @@
 package us.tractat.kuilt.session
 
 import kotlinx.coroutines.CoroutineStart
+import us.tractat.kuilt.identity.InMemoryDeviceKeyStore
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.Job
@@ -291,6 +292,7 @@ class ResumeAckAfterHostLostTest {
             },
             heartbeatConfig = config,
             roomId = null,
+            deviceKeyStore = InMemoryDeviceKeyStore(),
             reweave = {
                 seam.heal()
                 seam
