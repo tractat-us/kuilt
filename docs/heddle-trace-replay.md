@@ -362,7 +362,8 @@ A replay checks two things: each call's answer, and the state at each anchor.
 - **The rest.** A stretch ends `Matched` when it runs out, `Unreadable(seq, reason)` when the
   reader could not decode an entry, and a gap is reported in `unchecked`. A trace that reaches
   `End` with every stretch `Matched` and nothing unchecked is a full match, and the report says so
-  in one field.
+  in one field. A replay handed the wrong digester makes no report at all: it refuses before the
+  first call (below).
 
 A replay never continues past a divergence in the same stretch, because the recorded calls after
 it name leases the twin may not have opened. Going further is a different tool, below.
@@ -370,13 +371,25 @@ it name leases the twin may not have opened. Going further is a different tool, 
 **Digests narrow a `StateDiverged` between anchors.** Every `digestEvery` calls the recorder writes a
 `Digest` entry: a 64-bit hash of the snapshot `persist()` would take at that point. Core has no
 format to encode a snapshot with, so it does not hash one itself. The recording hook takes a
-*digester*, a function from `LocalHeddleSnapshot` to `Long`, as a required parameter, and the
-replay takes one too. `:kuilt-heddle-otel` supplies the one it records with: FNV-1a 64 over the
-snapshot's JSON encoding, the same hash the `recordId` uses. The replay hashes its twin's snapshot
-at the same `seq`, and a mismatch is `StateDiverged(digestSeq)`, narrowed to the `digestEvery`
-calls since the last check. A replay handed a different digester from the recorder's reports
-`StateDiverged` at the first digest even where the states agree, so the adapter exposes the one it
-records with, for the replay to be given the same one.
+*digester* as a required parameter, and the replay takes one too. A digester is a
+`SnapshotDigester`: a function from `LocalHeddleSnapshot` to `Long`, and a stable name for it,
+which its `init` refuses to leave blank. It is a class holding both, not a `fun interface`,
+because a `fun interface` has one abstract member and the name would be a second.
+`:kuilt-heddle-otel` supplies the one it records with: FNV-1a 64 over the snapshot's JSON
+encoding, the same hash the `recordId` uses. The replay hashes its twin's snapshot at the same
+`seq`, and a mismatch is `StateDiverged(digestSeq)`, narrowed to the `digestEvery` calls since the
+last check.
+
+**A replay handed the wrong digester refuses before it starts.** Two different functions hash the
+same state to different numbers, so a replay checking one against the other would report
+`StateDiverged` at the first digest where the states agree. That is a mistake in how the replay
+was set up, and it would read as testimony about the engine. So `Begin` records the digester's
+name, and before it resumes a twin or replays a call, `replay` compares that name with the name of
+the digester it was handed. On a difference it returns `ReplayResult.DigesterMismatch(recorded,
+given)` and no report. The incremental form makes the same check at the `Begin` it is offered,
+before any call. Core compares names, not functions, because the trace holds only the name. So a
+name is a promise that the output has not changed, and invariant 7 is what keeps the adapter's
+promise.
 
 A digest saves buffer space, not work: the adapter's digester still encodes the whole snapshot to
 hash it, so slice 3 measures its cost beside an anchor's. It is evidence, not proof. Two different
