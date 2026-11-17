@@ -549,7 +549,8 @@ One behaviour move each, in order. None is filed yet.
    lease id; a digest compared at the wrong `seq`.
 3. **The wire (`:kuilt-heddle-otel`, created here or by #3184).** The JSON codec with golden
    vectors, set changes and whole sets, the `LogRecord` mapping, anchor parts, the adapter sink,
-   queue and pump, and `DecisionTraceReader` with gap reporting. A measurement against the budget
+   queue and pump, the digester with its golden vector (invariant 7), and `DecisionTraceReader`
+   with gap reporting. A measurement against the budget
    in §5 sets `anchorEvery`, `digestEvery`, `fullSetEvery`, the queue size and
    `ANCHOR_PART_BYTES`, and says whether the guide can tell consumers to leave recording on.
    Includes the four edits a
