@@ -116,6 +116,24 @@ evidence.
   `--rerun-tasks` without the leading `clean` is not cache-disabled: it leaves Kotlin's incremental
   state in place (#1913, receipts in AGENTS.md § *Build & test commands*).
 
+- **A task `UP-TO-DATE` right after you edited its sources is Gradle's file-system watcher missing
+  the edit, not a result.** Edit, build and restore within seconds under a warm daemon (a mutation
+  loop, a revert-check, a before/after benchmark that `git checkout -- <file>`s between rows) and
+  the daemon's snapshot of the tree can still be the old one. The compile task comes back
+  `UP-TO-DATE` on the edited source and the tests run the previous classes, so a mutant "survives"
+  or a fix "fails" with the very error it fixed. The same staleness reaches one layer up: after an
+  edit to a `build.gradle.kts` or a `build-logic` plugin the log says
+  `Configuration cache entry reused` and the edit is never applied, and `--no-configuration-cache`
+  does not cure it, because `build-logic` then compiles `UP-TO-DATE` instead.
+  **Pass `--no-watch-fs` to every build in a dispatched worktree, and `--no-watch-fs
+  --no-build-cache` to every mutation, revert-check or before/after row.** Before recording a
+  verdict, grep that run's log for `> Task :<module>:compile…` *without* `UP-TO-DATE` (after a
+  build-logic edit, for `Calculating task graph`, not `Configuration cache entry reused`), and do not
+  run the harness under `-q`, which hides those lines. It hit seven workers here between 2026-11-12
+  and 2026-11-16. #3352's four mutants read 0 of 4 red with `--rerun --no-build-cache` and 4 of 4
+  with `--no-watch-fs`; #3338's version-stamp mutant in a `build-logic` plugin read `failures=0`
+  until the same flag made it red.
+
 - **A `--tests` filter matching nothing passes silently.** Confirm your new tests actually *ran* by
   counting them in `build/test-results/`.
 
