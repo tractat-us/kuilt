@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 300" width="880" height="300" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
   <title>Heddle's flight recorder: from the engine to a replay</title>
-  <desc>On the device, LocalHeddle hands each call and its answer to a DecisionSink. An adapter queues the entries and exports them into a dedicated WarpLogRecordExporter. The records leave the device through LogTapClient or the OTLP drain. On any machine, DecisionTraceReader rebuilds the trace, and DecisionTrace.replay runs a twin engine and reports the first difference.</desc>
+  <desc>On the device, LocalHeddle hands each call and its answer to a DecisionSink, an interface in kuilt-heddle-core. The adapter in kuilt-heddle-otel implements it, queues the entries and exports them into a dedicated WarpLogRecordExporter. The records leave the device through LogTapClient or the OTLP drain. On any machine, DecisionTraceReader rebuilds the trace, and DecisionTrace.replay runs a twin engine and reports the first difference.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#9aa4b2"/>
@@ -19,11 +19,11 @@
   <!-- engine -->
   <rect x="36" y="80" width="190" height="64" rx="8" fill="#161b22" stroke="#58a6ff"/>
   <text x="131" y="106" fill="#e6edf3" font-size="14" text-anchor="middle">LocalHeddle</text>
-  <text x="131" y="126" fill="#8b949e" font-size="12" text-anchor="middle">one entry per call, anchors</text>
+  <text x="131" y="126" fill="#8b949e" font-size="12" text-anchor="middle">→ DecisionSink (core)</text>
 
   <!-- adapter -->
   <rect x="276" y="80" width="190" height="64" rx="8" fill="#161b22" stroke="#3fb950"/>
-  <text x="371" y="106" fill="#e6edf3" font-size="14" text-anchor="middle">DecisionSink → queue</text>
+  <text x="371" y="106" fill="#e6edf3" font-size="14" text-anchor="middle">adapter sink → queue</text>
   <text x="371" y="126" fill="#8b949e" font-size="12" text-anchor="middle">:kuilt-heddle-otel (new)</text>
 
   <!-- exporter -->
