@@ -569,8 +569,9 @@ One behaviour move each, in order. None is filed yet.
    `before`, `ReplayResult`, `ReplayReport`, and the anchor check by `LocalHeddleSnapshot.equals`.
    Tests: the refusal over a trace whose first answer was altered (invariant 11); a seeded driver
    over all nine calls replays `Matched` on JVM, `macosArm64` and `wasmJs`, read as a union,
-   sorting what it walks (#2592). A changed `sleeperCredit` reports `Diverged` at the first differing `seq`, and the
-   row asserts that a pick does differ at that `seq` before it acts. Mutations that must red:
+   sorting what it walks (#2592). A changed `sleeperCredit` reports `Diverged` at the first
+   differing `seq`, and the row asserts that a pick does differ at that `seq` before it acts.
+   Mutations that must red:
    one call left unrecorded; an anchor resumed under a later epoch; an outcome mapped without its
    lease id; a digest compared at the wrong `seq`; the digester's name checked only at the first
    digest.
