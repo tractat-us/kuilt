@@ -46,12 +46,18 @@ class WarpMetricExporterRefusedRecoveryTest {
     private val otherCardinality = MetricKey("cardinality.other", MetricKind.CARDINALITY)
     private val histogram = MetricKey("histogram", MetricKind.EXPONENTIAL_HISTOGRAM)
     private val otherHistogram = MetricKey("histogram.other", MetricKind.EXPONENTIAL_HISTOGRAM)
+    private val upDown = MetricKey("updown", MetricKind.UP_DOWN_SUM)
+    private val otherUpDown = MetricKey("updown.other", MetricKind.UP_DOWN_SUM)
+    private val upDownDouble = MetricKey("updown.double", MetricKind.UP_DOWN_SUM)
+    private val otherUpDownDouble = MetricKey("updown.double.other", MetricKind.UP_DOWN_SUM)
 
     private val sumsKey = StoreKey("otel.metrics.sums")
     private val doubleSumsKey = StoreKey("otel.metrics.sums.double")
     private val gaugesKey = StoreKey("otel.metrics.gauges")
     private val cardinalitiesKey = StoreKey("otel.metrics.cardinalities")
     private val histogramsKey = StoreKey("otel.metrics.histograms")
+    private val upDownSumsKey = StoreKey("otel.metrics.updown")
+    private val upDownSumsDoubleKey = StoreKey("otel.metrics.updown.double")
 
     private val gaugeTimestamp = 10L
 
@@ -67,6 +73,8 @@ class WarpMetricExporterRefusedRecoveryTest {
             recordHistogram(histogram, 1.0)
             recordHistogram(histogram, 2.0)
             recordHistogram(histogram, 3.0)
+            setUpDownSum(upDown, 6L)
+            setUpDownSumDouble(upDownDouble, 2.5)
         }
     }
 
@@ -95,6 +103,8 @@ class WarpMetricExporterRefusedRecoveryTest {
             setGauge(otherGauge, 9.0, 1L)
             addCardinality(otherCardinality, "peer")
             recordHistogram(otherHistogram, 7.0)
+            setUpDownSum(otherUpDown, 4L)
+            setUpDownSumDouble(otherUpDownDouble, 1.25)
         }.snapshotAll()
     }
 
@@ -126,6 +136,16 @@ class WarpMetricExporterRefusedRecoveryTest {
                 MetricUpdate.RecordHistogram(otherHistogram, 1.0),
                 { mergeHistogram(otherHistogram, remote.histograms.getValue(otherHistogram)) },
             ) { it.histograms },
+            Kind(
+                upDownSumsKey,
+                MetricUpdate.SetUpDownSum(otherUpDown, 2L),
+                { mergeUpDownSum(otherUpDown, remote.upDownSums.getValue(otherUpDown)) },
+            ) { it.upDownSums },
+            Kind(
+                upDownSumsDoubleKey,
+                MetricUpdate.SetUpDownSumDouble(otherUpDownDouble, 0.5),
+                { mergeUpDownSumDouble(otherUpDownDouble, remote.doubleUpDownSums.getValue(otherUpDownDouble)) },
+            ) { it.doubleUpDownSums },
         )
     }
 
@@ -551,7 +571,7 @@ class WarpMetricExporterRefusedRecoveryTest {
 
     // ---- Health, and memory ----
 
-    private fun MetricCatalog.maps(): List<Map<MetricKey, Any>> = listOf(sums, doubleSums, gauges, cardinalities, histograms)
+    private fun MetricCatalog.maps(): List<Map<MetricKey, Any>> = listOf(sums, doubleSums, gauges, cardinalities, histograms, upDownSums, doubleUpDownSums)
 
     /**
      * A turn refused for an unread kind is a failed turn on `health`, outstanding until a write of
@@ -694,7 +714,7 @@ class WarpMetricExporterRefusedRecoveryTest {
      * an exporter still over the cap; at zero the heal and a write disagreed, the heal evicting to
      * nothing and a write of a new series keeping it, since there was nothing to evict for it. At a
      * cap of one both hold one series. Recover joins the seeded series kind by kind and evicts as it
-     * goes, so `DROP_OLDEST` leaves the last kind read, the histogram, with its three seeded values.
+     * goes, so `DROP_OLDEST` leaves the last kind read, the fractional up-down sum, at its seeded 2.5.
      */
     @Test
     fun aBufferCapBelowOneIsRefusedAndACapOfOneHoldsOneSeriesOnHealAndWrite() = runTest {
@@ -702,14 +722,21 @@ class WarpMetricExporterRefusedRecoveryTest {
         seed(backing)
         val one = WarpMetricExporter(replica, backing, maxMetrics = 1).also { it.recover() }
         val healed = one.snapshotAll()
+        val healedShare = one.upDownSumDoubleValue(upDownDouble)
         val written = one.incrementSum(otherSum, 1L)
 
         assertAll(
             { assertFailsWith<IllegalArgumentException>("a cap of -1 was accepted") { WarpMetricExporter(replica, backing, maxMetrics = -1) } },
             { assertFailsWith<IllegalArgumentException>("a cap of 0 was accepted") { WarpMetricExporter(replica, backing, maxMetrics = 0) } },
-            { assertEquals(setOf(histogram), healed.histograms.keys, "the series a capped recover kept") },
-            { assertEquals(3L, healed.histograms[histogram]?.count, "recover did not join the seeded histogram") },
-            { assertEquals(emptySet(), healed.sums.keys + healed.doubleSums.keys + healed.gauges.keys + healed.cardinalities.keys) },
+            { assertEquals(setOf(upDownDouble), healed.doubleUpDownSums.keys, "the series a capped recover kept") },
+            { assertEquals(2.5, healedShare, "recover did not join the seeded up-down share") },
+            {
+                assertEquals(
+                    emptySet(),
+                    healed.sums.keys + healed.doubleSums.keys + healed.gauges.keys + healed.cardinalities.keys +
+                        healed.histograms.keys + healed.upDownSums.keys,
+                )
+            },
             { assertEquals(MetricExportResult.Success, written) },
             { assertEquals(1, one.metricCount(), "a write of a new series at a cap of one kept ${one.metricCount()} series") },
             { assertEquals(1L, one.sumValue(otherSum), "the new series did not take the place of the healed one") },
