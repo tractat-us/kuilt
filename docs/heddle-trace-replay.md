@@ -163,7 +163,9 @@ reason the replay lives in the same module (§7).
 - at the start of a recording, right after `Begin`;
 - every `anchorEvery` calls, a recording parameter;
 - at the next call after the sink reports that it dropped an entry (§5), so a gap is followed by
-  a fresh starting point as soon as possible;
+  a fresh starting point as soon as possible. If that anchor is dropped too, it stays owed, but
+  the engine does not try again until the sink next answers `Kept`. A sink that is dropping
+  everything would otherwise cost a `persist()` on every call while it recovers;
 - when the consumer asks for one, on the next call. An anchor is taken under the caller's own
   scheduling lock, inside a call, because `LocalHeddle` has one writer.
 
