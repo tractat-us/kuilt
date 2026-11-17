@@ -17,7 +17,7 @@ hit its timeout. This table is what would have said so.
 
 The default was 15 until that module settled at 16-32 minutes a target and warned every night, so
 the warning carried no news. At 40 it sits above the slowest task the nightly has run and still
-fires with roughly half of the `apple` job's 90 minutes to spare; the workflow says why.
+fires with about half an hour of the `apple` job's 90 minutes to spare; the workflow says why.
 
 A `0m 00s` row is not evidence that a task was quick. Kotlin/Native on macOS can report
 `time="0.0"` for a run that provably did its work (AGENTS.md, on `-P`-gated probes), so only a
