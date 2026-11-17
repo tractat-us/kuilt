@@ -285,8 +285,11 @@ under a kilobyte of JSON written whole. That figure is arithmetic, not a measure
 measures it before any default is set.
 
 **For longer than the window, archive it.** The dedicated exporter takes an `AppliedOpSink`, and a
-`BoltDecorator` there keeps every entry past the buffer's cap. Nothing in this design changes for
-it; slice 5's cookbook entry shows the wiring.
+`BoltDecorator` there archives entries past the buffer's cap. The archive is best effort.
+`AppliedOpSink` returns nothing, so when the archive fails to write an entry the exporter is never
+told, and only the decorator's `health` counts it. The entry is not lost silently, though: its
+`seq` is missing from the archive, and the reader reports that gap like any other. Nothing in this
+design changes for it; slice 6's cookbook entry shows the wiring.
 
 ### 6. Riding the otel buffer and the tap
 
