@@ -259,10 +259,12 @@ cost is one more call that already exists: `installLogTap` takes one exporter, s
 exporter gets its own tap session, on its own `LogTapConfig.pattern`.
 
 **The bound is in records.** With a buffer of `M` records and an anchor every `K` calls, the
-oldest stretch can be partly evicted, and every stretch after it is whole. So at least
-`M − K − P` calls are replayable, where `P` is an anchor's part count. For `M = 10,000` and
-`K = 1,000` that is about nine thousand calls. A lease costs two calls, an `acquire` and a
-`complete`.
+oldest stretch can be partly evicted, and every stretch after it is whole. Each stretch holds
+more than its calls: its anchor's `P` parts, and a digest every `d` calls (`digestEvery`). So a
+stretch is `K + P + K/d` records, and roughly `M·K/(K + P + K/d) − K` calls are replayable. For
+`M = 10,000`, `K = 1,000`, ten parts to an anchor and `d = 100`, that is about 8,800 calls. A
+lease costs two calls, an `acquire` and a `complete`, so a farm starting one lease a second makes
+7,200 calls an hour, and that buffer holds about 73 minutes of it.
 
 **The recorder is meant to stay on.** The first limit above is that a surprise nobody was recording
 cannot be replayed, so a recorder switched on afterwards always arrives too late. Recording stays
