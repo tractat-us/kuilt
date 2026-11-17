@@ -71,7 +71,11 @@ Keystore, which signs with it and never hands it to the app, and the grants in t
 folder, so neither moves to another phone with a backup. A key that no longer signs for its name,
 or that the Keystore blames, is replaced with a warning. A Keystore that cannot answer right now
 throws and keeps the key. When nothing says whose failure it is, as on every phone older than
-Android 13, the key is kept until the Keystore has been failing for an hour, and then replaced. The browser store follows. Every store, including one you write
+Android 13, the key is kept until the Keystore has been failing for an hour, and then replaced. In
+a browser, `DeviceKeyStore.platform("my-app")` makes a WebCrypto key the page can sign with but never
+read out, and keeps it in the IndexedDB database `kuilt-identity-my-app` with the grants. Every tab of
+the site is the same device; clearing the site's data makes the next visit a new one. A damaged record
+is replaced with a warning, and a database that cannot answer right now throws and keeps the key. Every store, including one you write
 yourself, proves it keeps its promises by passing `DeviceKeyStoreConformanceSuite` from
 `:kuilt-conformance`.
 
