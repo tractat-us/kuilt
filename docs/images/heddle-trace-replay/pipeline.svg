@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 300" width="880" height="300" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>Heddle's flight recorder: from the engine to a replay</title>
+  <desc>On the device, LocalHeddle hands each call and its answer to a DecisionSink, an interface in kuilt-heddle-core. The adapter in kuilt-heddle-otel implements it, queues the entries and exports them into a dedicated WarpLogRecordExporter. The records leave the device through LogTapClient or the OTLP drain. On any machine, DecisionTraceReader rebuilds the trace, and DecisionTrace.replay runs a twin engine and reports the first difference.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9aa4b2"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="880" height="300" fill="#0d1117"/>
+
+  <!-- the device -->
+  <rect x="16" y="30" width="470" height="250" rx="10" fill="none" stroke="#30363d" stroke-dasharray="6 4"/>
+  <text x="32" y="54" fill="#8b949e" font-size="13">on the device</text>
+
+  <!-- the analyst's machine -->
+  <rect x="560" y="30" width="304" height="250" rx="10" fill="none" stroke="#30363d" stroke-dasharray="6 4"/>
+  <text x="576" y="54" fill="#8b949e" font-size="13">on any machine, later or alongside</text>
+
+  <!-- engine -->
+  <rect x="36" y="80" width="190" height="64" rx="8" fill="#161b22" stroke="#58a6ff"/>
+  <text x="131" y="106" fill="#e6edf3" font-size="14" text-anchor="middle">LocalHeddle</text>
+  <text x="131" y="126" fill="#8b949e" font-size="12" text-anchor="middle">→ DecisionSink (core)</text>
+
+  <!-- adapter -->
+  <rect x="276" y="80" width="190" height="64" rx="8" fill="#161b22" stroke="#3fb950"/>
+  <text x="371" y="106" fill="#e6edf3" font-size="14" text-anchor="middle">adapter sink → queue</text>
+  <text x="371" y="126" fill="#8b949e" font-size="12" text-anchor="middle">:kuilt-heddle-otel (new)</text>
+
+  <!-- exporter -->
+  <rect x="276" y="190" width="190" height="64" rx="8" fill="#161b22" stroke="#8b949e"/>
+  <text x="371" y="216" fill="#e6edf3" font-size="14" text-anchor="middle">WarpLogRecordExporter</text>
+  <text x="371" y="236" fill="#8b949e" font-size="12" text-anchor="middle">its own buffer (exists)</text>
+
+  <!-- reader -->
+  <rect x="600" y="80" width="230" height="64" rx="8" fill="#161b22" stroke="#3fb950"/>
+  <text x="715" y="106" fill="#e6edf3" font-size="14" text-anchor="middle">DecisionTraceReader</text>
+  <text x="715" y="126" fill="#8b949e" font-size="12" text-anchor="middle">sort by seq, report gaps (new)</text>
+
+  <!-- replay -->
+  <rect x="600" y="190" width="230" height="64" rx="8" fill="#161b22" stroke="#58a6ff"/>
+  <text x="715" y="216" fill="#e6edf3" font-size="14" text-anchor="middle">DecisionTrace.replay</text>
+  <text x="715" y="236" fill="#8b949e" font-size="12" text-anchor="middle">a twin, the first difference (new)</text>
+
+  <!-- arrows -->
+  <line x1="226" y1="112" x2="270" y2="112" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="371" y1="144" x2="371" y2="184" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M466,222 C520,222 540,112 594,112" fill="none" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="508" y="150" fill="#8b949e" font-size="12" text-anchor="middle">tap or</text>
+  <text x="508" y="166" fill="#8b949e" font-size="12" text-anchor="middle">OTLP</text>
+  <line x1="715" y1="144" x2="715" y2="184" stroke="#9aa4b2" stroke-width="1.5" marker-end="url(#arrow)"/>
+</svg>
