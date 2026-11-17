@@ -192,10 +192,12 @@ cannot put the entry ahead of its format.
 - **A reader halts on what it cannot read.** An unknown trace format, an unknown entry kind, or
   an unknown outcome kind ends that stretch of the trace with a typed `Unreadable` verdict. It is
   never skipped. A skipped call is a missing input, and a replay over a missing input checks a
-  history that never happened. This is the rule `.claude/rules/heddle.md` already sets for the
-  control log, for the same reason.
+  history that never happened. This is the rule
+  [`.claude/rules/heddle.md`](../.claude/rules/heddle.md) already sets for the control log, for
+  the same reason.
 - **The bytes are pinned by checked-in golden vectors,** one per entry kind and outcome kind, in
-  the shape of `HeddleControlLogCodecTest`. A change that moves them bumps `FORMAT_VERSION`. A new
+  the shape of
+  [`HeddleControlLogCodecTest`](../kuilt-heddle/src/commonTest/kotlin/us/tractat/kuilt/heddle/HeddleControlLogCodecTest.kt). A change that moves them bumps `FORMAT_VERSION`. A new
   outcome arm is such a change.
 
 **`waiting` and `eligible` are written as changes,** with the whole set written now and then, the
@@ -456,8 +458,9 @@ has five consequences for this design.
 - **An engine restored from a 0.7.5 snapshot records the translated state.** No trace predates
   step B: the recorder ships after it, so no trace holds an origin. A snapshot 0.7.5 wrote can,
   and restoring it translates each origin into its children's positions and discards it
-  (`LedgerFormat1` in `:kuilt-heddle-core`), before a recording can start. So that engine's first
-  anchor is written origin-free, and its bytes differ from the snapshot the consumer restored. The
+  ([`LedgerFormat1.kt`](../kuilt-heddle-core/src/commonMain/kotlin/us/tractat/kuilt/heddle/LedgerFormat1.kt)
+  in `:kuilt-heddle-core`), before a recording can start. So that engine's first anchor is written
+  origin-free, and its bytes differ from the snapshot the consumer restored. The
   replay starts its twin from the anchor, never from the 0.7.5 bytes, so the translation cannot
   show up as a divergence.
 - **The position limit refuses through existing arms,** `AcquireOutcome.LifetimeExhausted` and
@@ -593,7 +596,7 @@ One behaviour move each, in order. None is filed yet.
    `sleeperCredit` and not under another, where `estimate` must name the better one; a trace
    whose run times are too noisy to calibrate, which must come back `Uncalibrated`; a picked leaf
    with no sample, which must give up. The calibration tolerance is set from the first of those.
-6. **Routes and the guide.** A symptom→primitive entry in `docs/agent-cookbook/heddle.md`, the
+6. **Routes and the guide.** A symptom→primitive entry in [`docs/agent-cookbook/heddle.md`](agent-cookbook/heddle.md), the
    matching route in the `kuilt-primitives` skill (a trigger in, one out), and a guide topic,
    *When a pick surprises you*, written top-down.
 7. **The many-peer form.** A design first (§10), then `:kuilt-heddle-test`.
