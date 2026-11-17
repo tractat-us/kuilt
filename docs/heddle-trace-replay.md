@@ -524,6 +524,11 @@ Each names what enforces it. An enforcer that is not built yet names the slice t
 9. **An estimate is never read as testimony.** `WorkloadEstimate` and `ReplayReport` are separate
    types, and an estimate whose calibration run misses the record carries no suggestion
    (slice 5).
+10. **A sink that keeps dropping costs one anchor, not one per call.** After a drop the engine owes
+    an anchor and tries it once; a dropped anchor is not tried again until the sink answers
+    `Kept`, and the next call after that carries it. Enforced by a slice 1 test: a sink that drops
+    every entry for many calls sees one `persist()`, and the first `Kept` after it is followed by an
+    anchor.
 
 ### 13. Slices: issues to file
 
