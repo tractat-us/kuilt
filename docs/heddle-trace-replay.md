@@ -435,7 +435,8 @@ touches four parts of this design.
   recording hook is a new member or overload on `LocalHeddle`, never a default parameter added to
   `fromTopology` or `restore`, and the public outcome types are not made `@Serializable`.
 - **Anchors.** Slice 4 takes the origin out of the ledger, and 0.7.6 writes format 1 with no
-  origins. An anchor needs no change, because it is whatever `persist()` writes in format 1.
+  origins. An anchor needs no change, because it is whatever snapshot `persist()` takes, encoded
+  in format 1.
 - **An engine restored from a 0.7.5 snapshot records the translated state.** No trace predates
   step B: the recorder ships after it, so no trace holds an origin. A snapshot 0.7.5 wrote can,
   and restoring it translates each origin into its children's positions and discards it
