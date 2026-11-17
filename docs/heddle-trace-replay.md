@@ -371,9 +371,9 @@ format to encode a snapshot with, so it does not hash one itself. The recording 
 replay takes one too. `:kuilt-heddle-otel` supplies the one it records with: FNV-1a 64 over the
 snapshot's JSON encoding, the same hash the `recordId` uses. The replay hashes its twin's snapshot
 at the same `seq`, and a mismatch is `StateDiverged(digestSeq)`, narrowed to the `digestEvery`
-calls since the last check. A replay handed a different digester from the recorder's mismatches at
-the first digest, which is loud rather than wrong, and the adapter exposes its own so the two sides
-can name the same one.
+calls since the last check. A replay handed a different digester from the recorder's reports
+`StateDiverged` at the first digest even where the states agree, so the adapter exposes the one it
+records with, for the replay to be given the same one.
 
 A digest saves buffer space, not work: the adapter's digester still encodes the whole snapshot to
 hash it, so slice 3 measures its cost beside an anchor's. It is evidence, not proof. Two different
