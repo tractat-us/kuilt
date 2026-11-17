@@ -190,6 +190,23 @@ public class WarpMetricExporter(
     }
 
     /**
+     * The exporter with a [versionLease] other than [VERSION_LEASE], so a test can drive the version
+     * claim's renewal across a few sets rather than a thousand.
+     */
+    internal constructor(
+        replica: ReplicaId,
+        store: DurableStore,
+        maxMetrics: Int,
+        versionLease: Long,
+    ) : this(replica, store, maxMetrics) {
+        require(versionLease >= 1L) { "versionLease must be at least 1; got $versionLease" }
+        this.versionLease = versionLease
+    }
+
+    /** How far a version claim reaches past the versions a turn may mint; see [VERSION_LEASE]. Set once, at construction. */
+    private var versionLease: Long = VERSION_LEASE
+
+    /**
      * The OTLP exponential-histogram scale every histogram series here is kept at — the scale
      * [histogramPrototype]'s accuracy aligns with, [DEFAULT_OTLP_HISTOGRAM_SCALE] by default.
      *
@@ -356,6 +373,20 @@ public class WarpMetricExporter(
         private val HISTOGRAM_STORE_KEY = StoredKind.HISTOGRAMS.storeKey
         private val UP_DOWN_SUM_STORE_KEY = StoredKind.UP_DOWN_SUMS.storeKey
         private val UP_DOWN_SUM_DOUBLE_STORE_KEY = StoredKind.UP_DOWN_SUMS_DOUBLE.storeKey
+
+        /**
+         * Where this replica's up-down versions are claimed: the highest version any run may have
+         * minted. Not a [StoredKind]: it holds no series, and [clear] never deletes it.
+         */
+        private val VERSION_STORE_KEY = StoreKey("otel.metrics.updown.version")
+
+        /**
+         * The default [versionLease]: how far past a turn's mints a version claim reaches. A turn
+         * writes a new claim only when its mints would pass the last one, so in steady state that is
+         * one small write per this many up-down writes, plus one before the first of each run. The
+         * cost of a larger lease is versions a restart skips, of which a `Long` has plenty.
+         */
+        private const val VERSION_LEASE = 1L shl 10
 
         private val cbor = Cbor { alwaysUseByteString = true }
 
