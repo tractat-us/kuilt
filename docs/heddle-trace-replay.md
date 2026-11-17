@@ -387,9 +387,9 @@ was set up, and it would read as testimony about the engine. So `Begin` records 
 name, and before it resumes a twin or replays a call, `replay` compares that name with the name of
 the digester it was handed. On a difference it returns `ReplayResult.DigesterMismatch(recorded,
 given)` and no report. The incremental form makes the same check at the `Begin` it is offered,
-before any call. Core compares names, not functions, because the trace holds only the name. So a
-name is a promise that the output has not changed, and invariant 7 is what keeps the adapter's
-promise.
+before any call. Core compares names, not functions, because the trace holds only the name. So
+a name is a promise that the output has not changed, and invariant 7 (§12) is what keeps the
+adapter's promise.
 
 A digest saves buffer space, not work: the adapter's digester still encodes the whole snapshot to
 hash it, so slice 3 measures its cost beside an anchor's. It is evidence, not proof. Two different
@@ -533,9 +533,9 @@ Each names what enforces it. An enforcer that is not built yet names the slice t
    snapshot of format 1 (slice 3).
 7. **A digest is the same number on every target.** A golden vector for the adapter's digester,
    run on JVM, `macosArm64` and `wasmJs`, read as a union (slice 3). Core cannot pin it: the
-   digester is a parameter there, and the one that ships is the adapter's. The vector pins the
-   digester's name beside its output, so a change that moves the output must rename it, the way a
-   layout change bumps `FORMAT_VERSION`.
+   digester is a parameter there, and the one that ships is the adapter's. The vector is keyed by
+   the digester's name, so a change that moves the output reds under the old name, and the fix is
+   a new name with its own vector, the way a layout change bumps `FORMAT_VERSION`.
 8. **A set rebuilt from changes equals the set written whole.** Checked by the reader at every
    whole set, as an `Unreadable` verdict; pinned by a seeded round trip whose sets change on most
    calls, with `fullSetEvery` large enough that the reader must walk a chain of changes (slice 3).
