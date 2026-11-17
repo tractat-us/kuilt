@@ -559,22 +559,25 @@ Each names what enforces it. An enforcer that is not built yet names the slice t
 One behaviour move each, in order. None is filed yet.
 
 1. **Record (`:kuilt-heddle-core`).** `DecisionSink`, the entry and `DecisionOutcome` types and
-   their mapping, the required-parameter `atomically`, the recording hook with its required
-   digester, anchors and digests. Tests: the on/off twin (invariant 2), sink drop and throw, an
-   anchor after a drop and none again until `Kept` (invariant 10), a reused mutable `waiting` set.
-   The tests pass a digester of their own, since core has no format. ABI dump gains lines only.
+   their mapping, `SnapshotDigester`, the required-parameter `atomically`, the recording hook with
+   its required digester, anchors and digests. Tests: the on/off twin (invariant 2), sink drop and
+   throw, an anchor after a drop and none again until `Kept` (invariant 10), a reused mutable
+   `waiting` set, `Begin` carrying the digester's name, and a blank name refused. The tests pass a
+   digester of their own, since core has no format. ABI dump gains lines only.
 2. **Replay (`:kuilt-heddle-core`).** The `internal` same-epoch resume, `DecisionTrace` and its
-   stretches, `replay` with its digester, `compare`, `before`, `ReplayReport`, and the anchor check
-   by `LocalHeddleSnapshot.equals`. Tests: a seeded driver over all nine
-   calls replays `Matched` on JVM, `macosArm64` and `wasmJs`, read as a union, sorting what it
-   walks (#2592). A changed `sleeperCredit` reports `Diverged` at the first differing `seq`, and the
+   stretches, `replay` with its digester, the up-front `DigesterMismatch` refusal, `compare`,
+   `before`, `ReplayResult`, `ReplayReport`, and the anchor check by `LocalHeddleSnapshot.equals`.
+   Tests: the refusal over a trace whose first answer was altered (invariant 11); a seeded driver
+   over all nine calls replays `Matched` on JVM, `macosArm64` and `wasmJs`, read as a union,
+   sorting what it walks (#2592). A changed `sleeperCredit` reports `Diverged` at the first differing `seq`, and the
    row asserts that a pick actually differs at that `seq` before it acts. Mutations that must red:
    one call left unrecorded; an anchor resumed under a later epoch; an outcome mapped without its
-   lease id; a digest compared at the wrong `seq`.
+   lease id; a digest compared at the wrong `seq`; the digester's name checked only at the first
+   digest.
 3. **The wire (`:kuilt-heddle-otel`, created here or by #3184).** The JSON codec with golden
    vectors, set changes and whole sets, the `LogRecord` mapping, anchor parts, the adapter sink,
-   queue and pump, the digester with its golden vector (invariant 7), and `DecisionTraceReader`
-   with gap reporting. A measurement against the budget
+   queue and pump, the digester with its name and golden vector (invariant 7), and
+   `DecisionTraceReader` with gap reporting. A measurement against the budget
    in §5 sets `anchorEvery`, `digestEvery`, `fullSetEvery`, the queue size and
    `ANCHOR_PART_BYTES`, and says whether the guide can tell consumers to leave recording on.
    Includes the four edits a
