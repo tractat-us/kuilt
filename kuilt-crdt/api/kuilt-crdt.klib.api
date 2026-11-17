@@ -341,7 +341,9 @@ final class <#A: kotlin/Any?, #B: kotlin/Any?> us.tractat.kuilt.crdt/LWWMap : us
     final fun piece(us.tractat.kuilt.crdt/LWWMap<#A, #B>): us.tractat.kuilt.crdt/LWWMap<#A, #B> // us.tractat.kuilt.crdt/LWWMap.piece|piece(us.tractat.kuilt.crdt.LWWMap<1:0,1:1>){}[0]
     final fun remove(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long, #A): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/LWWMap<#A, #B>> // us.tractat.kuilt.crdt/LWWMap.remove|remove(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long;1:0){}[0]
     final fun set(us.tractat.kuilt.crdt/ReplicaId, kotlin/Long, #A, #B): us.tractat.kuilt.crdt/Patch<us.tractat.kuilt.crdt/LWWMap<#A, #B>> // us.tractat.kuilt.crdt/LWWMap.set|set(us.tractat.kuilt.crdt.ReplicaId;kotlin.Long;1:0;1:1){}[0]
+    final fun tagOf(#A): kotlin/Long? // us.tractat.kuilt.crdt/LWWMap.tagOf|tagOf(1:0){}[0]
     final fun toString(): kotlin/String // us.tractat.kuilt.crdt/LWWMap.toString|toString(){}[0]
+    final fun without(#A): us.tractat.kuilt.crdt/LWWMap<#A, #B> // us.tractat.kuilt.crdt/LWWMap.without|without(1:0){}[0]
 
     final class <#A1: kotlin/Any?, #B1: kotlin/Any?> $serializer : kotlinx.serialization.internal/GeneratedSerializer<us.tractat.kuilt.crdt/LWWMap<#A1, #B1>> { // us.tractat.kuilt.crdt/LWWMap.$serializer|null[0]
         constructor <init>(kotlinx.serialization/KSerializer<#A1>, kotlinx.serialization/KSerializer<#B1>) // us.tractat.kuilt.crdt/LWWMap.$serializer.<init>|<init>(kotlinx.serialization.KSerializer<1:0>;kotlinx.serialization.KSerializer<1:1>){}[0]

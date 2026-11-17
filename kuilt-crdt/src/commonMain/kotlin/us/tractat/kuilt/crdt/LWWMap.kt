@@ -161,8 +161,7 @@ public class LWWMap<K, V> private constructor(
      * key from what it is about to join, and keeps its own cell as the only one for that key.
      */
     @CrdtInternalApi
-    public fun without(key: K): LWWMap<K, V> =
-        cells[key]?.let { LWWMap(cells + (key to LWWRegister.tagged<V>(ReplicaId.Bottom, it.timestamp + 1, null))) } ?: this
+    public fun without(key: K): LWWMap<K, V> = if (key in cells) LWWMap(cells - key) else this
 
     /** The join: per-key max-tag of the underlying registers. */
     override fun piece(other: LWWMap<K, V>): LWWMap<K, V> =

@@ -1057,7 +1057,9 @@ public final class us/tractat/kuilt/crdt/LWWMap : us/tractat/kuilt/crdt/Quilted 
 	public synthetic fun piece (Lus/tractat/kuilt/crdt/Quilted;)Lus/tractat/kuilt/crdt/Quilted;
 	public final fun remove-A2Ggm7A (Ljava/lang/String;JLjava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
 	public final fun set-fjENvQQ (Ljava/lang/String;JLjava/lang/Object;Ljava/lang/Object;)Lus/tractat/kuilt/crdt/Quilted;
+	public final fun tagOf (Ljava/lang/Object;)Ljava/lang/Long;
 	public fun toString ()Ljava/lang/String;
+	public final fun without (Ljava/lang/Object;)Lus/tractat/kuilt/crdt/LWWMap;
 }
 
 public final synthetic class us/tractat/kuilt/crdt/LWWMap$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
