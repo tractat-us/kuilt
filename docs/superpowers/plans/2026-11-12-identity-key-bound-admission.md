@@ -240,6 +240,18 @@ give each entry a **generation** (`take` returns `Pending(gen)`, plus `isCurrent
     own `RejectCode` arrives as `Unknown(id)`, retryable. If 2.5's protocol bump carries `retryable`, see
     the issue filed for it; otherwise 1.7's re-Hello retries a refused returning device to its deadline.
 
+## Amendment B — rulings of 2026-11-16 (before Task 1.4 started)
+
+Overrides the tasks below where they differ. Spec Decided 21 (confirmed) and Decided 30 are the normative text.
+
+- **#3271, before 1.4:** thread `deviceId` through `ElectionLobby.start` and `awaitRoom`, as `join` and `adopt` take it (Decided 6). A small PR stacked on 1.3, done first by the 1.4 worker.
+- **1.4:** a joiner presenting the host's own key is **not** refused. It gets an ordinary additional seat (Decided 30), so the caller's host-key check before `decideSeat` routes it to additional-seat admission.
+- **1.5:** when Decided 18 releases a partitioned seat whose id now shows a different key, the proven key is decided again under Decided 30. Decided 23's terminal "one key holding two seats" conflict no longer applies. The same-id, different-key, connected refusal stays.
+- **1.6:** `RestoreUnderNewId` fires only for a **partitioned** seat of the key, choosing the most recently connected when there are several. A key whose seats are all connected gets an additional seat.
+  - `supersededJoinerDoesNotReHello` rigs the first room **partitioned** before the second admission. Add `secondConnectedTabGetsAnAdditionalSeat`: two connected rooms over one `DeviceKeyStore` both stay members, with no `Superseded` and no loop.
+  - Add `hostSecondTabIsAdmittedAsMember`.
+- **Every task:** never assume `Member.key` is unique in a roster.
+
 ## Global Constraints
 
 - **Each task is one PR and one sub-issue of #3159.**

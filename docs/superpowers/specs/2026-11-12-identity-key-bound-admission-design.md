@@ -97,7 +97,7 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     `ResumeTokenInvalid`, `ResumeWindowNotYetOpen` and `ResumeWindowExpired` are removed when
     `Resume` is retired, together with their readers.
 21. **The store keeps the newest grant per issuer and scope, not per issuer (controller ruling,
-    2026-11-13, #3253's review; for Iain to confirm).** One host key serves many rooms, so
+    2026-11-13, #3253's review; confirmed by Iain, 2026-11-16).** One host key serves many rooms, so
     `Room(A)` and `Room(B)` from one issuer are both kept; keyed by issuer alone, B's refresh evicts
     A's and the device loses its pass back into A — Decided 1's middle tier. A tie on `issuedAt` keeps
     the held grant, so a replayed or reordered copy cannot displace it.
@@ -112,7 +112,7 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     seats. When Decided 18 releases a partitioned seat, the joiner's key is then decided as if that
     seat were never held: `Returning` with a valid grant, else ordinary. The same "decide again
     without the seat" applies to a revoked restore (Decided 14) and to a restore whose window refuses
-    it. A host's own seat is never in the table; a joiner presenting the host's key is #3257.
+    it. A host's own seat is never in the table; a joiner presenting the host's key is decided by Decided 30.
 24. **A grant dated beyond a clock-skew allowance is refused (Iain, 2026-11-13, #3268's review).** A
     grant whose `issuedAt` lies more than a fixed skew allowance (a few minutes) past the verifier's
     `now` gets a new `GrantVerdict` (e.g. `NotYetValid`), failing closed: the device goes through
@@ -163,6 +163,22 @@ accepted by him, or are review corrections he has not yet seen (marked *revised*
     than a first launch. The Android store requires API 26 (`@RequiresApi(26)` on `platform`; its
     grants store uses `java.nio.file`). A replaced key is a new device returning through ordinary
     admission.
+30. **One key may hold many seats; a connected seat is never superseded (Iain, 2026-11-16, #3257).**
+    Every tab of one browser shares one IndexedDB key, and many admitted tabs are the point ("if it's
+    browser tabs I don't mind having many many admitted tabs"). So a Proof under a new peer id with a
+    key that already holds seats **restores that key's partitioned seat** if it has one (the most
+    recently connected first), and otherwise is **admitted to an additional seat**. A connected seat
+    is never superseded by another peer id: live tabs coexist, and a restarted process still reclaims
+    its dead seat. **The host's own key** gets an ordinary additional seat, so the host's second tab
+    joins like any other. Consequences:
+    - `Member.key` is not unique in a roster. Nothing in kuilt or a consumer may assume one member
+      per key.
+    - Review Focus 1's loop cannot form, because only a partitioned seat is ever superseded; a
+      superseded joiner still ends its room and never re-Hellos.
+    - Decided 23's terminal key conflict loses its premise ("one key holding two seats"): when
+      Decided 18 releases the id's partitioned seat, the proven key is decided again under this rule.
+    - Decided 18's same-id, different-key, **connected** refusal stands: that is another device
+      claiming a live member's peer id, not a second tab.
 
 ## Goals
 
@@ -322,7 +338,8 @@ The host keeps, for each member, its key. On a verified Proof:
 | Peer id | Key | Seat | Outcome |
 |---|---|---|---|
 | same | same | held (partitioned or still connected) | **Restored**: the same membership, `MembershipEvent.Resumed`; a still-connected seat's old link is superseded |
-| new | same | held | **Restored under the new id**: the old member leaves with a dedicated `LeaveReason` (superseded), the new one inherits the membership; one event pair, ordered through `fanOutToOtherMembers` |
+| new | same | held, **partitioned** | **Restored under the new id**: the old member leaves with a dedicated `LeaveReason` (superseded), the new one inherits the membership; one event pair, ordered through `fanOutToOtherMembers`. With several partitioned seats, the most recently connected (Decided 30) |
+| new | same | held, all **connected** (or the host's own key) | **Additional seat**: admitted as a new member under the same key; no seat is superseded (Decided 30) |
 | any | same | gone, grant `Valid` | **Returning**: admitted without calling vetting; the roster Welcome carries a `returning` mark |
 | same | **different** | connected | **Rejected**, terminal — a different device claiming a connected member's id (Decided 18) |
 | same | **different** | partitioned | old seat released; the key is decided again without it: **Returning** with a valid grant, else **ordinary admission** as a new member (Decided 18, 23) |
