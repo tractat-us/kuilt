@@ -523,8 +523,9 @@ the evidence, which is the fifth shape applied to itself.
   `sourceInfoType=libbacktrace` (flat under load, `file:line` preserved), documented in
   `docs/usage.md`. The second part is **per trace**, and it is not small: measured during #3532 in
   a `macosArm64` debug test binary, every rendered trace cost ~25 ms with `libbacktrace` and ~23 ms
-  with `coresymbolication` on a dev Mac, and 50–70 ms on the 3-vCPU apple-nightly runner (448
-  refused commits: 12.2 s with the throwable, 0.03 s without). `libbacktrace` does not remove it; a
+  with `coresymbolication` on a 16-core dev Mac at load 8–22, and 50–70 ms on the 3-vCPU
+  apple-nightly runner (448 refused commits: 12.2 s on the Mac, 23–31 s on the runner, 0.03 s
+  without the throwable). `libbacktrace` does not remove it; a
   throwable-free `logger.warn { … }` never symbolizes at all. So a site that logs a throwable
   **per event** on a routine path pays that per event, and that site — not a sweep — is where
   dropping the trace is worth weighing. The rule above still decides it: `SpeculativeSequencer`'s
