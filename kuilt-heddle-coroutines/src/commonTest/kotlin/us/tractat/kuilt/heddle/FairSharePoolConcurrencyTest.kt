@@ -4,6 +4,8 @@ import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.update
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: the pool's count is guarded by a lock, and only real threads (JVM, Native) put a complete, a hand-back and a dispatch in the same window; on wasmJs this only witnesses that the body runs
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
@@ -31,8 +33,9 @@ import kotlin.time.TimeSource
  * What each target shows: on the JVM and Kotlin/Native, `Dispatchers.Default` is a thread pool, and
  * the lock claim rests on those two. On wasmJs it is the browser's one event loop, and the pool's
  * critical sections never suspend, so nothing can interleave inside one: there the probe witnesses
- * only that its body runs, and [cancellationOnRealThreadsLeaksNoSlot] records its race counters
- * rather than asserting them ([runsOnRealThreads]).
+ * only that its body runs, and [cancellationOnRealThreadsLeaksNoSlot] records its hand-back counter
+ * rather than asserting it ([runsOnRealThreads]). A cancel of a queued waiter needs no interleaving,
+ * so that counter is asserted on every target.
  *
  * A hang here gets none of `:kuilt-test`'s JVM-only coroutine dump, so every failure message carries
  * the pool's counters instead.
@@ -104,6 +107,10 @@ class FairSharePoolConcurrencyTest {
             var ran = 0
             var cancelled = 0
             var rounds = 0
+            var issuedTotal = 0
+            // A missed floor must reach its named assertion, not the wedge report: rounds run on a
+            // real-time budget well inside it, as well as under the cap.
+            val budget = TimeSource.Monotonic.markNow() + RACE_BUDGET
             // On wasmJs the hand-back window may never open, so a floor there would only spend the cap.
             val roundCap = if (runsOnRealThreads) ROUND_CAP else WASM_ROUNDS
             fun bothRacesFired() = pool.removedWhileQueuedForTest.value >= 1 && pool.handedBackForTest.value >= 1
@@ -132,36 +139,41 @@ class FairSharePoolConcurrencyTest {
                         // Swept from the start with a bare yield between them, nearly all landed on queued
                         // waiters: a hand-back took 36 rounds on macosArm64, 24 s of the 30 s backstop.
                         val cancellers = List(2) { lane ->
-                            launch {
+                            async {
                                 var issued = 0
                                 for (i in jobs.indices.filter { it % 2 == lane && it % 3 == 0 }) {
                                     while (granted[lane].value + issued < i / 2) yield()
                                     jobs[i].cancel()
                                     issued++
                                 }
+                                issued
                             }
                         }
-                        cancellers.joinAll()
+                        issuedTotal += cancellers.awaitAll().sum()
                         jobs.joinAll()
                         // Joined, so every write to `finished` is visible. A cancel landing after a body's
                         // last suspension still marks its job cancelled; that one counts as ran.
                         ran += finished.count { it }
                         cancelled += jobs.indices.count { jobs[it].isCancelled && !finished[it] }
                     }
-                } while (rounds < roundCap && !bothRacesFired())
+                } while (rounds < roundCap && budget.hasNotPassedNow() && !bothRacesFired())
             }
             val removed = pool.removedWhileQueuedForTest.value
             val handedBack = pool.handedBackForTest.value
             val open = pool.openForTest
             val waiters = pool.waitersForTest
             val leases = engine.snapshot().leases
-            val seen = "rounds=$rounds ran=$ran cancelled=$cancelled ${pool.state()}"
+            val seen = "rounds=$rounds ran=$ran cancelled=$cancelled issued=$issuedTotal ${pool.state()}"
             println("FairSharePoolConcurrencyTest.cancellationOnRealThreadsLeaksNoSlot: realThreads=$runsOnRealThreads $seen")
             // Last: it opens a lease of its own.
             val fresh = pool.acquire(web)
             assertAll(
                 { assertEquals(JOBS * rounds, ran + cancelled, "every job ran or was cancelled: $seen") },
-                { if (runsOnRealThreads) assertTrue(removed >= 1, "the rig: a queued waiter was cancelled: $seen") },
+                // Only the canceller cancels: a job ended cancelled for any other reason, such as a
+                // failure the pool delivered as a CancellationException, breaks these two.
+                { assertTrue(cancelled <= issuedTotal, "no job was cancelled but by the canceller ($issuedTotal issued): $seen") },
+                { assertTrue(ran >= JOBS * rounds - issuedTotal, "every job not cancelled ran ($issuedTotal issued): $seen") },
+                { assertTrue(removed >= 1, "the rig: a queued waiter was cancelled: $seen") },
                 { if (runsOnRealThreads) assertTrue(handedBack >= 1, "the rig: a granted waiter handed back: $seen") },
                 { assertEquals(0, open, "the pool counts no open lease: $seen") },
                 { assertEquals(0, waiters, "no waiter is queued: $seen") },
@@ -179,5 +191,6 @@ class FairSharePoolConcurrencyTest {
         const val ROUND_CAP = 50
         const val WASM_ROUNDS = 1
         val WEDGE_REPORT = TEST_WEDGE_BACKSTOP - 5.seconds
+        val RACE_BUDGET = 15.seconds
     }
 }
