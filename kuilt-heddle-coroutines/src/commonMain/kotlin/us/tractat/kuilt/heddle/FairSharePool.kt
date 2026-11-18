@@ -176,9 +176,9 @@ public class FairSharePool(
      *   granted to [leaf], and [block] never runs.
      * @throws IllegalArgumentException when [reservation] is not in `1..`[LocalHeddle.MAX_RESERVATION],
      *   before anything waits.
-     * @throws Exception whatever the engine threw, or the [IllegalStateException] the pool raised for
-     *   an answer the engine's contract rules out, when handing out slots fails while the caller is
-     *   queued (see Failures, above); [block] never runs.
+     * @throws Exception the pool's failure, when it fails while the caller is queued: whatever the
+     *   engine threw, or an [IllegalStateException] for an answer the engine's contract rules out
+     *   (see Failures, above). [block] never runs.
      * @sample us.tractat.kuilt.heddle.sampleWithSlot
      */
     public suspend fun <T> withSlot(leaf: GroupId, reservation: Long = defaultReservation, block: suspend (Lease) -> T): T {
@@ -199,8 +199,8 @@ public class FairSharePool(
 
     /**
      * Suspend until fair share grants [leaf] a slot, and answer [SlotOutcome.Granted] with its lease,
-     * or [SlotOutcome.Refused] when no lease can end at [leaf] as the tree stands now. The caller holds a granted slot
-     * until it calls [complete] or [cancel].
+     * or [SlotOutcome.Refused] when no lease can end at [leaf] as the tree stands now. The caller
+     * holds a granted slot until it calls [complete] or [cancel].
      *
      * Cancelling the caller while it waits, or after its grant was made but before it resumed, frees
      * the slot: the lease is cancelled with nothing charged.
@@ -211,9 +211,9 @@ public class FairSharePool(
      *   as an overrun at [complete].
      * @throws IllegalArgumentException when [reservation] is not in `1..`[LocalHeddle.MAX_RESERVATION],
      *   before anything waits.
-     * @throws Exception whatever the engine threw, or the [IllegalStateException] the pool raised for
-     *   an answer the engine's contract rules out, when handing out slots fails while the caller is
-     *   queued (see Failures, above).
+     * @throws Exception the pool's failure, when it fails while the caller is queued: whatever the
+     *   engine threw, or an [IllegalStateException] for an answer the engine's contract rules out
+     *   (see Failures, above).
      * @sample us.tractat.kuilt.heddle.sampleAcquireSlot
      */
     public suspend fun acquire(leaf: GroupId, reservation: Long = defaultReservation): SlotOutcome {

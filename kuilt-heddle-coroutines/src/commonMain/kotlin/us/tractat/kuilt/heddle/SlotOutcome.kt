@@ -1,7 +1,8 @@
 package us.tractat.kuilt.heddle
 
 /**
- * What [FairSharePool.acquire] answered: a slot, or the reason none can ever be granted to that leaf.
+ * What [FairSharePool.acquire] answered: a slot, or the reason none can be granted to that leaf
+ * as the tree stands now.
  *
  * @sample us.tractat.kuilt.heddle.sampleAcquireSlot
  */
