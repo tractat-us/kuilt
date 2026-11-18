@@ -342,6 +342,32 @@ class FairSharePoolTest {
         )
     }
 
+    /**
+     * The one LifetimeExhausted the public API reaches (measured, #3555): each complete records an
+     * overrun of up to [LocalHeddle.MAX_RECORDED_OVERRUN], and the root mints every one, so after 62
+     * the root's minted supply is at the watermark and the engine answers LifetimeExhausted at the
+     * root for every lane. A lane full on its own, with the root still able to fund a sibling, is
+     * out of reach here: the root's mint is at least any one edge's issuance, so it trips first.
+     */
+    @Test
+    fun aFullRootRefusesEveryLaneWithLifetimeExhausted() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val p = pool(slots = 1)
+        var overruns = 0
+        while (overruns < 80) {
+            val lease = (p.acquire(web) as? SlotOutcome.Granted)?.lease ?: break
+            p.complete(lease.id, lease.reserved + LocalHeddle.MAX_RECORDED_OVERRUN)
+            overruns++
+        }
+        val full = SlotOutcome.Refused(WaitExplanation.LifetimeExhausted(farmTopology.groupId()))
+        val outs = listOf(p.acquire(web), p.acquire(mobile))
+        assertAll(
+            { assertEquals(62, overruns, "the rig: the root's mint reached the watermark") },
+            { assertEquals(listOf(full, full), outs) },
+            { assertEquals(0, p.openForTest) },
+            { assertEquals(0, p.waitersForTest) },
+        )
+    }
+
     @Test
     fun anAlreadyCancelledCallerIsNeverQueued() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val p = pool(slots = 1)
