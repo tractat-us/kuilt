@@ -1050,6 +1050,16 @@ jobs:
           ./gradlew :kuilt-heddle:jvmTest -Pconcurrency.stress.tests=true
           --tests "*ConcurrencyTest"
 
+      # `FairSharePool`'s lock on real threads (#3558). Own step, same reason as above. Gated
+      # identically in kuilt-heddle-coroutines/build.gradle.kts. The probe is commonTest: its
+      # macosArm64 and wasmJs runs are local, recorded in the PR that added it, since this job runs
+      # the JVM only.
+      - name: Run :kuilt-heddle-coroutines concurrency probes (isolated runner, NON-BLOCKING)
+        if: always()
+        run: >-
+          ./gradlew :kuilt-heddle-coroutines:jvmTest -Pconcurrency.stress.tests=true
+          --tests "*ConcurrencyTest"
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -1072,6 +1082,8 @@ jobs:
             kuilt-session/build/test-results/
             kuilt-heddle/build/reports/tests/
             kuilt-heddle/build/test-results/
+            kuilt-heddle-coroutines/build/reports/tests/
+            kuilt-heddle-coroutines/build/test-results/
 
   # ── nw-concurrency-probes ───────────────────────────────────────────────────
   # `:kuilt-nw`'s real-threaded probes (#2481). Same shape as concurrency-probes
