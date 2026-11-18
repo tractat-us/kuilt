@@ -146,11 +146,43 @@ value they return. Every call that changes the engine is all or nothing.
 
 **Intent:** a coroutine that should simply wait until its lane's fair share comes round, then
 run — without hand-rolling a semaphore per lane, a queue of waiters, the wake-up of the right
-one, or the hand-back of a slot whose waiter gave up at the moment it was granted.
-**Primitive:** `FairSharePool` (`:kuilt-heddle-coroutines`), built over a `LocalHeddle` and a
-slot count. `acquire(leaf)` suspends until fair share grants that leaf a slot and answers
-`SlotOutcome.Granted(lease)`, or `SlotOutcome.Refused(reason)` for a name no lease can end at;
-the caller then `complete`s the lease at its real cost, or `cancel`s it.
+one, the charge for a job that failed, or the hand-back of a slot whose waiter gave up at the
+moment it was granted.
+**Primitive:** `FairSharePool.withSlot` (`:kuilt-heddle-coroutines`), on a pool built over a
+`LocalHeddle` and a slot count. `withSlot(leaf) { lease -> … }` suspends until fair share grants
+that leaf a slot, runs the block, and charges the lease the time the block took, in whole cost
+units rounded up. It throws `SlotRefusedException(reason)`, an `IllegalStateException`, for a name
+no lease can end at, and the block never runs.
+
+<!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleWithSlot -->
+```kotlin
+    val pool = FairSharePool(heddle, slots = 1, TimeSource.Monotonic, costUnit = 1.minutes)
+
+    val built = mutableListOf<String>()
+    coroutineScope {
+        // One agent: whichever lane's turn comes second waits for the first build to finish.
+        launch { built += pool.withSlot(web) { "web build" } }
+        launch { built += pool.withSlot(mobile) { "mobile build" } }
+    }
+    check(built.sorted() == listOf("mobile build", "web build"))
+
+    // A name the farm does not declare is refused before anything runs.
+    val refused = try {
+        pool.withSlot(GroupId("nightly")) { "never runs" }
+    } catch (e: SlotRefusedException) {
+        "refused: ${e.reason}"
+    }
+    check(refused.startsWith("refused"))
+```
+
+**Every exit is charged.** A block that returns, throws, or is cancelled part-way is charged the
+time it held the slot, and the throwable or the cancellation goes on to the caller: a lane whose
+work fails fast must not get the farm for free. The clock starts when the block starts, so the
+moment between the grant and the caller resuming is never charged.
+
+**The low-level form.** `acquire(leaf)` is the same wait without the block. It answers
+`SlotOutcome.Granted(lease)`, or `SlotOutcome.Refused(reason)`, and the caller then `complete`s the
+lease at its real cost, or `cancel`s it.
 
 <!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleAcquireSlot -->
 ```kotlin
