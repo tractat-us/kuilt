@@ -20,6 +20,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TestTimeSource
 
 /**
  * [FairSharePool.withSlot] charges a block the time it held its slot, however the block ends
@@ -102,6 +103,55 @@ class FairSharePoolWithSlotTest {
             { assertEquals(listOf(2L), completions.map { it.actualCost }) },
             { assertIs<LeaseOutcome.Done>(completions.singleOrNull()?.outcome) },
             { assertEquals(0, p.openForTest) },
+        )
+    }
+
+    @Test
+    fun theWaitBeforeTheBlockIsNotCharged() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val engine = farm()
+        val p = pool(slots = 1, engine = engine)
+        val completions = p.recordCompletions()
+        val held = p.acquire(web).granted()
+        val b = async { p.withSlot(web) { delay(2.seconds) } }
+        runCurrent()
+        // The rig: B is queued, not running, while the clock moves four units.
+        val queuedWhileHeld = p.waitersForTest
+        advanceTimeBy(4.seconds)
+        runCurrent()
+        p.complete(held.id, 3L)
+        b.await()
+        assertAll(
+            { assertEquals(1, queuedWhileHeld, "B waited behind the held lease") },
+            {
+                assertEquals(
+                    listOf(3L, 2L),
+                    completions.map { it.actualCost },
+                    "B is charged the 2 units its block ran, not the 4 it spent queued (Ruling 14)",
+                )
+            },
+        )
+        assertNothingLeaked(p, engine)
+    }
+
+    @Test
+    fun aClockThatStepsBackChargesNothingAndLeaksNothing() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val engine = farm()
+        val clock = TestTimeSource()
+        val p = FairSharePool(engine, slots = 1, timeSource = clock, costUnit = 1.seconds)
+        val completions = p.recordCompletions()
+        assertFailsWith<Boom> {
+            p.withSlot(web) {
+                clock += (-5).seconds
+                throw Boom()
+            }
+        }
+        val nowAfter = p.now()
+        assertAll(
+            { assertEquals(listOf(0L), completions.map { it.actualCost }, "a backwards reading is no time at all") },
+            { assertIs<LeaseOutcome.Done>(completions.singleOrNull()?.outcome) },
+            { assertEquals(0L, nowAfter, "now never reads below clockStart") },
+            { assertEquals(0, p.openForTest) },
+            { assertEquals(emptyList(), engine.snapshot().leases) },
         )
     }
 

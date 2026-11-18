@@ -75,7 +75,9 @@ import kotlin.time.TimeSource
  *
  * @param engine the scheduler deciding whose turn it is. The pool reconciles its capacity to [slots].
  * @param slots how many leases may be open at once, at least `0`.
- * @param timeSource the clock [now] reads.
+ * @param timeSource the clock [now] reads and [withSlot] measures with. It should be monotonic: a
+ *   reading that goes back before a mark is taken as no time at all, so a block whose clock stepped
+ *   back is charged `0`, and [now] never reads below [clockStart].
  * @param costUnit how long one unit of [LocalHeddle] cost is: positive and finite.
  * @param clockStart what [now] reads at construction, in cost units; non-negative.
  * @throws IllegalArgumentException when an argument is out of range, or the engine refuses to
@@ -169,7 +171,9 @@ public class FairSharePool(
         try {
             return block(lease)
         } finally {
-            complete(lease.id, costUnits(started.elapsedNow(), costUnit))
+            // Clamped here, not refused in costUnits: a throw in this finally would leak the slot and
+            // replace the block's own throwable. A clock that stepped back charges nothing.
+            complete(lease.id, costUnits(started.elapsedNow().coerceAtLeast(Duration.ZERO), costUnit))
         }
     }
 
@@ -395,7 +399,7 @@ public class FairSharePool(
     }
 
     /** Whole cost units since construction, floored. */
-    private fun nowUnits(): Long = origin.elapsedNow().inWholeNanoseconds / costUnitNanos
+    private fun nowUnits(): Long = origin.elapsedNow().coerceAtLeast(Duration.ZERO).inWholeNanoseconds / costUnitNanos
 
     /** One caller waiting for a slot. Compared by identity, so a cancelled waiter removes only itself. */
     private class Waiter(val leaf: GroupId, val reservation: Long, val cont: CancellableContinuation<SlotOutcome>)
