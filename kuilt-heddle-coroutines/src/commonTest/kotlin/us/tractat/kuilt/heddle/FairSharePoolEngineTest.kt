@@ -1,6 +1,7 @@
 package us.tractat.kuilt.heddle
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
@@ -53,7 +54,7 @@ class FairSharePoolEngineTest {
         val p = pool(slots = 3)
         val held = List(3) { p.acquire(web).granted() }
         p.resize(1)
-        val fourth = async { p.acquire(web) }
+        val fourth = backgroundScope.async { p.acquire(web) }
         runCurrent()
         val openAfterResize = p.openForTest
         val waitsAtFirst = !fourth.isCompleted
@@ -63,12 +64,12 @@ class FairSharePoolEngineTest {
         val waitsWithOneOpen = !fourth.isCompleted
         p.complete(held[2].id, 3L)
         runCurrent()
-        val fourthOut = fourth.await()
+        val fourthOut = fourth.settled()
         assertAll(
             { assertEquals(3, openAfterResize, "every lease stays open past a lowered count") },
             { assertTrue(waitsAtFirst, "a fourth waiter waits while three are open") },
             { assertTrue(waitsWithOneOpen, "with one open and one slot, the fourth still waits") },
-            { assertEquals(web, fourthOut.granted().leaf) },
+            { assertEquals(web, fourthOut?.granted()?.leaf) },
         )
     }
 
@@ -83,16 +84,16 @@ class FairSharePoolEngineTest {
     fun withEngineRedispatchesAfterAReloadLiftsACeiling() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val p = pool(slots = 2, engine = farm(cappedWebTopology))
         p.acquire(web).granted()
-        val second = async { p.acquire(web) }
+        val second = backgroundScope.async { p.acquire(web) }
         runCurrent()
         val waitedAtCeiling = !second.isCompleted
         val reload = p.withEngine { it.apply(farmTopology, 1L) }
         runCurrent()
-        val secondOut = second.await()
+        val secondOut = second.settled()
         assertAll(
             { assertTrue(waitedAtCeiling, "the rig: web's second waiter waits at its ceiling") },
             { assertEquals(emptyList(), reload.refusals) },
-            { assertEquals(web, secondOut.granted().leaf) },
+            { assertEquals(web, secondOut?.granted()?.leaf) },
             { assertEquals(2, p.openForTest) },
         )
     }
@@ -102,13 +103,13 @@ class FairSharePoolEngineTest {
         val engine = farm()
         val p = pool(slots = 1, engine = engine)
         val a = p.acquire(web).granted()
-        val waiters = List(2) { async { p.acquire(mobile) } }
+        val waiters = List(2) { backgroundScope.async { p.acquire(mobile) } }
         runCurrent()
         val queued = p.waitersForTest
         val reload = p.withEngine { it.apply(webOnly, 1L) }
         runCurrent()
         val gone = SlotOutcome.Refused(WaitExplanation.NoLiveLineage(mobile))
-        val outs = waiters.map { it.await() }
+        val outs = waiters.map { it.settled() }
         assertAll(
             { assertEquals(2, queued, "the rig: both mobile waiters queue behind web's lease") },
             { assertEquals(emptyList(), reload.refusals) },
@@ -130,7 +131,7 @@ class FairSharePoolEngineTest {
         val p = pool(slots = 1)
         val a = p.acquire(web).granted()
         val w = launch { p.acquire(web) }
-        val m = async { p.acquire(mobile) }
+        val m = backgroundScope.async { p.acquire(mobile) }
         runCurrent()
         val queued = p.waitersForTest
         var inBlock = false
@@ -146,7 +147,7 @@ class FairSharePoolEngineTest {
             inBlock = false
         }
         runCurrent()
-        val mOut = m.await()
+        val mOut = m.settled()
         p.beforeResumeForTest = {}
         val openWhileAHeld = p.openForTest
         p.complete(a.id, 3L)
@@ -166,7 +167,7 @@ class FairSharePoolEngineTest {
     fun aWithEngineBlockThatThrowsStillResumesItsGrants() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val p = pool(slots = 2, engine = farm(cappedWebTopology))
         p.acquire(web).granted()
-        val second = async { p.acquire(web) }
+        val second = backgroundScope.async { p.acquire(web) }
         runCurrent()
         val queued = p.waitersForTest
         val thrown = assertFailsWith<IllegalStateException> {
@@ -176,11 +177,11 @@ class FairSharePoolEngineTest {
             }
         }
         runCurrent()
-        val secondOut = second.await()
+        val secondOut = second.settled()
         assertAll(
             { assertEquals(1, queued, "the rig: web's second waiter waits at its ceiling") },
             { assertEquals("boom", thrown.message, "the block's own throwable reaches the caller") },
-            { assertEquals(web, secondOut.granted().leaf) },
+            { assertEquals(web, secondOut?.granted()?.leaf) },
             { assertEquals(2, p.openForTest) },
         )
     }
@@ -189,16 +190,16 @@ class FairSharePoolEngineTest {
     fun aLeaseCompletedThroughTheEngineFreesItsSlot() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val p = pool(slots = 1)
         val a = p.acquire(web).granted()
-        val b = async { p.acquire(web) }
+        val b = backgroundScope.async { p.acquire(web) }
         runCurrent()
         val waited = !b.isCompleted
         val done = p.withEngine { it.complete(a.id, 3L, emptySet()) }
         runCurrent()
-        val bOut = b.await()
+        val bOut = b.settled()
         assertAll(
             { assertTrue(waited, "the rig: B waits behind A") },
             { assertEquals(LeaseOutcome.Done(3L, 0L, 0L), done) },
-            { assertEquals(web, bOut.granted().leaf) },
+            { assertEquals(web, bOut?.granted()?.leaf, "B is granted the slot A's completion freed") },
             { assertEquals(1, p.openForTest) },
         )
     }
@@ -214,7 +215,7 @@ class FairSharePoolEngineTest {
         val engine = LocalHeddle.fromTopology(farmTopology, policy, epoch = 0L).heddle
         val p = pool(slots = 1, engine = engine)
         p.acquire(web).granted()
-        val b = async { p.acquire(web) }
+        val b = backgroundScope.async { p.acquire(web) }
         runCurrent()
         val waited = !b.isCompleted
         assertFailsWith<IllegalArgumentException> { p.resize(2) }
@@ -226,6 +227,11 @@ class FairSharePoolEngineTest {
             { assertEquals(1, p.waitersForTest) },
             { assertEquals(1L, engine.persist().totalSlots, "the engine kept its capacity") },
         )
-        b.cancel()
     }
+
+    /**
+     * What this call answered, or `null` while it still waits. Read rather than awaited, so a waiter
+     * the pool failed to grant reds the assertion that names it instead of hanging to the backstop.
+     */
+    private fun <T> Deferred<T>.settled(): T? = if (isCompleted) getCompleted() else null
 }
