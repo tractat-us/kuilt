@@ -115,6 +115,30 @@ class FairSharePoolTest {
     }
 
     /**
+     * A refusal names a leaf no lease can end at, so its reason is one of the two that say so; every
+     * other explanation describes a wait. `BehindAtLevel` is left out: its constructor takes
+     * deprecated positions, and it falls to the same `require` as the others.
+     */
+    @Test
+    fun aRefusalTakesOnlyAnUnleasableReason() {
+        val waits = listOf(
+            WaitExplanation.NotWaiting,
+            WaitExplanation.NotEligible,
+            WaitExplanation.AtCeiling(web, 1L),
+            WaitExplanation.SupplyExhausted,
+            WaitExplanation.WouldBePickedNext,
+        )
+        val refusesAWait: List<() -> Unit> = waits.map { wait ->
+            { assertFailsWith<IllegalArgumentException>("$wait") { SlotOutcome.Refused(wait) } }
+        }
+        assertAll(
+            { assertEquals(WaitExplanation.NoLiveLineage(nope), SlotOutcome.Refused(WaitExplanation.NoLiveLineage(nope)).reason) },
+            { assertEquals(WaitExplanation.LifetimeExhausted(web), SlotOutcome.Refused(WaitExplanation.LifetimeExhausted(web)).reason) },
+            *refusesAWait.toTypedArray(),
+        )
+    }
+
+    /**
      * The plan's arm. With the arrival check (Ruling 12), `nope` is refused the moment it arrives,
      * since the one slot is busy, so this arm does not reach dispatch's refusal pass: the arm below,
      * [aRefusalPassNeverTakesACappedLanesWaiter], is the one that does.
@@ -383,8 +407,21 @@ class FairSharePoolTest {
         )
     }
 
+    /**
+     * Each grant holds its waiter's reservation, the 12 extended on the engine's side too, and the
+     * grants come in the engine's own preview order.
+     *
+     * The order half is narrower than it looks. [LocalHeddle.previewPicks] counts each pick at its
+     * reservation and never completes one, and an extend makes no pick, so the order cannot see a
+     * missing extend: the reservations are what pin it. The pool completes each job between picks,
+     * so the order matches only while each job costs about what it reserved. Here that is its
+     * reservation + 1, a one-unit overrun that flips no pick; measured, charging exactly the
+     * reservation gives the same order, while charging 1 or 40 a job reorders the last four picks.
+     * What the order pins is that the pool asks the engine with the waiting leaves as both sets and
+     * grants the head of the leaf the engine picked.
+     */
     @Test
-    fun mixedReservationsGrantInPreviewOrder() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+    fun mixedReservationsHoldTheirReservationsAndGrantInPreviewOrder() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val queues = mapOf(web to listOf(3L, 12L, 3L, 3L), mobile to listOf(3L, 3L, 3L))
         val both = setOf(web, mobile)
         val twin = farm()
@@ -393,14 +430,20 @@ class FairSharePoolTest {
         twin.complete(twinHeld.id, 3L, both)
         val preview = twin.previewPicks(queues, eligible = both)
 
-        val p = pool(slots = 1)
+        val engine = farm()
+        val p = pool(slots = 1, engine = engine)
+        val default = engine.defaultReservation
         val held = p.acquire(web).granted()
         val granted = mutableListOf<GroupId>()
-        val jobs = queues.flatMap { (leaf, reservations) ->
-            reservations.map { r ->
+        // Per grant: what the waiter asked for, what its lease says it holds, what the engine holds for it.
+        val reservations = mutableListOf<Triple<Long, Long, Long>>()
+        val jobs = queues.flatMap { (leaf, asked) ->
+            asked.map { r ->
                 launch {
                     val lease = p.acquire(leaf, reservation = r).granted()
+                    val engineSide = engine.snapshot().leases.single { it.id == lease.id }.reserved
                     granted += lease.leaf
+                    reservations += Triple(r, lease.reserved, engineSide)
                     p.complete(lease.id, r + 1)
                 }
             }
@@ -408,8 +451,11 @@ class FairSharePoolTest {
         runCurrent()
         p.complete(held.id, 3L)
         jobs.joinAll()
+        val expected = reservations.map { (r, _, _) -> maxOf(r, default).let { Triple(r, it, it) } }
         assertAll(
             { assertEquals(7, granted.size) },
+            { assertEquals(listOf(12L), reservations.map { it.first }.filter { it > default }, "the rig: one waiter asks above the default") },
+            { assertEquals(expected, reservations, "each lease holds max(asked, default), on both sides") },
             { assertEquals(preview, granted) },
         )
     }

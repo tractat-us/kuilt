@@ -16,6 +16,15 @@ public sealed interface SlotOutcome {
      * No lease can be granted to the leaf: [reason] is the engine's own explanation,
      * [WaitExplanation.NoLiveLineage] for a name no lease can end at, or
      * [WaitExplanation.LifetimeExhausted] for a lane whose lifetime counter is full.
+     *
+     * @throws IllegalArgumentException when [reason] is any other explanation: those describe a
+     *   wait, not a refusal.
      */
-    public data class Refused(public val reason: WaitExplanation) : SlotOutcome
+    public data class Refused(public val reason: WaitExplanation) : SlotOutcome {
+        init {
+            require(reason is WaitExplanation.NoLiveLineage || reason is WaitExplanation.LifetimeExhausted) {
+                "a refusal's reason is NoLiveLineage or LifetimeExhausted, was $reason"
+            }
+        }
+    }
 }

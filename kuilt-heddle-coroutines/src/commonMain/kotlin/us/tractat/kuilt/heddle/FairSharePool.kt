@@ -57,7 +57,9 @@ import kotlin.time.TimeSource
  * A failure while handing out slots, the engine throwing or answering something its own contract
  * rules out, is delivered to the waiters: every queued waiter's [acquire] throws it, and the call
  * that set the hand-out going, a stranger's [complete] or a cancelled waiter's handler, returns as
- * usual. The next arrival starts a fresh hand-out.
+ * usual. The next arrival starts a fresh hand-out. An engine refusing to take back the lease of a
+ * waiter cancelled after its grant is delivered the same way: the slot is freed, and the engine,
+ * which still holds the lease, reports it as an orphan through [LocalHeddle.reconcileLeases].
  *
  * ## Threads
  *
@@ -137,8 +139,9 @@ public class FairSharePool(
      * Cancelling the caller while it waits, or after its grant was made but before it resumed, frees
      * the slot: the lease is cancelled with nothing charged.
      *
-     * @param reservation the cost the lease holds; above the engine's default the lease is extended
-     *   to it.
+     * @param reservation the cost the caller expects the work to take. The lease holds
+     *   `max(reservation, defaultReservation)`: above the engine's default it is extended to it, and
+     *   below the default it holds the default, since a lease cannot shrink.
      * @throws IllegalArgumentException when [reservation] is not in `1..`[LocalHeddle.MAX_RESERVATION],
      *   before anything waits.
      * @sample us.tractat.kuilt.heddle.sampleAcquireSlot
@@ -186,6 +189,9 @@ public class FairSharePool(
 
     /** Called under the lock before each engine acquire a hand-out makes; a throw rigs a dispatch failure. */
     internal var dispatchFaultForTest: (() -> Unit)? = null
+
+    /** Called under the lock just before a hand-back's engine cancel; a throw rigs the engine refusing it. */
+    internal var handBackFaultForTest: (() -> Unit)? = null
 
     /**
      * Run [block] under the lock. The outermost frame then hands out slots, even when [block]
@@ -305,12 +311,22 @@ public class FairSharePool(
         queues.clear()
     }
 
-    /** Return a granted lease whose waiter was cancelled before its grant took. */
+    /**
+     * Return a granted lease whose waiter was cancelled before its grant took. This runs as a
+     * cancellation callback, where a throw reaches the uncaught-exception handler, so it throws
+     * nothing: the slot is freed first, and an engine that refuses the cancel fails the waiters, as
+     * a dispatch failure does. The engine then still holds the lease, which
+     * [LocalHeddle.reconcileLeases] reports as an orphan.
+     */
     private fun handBack(lease: LeaseId) {
         mutate {
-            if (lease in open) {
-                engine.cancel(lease)
-                open.remove(lease)
+            if (open.remove(lease)) {
+                try {
+                    handBackFaultForTest?.invoke()
+                    engine.cancel(lease)
+                } catch (failure: Exception) { // ALLOW-ise: nothing inside the try suspends
+                    failAll(failure)
+                }
             }
         }
     }
