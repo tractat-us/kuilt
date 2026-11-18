@@ -99,12 +99,14 @@ class FairSharePoolConcurrencyTest {
             do {
                 rounds++
                 val finished = BooleanArray(JOBS)
-                val granted = atomic(0)
+                // Per lane, since web is granted three times as often as mobile: index `i` is the
+                // `i / 2`-th job of lane `i % 2`.
+                val granted = List(2) { atomic(0) }
                 coroutineScope {
                     val jobs = List(JOBS) { i ->
                         launch {
                             val lease = pool.acquire(if (i % 2 == 0) web else mobile).granted()
-                            granted.incrementAndGet()
+                            granted[i % 2].incrementAndGet()
                             try {
                                 delay(1.milliseconds)
                             } finally {
@@ -113,18 +115,21 @@ class FairSharePoolConcurrencyTest {
                             finished[i] = true
                         }
                     }
-                    // Each third job is cancelled as the grant frontier reaches it, so the cancels land
-                    // on queued waiters and on fresh grants alike, all through the round. Swept from
-                    // the start with a bare yield between them, nearly all landed on queued waiters:
-                    // a hand-back took 36 rounds of 2,000 on macosArm64, 24 s of the 30 s backstop.
-                    launch {
-                        var issued = 0
-                        for (i in jobs.indices step 3) {
-                            while (granted.value + issued < i) yield()
-                            jobs[i].cancel()
-                            issued++
+                    // Each third job is cancelled as its lane's grant frontier reaches it, so the
+                    // cancels land on queued waiters and on fresh grants alike, all through the round.
+                    // Swept from the start with a bare yield between them, nearly all landed on queued
+                    // waiters: a hand-back took 36 rounds on macosArm64, 24 s of the 30 s backstop.
+                    val cancellers = List(2) { lane ->
+                        launch {
+                            var issued = 0
+                            for (i in jobs.indices.filter { it % 2 == lane && it % 3 == 0 }) {
+                                while (granted[lane].value + issued < i / 2) yield()
+                                jobs[i].cancel()
+                                issued++
+                            }
                         }
-                    }.join()
+                    }
+                    cancellers.joinAll()
                     jobs.joinAll()
                     // Joined, so every write to `finished` is visible. A cancel landing after a body's
                     // last suspension still marks its job cancelled; that one counts as ran.
