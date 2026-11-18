@@ -83,6 +83,13 @@ next slot itself.
 - **Restarts.** The engine's open leases are adopted and count against the slots. `now()` is the
   pool's clock in cost units: persist it beside the engine's snapshot and pass it back as
   `clockStart`.
+- **One writer.** The pool owns the engine. Reach it only through
+  `withEngine { engine, waiting -> … }`, for a snapshot, an explain or a reload. `waiting` is a
+  copy of the pool's queued lanes as the block starts: pass it wherever the engine asks for a
+  waiting set, since a guessed one skews later picks. Afterwards the pool frees the slot of any
+  lease the block closed, refuses the waiters of a lane the reload removed, and grants whoever the
+  change let through. `resize` changes the slot count, and lowering it closes nothing; a block's
+  own `reconcileCapacity` is undone when it ends.
 
 This module adds coroutines on top of `:kuilt-heddle-core`, which has none and must never gain
 them. Waiting on the networked `HeddleNode` is not here.
