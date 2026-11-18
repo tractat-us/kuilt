@@ -469,6 +469,28 @@ class FairSharePoolTest {
             { assertFailsWith<IllegalArgumentException> { FairSharePool(farm(), 1, clock, Duration.ZERO) } },
             { assertFailsWith<IllegalArgumentException> { FairSharePool(farm(), 1, clock, (-1).seconds) } },
             { assertFailsWith<IllegalArgumentException> { FairSharePool(farm(), 1, clock, Duration.INFINITE) } },
+            { assertFailsWith<IllegalArgumentException> { FairSharePool(farm(), 1, clock, 1.seconds, clockStart = -1L) } },
+        )
+    }
+
+    /**
+     * A slot count the engine cannot size is refused, and the engine keeps the capacity it had. Two
+     * slots size a target above `Long.MAX_VALUE / 4` under this policy, and one does not, so the
+     * engine is first reconciled to one and must still read one afterwards.
+     */
+    @Test
+    fun constructionTheEngineRefusesLeavesTheEngineUnchanged() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val limit = Long.MAX_VALUE / 4
+        val policy = LocalPolicy(defaultReservation = 3L, supply = SupplyPolicy(lowWatermarkSlots = 1L, targetSlots = limit / 3))
+        val engine = LocalHeddle.fromTopology(farmTopology, policy, epoch = 0L).heddle
+        engine.reconcileCapacity(1L)
+        val before = engine.persist()
+        assertFailsWith<IllegalArgumentException> { FairSharePool(engine, 2, testScheduler.timeSource, 1.seconds) }
+        val after = engine.persist()
+        assertAll(
+            { assertEquals(1L, before.totalSlots, "the rig: the engine starts at one slot") },
+            { assertEquals(1L, after.totalSlots, "the engine kept its capacity") },
+            { assertEquals(before, after, "the engine is unchanged") },
         )
     }
 }

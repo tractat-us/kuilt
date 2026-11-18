@@ -173,6 +173,53 @@ class FairSharePoolCancellationTest {
     }
 
     /**
+     * A lease the pool let go of is never counted again. B is cancelled just before its resume and
+     * the engine refuses the hand-back, so the engine still holds B's lease while the pool has freed
+     * its slot. A later [FairSharePool.withEngine] catches the pool up from the engine's open leases,
+     * and must not take B's back: if it did, the one slot would be held by a lease nobody will ever
+     * settle, and a fresh waiter would never be granted.
+     */
+    @Test
+    fun aLaterWithEngineNeverRecountsALeaseTheHandBackLetGo() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val engine = farm()
+        val p = pool(slots = 1, engine = engine)
+        val a = p.acquire(web).granted()
+        val b = launch { p.acquire(web) }
+        runCurrent()
+        var bLease: LeaseId? = null
+        var faults = 0
+        p.handBackFaultForTest = {
+            faults++
+            throw Boom()
+        }
+        p.beforeResumeForTest = { outcome ->
+            bLease = (outcome as SlotOutcome.Granted).lease.id
+            b.cancel()
+        }
+        p.complete(a.id, 3L)
+        p.beforeResumeForTest = {}
+        p.handBackFaultForTest = null
+        runCurrent()
+        val openBefore = p.openForTest
+        p.withEngine { _, _ -> }
+        val openAfter = p.openForTest
+        val engineLeases = engine.snapshot().leases.map { it.id }
+        val fresh = async { p.acquire(mobile) }
+        runCurrent()
+        val freshOutcome = if (fresh.isCompleted) fresh.getCompleted() else null
+        // A regression strands the fresh waiter: free it, so the test reds instead of hanging.
+        fresh.cancel()
+        assertAll(
+            { assertEquals(1, faults, "the rig: the hand-back reached the fault once") },
+            { assertTrue(b.isCancelled) },
+            { assertEquals(listOf(bLease), engineLeases, "the rig: the engine still holds B's lease") },
+            { assertEquals(0, openBefore, "the rig: the hand-back freed the slot") },
+            { assertEquals(0, openAfter, "withEngine never counts B's lease again") },
+            { assertIs<SlotOutcome.Granted>(freshOutcome, "a fresh waiter is granted") },
+        )
+    }
+
+    /**
      * A thousand waiters, each completing its lease the moment it is granted, from an unconfined
      * resume. It cannot show a deadlock (one thread on a reentrant lock cannot deadlock) or a stack
      * overflow (`Unconfined` queues nested resumes on the thread's event loop). What it catches is a
