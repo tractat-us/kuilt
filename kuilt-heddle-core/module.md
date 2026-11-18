@@ -69,7 +69,8 @@ The rest of the surface, by what you would ask it:
 
 Every refusal is a typed outcome (`AcquireOutcome`, `AdmitOutcome`, `LeaseOutcome`)
 that changes nothing, and the engine is not thread-safe: one writer, under your own
-scheduling lock. Two fairness gaps are known. An estimate's size leans share
+scheduling lock; in a coroutine program, `FairSharePool` (`:kuilt-heddle-coroutines`) is that
+lock. Two fairness gaps are known. An estimate's size leans share
 toward groups that under-reserve, and a lease still running when its group
 returns from idle can hand idle credit back. Both are explained, with what to
 do about them, in the guide's

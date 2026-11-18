@@ -92,7 +92,8 @@ which needs no network and no coroutines. The distributed node lives in
 - **Estimates steer order.** A lease counts at its estimate until it
   completes. Good estimates give fairer turns.
 - **One caller at a time.** `LocalHeddle` takes no locks of its own. Call it
-  from one place, under your scheduler's lock.
+  from one place, under your scheduler's lock. In a coroutine program,
+  `FairSharePool` from `:kuilt-heddle-coroutines` is that lock.
 - **A crashed peer's share waits.** In the distributed form, nothing takes
   back a silent machine's share automatically, since it might still be
   spending it.
