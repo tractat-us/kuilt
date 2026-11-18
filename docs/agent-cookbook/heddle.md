@@ -154,9 +154,9 @@ moment it was granted.
 that leaf a slot, runs the block, and charges the lease the time the block took, in whole cost
 units rounded up. It throws `SlotRefusedException(reason)`, an `IllegalStateException`, for a name
 no lease can end at or a lane at its lifetime limit, and the block never runs. Catch it by name,
-`catch (e: SlotRefusedException)`, never as `IllegalStateException` around a suspend call: that
-catches cancellation too, which `forbidCancellationSwallowingCatch` bans in this repo and which
-swallows the caller's cancel anywhere.
+`catch (e: SlotRefusedException)`, never as `IllegalStateException` around a suspend call: a
+`CancellationException` is an `IllegalStateException`, so that arm swallows the caller's cancel
+too. kuilt bans the shape in its own code with `forbidCancellationSwallowingCatch`.
 
 <!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleWithSlot -->
 ```kotlin
