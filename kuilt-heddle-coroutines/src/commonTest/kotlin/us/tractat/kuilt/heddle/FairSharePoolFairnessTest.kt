@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
@@ -12,6 +13,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /** The pool grants in the order fair share picks, not the order waiters arrive (#3555). */
+@OptIn(ExperimentalCoroutinesApi::class)
 class FairSharePoolFairnessTest {
 
     /**

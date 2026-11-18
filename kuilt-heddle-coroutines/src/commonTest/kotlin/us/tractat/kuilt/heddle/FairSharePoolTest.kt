@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
@@ -17,12 +18,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
-import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 /** [FairSharePool]'s acquire, complete and cancel, one property per test, on virtual time (#3555). */
+@OptIn(ExperimentalCoroutinesApi::class)
 class FairSharePoolTest {
 
     private val done3 = LeaseOutcome.Done(3L, 0L, 0L)
@@ -105,8 +106,9 @@ class FairSharePoolTest {
     @Test
     fun aNameNoLeaseCanEndAtIsRefused() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val p = pool(slots = 2)
+        val out = p.acquire(nope)
         assertAll(
-            { assertEquals(SlotOutcome.Refused(WaitExplanation.NoLiveLineage(nope)), p.acquire(nope)) },
+            { assertEquals(SlotOutcome.Refused(WaitExplanation.NoLiveLineage(nope)), out) },
             { assertEquals(0, p.openForTest) },
             { assertEquals(0, p.waitersForTest) },
         )
@@ -129,9 +131,10 @@ class FairSharePoolTest {
         val w2Lease = w2.await().granted()
         p.complete(w2Lease.id, 3L)
         runCurrent()
+        val badOut = bad.await()
         assertAll(
             { assertEquals(web, w2Lease.leaf) },
-            { assertEquals(SlotOutcome.Refused(WaitExplanation.NoLiveLineage(nope)), bad.await()) },
+            { assertEquals(SlotOutcome.Refused(WaitExplanation.NoLiveLineage(nope)), badOut) },
             { assertEquals(0, p.openForTest) },
         )
     }
@@ -155,8 +158,9 @@ class FairSharePoolTest {
         )
         val bad = async { p.acquire(nope) }
         runCurrent()
+        val badOut = bad.await()
         assertAll(
-            { assertEquals(SlotOutcome.Refused(WaitExplanation.NoLiveLineage(nope)), bad.await()) },
+            { assertEquals(SlotOutcome.Refused(WaitExplanation.NoLiveLineage(nope)), badOut) },
             { assertFalse(w2.isCompleted, "web's waiter is neither refused nor granted past its ceiling") },
             { assertEquals(1, p.waitersForTest) },
         )
@@ -262,10 +266,8 @@ class FairSharePoolTest {
             { assertFalse(healthyAtZero.isCompleted, "a healthy name at zero slots waits") },
             { assertEquals(1, zero.waitersForTest) },
         )
-        assertAll(
-            { assertEquals(expected, refused.await()) },
-            { assertEquals(expected, refusedAtZero.await()) },
-        )
+        val outs = listOf(refused.await(), refusedAtZero.await())
+        assertEquals(listOf(expected, expected), outs)
     }
 
     @Test
@@ -292,7 +294,8 @@ class FairSharePoolTest {
         val fresh = p.acquire(web)
         assertAll(
             { assertEquals(done3, completed, "complete answers its own Done") },
-            { failures.forEach { assertSame(boom, it) } },
+            // A copy, not the same instance: coroutines recover stack traces by copying the exception on the JVM.
+            { failures.forEach { assertIs<Boom>(it) } },
             { assertEquals(0, p.waitersForTest) },
             { assertEquals(web, fresh.granted().leaf) },
         )
@@ -330,9 +333,10 @@ class FairSharePoolTest {
         cancelled.cancel()
         runCurrent()
         p.dispatchFaultForTest = null
+        val survivorFailure = survivor.await()
         assertAll(
             { assertEquals(1, faults, "the handler's dispatch reached the fault") },
-            { assertSame(boom, survivor.await()) },
+            { assertIs<Boom>(survivorFailure) },
             { assertEquals(emptyList(), uncaught) },
             { assertEquals(0, p.waitersForTest) },
         )

@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -18,6 +19,7 @@ import kotlin.test.assertTrue
  * resume but before it runs, and before its resume takes (#3555). Every arm ends on the same four
  * invariants.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class FairSharePoolCancellationTest {
 
     private suspend fun TestScope.assertNothingLeaked(p: FairSharePool, engine: LocalHeddle) {
