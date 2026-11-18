@@ -1,0 +1,35 @@
+public final class us/tractat/kuilt/heddle/FairSharePool {
+	public synthetic fun <init> (Lus/tractat/kuilt/heddle/LocalHeddle;ILkotlin/time/TimeSource$WithComparableMarks;JJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Lus/tractat/kuilt/heddle/LocalHeddle;ILkotlin/time/TimeSource$WithComparableMarks;JJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun acquire-lUmtw0Q (Ljava/lang/String;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun acquire-lUmtw0Q$default (Lus/tractat/kuilt/heddle/FairSharePool;Ljava/lang/String;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun cancel (Lus/tractat/kuilt/heddle/LeaseId;)Lus/tractat/kuilt/heddle/LeaseOutcome;
+	public final fun complete (Lus/tractat/kuilt/heddle/LeaseId;J)Lus/tractat/kuilt/heddle/LeaseOutcome;
+	public final fun now ()J
+}
+
+public abstract interface class us/tractat/kuilt/heddle/SlotOutcome {
+}
+
+public final class us/tractat/kuilt/heddle/SlotOutcome$Granted : us/tractat/kuilt/heddle/SlotOutcome {
+	public fun <init> (Lus/tractat/kuilt/heddle/Lease;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/Lease;
+	public final fun copy (Lus/tractat/kuilt/heddle/Lease;)Lus/tractat/kuilt/heddle/SlotOutcome$Granted;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/SlotOutcome$Granted;Lus/tractat/kuilt/heddle/Lease;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/SlotOutcome$Granted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLease ()Lus/tractat/kuilt/heddle/Lease;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class us/tractat/kuilt/heddle/SlotOutcome$Refused : us/tractat/kuilt/heddle/SlotOutcome {
+	public fun <init> (Lus/tractat/kuilt/heddle/WaitExplanation;)V
+	public final fun component1 ()Lus/tractat/kuilt/heddle/WaitExplanation;
+	public final fun copy (Lus/tractat/kuilt/heddle/WaitExplanation;)Lus/tractat/kuilt/heddle/SlotOutcome$Refused;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/SlotOutcome$Refused;Lus/tractat/kuilt/heddle/WaitExplanation;ILjava/lang/Object;)Lus/tractat/kuilt/heddle/SlotOutcome$Refused;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Lus/tractat/kuilt/heddle/WaitExplanation;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
