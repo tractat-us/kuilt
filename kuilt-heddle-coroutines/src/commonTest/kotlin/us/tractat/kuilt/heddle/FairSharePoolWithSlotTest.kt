@@ -209,9 +209,10 @@ class FairSharePoolWithSlotTest {
         runCurrent()
         val bLease = completions.first().lease
         val cLease = c.await()
+        val bOwn = b.await()
         runCurrent()
         assertAll(
-            { assertEquals(LeaseOutcome.Done(1L, 0L, 0L), b.await(), "the block's own complete settled B") },
+            { assertEquals(LeaseOutcome.Done(1L, 0L, 0L), bOwn, "the block's own complete settled B") },
             {
                 assertEquals(
                     listOf(
