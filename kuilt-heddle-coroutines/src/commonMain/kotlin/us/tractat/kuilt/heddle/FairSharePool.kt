@@ -1,5 +1,7 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.atomicfu.AtomicInt
+import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
 import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CancellableContinuation
@@ -184,6 +186,12 @@ public class FairSharePool(
     /** Every queued waiter, across every leaf. */
     internal val waitersForTest: Int get() = lock.withLock { queues.values.sumOf { it.size } }
 
+    /** How many queued waiters a cancellation handler has removed from their queue. */
+    internal val removedWhileQueuedForTest: AtomicInt = atomic(0)
+
+    /** How many granted leases a waiter cancelled before its grant took has handed back. */
+    internal val handedBackForTest: AtomicInt = atomic(0)
+
     /** Called just before each grant or refusal is resumed, outside the lock. */
     internal var beforeResumeForTest: (SlotOutcome) -> Unit = {}
 
@@ -240,7 +248,9 @@ public class FairSharePool(
 
     private fun removeWaiter(waiter: Waiter) {
         val queue = queues[waiter.leaf] ?: return
-        if (queue.remove(waiter) && queue.isEmpty()) queues.remove(waiter.leaf)
+        if (!queue.remove(waiter)) return
+        removedWhileQueuedForTest.incrementAndGet()
+        if (queue.isEmpty()) queues.remove(waiter.leaf)
     }
 
     /** Hand out slots while one is free and a leaf has a waiter. Throws nothing: a failure goes to the waiters. */
@@ -321,6 +331,7 @@ public class FairSharePool(
     private fun handBack(lease: LeaseId) {
         mutate {
             if (open.remove(lease)) {
+                handedBackForTest.incrementAndGet()
                 try {
                     handBackFaultForTest?.invoke()
                     engine.cancel(lease)
