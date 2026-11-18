@@ -267,8 +267,14 @@ public class FairSharePool(
      * [LocalHeddle.admit] is never counted against [slots], though [complete] and [cancel] still
      * close it, and a lease the pool already let go of is never counted again. That is the one an
      * engine refused to take back from a cancelled waiter (see Failures, above): the engine still
-     * holds it, and [LocalHeddle.reconcileLeases] reports it as an orphan. Calling [LocalHeddle.reconcileCapacity] directly
-     * changes the engine and not the pool's count: use [resize].
+     * holds it, and [LocalHeddle.reconcileLeases] reports it as an orphan. Calling
+     * [LocalHeddle.reconcileCapacity] directly changes the engine and not the pool's count: use
+     * [resize].
+     *
+     * Lease ids are never reused under a pool: the engine numbers each lease one past the last in
+     * its epoch, a reload keeps every open lease's id, and the pool's engine is never replaced. So a
+     * late [complete] for a lease the block already closed answers [LeaseOutcome.Unknown], and never
+     * closes another caller's lease.
      *
      * A block may call back into the pool, [complete], [cancel] or [withEngine]; that inner call
      * hands out nothing and resumes nothing, and this call does both once the block ends.

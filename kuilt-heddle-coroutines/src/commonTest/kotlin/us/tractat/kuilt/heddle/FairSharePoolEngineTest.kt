@@ -205,6 +205,29 @@ class FairSharePoolEngineTest {
     }
 
     /**
+     * A stale holder's late [FairSharePool.complete], after its lease was closed through the
+     * engine and the slot granted again, closes nothing: the new lease has a new id.
+     */
+    @Test
+    fun aLateCompleteAfterAnEngineCloseLeavesTheNextLeaseOpen() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val engine = farm()
+        val p = pool(slots = 1, engine = engine)
+        val a = p.acquire(web).granted()
+        val b = backgroundScope.async { p.acquire(web) }
+        runCurrent()
+        p.withEngine { it.cancel(a.id) }
+        runCurrent()
+        val bLease = b.settled()?.granted()
+        val late = p.complete(a.id, 3L)
+        assertAll(
+            { assertTrue(bLease != null && bLease.id != a.id, "the rig: B holds the freed slot under a new id") },
+            { assertEquals(LeaseOutcome.Unknown, late) },
+            { assertEquals(listOfNotNull(bLease?.id), engine.snapshot().leases.map { it.id }, "B's lease is still open") },
+            { assertEquals(1, p.openForTest) },
+        )
+    }
+
+    /**
      * A target one slot can size and two cannot: `totalSlots × 3 × targetSlots` must stay at or below
      * `Long.MAX_VALUE / 4`, and `targetSlots` is a third of that, so the bound is exactly one slot.
      */
