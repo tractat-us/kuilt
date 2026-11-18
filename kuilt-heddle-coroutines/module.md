@@ -15,8 +15,36 @@ noticing. The pool hands that slot back.
 ## Start here
 
 Describe the lanes as a `Topology`, start a `LocalHeddle` from it, and hand the engine to a pool
-with a slot count, a clock, and how long one unit of cost is. Then `acquire` a slot for a lane, run
-the work, and `complete` it at what it really cost:
+with a slot count, a clock, and how long one unit of cost is. Then run each job inside `withSlot`:
+it waits for the lane's turn, runs the job, and charges the lane the time the job held the slot.
+
+<!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleWithSlot -->
+```kotlin
+    val pool = FairSharePool(heddle, slots = 1, TimeSource.Monotonic, costUnit = 1.minutes)
+
+    val built = mutableListOf<String>()
+    coroutineScope {
+        // One agent: whichever lane's turn comes second waits for the first build to finish.
+        launch { built += pool.withSlot(web) { "web build" } }
+        launch { built += pool.withSlot(mobile) { "mobile build" } }
+    }
+    check(built.sorted() == listOf("mobile build", "web build"))
+
+    // A name the farm does not declare is refused before anything runs.
+    val refused = try {
+        pool.withSlot(GroupId("nightly")) { "never runs" }
+    } catch (e: SlotRefusedException) {
+        "refused: ${e.reason}"
+    }
+    check(refused.startsWith("refused"))
+```
+
+A job that fails, or is cancelled part-way, is charged the time it held the slot all the same, so a
+lane whose work fails fast does not get the farm for free. The clock starts when the job starts:
+the moment between a grant and its caller resuming is never charged.
+
+When the work does not fit in one block, `acquire` a slot for a lane, run the work, and `complete`
+it at what it really cost:
 
 <!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleAcquireSlot -->
 ```kotlin
