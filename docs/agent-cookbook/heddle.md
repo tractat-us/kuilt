@@ -14,7 +14,8 @@ validator for the tree, or a "why is my job waiting" screen: each has a section 
 ## Which engine: one process or many peers
 
 **Intent:** pick the right heddle entry point before writing any scheduling code.
-**Primitive:** one of three, by where the scheduling decision is made.
+**Primitive:** pick the row that matches where the scheduling decision is made, and whether your
+code waits for it.
 
 | Your situation | Use | Module |
 |---|---|---|
@@ -152,7 +153,10 @@ moment it was granted.
 `LocalHeddle` and a slot count. `withSlot(leaf) { lease -> … }` suspends until fair share grants
 that leaf a slot, runs the block, and charges the lease the time the block took, in whole cost
 units rounded up. It throws `SlotRefusedException(reason)`, an `IllegalStateException`, for a name
-no lease can end at, and the block never runs.
+no lease can end at or a lane at its lifetime limit, and the block never runs. Catch it by name,
+`catch (e: SlotRefusedException)`, never as `IllegalStateException` around a suspend call: a
+`CancellationException` is an `IllegalStateException`, so that arm swallows the caller's cancel
+too. kuilt bans the shape in its own code with `forbidCancellationSwallowingCatch`.
 
 <!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleWithSlot -->
 ```kotlin
@@ -205,10 +209,36 @@ lease at its real cost, or `cancel`s it.
 
 **No slot leaks under cancellation.** A waiter cancelled while queued leaves its queue; one
 cancelled after its grant was made but before it resumed hands the lease back with nothing
-charged. **Its open leases are adopted**: a restored engine's leases count against the slots from
-the start, and `now()` is the pool's clock in cost units, from the `clockStart` you pass. A
-failure while handing out slots fails the waiters, never the `complete` or cancellation that set
-it going.
+charged. A failure while handing out slots fails the waiters, never the `complete` or
+cancellation that set it going.
+
+**After a restart, settle what the crash left open.** The engine's open leases are adopted: a
+restored engine's leases count against the slots from the start, and `now()` is the pool's clock in
+cost units, from the `clockStart` you pass. Persist `now()` beside the snapshot and pass it back.
+A `withSlot` caller that held a slot died with the old program, so nothing will settle its lease,
+and a pool whose slots were all busy at the crash grants nothing at all. Once the pool is built,
+reconcile with the leases whose work survived as `live`, and settle every orphan through the pool.
+`now()` takes no lock, so it is safe inside the block. With a `clockStart` of `0`, every default
+settlement reads `0`.
+
+<!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleRestartAPool -->
+```kotlin
+    // After the crash: restore under a raised epoch, your persisted boot counter, and start the
+    // pool's clock where it stopped. Both leases are adopted: every slot is taken.
+    val restored = LocalHeddle.restore(snapshot, policy, epoch = snapshot.epoch + 1)
+    val pool = FairSharePool(restored, slots = 2, clock, costUnit = 1.minutes, clockStart = stoppedAt)
+
+    coroutineScope {
+        val next = async(start = CoroutineStart.UNDISPATCHED) { pool.acquire(web) }
+        check(!next.isCompleted) // both slots are held by builds that died with the old program
+
+        // None of the old builds is running, so name none as live, and settle each orphan at the
+        // default: the two minutes it ran. With the default clockStart of 0, now() would read 0,
+        // and every default settlement would read 0 too.
+        val found = pool.withEngine { engine, _ -> engine.reconcileLeases(live = emptySet(), now = pool.now()) }
+        check(found.orphaned.map { it.defaultSettlement } == listOf(2L, 2L))
+        found.orphaned.forEach { pool.complete(it.lease.id, it.defaultSettlement) }
+```
 
 **One writer: the pool owns the engine.** Once a `LocalHeddle` is in a pool, reach it only
 through `pool.withEngine { engine, waiting -> … }`, which runs the block under the pool's lock:
@@ -742,7 +772,10 @@ changes nothing. `orphaned` lists each open lease you did not name, with `elapse
 that the engine holds no lease for. Which orphans to settle, and at what cost, is yours to decide;
 the documented default is `complete(lease, orphan.defaultSettlement, waiting)`: the time it ran, capped at
 `granted`, its reservation plus extensions, because a dead job's overrun cannot be checked. Work
-that will resume belongs in `live`, so it never becomes an orphan.
+that will resume belongs in `live`, so it never becomes an orphan. An engine inside a
+`FairSharePool` is reconciled through `withEngine`, and its orphans settled with `pool.complete`:
+see [Waiting your turn for a slot](#waiting-your-turn-for-a-slot), whose restarted pool grants
+nothing until they are.
 
 <!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleReconcileLeases -->
 ```kotlin

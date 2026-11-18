@@ -47,6 +47,15 @@ import kotlin.time.TimeSource
  * downtime if you know it, as `clockStart` after a restart: an adopted lease's `startedAt` is then
  * on the same clock. With the default of `0`, an adopted lease reads as just started.
  *
+ * So a pool can restart with every slot held. A caller that waited through [withSlot] or [acquire]
+ * died with the old program, and nothing will ever settle the lease it held, so the pool grants
+ * nothing until those leases are closed. Once the pool is built, find them with
+ * `pool.withEngine { engine, _ -> engine.reconcileLeases(live, pool.now()) }`, naming as `live` only
+ * the leases whose work survived, and settle each orphan with
+ * `pool.complete(orphan.lease.id, orphan.defaultSettlement)` after the block returns. [now] takes no
+ * lock, so it is safe to read inside the block. With a `clockStart` of `0`, [now] reads no later
+ * than any adopted lease's `startedAt`, so every default settlement reads `0`.
+ *
  * ## Refusals
  *
  * A leaf no lease can end at is refused, never queued for good: [acquire] answers
@@ -64,6 +73,10 @@ import kotlin.time.TimeSource
  * usual. The next arrival starts a fresh hand-out. An engine refusing to take back the lease of a
  * waiter cancelled after its grant is delivered the same way: the slot is freed, and the engine,
  * which still holds the lease, reports it as an orphan through [LocalHeddle.reconcileLeases].
+ *
+ * A failure with no waiter queued has nobody to go to, and is dropped: a [withEngine] block that
+ * leaves the engine throwing, or an engine refusing a hand-back, while nobody waits, leaves no trace
+ * beyond the engine's own state. That is tracked by #3570.
  *
  * ## Threads
  *
@@ -87,6 +100,7 @@ import kotlin.time.TimeSource
  *   reconcile its capacity to [slots]; the engine is unchanged.
  * @sample us.tractat.kuilt.heddle.sampleWithSlot
  * @sample us.tractat.kuilt.heddle.sampleAcquireSlot
+ * @sample us.tractat.kuilt.heddle.sampleRestartAPool
  */
 public class FairSharePool(
     engine: LocalHeddle,
@@ -162,6 +176,9 @@ public class FairSharePool(
      *   granted to [leaf], and [block] never runs.
      * @throws IllegalArgumentException when [reservation] is not in `1..`[LocalHeddle.MAX_RESERVATION],
      *   before anything waits.
+     * @throws Exception the pool's failure, when it fails while the caller is queued: whatever the
+     *   engine threw, or an [IllegalStateException] for an answer the engine's contract rules out
+     *   (see Failures, above). [block] never runs.
      * @sample us.tractat.kuilt.heddle.sampleWithSlot
      */
     public suspend fun <T> withSlot(leaf: GroupId, reservation: Long = defaultReservation, block: suspend (Lease) -> T): T {
@@ -182,17 +199,21 @@ public class FairSharePool(
 
     /**
      * Suspend until fair share grants [leaf] a slot, and answer [SlotOutcome.Granted] with its lease,
-     * or [SlotOutcome.Refused] when no lease can ever end at [leaf]. The caller holds a granted slot
-     * until it calls [complete] or [cancel].
+     * or [SlotOutcome.Refused] when no lease can end at [leaf] as the tree stands now. The caller
+     * holds a granted slot until it calls [complete] or [cancel].
      *
      * Cancelling the caller while it waits, or after its grant was made but before it resumed, frees
      * the slot: the lease is cancelled with nothing charged.
      *
-     * @param reservation the cost the caller expects the work to take. The lease holds
-     *   `max(reservation, defaultReservation)`: above the engine's default it is extended to it, and
-     *   below the default it holds the default, since a lease cannot shrink.
+     * @param reservation the cost the caller expects the work to take. Below the engine's default the
+     *   lease holds the default, since a lease cannot shrink. Above it, the lease holds [reservation]
+     *   when the engine can extend it that far; otherwise it holds the default, and the rest arrives
+     *   as an overrun at [complete].
      * @throws IllegalArgumentException when [reservation] is not in `1..`[LocalHeddle.MAX_RESERVATION],
      *   before anything waits.
+     * @throws Exception the pool's failure, when it fails while the caller is queued: whatever the
+     *   engine threw, or an [IllegalStateException] for an answer the engine's contract rules out
+     *   (see Failures, above).
      * @sample us.tractat.kuilt.heddle.sampleAcquireSlot
      */
     public suspend fun acquire(leaf: GroupId, reservation: Long = defaultReservation): SlotOutcome {
@@ -269,6 +290,9 @@ public class FairSharePool(
      *   its slot;
      * - the waiters of a leaf no lease can end at any more, say one a reload removed, are refused;
      * - a waiter the block's changes made grantable, say by a reload lifting a ceiling, is granted.
+     *
+     * A refusal reads the tree as it stands when the waiter arrives, so a waiter for a leaf that a
+     * later block attaches is refused before that block runs: attach the leaf first, then wait on it.
      *
      * The slot count is the pool's: change it with [resize]. A block that calls
      * [LocalHeddle.reconcileCapacity] itself changes the engine only until the block ends, when the

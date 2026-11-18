@@ -82,7 +82,10 @@ next slot itself.
   refuses to take back a cancelled waiter's lease: the slot is freed all the same.
 - **Restarts.** The engine's open leases are adopted and count against the slots. `now()` is the
   pool's clock in cost units: persist it beside the engine's snapshot and pass it back as
-  `clockStart`.
+  `clockStart`. A `withSlot` caller that held a slot died with the old program, so nothing settles
+  its lease, and a pool whose slots were all busy at the crash grants nothing. Settle those
+  leases once the new pool is built, as the restart walk-through below shows. With a `clockStart`
+  of `0`, every default settlement reads `0`.
 - **One writer.** The pool owns the engine. Reach it only through
   `withEngine { engine, waiting -> … }`, for a snapshot, an explain or a reload. `waiting` is a
   copy of the pool's queued lanes as the block starts: pass it wherever the engine asks for a
@@ -90,6 +93,35 @@ next slot itself.
   lease the block closed, refuses the waiters of a lane the reload removed, and grants whoever the
   change let through. `resize` changes the slot count, and lowering it closes nothing; a block's
   own `reconcileCapacity` is undone when it ends.
+
+## After a restart
+
+The farm's program crashed while both agents were busy. Name the leases whose work survived as
+`live`, none here, and settle every other one at its default, the time it ran:
+
+<!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleRestartAPool -->
+```kotlin
+    // After the crash: restore under a raised epoch, your persisted boot counter, and start the
+    // pool's clock where it stopped. Both leases are adopted: every slot is taken.
+    val restored = LocalHeddle.restore(snapshot, policy, epoch = snapshot.epoch + 1)
+    val pool = FairSharePool(restored, slots = 2, clock, costUnit = 1.minutes, clockStart = stoppedAt)
+
+    coroutineScope {
+        val next = async(start = CoroutineStart.UNDISPATCHED) { pool.acquire(web) }
+        check(!next.isCompleted) // both slots are held by builds that died with the old program
+
+        // None of the old builds is running, so name none as live, and settle each orphan at the
+        // default: the two minutes it ran. With the default clockStart of 0, now() would read 0,
+        // and every default settlement would read 0 too.
+        val found = pool.withEngine { engine, _ -> engine.reconcileLeases(live = emptySet(), now = pool.now()) }
+        check(found.orphaned.map { it.defaultSettlement } == listOf(2L, 2L))
+        found.orphaned.forEach { pool.complete(it.lease.id, it.defaultSettlement) }
+
+        val granted = next.await()
+        check(granted is SlotOutcome.Granted)
+        pool.complete(granted.lease.id, actualCost = 3L)
+    }
+```
 
 This module adds coroutines on top of `:kuilt-heddle-core`, which has none and must never gain
 them. Waiting on the networked `HeddleNode` is not here.

@@ -240,6 +240,41 @@ class FairSharePoolEngineTest {
      * A target one slot can size and two cannot: `totalSlots × 3 × targetSlots` must stay at or below
      * `Long.MAX_VALUE / 4`, and `targetSlots` is a third of that, so the bound is exactly one slot.
      */
+    /**
+     * A lease a block opens through the engine is never counted against the slots, and completing
+     * it through the pool frees none. Web holds one of two slots; the block opens a mobile lease
+     * beside it. After it closes, one slot is still free and no more: of a web and a mobile waiter,
+     * exactly one is granted. A pool that counted the block's lease, or freed a slot for it, would
+     * grant both or neither.
+     */
+    @Test
+    fun aLeaseABlockOpensIsNeverCountedAndFreesNoSlot() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val p = pool(slots = 2)
+        val a = p.acquire(web).granted()
+        val openBefore = p.openForTest
+        val stray = p.withEngine { e, _ -> e.acquire(setOf(mobile), setOf(mobile), p.now()) }
+        val strayLease = (stray as? AcquireOutcome.Acquired)?.lease
+        val openAfterBlock = p.openForTest
+        val closed = strayLease?.let { p.complete(it.id, 3L) }
+        val openAfterComplete = p.openForTest
+        val w = async { p.acquire(web) }
+        val m = async { p.acquire(mobile) }
+        runCurrent()
+        val granted = listOf(w, m).count { it.isCompleted }
+        // Free whichever waiter is still queued, so a regression reds instead of hanging.
+        w.cancel()
+        m.cancel()
+        assertAll(
+            { assertEquals(1, openBefore, "the rig: A holds one of two slots") },
+            { assertEquals(mobile, strayLease?.leaf, "the rig: the block opened a lease, was $stray") },
+            { assertEquals(1, openAfterBlock, "the block's lease is never counted") },
+            { assertEquals(LeaseOutcome.Done(charged = 3L, overrun = 0L, unrecorded = 0L), closed) },
+            { assertEquals(1, openAfterComplete, "completing an uncounted lease frees no slot") },
+            { assertEquals(1, granted, "one slot is free, and only one") },
+        )
+        p.complete(a.id, 3L)
+    }
+
     @Test
     fun resizeAboveTheSupplyLimitChangesNothing() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val limit = Long.MAX_VALUE / 4

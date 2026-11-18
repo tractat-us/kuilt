@@ -1,5 +1,7 @@
 # `:kuilt-heddle-coroutines` Implementation Plan
 
+> **The shipped API differs from this plan, and the KDoc is authoritative.** `withEngine`'s block takes `(engine, waiting)`, and `withSlot`'s clock starts when its block starts, not at the grant.
+
 > **For agentic workers:** execute task by task under `worktree-dispatch`, one fresh worker per task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship `FairSharePool`, a suspending front door over `LocalHeddle`: `withSlot(lane) { … }` waits for fair share to grant a slot, runs the block, and charges the time it took, with no slot leaked under cancellation (epic #3554).
@@ -63,7 +65,7 @@
 
 0. **A dispatch failure never escapes through a stranger's call or a cancellation handler** (Ruling 11). Test: Task 1, `aDispatchFailureFailsTheWaitersAndLeavesCompleteIntact`.
 1. **A waiter for a name no lease can end at, while every slot is busy**, is refused at arrival. It does not sit until every healthy lane drains. Test: Task 1, `aWaiterForAnUnleasableNameIsRefusedEvenWhenEverySlotIsBusy`.
-2. **A refusal never takes a healthy lane's waiter.** With an unleasable leaf queued beside a healthy one, the healthy waiter is granted and only the bad leaf is refused. Test: Task 1, `aRefusalNeverTakesAHealthyLanesWaiter`.
+2. **A refusal never takes a healthy lane's waiter.** With an unleasable leaf queued beside a healthy one, the healthy waiter is granted and only the bad leaf is refused. Test: Task 1, `aRefusalPassNeverTakesACappedLanesWaiter`, which reaches dispatch's refusal pass; `anArrivalRefusalLeavesAQueuedHealthyWaiterAlone` is refused at arrival and never does.
 3. **A double `complete`, a `cancel` after `complete`, or a lease id the pool never issued** neither frees a second slot nor drives the count below zero. Test: Task 1, `aDoubleCompleteFreesOneSlot` and `aLeaseThePoolDidNotIssueLeavesTheCountAlone`.
 4. **A `withEngine` block that throws** still resumes the grants its re-dispatch made, and leaves the pool usable. A block that completes a pool lease through the engine directly frees that slot. Test: Task 3, `aWithEngineBlockThatThrowsStillResumesItsGrants` and `aLeaseCompletedThroughTheEngineFreesItsSlot`.
 5. **Zero slots and lowering the count.** A pool at 0 slots queues every healthy waiter and refuses only an unleasable name (Ruling 12). `resize` below the open count preempts nothing, and grants resume only once open < slots. Test: Task 3, `resizeFromZeroGrantsInThePreviewOrder` and `loweringTheSlotCountPreemptsNothing`.
@@ -127,7 +129,7 @@
   - `aReservationOutOfRangeThrowsBeforeSuspending`: `assertFailsWith<IllegalArgumentException>` for `0L` and for `LocalHeddle.MAX_RESERVATION + 1`, and `waitersForTest == 0`.
   - `aNameNoLeaseCanEndAtIsRefused`: on an idle pool, `acquire(GroupId("nope")) == SlotOutcome.Refused(WaitExplanation.NoLiveLineage(GroupId("nope")))`.
   - No test reaches `LifetimeExhausted` through the public API: it needs `Long` counters near the watermark, and the hooks that set them up are internal to `:kuilt-heddle-core`. That arm shares the refusal pass with `NoLiveLineage`, so the `NoLiveLineage` arms pin it. Say so in the PR body.
-  - `aRefusalNeverTakesAHealthyLanesWaiter`: slots = 1, and A holds web. Queue W2 on web, then a waiter on `GroupId("nope")`. `complete(A)`: W2 is `Granted`. `complete(W2)`: nope is `Refused(NoLiveLineage(nope))`. At the end, `openForTest == 0`.
+  - `anArrivalRefusalLeavesAQueuedHealthyWaiterAlone`: slots = 1, and A holds web. Queue W2 on web, then a waiter on `GroupId("nope")`. `complete(A)`: W2 is `Granted`. `complete(W2)`: nope is `Refused(NoLiveLineage(nope))`. At the end, `openForTest == 0`.
   - `aDoubleCompleteFreesOneSlot`: slots = 1. `complete(A)` is `Done`, and a second `complete(A) == LeaseOutcome.Unknown`. Launch B and C. Only B is granted: `openForTest == 1` and `waitersForTest == 1`.
   - `aLeaseThePoolDidNotIssueLeavesTheCountAlone`: `complete(LeaseId(0L, 99L), 1L)` and `cancel(LeaseId(0L, 99L))` are both `Unknown`, and `openForTest` is unchanged.
   - `cancelReturnsTheSlot`: `cancel(A) == Done(0L, 0L, 0L)`, and a queued B is then granted.
@@ -275,7 +277,7 @@ Runs after Task 2 merges, because both edit `FairSharePool.kt`.
 
 **Files:**
 - Modify: `kuilt-heddle-coroutines/src/commonMain/kotlin/us/tractat/kuilt/heddle/FairSharePool.kt`
-- Modify: `kuilt-heddle-coroutines/src/commonTest/kotlin/us/tractat/kuilt/heddle/FairSharePoolTest.kt` (`aRefusalNeverTakesAHealthyLanesWaiter`)
+- Modify: `kuilt-heddle-coroutines/src/commonTest/kotlin/us/tractat/kuilt/heddle/FairSharePoolTest.kt` (`anArrivalRefusalLeavesAQueuedHealthyWaiterAlone`)
 - Test: `kuilt-heddle-coroutines/src/commonTest/kotlin/us/tractat/kuilt/heddle/FairSharePoolEngineTest.kt`
 - Modify: `FairSharePoolSamples.kt`, `FairSharePoolSamplesRunTest.kt`, `docs/agent-cookbook/heddle.md`, `docs/agent-cookbook.md` (the row), `kuilt-heddle-coroutines/module.md`, `kuilt-heddle-coroutines/api/**`
 
