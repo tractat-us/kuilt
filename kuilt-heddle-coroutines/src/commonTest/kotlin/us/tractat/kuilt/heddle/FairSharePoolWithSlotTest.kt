@@ -100,7 +100,7 @@ class FairSharePoolWithSlotTest {
         }
         assertAll(
             { assertEquals(listOf(2L), completions.map { it.actualCost }) },
-            { assertIs<LeaseOutcome.Done>(completions.single().outcome) },
+            { assertIs<LeaseOutcome.Done>(completions.singleOrNull()?.outcome) },
             { assertEquals(0, p.openForTest) },
         )
     }
@@ -131,7 +131,7 @@ class FairSharePoolWithSlotTest {
             { assertTrue(job.isCancelled) },
             { assertFalse(blockFinished) },
             { assertEquals(listOf(3L), completions.map { it.actualCost }) },
-            { assertIs<LeaseOutcome.Done>(completions.single().outcome) },
+            { assertIs<LeaseOutcome.Done>(completions.singleOrNull()?.outcome) },
             { assertEquals(0, p.openForTest) },
             { assertEquals(emptyList(), engine.snapshot().leases) },
         )
