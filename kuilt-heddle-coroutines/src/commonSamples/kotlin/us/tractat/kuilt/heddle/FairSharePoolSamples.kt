@@ -1,5 +1,7 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.minutes
@@ -61,4 +63,37 @@ internal suspend fun sampleAcquireSlot() {
     val next = pool.acquire(mobile)
     check(next is SlotOutcome.Granted)
     pool.cancel(next.lease.id)
+}
+
+/**
+ * Web may hold only one of two agents, so its second build waits with an agent free. A reload
+ * lifts the cap through the pool, and the pool grants the waiting build once the reload is in.
+ */
+@Suppress("unused")
+internal suspend fun sampleReloadWhileWaiting() {
+    val capped = Topology("farm", listOf(Topology.Lane("web", Weight.of(3), maxConcurrent = 1L), Topology.Lane("mobile")))
+    val web = capped.groupId("web")
+    val (heddle, booted) = LocalHeddle.fromTopology(capped, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
+    val pool = FairSharePool(heddle, slots = 2, TimeSource.Monotonic, costUnit = 1.minutes)
+
+    val first = pool.acquire(web)
+    check(first is SlotOutcome.Granted)
+    coroutineScope {
+        val second = async(start = CoroutineStart.UNDISPATCHED) { pool.acquire(web) }
+        check(!second.isCompleted) // web is at its cap
+
+        // Everything that touches the engine goes through the pool: a reload, a snapshot, an explain.
+        val uncapped = Topology("farm", listOf(Topology.Lane("web", Weight.of(3)), Topology.Lane("mobile")))
+        val reload = pool.withEngine { it.apply(uncapped, generation = 1L) }
+        check(reload.refusals.isEmpty())
+
+        val granted = second.await()
+        check(granted is SlotOutcome.Granted)
+        pool.complete(granted.lease.id, actualCost = 3L)
+    }
+    pool.complete(first.lease.id, actualCost = 3L)
+
+    // Lowering the count closes nothing: it only holds back the next grant.
+    pool.resize(1)
 }

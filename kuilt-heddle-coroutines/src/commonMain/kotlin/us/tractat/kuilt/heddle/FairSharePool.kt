@@ -73,7 +73,8 @@ import kotlin.time.TimeSource
  * such [complete] on the stack. Coroutines' own `Unconfined` dispatcher queues them on the thread's
  * event loop instead.
  *
- * The pool owns the engine from here on: call nothing on it directly.
+ * The pool owns the engine from here on: reach it only through [withEngine], which runs under the
+ * pool's lock and catches the pool up afterwards, and change the slot count with [resize].
  *
  * @param engine the scheduler deciding whose turn it is. The pool reconciles its capacity to [slots].
  * @param slots how many leases may be open at once, at least `0`.
@@ -229,6 +230,59 @@ public class FairSharePool(
         engine.cancel(lease).also { if (it is LeaseOutcome.Done) open.remove(lease) }
     }
 
+    /**
+     * Change how many leases may be open at once to [slots], reconciling the engine's capacity to
+     * it. Raising the count grants queued waiters at once, in the engine's own order. Lowering it
+     * preempts nothing: every open lease stays open, and the next grant waits until fewer than
+     * [slots] are.
+     *
+     * @throws IllegalArgumentException when [slots] is negative, or the engine refuses to reconcile
+     *   its capacity to it (see [LocalHeddle.reconcileCapacity]); the pool keeps its old count.
+     */
+    public fun resize(slots: Int) {
+        require(slots >= 0) { "slots must be non-negative, was $slots" }
+        mutate {
+            // The engine first, so a count it refuses is never assigned.
+            engine.reconcileCapacity(slots.toLong())
+            this.slots = slots
+        }
+    }
+
+    /**
+     * Run [block] on the engine, under the pool's lock, and answer what it returned. This is the one
+     * way to reach the engine once it is in a pool: [LocalHeddle.persist] for a snapshot,
+     * [LocalHeddle.explain] for why a lane waits, [LocalHeddle.apply] for a reload,
+     * [LocalHeddle.reconcileLeases] to find orphans. Every other thread waits on the lock meanwhile,
+     * so keep the block short.
+     *
+     * When the block ends, however it ends, the pool catches up with what it did, then hands out
+     * slots and resumes the waiters it granted, refused or failed, after releasing the lock:
+     * - a pool lease the engine no longer holds, completed or cancelled through the engine, frees
+     *   its slot;
+     * - the waiters of a leaf no lease can end at any more, say one a reload removed, are refused;
+     * - a waiter the block's changes made grantable, a lifted ceiling or a raised capacity, is
+     *   granted.
+     *
+     * What it does not catch up with: a lease the block opens with [LocalHeddle.acquire] or
+     * [LocalHeddle.admit] is never counted against [slots], though [complete] and [cancel] still
+     * close it, and a lease the pool already let go of is never counted again. That is the one an
+     * engine refused to take back from a cancelled waiter (see Failures, above): the engine still
+     * holds it, and [LocalHeddle.reconcileLeases] reports it as an orphan. Calling [LocalHeddle.reconcileCapacity] directly
+     * changes the engine and not the pool's count: use [resize].
+     *
+     * A block may call back into the pool, [complete], [cancel] or [withEngine]; that inner call
+     * hands out nothing and resumes nothing, and this call does both once the block ends.
+     *
+     * @sample us.tractat.kuilt.heddle.sampleReloadWhileWaiting
+     */
+    public fun <R> withEngine(block: (LocalHeddle) -> R): R = mutate {
+        try {
+            block(engine)
+        } finally {
+            catchUp()
+        }
+    }
+
     /** The leases the pool counts against [slots]. */
     internal val openForTest: Int get() = lock.withLock { open.size }
 
@@ -296,6 +350,22 @@ public class FairSharePool(
             }
         }
         queues[waiter.leaf] = ArrayDeque<Waiter>().apply { addLast(waiter) }
+    }
+
+    /**
+     * After a [withEngine] block: forget the pool leases the engine no longer holds, and refuse the
+     * waiters of every leaf it can no longer lease. Throws nothing, so the block's own throwable or
+     * answer reaches the caller: an engine failing here fails the waiters, as in [dispatch].
+     */
+    private fun catchUp() {
+        try {
+            val held = engine.snapshot().leases.mapTo(HashSet()) { it.id }
+            // retainAll only removes: a lease the pool let go of is never counted again.
+            open.retainAll(held)
+            refuseUnleasable(queues.keys.toList())
+        } catch (failure: Exception) { // ALLOW-ise: nothing inside the try suspends
+            failAll(failure)
+        }
     }
 
     private fun removeWaiter(waiter: Waiter) {

@@ -14,5 +14,6 @@ class FairSharePoolSamplesRunTest {
     fun samples() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         sampleWithSlot()
         sampleAcquireSlot()
+        sampleReloadWhileWaiting()
     }
 }
