@@ -19,6 +19,7 @@ validator for the tree, or a "why is my job waiting" screen: each has a section 
 | Your situation | Use | Module |
 |---|---|---|
 | One program hands out slots, workers or turns, and keeps the books | `LocalHeddle` | `:kuilt-heddle-core` |
+| The same, with coroutines that wait for their turn | `FairSharePool` over a `LocalHeddle` | `:kuilt-heddle-coroutines` |
 | Several peers share one budget over a `Seam`, and no peer is in charge | `HeddleNode` (`heddleStatic`, or `heddleGoverned` to mint and reshape with agreement) | `:kuilt-heddle` |
 | You already have your own ledger and loop, and want only the pick | `HeddlePolicy.pick`, `FairShareAllocator` | `:kuilt-heddle-core` |
 
@@ -140,6 +141,43 @@ treat it as `NoLiveLineage`.
 gives the same picks on every target. It is not thread-safe: call every method under your
 scheduling lock, `snapshot()` and `persist()` included, and hand status readers the immutable
 value they return. Every call that changes the engine is all or nothing.
+
+## Waiting your turn for a slot
+
+**Intent:** a coroutine that should simply wait until its lane's fair share comes round, then
+run — without hand-rolling a semaphore per lane, a queue of waiters, the wake-up of the right
+one, or the hand-back of a slot whose waiter gave up at the moment it was granted.
+**Primitive:** `FairSharePool` (`:kuilt-heddle-coroutines`), built over a `LocalHeddle` and a
+slot count. `acquire(leaf)` suspends until fair share grants that leaf a slot and answers
+`SlotOutcome.Granted(lease)`, or `SlotOutcome.Refused(reason)` for a name no lease can end at;
+the caller then `complete`s the lease at its real cost, or `cancel`s it.
+
+<!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleAcquireSlot -->
+```kotlin
+    // Two agents, and one unit of cost is one minute on an agent. The pool owns the engine now.
+    val pool = FairSharePool(heddle, slots = 2, TimeSource.Monotonic, costUnit = 1.minutes)
+
+    // Waits until fair share grants web a slot: at once, on an idle farm.
+    val build = pool.acquire(web)
+    check(build is SlotOutcome.Granted)
+    // The build took five minutes against the default estimate of three: two are overrun.
+    check(pool.complete(build.lease.id, actualCost = 5L) == LeaseOutcome.Done(charged = 5L, overrun = 2L, unrecorded = 0L))
+
+    // A name the farm does not declare is refused, never left waiting.
+    check(pool.acquire(GroupId("nightly")) is SlotOutcome.Refused)
+
+    val next = pool.acquire(mobile)
+    check(next is SlotOutcome.Granted)
+    pool.cancel(next.lease.id)
+```
+
+**No slot leaks under cancellation.** A waiter cancelled while queued leaves its queue; one
+cancelled after its grant was made but before it resumed hands the lease back with nothing
+charged. **The pool owns the engine**: call nothing on the `LocalHeddle` directly once it is in
+a pool. **Its open leases are adopted**: a restored engine's leases count against the slots from
+the start, and `now()` is the pool's clock in cost units, from the `clockStart` you pass. A
+failure while handing out slots fails the waiters, never the `complete` or cancellation that set
+it going.
 
 ## Loading the tree from a config file
 
