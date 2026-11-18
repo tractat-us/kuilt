@@ -139,12 +139,13 @@ class FairSharePoolTest {
     }
 
     /**
-     * The plan's arm. With the arrival check (Ruling 12), `nope` is refused the moment it arrives,
-     * since the one slot is busy, so this arm does not reach dispatch's refusal pass: the arm below,
-     * [aRefusalPassNeverTakesACappedLanesWaiter], is the one that does.
+     * An arrival refusal leaves a queued healthy waiter alone. With the arrival check (Ruling 12),
+     * `nope` is refused the moment it arrives, since the one slot is busy, so this arm does not reach
+     * dispatch's refusal pass: the arm below, [aRefusalPassNeverTakesACappedLanesWaiter], is the one
+     * that does.
      */
     @Test
-    fun aRefusalNeverTakesAHealthyLanesWaiter() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+    fun anArrivalRefusalLeavesAQueuedHealthyWaiterAlone() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val p = pool(slots = 1)
         val a = p.acquire(web).granted()
         val w2 = async { p.acquire(web) }
