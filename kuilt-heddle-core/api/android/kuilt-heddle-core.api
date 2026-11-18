@@ -816,6 +816,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun explain-mLLTQY0 (Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;J)Lus/tractat/kuilt/heddle/WaitExplanation;
 	public static synthetic fun explain-mLLTQY0$default (Lus/tractat/kuilt/heddle/LocalHeddle;Ljava/lang/String;Ljava/util/Set;Ljava/util/Set;JILjava/lang/Object;)Lus/tractat/kuilt/heddle/WaitExplanation;
 	public final fun extend (Lus/tractat/kuilt/heddle/LeaseId;JLjava/util/Set;)Lus/tractat/kuilt/heddle/LeaseOutcome;
+	public final fun getDefaultReservation ()J
 	public final fun getEpoch ()J
 	public final fun getRoot-urUY4Jo ()Ljava/lang/String;
 	public final fun persist ()Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;

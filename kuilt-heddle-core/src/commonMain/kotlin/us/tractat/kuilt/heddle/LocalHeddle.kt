@@ -510,6 +510,9 @@ public class LocalHeddle private constructor(
         require(epoch >= 0L) { "epoch must be non-negative, was $epoch" }
     }
 
+    /** The reservation an [acquire] makes when the caller names none: [LocalPolicy.defaultReservation]. */
+    public val defaultReservation: Long get() = policy.defaultReservation
+
     /**
      * Everything a call can change, in one object, so that a call keeps all of it or none of it: see
      * [atomically]. A field of the engine that changes and is not in here would survive a throw.

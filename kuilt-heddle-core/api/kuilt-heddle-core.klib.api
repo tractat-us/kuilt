@@ -1178,6 +1178,8 @@ final class us.tractat.kuilt.heddle/LeaseReconciliation { // us.tractat.kuilt.he
 }
 
 final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/LocalHeddle|null[0]
+    final val defaultReservation // us.tractat.kuilt.heddle/LocalHeddle.defaultReservation|{}defaultReservation[0]
+        final fun <get-defaultReservation>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.defaultReservation.<get-defaultReservation>|<get-defaultReservation>(){}[0]
     final val epoch // us.tractat.kuilt.heddle/LocalHeddle.epoch|{}epoch[0]
         final fun <get-epoch>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.epoch.<get-epoch>|<get-epoch>(){}[0]
     final val root // us.tractat.kuilt.heddle/LocalHeddle.root|{}root[0]
