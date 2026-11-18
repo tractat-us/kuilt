@@ -83,9 +83,14 @@ internal suspend fun sampleReloadWhileWaiting() {
         val second = async(start = CoroutineStart.UNDISPATCHED) { pool.acquire(web) }
         check(!second.isCompleted) // web is at its cap
 
-        // Everything that touches the engine goes through the pool: a reload, a snapshot, an explain.
+        // Everything that touches the engine goes through the pool, which hands over its waiting
+        // set too: why web waits, as the pool's next pick sees it.
+        val why = pool.withEngine { engine, waiting -> engine.explain(web, waiting, waiting) }
+        check(why == WaitExplanation.AtCeiling(web, limit = 1L))
+
+        // A reload, a snapshot, a search for orphans: the same way in.
         val uncapped = Topology("farm", listOf(Topology.Lane("web", Weight.of(3)), Topology.Lane("mobile")))
-        val reload = pool.withEngine { it.apply(uncapped, generation = 1L) }
+        val reload = pool.withEngine { engine, _ -> engine.apply(uncapped, generation = 1L) }
         check(reload.refusals.isEmpty())
 
         val granted = second.await()

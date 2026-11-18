@@ -7,7 +7,7 @@ public final class us/tractat/kuilt/heddle/FairSharePool {
 	public final fun complete (Lus/tractat/kuilt/heddle/LeaseId;J)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun now ()J
 	public final fun resize (I)V
-	public final fun withEngine (Lkotlin/jvm/functions/Function1;)Ljava/lang/Object;
+	public final fun withEngine (Lkotlin/jvm/functions/Function2;)Ljava/lang/Object;
 	public final fun withSlot-mLLTQY0 (Ljava/lang/String;JLkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun withSlot-mLLTQY0$default (Lus/tractat/kuilt/heddle/FairSharePool;Ljava/lang/String;JLkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }

@@ -37,7 +37,7 @@ sealed interface us.tractat.kuilt.heddle/SlotOutcome { // us.tractat.kuilt.heddl
 final class us.tractat.kuilt.heddle/FairSharePool { // us.tractat.kuilt.heddle/FairSharePool|null[0]
     constructor <init>(us.tractat.kuilt.heddle/LocalHeddle, kotlin/Int, kotlin.time/TimeSource.WithComparableMarks, kotlin.time/Duration, kotlin/Long = ...) // us.tractat.kuilt.heddle/FairSharePool.<init>|<init>(us.tractat.kuilt.heddle.LocalHeddle;kotlin.Int;kotlin.time.TimeSource.WithComparableMarks;kotlin.time.Duration;kotlin.Long){}[0]
 
-    final fun <#A1: kotlin/Any?> withEngine(kotlin/Function1<us.tractat.kuilt.heddle/LocalHeddle, #A1>): #A1 // us.tractat.kuilt.heddle/FairSharePool.withEngine|withEngine(kotlin.Function1<us.tractat.kuilt.heddle.LocalHeddle,0:0>){0§<kotlin.Any?>}[0]
+    final fun <#A1: kotlin/Any?> withEngine(kotlin/Function2<us.tractat.kuilt.heddle/LocalHeddle, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, #A1>): #A1 // us.tractat.kuilt.heddle/FairSharePool.withEngine|withEngine(kotlin.Function2<us.tractat.kuilt.heddle.LocalHeddle,kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>,0:0>){0§<kotlin.Any?>}[0]
     final fun cancel(us.tractat.kuilt.heddle/LeaseId): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/FairSharePool.cancel|cancel(us.tractat.kuilt.heddle.LeaseId){}[0]
     final fun complete(us.tractat.kuilt.heddle/LeaseId, kotlin/Long): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/FairSharePool.complete|complete(us.tractat.kuilt.heddle.LeaseId;kotlin.Long){}[0]
     final fun now(): kotlin/Long // us.tractat.kuilt.heddle/FairSharePool.now|now(){}[0]

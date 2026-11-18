@@ -255,35 +255,48 @@ public class FairSharePool(
      * [LocalHeddle.reconcileLeases] to find orphans. Every other thread waits on the lock meanwhile,
      * so keep the block short.
      *
+     * The block is handed the pool's waiting set beside the engine: every leaf with a waiter
+     * queued, as a copy taken when the block starts. It is the set the engine's own calls take as
+     * `waiting`, and a guessed one skews them: an overrunning [LocalHeddle.complete] or an
+     * [LocalHeddle.extend] observes it as demand, so a set missing a queued lane changes later
+     * picks. `explain(leaf, waiting, waiting)` answers why a lane waits, as the pool's next pick
+     * sees it. To settle a lease the pool granted, prefer [complete] or [cancel]: they work from
+     * inside the block and use the live set.
+     *
      * When the block ends, however it ends, the pool catches up with what it did, then hands out
      * slots and resumes the waiters it granted, refused or failed, after releasing the lock:
      * - a pool lease the engine no longer holds, completed or cancelled through the engine, frees
      *   its slot;
      * - the waiters of a leaf no lease can end at any more, say one a reload removed, are refused;
-     * - a waiter the block's changes made grantable, a lifted ceiling or a raised capacity, is
-     *   granted.
+     * - a waiter the block's changes made grantable, say by a reload lifting a ceiling, is granted.
+     *
+     * The slot count is the pool's: change it with [resize]. A block that calls
+     * [LocalHeddle.reconcileCapacity] itself changes the engine only until the block ends, when the
+     * pool reconciles the engine back to [slots].
      *
      * What it does not catch up with: a lease the block opens with [LocalHeddle.acquire] or
      * [LocalHeddle.admit] is never counted against [slots], though [complete] and [cancel] still
      * close it, and a lease the pool already let go of is never counted again. That is the one an
      * engine refused to take back from a cancelled waiter (see Failures, above): the engine still
-     * holds it, and [LocalHeddle.reconcileLeases] reports it as an orphan. Calling
-     * [LocalHeddle.reconcileCapacity] directly changes the engine and not the pool's count: use
-     * [resize].
+     * holds it, and [LocalHeddle.reconcileLeases] reports it as an orphan.
      *
      * Lease ids are never reused under a pool: the engine numbers each lease one past the last in
      * its epoch, a reload keeps every open lease's id, and the pool's engine is never replaced. So a
-     * late [complete] for a lease the block already closed answers [LeaseOutcome.Unknown], and never
-     * closes another caller's lease.
+     * late [complete] for a lease the block already closed answers [LeaseOutcome.Unknown] (or
+     * [LeaseOutcome.Stale] for a lease from an earlier epoch), and never closes another caller's
+     * lease.
      *
      * A block may call back into the pool, [complete], [cancel] or [withEngine]; that inner call
      * hands out nothing and resumes nothing, and this call does both once the block ends.
      *
+     * @param block given the engine and the waiting set: the leaves with a waiter queued as the
+     *   block starts.
      * @sample us.tractat.kuilt.heddle.sampleReloadWhileWaiting
      */
-    public fun <R> withEngine(block: (LocalHeddle) -> R): R = mutate {
+    public fun <R> withEngine(block: (engine: LocalHeddle, waiting: Set<GroupId>) -> R): R = mutate {
+        val waiting = queues.keys.toSet()
         try {
-            block(engine)
+            block(engine, waiting)
         } finally {
             catchUp()
         }
@@ -359,12 +372,16 @@ public class FairSharePool(
     }
 
     /**
-     * After a [withEngine] block: forget the pool leases the engine no longer holds, and refuse the
-     * waiters of every leaf it can no longer lease. Throws nothing, so the block's own throwable or
-     * answer reaches the caller: an engine failing here fails the waiters, as in [dispatch].
+     * After a [withEngine] block: reconcile the engine back to [slots], forget the pool leases the
+     * engine no longer holds, and refuse the waiters of every leaf it can no longer lease. Throws
+     * nothing, so the block's own throwable or answer reaches the caller: an engine failing here
+     * fails the waiters, as in [dispatch].
      */
     private fun catchUp() {
         try {
+            // Undoes a block's own reconcileCapacity. The same count again changes nothing, and the
+            // pool reconciled this one already, so the engine cannot refuse it.
+            engine.reconcileCapacity(slots.toLong())
             val held = engine.snapshot().leases.mapTo(HashSet()) { it.id }
             // retainAll only removes: a lease the pool let go of is never counted again.
             open.retainAll(held)

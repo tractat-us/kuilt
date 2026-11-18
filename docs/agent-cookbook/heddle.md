@@ -211,21 +211,32 @@ failure while handing out slots fails the waiters, never the `complete` or cance
 it going.
 
 **One writer: the pool owns the engine.** Once a `LocalHeddle` is in a pool, reach it only
-through `pool.withEngine { engine -> … }`, which runs the block under the pool's lock: `persist`,
-`explain`, `apply` for a reload, `reconcileLeases` for orphans. When the block ends, however it
-ends, the pool catches up. A pool lease the block closed frees its slot, the waiters of a lane the
-reload removed are refused with `NoLiveLineage`, and a waiter the change made grantable, such as
-one under a lifted ceiling, is granted. Change the slot count with `pool.resize(n)`, never with
-`reconcileCapacity`: lowering it preempts nothing, and only holds back the next grant.
+through `pool.withEngine { engine, waiting -> … }`, which runs the block under the pool's lock:
+`persist`, `explain`, `apply` for a reload, `reconcileLeases` for orphans. `waiting` is a copy of
+the pool's queued lanes as the block starts. Pass it wherever the engine asks for a waiting set,
+never a guess: `explain(lane, waiting, waiting)` answers why a lane waits as the pool's next pick
+sees it, and an overrunning `complete` or an `extend` observes it as demand, so a set missing a
+queued lane skews later picks. To settle a pool lease, prefer `pool.complete` or `pool.cancel`,
+which work inside the block too and use the live set. When the block ends, however it ends, the
+pool catches up. A pool lease the block closed frees its slot, the waiters of a lane the reload
+removed are refused with `NoLiveLineage`, and a waiter the change made grantable, such as one
+under a lifted ceiling, is granted. The slot count is the pool's: change it with
+`pool.resize(n)`. A block's own `reconcileCapacity` is undone when it ends. Lowering the count
+preempts nothing, and only holds back the next grant.
 
 <!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleReloadWhileWaiting -->
 ```kotlin
         val second = async(start = CoroutineStart.UNDISPATCHED) { pool.acquire(web) }
         check(!second.isCompleted) // web is at its cap
 
-        // Everything that touches the engine goes through the pool: a reload, a snapshot, an explain.
+        // Everything that touches the engine goes through the pool, which hands over its waiting
+        // set too: why web waits, as the pool's next pick sees it.
+        val why = pool.withEngine { engine, waiting -> engine.explain(web, waiting, waiting) }
+        check(why == WaitExplanation.AtCeiling(web, limit = 1L))
+
+        // A reload, a snapshot, a search for orphans: the same way in.
         val uncapped = Topology("farm", listOf(Topology.Lane("web", Weight.of(3)), Topology.Lane("mobile")))
-        val reload = pool.withEngine { it.apply(uncapped, generation = 1L) }
+        val reload = pool.withEngine { engine, _ -> engine.apply(uncapped, generation = 1L) }
         check(reload.refusals.isEmpty())
 
         val granted = second.await()

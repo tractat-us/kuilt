@@ -3,7 +3,10 @@ package us.tractat.kuilt.heddle
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
@@ -20,6 +23,12 @@ class FairSharePoolEngineTest {
 
     /** The farm with mobile removed: what a reload that drops a lane applies. */
     private val webOnly = Topology("farm", listOf(Topology.Lane("web", Weight.of(3))))
+
+    /** Ten times the default reservation of 3, so a settle at it overruns by 27. */
+    private val overrunCost = 30L
+
+    /** Waiters queued behind one slot, more than the supply minted ahead at one slot can grant. */
+    private val queuedWaiters = 8
 
     @Test
     fun resizeFromZeroGrantsInThePreviewOrder() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
@@ -87,7 +96,7 @@ class FairSharePoolEngineTest {
         val second = backgroundScope.async { p.acquire(web) }
         runCurrent()
         val waitedAtCeiling = !second.isCompleted
-        val reload = p.withEngine { it.apply(farmTopology, 1L) }
+        val reload = p.withEngine { engine, _ -> engine.apply(farmTopology, 1L) }
         runCurrent()
         val secondOut = second.settled()
         assertAll(
@@ -106,7 +115,7 @@ class FairSharePoolEngineTest {
         val waiters = List(2) { backgroundScope.async { p.acquire(mobile) } }
         runCurrent()
         val queued = p.waitersForTest
-        val reload = p.withEngine { it.apply(webOnly, 1L) }
+        val reload = p.withEngine { engine, _ -> engine.apply(webOnly, 1L) }
         runCurrent()
         val gone = SlotOutcome.Refused(WaitExplanation.NoLiveLineage(mobile))
         val outs = waiters.map { it.settled() }
@@ -138,10 +147,10 @@ class FairSharePoolEngineTest {
         val resumedInBlock = mutableListOf<Boolean>()
         p.beforeResumeForTest = { resumedInBlock += inBlock }
         var waitersAfterCancel = -1
-        p.withEngine { engine ->
+        p.withEngine { engine, _ ->
             inBlock = true
             engine.apply(webOnly, 1L)
-            p.withEngine { }
+            p.withEngine { _, _ -> }
             w.cancel()
             waitersAfterCancel = p.waitersForTest
             inBlock = false
@@ -171,8 +180,8 @@ class FairSharePoolEngineTest {
         runCurrent()
         val queued = p.waitersForTest
         val thrown = assertFailsWith<IllegalStateException> {
-            p.withEngine {
-                it.apply(farmTopology, 1L)
+            p.withEngine { engine, _ ->
+                engine.apply(farmTopology, 1L)
                 error("boom")
             }
         }
@@ -193,7 +202,7 @@ class FairSharePoolEngineTest {
         val b = backgroundScope.async { p.acquire(web) }
         runCurrent()
         val waited = !b.isCompleted
-        val done = p.withEngine { it.complete(a.id, 3L, emptySet()) }
+        val done = p.withEngine { engine, waiting -> engine.complete(a.id, 3L, waiting) }
         runCurrent()
         val bOut = b.settled()
         assertAll(
@@ -215,7 +224,7 @@ class FairSharePoolEngineTest {
         val a = p.acquire(web).granted()
         val b = backgroundScope.async { p.acquire(web) }
         runCurrent()
-        p.withEngine { it.cancel(a.id) }
+        p.withEngine { engine, _ -> engine.cancel(a.id) }
         runCurrent()
         val bLease = b.settled()?.granted()
         val late = p.complete(a.id, 3L)
@@ -250,6 +259,126 @@ class FairSharePoolEngineTest {
             { assertEquals(1, p.waitersForTest) },
             { assertEquals(1L, engine.persist().totalSlots, "the engine kept its capacity") },
         )
+    }
+
+    /**
+     * The waiting set a block is handed is the one [FairSharePool.complete] uses: an overrunning
+     * complete through the engine, given it, lands exactly as the pool's own complete does on a
+     * twin pool. An overrun observes the waiting set as demand, so a set missing mobile's queued
+     * waiters would change who goes next.
+     */
+    @Test
+    fun anOverrunThroughTheEngineWithTheHandedSetMatchesThePoolsComplete() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val throughEngine = overrunScenario { p, a ->
+            p.withEngine { engine, waiting -> engine.complete(a, overrunCost, waiting) }
+        }
+        val throughPool = overrunScenario { p, a -> p.complete(a, overrunCost) }
+        assertAll(
+            { assertEquals(setOf(web, mobile), throughEngine.handed, "the rig: both lanes are queued as the block starts") },
+            { assertEquals(LeaseOutcome.Done(overrunCost, overrunCost - 3L, 0L), throughEngine.done, "the rig: it overruns") },
+            { assertEquals(throughPool.done, throughEngine.done) },
+            { assertEquals(throughPool.grants, throughEngine.grants, "the next grants") },
+            { assertEquals(throughPool.preview, throughEngine.preview, "who goes after") },
+        )
+    }
+
+    /**
+     * A block's own [LocalHeddle.reconcileCapacity] is undone when it ends: the pool's count stands.
+     * A zeroed engine mints no supply ahead, so the supply minted before the block runs out after a
+     * few grants and the next one is [AcquireOutcome.SupplyExhausted], which fails every waiter.
+     * Eight waiters in turn are enough to get there.
+     */
+    @Test
+    fun aBlockThatZeroesTheEnginesCapacityStillLeavesEveryWaiterGranted() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val engine = farm()
+        val p = pool(slots = 1, engine = engine)
+        val first = p.acquire(web).granted()
+        val grants = mutableListOf<Lease>()
+        val failures = mutableListOf<String?>()
+        repeat(queuedWaiters) {
+            backgroundScope.launch {
+                try {
+                    grants += p.acquire(web).granted()
+                } catch (failure: IllegalStateException) {
+                    currentCoroutineContext().ensureActive()
+                    failures += failure.message
+                }
+            }
+        }
+        runCurrent()
+        val queued = p.waitersForTest
+        val inBlock = p.withEngine { e, _ ->
+            e.reconcileCapacity(0L)
+            e.persist().totalSlots
+        }
+        val afterBlock = engine.persist().totalSlots
+        var held = first
+        for (next in 0 until queuedWaiters) {
+            p.complete(held.id, 3L)
+            runCurrent()
+            held = grants.getOrNull(next) ?: break
+        }
+        assertAll(
+            { assertEquals(queuedWaiters, queued, "the rig: every waiter queues behind the one slot") },
+            { assertEquals(0L, inBlock, "the rig: the block zeroed the engine's capacity") },
+            { assertEquals(1L, afterBlock, "the pool reconciled the engine back to its count") },
+            { assertEquals(emptyList(), failures, "no waiter is failed") },
+            { assertEquals(queuedWaiters, grants.size, "each waiter is granted the slot the one before freed") },
+        )
+    }
+
+    /** The catch-up runs however the block ends: a lease it closed and then threw still frees its slot. */
+    @Test
+    fun aBlockThatClosesAPoolLeaseAndThrowsStillFreesTheSlot() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val p = pool(slots = 1)
+        val a = p.acquire(web).granted()
+        val b = backgroundScope.async { p.acquire(web) }
+        runCurrent()
+        val waited = !b.isCompleted
+        var done: LeaseOutcome? = null
+        assertFailsWith<Boom> {
+            p.withEngine { engine, waiting ->
+                done = engine.complete(a.id, 3L, waiting)
+                throw Boom()
+            }
+        }
+        runCurrent()
+        val bOut = b.settled()
+        assertAll(
+            { assertTrue(waited, "the rig: B waits behind A") },
+            { assertEquals(LeaseOutcome.Done(3L, 0L, 0L), done, "the rig: the block closed A before it threw") },
+            { assertEquals(web, bOut?.granted()?.leaf, "B is granted the slot A's completion freed") },
+            { assertEquals(1, p.openForTest, "A is no longer counted, B is") },
+        )
+    }
+
+    /** What [overrunScenario] saw: the settle's answer, the grants after it, and the preview after those. */
+    private data class Overrun(val handed: Set<GroupId>, val done: LeaseOutcome, val grants: List<GroupId>, val preview: List<GroupId>)
+
+    /**
+     * One slot, held by web, with three waiters queued in each lane; [settle] closes web's lease at
+     * an overrun. Answers the leaves the next three grants went to, each closed at its reservation
+     * in turn, and who the engine would pick after them.
+     */
+    private suspend fun TestScope.overrunScenario(settle: (FairSharePool, LeaseId) -> LeaseOutcome): Overrun {
+        val p = pool(slots = 1)
+        val a = p.acquire(web).granted()
+        val grants = mutableListOf<Lease>()
+        (List(3) { mobile } + List(3) { web }).forEach { leaf ->
+            backgroundScope.launch { grants += p.acquire(leaf).granted() }
+        }
+        runCurrent()
+        val handed = p.withEngine { _, waiting -> waiting }
+        val done = settle(p, a.id)
+        runCurrent()
+        repeat(2) {
+            p.complete(grants.last().id, 3L)
+            runCurrent()
+        }
+        val preview = p.withEngine { engine, _ ->
+            engine.previewPicks(mapOf(web to 10, mobile to 10), setOf(web, mobile), List(6) { 3L })
+        }
+        return Overrun(handed, done, grants.map { it.leaf }, preview)
     }
 
     /**
