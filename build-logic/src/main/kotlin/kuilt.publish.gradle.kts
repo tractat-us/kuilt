@@ -156,7 +156,8 @@ fun moduleDescription(module: String): String = when (module) {
             "with no network, Raft or coroutines."
     "kuilt-heddle-coroutines" ->
         "Wait your turn for a slot: a coroutine front door over LocalHeddle that suspends until " +
-            "fair share grants a slot, and hands the slot back when a waiter gives up."
+            "fair share grants a slot, charges the time the work held it, even when the work fails, " +
+            "and hands the slot back when a waiter gives up."
     "kuilt-liveness" ->
         "Peer-liveness detection over a kuilt Seam: heartbeats, partition events and reachability."
     "kuilt-session" ->
