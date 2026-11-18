@@ -12,6 +12,7 @@ class FairSharePoolSamplesRunTest {
 
     @Test
     fun samples() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        sampleWithSlot()
         sampleAcquireSlot()
     }
 }
