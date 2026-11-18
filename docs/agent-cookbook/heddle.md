@@ -205,11 +205,35 @@ lease at its real cost, or `cancel`s it.
 
 **No slot leaks under cancellation.** A waiter cancelled while queued leaves its queue; one
 cancelled after its grant was made but before it resumed hands the lease back with nothing
-charged. **The pool owns the engine**: call nothing on the `LocalHeddle` directly once it is in
-a pool. **Its open leases are adopted**: a restored engine's leases count against the slots from
+charged. **Its open leases are adopted**: a restored engine's leases count against the slots from
 the start, and `now()` is the pool's clock in cost units, from the `clockStart` you pass. A
 failure while handing out slots fails the waiters, never the `complete` or cancellation that set
 it going.
+
+**One writer: the pool owns the engine.** Once a `LocalHeddle` is in a pool, reach it only
+through `pool.withEngine { engine -> … }`, which runs the block under the pool's lock: `persist`,
+`explain`, `apply` for a reload, `reconcileLeases` for orphans. When the block ends, however it
+ends, the pool catches up. A pool lease the block closed frees its slot, the waiters of a lane the
+reload removed are refused with `NoLiveLineage`, and a waiter the change made grantable, such as
+one under a lifted ceiling, is granted. Change the slot count with `pool.resize(n)`, never with
+`reconcileCapacity`: lowering it preempts nothing, and only holds back the next grant.
+
+<!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleReloadWhileWaiting -->
+```kotlin
+        val second = async(start = CoroutineStart.UNDISPATCHED) { pool.acquire(web) }
+        check(!second.isCompleted) // web is at its cap
+
+        // Everything that touches the engine goes through the pool: a reload, a snapshot, an explain.
+        val uncapped = Topology("farm", listOf(Topology.Lane("web", Weight.of(3)), Topology.Lane("mobile")))
+        val reload = pool.withEngine { it.apply(uncapped, generation = 1L) }
+        check(reload.refusals.isEmpty())
+
+        val granted = second.await()
+        check(granted is SlotOutcome.Granted)
+```
+
+A lease the block opens itself with `acquire` or `admit` is never counted against the slots, and
+the block runs while every other caller waits on the lock, so keep it short.
 
 ## Loading the tree from a config file
 
