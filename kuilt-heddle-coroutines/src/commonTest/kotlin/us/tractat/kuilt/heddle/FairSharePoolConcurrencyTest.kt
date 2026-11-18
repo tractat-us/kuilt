@@ -126,16 +126,19 @@ class FairSharePoolConcurrencyTest {
             } while (rounds < roundCap && !bothRacesFired())
             val removed = pool.removedWhileQueuedForTest.value
             val handedBack = pool.handedBackForTest.value
+            val open = pool.openForTest
+            val waiters = pool.waitersForTest
             val leases = engine.snapshot().leases
             val seen = "rounds=$rounds ran=$ran cancelled=$cancelled ${pool.state()}"
             println("FairSharePoolConcurrencyTest.cancellationOnRealThreadsLeaksNoSlot: realThreads=$runsOnRealThreads $seen")
+            // Last: it opens a lease of its own.
             val fresh = pool.acquire(web)
             assertAll(
                 { assertEquals(JOBS * rounds, ran + cancelled, "every job ran or was cancelled: $seen") },
                 { if (runsOnRealThreads) assertTrue(removed >= 1, "the rig: a queued waiter was cancelled: $seen") },
                 { if (runsOnRealThreads) assertTrue(handedBack >= 1, "the rig: a granted waiter handed back: $seen") },
-                { assertEquals(0, pool.openForTest, "the pool counts no open lease: $seen") },
-                { assertEquals(0, pool.waitersForTest, "no waiter is queued: $seen") },
+                { assertEquals(0, open, "the pool counts no open lease: $seen") },
+                { assertEquals(0, waiters, "no waiter is queued: $seen") },
                 { assertEquals(emptyList(), leases, "the engine holds no open lease: $seen") },
                 { assertEquals(web, fresh.granted().leaf, "a fresh waiter is granted: $seen") },
             )
