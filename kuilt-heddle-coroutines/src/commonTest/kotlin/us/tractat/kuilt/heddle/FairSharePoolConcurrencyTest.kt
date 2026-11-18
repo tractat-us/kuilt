@@ -60,7 +60,9 @@ class FairSharePoolConcurrencyTest {
                             val lease = pool.acquire(if ((worker + round) % 2 == 0) web else mobile).granted()
                             val now = inFlight.incrementAndGet()
                             maxSeen.update { maxOf(it, now) }
-                            yield()
+                            // Held for a millisecond, well past a hand-off between threads. Held for
+                            // one yield, a slot was mostly in hand-off and the rig read maxSeen=2.
+                            delay(1.milliseconds)
                             inFlight.decrementAndGet()
                             iterations.incrementAndGet()
                             pool.complete(lease.id, 1L)
@@ -97,10 +99,12 @@ class FairSharePoolConcurrencyTest {
             do {
                 rounds++
                 val finished = BooleanArray(JOBS)
+                val granted = atomic(0)
                 coroutineScope {
                     val jobs = List(JOBS) { i ->
                         launch {
                             val lease = pool.acquire(if (i % 2 == 0) web else mobile).granted()
+                            granted.incrementAndGet()
                             try {
                                 delay(1.milliseconds)
                             } finally {
@@ -109,12 +113,16 @@ class FairSharePoolConcurrencyTest {
                             finished[i] = true
                         }
                     }
+                    // Each third job is cancelled as the grant frontier reaches it, so the cancels land
+                    // on queued waiters and on fresh grants alike, all through the round. Swept from
+                    // the start with a bare yield between them, nearly all landed on queued waiters:
+                    // a hand-back took 36 rounds of 2,000 on macosArm64, 24 s of the 30 s backstop.
                     launch {
-                        jobs.forEachIndexed { i, job ->
-                            if (i % 3 == 0) {
-                                yield()
-                                job.cancel()
-                            }
+                        var issued = 0
+                        for (i in jobs.indices step 3) {
+                            while (granted.value + issued < i) yield()
+                            jobs[i].cancel()
+                            issued++
                         }
                     }.join()
                     jobs.joinAll()
