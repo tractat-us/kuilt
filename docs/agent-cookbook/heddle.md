@@ -19,7 +19,7 @@ validator for the tree, or a "why is my job waiting" screen: each has a section 
 | Your situation | Use | Module |
 |---|---|---|
 | One program hands out slots, workers or turns, and keeps the books | `LocalHeddle` | `:kuilt-heddle-core` |
-| The same, with coroutines that wait for their turn | `FairSharePool` over a `LocalHeddle` | `:kuilt-heddle-coroutines` |
+| The same, with coroutines that wait for their turn | `FairSharePool.withSlot` over a `LocalHeddle` | `:kuilt-heddle-coroutines` |
 | Several peers share one budget over a `Seam`, and no peer is in charge | `HeddleNode` (`heddleStatic`, or `heddleGoverned` to mint and reshape with agreement) | `:kuilt-heddle` |
 | You already have your own ledger and loop, and want only the pick | `HeddlePolicy.pick`, `FairShareAllocator` | `:kuilt-heddle-core` |
 
