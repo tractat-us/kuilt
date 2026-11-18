@@ -3,18 +3,21 @@ package us.tractat.kuilt.heddle
 import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.update
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: the pool's count is guarded by a lock, and only real threads (JVM, Native) put a complete, a hand-back and a dispatch in the same window; on wasmJs this only witnesses that the body runs
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import us.tractat.kuilt.test.TEST_WEDGE_BACKSTOP
 import us.tractat.kuilt.test.assertAll
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.fail
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -42,6 +45,14 @@ class FairSharePoolConcurrencyTest {
         "open=$openForTest waiters=$waitersForTest removedWhileQueued=${removedWhileQueuedForTest.value} " +
             "handedBack=${handedBackForTest.value}"
 
+    /**
+     * Run [block], and fail with [state] if it has not finished well inside the backstop. A wedged
+     * pool would otherwise fail as a bare `UncompletedCoroutinesError`, with none of its counters.
+     */
+    private suspend fun reportingAWedge(state: () -> String, block: suspend CoroutineScope.() -> Unit) {
+        withTimeoutOrNull(WEDGE_REPORT) { coroutineScope(block) } ?: fail("wedged after $WEDGE_REPORT: ${state()}")
+    }
+
     /** A pool on the real monotonic clock: these tests run on real threads, where no virtual one advances. */
     private fun realPool(engine: LocalHeddle): FairSharePool = FairSharePool(engine, SLOTS, TimeSource.Monotonic, 1.seconds)
 
@@ -53,7 +64,7 @@ class FairSharePoolConcurrencyTest {
             val inFlight = atomic(0)
             val maxSeen = atomic(0)
             val iterations = atomic(0)
-            coroutineScope {
+            reportingAWedge({ "maxSeen=${maxSeen.value} iterations=${iterations.value} ${pool.state()}" }) {
                 repeat(WORKERS) { worker ->
                     launch {
                         repeat(ROUNDS) { round ->
@@ -96,47 +107,49 @@ class FairSharePoolConcurrencyTest {
             // On wasmJs the hand-back window may never open, so a floor there would only spend the cap.
             val roundCap = if (runsOnRealThreads) ROUND_CAP else WASM_ROUNDS
             fun bothRacesFired() = pool.removedWhileQueuedForTest.value >= 1 && pool.handedBackForTest.value >= 1
-            do {
-                rounds++
-                val finished = BooleanArray(JOBS)
-                // Per lane, since web is granted three times as often as mobile: index `i` is the
-                // `i / 2`-th job of lane `i % 2`.
-                val granted = List(2) { atomic(0) }
-                coroutineScope {
-                    val jobs = List(JOBS) { i ->
-                        launch {
-                            val lease = pool.acquire(if (i % 2 == 0) web else mobile).granted()
-                            granted[i % 2].incrementAndGet()
-                            try {
-                                delay(1.milliseconds)
-                            } finally {
-                                pool.complete(lease.id, 1L)
-                            }
-                            finished[i] = true
-                        }
-                    }
-                    // Each third job is cancelled as its lane's grant frontier reaches it, so the
-                    // cancels land on queued waiters and on fresh grants alike, all through the round.
-                    // Swept from the start with a bare yield between them, nearly all landed on queued
-                    // waiters: a hand-back took 36 rounds on macosArm64, 24 s of the 30 s backstop.
-                    val cancellers = List(2) { lane ->
-                        launch {
-                            var issued = 0
-                            for (i in jobs.indices.filter { it % 2 == lane && it % 3 == 0 }) {
-                                while (granted[lane].value + issued < i / 2) yield()
-                                jobs[i].cancel()
-                                issued++
+            reportingAWedge({ "rounds=$rounds ran=$ran cancelled=$cancelled ${pool.state()}" }) {
+                do {
+                    rounds++
+                    val finished = BooleanArray(JOBS)
+                    // Per lane, since web is granted three times as often as mobile: index `i` is the
+                    // `i / 2`-th job of lane `i % 2`.
+                    val granted = List(2) { atomic(0) }
+                    coroutineScope {
+                        val jobs = List(JOBS) { i ->
+                            launch {
+                                val lease = pool.acquire(if (i % 2 == 0) web else mobile).granted()
+                                granted[i % 2].incrementAndGet()
+                                try {
+                                    delay(1.milliseconds)
+                                } finally {
+                                    pool.complete(lease.id, 1L)
+                                }
+                                finished[i] = true
                             }
                         }
+                        // Each third job is cancelled as its lane's grant frontier reaches it, so the
+                        // cancels land on queued waiters and on fresh grants alike, all through the round.
+                        // Swept from the start with a bare yield between them, nearly all landed on queued
+                        // waiters: a hand-back took 36 rounds on macosArm64, 24 s of the 30 s backstop.
+                        val cancellers = List(2) { lane ->
+                            launch {
+                                var issued = 0
+                                for (i in jobs.indices.filter { it % 2 == lane && it % 3 == 0 }) {
+                                    while (granted[lane].value + issued < i / 2) yield()
+                                    jobs[i].cancel()
+                                    issued++
+                                }
+                            }
+                        }
+                        cancellers.joinAll()
+                        jobs.joinAll()
+                        // Joined, so every write to `finished` is visible. A cancel landing after a body's
+                        // last suspension still marks its job cancelled; that one counts as ran.
+                        ran += finished.count { it }
+                        cancelled += jobs.indices.count { jobs[it].isCancelled && !finished[it] }
                     }
-                    cancellers.joinAll()
-                    jobs.joinAll()
-                    // Joined, so every write to `finished` is visible. A cancel landing after a body's
-                    // last suspension still marks its job cancelled; that one counts as ran.
-                    ran += finished.count { it }
-                    cancelled += jobs.indices.count { jobs[it].isCancelled && !finished[it] }
-                }
-            } while (rounds < roundCap && !bothRacesFired())
+                } while (rounds < roundCap && !bothRacesFired())
+            }
             val removed = pool.removedWhileQueuedForTest.value
             val handedBack = pool.handedBackForTest.value
             val open = pool.openForTest
@@ -165,5 +178,6 @@ class FairSharePoolConcurrencyTest {
         const val JOBS = 2_000
         const val ROUND_CAP = 50
         const val WASM_ROUNDS = 1
+        val WEDGE_REPORT = TEST_WEDGE_BACKSTOP - 5.seconds
     }
 }
