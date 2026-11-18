@@ -63,11 +63,12 @@ class FairSharePoolEngineTest {
         val waitsWithOneOpen = !fourth.isCompleted
         p.complete(held[2].id, 3L)
         runCurrent()
+        val fourthOut = fourth.await()
         assertAll(
             { assertEquals(3, openAfterResize, "every lease stays open past a lowered count") },
             { assertTrue(waitsAtFirst, "a fourth waiter waits while three are open") },
             { assertTrue(waitsWithOneOpen, "with one open and one slot, the fourth still waits") },
-            { assertEquals(web, fourth.await().granted().leaf) },
+            { assertEquals(web, fourthOut.granted().leaf) },
         )
     }
 
@@ -87,10 +88,11 @@ class FairSharePoolEngineTest {
         val waitedAtCeiling = !second.isCompleted
         val reload = p.withEngine { it.apply(farmTopology, 1L) }
         runCurrent()
+        val secondOut = second.await()
         assertAll(
             { assertTrue(waitedAtCeiling, "the rig: web's second waiter waits at its ceiling") },
             { assertEquals(emptyList(), reload.refusals) },
-            { assertEquals(web, second.await().granted().leaf) },
+            { assertEquals(web, secondOut.granted().leaf) },
             { assertEquals(2, p.openForTest) },
         )
     }
@@ -106,10 +108,11 @@ class FairSharePoolEngineTest {
         val reload = p.withEngine { it.apply(webOnly, 1L) }
         runCurrent()
         val gone = SlotOutcome.Refused(WaitExplanation.NoLiveLineage(mobile))
+        val outs = waiters.map { it.await() }
         assertAll(
             { assertEquals(2, queued, "the rig: both mobile waiters queue behind web's lease") },
             { assertEquals(emptyList(), reload.refusals) },
-            { assertEquals(listOf(gone, gone), waiters.map { it.await() }) },
+            { assertEquals(listOf(gone, gone), outs) },
             { assertEquals(0, p.waitersForTest) },
             { assertEquals(1, p.openForTest) },
             { assertEquals(listOf(a.id), engine.snapshot().leases.map { it.id }, "web's lease is still open") },
@@ -144,6 +147,7 @@ class FairSharePoolEngineTest {
         }
         runCurrent()
         val mOut = m.await()
+        p.beforeResumeForTest = {}
         val openWhileAHeld = p.openForTest
         p.complete(a.id, 3L)
         val fresh = p.acquire(web)
@@ -172,10 +176,11 @@ class FairSharePoolEngineTest {
             }
         }
         runCurrent()
+        val secondOut = second.await()
         assertAll(
             { assertEquals(1, queued, "the rig: web's second waiter waits at its ceiling") },
             { assertEquals("boom", thrown.message, "the block's own throwable reaches the caller") },
-            { assertEquals(web, second.await().granted().leaf) },
+            { assertEquals(web, secondOut.granted().leaf) },
             { assertEquals(2, p.openForTest) },
         )
     }
@@ -189,10 +194,11 @@ class FairSharePoolEngineTest {
         val waited = !b.isCompleted
         val done = p.withEngine { it.complete(a.id, 3L, emptySet()) }
         runCurrent()
+        val bOut = b.await()
         assertAll(
             { assertTrue(waited, "the rig: B waits behind A") },
             { assertEquals(LeaseOutcome.Done(3L, 0L, 0L), done) },
-            { assertEquals(web, b.await().granted().leaf) },
+            { assertEquals(web, bOut.granted().leaf) },
             { assertEquals(1, p.openForTest) },
         )
     }
