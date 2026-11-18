@@ -165,7 +165,7 @@ Replace `<version>` with the latest release shown on the Maven Central badge at 
 | Module | Targets | What it gives you |
 |--------|---------|-------------------|
 | `kuilt-heddle-core` | all | A whole weighted fair-share scheduler in one process, with no network: lease a slot, charge its real cost, preview and explain the next picks, and survive a restart (`LocalHeddle`). See the [Scheduling guide](https://tractat-us.github.io/kuilt/guide/scheduling.html). |
-| `kuilt-heddle-coroutines` | all | Wait your turn for a slot: a caller waits until its group's fair share comes round, then runs (`FairSharePool`). A caller that gives up just as its turn comes never leaves a slot lost. |
+| `kuilt-heddle-coroutines` | all | Wait your turn for a slot: a caller waits until its group's fair share comes round, then runs (`FairSharePool.withSlot`). The group is charged the time the job took, even if it failed. A caller that gives up just as its turn comes never leaves a slot lost. |
 | `kuilt-heddle` | all | The same fair share across peers with no central referee: a mergeable ledger each peer spends from locally, plus a Raft control plane for supply and tree changes. |
 
 **Playground** — pre-1.0, outside the stability surface; API may change, not for production.

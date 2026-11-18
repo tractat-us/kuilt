@@ -14,8 +14,9 @@ import kotlin.time.TimeSource
  * Wait your turn for a slot. A build farm has four agents and two lanes, web and mobile; a program
  * handing them out wants to say "run this in web's lane when it is web's turn" and have that one
  * line wait. A `FairSharePool` holds a [LocalHeddle], which knows whose turn it is, and a count of
- * [slots]. [acquire] suspends until fair share grants the caller's leaf a slot, and the caller
- * hands it back with [complete] or [cancel].
+ * [slots]. [withSlot] suspends until fair share grants the caller's leaf a slot, runs the work, and
+ * charges the lane the time the work took, however it ends. [acquire] is the same wait on its own:
+ * the caller hands the slot back with [complete] or [cancel].
  *
  * The part that is easy to get wrong, and silent when it is, is a waiter that gives up at the moment
  * it is granted. The pool hands that slot back: a waiter cancelled while queued leaves its queue,
@@ -33,7 +34,8 @@ import kotlin.time.TimeSource
  * is charged as an overrun at [complete]. Waiters are resumed only once the lock is released.
  *
  * A grant's [Lease.startedAt] is [now] at the moment the grant is made, which can be a little
- * before its waiter runs.
+ * before its waiter runs. [withSlot] starts its clock when the block starts, so that gap is never
+ * charged.
  *
  * ## The engine's open leases are adopted
  *
@@ -73,11 +75,14 @@ import kotlin.time.TimeSource
  *
  * @param engine the scheduler deciding whose turn it is. The pool reconciles its capacity to [slots].
  * @param slots how many leases may be open at once, at least `0`.
- * @param timeSource the clock [now] reads.
+ * @param timeSource the clock [now] reads and [withSlot] measures with. It should be monotonic: a
+ *   reading that goes back before a mark is taken as no time at all, so a block whose clock stepped
+ *   back is charged `0`, and [now] never reads below [clockStart].
  * @param costUnit how long one unit of [LocalHeddle] cost is: positive and finite.
  * @param clockStart what [now] reads at construction, in cost units; non-negative.
  * @throws IllegalArgumentException when an argument is out of range, or the engine refuses to
  *   reconcile its capacity to [slots]; the engine is unchanged.
+ * @sample us.tractat.kuilt.heddle.sampleWithSlot
  * @sample us.tractat.kuilt.heddle.sampleAcquireSlot
  */
 public class FairSharePool(
@@ -88,6 +93,8 @@ public class FairSharePool(
     clockStart: Long = 0L,
 ) {
     private val engine: LocalHeddle
+    private val timeSource: TimeSource.WithComparableMarks
+    private val costUnit: Duration
     private val costUnitNanos: Long
     private val clockStart: Long
     private val origin: ComparableTimeMark
@@ -118,6 +125,8 @@ public class FairSharePool(
         engine.reconcileCapacity(slots.toLong())
         this.engine = engine
         this.slots = slots
+        this.timeSource = timeSource
+        this.costUnit = costUnit
         this.costUnitNanos = costUnit.inWholeNanoseconds
         this.clockStart = clockStart
         this.defaultReservation = engine.defaultReservation
@@ -129,6 +138,43 @@ public class FairSharePool(
     public fun now(): Long {
         val units = nowUnits()
         return if (units > Long.MAX_VALUE - clockStart) Long.MAX_VALUE else clockStart + units
+    }
+
+    /**
+     * Suspend until fair share grants [leaf] a slot, run [block] with its lease, and charge the lease
+     * the time the block took, in whole cost units rounded up. Answers what [block] returned.
+     *
+     * The charge is made however the block ends: when it returns, when it throws, and when it is
+     * cancelled part-way, and the throwable or the cancellation then goes on to the caller. Work that
+     * failed or was cancelled still held the slot, and a lane whose work fails fast must not get the
+     * farm for free. The clock starts when the block starts, so the moment between the grant and the
+     * caller resuming is never charged. A caller cancelled before its block starts is handed back
+     * with nothing charged, as at [acquire].
+     *
+     * A block may settle its own lease with [complete] or [cancel]; the charge at its end then finds
+     * the lease closed, answers [LeaseOutcome.Unknown], and changes nothing.
+     *
+     * @param reservation the cost the caller expects the work to take, as at [acquire].
+     * @throws SlotRefusedException where [acquire] would answer [SlotOutcome.Refused]: no lease can be
+     *   granted to [leaf], and [block] never runs.
+     * @throws IllegalArgumentException when [reservation] is not in `1..`[LocalHeddle.MAX_RESERVATION],
+     *   before anything waits.
+     * @sample us.tractat.kuilt.heddle.sampleWithSlot
+     */
+    public suspend fun <T> withSlot(leaf: GroupId, reservation: Long = defaultReservation, block: suspend (Lease) -> T): T {
+        val lease = when (val outcome = acquire(leaf, reservation)) {
+            is SlotOutcome.Granted -> outcome.lease
+            is SlotOutcome.Refused -> throw SlotRefusedException(outcome.reason)
+        }
+        val started = timeSource.markNow()
+        // No catch and no NonCancellable: complete never suspends, so it runs even once cancelled.
+        try {
+            return block(lease)
+        } finally {
+            // Clamped here, not refused in costUnits: a throw in this finally would leak the slot and
+            // replace the block's own throwable. A clock that stepped back charges nothing.
+            complete(lease.id, costUnits(started.elapsedNow().coerceAtLeast(Duration.ZERO), costUnit))
+        }
     }
 
     /**
@@ -167,7 +213,10 @@ public class FairSharePool(
      * @throws IllegalArgumentException when [actualCost] is negative.
      */
     public fun complete(lease: LeaseId, actualCost: Long): LeaseOutcome = mutate {
-        engine.complete(lease, actualCost, queues.keys).also { if (it is LeaseOutcome.Done) open.remove(lease) }
+        engine.complete(lease, actualCost, queues.keys).also {
+            if (it is LeaseOutcome.Done) open.remove(lease)
+            afterCompleteForTest(lease, actualCost, it)
+        }
     }
 
     /**
@@ -186,6 +235,9 @@ public class FairSharePool(
 
     /** Called just before each grant or refusal is resumed, outside the lock. */
     internal var beforeResumeForTest: (SlotOutcome) -> Unit = {}
+
+    /** Called under the lock after each [complete]'s engine answer, with the lease, the cost and the answer. */
+    internal var afterCompleteForTest: (lease: LeaseId, actualCost: Long, outcome: LeaseOutcome) -> Unit = { _, _, _ -> }
 
     /** Called under the lock before each engine acquire a hand-out makes; a throw rigs a dispatch failure. */
     internal var dispatchFaultForTest: (() -> Unit)? = null
@@ -347,7 +399,7 @@ public class FairSharePool(
     }
 
     /** Whole cost units since construction, floored. */
-    private fun nowUnits(): Long = origin.elapsedNow().inWholeNanoseconds / costUnitNanos
+    private fun nowUnits(): Long = origin.elapsedNow().coerceAtLeast(Duration.ZERO).inWholeNanoseconds / costUnitNanos
 
     /** One caller waiting for a slot. Compared by identity, so a cancelled waiter removes only itself. */
     private class Waiter(val leaf: GroupId, val reservation: Long, val cont: CancellableContinuation<SlotOutcome>)
@@ -357,4 +409,17 @@ public class FairSharePool(
         class Refuse(val cont: CancellableContinuation<SlotOutcome>, val outcome: SlotOutcome.Refused) : Resumption
         class Fail(val cont: CancellableContinuation<SlotOutcome>, val failure: Throwable) : Resumption
     }
+}
+
+/**
+ * [elapsed] in whole [costUnit]s, rounded up, so any time at all costs at least one unit. Divides in
+ * whole nanoseconds and adds the remainder's unit separately: `(e + u - 1) / u` would overflow near
+ * `Long.MAX_VALUE`.
+ */
+internal fun costUnits(elapsed: Duration, costUnit: Duration): Long {
+    require(!elapsed.isNegative()) { "elapsed must be non-negative, was $elapsed" }
+    require(costUnit.isPositive()) { "costUnit must be positive, was $costUnit" }
+    val e = elapsed.inWholeNanoseconds
+    val u = costUnit.inWholeNanoseconds
+    return e / u + if (e % u != 0L) 1L else 0L
 }

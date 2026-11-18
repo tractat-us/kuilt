@@ -40,5 +40,13 @@ final class us.tractat.kuilt.heddle/FairSharePool { // us.tractat.kuilt.heddle/F
     final fun cancel(us.tractat.kuilt.heddle/LeaseId): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/FairSharePool.cancel|cancel(us.tractat.kuilt.heddle.LeaseId){}[0]
     final fun complete(us.tractat.kuilt.heddle/LeaseId, kotlin/Long): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/FairSharePool.complete|complete(us.tractat.kuilt.heddle.LeaseId;kotlin.Long){}[0]
     final fun now(): kotlin/Long // us.tractat.kuilt.heddle/FairSharePool.now|now(){}[0]
+    final suspend fun <#A1: kotlin/Any?> withSlot(us.tractat.kuilt.heddle/GroupId, kotlin/Long = ..., kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.heddle/Lease, #A1>): #A1 // us.tractat.kuilt.heddle/FairSharePool.withSlot|withSlot(us.tractat.kuilt.heddle.GroupId;kotlin.Long;kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.heddle.Lease,0:0>){0§<kotlin.Any?>}[0]
     final suspend fun acquire(us.tractat.kuilt.heddle/GroupId, kotlin/Long = ...): us.tractat.kuilt.heddle/SlotOutcome // us.tractat.kuilt.heddle/FairSharePool.acquire|acquire(us.tractat.kuilt.heddle.GroupId;kotlin.Long){}[0]
+}
+
+final class us.tractat.kuilt.heddle/SlotRefusedException : kotlin/IllegalStateException { // us.tractat.kuilt.heddle/SlotRefusedException|null[0]
+    constructor <init>(us.tractat.kuilt.heddle/WaitExplanation) // us.tractat.kuilt.heddle/SlotRefusedException.<init>|<init>(us.tractat.kuilt.heddle.WaitExplanation){}[0]
+
+    final val reason // us.tractat.kuilt.heddle/SlotRefusedException.reason|{}reason[0]
+        final fun <get-reason>(): us.tractat.kuilt.heddle/WaitExplanation // us.tractat.kuilt.heddle/SlotRefusedException.reason.<get-reason>|<get-reason>(){}[0]
 }
