@@ -154,6 +154,9 @@ fun moduleDescription(module: String): String = when (module) {
         "A whole fair-share scheduler in one process (LocalHeddle): weighted groups from a config " +
             "file, a lease per free slot charged at its real cost, and a snapshot across restarts, " +
             "with no network, Raft or coroutines."
+    "kuilt-heddle-coroutines" ->
+        "Wait your turn for a slot: a coroutine front door over LocalHeddle that suspends until " +
+            "fair share grants a slot, and hands the slot back when a waiter gives up."
     "kuilt-liveness" ->
         "Peer-liveness detection over a kuilt Seam: heartbeats, partition events and reachability."
     "kuilt-session" ->

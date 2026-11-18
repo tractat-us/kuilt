@@ -35,6 +35,12 @@ class LocalHeddleTest {
         }
 
     @Test
+    fun defaultReservationIsThePolicys() {
+        val tree = Topology("farm", listOf(Topology.Lane("web")))
+        assertEquals(7L, LocalHeddle.fromTopology(tree, LocalPolicy(defaultReservation = 7L), 0L).heddle.defaultReservation)
+    }
+
+    @Test
     fun weightedLeasesFollowTheWeights() {
         val x = GroupId("c-7f3a")
         val y = GroupId("é#%@")
