@@ -82,8 +82,8 @@ next slot itself.
   refuses to take back a cancelled waiter's lease: the slot is freed all the same.
 - **Restarts.** The engine's open leases are adopted and count against the slots. `now()` is the
   pool's clock in cost units: persist it beside the engine's snapshot and pass it back as
-  `clockStart`. A caller waiting in `withSlot` died with the old program, so the lease it held is
-  never settled, and a pool whose slots were all busy at the crash grants nothing. Settle those
+  `clockStart`. A `withSlot` caller that held a slot died with the old program, so nothing settles
+  its lease, and a pool whose slots were all busy at the crash grants nothing. Settle those
   leases once the new pool is built, as the restart walk-through below shows. With a `clockStart`
   of `0`, every default settlement reads `0`.
 - **One writer.** The pool owns the engine. Reach it only through
