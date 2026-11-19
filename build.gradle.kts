@@ -8677,11 +8677,14 @@ allprojects {
 // Every snapshot publishes at `-Pversion=<line>.0-dev.<run>`, so the version is the one input that
 // differs between any two publish runs. When it reached the compile tasks of every module through
 // `:kuilt-base` (an `api` edge from five roots, and a `const` the JVM classpath snapshot records),
-// the publish job lost its build cache and grew from 2 to 30+ minutes, and nothing said why.
+// the publish job lost its build cache and grew from 2 to 30+ minutes, and nothing said why. The
+// commit SHA is the second such input: `kuilt.publish` writes it into jar manifests as
+// `SCM-Revision` (#3576), and it changes on every commit.
 //
 // This measures the property itself rather than any one route to breaking it, so it is not a source
 // scan: after a normal build, `.github/scripts/stamp-invariance.sh` runs `stampProbeTargets` again
-// at a different `-Pversion`, records every task outcome with Gradle's own reasons, and fails
+// at a different `-Pversion` and a different `-Pkuilt.sourceRevision` (#3583), records every task
+// outcome with Gradle's own reasons, and fails
 // unless every selected task that actually executed is allowlisted in
 // `.github/stamp-invariance-allowlist.txt` (`.github/scripts/stamp-invariance.py` has the rules). A new `api`/`implementation`
 // edge, a `const`, a test runtime classpath, a generated resource, or a build-logic change that puts
@@ -8694,12 +8697,14 @@ allprojects {
 // up to date against. The script fails on such a task too ("unmeasured"), so the selection cannot
 // silently grow into a second build.
 //
-// What it does not see: anything outside the selection. Publish-only tasks (POMs, Gradle module
-// metadata, sources and javadoc jars) legitimately carry the version and are not selected; the
-// native/wasm test LINK tasks are not selected either, because a link re-runs only when a klib it
-// reads changed, and that klib's compile task is selected. Nor does it see the commit SHA that
-// `kuilt.publish` stamps into jar manifests (#3576): both passes run at the same commit, so the SHA
-// never changes between them. Varying it as well is tracked by #3583.
+// What it does not see: anything outside the selection. The archive tasks legitimately carry the
+// stamps and are not selected: POMs and Gradle module metadata carry the version, and every JVM
+// class jar (`jvmJar`, `jar`) and sources jar carries both the version and the commit in its
+// manifest. A class jar still reaches selected tasks, as the runtime classpath of a JVM `Test`, so
+// the stamps in its manifest are caught there unless the normalization block below ignores them;
+// the checker also requires that a jar this pass wrote carries the probe's commit, so the commit arm
+// cannot pass by never changing. The native/wasm test LINK tasks are not selected either, because a
+// link re-runs only when a klib it reads changed, and that klib's compile task is selected.
 //
 // Positive control: `-Pkuilt.stampProbe.plantBaseEdge=true` gives `:kuilt-store` an
 // `api(project(":kuilt-base"))` edge (see its build script). Both passes must carry the flag; the
@@ -8781,7 +8786,8 @@ fun stampProbeSelection(p: Project, family: String): List<Task> {
 
 // Each project's `stampProbeTargets` writes the paths it selected, so the checker judges exactly the
 // selection: compile and test tasks. A helper that re-runs only because a file NAME carries the
-// version (every jar, KGP's metadata transforms) is an input to a selected task; if its content
+// version, or because its manifest carries a stamp (every jar, KGP's metadata transforms), is an
+// input to a selected task; if its content
 // changed, the selected task re-runs and is caught there, and if only its name changed, nothing
 // downstream notices, which is the correct verdict.
 allprojects {

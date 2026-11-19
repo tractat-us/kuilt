@@ -26,18 +26,45 @@ Gradle's own reasons, never from its name:
                        comes back the flag was removed or the Kotlin plugin changed how it keys
                        friends, and every snapshot is recompiling every JVM test compile again.
 
-Two preconditions are asserted first, because a clean report proves nothing without them:
-`:kuilt-base:generateKuiltVersion` EXECUTED (so the stamp really changed), and every selected task
-appears in the report (so the probe ran what it selected).
+Three preconditions are asserted first, because a clean report proves nothing without them:
+`:kuilt-base:generateKuiltVersion` EXECUTED (so the version stamp really changed); a jar this pass
+wrote carries `SCM-Revision: stamp-probe` and none carries anything else (so the commit stamp
+really changed too, #3583); and every selected task appears in the report (so the probe ran what
+it selected). The jar is read rather than the report, because Gradle stops listing a jar task's
+reasons at its renamed output and never gets as far as the manifest.
 """
 from __future__ import annotations
 
 import fnmatch
+import os
 import sys
+import zipfile
 from pathlib import Path
 
 ISSUE = "https://github.com/tractat-us/kuilt/issues/3464"
 GENERATOR = ":kuilt-base:generateKuiltVersion"
+# What stamp-invariance.sh passes as -Pkuilt.sourceRevision, and the suffix it gives -Pversion.
+PROBE_REVISION = "stamp-probe"
+PROBE_JARS = ("*/build/libs/*.stamp-probe*.jar", "*/*/build/libs/*.stamp-probe*.jar")
+
+
+def probe_revisions(since: float) -> dict[str, str]:
+    """`SCM-Revision` of every probe jar written at or after `since`, by path. A jar without the
+    attribute (a metadata jar, say) is left out: `kuilt.publish` stamps class and sources jars only."""
+    found: dict[str, str] = {}
+    for pattern in PROBE_JARS:
+        for jar in Path(".").glob(pattern):
+            if jar.stat().st_mtime < since:
+                continue
+            with zipfile.ZipFile(jar) as z:
+                try:
+                    manifest = z.read("META-INF/MANIFEST.MF").decode("utf-8")
+                except KeyError:
+                    continue
+            for line in manifest.splitlines():
+                if line.startswith("SCM-Revision:"):
+                    found[str(jar)] = line.split(":", 1)[1].strip()
+    return found
 
 
 def load_lines(path: Path) -> list[str]:
@@ -91,6 +118,23 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
+    # Jars written since the probe pass began; run by hand without the script, every probe jar.
+    # Only the `linux` family reads jars. The `apple` family compiles against klibs, which carry no
+    # commit stamp, so it writes no class jar and there is nothing for this precondition to read.
+    revisions = probe_revisions(float(os.environ.get("STAMP_PROBE_START", "0")))
+    stamped = sorted(j for j, r in revisions.items() if r == PROBE_REVISION)
+    other = sorted(f"{j} ({r})" for j, r in revisions.items() if r != PROBE_REVISION)
+    if os.environ.get("STAMP_PROBE_FAMILY", "linux") == "linux" and (not stamped or other):
+        print(
+            f"stamp-invariance: {len(stamped)} jars written by the probe pass carry "
+            f"`SCM-Revision: {PROBE_REVISION}`, and {len(other)} carry another "
+            f"({', '.join(other[:5])}). The commit stamp never changed on the test classpath, so "
+            f"this report cannot see it leak. Pass -Pkuilt.sourceRevision={PROBE_REVISION} to the "
+            f"probe pass. See https://github.com/tractat-us/kuilt/issues/3583.",
+            file=sys.stderr,
+        )
+        return 1
+
     recorded = {r[0] for r in rows}
     missing = sorted(selected - recorded)
     if not selected or missing:
@@ -132,23 +176,28 @@ def main(argv: list[str]) -> int:
             print(f"  re-ran, {kind} ({len(tasks)}): " + ", ".join(p for p, _ in tasks))
 
     if not any(buckets.get(k) for k in ("leak", "unmeasured", "failed")):
-        print("stamp-invariance: OK — changing the version re-ran no selected task outside the allowlist.")
+        print(
+            "stamp-invariance: OK — changing the version and the commit re-ran no selected task "
+            f"outside the allowlist ({len(stamped)} probe jars carry SCM-Revision: {PROBE_REVISION})."
+        )
         return 0
 
     out = sys.stderr
     if buckets.get("leak"):
         print(
-            f"\nstamp-invariance: changing ONLY the version stamp re-ran {len(buckets['leak'])} "
-            f"tasks that are not allowed to read it ({ISSUE}). Every snapshot publish changes the "
-            "stamp, so each of these re-runs on every snapshot, and on native and wasm everything "
-            "above it does too:",
+            f"\nstamp-invariance: changing ONLY the version and commit stamps re-ran "
+            f"{len(buckets['leak'])} tasks that are not allowed to read them ({ISSUE}). Every "
+            "snapshot publish changes both, so each of these re-runs on every snapshot, and on "
+            "native and wasm everything above it does too:",
             file=out,
         )
         for path, reasons in buckets["leak"]:
             print(f"  {path}\n      because: " + "; ".join(reasons or ["(no reason recorded)"]), file=out)
         print(
             "\nThe usual cause is a dependency on :kuilt-base (or on a module above it), a `const` "
-            "holding the version, or a build-logic change that makes the version a task input. If "
+            "holding the version, or a build-logic change that makes the version a task input. A "
+            "test task re-run only by `stableClasspath` most likely means a jar manifest attribute "
+            "that runtime-classpath normalization does not ignore (see the root build, #3576). If "
             "the module really does need KuiltVersion, add its tasks to "
             ".github/stamp-invariance-allowlist.txt in the same PR and say why.",
             file=out,

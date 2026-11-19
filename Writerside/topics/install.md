@@ -54,6 +54,8 @@ if (file("../kuilt").exists()) includeBuild("../kuilt")
 
 When the `kuilt/` directory is absent (CI, temporary worktrees), Gradle falls back to the published artifact automatically. `includeBuild` is only a local development shortcut.
 
+Each kuilt jar names the commit that built it in an `SCM-Revision` manifest line, so with `includeBuild` your JVM tests re-run after every kuilt commit unless each of your projects adds `normalization { runtimeClasspath { metaInf { ignoreAttribute("SCM-Revision") } } }`.
+
 ## Test utilities
 
 These are the two you reach for first when testing code built on kuilt:

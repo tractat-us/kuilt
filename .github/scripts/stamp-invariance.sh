@@ -20,6 +20,8 @@ selected="build/stamp-probe/selected"
 rm -rf "$report" "$selected"
 
 start="$(date +%s)"
+# The checker reads the manifests of the jars this pass writes, and only those (#3583).
+export STAMP_PROBE_START="$start" STAMP_PROBE_FAMILY="$family"
 status=0
 # shellcheck disable=SC2086 # STAMP_PROBE_TASKS is a word list by design
 ./gradlew ${STAMP_PROBE_TASKS:-stampProbeTargets} \
