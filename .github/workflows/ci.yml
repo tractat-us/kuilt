@@ -227,7 +227,7 @@ jobs:
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
-          java-version: '25.0.5+8.0.LTS'
+          java-version: '25.0.5+100000002.0.LTS'
           distribution: 'temurin'
 
       # Only `main` writes the Actions cache; a PR reads `main`'s (#3115). The repo's 10 GB of Actions
@@ -435,7 +435,7 @@ jobs:
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
-          java-version: '25.0.5+8.0.LTS'
+          java-version: '25.0.5+100000002.0.LTS'
           distribution: 'temurin'
 
       - name: Setup Gradle
@@ -575,7 +575,7 @@ jobs:
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
-          java-version: '25.0.5+8.0.LTS'
+          java-version: '25.0.5+100000002.0.LTS'
           distribution: 'temurin'
 
       - name: Setup Gradle
@@ -644,7 +644,7 @@ jobs:
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
-          java-version: '25.0.5+8.0.LTS'
+          java-version: '25.0.5+100000002.0.LTS'
           distribution: 'temurin'
 
       - name: Setup Gradle
@@ -761,7 +761,7 @@ jobs:
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
-          java-version: '25.0.5+8.0.LTS'
+          java-version: '25.0.5+100000002.0.LTS'
           distribution: 'temurin'
 
       # Read-only cache: this job compiles nothing, so it has no build output worth
@@ -874,7 +874,7 @@ jobs:
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
-          java-version: '25.0.5+8.0.LTS'
+          java-version: '25.0.5+100000002.0.LTS'
           distribution: 'temurin'
 
       - name: Setup Gradle
@@ -976,7 +976,7 @@ jobs:
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
-          java-version: '25.0.5+8.0.LTS'
+          java-version: '25.0.5+100000002.0.LTS'
           distribution: 'temurin'
 
       - name: Setup Gradle
@@ -1156,7 +1156,7 @@ jobs:
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
-          java-version: '25.0.5+8.0.LTS'
+          java-version: '25.0.5+100000002.0.LTS'
           distribution: 'temurin'
 
       - name: Setup Gradle
@@ -1245,7 +1245,7 @@ jobs:
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
-          java-version: '25.0.5+8.0.LTS'
+          java-version: '25.0.5+100000002.0.LTS'
           distribution: 'temurin'
 
       - name: Setup Gradle
