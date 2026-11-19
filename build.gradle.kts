@@ -8697,7 +8697,9 @@ allprojects {
 // What it does not see: anything outside the selection. Publish-only tasks (POMs, Gradle module
 // metadata, sources and javadoc jars) legitimately carry the version and are not selected; the
 // native/wasm test LINK tasks are not selected either, because a link re-runs only when a klib it
-// reads changed, and that klib's compile task is selected.
+// reads changed, and that klib's compile task is selected. Nor does it see the commit SHA that
+// `kuilt.publish` stamps into jar manifests (#3576): both passes run at the same commit, so the SHA
+// never changes between them. Varying it as well is tracked by #3583.
 //
 // Positive control: `-Pkuilt.stampProbe.plantBaseEdge=true` gives `:kuilt-store` an
 // `api(project(":kuilt-base"))` edge (see its build script). Both passes must carry the flag; the
