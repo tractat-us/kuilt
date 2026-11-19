@@ -7,9 +7,26 @@ public final class us/tractat/kuilt/heddle/FairSharePool {
 	public final fun complete (Lus/tractat/kuilt/heddle/LeaseId;J)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun now ()J
 	public final fun resize (I)V
+	public final fun view ()Lus/tractat/kuilt/heddle/PoolView;
 	public final fun withEngine (Lkotlin/jvm/functions/Function2;)Ljava/lang/Object;
 	public final fun withSlot-mLLTQY0 (Ljava/lang/String;JLkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun withSlot-mLLTQY0$default (Lus/tractat/kuilt/heddle/FairSharePool;Ljava/lang/String;JLkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class us/tractat/kuilt/heddle/PoolView {
+	public fun <init> (Ljava/util/Map;II)V
+	public final fun component1 ()Ljava/util/Map;
+	public final fun component2 ()I
+	public final fun component3 ()I
+	public final fun copy (Ljava/util/Map;II)Lus/tractat/kuilt/heddle/PoolView;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/PoolView;Ljava/util/Map;IIILjava/lang/Object;)Lus/tractat/kuilt/heddle/PoolView;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getOpen ()I
+	public final fun getQueues ()Ljava/util/Map;
+	public final fun getSlots ()I
+	public final fun getWaiting ()Ljava/util/Set;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public abstract interface class us/tractat/kuilt/heddle/SlotOutcome {

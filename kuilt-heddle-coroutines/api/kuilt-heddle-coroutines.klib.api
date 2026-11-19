@@ -37,13 +37,35 @@ sealed interface us.tractat.kuilt.heddle/SlotOutcome { // us.tractat.kuilt.heddl
 final class us.tractat.kuilt.heddle/FairSharePool { // us.tractat.kuilt.heddle/FairSharePool|null[0]
     constructor <init>(us.tractat.kuilt.heddle/LocalHeddle, kotlin/Int, kotlin.time/TimeSource.WithComparableMarks, kotlin.time/Duration, kotlin/Long = ...) // us.tractat.kuilt.heddle/FairSharePool.<init>|<init>(us.tractat.kuilt.heddle.LocalHeddle;kotlin.Int;kotlin.time.TimeSource.WithComparableMarks;kotlin.time.Duration;kotlin.Long){}[0]
 
-    final fun <#A1: kotlin/Any?> withEngine(kotlin/Function2<us.tractat.kuilt.heddle/LocalHeddle, kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId>, #A1>): #A1 // us.tractat.kuilt.heddle/FairSharePool.withEngine|withEngine(kotlin.Function2<us.tractat.kuilt.heddle.LocalHeddle,kotlin.collections.Set<us.tractat.kuilt.heddle.GroupId>,0:0>){0§<kotlin.Any?>}[0]
+    final fun <#A1: kotlin/Any?> withEngine(kotlin/Function2<us.tractat.kuilt.heddle/LocalHeddle, us.tractat.kuilt.heddle/PoolView, #A1>): #A1 // us.tractat.kuilt.heddle/FairSharePool.withEngine|withEngine(kotlin.Function2<us.tractat.kuilt.heddle.LocalHeddle,us.tractat.kuilt.heddle.PoolView,0:0>){0§<kotlin.Any?>}[0]
     final fun cancel(us.tractat.kuilt.heddle/LeaseId): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/FairSharePool.cancel|cancel(us.tractat.kuilt.heddle.LeaseId){}[0]
     final fun complete(us.tractat.kuilt.heddle/LeaseId, kotlin/Long): us.tractat.kuilt.heddle/LeaseOutcome // us.tractat.kuilt.heddle/FairSharePool.complete|complete(us.tractat.kuilt.heddle.LeaseId;kotlin.Long){}[0]
     final fun now(): kotlin/Long // us.tractat.kuilt.heddle/FairSharePool.now|now(){}[0]
     final fun resize(kotlin/Int) // us.tractat.kuilt.heddle/FairSharePool.resize|resize(kotlin.Int){}[0]
+    final fun view(): us.tractat.kuilt.heddle/PoolView // us.tractat.kuilt.heddle/FairSharePool.view|view(){}[0]
     final suspend fun <#A1: kotlin/Any?> withSlot(us.tractat.kuilt.heddle/GroupId, kotlin/Long = ..., kotlin.coroutines/SuspendFunction1<us.tractat.kuilt.heddle/Lease, #A1>): #A1 // us.tractat.kuilt.heddle/FairSharePool.withSlot|withSlot(us.tractat.kuilt.heddle.GroupId;kotlin.Long;kotlin.coroutines.SuspendFunction1<us.tractat.kuilt.heddle.Lease,0:0>){0§<kotlin.Any?>}[0]
     final suspend fun acquire(us.tractat.kuilt.heddle/GroupId, kotlin/Long = ...): us.tractat.kuilt.heddle/SlotOutcome // us.tractat.kuilt.heddle/FairSharePool.acquire|acquire(us.tractat.kuilt.heddle.GroupId;kotlin.Long){}[0]
+}
+
+final class us.tractat.kuilt.heddle/PoolView { // us.tractat.kuilt.heddle/PoolView|null[0]
+    constructor <init>(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin.collections/List<kotlin/Long>>, kotlin/Int, kotlin/Int) // us.tractat.kuilt.heddle/PoolView.<init>|<init>(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.collections.List<kotlin.Long>>;kotlin.Int;kotlin.Int){}[0]
+
+    final val open // us.tractat.kuilt.heddle/PoolView.open|{}open[0]
+        final fun <get-open>(): kotlin/Int // us.tractat.kuilt.heddle/PoolView.open.<get-open>|<get-open>(){}[0]
+    final val queues // us.tractat.kuilt.heddle/PoolView.queues|{}queues[0]
+        final fun <get-queues>(): kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin.collections/List<kotlin/Long>> // us.tractat.kuilt.heddle/PoolView.queues.<get-queues>|<get-queues>(){}[0]
+    final val slots // us.tractat.kuilt.heddle/PoolView.slots|{}slots[0]
+        final fun <get-slots>(): kotlin/Int // us.tractat.kuilt.heddle/PoolView.slots.<get-slots>|<get-slots>(){}[0]
+    final val waiting // us.tractat.kuilt.heddle/PoolView.waiting|{}waiting[0]
+        final fun <get-waiting>(): kotlin.collections/Set<us.tractat.kuilt.heddle/GroupId> // us.tractat.kuilt.heddle/PoolView.waiting.<get-waiting>|<get-waiting>(){}[0]
+
+    final fun component1(): kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin.collections/List<kotlin/Long>> // us.tractat.kuilt.heddle/PoolView.component1|component1(){}[0]
+    final fun component2(): kotlin/Int // us.tractat.kuilt.heddle/PoolView.component2|component2(){}[0]
+    final fun component3(): kotlin/Int // us.tractat.kuilt.heddle/PoolView.component3|component3(){}[0]
+    final fun copy(kotlin.collections/Map<us.tractat.kuilt.heddle/GroupId, kotlin.collections/List<kotlin/Long>> = ..., kotlin/Int = ..., kotlin/Int = ...): us.tractat.kuilt.heddle/PoolView // us.tractat.kuilt.heddle/PoolView.copy|copy(kotlin.collections.Map<us.tractat.kuilt.heddle.GroupId,kotlin.collections.List<kotlin.Long>>;kotlin.Int;kotlin.Int){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/PoolView.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/PoolView.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/PoolView.toString|toString(){}[0]
 }
 
 final class us.tractat.kuilt.heddle/SlotRefusedException : kotlin/IllegalStateException { // us.tractat.kuilt.heddle/SlotRefusedException|null[0]
