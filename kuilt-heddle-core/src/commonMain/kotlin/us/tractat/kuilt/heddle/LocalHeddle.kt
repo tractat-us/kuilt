@@ -558,7 +558,10 @@ public class LocalHeddle private constructor(
         var capacity: Capacity,
         /** Mints [complete] and [admit] wrote to cover a shortfall at the root. */
         var forcedMints: Int,
-        /** Which state this is: see [LocalHeddle.revision]. Set once, when [atomically] forks. */
+        /**
+         * Which state this is: see [LocalHeddle.revision]. Set when the Core is built; [atomically]
+         * builds each next one.
+         */
         val revision: LocalHeddleRevision,
     ) {
         /**
@@ -583,8 +586,9 @@ public class LocalHeddle private constructor(
      *
      * The working copy carries the next [revision], so every call through here moves it however the
      * call returns, a non-local `return` included, and a throw puts it back with everything else.
-     * Every call that writes the engine runs through here, which is what makes it the one place to
-     * move it. [Core.fork] takes the revision as an argument, so no other fork can move it by accident.
+     * Every call on a published engine that writes it runs through here, which is what makes this
+     * the one place to move it; [restore] and [scratch] write only before the engine is handed out.
+     * [Core.fork] takes the revision as an argument, so no other fork can move it by accident.
      */
     private inline fun <T> atomically(block: () -> T): T {
         val committed = core
