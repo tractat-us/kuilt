@@ -8797,3 +8797,21 @@ allprojects {
         }
     }
 }
+
+// A jar's manifest carries the version and the commit it was built from (`kuilt.publish`, #3576),
+// and a test task reads every jar on its runtime classpath, manifest included. Left alone, each
+// commit would re-run every JVM test task whose classpath holds another kuilt module's jar, and each
+// snapshot would too. Measured with a changed `-Pkuilt.sourceRevision` alone: `:kuilt-math:jvmTest`
+// and `:kuilt-crdt:jvmTest` re-ran on "`stableClasspath` … has changed" before this block and stay
+// UP-TO-DATE after it. The compile tasks never noticed: they read classes, not the manifest.
+// Normalization is per consuming project, hence every project rather than only the published ones.
+allprojects {
+    normalization {
+        runtimeClasspath {
+            metaInf {
+                ignoreAttribute("Implementation-Version")
+                ignoreAttribute("SCM-Revision")
+            }
+        }
+    }
+}
