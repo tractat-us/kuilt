@@ -221,24 +221,25 @@ class LocalHeddlePositionCeilingTest {
 
     @Test
     fun anAcquireThatThrowsPartWayChangesNothing() {
-        val failing = engine().apply { warmUp() }
         val twin = engine().apply { warmUp() }
-        val stateBefore = failing.snapshot()
-        val bytesBefore = failing.bytes()
+        val twinBefore = twin.snapshot()
 
         // Only the nested group's lanes wait, so the descent must go root → g → leaf.
         val waiting = setOf(x, y)
         var fired = 0
         var stateMidCall: LocalHeddleState? = null
-        failing.afterPickForTest = { group ->
-            if (group == g) {
+        lateinit var failing: LocalHeddle
+        // Throws at g on the first call only, so the next call runs as the twin's does.
+        failing = engine().apply { warmUp() }.withAfterPickForTest { group ->
+            if (group == g && fired == 0) {
                 fired++
                 stateMidCall = failing.snapshot()
                 throw IllegalStateException("injected after the pick at ${group.value}")
             }
         }
+        val stateBefore = failing.snapshot()
+        val bytesBefore = failing.bytes()
         assertFailsWith<IllegalStateException> { failing.acquire(waiting, waiting, startedAt = 100L) }
-        failing.afterPickForTest = {}
         val stateAfter = failing.snapshot()
         val bytesAfter = failing.bytes()
 
@@ -246,6 +247,7 @@ class LocalHeddlePositionCeilingTest {
         val twinNext = twin.acquire(waiting, waiting, startedAt = 101L)
         assertAll(
             { assertEquals(1, fired, "the injected failure fired once") },
+            { assertEquals(twinBefore, stateBefore, "the hooked copy starts where the twin does") },
             // The rig: part-way through, the call had changed the engine, so an unchanged engine
             // afterwards is the rollback's doing and not a call that never got going.
             { assertNotEquals(stateBefore, stateMidCall, "the failing call had moved the engine before it threw") },
