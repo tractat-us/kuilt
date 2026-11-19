@@ -818,6 +818,7 @@ public final class us/tractat/kuilt/heddle/LocalHeddle {
 	public final fun extend (Lus/tractat/kuilt/heddle/LeaseId;JLjava/util/Set;)Lus/tractat/kuilt/heddle/LeaseOutcome;
 	public final fun getDefaultReservation ()J
 	public final fun getEpoch ()J
+	public final fun getRevision ()Lus/tractat/kuilt/heddle/LocalHeddleRevision;
 	public final fun getRoot-urUY4Jo ()Ljava/lang/String;
 	public final fun persist ()Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;
 	public final fun previewPicks (Ljava/util/Map;Ljava/util/Set;J)Ljava/util/List;
@@ -846,6 +847,21 @@ public final class us/tractat/kuilt/heddle/LocalHeddle$Companion {
 	public final fun decode ([BLkotlinx/serialization/BinaryFormat;)Lus/tractat/kuilt/heddle/RestoreResult;
 	public final fun fromTopology (Lus/tractat/kuilt/heddle/Topology;Lus/tractat/kuilt/heddle/LocalPolicy;J)Lus/tractat/kuilt/heddle/LocalHeddle$Boot;
 	public final fun restore (Lus/tractat/kuilt/heddle/LocalHeddleSnapshot;Lus/tractat/kuilt/heddle/LocalPolicy;J)Lus/tractat/kuilt/heddle/LocalHeddle;
+}
+
+public final class us/tractat/kuilt/heddle/LocalHeddleRevision : java/lang/Comparable {
+	public fun <init> (JJ)V
+	public synthetic fun compareTo (Ljava/lang/Object;)I
+	public fun compareTo (Lus/tractat/kuilt/heddle/LocalHeddleRevision;)I
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun copy (JJ)Lus/tractat/kuilt/heddle/LocalHeddleRevision;
+	public static synthetic fun copy$default (Lus/tractat/kuilt/heddle/LocalHeddleRevision;JJILjava/lang/Object;)Lus/tractat/kuilt/heddle/LocalHeddleRevision;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCount ()J
+	public final fun getEpoch ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class us/tractat/kuilt/heddle/LocalHeddleSnapshot {
