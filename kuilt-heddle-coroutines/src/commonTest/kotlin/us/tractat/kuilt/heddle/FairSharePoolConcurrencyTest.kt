@@ -28,7 +28,9 @@ import kotlin.time.TimeSource
  * The pool's one lock, on real threads (#3558). Every other pool test runs under `runTest`, where
  * everything is serial, so none of them can show that a [FairSharePool.complete], a cancelled
  * waiter's hand-back and a hand-out racing on different threads still never open more than the
- * pool's slots, or leak one. These two run on `Dispatchers.Default`.
+ * pool's slots, or leak one. These run on `Dispatchers.Default`, and the third adds
+ * [FairSharePool.withEngine] and [FairSharePool.resize], which take the same lock from paths of
+ * their own.
  *
  * What each target shows: on the JVM and Kotlin/Native, `Dispatchers.Default` is a thread pool, and
  * the lock claim rests on those two. On wasmJs it is the browser's one event loop, and the pool's
@@ -40,7 +42,8 @@ import kotlin.time.TimeSource
  * A hang here gets none of `:kuilt-test`'s JVM-only coroutine dump, so every failure message carries
  * the pool's counters instead.
  *
- * Gated: it runs only under `-Pconcurrency.stress.tests=true` (see this module's build).
+ * Gated: it runs only under `-Pconcurrency.stress.tests=true` (see this module's build). CI runs it
+ * on the JVM in `ci.yml`'s `concurrency-probes` job and on macosArm64 in `apple-nightly.yml`.
  */
 class FairSharePoolConcurrencyTest {
 
