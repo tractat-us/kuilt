@@ -2,9 +2,11 @@ package us.tractat.kuilt.heddle
 
 import kotlinx.atomicfu.AtomicBoolean
 import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.update
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers // ALLOW-realDispatcher: the probe needs a waiter resumed inline on the thread that granted it, which only Unconfined does; real threads come from the platform test that runs it
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import us.tractat.kuilt.test.assertAll
@@ -31,9 +33,14 @@ import kotlin.time.TimeSource
  * [BOUND], never as a hang: the waiter is released afterwards whatever the verdict, and every thread
  * unwinds.
  *
+ * A throw inside one of the probe's coroutines goes to a handler and fails the first assertion: on
+ * Kotlin/Native an unhandled one would abort the whole test binary. When the threads have not
+ * unwound, a thread may still hold the pool's lock, so the failure is reported from the probe's own
+ * flags and the engine alone, which takes no lock, and the pool is not asked.
+ *
  * It cannot live in `commonTest` as a test: on wasmJs's one thread the parked body would block the
  * thread the cancel needs, forever. So this class holds the body, and `jvmTest` and `appleTest` run
- * it with their own threads.
+ * it with their own threads. Android unit tests do not run it.
  *
  * @param startThread starts [block] on a new platform thread named `name`, and returns at once.
  * @param sleepMillis blocks the calling thread for that many milliseconds.
@@ -45,19 +52,22 @@ internal class ResumeOutsideTheLockProbe(
     fun run() {
         val engine = farm()
         val pool = FairSharePool(engine, 1, TimeSource.Monotonic, 1.seconds)
-        val scope = CoroutineScope(Dispatchers.Unconfined + Job())
+        // Written from the completer's thread as well as this one.
+        val uncaught = atomic(emptyList<Throwable>())
+        val handler = CoroutineExceptionHandler { _, failure -> uncaught.update { it + failure } }
+        val scope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob() + handler)
         try {
-            run(engine, pool, scope)
+            run(engine, pool, scope) { uncaught.value }
         } finally {
             scope.cancel()
         }
     }
 
-    private fun run(engine: LocalHeddle, pool: FairSharePool, scope: CoroutineScope) {
+    private fun run(engine: LocalHeddle, pool: FairSharePool, scope: CoroutineScope, uncaught: () -> List<Throwable>) {
         // The one slot. On Unconfined, with a slot free, acquire returns without suspending.
         var holder: Lease? = null
         scope.launch { holder = pool.acquire(web).granted() }
-        val held = holder ?: error("the first acquire did not complete inline")
+        val held = holder ?: error("the first acquire did not complete inline; uncaught=${uncaught()}")
 
         val insideComplete = atomic(false)
         val resumedInsideComplete = atomic(false)
@@ -76,30 +86,39 @@ internal class ResumeOutsideTheLockProbe(
         val queued = pool.waitersForTest
 
         val completerDone = atomic(false)
-        startThread("resume-probe-completer") {
-            insideComplete.value = true
-            pool.complete(held.id, 1L)
-            insideComplete.value = false
-            completerDone.value = true
-        }
-        val parkedInTime = parked.awaitTrue(BOUND)
-
         var strangerAnswer: LeaseOutcome? = null
         val strangerDone = atomic(false)
-        startThread("resume-probe-stranger") {
-            strangerAnswer = pool.cancel(STRANGER)
-            strangerDone.value = true
-        }
-        val cancelledWhileParked = strangerDone.awaitTrue(BOUND)
+        var parkedInTime = false
+        var cancelledWhileParked = false
+        try {
+            startThread("resume-probe-completer") {
+                insideComplete.value = true
+                pool.complete(held.id, 1L)
+                insideComplete.value = false
+                completerDone.value = true
+            }
+            parkedInTime = parked.awaitTrue(BOUND)
 
-        // Whatever the verdict, let the waiter go, so every thread unwinds.
-        release.value = true
+            startThread("resume-probe-stranger") {
+                strangerAnswer = pool.cancel(STRANGER)
+                strangerDone.value = true
+            }
+            cancelledWhileParked = strangerDone.awaitTrue(BOUND)
+        } finally {
+            // Whatever the verdict, and whatever threw, let the waiter go, so every thread unwinds.
+            release.value = true
+        }
         val unwound = completerDone.awaitTrue(BOUND) && waiterDone.awaitTrue(BOUND) && strangerDone.awaitTrue(BOUND)
 
+        // Unwound, nothing holds the lock and the pool can be asked. Not unwound, a thread may still
+        // hold it, so only the probe's flags and the engine are read.
+        val poolState = if (unwound) "open=${pool.view().open} waiters=${pool.waitersForTest}" else "pool not read"
         val seen = "queued=$queued parked=$parkedInTime resumedInsideComplete=${resumedInsideComplete.value} " +
-            "cancelledWhileParked=$cancelledWhileParked unwound=$unwound open=${pool.view().open} " +
-            "waiters=${pool.waitersForTest}"
+            "cancelledWhileParked=$cancelledWhileParked unwound=$unwound completerDone=${completerDone.value} " +
+            "waiterDone=${waiterDone.value} strangerDone=${strangerDone.value} " +
+            "engineLeases=${engine.snapshot().leases.size} $poolState uncaught=${uncaught()}"
         assertAll(
+            { assertEquals(emptyList(), uncaught(), "nothing reached the exception handler: $seen") },
             { assertEquals(1, queued, "the rig: the waiter queued behind the one slot: $seen") },
             { assertTrue(parkedInTime, "the rig: the waiter was granted and parked within $BOUND: $seen") },
             // Inline on the completer's thread, inside its complete: the case where the lock matters.
@@ -113,7 +132,8 @@ internal class ResumeOutsideTheLockProbe(
             },
             { assertEquals(LeaseOutcome.Unknown, strangerAnswer, "the stranger's lease is unknown to the engine: $seen") },
             { assertTrue(unwound, "every thread finished once the waiter was released: $seen") },
-            { assertEquals(0, pool.view().open, "the pool counts no open lease: $seen") },
+            // Asked only once unwound: otherwise the lock may be held, and the read would wait on it.
+            { if (unwound) assertEquals(0, pool.view().open, "the pool counts no open lease: $seen") },
             { assertEquals(emptyList(), engine.snapshot().leases, "the engine holds no open lease: $seen") },
         )
     }
