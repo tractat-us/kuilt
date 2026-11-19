@@ -1182,6 +1182,8 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
         final fun <get-defaultReservation>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.defaultReservation.<get-defaultReservation>|<get-defaultReservation>(){}[0]
     final val epoch // us.tractat.kuilt.heddle/LocalHeddle.epoch|{}epoch[0]
         final fun <get-epoch>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddle.epoch.<get-epoch>|<get-epoch>(){}[0]
+    final val revision // us.tractat.kuilt.heddle/LocalHeddle.revision|{}revision[0]
+        final fun <get-revision>(): us.tractat.kuilt.heddle/LocalHeddleRevision // us.tractat.kuilt.heddle/LocalHeddle.revision.<get-revision>|<get-revision>(){}[0]
     final val root // us.tractat.kuilt.heddle/LocalHeddle.root|{}root[0]
         final fun <get-root>(): us.tractat.kuilt.heddle/GroupId // us.tractat.kuilt.heddle/LocalHeddle.root.<get-root>|<get-root>(){}[0]
 
@@ -1231,6 +1233,23 @@ final class us.tractat.kuilt.heddle/LocalHeddle { // us.tractat.kuilt.heddle/Loc
         final fun fromTopology(us.tractat.kuilt.heddle/Topology, us.tractat.kuilt.heddle/LocalPolicy, kotlin/Long): us.tractat.kuilt.heddle/LocalHeddle.Boot // us.tractat.kuilt.heddle/LocalHeddle.Companion.fromTopology|fromTopology(us.tractat.kuilt.heddle.Topology;us.tractat.kuilt.heddle.LocalPolicy;kotlin.Long){}[0]
         final fun restore(us.tractat.kuilt.heddle/LocalHeddleSnapshot, us.tractat.kuilt.heddle/LocalPolicy, kotlin/Long): us.tractat.kuilt.heddle/LocalHeddle // us.tractat.kuilt.heddle/LocalHeddle.Companion.restore|restore(us.tractat.kuilt.heddle.LocalHeddleSnapshot;us.tractat.kuilt.heddle.LocalPolicy;kotlin.Long){}[0]
     }
+}
+
+final class us.tractat.kuilt.heddle/LocalHeddleRevision : kotlin/Comparable<us.tractat.kuilt.heddle/LocalHeddleRevision> { // us.tractat.kuilt.heddle/LocalHeddleRevision|null[0]
+    constructor <init>(kotlin/Long, kotlin/Long) // us.tractat.kuilt.heddle/LocalHeddleRevision.<init>|<init>(kotlin.Long;kotlin.Long){}[0]
+
+    final val count // us.tractat.kuilt.heddle/LocalHeddleRevision.count|{}count[0]
+        final fun <get-count>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddleRevision.count.<get-count>|<get-count>(){}[0]
+    final val epoch // us.tractat.kuilt.heddle/LocalHeddleRevision.epoch|{}epoch[0]
+        final fun <get-epoch>(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddleRevision.epoch.<get-epoch>|<get-epoch>(){}[0]
+
+    final fun compareTo(us.tractat.kuilt.heddle/LocalHeddleRevision): kotlin/Int // us.tractat.kuilt.heddle/LocalHeddleRevision.compareTo|compareTo(us.tractat.kuilt.heddle.LocalHeddleRevision){}[0]
+    final fun component1(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddleRevision.component1|component1(){}[0]
+    final fun component2(): kotlin/Long // us.tractat.kuilt.heddle/LocalHeddleRevision.component2|component2(){}[0]
+    final fun copy(kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.heddle/LocalHeddleRevision // us.tractat.kuilt.heddle/LocalHeddleRevision.copy|copy(kotlin.Long;kotlin.Long){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.heddle/LocalHeddleRevision.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // us.tractat.kuilt.heddle/LocalHeddleRevision.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // us.tractat.kuilt.heddle/LocalHeddleRevision.toString|toString(){}[0]
 }
 
 final class us.tractat.kuilt.heddle/LocalHeddleSnapshot { // us.tractat.kuilt.heddle/LocalHeddleSnapshot|null[0]

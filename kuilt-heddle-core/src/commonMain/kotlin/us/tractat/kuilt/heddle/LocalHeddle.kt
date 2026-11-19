@@ -74,6 +74,26 @@ public data class LeaseId(public val epoch: Long, public val seq: Long) : Compar
 }
 
 /**
+ * How far a [LocalHeddle] has come: the [epoch] it was started with, and how many calls that can
+ * change it have returned since, [count]. Ordered by epoch, then by count, like a [LeaseId].
+ *
+ * Two revisions that are equal mean the engine has not changed in between, so a caller can skip
+ * work whose inputs include the engine with one comparison, before copying anything. The converse
+ * does not hold: a call that changed nothing may still have moved it.
+ *
+ * It is not persisted. A restored engine counts from zero again, under the higher epoch
+ * [LocalHeddle.restore] requires, so its revision is above every one the persisted engine had, and
+ * a caller holding one across a restart still sees a change. Two engines started under the same
+ * epoch can repeat each other's revisions, as they repeat each other's lease ids.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleRevision
+ */
+public data class LocalHeddleRevision(public val epoch: Long, public val count: Long) : Comparable<LocalHeddleRevision> {
+    override fun compareTo(other: LocalHeddleRevision): Int =
+        compareValuesBy(this, other, LocalHeddleRevision::epoch, LocalHeddleRevision::count)
+}
+
+/**
  * One open lease: one slot of work running for [leaf].
  *
  * @property reserved the cost delegated to it so far: its reservation plus every extension. `0` for
@@ -538,12 +558,24 @@ public class LocalHeddle private constructor(
         var capacity: Capacity,
         /** Mints [complete] and [admit] wrote to cover a shortfall at the root. */
         var forcedMints: Int,
+        /**
+         * Which state this is: see [LocalHeddle.revision]. Set when the Core is built; [atomically]
+         * builds each next one.
+         */
+        val revision: LocalHeddleRevision,
     ) {
-        /** A working copy: the ledger and leasable are immutable values; the two mutable maps are copied. */
-        fun fork(): Core = Core(ledger, allocator.fork(), leasable, HashMap(open), nextSeq, capacity, forcedMints)
+        /**
+         * A working copy at [revision]: the ledger and leasable are immutable values; the two mutable
+         * maps are copied.
+         */
+        fun fork(revision: LocalHeddleRevision): Core =
+            Core(ledger, allocator.fork(), leasable, HashMap(open), nextSeq, capacity, forcedMints, revision)
     }
 
-    private var core = Core(ledger, allocator, leasable, HashMap(), nextSeq = 0L, capacity = Capacity.NONE, forcedMints = 0)
+    private var core = Core(
+        ledger, allocator, leasable, HashMap(), nextSeq = 0L, capacity = Capacity.NONE, forcedMints = 0,
+        revision = LocalHeddleRevision(epoch, count = 0L),
+    )
 
     /**
      * Run [block] on a working copy of [core], and keep the copy only if [block] returns. On a
@@ -551,10 +583,16 @@ public class LocalHeddle private constructor(
      * engine's fields as it would without this, because they all resolve through [core]. One swap of
      * one reference, rather than a restore per field, is what makes a forgotten field impossible:
      * there is nowhere else for one to live.
+     *
+     * The working copy carries the next [revision], so every call through here moves it however the
+     * call returns, a non-local `return` included, and a throw puts it back with everything else.
+     * Every call on a published engine that writes it runs through here, which is what makes this
+     * the one place to move it; [restore] and [scratch] write only before the engine is handed out.
+     * [Core.fork] takes the revision as an argument, so no other fork can move it by accident.
      */
     private inline fun <T> atomically(block: () -> T): T {
         val committed = core
-        core = committed.fork()
+        core = committed.fork(LocalHeddleRevision(epoch, committed.revision.count + 1))
         return try {
             block()
         } catch (failure: Throwable) {
@@ -592,6 +630,22 @@ public class LocalHeddle private constructor(
         private set(value) {
             core.forcedMints = value
         }
+
+    /**
+     * How far this engine has come: moved by every call that can change it, [acquire], [admit],
+     * [extend], [complete], [cancel], [reconcileCapacity], [apply], [attach] and [detach], whatever
+     * the call returns, since a refused [acquire] may still move the wake memory. Never moved by a
+     * read ([snapshot], [persist], [previewPicks], [explain], [entitlement], [reconcileLeases]), nor by
+     * a call that throws, which changes nothing. Costs one field read: compare it with the revision
+     * the last pass saw before copying anything.
+     *
+     * Read it as you read the rest of the engine, under the caller's scheduling lock. It is not
+     * persisted: see [LocalHeddleRevision] for why a revision held across a restart still compares
+     * correctly.
+     *
+     * @sample us.tractat.kuilt.heddle.sampleRevision
+     */
+    public val revision: LocalHeddleRevision get() = core.revision
 
     /** The engine's whole state, as an immutable value. Costs a sort of the open leases and of the wake memory. */
     public fun snapshot(): LocalHeddleState =
@@ -1464,7 +1518,7 @@ public class LocalHeddle private constructor(
     internal fun withAfterPickForTest(hook: (GroupId) -> Unit): LocalHeddle =
         LocalHeddle(root, policy, epoch, ledger, allocator, leasable, openElsewhere, afterPick = hook)
             .also {
-                it.core = core.fork()
+                it.core = core.fork(core.revision)
                 it.forgetsForTest = forgetsForTest
             }
 
@@ -1492,12 +1546,12 @@ public class LocalHeddle private constructor(
      * Replace the ledger with [transform] of it: the test seam for a topology change while leases
      * are open that [apply] cannot express, such as an edge left closing by hand.
      */
-    internal fun reshapeForTest(transform: (EntitlementLedger) -> EntitlementLedger) {
+    internal fun reshapeForTest(transform: (EntitlementLedger) -> EntitlementLedger): Unit = atomically {
         ledger = transform(ledger)
     }
 
     /** Mint [amount] at the root, as one act: the test seam for supply laid down ahead of any top-up. */
-    internal fun mintSupply(amount: Long) {
+    internal fun mintSupply(amount: Long): Unit = atomically {
         ledger = mintAt(ledger, amount)
     }
 

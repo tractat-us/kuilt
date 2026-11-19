@@ -829,3 +829,33 @@ internal fun sampleRunnerPool() {
     // The 24 minutes apps spent on the Macs count against it here, so acme ran more of these jobs.
     check(served == mapOf(acme to 151, apps to 148, hobby to 101))
 }
+
+/**
+ * Skip a scheduling pass when nothing has changed: compare the engine's revision with the one the
+ * last pass saw, before copying anything. Reads leave it alone, every call that can change the
+ * engine moves it, and a restored engine's is above every one the old engine had.
+ */
+@Suppress("unused")
+internal fun sampleRevision() {
+    val tree = twoLanes()
+    val heavy = tree.groupId("heavy")
+    val light = tree.groupId("light")
+    val queued = setOf(heavy, light)
+    val policy = LocalPolicy(defaultReservation = 3L)
+    val (heddle, _) = LocalHeddle.fromTopology(tree, policy, epoch = 0L)
+    heddle.reconcileCapacity(totalSlots = 2L)
+
+    // The last pass saw this. Asking who goes next changes nothing, so the next pass can skip.
+    val seen = heddle.revision
+    heddle.previewPicks(mapOf(heavy to 1, light to 1), queued, listOf(3L))
+    check(heddle.revision == seen)
+
+    // A lease moves it, so the next pass looks again.
+    check(heddle.acquire(queued, queued, startedAt = 0L) is AcquireOutcome.Acquired)
+    check(heddle.revision > seen)
+
+    // It is not persisted, but a restore runs under a higher epoch, so the restored engine's
+    // revision is above every one the old engine had: a pass that saw the old one sees a change.
+    val restarted = LocalHeddle.restore(heddle.persist(), policy, epoch = 1L)
+    check(restarted.revision > heddle.revision)
+}
