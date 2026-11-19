@@ -34,7 +34,7 @@ class FairSharePoolTest {
         val out = p.acquire(web)
         assertAll(
             { assertEquals(web, out.granted().leaf) },
-            { assertEquals(1, p.openForTest) },
+            { assertEquals(1, p.view().open) },
         )
     }
 
@@ -73,7 +73,7 @@ class FairSharePoolTest {
         assertAll(
             { assertEquals(2, maxInFlight, "the bound was reached and never passed") },
             { assertEquals(12, grants) },
-            { assertEquals(0, p.openForTest) },
+            { assertEquals(0, p.view().open) },
         )
     }
 
@@ -109,7 +109,7 @@ class FairSharePoolTest {
         val out = p.acquire(nope)
         assertAll(
             { assertEquals(SlotOutcome.Refused(WaitExplanation.NoLiveLineage(nope)), out) },
-            { assertEquals(0, p.openForTest) },
+            { assertEquals(0, p.view().open) },
             { assertEquals(0, p.waitersForTest) },
         )
     }
@@ -160,7 +160,7 @@ class FairSharePoolTest {
         assertAll(
             { assertEquals(web, w2Lease.leaf) },
             { assertEquals(SlotOutcome.Refused(WaitExplanation.NoLiveLineage(nope)), badOut) },
-            { assertEquals(0, p.openForTest) },
+            { assertEquals(0, p.view().open) },
         )
     }
 
@@ -178,7 +178,7 @@ class FairSharePoolTest {
         runCurrent()
         // The rig: a slot is free and web's second waiter still queues, at its ceiling.
         assertAll(
-            { assertEquals(1, p.openForTest) },
+            { assertEquals(1, p.view().open) },
             { assertEquals(1, p.waitersForTest) },
         )
         val bad = async { p.acquire(nope) }
@@ -209,7 +209,7 @@ class FairSharePoolTest {
         assertAll(
             { assertTrue(b.isCompleted, "B is granted the slot A freed") },
             { assertFalse(c.isCompleted, "C waits: A freed one slot, not two") },
-            { assertEquals(1, p.openForTest) },
+            { assertEquals(1, p.view().open) },
             { assertEquals(1, p.waitersForTest) },
         )
     }
@@ -222,7 +222,7 @@ class FairSharePoolTest {
         assertAll(
             { assertEquals(LeaseOutcome.Unknown, p.complete(stranger, 1L)) },
             { assertEquals(LeaseOutcome.Unknown, p.cancel(stranger)) },
-            { assertEquals(1, p.openForTest) },
+            { assertEquals(1, p.view().open) },
         )
     }
 
@@ -243,7 +243,7 @@ class FairSharePoolTest {
         engine.reconcileCapacity(1L)
         val adopted = assertIs<AcquireOutcome.Acquired>(engine.acquire(setOf(web), setOf(web), startedAt = 0L)).lease
         val p = pool(slots = 1, engine = engine)
-        assertEquals(1, p.openForTest, "the engine's open lease holds the one slot")
+        assertEquals(1, p.view().open, "the engine's open lease holds the one slot")
         val b = async { p.acquire(web) }
         runCurrent()
         assertFalse(b.isCompleted, "B waits behind the adopted lease")
@@ -285,7 +285,7 @@ class FairSharePoolTest {
         val expected = SlotOutcome.Refused(WaitExplanation.NoLiveLineage(nope))
         assertAll(
             { assertTrue(refused.isCompleted, "refused while every slot is busy") },
-            { assertEquals(1, busy.openForTest) },
+            { assertEquals(1, busy.view().open) },
             { assertEquals(0, busy.waitersForTest) },
             { assertTrue(refusedAtZero.isCompleted, "refused at zero slots") },
             { assertFalse(healthyAtZero.isCompleted, "a healthy name at zero slots waits") },
@@ -388,7 +388,7 @@ class FairSharePoolTest {
         assertAll(
             { assertEquals(62, overruns, "the rig: the root's mint reached the watermark") },
             { assertEquals(listOf(full, full), outs) },
-            { assertEquals(0, p.openForTest) },
+            { assertEquals(0, p.view().open) },
             { assertEquals(0, p.waitersForTest) },
         )
     }
