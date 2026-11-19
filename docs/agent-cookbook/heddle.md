@@ -210,7 +210,7 @@ lease at its real cost, or `cancel`s it.
 **No slot leaks under cancellation.** A waiter cancelled while queued leaves its queue; one
 cancelled after its grant was made but before it resumed hands the lease back with nothing
 charged. A failure while handing out slots fails the waiters, never the `complete` or
-cancellation that set it going.
+cancellation that set it going; with nobody waiting, it is logged at error with its trace.
 
 **After a restart, settle what the crash left open.** The engine's open leases are adopted: a
 restored engine's leases count against the slots from the start, and `now()` is the pool's clock in

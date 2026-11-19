@@ -79,7 +79,8 @@ next slot itself.
   never left waiting, even when every slot is busy.
 - **Failures.** If handing out slots fails, the waiters get the failure; the `complete` or the
   cancellation that set the hand-out going returns as usual. The same goes for an engine that
-  refuses to take back a cancelled waiter's lease: the slot is freed all the same.
+  refuses to take back a cancelled waiter's lease: the slot is freed all the same. With nobody
+  waiting, the failure is logged at error with its trace, since it means the engine has a bug.
 - **Restarts.** The engine's open leases are adopted and count against the slots. `now()` is the
   pool's clock in cost units: persist it beside the engine's snapshot and pass it back as
   `clockStart`. A `withSlot` caller that held a slot died with the old program, so nothing settles

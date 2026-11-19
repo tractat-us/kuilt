@@ -10,10 +10,21 @@ kotlin {
             api(libs.kotlinx.coroutines.core)
             // The pool's one lock, `reentrantLock`.
             implementation(libs.kotlinx.atomicfu)
+            // A hand-out failure no waiter is queued to receive is logged at error, with its trace.
+            implementation(libs.kotlin.logging)
         }
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
+        }
+        // On the compile classpath, not just the runtime one: the failure-log test attaches a Logback
+        // `ListAppender` to the pool's logger and asserts on what it emitted.
+        jvmTest.dependencies {
+            implementation(libs.logback)
+        }
+        // The SLF4J backend kotlin-logging needs on the Android unit-test variant.
+        androidUnitTest.dependencies {
+            runtimeOnly(libs.logback)
         }
     }
 }
