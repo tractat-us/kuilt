@@ -45,7 +45,7 @@ import kotlin.time.TimeSource
 class FairSharePoolConcurrencyTest {
 
     private fun FairSharePool.state(): String =
-        "open=$openForTest waiters=$waitersForTest removedWhileQueued=${removedWhileQueuedForTest.value} " +
+        "open=${view().open} waiters=$waitersForTest removedWhileQueued=${removedWhileQueuedForTest.value} " +
             "handedBack=${handedBackForTest.value}"
 
     /**
@@ -92,7 +92,7 @@ class FairSharePoolConcurrencyTest {
                 { assertTrue(maxSeen.value <= SLOTS, "never more than $SLOTS slots held at once: $seen") },
                 // The rig, apart from the property, so the property does not lean on scheduling.
                 { assertTrue(maxSeen.value >= SLOTS, "the rig: every slot was held at once at least once: $seen") },
-                { assertEquals(0, pool.openForTest, "the pool counts no open lease: $seen") },
+                { assertEquals(0, pool.view().open, "the pool counts no open lease: $seen") },
                 { assertEquals(0, pool.waitersForTest, "no waiter is queued: $seen") },
                 { assertEquals(emptyList(), leases, "the engine holds no open lease: $seen") },
             )
@@ -160,7 +160,7 @@ class FairSharePoolConcurrencyTest {
             }
             val removed = pool.removedWhileQueuedForTest.value
             val handedBack = pool.handedBackForTest.value
-            val open = pool.openForTest
+            val open = pool.view().open
             val waiters = pool.waitersForTest
             val leases = engine.snapshot().leases
             val seen = "rounds=$rounds ran=$ran cancelled=$cancelled issued=$issuedTotal ${pool.state()}"

@@ -39,7 +39,7 @@ class FairSharePoolEngineTest {
         }
         runCurrent()
         val queuedAtZero = p.waitersForTest
-        val openAtZero = p.openForTest
+        val openAtZero = p.view().open
 
         val twin = farm()
         twin.reconcileCapacity(6L)
@@ -53,7 +53,7 @@ class FairSharePoolEngineTest {
             { assertEquals(0, openAtZero) },
             { assertTrue(mobile in preview, "the rig: the preview grants mobile a slot") },
             { assertEquals(preview, grants.sortedBy { it.id }.map { it.leaf }) },
-            { assertEquals(6, p.openForTest) },
+            { assertEquals(6, p.view().open) },
             { assertEquals(34, p.waitersForTest) },
         )
     }
@@ -65,7 +65,7 @@ class FairSharePoolEngineTest {
         p.resize(1)
         val fourth = backgroundScope.async { p.acquire(web) }
         runCurrent()
-        val openAfterResize = p.openForTest
+        val openAfterResize = p.view().open
         val waitsAtFirst = !fourth.isCompleted
         p.complete(held[0].id, 3L)
         p.complete(held[1].id, 3L)
@@ -103,7 +103,7 @@ class FairSharePoolEngineTest {
             { assertTrue(waitedAtCeiling, "the rig: web's second waiter waits at its ceiling") },
             { assertEquals(emptyList(), reload.refusals) },
             { assertEquals(web, secondOut?.granted()?.leaf) },
-            { assertEquals(2, p.openForTest) },
+            { assertEquals(2, p.view().open) },
         )
     }
 
@@ -124,7 +124,7 @@ class FairSharePoolEngineTest {
             { assertEquals(emptyList(), reload.refusals) },
             { assertEquals(listOf(gone, gone), outs) },
             { assertEquals(0, p.waitersForTest) },
-            { assertEquals(1, p.openForTest) },
+            { assertEquals(1, p.view().open) },
             { assertEquals(listOf(a.id), engine.snapshot().leases.map { it.id }, "web's lease is still open") },
         )
     }
@@ -158,7 +158,7 @@ class FairSharePoolEngineTest {
         runCurrent()
         val mOut = m.settled()
         p.beforeResumeForTest = {}
-        val openWhileAHeld = p.openForTest
+        val openWhileAHeld = p.view().open
         p.complete(a.id, 3L)
         val fresh = p.acquire(web)
         assertAll(
@@ -191,7 +191,7 @@ class FairSharePoolEngineTest {
             { assertEquals(1, queued, "the rig: web's second waiter waits at its ceiling") },
             { assertEquals("boom", thrown.message, "the block's own throwable reaches the caller") },
             { assertEquals(web, secondOut?.granted()?.leaf) },
-            { assertEquals(2, p.openForTest) },
+            { assertEquals(2, p.view().open) },
         )
     }
 
@@ -202,14 +202,14 @@ class FairSharePoolEngineTest {
         val b = backgroundScope.async { p.acquire(web) }
         runCurrent()
         val waited = !b.isCompleted
-        val done = p.withEngine { engine, waiting -> engine.complete(a.id, 3L, waiting) }
+        val done = p.withEngine { engine, view -> engine.complete(a.id, 3L, view.waiting) }
         runCurrent()
         val bOut = b.settled()
         assertAll(
             { assertTrue(waited, "the rig: B waits behind A") },
             { assertEquals(LeaseOutcome.Done(3L, 0L, 0L), done) },
             { assertEquals(web, bOut?.granted()?.leaf, "B is granted the slot A's completion freed") },
-            { assertEquals(1, p.openForTest) },
+            { assertEquals(1, p.view().open) },
         )
     }
 
@@ -232,7 +232,7 @@ class FairSharePoolEngineTest {
             { assertTrue(bLease != null && bLease.id != a.id, "the rig: B holds the freed slot under a new id") },
             { assertEquals(LeaseOutcome.Unknown, late) },
             { assertEquals(listOfNotNull(bLease?.id), engine.snapshot().leases.map { it.id }, "B's lease is still open") },
-            { assertEquals(1, p.openForTest) },
+            { assertEquals(1, p.view().open) },
         )
     }
 
@@ -251,12 +251,12 @@ class FairSharePoolEngineTest {
     fun aLeaseABlockOpensIsNeverCountedAndFreesNoSlot() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val p = pool(slots = 2)
         val a = p.acquire(web).granted()
-        val openBefore = p.openForTest
+        val openBefore = p.view().open
         val stray = p.withEngine { e, _ -> e.acquire(setOf(mobile), setOf(mobile), p.now()) }
         val strayLease = (stray as? AcquireOutcome.Acquired)?.lease
-        val openAfterBlock = p.openForTest
+        val openAfterBlock = p.view().open
         val closed = strayLease?.let { p.complete(it.id, 3L) }
-        val openAfterComplete = p.openForTest
+        val openAfterComplete = p.view().open
         val w = async { p.acquire(web) }
         val m = async { p.acquire(mobile) }
         runCurrent()
@@ -290,22 +290,22 @@ class FairSharePoolEngineTest {
         assertAll(
             { assertTrue(waited, "the rig: B waits behind the one slot") },
             { assertFalse(b.isCompleted, "the pool still has one slot") },
-            { assertEquals(1, p.openForTest) },
+            { assertEquals(1, p.view().open) },
             { assertEquals(1, p.waitersForTest) },
             { assertEquals(1L, engine.persist().totalSlots, "the engine kept its capacity") },
         )
     }
 
     /**
-     * The waiting set a block is handed is the one [FairSharePool.complete] uses: an overrunning
-     * complete through the engine, given it, lands exactly as the pool's own complete does on a
-     * twin pool. An overrun observes the waiting set as demand, so a set missing mobile's queued
+     * The waiting set a block is handed, [PoolView.waiting], is the one [FairSharePool.complete]
+     * uses: an overrunning complete through the engine, given it, lands exactly as the pool's own
+     * complete does on a twin pool. An overrun observes the waiting set as demand, so a set missing mobile's queued
      * waiters would change who goes next.
      */
     @Test
     fun anOverrunThroughTheEngineWithTheHandedSetMatchesThePoolsComplete() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
         val throughEngine = overrunScenario { p, a ->
-            p.withEngine { engine, waiting -> engine.complete(a, overrunCost, waiting) }
+            p.withEngine { engine, view -> engine.complete(a, overrunCost, view.waiting) }
         }
         val throughPool = overrunScenario { p, a -> p.complete(a, overrunCost) }
         assertAll(
@@ -372,8 +372,8 @@ class FairSharePoolEngineTest {
         val waited = !b.isCompleted
         var done: LeaseOutcome? = null
         assertFailsWith<Boom> {
-            p.withEngine { engine, waiting ->
-                done = engine.complete(a.id, 3L, waiting)
+            p.withEngine { engine, view ->
+                done = engine.complete(a.id, 3L, view.waiting)
                 throw Boom()
             }
         }
@@ -383,7 +383,7 @@ class FairSharePoolEngineTest {
             { assertTrue(waited, "the rig: B waits behind A") },
             { assertEquals(LeaseOutcome.Done(3L, 0L, 0L), done, "the rig: the block closed A before it threw") },
             { assertEquals(web, bOut?.granted()?.leaf, "B is granted the slot A's completion freed") },
-            { assertEquals(1, p.openForTest, "A is no longer counted, B is") },
+            { assertEquals(1, p.view().open, "A is no longer counted, B is") },
         )
     }
 
@@ -403,7 +403,7 @@ class FairSharePoolEngineTest {
             backgroundScope.launch { grants += p.acquire(leaf).granted() }
         }
         runCurrent()
-        val handed = p.withEngine { _, waiting -> waiting }
+        val handed = p.withEngine { _, view -> view.waiting }
         val done = settle(p, a.id)
         runCurrent()
         repeat(2) {

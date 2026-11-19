@@ -16,5 +16,6 @@ class FairSharePoolSamplesRunTest {
         sampleAcquireSlot()
         sampleReloadWhileWaiting()
         sampleRestartAPool()
+        samplePreviewThePool()
     }
 }

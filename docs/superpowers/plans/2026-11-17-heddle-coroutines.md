@@ -1,6 +1,6 @@
 # `:kuilt-heddle-coroutines` Implementation Plan
 
-> **The shipped API differs from this plan, and the KDoc is authoritative.** `withEngine`'s block takes `(engine, waiting)`, and `withSlot`'s clock starts when its block starts, not at the grant.
+> **The shipped API differs from this plan, and the KDoc is authoritative.** `withEngine`'s block takes `(engine, view: PoolView)`, and `withSlot`'s clock starts when its block starts, not at the grant.
 
 > **For agentic workers:** execute task by task under `worktree-dispatch`, one fresh worker per task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

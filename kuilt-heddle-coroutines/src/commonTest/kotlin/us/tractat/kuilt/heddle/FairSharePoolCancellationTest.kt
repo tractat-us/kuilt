@@ -27,7 +27,7 @@ class FairSharePoolCancellationTest {
 
     private suspend fun TestScope.assertNothingLeaked(p: FairSharePool, engine: LocalHeddle) {
         runCurrent()
-        val open = p.openForTest
+        val open = p.view().open
         val leases = engine.snapshot().leases
         val waiters = p.waitersForTest
         val fresh = p.acquire(web)
@@ -69,7 +69,7 @@ class FairSharePoolCancellationTest {
         p.complete(a.id, 3L)
         // The rig: B is granted and resumed, but the test dispatcher has not run it yet.
         assertAll(
-            { assertEquals(1, p.openForTest, "B's lease is open") },
+            { assertEquals(1, p.view().open, "B's lease is open") },
             { assertFalse(b.isCompleted, "B has not run") },
         )
         b.cancel()
@@ -149,7 +149,7 @@ class FairSharePoolCancellationTest {
         p.beforeResumeForTest = {}
         p.handBackFaultForTest = null
         runCurrent()
-        val open = p.openForTest
+        val open = p.view().open
         val waiters = p.waitersForTest
         val engineLeases = engine.snapshot().leases.map { it.id }
         val cFailure = if (c.isCompleted) c.getCompleted() else null
@@ -200,9 +200,9 @@ class FairSharePoolCancellationTest {
         p.beforeResumeForTest = {}
         p.handBackFaultForTest = null
         runCurrent()
-        val openBefore = p.openForTest
+        val openBefore = p.view().open
         p.withEngine { _, _ -> }
-        val openAfter = p.openForTest
+        val openAfter = p.view().open
         val engineLeases = engine.snapshot().leases.map { it.id }
         val fresh = async { p.acquire(mobile) }
         runCurrent()

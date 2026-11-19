@@ -84,9 +84,9 @@ internal suspend fun sampleReloadWhileWaiting() {
         val second = async(start = CoroutineStart.UNDISPATCHED) { pool.acquire(web) }
         check(!second.isCompleted) // web is at its cap
 
-        // Everything that touches the engine goes through the pool, which hands over its waiting
-        // set too: why web waits, as the pool's next pick sees it.
-        val why = pool.withEngine { engine, waiting -> engine.explain(web, waiting, waiting) }
+        // Everything that touches the engine goes through the pool, which hands over a view of its
+        // queues too: why web waits, as the pool's next pick sees it.
+        val why = pool.withEngine { engine, view -> engine.explain(web, view.waiting, view.waiting) }
         check(why == WaitExplanation.AtCeiling(web, limit = 1L))
 
         // A reload, a snapshot, a search for orphans: the same way in.
@@ -147,4 +147,40 @@ internal suspend fun sampleRestartAPool() {
         check(granted is SlotOutcome.Granted)
         pool.complete(granted.lease.id, actualCost = 3L)
     }
+}
+
+/**
+ * A status page shows who builds next. It reads the pool's own queues under the pool's lock, so it
+ * keeps no count of its own beside the pool's, and the engine answers about exactly those queues.
+ */
+@Suppress("unused")
+internal suspend fun samplePreviewThePool() {
+    val farm = Topology("farm", listOf(Topology.Lane("web", Weight.of(3)), Topology.Lane("mobile")))
+    val web = farm.groupId("web")
+    val mobile = farm.groupId("mobile")
+    val (heddle, booted) = LocalHeddle.fromTopology(farm, LocalPolicy(defaultReservation = 3L), epoch = 0L)
+    check(booted.refusals.isEmpty())
+    val pool = FairSharePool(heddle, slots = 2, TimeSource.Monotonic, costUnit = 1.minutes)
+    val running = listOf(pool.acquire(web), pool.acquire(mobile)).map { (it as SlotOutcome.Granted).lease }
+
+    coroutineScope {
+        // Five builds queue behind the two running, each with its estimate in minutes.
+        val builds = listOf(web to 3L, web to 12L, mobile to 3L, web to 3L, mobile to 3L)
+        builds.forEach { (lane, minutes) ->
+            launch(start = CoroutineStart.UNDISPATCHED) { pool.withSlot(lane, reservation = minutes) { } }
+        }
+
+        // A gauge needs no engine: each lane's queued estimates, head first, and the slots in use.
+        val view = pool.view()
+        check(view.queues == mapOf(web to listOf(3L, 12L, 3L), mobile to listOf(3L, 3L)))
+        check(view.open == 2 && view.slots == 2)
+
+        // Who goes next is a question for the engine, about the pool's own queues: ask it inside
+        // withEngine, so the view and the answer are of the same moment.
+        val next = pool.withEngine { engine, queued -> engine.previewPicks(queued.queues, queued.waiting) }
+        check(next == listOf(web, mobile, web, mobile, web))
+
+        running.forEach { pool.complete(it.id, actualCost = it.reserved) }
+    }
+    check(pool.view() == PoolView(emptyMap(), open = 0, slots = 2))
 }

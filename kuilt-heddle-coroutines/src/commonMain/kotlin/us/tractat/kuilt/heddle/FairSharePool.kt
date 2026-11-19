@@ -272,17 +272,21 @@ public class FairSharePool(
     /**
      * Run [block] on the engine, under the pool's lock, and answer what it returned. This is the one
      * way to reach the engine once it is in a pool: [LocalHeddle.persist] for a snapshot,
-     * [LocalHeddle.explain] for why a lane waits, [LocalHeddle.apply] for a reload,
-     * [LocalHeddle.reconcileLeases] to find orphans. Every other thread waits on the lock meanwhile,
-     * so keep the block short.
+     * [LocalHeddle.explain] for why a lane waits, [LocalHeddle.previewPicks] for who goes next,
+     * [LocalHeddle.apply] for a reload, [LocalHeddle.reconcileLeases] to find orphans. Every other
+     * thread waits on the lock meanwhile, so keep the block short.
      *
-     * The block is handed the pool's waiting set beside the engine: every leaf with a waiter
-     * queued, as a copy taken when the block starts. It is the set the engine's own calls take as
-     * `waiting`, and a guessed one skews them: an overrunning [LocalHeddle.complete] or an
-     * [LocalHeddle.extend] observes it as demand, so a set missing a queued lane changes later
-     * picks. `explain(leaf, waiting, waiting)` answers why a lane waits, as the pool's next pick
-     * sees it. To settle a lease the pool granted, prefer [complete] or [cancel]: they work from
-     * inside the block and use the live set.
+     * The block is handed the pool's [PoolView] beside the engine, taken when the block starts:
+     * each leaf's queued reservations, the open count and the slot count. Its [PoolView.waiting] is
+     * the set the engine's own calls take as `waiting`, and a guessed one skews them: an overrunning
+     * [LocalHeddle.complete] or an [LocalHeddle.extend] observes it as demand, so a set missing a
+     * queued lane changes later picks. `explain(leaf, view.waiting, view.waiting)` answers why a
+     * lane waits, as the pool's next pick sees it, and `previewPicks(view.queues, view.waiting)`
+     * forecasts who goes next: exact when [resize] raises the slots with nothing else happening, and
+     * a forecast otherwise, since a completion at a cost other than its reservation, or a waiter
+     * arriving, leaving or being refused, can change the order (see [PoolView]). To settle a lease
+     * the pool granted, prefer [complete] or [cancel]: they work from inside the block and use the
+     * live set.
      *
      * When the block ends, however it ends, the pool catches up with what it did, then hands out
      * slots and resumes the waiters it granted, refused or failed, after releasing the lock:
@@ -310,24 +314,36 @@ public class FairSharePool(
      * [LeaseOutcome.Stale] for a lease from an earlier epoch), and never closes another caller's
      * lease.
      *
-     * A block may call back into the pool, [complete], [cancel] or [withEngine]; that inner call
-     * hands out nothing and resumes nothing, and this call does both once the block ends.
+     * A block may call back into the pool, [complete], [cancel], [resize] or [withEngine]; that inner
+     * call hands out nothing and resumes nothing, and this call does both once the block ends. The
+     * view the block was handed is a copy, so it does not follow those calls: [view] takes a fresh one.
      *
-     * @param block given the engine and the waiting set: the leaves with a waiter queued as the
-     *   block starts.
+     * @param block given the engine and the pool's view as the block starts.
      * @sample us.tractat.kuilt.heddle.sampleReloadWhileWaiting
+     * @sample us.tractat.kuilt.heddle.samplePreviewThePool
      */
-    public fun <R> withEngine(block: (engine: LocalHeddle, waiting: Set<GroupId>) -> R): R = mutate {
-        val waiting = queues.keys.toSet()
+    public fun <R> withEngine(block: (engine: LocalHeddle, view: PoolView) -> R): R = mutate {
+        val view = viewLocked()
         try {
-            block(engine, waiting)
+            block(engine, view)
         } finally {
             catchUp()
         }
     }
 
-    /** The leases the pool counts against [slots]. */
-    internal val openForTest: Int get() = lock.withLock { open.size }
+    /**
+     * The pool as it stands: each leaf's queued reservations, the open count and the slot count,
+     * copied under the pool's lock. Use it where the engine is not needed, say a gauge of the open
+     * count; for a question the engine answers, read the view [withEngine] hands its block, so the
+     * answer and the view are of the same moment.
+     *
+     * @sample us.tractat.kuilt.heddle.samplePreviewThePool
+     */
+    public fun view(): PoolView = lock.withLock { viewLocked() }
+
+    /** A [PoolView] of the pool now. The caller holds the lock. */
+    private fun viewLocked(): PoolView =
+        PoolView(queues.entries.associate { (leaf, queue) -> leaf to queue.map { it.reservation } }, open.size, slots)
 
     /** Every queued waiter, across every leaf. */
     internal val waitersForTest: Int get() = lock.withLock { queues.values.sumOf { it.size } }

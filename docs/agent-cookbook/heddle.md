@@ -241,27 +241,29 @@ settlement reads `0`.
 ```
 
 **One writer: the pool owns the engine.** Once a `LocalHeddle` is in a pool, reach it only
-through `pool.withEngine { engine, waiting -> … }`, which runs the block under the pool's lock:
-`persist`, `explain`, `apply` for a reload, `reconcileLeases` for orphans. `waiting` is a copy of
-the pool's queued lanes as the block starts. Pass it wherever the engine asks for a waiting set,
-never a guess: `explain(lane, waiting, waiting)` answers why a lane waits as the pool's next pick
-sees it, and an overrunning `complete` or an `extend` observes it as demand, so a set missing a
-queued lane skews later picks. To settle a pool lease, prefer `pool.complete` or `pool.cancel`,
-which work inside the block too and use the live set. When the block ends, however it ends, the
-pool catches up. A pool lease the block closed frees its slot, the waiters of a lane the reload
-removed are refused with `NoLiveLineage`, and a waiter the change made grantable, such as one
-under a lifted ceiling, is granted. The slot count is the pool's: change it with
-`pool.resize(n)`. A block's own `reconcileCapacity` is undone when it ends. Lowering the count
-preempts nothing, and only holds back the next grant.
+through `pool.withEngine { engine, view -> … }`, which runs the block under the pool's lock:
+`persist`, `explain`, `previewPicks`, `apply` for a reload, `reconcileLeases` for orphans. `view`
+is a `PoolView`, a copy of the pool as the block starts: each lane's queued reservations head
+first (`queues`), the leases open (`open`) and the slot count (`slots`). Pass `view.waiting`
+wherever the engine asks for a waiting set, never a guess: `explain(lane, view.waiting,
+view.waiting)` answers why a lane waits as the pool's next pick sees it, and an overrunning
+`complete` or an `extend` observes it as demand, so a set missing a queued lane skews later picks.
+To settle a pool lease, prefer `pool.complete` or `pool.cancel`, which work inside the block too
+and use the live set. When the block ends, however it ends, the pool catches up. A pool lease the
+block closed frees its slot, the waiters of a lane the reload removed are refused with
+`NoLiveLineage`, and a waiter the change made grantable, such as one under a lifted ceiling, is
+granted. The slot count is the pool's: change it with `pool.resize(n)`. A block's own
+`reconcileCapacity` is undone when it ends. Lowering the count preempts nothing, and only holds
+back the next grant.
 
 <!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#sampleReloadWhileWaiting -->
 ```kotlin
         val second = async(start = CoroutineStart.UNDISPATCHED) { pool.acquire(web) }
         check(!second.isCompleted) // web is at its cap
 
-        // Everything that touches the engine goes through the pool, which hands over its waiting
-        // set too: why web waits, as the pool's next pick sees it.
-        val why = pool.withEngine { engine, waiting -> engine.explain(web, waiting, waiting) }
+        // Everything that touches the engine goes through the pool, which hands over a view of its
+        // queues too: why web waits, as the pool's next pick sees it.
+        val why = pool.withEngine { engine, view -> engine.explain(web, view.waiting, view.waiting) }
         check(why == WaitExplanation.AtCeiling(web, limit = 1L))
 
         // A reload, a snapshot, a search for orphans: the same way in.
@@ -275,6 +277,28 @@ preempts nothing, and only holds back the next grant.
 
 A lease the block opens itself with `acquire` or `admit` is never counted against the slots, and
 the block runs while every other caller waits on the lock, so keep it short.
+
+**A status page reads the pool, not a count of its own.** `pool.view()` is the same `PoolView`
+without the engine, for a gauge of the open count or the queue depths. Who goes next is the
+engine's answer, so ask it inside the block: `previewPicks(view.queues, view.waiting)`. Treat it
+as a forecast. It is exact when `pool.resize` raises the slots and nothing else happens before the
+grants. A lease completed at a cost other than its reservation refunds or overruns against the
+waiting set of that moment, and a waiter arriving, leaving or being refused changes the queues, so
+either can change the order. A view is a copy, so it never moves under you, and a count kept
+beside the pool's would race it.
+
+<!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#samplePreviewThePool -->
+```kotlin
+        // A gauge needs no engine: each lane's queued estimates, head first, and the slots in use.
+        val view = pool.view()
+        check(view.queues == mapOf(web to listOf(3L, 12L, 3L), mobile to listOf(3L, 3L)))
+        check(view.open == 2 && view.slots == 2)
+
+        // Who goes next is a question for the engine, about the pool's own queues: ask it inside
+        // withEngine, so the view and the answer are of the same moment.
+        val next = pool.withEngine { engine, queued -> engine.previewPicks(queued.queues, queued.waiting) }
+        check(next == listOf(web, mobile, web, mobile, web))
+```
 
 ## Loading the tree from a config file
 

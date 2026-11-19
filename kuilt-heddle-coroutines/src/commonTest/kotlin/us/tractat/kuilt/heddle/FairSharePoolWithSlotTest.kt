@@ -41,7 +41,7 @@ class FairSharePoolWithSlotTest {
 
     private suspend fun TestScope.assertNothingLeaked(p: FairSharePool, engine: LocalHeddle) {
         runCurrent()
-        val open = p.openForTest
+        val open = p.view().open
         val leases = engine.snapshot().leases
         val waiters = p.waitersForTest
         val fresh = p.acquire(web)
@@ -85,7 +85,7 @@ class FairSharePoolWithSlotTest {
             { assertEquals("done", result) },
             { assertEquals(listOf(5L), completions.map { it.actualCost }) },
             { assertEquals(listOf<LeaseOutcome>(LeaseOutcome.Done(5L, 2L, 0L)), completions.map { it.outcome }) },
-            { assertEquals(0, p.openForTest) },
+            { assertEquals(0, p.view().open) },
         )
     }
 
@@ -102,7 +102,7 @@ class FairSharePoolWithSlotTest {
         assertAll(
             { assertEquals(listOf(2L), completions.map { it.actualCost }) },
             { assertIs<LeaseOutcome.Done>(completions.singleOrNull()?.outcome) },
-            { assertEquals(0, p.openForTest) },
+            { assertEquals(0, p.view().open) },
         )
     }
 
@@ -150,7 +150,7 @@ class FairSharePoolWithSlotTest {
             { assertEquals(listOf(0L), completions.map { it.actualCost }, "a backwards reading is no time at all") },
             { assertIs<LeaseOutcome.Done>(completions.singleOrNull()?.outcome) },
             { assertEquals(0L, nowAfter, "now never reads below clockStart") },
-            { assertEquals(0, p.openForTest) },
+            { assertEquals(0, p.view().open) },
             { assertEquals(emptyList(), engine.snapshot().leases) },
         )
     }
@@ -182,7 +182,7 @@ class FairSharePoolWithSlotTest {
             { assertFalse(blockFinished) },
             { assertEquals(listOf(3L), completions.map { it.actualCost }) },
             { assertIs<LeaseOutcome.Done>(completions.singleOrNull()?.outcome) },
-            { assertEquals(0, p.openForTest) },
+            { assertEquals(0, p.view().open) },
             { assertEquals(emptyList(), engine.snapshot().leases) },
         )
     }
@@ -275,7 +275,7 @@ class FairSharePoolWithSlotTest {
                 )
             },
             { assertEquals(2, grants, "B and C were each granted exactly once") },
-            { assertEquals(0, p.openForTest) },
+            { assertEquals(0, p.view().open) },
         )
         assertNothingLeaked(p, engine)
     }
