@@ -82,7 +82,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.FairSharePool
  * the engine throwing, or an engine refusing a hand-back, while nobody waits. It means the engine
  * broke its own contract, so it is logged once the lock is released, and never thrown at the call
  * that set the hand-out going. A failure that does reach a waiter is not logged as well: that
- * waiter's [acquire] throws it.
+ * waiter's [acquire] throws it. A failure handed to a waiter cancelled at that moment is still lost,
+ * neither thrown nor logged; tracked by #3587.
  *
  * ## Threads
  *
