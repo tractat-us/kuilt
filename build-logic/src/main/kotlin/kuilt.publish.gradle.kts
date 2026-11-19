@@ -88,6 +88,47 @@ publishing {
     }
 }
 
+// ── Provenance: which commit built this jar (#3576) ──────────────────────────────────────────────
+//
+// Every published JVM class jar (`jvmJar`, or `jar` in a plain Kotlin/JVM module) and every sources
+// jar carries, in `META-INF/MANIFEST.MF`:
+//
+//   Implementation-Version: the version it was published at (the tag, minus the `v`, on a release)
+//   SCM-Revision:           the full commit SHA it was built from, or `unknown` outside git
+//
+// `SCM-Revision` is the name Apache Maven's own cookbook gives the source-control revision in a
+// manifest. `Implementation-Build`, the other common choice, also reads as a build number, which
+// this is not. `-Pkuilt.sourceRevision=<sha>` overrides what git says, for a build from a source
+// tarball that knows its commit.
+//
+// Not the klib-producing archives (`wasmJsJar`, `allMetadataJar`): a downstream klib compile reads
+// those bytes as they are, with no runtime-classpath normalization to ignore an attribute, so a
+// per-commit manifest there would recompile every wasm and metadata dependent on every commit.
+// Not the AAR either: AGP builds its `classes.jar` without a Gradle `Jar` task. Android consumers
+// get provenance from `androidReleaseSourcesJar`.
+//
+// Both values change more often than the code (#3464): the version on every snapshot, the revision
+// on every commit. They may reach these archives and nothing else. A test task reads every jar on
+// its runtime classpath, manifest included, so the root build tells runtime-classpath normalization
+// to ignore both attributes (see "Stamp invariance" there).
+val sourceRevision: Provider<String> = providers.gradleProperty("kuilt.sourceRevision")
+    .orElse(
+        providers.of(SourceRevision::class.java) {
+            parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+        },
+    )
+
+tasks.withType<Jar>()
+    .matching { it.name == "jvmJar" || it.name == "jar" || it.name.endsWith("sourcesJar", ignoreCase = true) }
+    .configureEach {
+        manifest.attributes(
+            mapOf(
+                "Implementation-Version" to project.version.toString(),
+                SourceRevision.ATTRIBUTE to sourceRevision,
+            ),
+        )
+    }
+
 // Per-module POM description. Maven Central rejects publications without one, and
 // this text is what a reader sees in Central's search results and on aggregators
 // like klibs.io — so every module earns a line saying what it actually does, in
