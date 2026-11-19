@@ -14,6 +14,8 @@ kotlin {
         commonTest.dependencies {
             implementation(project(":kuilt-test"))
             implementation(libs.kotlinx.coroutines.test)
+            // A lane's lifetime counter is filled through a snapshot, which only a format carries (#3571).
+            implementation(libs.kotlinx.serialization.json)
         }
     }
 }
