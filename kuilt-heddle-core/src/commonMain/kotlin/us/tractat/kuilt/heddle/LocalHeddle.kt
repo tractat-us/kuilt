@@ -1541,12 +1541,12 @@ public class LocalHeddle private constructor(
      * Replace the ledger with [transform] of it: the test seam for a topology change while leases
      * are open that [apply] cannot express, such as an edge left closing by hand.
      */
-    internal fun reshapeForTest(transform: (EntitlementLedger) -> EntitlementLedger) {
+    internal fun reshapeForTest(transform: (EntitlementLedger) -> EntitlementLedger): Unit = atomically {
         ledger = transform(ledger)
     }
 
     /** Mint [amount] at the root, as one act: the test seam for supply laid down ahead of any top-up. */
-    internal fun mintSupply(amount: Long) {
+    internal fun mintSupply(amount: Long): Unit = atomically {
         ledger = mintAt(ledger, amount)
     }
 
