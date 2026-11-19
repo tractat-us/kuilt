@@ -28,7 +28,9 @@ import kotlin.time.TimeSource
  * The pool's one lock, on real threads (#3558). Every other pool test runs under `runTest`, where
  * everything is serial, so none of them can show that a [FairSharePool.complete], a cancelled
  * waiter's hand-back and a hand-out racing on different threads still never open more than the
- * pool's slots, or leak one. These two run on `Dispatchers.Default`.
+ * pool's slots, or leak one. These run on `Dispatchers.Default`, and the third adds
+ * [FairSharePool.withEngine] and [FairSharePool.resize], which take the same lock from paths of
+ * their own.
  *
  * What each target shows: on the JVM and Kotlin/Native, `Dispatchers.Default` is a thread pool, and
  * the lock claim rests on those two. On wasmJs it is the browser's one event loop, and the pool's
@@ -40,7 +42,8 @@ import kotlin.time.TimeSource
  * A hang here gets none of `:kuilt-test`'s JVM-only coroutine dump, so every failure message carries
  * the pool's counters instead.
  *
- * Gated: it runs only under `-Pconcurrency.stress.tests=true` (see this module's build).
+ * Gated: it runs only under `-Pconcurrency.stress.tests=true` (see this module's build). CI runs it
+ * on the JVM in `ci.yml`'s `concurrency-probes` job and on macosArm64 in `apple-nightly.yml`.
  */
 class FairSharePoolConcurrencyTest {
 
@@ -183,8 +186,104 @@ class FairSharePoolConcurrencyTest {
         }
     }
 
+    /**
+     * [FairSharePool.withEngine] and [FairSharePool.resize] take the pool's lock from a path of their
+     * own (#3573). Here a third coroutine alternates `withEngine { e, _ -> e.persist() }` with
+     * `resize(SLOTS ± 1)` beside the workers of [neverMoreThanSlotsOpenOnRealThreads].
+     *
+     * Inside each block, under the lock, the pool and the engine must agree: the engine holds exactly
+     * as many leases as the view counts open, and its capacity is the view's slot count. A block that
+     * ran outside the lock, or a resize that did, would read them between two writes, and a resize
+     * that reconciles the engine unlocked forks its state from under a hand-out, so a lease goes
+     * missing and the end state leaks.
+     */
+    @Test
+    fun withEngineAndResizeBesideTheWorkersLeakNoSlot() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        withContext(Dispatchers.Default) {
+            val engine = farm()
+            val pool = realPool(engine)
+            val inFlight = atomic(0)
+            val maxSeen = atomic(0)
+            val iterations = atomic(0)
+            val alternations = atomic(0)
+            // Blocks that ran while a lease was open or a waiter queued: the arm overlapped the workers.
+            val contended = atomic(0)
+            val disagreements = atomic(0)
+            val firstDisagreement = atomic<String?>(null)
+            val workersLeft = atomic(WORKERS)
+            fun seen() = "maxSeen=${maxSeen.value} iterations=${iterations.value} alternations=${alternations.value} " +
+                "contended=${contended.value} disagreements=${disagreements.value} ${pool.state()}"
+            reportingAWedge(::seen) {
+                // First, so it is already alternating when the workers start.
+                launch {
+                    while (workersLeft.value > 0) {
+                        pool.withEngine { e, view ->
+                            val persisted = e.persist()
+                            val held = e.snapshot().leases.size
+                            if (held != view.open || persisted.totalSlots != view.slots.toLong()) {
+                                disagreements.incrementAndGet()
+                                firstDisagreement.compareAndSet(
+                                    null,
+                                    "engine held=$held capacity=${persisted.totalSlots}, view open=${view.open} slots=${view.slots}",
+                                )
+                            }
+                            if (view.open > 0 || view.waiting.isNotEmpty()) contended.incrementAndGet()
+                        }
+                        pool.resize(if (alternations.value % 2 == 0) SLOTS + 1 else SLOTS - 1)
+                        alternations.incrementAndGet()
+                        yield()
+                    }
+                }
+                repeat(WORKERS) { worker ->
+                    launch {
+                        try {
+                            repeat(ROUNDS) { round ->
+                                val lease = pool.acquire(if ((worker + round) % 2 == 0) web else mobile).granted()
+                                val now = inFlight.incrementAndGet()
+                                maxSeen.update { maxOf(it, now) }
+                                delay(1.milliseconds)
+                                inFlight.decrementAndGet()
+                                iterations.incrementAndGet()
+                                pool.complete(lease.id, 1L)
+                            }
+                        } finally {
+                            workersLeft.decrementAndGet()
+                        }
+                    }
+                }
+            }
+            // Every coroutine joined: back to the pool's own count, then read the quiescent engine.
+            pool.resize(SLOTS)
+            val leases = engine.snapshot().leases
+            val capacity = pool.withEngine { e, _ -> e.persist().totalSlots }
+            val seen = seen()
+            println("FairSharePoolConcurrencyTest.withEngineAndResizeBesideTheWorkersLeakNoSlot: realThreads=$runsOnRealThreads $seen")
+            assertAll(
+                { assertEquals(WORKERS * ROUNDS, iterations.value, "every round ran: $seen") },
+                // The arm's own count: it ran, and ran while the workers did.
+                { assertTrue(alternations.value >= MIN_ALTERNATIONS, "the arm alternated at least $MIN_ALTERNATIONS times: $seen") },
+                { assertTrue(contended.value >= 1, "the rig: a block ran while the pool was busy: $seen") },
+                {
+                    assertEquals(
+                        0,
+                        disagreements.value,
+                        "under the lock the engine and the view always agreed; first: ${firstDisagreement.value}: $seen",
+                    )
+                },
+                // Lowering preempts nothing, so a slot granted at SLOTS + 1 can stay held past a lowering.
+                { assertTrue(maxSeen.value <= SLOTS + 1, "never more than ${SLOTS + 1} slots held at once: $seen") },
+                { assertTrue(maxSeen.value >= SLOTS + 1, "the rig: a raise was granted into: $seen") },
+                { assertEquals(SLOTS.toLong(), capacity, "the engine's capacity is the pool's last resize: $seen") },
+                { assertEquals(0, pool.view().open, "the pool counts no open lease: $seen") },
+                { assertEquals(0, pool.waitersForTest, "no waiter is queued: $seen") },
+                { assertEquals(emptyList(), leases, "the engine holds no open lease: $seen") },
+            )
+        }
+    }
+
     private companion object {
         const val SLOTS = 3
+        const val MIN_ALTERNATIONS = 100
         const val WORKERS = 32
         const val ROUNDS = 200
         const val JOBS = 2_000
