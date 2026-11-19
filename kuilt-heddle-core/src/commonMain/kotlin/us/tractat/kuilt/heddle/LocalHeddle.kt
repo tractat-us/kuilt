@@ -74,6 +74,26 @@ public data class LeaseId(public val epoch: Long, public val seq: Long) : Compar
 }
 
 /**
+ * How far a [LocalHeddle] has come: the [epoch] it was started with, and how many calls that can
+ * change it have returned since, [count]. Ordered by epoch, then by count, like a [LeaseId].
+ *
+ * Two revisions that are equal mean the engine has not changed in between, so a caller can skip
+ * work whose inputs include the engine with one comparison, before copying anything. The converse
+ * does not hold: a call that changed nothing may still have moved it.
+ *
+ * It is not persisted. A restored engine counts from zero again, under the higher epoch [LocalHeddle.restore]
+ * requires, so its revision is above every one the persisted engine had and a caller holding one
+ * across a restart still sees a change. Two engines started under the same epoch can repeat each
+ * other's revisions, as they repeat each other's lease ids.
+ *
+ * @sample us.tractat.kuilt.heddle.sampleRevision
+ */
+public data class LocalHeddleRevision(public val epoch: Long, public val count: Long) : Comparable<LocalHeddleRevision> {
+    override fun compareTo(other: LocalHeddleRevision): Int =
+        compareValuesBy(this, other, LocalHeddleRevision::epoch, LocalHeddleRevision::count)
+}
+
+/**
  * One open lease: one slot of work running for [leaf].
  *
  * @property reserved the cost delegated to it so far: its reservation plus every extension. `0` for
