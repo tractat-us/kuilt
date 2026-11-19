@@ -11,7 +11,9 @@ package us.tractat.kuilt.heddle
  *
  * [queues] has the shape [LocalHeddle.previewPicks] takes, so inside a `withEngine` block
  * `engine.previewPicks(view.queues, view.waiting)` lists the leaves the pool grants next, in order,
- * as slots free up with nothing else changing the engine in between.
+ * as slots free up with nothing else changing the engine in between. The preview stops at a waiter
+ * whose lease the engine would not extend to its reservation; the pool grants that waiter at the
+ * default reservation and goes on.
  *
  * @property queues each leaf with a waiter queued, in the order its first waiter arrived, mapped to
  *   its waiters' reservations, head first. A leaf with no waiter is absent, never mapped to an
