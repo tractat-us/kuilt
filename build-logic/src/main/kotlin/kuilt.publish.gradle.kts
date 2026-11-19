@@ -118,7 +118,10 @@ val sourceRevision: Provider<String> = providers.gradleProperty("kuilt.sourceRev
         },
     )
 
-tasks.withType<Jar>()
+// `org.gradle.jvm.tasks.Jar`, not the default-imported `org.gradle.api.tasks.bundling.Jar`: the
+// bundling one is a SUBCLASS, and the Kotlin plugin registers its sources jars as the base type, so
+// filtering on the default import silently skips every sources jar.
+tasks.withType<org.gradle.jvm.tasks.Jar>()
     .matching { it.name == "jvmJar" || it.name == "jar" || it.name.endsWith("sourcesJar", ignoreCase = true) }
     .configureEach {
         manifest.attributes(
