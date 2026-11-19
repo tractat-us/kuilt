@@ -505,6 +505,14 @@ public class LocalHeddle private constructor(
      * every real engine. Never changes, so it lives outside [Core].
      */
     private val openElsewhere: Map<GroupId, Int> = emptyMap(),
+    /**
+     * Called after each level's pick, once the wake memory has moved and before the delegation: the
+     * seam a test throws from to fail an [acquire] part-way, since no input reaches the invariant
+     * checks there. `null` in every engine but the one [withAfterPickForTest] builds. Nullable
+     * rather than a no-op lambda so the published classes carry no test hook: a lambda over a
+     * value class compiles to a class of its own. Never changes, so it lives outside [Core].
+     */
+    private val afterPick: ((GroupId) -> Unit)? = null,
 ) {
     init {
         require(epoch >= 0L) { "epoch must be non-negative, was $epoch" }
@@ -652,7 +660,7 @@ public class LocalHeddle private constructor(
                 // The seat and wake step there would pass the position limit (design §7.1).
                 FairShareAllocator.ChildStep.PastLimit -> return Descent.Exhausted(group)
             }
-            afterPickForTest(group)
+            afterPick?.invoke(group)
             val grant = pick.grant
             val edge = grant.attachment
             check(grant.amount == reservation) {
@@ -1450,10 +1458,15 @@ public class LocalHeddle private constructor(
     internal var forgetsForTest: Boolean = true
 
     /**
-     * Called after each level's pick, once the wake memory has moved and before the delegation: the
-     * seam a test throws from to fail an [acquire] part-way. Not engine state.
+     * A copy of this engine, its whole [Core] included, that calls [hook] after each level's pick:
+     * see [afterPick]. The copy shares nothing mutable with this engine.
      */
-    internal var afterPickForTest: (GroupId) -> Unit = {}
+    internal fun withAfterPickForTest(hook: (GroupId) -> Unit): LocalHeddle =
+        LocalHeddle(root, policy, epoch, ledger, allocator, leasable, openElsewhere, afterPick = hook)
+            .also {
+                it.core = core.fork()
+                it.forgetsForTest = forgetsForTest
+            }
 
     /** The path [lease] charges, for tests: what it was opened on, or what a reweight moved it onto. */
     internal fun capturedPath(lease: LeaseId): List<AttachmentId>? = open[lease]?.path
