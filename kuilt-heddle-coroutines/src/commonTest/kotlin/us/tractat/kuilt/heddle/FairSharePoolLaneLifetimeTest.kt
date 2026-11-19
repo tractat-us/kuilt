@@ -27,11 +27,13 @@ import kotlin.test.fail
  * beside a full lane that is next in line, a healthy lane reads as `LifetimeExhausted` too, so a
  * pool asking with the whole waiting set would refuse it.
  *
- * Through the public API this state is out of reach: the root mints every overrun, so its minted
- * supply is at least any edge's issuance and trips first ([FairSharePoolTest.aFullRootRefusesEveryLaneWithLifetimeExhausted]).
- * So the fixture fills web's edge through a snapshot instead: it raises the edge's issued and
- * returned counters by the same amount, which is the state many leases reserved and handed back
- * unspent would leave. Web's balance and the root's mint do not move, only web's lifetime counter.
+ * Overruns cannot reach this state: the root mints every one, so its minted supply is at least any
+ * edge's issuance and trips first ([FairSharePoolTest.aFullRootRefusesEveryLaneWithLifetimeExhausted]).
+ * Leases reserved at [LocalHeddle.MAX_RESERVATION] and handed back unspent do reach it, since each
+ * raises web's issued and returned counters by the same amount and mints nothing after the first
+ * (measured on JVM: four such leases left the mint at its first value), but it takes about half a
+ * million of them. So the fixture writes that end state into a snapshot: web's issued and returned
+ * counters raised by the same amount, web's balance and the root's mint unchanged.
  *
  * The fill lands while both waiters are queued, through an overrun of one unit on web's open lease.
  * Filled beforehand, web's waiter would be refused at arrival, never queue, and the healthy lane
