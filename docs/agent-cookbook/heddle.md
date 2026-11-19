@@ -699,6 +699,38 @@ The view takes each lane's queue of estimates as the engine does:
     check(view.previewPicks(queues, eligible = both) == heddle.previewPicks(queues, eligible = both))
 ```
 
+## Has anything changed since the last pass
+
+**Intent:** a loop wakes up and wants to skip a scheduling pass when none of its inputs changed,
+without copying the engine to find out. Do not hand-roll a dirty flag beside the engine or diff two
+`snapshot()`s.
+**Primitive:** `LocalHeddle.revision` → `LocalHeddleRevision(epoch, count)`. It costs one field
+read. Every call that can change the engine moves it: `acquire`, `admit`, `extend`, `complete`,
+`cancel`, `reconcileCapacity`, `apply`, `attach` and `detach`, refusals included. Reads and calls
+that throw leave it alone.
+
+<!-- verbatim from kuilt-heddle-core/src/commonSamples/kotlin/us/tractat/kuilt/heddle/LocalHeddleSamples.kt#sampleRevision -->
+```kotlin
+    // The last pass saw this. Asking who goes next changes nothing, so the next pass can skip.
+    val seen = heddle.revision
+    heddle.previewPicks(mapOf(heavy to 1, light to 1), queued, listOf(3L))
+    check(heddle.revision == seen)
+
+    // A lease moves it, so the next pass looks again.
+    check(heddle.acquire(queued, queued, startedAt = 0L) is AcquireOutcome.Acquired)
+    check(heddle.revision > seen)
+
+    // It is not persisted, but a restore runs under a higher epoch, so the restored engine's
+    // revision is above every one the old engine had: a pass that saw the old one sees a change.
+    val restarted = LocalHeddle.restore(heddle.persist(), policy, epoch = 1L)
+    check(restarted.revision > heddle.revision)
+```
+
+Equal revisions mean nothing changed. Unequal ones mean something may have: a refused `acquire`
+can still move the wake memory, so it moves the revision too. Compare the whole value, not
+`count` alone. `count` restarts at zero on a restored engine, and only the epoch keeps it above
+the old one. Read it under your scheduling lock, as you read the rest of the engine.
+
 ## Charging work started elsewhere
 
 **Intent:** someone started a job by hand, or another scheduler placed it, and it must still be
