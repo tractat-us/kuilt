@@ -157,22 +157,6 @@ jobs:
           -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
           -Dkotlin.daemon.jvmargs="-Xmx3g"
 
-      # `FairSharePool`'s real-thread probe on Kotlin/Native (#3573). ci.yml's concurrency-probes
-      # job runs it on the JVM; K/N has no Linux host, so this leg is its only CI run. One module,
-      # after the full step, so it runs alone on the runner. The test binary is the one just linked:
-      # the flag only lifts a test filter. The objection ci.yml records against putting a K/N probe
-      # here, that a wedge on this slow runner has no cap to make it a named failure, does not hold
-      # for this one: it bounds itself in real time and fails with the pool's counters well inside
-      # its 30 s backstop. Its run replaces the module's macosArm64Test results in the artifact
-      # below, so the probe's XML is the one uploaded; the full step's verdict is in its own log.
-      - name: :kuilt-heddle-coroutines concurrency probe (macosArm64)
-        if: ${{ always() && matrix.target == 'macosArm64' }}
-        run: >-
-          ./gradlew :kuilt-heddle-coroutines:macosArm64Test --max-workers=2
-          -Pconcurrency.stress.tests=true --tests "*ConcurrencyTest"
-          -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8"
-          -Dkotlin.daemon.jvmargs="-Xmx3g"
-
       # Only `main` writes ~/.konan, as in ci.yml (#3115).
       - name: Save Kotlin/Native (~/.konan)
         if: github.ref == 'refs/heads/main' && steps.konan.outputs.cache-hit != 'true'
@@ -180,6 +164,31 @@ jobs:
         with:
           path: ~/.konan
           key: ${{ steps.konan.outputs.cache-primary-key }}
+
+      # `FairSharePool`'s real-thread probe on Kotlin/Native (#3573). ci.yml's concurrency-probes
+      # job runs it on the JVM; K/N has no Linux host, so this leg is its only CI run. One module,
+      # after the full step, so it runs alone on the runner, and after the konan save, so a red
+      # probe never skips that. The test binary is the one just linked: the flag only lifts a test
+      # filter. ci.yml records an objection to a K/N probe here: a wedge on this slow runner has no
+      # cap to turn it into a named failure. This probe bounds itself in real time and fails with the
+      # pool's counters inside its 30 s backstop. A thread wedged inside the pool's lock ignores
+      # that bound, so the step has a timeout of its own.
+      #
+      # Re-running the task replaces the module's results and report, so the full step's are first
+      # copied to sibling `macosArm64Test-full` directories. The upload globs below and the duration
+      # table pick those up as a task of their own.
+      - name: :kuilt-heddle-coroutines concurrency probe (macosArm64)
+        if: ${{ !cancelled() && matrix.target == 'macosArm64' }}
+        timeout-minutes: 5
+        run: |
+          for kind in test-results reports/tests; do
+            full="kuilt-heddle-coroutines/build/$kind/macosArm64Test"
+            if [ -d "$full" ]; then cp -R "$full" "$full-full"; fi
+          done
+          ./gradlew :kuilt-heddle-coroutines:macosArm64Test --max-workers=2 \
+            -Pconcurrency.stress.tests=true --tests "*ConcurrencyTest" \
+            -Dorg.gradle.jvmargs="-Xmx2g -Dfile.encoding=UTF-8" \
+            -Dkotlin.daemon.jvmargs="-Xmx3g"
 
       # Per-module wall time for every test task, in the run's summary, with a warning on any task
       # over 40 min. One module's tests reached 32 min per target without a word until the job
