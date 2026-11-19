@@ -1051,9 +1051,9 @@ jobs:
           --tests "*ConcurrencyTest"
 
       # `FairSharePool`'s lock on real threads (#3558). Own step, same reason as above. Gated
-      # identically in kuilt-heddle-coroutines/build.gradle.kts. The probe is commonTest: its
-      # macosArm64 and wasmJs runs are local, recorded in the PR that added it, since this job runs
-      # the JVM only.
+      # identically in kuilt-heddle-coroutines/build.gradle.kts. The probe is commonTest. This job
+      # runs the JVM only; apple-nightly.yml's macosArm64 leg runs it on Kotlin/Native (#3573), and
+      # its wasmJs run, single-threaded, is local.
       - name: Run :kuilt-heddle-coroutines concurrency probes (isolated runner, NON-BLOCKING)
         if: always()
         run: >-
