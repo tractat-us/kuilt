@@ -373,9 +373,10 @@ class FairSharePoolTest {
      * so after 62 the root's minted supply is at the watermark and the engine answers
      * LifetimeExhausted at the root for every lane. On this route the root's mint is at least any
      * one edge's issuance, so it trips first. A lane full on its own, with the root still able to
-     * fund a sibling, takes leases reserved and handed back unspent, which grow the lane's issuance
-     * and not the mint, about half a million of them: [FairSharePoolLaneLifetimeTest] restores that
-     * state from a snapshot instead.
+     * fund a sibling, takes leases reserved at [LocalHeddle.MAX_RESERVATION] and handed back
+     * unspent, which grow the lane's issuance and not the mint, about half a million of them (at the
+     * default reservation of 3, about 3×10^18): [FairSharePoolLaneLifetimeTest] restores that state
+     * from a snapshot instead.
      */
     @Test
     fun aFullRootRefusesEveryLaneWithLifetimeExhausted() = runTest(timeout = TEST_WEDGE_BACKSTOP) {

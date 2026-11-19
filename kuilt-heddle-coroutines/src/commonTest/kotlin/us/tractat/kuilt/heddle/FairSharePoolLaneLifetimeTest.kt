@@ -38,7 +38,9 @@ import kotlin.test.fail
  * The fill lands while both waiters are queued, through an overrun of one unit on web's open lease.
  * Filled beforehand, web's waiter would be refused at arrival, never queue, and the healthy lane
  * would never be asked about beside it. Mobile's waiter queues first, so a refusal pass that asks
- * each leaf with the live waiting set reaches mobile while web is still in it.
+ * each leaf with the live waiting set reaches mobile while web is still in it. That relies on the
+ * pool's `queues` iterating in insertion order: in any other order a live-set pass could ask about
+ * web first, remove it, and then ask about mobile alone, which this test would not notice.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class FairSharePoolLaneLifetimeTest {
