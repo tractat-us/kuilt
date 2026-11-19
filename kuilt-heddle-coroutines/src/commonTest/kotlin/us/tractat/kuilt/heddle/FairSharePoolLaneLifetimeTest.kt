@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
@@ -43,6 +44,9 @@ class FairSharePoolLaneLifetimeTest {
     private val root: GroupId = farmTopology.groupId()
     private val both: Set<GroupId> = setOf(web, mobile)
 
+    /** What mobile's one lease is charged in the seed: a hundred times the default reservation. */
+    private val mobileCost = 300L
+
     /** The answers [LocalHeddle.explain] gives the moment the pool sees the full lane. */
     private data class Rig(val webAlone: WaitExplanation, val mobileAlone: WaitExplanation, val mobileBesideWeb: WaitExplanation)
 
@@ -51,17 +55,17 @@ class FairSharePoolLaneLifetimeTest {
         val (engine, held) = webAtTheWatermark()
         val before = Rig(engine.alone(web), engine.alone(mobile), engine.explain(mobile, both, both))
         val p = pool(slots = 1, engine = engine)
-        val mobileWaiter = async { p.acquire(mobile) }
+        val mobileWaiter = backgroundScope.async { p.acquire(mobile) }
         runCurrent()
-        val webWaiter = async { p.acquire(web) }
+        val webWaiter = backgroundScope.async { p.acquire(web) }
         runCurrent()
         val queued = p.waitersForTest
         // Under the lock, after the engine charged the overrun and before the pool hands out the slot.
         var atDispatch: Rig? = null
         p.afterCompleteForTest = { _, _, _ -> atDispatch = Rig(engine.alone(web), engine.alone(mobile), engine.explain(mobile, both, both)) }
-        val settled = p.complete(held.id, held.reserved + 1L)
+        val closed = p.complete(held.id, held.reserved + 1L)
         runCurrent()
-        assertRefusesOnlyWeb(before, queued, atDispatch, settled, webWaiter.await(), mobileWaiter.await())
+        assertRefusesOnlyWeb(before, queued, atDispatch, closed, webWaiter.settled(), mobileWaiter.settled())
     }
 
     @Test
@@ -69,26 +73,26 @@ class FairSharePoolLaneLifetimeTest {
         val (engine, held) = webAtTheWatermark()
         val before = Rig(engine.alone(web), engine.alone(mobile), engine.explain(mobile, both, both))
         val p = pool(slots = 1, engine = engine)
-        val mobileWaiter = async { p.acquire(mobile) }
+        val mobileWaiter = backgroundScope.async { p.acquire(mobile) }
         runCurrent()
-        val webWaiter = async { p.acquire(web) }
+        val webWaiter = backgroundScope.async { p.acquire(web) }
         runCurrent()
         val queued = p.waitersForTest
-        val (settled, atCatchUp) = p.withEngine { e, view ->
+        val (closed, atCatchUp) = p.withEngine { e, view ->
             e.complete(held.id, held.reserved + 1L, view.waiting) to
                 Rig(e.alone(web), e.alone(mobile), e.explain(mobile, both, both))
         }
         runCurrent()
-        assertRefusesOnlyWeb(before, queued, atCatchUp, settled, webWaiter.await(), mobileWaiter.await())
+        assertRefusesOnlyWeb(before, queued, atCatchUp, closed, webWaiter.settled(), mobileWaiter.settled())
     }
 
     private fun assertRefusesOnlyWeb(
         before: Rig,
         queued: Int,
         atRefusal: Rig?,
-        settled: LeaseOutcome,
-        webOut: SlotOutcome,
-        mobileOut: SlotOutcome,
+        closed: LeaseOutcome,
+        webOut: SlotOutcome?,
+        mobileOut: SlotOutcome?,
     ) = assertAll(
         // The rig, before: both lanes leasable alone, so both waiters queue rather than being refused
         // at arrival, and web is next in line, so a pick over both waiting lanes reaches web's edge.
@@ -97,7 +101,7 @@ class FairSharePoolLaneLifetimeTest {
         { assertEquals(web, (before.mobileBesideWeb as? WaitExplanation.BehindAtLevel)?.nextChild, "${before.mobileBesideWeb}") },
         { assertEquals(2, queued, "both waiters queue behind the one held slot") },
         // The overrun of one unit was recorded whole, on web's edge.
-        { assertEquals(LeaseOutcome.Done(4L, 1L, 0L), settled) },
+        { assertEquals(LeaseOutcome.Done(4L, 1L, 0L), closed) },
         // The rig, as the pool sees it: web full alone; the root still funds mobile alone, so the full
         // counter is web's edge and not the root's mint; and mobile asked beside web reads full too,
         // which is the answer a pool asking with the whole waiting set would act on.
@@ -106,23 +110,30 @@ class FairSharePoolLaneLifetimeTest {
         { assertEquals(WaitExplanation.LifetimeExhausted(root), atRefusal?.mobileBesideWeb) },
         // The property.
         { assertEquals(SlotOutcome.Refused(WaitExplanation.LifetimeExhausted(root)), webOut) },
-        { assertEquals(mobile, mobileOut.granted().leaf, "the healthy lane's waiter is granted, never refused") },
+        { assertEquals(mobile, (mobileOut as? SlotOutcome.Granted)?.lease?.leaf, "the healthy lane's waiter is granted, never refused: $mobileOut") },
     )
+
+    /** What a waiter's acquire answered, or `null` while it still waits. */
+    private fun Deferred<SlotOutcome>.settled(): SlotOutcome? = if (isCompleted) getCompleted() else null
 
     private fun LocalHeddle.alone(leaf: GroupId): WaitExplanation = explain(leaf, setOf(leaf), setOf(leaf))
 
     /**
      * The farm restored with one web lease open at the default reservation and web's edge one
      * default reservation below the watermark: a web pick still fits, and one unit more on the edge
-     * leaves no room for the next. Mobile was served first, at a cost well above web's, so web is
-     * next in line once both wait.
+     * leaves no room for the next.
+     *
+     * Mobile was charged [mobileCost] while both lanes waited, so web is far behind it and stays next
+     * in line after its own overrun of one unit. Both lanes wait throughout, since a lane that wakes
+     * is clamped level with the other, and one unit would then tip the order to mobile, which is
+     * picked without ever reaching web's full edge (measured: the probe that sized this fixture).
      */
     private fun webAtTheWatermark(): Pair<LocalHeddle, Lease> {
         val seed = farm()
-        seed.reconcileCapacity(1L)
-        val first = seed.acquire(setOf(mobile), setOf(mobile), 0L, 3L).acquired()
-        seed.complete(first.id, 30L, emptySet())
-        val held = seed.acquire(setOf(web), setOf(web), 0L, 3L).acquired()
+        seed.reconcileCapacity(2L)
+        val charged = seed.acquire(both, setOf(mobile), 0L, 3L).acquired()
+        val held = seed.acquire(both, setOf(web), 0L, 3L).acquired()
+        seed.complete(charged.id, mobileCost, both)
         val snapshot = Json.encodeToJsonElement(LocalHeddleSnapshot.serializer(), seed.persist())
         val target = Long.MAX_VALUE - LocalHeddle.LIFETIME_HEADROOM - seed.defaultReservation
         val restored = LocalHeddle.decode(Json.encodeToString(JsonElement.serializer(), raiseWebIssuance(snapshot, target)), Json)
