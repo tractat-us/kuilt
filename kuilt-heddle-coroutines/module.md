@@ -87,9 +87,12 @@ next slot itself.
   leases once the new pool is built, as the restart walk-through below shows. With a `clockStart`
   of `0`, every default settlement reads `0`.
 - **One writer.** The pool owns the engine. Reach it only through
-  `withEngine { engine, waiting -> … }`, for a snapshot, an explain or a reload. `waiting` is a
-  copy of the pool's queued lanes as the block starts: pass it wherever the engine asks for a
-  waiting set, since a guessed one skews later picks. Afterwards the pool frees the slot of any
+  `withEngine { engine, view -> … }`, for a snapshot, an explain, a preview or a reload. `view`
+  is a `PoolView`, a copy of the pool as the block starts: each lane's queued reservations head
+  first, the leases open and the slot count. Pass `view.waiting` wherever the engine asks for a
+  waiting set, since a guessed one skews later picks, and `previewPicks(view.queues,
+  view.waiting)` answers who goes next for exactly the pool's own queues. `view()` gives the same
+  copy without the engine. Afterwards the pool frees the slot of any
   lease the block closed, refuses the waiters of a lane the reload removed, and grants whoever the
   change let through. `resize` changes the slot count, and lowering it closes nothing; a block's
   own `reconcileCapacity` is undone when it ends.
