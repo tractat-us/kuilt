@@ -107,4 +107,7 @@ class HeddleSamplesRunTest {
 
     @Test
     fun runnerPoolHolds() = sampleRunnerPool()
+
+    @Test
+    fun revisionHolds() = sampleRevision()
 }
