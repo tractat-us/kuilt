@@ -583,7 +583,8 @@ public class LocalHeddle private constructor(
      *
      * The working copy carries the next [revision], so every call through here moves it however the
      * call returns, a non-local `return` included, and a throw puts it back with everything else.
-     * This is the only place a [Core] is forked, which is what makes it the one place to move it.
+     * Every call that writes the engine runs through here, which is what makes it the one place to
+     * move it. [Core.fork] takes the revision as an argument, so no other fork can move it by accident.
      */
     private inline fun <T> atomically(block: () -> T): T {
         val committed = core
@@ -1513,7 +1514,7 @@ public class LocalHeddle private constructor(
     internal fun withAfterPickForTest(hook: (GroupId) -> Unit): LocalHeddle =
         LocalHeddle(root, policy, epoch, ledger, allocator, leasable, openElsewhere, afterPick = hook)
             .also {
-                it.core = core.fork()
+                it.core = core.fork(core.revision)
                 it.forgetsForTest = forgetsForTest
             }
 
