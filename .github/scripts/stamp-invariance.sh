@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The second pass of the stamp-invariance check (#3464): re-run `stampProbeTargets` at a version
-# that differs from the first pass's, record every task outcome, and fail on any task outside the
-# allowlist that re-ran. See the "Stamp invariance" section of the root build.gradle.kts.
+# and a commit SHA that differ from the first pass's, record every task outcome, and fail on any
+# task outside the allowlist that re-ran. The SHA is the `SCM-Revision` that `kuilt.publish` writes
+# into jar manifests (#3576); the first pass reads it from git, this pass overrides it (#3583). See the "Stamp invariance" section of the root build.gradle.kts.
 #
 #   .github/scripts/stamp-invariance.sh <linux|apple> [extra Gradle arguments…]
 #
@@ -19,10 +20,13 @@ selected="build/stamp-probe/selected"
 rm -rf "$report" "$selected"
 
 start="$(date +%s)"
+# The checker reads the manifests of the jars this pass writes, and only those (#3583).
+export STAMP_PROBE_START="$start" STAMP_PROBE_FAMILY="$family"
 status=0
 # shellcheck disable=SC2086 # STAMP_PROBE_TASKS is a word list by design
 ./gradlew ${STAMP_PROBE_TASKS:-stampProbeTargets} \
   "-Pversion=${line}.0-dev.stamp-probe" \
+  "-Pkuilt.sourceRevision=stamp-probe" \
   "-Pkuilt.stampProbe.family=${family}" \
   "-Pkuilt.stampProbe.report=${report}" \
   --no-build-cache --continue "$@" || status=$?
