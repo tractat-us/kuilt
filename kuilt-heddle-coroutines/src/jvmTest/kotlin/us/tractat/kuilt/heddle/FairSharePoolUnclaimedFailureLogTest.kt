@@ -56,7 +56,8 @@ class FairSharePoolUnclaimedFailureLogTest {
         assertAll(
             { assertEquals(1, rig.faults, "the rig: the hand-back reached the fault once") },
             { assertEquals(1, rig.waitersAtFault, "the rig: C was queued when it failed") },
-            { assertSame(boom, rig.cFailure, "C's acquire throws the failure") },
+            // assertIs, not assertSame: stack-trace recovery may hand C a copy of the throwable.
+            { assertIs<Boom>(rig.cFailure, "C's acquire throws the failure") },
             { assertTrue(logged.isEmpty(), "nothing is logged as well: ${logged.dump()}") },
         )
     }
