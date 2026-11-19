@@ -297,9 +297,9 @@ class FairSharePoolEngineTest {
     }
 
     /**
-     * The waiting set a block is handed, [PoolView.waiting], is the one [FairSharePool.complete] uses: an overrunning
-     * complete through the engine, given it, lands exactly as the pool's own complete does on a
-     * twin pool. An overrun observes the waiting set as demand, so a set missing mobile's queued
+     * The waiting set a block is handed, [PoolView.waiting], is the one [FairSharePool.complete]
+     * uses: an overrunning complete through the engine, given it, lands exactly as the pool's own
+     * complete does on a twin pool. An overrun observes the waiting set as demand, so a set missing mobile's queued
      * waiters would change who goes next.
      */
     @Test
