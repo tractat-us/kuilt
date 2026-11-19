@@ -280,10 +280,12 @@ the block runs while every other caller waits on the lock, so keep it short.
 
 **A status page reads the pool, not a count of its own.** `pool.view()` is the same `PoolView`
 without the engine, for a gauge of the open count or the queue depths. Who goes next is the
-engine's answer, so ask it inside the block: `previewPicks(view.queues, view.waiting)` lists the
-lanes in the order the pool grants them as slots free up, as long as nothing changes the engine
-in between. A view is a copy, so it never moves under you, and a count kept beside the pool's
-would race it.
+engine's answer, so ask it inside the block: `previewPicks(view.queues, view.waiting)`. Treat it
+as a forecast. It is exact when `pool.resize` raises the slots and nothing else happens before the
+grants. A lease completed at a cost other than its reservation refunds or overruns against the
+waiting set of that moment, and a waiter arriving, leaving or being refused changes the queues, so
+either can change the order. A view is a copy, so it never moves under you, and a count kept
+beside the pool's would race it.
 
 <!-- verbatim from kuilt-heddle-coroutines/src/commonSamples/kotlin/us/tractat/kuilt/heddle/FairSharePoolSamples.kt#samplePreviewThePool -->
 ```kotlin

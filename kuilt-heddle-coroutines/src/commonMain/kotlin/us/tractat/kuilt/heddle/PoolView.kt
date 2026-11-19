@@ -10,10 +10,14 @@ package us.tractat.kuilt.heddle
  * does not change as the pool does: read it from any thread, keep it as long as you like.
  *
  * [queues] has the shape [LocalHeddle.previewPicks] takes, so inside a `withEngine` block
- * `engine.previewPicks(view.queues, view.waiting)` lists the leaves the pool grants next, in order,
- * as slots free up with nothing else changing the engine in between. The preview stops at a waiter
- * whose lease the engine would not extend to its reservation; the pool grants that waiter at the
- * default reservation and goes on.
+ * `engine.previewPicks(view.queues, view.waiting)` forecasts the order the pool grants in. The
+ * forecast is exact when the slots are raised with [FairSharePool.resize] and nothing else happens
+ * before the grants. Anything else can change the order: a lease completed at a cost other than its
+ * reservation, which refunds or overruns against the waiting set of that moment, or a waiter
+ * arriving, leaving or being refused. The preview also stops where the pool goes on: at a waiter
+ * whose lease the engine would not extend to its reservation, which the pool grants at the default,
+ * and at a leaf the engine reports as [WaitExplanation.NoLiveLineage] or
+ * [WaitExplanation.LifetimeExhausted], whose waiters the pool refuses.
  *
  * @property queues each leaf with a waiter queued, in the order its first waiter arrived, mapped to
  *   its waiters' reservations, head first. A leaf with no waiter is absent, never mapped to an

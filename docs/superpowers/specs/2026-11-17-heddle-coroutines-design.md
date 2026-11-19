@@ -1,6 +1,6 @@
 # `:kuilt-heddle-coroutines` — waiting your turn for a slot
 
-> **The shipped API differs from this spec, and the KDoc is authoritative.** `withEngine`'s block takes `(engine, waiting)`, and `withSlot`'s clock starts when its block starts, not at the grant.
+> **The shipped API differs from this spec, and the KDoc is authoritative.** `withEngine`'s block takes `(engine, view: PoolView)`, and `withSlot`'s clock starts when its block starts, not at the grant.
 
 Epic: #3554. Plan: `docs/superpowers/plans/2026-11-17-heddle-coroutines.md`. Where the two differ, the plan's Rulings win. They settle what this spec left open, and fold in the plan review: an adopted lease at construction, dispatch failures delivered to the waiters, and an unleasable name refused at arrival. `TimeSource` is the stdlib's, not coroutines'.
 

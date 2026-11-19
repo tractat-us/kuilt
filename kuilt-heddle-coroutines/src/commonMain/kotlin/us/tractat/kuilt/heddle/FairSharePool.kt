@@ -282,9 +282,11 @@ public class FairSharePool(
      * [LocalHeddle.complete] or an [LocalHeddle.extend] observes it as demand, so a set missing a
      * queued lane changes later picks. `explain(leaf, view.waiting, view.waiting)` answers why a
      * lane waits, as the pool's next pick sees it, and `previewPicks(view.queues, view.waiting)`
-     * answers who goes next, in the order the pool grants when slots free up with nothing else
-     * changing the engine in between. To settle a lease the pool granted, prefer [complete] or
-     * [cancel]: they work from inside the block and use the live set.
+     * forecasts who goes next: exact when [resize] raises the slots with nothing else happening, and
+     * a forecast otherwise, since a completion at a cost other than its reservation, or a waiter
+     * arriving, leaving or being refused, can change the order (see [PoolView]). To settle a lease
+     * the pool granted, prefer [complete] or [cancel]: they work from inside the block and use the
+     * live set.
      *
      * When the block ends, however it ends, the pool catches up with what it did, then hands out
      * slots and resumes the waiters it granted, refused or failed, after releasing the lock:
