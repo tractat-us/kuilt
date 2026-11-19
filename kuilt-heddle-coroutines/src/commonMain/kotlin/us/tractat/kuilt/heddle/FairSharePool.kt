@@ -1,5 +1,6 @@
 package us.tractat.kuilt.heddle
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.atomicfu.AtomicInt
 import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.reentrantLock
@@ -11,6 +12,8 @@ import kotlin.coroutines.resumeWithException
 import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlin.time.TimeSource
+
+private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.FairSharePool")
 
 /**
  * Wait your turn for a slot. A build farm has four agents and two lanes, web and mobile; a program
@@ -74,9 +77,12 @@ import kotlin.time.TimeSource
  * waiter cancelled after its grant is delivered the same way: the slot is freed, and the engine,
  * which still holds the lease, reports it as an orphan through [LocalHeddle.reconcileLeases].
  *
- * A failure with no waiter queued has nobody to go to, and is dropped: a [withEngine] block that
- * leaves the engine throwing, or an engine refusing a hand-back, while nobody waits, leaves no trace
- * beyond the engine's own state. That is tracked by #3570.
+ * A failure with no waiter queued has nobody to throw to, so it is logged at error, with its
+ * throwable, on the `us.tractat.kuilt.heddle.FairSharePool` logger: a [withEngine] block that leaves
+ * the engine throwing, or an engine refusing a hand-back, while nobody waits. It means the engine
+ * broke its own contract, so it is logged once the lock is released, and never thrown at the call
+ * that set the hand-out going. A failure that does reach a waiter is not logged as well: that
+ * waiter's [acquire] throws it.
  *
  * ## Threads
  *
@@ -127,7 +133,7 @@ public class FairSharePool(
     /** The leases this pool counts against [slots]. */
     private val open: HashSet<LeaseId>
 
-    /** Resumptions collected under the lock, delivered once the outermost [mutate] releases it. */
+    /** Resumptions and unclaimed failures collected under the lock, delivered once the outermost [mutate] releases it. */
     private var pending = ArrayList<Resumption>()
 
     /** How many [mutate] frames this thread is inside; only the outermost dispatches and drains. */
@@ -391,7 +397,7 @@ public class FairSharePool(
                 }
             }
         } finally {
-            drained.forEach(::resumeOne)
+            drained.forEach(::deliver)
         }
     }
 
@@ -415,7 +421,7 @@ public class FairSharePool(
      * After a [withEngine] block: reconcile the engine back to [slots], forget the pool leases the
      * engine no longer holds, and refuse the waiters of every leaf it can no longer lease. Throws
      * nothing, so the block's own throwable or answer reaches the caller: an engine failing here
-     * fails the waiters, as in [dispatch].
+     * fails the waiters, or is logged when there are none, as in [dispatch].
      */
     private fun catchUp() {
         try {
@@ -438,7 +444,7 @@ public class FairSharePool(
         if (queue.isEmpty()) queues.remove(waiter.leaf)
     }
 
-    /** Hand out slots while one is free and a leaf has a waiter. Throws nothing: a failure goes to the waiters. */
+    /** Hand out slots while one is free and a leaf has a waiter. Throws nothing: a failure goes to [failAll]. */
     private fun dispatch() {
         try {
             while (open.size < slots && queues.isNotEmpty()) {
@@ -501,7 +507,12 @@ public class FairSharePool(
         }
     }
 
+    /** Fail every queued waiter with [failure], or, with none queued, have it logged once the lock is released. */
     private fun failAll(failure: Throwable) {
+        if (queues.isEmpty()) {
+            pending += Resumption.Unclaimed(failure)
+            return
+        }
         queues.values.forEach { queue -> queue.forEach { pending += Resumption.Fail(it.cont, failure) } }
         queues.clear()
     }
@@ -509,8 +520,8 @@ public class FairSharePool(
     /**
      * Return a granted lease whose waiter was cancelled before its grant took. This runs as a
      * cancellation callback, where a throw reaches the uncaught-exception handler, so it throws
-     * nothing: the slot is freed first, and an engine that refuses the cancel fails the waiters, as
-     * a dispatch failure does. The engine then still holds the lease, which
+     * nothing: the slot is freed first, and an engine that refuses the cancel fails the waiters, or
+     * is logged when there are none, as a dispatch failure is. The engine then still holds the lease, which
      * [LocalHeddle.reconcileLeases] reports as an orphan.
      */
     private fun handBack(lease: LeaseId) {
@@ -527,7 +538,7 @@ public class FairSharePool(
         }
     }
 
-    private fun resumeOne(resumption: Resumption) {
+    private fun deliver(resumption: Resumption) {
         when (resumption) {
             is Resumption.Grant -> {
                 beforeResumeForTest(resumption.outcome)
@@ -539,6 +550,19 @@ public class FairSharePool(
                 resumption.cont.resume(resumption.outcome)
             }
             is Resumption.Fail -> resumption.cont.resumeWithException(resumption.failure)
+            is Resumption.Unclaimed -> logUnclaimed(resumption.failure)
+        }
+    }
+
+    /**
+     * Log a failure no waiter received. A logger that throws is ignored: the throw would skip the
+     * resumes still to be delivered, stranding their waiters, and out of a hand-back it would reach the
+     * uncaught-exception handler.
+     */
+    private fun logUnclaimed(failure: Throwable) {
+        try {
+            logger.error(failure) { "a failure while handing out slots reached no waiter: $failure" }
+        } catch (_: Exception) { // ALLOW-ise: nothing inside the try suspends
         }
     }
 
@@ -552,6 +576,9 @@ public class FairSharePool(
         class Grant(val cont: CancellableContinuation<SlotOutcome>, val outcome: SlotOutcome.Granted) : Resumption
         class Refuse(val cont: CancellableContinuation<SlotOutcome>, val outcome: SlotOutcome.Refused) : Resumption
         class Fail(val cont: CancellableContinuation<SlotOutcome>, val failure: Throwable) : Resumption
+
+        /** A failure with no waiter queued to throw it to, logged rather than resumed. */
+        class Unclaimed(val failure: Throwable) : Resumption
     }
 }
 
