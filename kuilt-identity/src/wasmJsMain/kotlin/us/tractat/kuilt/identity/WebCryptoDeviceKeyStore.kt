@@ -44,8 +44,10 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.WebCryptoDe
  * Anything IndexedDB itself refuses throws [IllegalStateException] and writes nothing: a database a
  * newer page upgraded past this one (`VersionError`), a connection the browser is closing
  * (`InvalidStateError`), a full disk (`QuotaExceededError`), a browser with no IndexedDB here. Only a
- * read that **succeeds** and finds nothing under `device-key` means "no key yet". A signing fault
- * during the self-test is WebCrypto failing, not the key, and throws too, keeping the key. The grants
+ * read that **succeeds** and finds nothing under `device-key` means "no key yet". WebCrypto works the
+ * same way: a fault exporting, decoding or importing the public half, or signing or verifying the
+ * self-test, is WebCrypto failing, not the key, and throws too, keeping the key. Only a verify that
+ * runs and answers `false` refuses the record. The grants
  * get the same rule from [IndexedDbDurableStore], whose failures are exceptions and whose `null` means
  * only "no record".
  *
@@ -185,22 +187,34 @@ internal sealed interface WebCryptoRead {
 /**
  * The key [stored] holds, checked as a key this store would have made and against the name its own
  * public half gives — never one derived from the private half: sign [SELF_TEST] with the private half
- * and verify under the name through [DidKey.verify], so through the on-curve check every other device
- * applies to it.
+ * and verify it under the name, through the point [decompress] computes from the name, so through the
+ * on-curve check every other device applies to it.
  *
  * Refused: a record that is not a pair of ECDSA P-256 `CryptoKey`s with a non-extractable private half
- * that may sign and an exportable public half; a public half whose raw point is not a P-256 point; and
- * a signature that does not verify. Thrown: WebCrypto failing to export the public half or to sign,
- * which says nothing about the record.
+ * that may sign and an exportable public half; a public half whose raw export is not an uncompressed
+ * point, or a name whose point is not on P-256; and a signature WebCrypto, having run, says does not
+ * verify. Thrown: WebCrypto failing to export, decode or import the public half, to sign, or to verify,
+ * which says nothing about the record. [DidKey.verify] is not the check here for that reason: it
+ * answers `false` for a provider that failed, and a store that read that `false` as a bad key would
+ * overwrite a good one on a transient browser fault.
  */
 internal suspend fun readBack(stored: JsAny): WebCryptoRead {
     if (!isUsableKeyPair(stored)) {
         return WebCryptoRead.Refused("it is not a non-extractable ECDSA P-256 key pair that may sign")
     }
     val id = nameOf(publicKeyOf(stored))
-        ?: return WebCryptoRead.Refused("its public half is not a P-256 point")
+        ?: return WebCryptoRead.Refused("its public half is not an uncompressed P-256 point")
+    val point = decompress(id.compressedPoint())
+        ?: return WebCryptoRead.Refused("its name, ${id.value}, is not a point on P-256")
     val key = WebCryptoDeviceKey(id, privateKeyOf(stored))
-    if (!id.verify(SELF_TEST, key.sign(SELF_TEST))) {
+    val signature = key.sign(SELF_TEST)
+    val named = cryptoCall<JsAny>("importing the public key its name gives") { onSuccess, onError ->
+        subtleImportRawPublicKey(point.toUint8Array(), onSuccess, onError)
+    }
+    val verifies = cryptoCall<Boolean>("verifying the self-test") { onSuccess, onError ->
+        subtleVerify(named, signature.toUint8Array(), SELF_TEST.toUint8Array(), onSuccess, onError)
+    }
+    if (!verifies) {
         return WebCryptoRead.Refused("its private half does not sign for the name its public half gives, ${id.value}")
     }
     return WebCryptoRead.Usable(key)
@@ -208,12 +222,15 @@ internal suspend fun readBack(stored: JsAny): WebCryptoRead {
 
 /**
  * The `did:key` [publicKey] names: its raw `0x04 ‖ x ‖ y` export, decoded and compressed through
- * cryptography-kotlin, which also checks it is a P-256 point. `null` when it is not one.
+ * cryptography-kotlin. `null` only when the export is not 65 bytes led by `0x04`, which is what the
+ * record holds.
  *
- * @throws IllegalStateException when WebCrypto cannot export the public half.
+ * @throws IllegalStateException when WebCrypto cannot export the public half, or the decoder fails on
+ *   the point it exported: a `CryptoKey` holds a point WebCrypto already accepted, so a refusal there is
+ *   WebCrypto failing, not the record.
  */
 internal suspend fun nameOf(publicKey: JsAny): DidKey? {
-    val raw = cryptoCall("exporting the public key") { onSuccess, onError -> subtleExportRaw(publicKey, onSuccess, onError) }
+    val raw = cryptoCall<JsAny>("exporting the public key") { onSuccess, onError -> subtleExportRaw(publicKey, onSuccess, onError) }
         .toByteArray()
     if (raw.size != UNCOMPRESSED_POINT_BYTES || raw[0] != UNCOMPRESSED) return null
     val ecdsa = algorithms().ecdsa
@@ -222,13 +239,15 @@ internal suspend fun nameOf(publicKey: JsAny): DidKey? {
             .encodeToByteArray(EC.PublicKey.Format.RAW.Compressed)
     } catch (e: CancellationException) {
         // My own cancellation propagates; one the provider minted while this job is alive is WebCrypto
-        // failing, not the point, so it is not a reason to refuse the record either.
+        // failing, like every other failure below.
         currentCoroutineContext().ensureActive()
         throw IllegalStateException("kuilt-identity: WebCrypto failed decoding a public key (${e::class.simpleName})")
     } catch (e: Error) {
         throw e
-    } catch (_: Throwable) {
-        return null
+    } catch (e: Throwable) {
+        // Throwable, not Exception: a WebCrypto rejection arrives on wasmJs as a bare JsException.
+        currentCoroutineContext().ensureActive()
+        throw IllegalStateException("kuilt-identity: WebCrypto failed decoding a public key (${e::class.simpleName})")
     }
     return DidKey.ofCompressedPoint(compressed)
 }
@@ -240,7 +259,7 @@ internal suspend fun nameOf(publicKey: JsAny): DidKey? {
  */
 internal class WebCryptoDeviceKey(override val id: DidKey, internal val privateKey: JsAny) : DeviceKey {
     override suspend fun sign(message: ByteArray): ByteArray {
-        val signature = cryptoCall("signing") { onSuccess, onError ->
+        val signature = cryptoCall<JsAny>("signing") { onSuccess, onError ->
             subtleSign(privateKey, message.toUint8Array(), onSuccess, onError)
         }.toByteArray()
         check(signature.size == RAW_SIGNATURE_BYTES) {
@@ -264,8 +283,8 @@ internal class WebCryptoDeviceKey(override val id: DidKey, internal val privateK
  *
  * A damaged record is overwritten with a new key, with a warning, and the app carries on as a new
  * device. An IndexedDB that cannot answer right now — a database a newer page upgraded, a closing
- * connection, a full disk — makes [DeviceKeyStore.deviceKey] throw [IllegalStateException] and keeps
- * the key.
+ * connection, a full disk — or a WebCrypto call that rejects makes [DeviceKeyStore.deviceKey] throw
+ * [IllegalStateException] and keeps the key.
  *
  * Needs a secure context (`https:` or `localhost`), where WebCrypto and Web Locks exist; elsewhere the
  * first [DeviceKeyStore.deviceKey] throws [IllegalStateException]. Works in a page and in a worker.
@@ -294,7 +313,7 @@ private const val RAW_SIGNATURE_BYTES = 64
 
 /** A new non-extractable P-256 signing pair, as WebCrypto's `CryptoKeyPair`. */
 internal suspend fun generateKeyPair(): JsAny =
-    cryptoCall("generating a P-256 key") { onSuccess, onError -> subtleGenerateKeyPair(onSuccess, onError) }
+    cryptoCall<JsAny>("generating a P-256 key") { onSuccess, onError -> subtleGenerateKeyPair(onSuccess, onError) }
 
 // ── Awaiting the bridges ──────────────────────────────────────────────────────
 
@@ -312,8 +331,8 @@ internal suspend fun <T> idbCall(doing: String, start: (onSuccess: (T) -> Unit, 
  * Runs a WebCrypto bridge and awaits its callback. A failure throws [IllegalStateException] carrying
  * only the DOM error's name, as every provider call in this module does.
  */
-private suspend fun cryptoCall(doing: String, start: (onSuccess: (JsAny) -> Unit, onError: (String) -> Unit) -> Unit): JsAny {
-    val result = CompletableDeferred<JsAny>()
+private suspend fun <T> cryptoCall(doing: String, start: (onSuccess: (T) -> Unit, onError: (String) -> Unit) -> Unit): T {
+    val result = CompletableDeferred<T>()
     start({ result.complete(it) }, { result.completeExceptionally(IllegalStateException("kuilt-identity: WebCrypto failed $doing ($it)")) })
     return result.await()
 }
@@ -447,6 +466,35 @@ private external fun subtleExportRaw(key: JsAny, onSuccess: (JsAny) -> Unit, onE
     """,
 )
 private external fun subtleSign(key: JsAny, data: JsAny, onSuccess: (JsAny) -> Unit, onError: (String) -> Unit)
+
+/** Imports a 65-byte uncompressed P-256 point as an ECDSA public key that may verify. */
+@JsFun(
+    """
+    (point, onSuccess, onError) => {
+        try {
+            crypto.subtle.importKey('raw', point, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify'])
+                .then((key) => onSuccess(key), (e) => onError(e && e.name ? e.name : String(e)));
+        } catch (e) { onError(e && e.name ? e.name : String(e)); }
+    }
+    """,
+)
+private external fun subtleImportRawPublicKey(point: JsAny, onSuccess: (JsAny) -> Unit, onError: (String) -> Unit)
+
+/**
+ * Whether [signature] verifies over [data] under [key]: [onSuccess] with WebCrypto's answer once the
+ * verify has run, [onError] when it rejected, which is no answer at all.
+ */
+@JsFun(
+    """
+    (key, signature, data, onSuccess, onError) => {
+        try {
+            crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, signature, data)
+                .then((ok) => onSuccess(ok === true), (e) => onError(e && e.name ? e.name : String(e)));
+        } catch (e) { onError(e && e.name ? e.name : String(e)); }
+    }
+    """,
+)
+private external fun subtleVerify(key: JsAny, signature: JsAny, data: JsAny, onSuccess: (Boolean) -> Unit, onError: (String) -> Unit)
 
 /**
  * Whether [value] is a key pair this store would have made: two `CryptoKey`s, ECDSA on P-256, an
