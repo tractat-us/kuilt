@@ -62,6 +62,41 @@ class FairSharePoolUnclaimedFailureLogTest {
         )
     }
 
+    /**
+     * A failure handed to the one waiter, cancelled as it is handed over, reached nobody (#3587).
+     * The common arms in `FairSharePoolDroppedFailureTest` pin when it is reported; this one pins
+     * that the report is the log line.
+     */
+    @Test
+    fun aFailureItsOnlyWaiterDropsIsLoggedAtErrorWithItsThrowable() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val boom = Boom()
+        val (handedOver, logged) = capturing {
+            val p = pool(slots = 1)
+            val a = p.acquire(web).granted()
+            val w = launch { p.acquire(web) }
+            runCurrent()
+            check(p.waitersForTest == 1) { "the rig: W did not queue" }
+            var handedOver = 0
+            p.dispatchFaultForTest = { throw boom }
+            p.beforeFailForTest = {
+                handedOver++
+                w.cancel()
+            }
+            p.complete(a.id, 3L)
+            p.dispatchFaultForTest = null
+            p.beforeFailForTest = {}
+            runCurrent()
+            check(w.isCancelled) { "the rig: W was not cancelled" }
+            handedOver
+        }
+        val errors = logged.filter { it.level == Level.ERROR }
+        assertAll(
+            { assertEquals(1, handedOver, "the rig: the failure was handed to W once") },
+            { assertEquals(1, logged.size, "the failure is logged once: ${logged.dump()}") },
+            { assertSame(boom, errors.singleOrNull()?.thrown(), "at error, with the failure itself attached") },
+        )
+    }
+
     private class Rig(val faults: Int, val waitersAtFault: Int, val cFailure: Throwable?)
 
     /** Run the refused hand-back described on the class, and report what the rig did. */
