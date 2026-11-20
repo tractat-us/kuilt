@@ -16,9 +16,10 @@ Three optional, additive pieces, all for apps that already run OpenTelemetry:
   its own and every counter, gauge and histogram also lands in the same durable
   buffer. It asks the SDK for **delta** temporality on counters and histograms,
   because kuilt adds each interval to what it already holds, and for
-  **cumulative** on UpDownCounters, so the gauge each becomes holds the current
-  level rather than the last interval's change. Your own OTLP exporter, on its
-  own reader, keeps whatever it asked for.
+  **cumulative** on UpDownCounters, so each point is the current level, which
+  sets this replica's share of an up-down sum rather than adding the last
+  interval's change. Your own OTLP exporter, on its own reader, keeps whatever
+  it asked for.
 
   Histograms arrive as **exponential** histograms, because the bridge asks the
   SDK for them at the scale kuilt keeps its sketches at, and each interval's

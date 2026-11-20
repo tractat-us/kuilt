@@ -96,6 +96,28 @@ internal fun samplePNCounter() {
     check(counter.value == 7L)
 }
 
+// ── PNCounterDouble ──────────────────────────────────────────────────────────
+
+/** Each replica moves its own share to the level it reports; the value is the sum of the levels. */
+@Suppress("unused")
+internal fun samplePNCounterDouble() {
+    val a = ReplicaId("A")
+    val b = ReplicaId("B")
+
+    // Each node reports how many gigabytes it has buffered: a level, not a change.
+    var onA = PNCounterDouble.ZERO
+    onA = onA.piece(onA.increment(a, 1.5))
+    onA = onA.piece(onA.decrement(a, 0.25)) // A's level falls to 1.25
+
+    var onB = PNCounterDouble.ZERO
+    onB = onB.piece(onB.increment(b, 2.0))
+
+    // Merge either direction: the fleet holds the sum of the levels.
+    val fleet = onA.piece(onB)
+    check(fleet.count(a) == 1.25)
+    check(fleet.value == 3.25)
+}
+
 // ── GSet ─────────────────────────────────────────────────────────────────────
 
 /** Elements grow monotonically; no remove is possible. */

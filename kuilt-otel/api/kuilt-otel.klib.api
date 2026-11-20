@@ -33,6 +33,7 @@ final enum class us.tractat.kuilt.otel/MetricKind : kotlin/Enum<us.tractat.kuilt
     enum entry EXPONENTIAL_HISTOGRAM // us.tractat.kuilt.otel/MetricKind.EXPONENTIAL_HISTOGRAM|null[0]
     enum entry GAUGE // us.tractat.kuilt.otel/MetricKind.GAUGE|null[0]
     enum entry SUM // us.tractat.kuilt.otel/MetricKind.SUM|null[0]
+    enum entry UP_DOWN_SUM // us.tractat.kuilt.otel/MetricKind.UP_DOWN_SUM|null[0]
 
     final val entries // us.tractat.kuilt.otel/MetricKind.entries|#static{}entries[0]
         final fun <get-entries>(): kotlin.enums/EnumEntries<us.tractat.kuilt.otel/MetricKind> // us.tractat.kuilt.otel/MetricKind.entries.<get-entries>|<get-entries>#static(){}[0]
@@ -334,6 +335,29 @@ sealed interface us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/Me
         final fun valueHash(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.DoubleSum.valueHash|valueHash(){}[0]
     }
 
+    final class DoubleUpDownSum : us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Double, kotlin/Long, kotlin/Long) // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Double;kotlin.Long;kotlin.Long){}[0]
+
+        final val key // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.key.<get-key>|<get-key>(){}[0]
+        final val startEpochNanos // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.startEpochNanos|{}startEpochNanos[0]
+            final fun <get-startEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.startEpochNanos.<get-startEpochNanos>|<get-startEpochNanos>(){}[0]
+        final val timeEpochNanos // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.timeEpochNanos|{}timeEpochNanos[0]
+            final fun <get-timeEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.timeEpochNanos.<get-timeEpochNanos>|<get-timeEpochNanos>(){}[0]
+        final val value // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.value|{}value[0]
+            final fun <get-value>(): kotlin/Double // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.value.<get-value>|<get-value>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.component1|component1(){}[0]
+        final fun component2(): kotlin/Double // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.component4|component4(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Double = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Double;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.toString|toString(){}[0]
+        final fun valueHash(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.DoubleUpDownSum.valueHash|valueHash(){}[0]
+    }
+
     final class ExponentialHistogram : us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram|null[0]
         constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Int, kotlin/Long, kotlin/Long, kotlin/Double, kotlin/Int, kotlin.collections/List<kotlin/Long>, kotlin/Int, kotlin.collections/List<kotlin/Long>, kotlin/Long, kotlin/Long) // us.tractat.kuilt.otel/MetricPoint.ExponentialHistogram.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Int;kotlin.Long;kotlin.Long;kotlin.Double;kotlin.Int;kotlin.collections.List<kotlin.Long>;kotlin.Int;kotlin.collections.List<kotlin.Long>;kotlin.Long;kotlin.Long){}[0]
 
@@ -420,6 +444,29 @@ sealed interface us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/Me
         final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricPoint.Sum.toString|toString(){}[0]
         final fun valueHash(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.Sum.valueHash|valueHash(){}[0]
     }
+
+    final class UpDownSum : us.tractat.kuilt.otel/MetricPoint { // us.tractat.kuilt.otel/MetricPoint.UpDownSum|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Long, kotlin/Long, kotlin/Long) // us.tractat.kuilt.otel/MetricPoint.UpDownSum.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+
+        final val key // us.tractat.kuilt.otel/MetricPoint.UpDownSum.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.UpDownSum.key.<get-key>|<get-key>(){}[0]
+        final val startEpochNanos // us.tractat.kuilt.otel/MetricPoint.UpDownSum.startEpochNanos|{}startEpochNanos[0]
+            final fun <get-startEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.UpDownSum.startEpochNanos.<get-startEpochNanos>|<get-startEpochNanos>(){}[0]
+        final val timeEpochNanos // us.tractat.kuilt.otel/MetricPoint.UpDownSum.timeEpochNanos|{}timeEpochNanos[0]
+            final fun <get-timeEpochNanos>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.UpDownSum.timeEpochNanos.<get-timeEpochNanos>|<get-timeEpochNanos>(){}[0]
+        final val value // us.tractat.kuilt.otel/MetricPoint.UpDownSum.value|{}value[0]
+            final fun <get-value>(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.UpDownSum.value.<get-value>|<get-value>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricPoint.UpDownSum.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.UpDownSum.component2|component2(){}[0]
+        final fun component3(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.UpDownSum.component3|component3(){}[0]
+        final fun component4(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.UpDownSum.component4|component4(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...): us.tractat.kuilt.otel/MetricPoint.UpDownSum // us.tractat.kuilt.otel/MetricPoint.UpDownSum.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricPoint.UpDownSum.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricPoint.UpDownSum.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricPoint.UpDownSum.toString|toString(){}[0]
+        final fun valueHash(): kotlin/Long // us.tractat.kuilt.otel/MetricPoint.UpDownSum.valueHash|valueHash(){}[0]
+    }
 }
 
 sealed interface us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate|null[0]
@@ -471,6 +518,51 @@ sealed interface us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/M
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.AddExponentialHistogram.toString|toString(){}[0]
+    }
+
+    final class AddUpDownSum : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Long) // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
+
+        final val by // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum.by|{}by[0]
+            final fun <get-by>(): kotlin/Long // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum.by.<get-by>|<get-by>(){}[0]
+        final val key // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum.key.<get-key>|<get-key>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Long = ...): us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSum.toString|toString(){}[0]
+    }
+
+    final class AddUpDownSumDouble : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Double) // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
+
+        final val by // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble.by|{}by[0]
+            final fun <get-by>(): kotlin/Double // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble.by.<get-by>|<get-by>(){}[0]
+        final val key // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble.key.<get-key>|<get-key>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble.component1|component1(){}[0]
+        final fun component2(): kotlin/Double // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Double = ...): us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.AddUpDownSumDouble.toString|toString(){}[0]
+    }
+
+    final class Forget : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.Forget|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey) // us.tractat.kuilt.otel/MetricUpdate.Forget.<init>|<init>(us.tractat.kuilt.otel.MetricKey){}[0]
+
+        final val key // us.tractat.kuilt.otel/MetricUpdate.Forget.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.Forget.key.<get-key>|<get-key>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.Forget.component1|component1(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ...): us.tractat.kuilt.otel/MetricUpdate.Forget // us.tractat.kuilt.otel/MetricUpdate.Forget.copy|copy(us.tractat.kuilt.otel.MetricKey){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.Forget.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.Forget.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.Forget.toString|toString(){}[0]
     }
 
     final class IncrementSum : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.IncrementSum|null[0]
@@ -538,6 +630,38 @@ sealed interface us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/M
         final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.SetGauge.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.SetGauge.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.SetGauge.toString|toString(){}[0]
+    }
+
+    final class SetUpDownSum : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Long) // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
+
+        final val key // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum.key.<get-key>|<get-key>(){}[0]
+        final val level // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum.level|{}level[0]
+            final fun <get-level>(): kotlin/Long // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum.level.<get-level>|<get-level>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Long = ...): us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSum.toString|toString(){}[0]
+    }
+
+    final class SetUpDownSumDouble : us.tractat.kuilt.otel/MetricUpdate { // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble|null[0]
+        constructor <init>(us.tractat.kuilt.otel/MetricKey, kotlin/Double) // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble.<init>|<init>(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
+
+        final val key // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble.key|{}key[0]
+            final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble.key.<get-key>|<get-key>(){}[0]
+        final val level // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble.level|{}level[0]
+            final fun <get-level>(): kotlin/Double // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble.level.<get-level>|<get-level>(){}[0]
+
+        final fun component1(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble.component1|component1(){}[0]
+        final fun component2(): kotlin/Double // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble.component2|component2(){}[0]
+        final fun copy(us.tractat.kuilt.otel/MetricKey = ..., kotlin/Double = ...): us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble.copy|copy(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // us.tractat.kuilt.otel/MetricUpdate.SetUpDownSumDouble.toString|toString(){}[0]
     }
 }
 
@@ -736,17 +860,22 @@ final class us.tractat.kuilt.otel/LogRecord { // us.tractat.kuilt.otel/LogRecord
 
 final class us.tractat.kuilt.otel/MetricCatalog : us.tractat.kuilt.crdt/Quilted<us.tractat.kuilt.otel/MetricCatalog> { // us.tractat.kuilt.otel/MetricCatalog|null[0]
     constructor <init>(kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounter> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounterDouble> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/LWWRegister<kotlin/Double>> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/HyperLogLog> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/DDSketch> = ...) // us.tractat.kuilt.otel/MetricCatalog.<init>|<init>(kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.GCounter>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.GCounterDouble>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.LWWRegister<kotlin.Double>>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.HyperLogLog>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.DDSketch>){}[0]
+    constructor <init>(kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounter> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounterDouble> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/LWWRegister<kotlin/Double>> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/HyperLogLog> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/DDSketch> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/PNCounter> = ..., kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/PNCounterDouble> = ...) // us.tractat.kuilt.otel/MetricCatalog.<init>|<init>(kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.GCounter>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.GCounterDouble>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.LWWRegister<kotlin.Double>>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.HyperLogLog>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.DDSketch>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.PNCounter>;kotlin.collections.Map<us.tractat.kuilt.otel.MetricKey,us.tractat.kuilt.crdt.PNCounterDouble>){}[0]
 
     final val cardinalities // us.tractat.kuilt.otel/MetricCatalog.cardinalities|{}cardinalities[0]
         final fun <get-cardinalities>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/HyperLogLog> // us.tractat.kuilt.otel/MetricCatalog.cardinalities.<get-cardinalities>|<get-cardinalities>(){}[0]
     final val doubleSums // us.tractat.kuilt.otel/MetricCatalog.doubleSums|{}doubleSums[0]
         final fun <get-doubleSums>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounterDouble> // us.tractat.kuilt.otel/MetricCatalog.doubleSums.<get-doubleSums>|<get-doubleSums>(){}[0]
+    final val doubleUpDownSums // us.tractat.kuilt.otel/MetricCatalog.doubleUpDownSums|{}doubleUpDownSums[0]
+        final fun <get-doubleUpDownSums>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/PNCounterDouble> // us.tractat.kuilt.otel/MetricCatalog.doubleUpDownSums.<get-doubleUpDownSums>|<get-doubleUpDownSums>(){}[0]
     final val gauges // us.tractat.kuilt.otel/MetricCatalog.gauges|{}gauges[0]
         final fun <get-gauges>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/LWWRegister<kotlin/Double>> // us.tractat.kuilt.otel/MetricCatalog.gauges.<get-gauges>|<get-gauges>(){}[0]
     final val histograms // us.tractat.kuilt.otel/MetricCatalog.histograms|{}histograms[0]
         final fun <get-histograms>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/DDSketch> // us.tractat.kuilt.otel/MetricCatalog.histograms.<get-histograms>|<get-histograms>(){}[0]
     final val sums // us.tractat.kuilt.otel/MetricCatalog.sums|{}sums[0]
         final fun <get-sums>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounter> // us.tractat.kuilt.otel/MetricCatalog.sums.<get-sums>|<get-sums>(){}[0]
+    final val upDownSums // us.tractat.kuilt.otel/MetricCatalog.upDownSums|{}upDownSums[0]
+        final fun <get-upDownSums>(): kotlin.collections/Map<us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/PNCounter> // us.tractat.kuilt.otel/MetricCatalog.upDownSums.<get-upDownSums>|<get-upDownSums>(){}[0]
 
     final fun equals(kotlin/Any?): kotlin/Boolean // us.tractat.kuilt.otel/MetricCatalog.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // us.tractat.kuilt.otel/MetricCatalog.hashCode|hashCode(){}[0]
@@ -829,6 +958,13 @@ final class us.tractat.kuilt.otel/MetricSumOverflowException : us.tractat.kuilt.
         final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricSumOverflowException.key.<get-key>|<get-key>(){}[0]
     final val total // us.tractat.kuilt.otel/MetricSumOverflowException.total|{}total[0]
         final fun <get-total>(): kotlin/Long? // us.tractat.kuilt.otel/MetricSumOverflowException.total.<get-total>|<get-total>(){}[0]
+}
+
+final class us.tractat.kuilt.otel/MetricUpDownSumOverflowException : us.tractat.kuilt.otel/MetricOverflowException { // us.tractat.kuilt.otel/MetricUpDownSumOverflowException|null[0]
+    final val fractional // us.tractat.kuilt.otel/MetricUpDownSumOverflowException.fractional|{}fractional[0]
+        final fun <get-fractional>(): kotlin/Boolean // us.tractat.kuilt.otel/MetricUpDownSumOverflowException.fractional.<get-fractional>|<get-fractional>(){}[0]
+    final val key // us.tractat.kuilt.otel/MetricUpDownSumOverflowException.key|{}key[0]
+        final fun <get-key>(): us.tractat.kuilt.otel/MetricKey // us.tractat.kuilt.otel/MetricUpDownSumOverflowException.key.<get-key>|<get-key>(){}[0]
 }
 
 final class us.tractat.kuilt.otel/PersistenceHealth { // us.tractat.kuilt.otel/PersistenceHealth|null[0]
@@ -1019,7 +1155,13 @@ final class us.tractat.kuilt.otel/WarpMetricExporter { // us.tractat.kuilt.otel/
     final fun snapshotAll(): us.tractat.kuilt.otel/MetricCatalog // us.tractat.kuilt.otel/WarpMetricExporter.snapshotAll|snapshotAll(){}[0]
     final fun sumSnapshot(us.tractat.kuilt.otel/MetricKey): us.tractat.kuilt.crdt/GCounter // us.tractat.kuilt.otel/WarpMetricExporter.sumSnapshot|sumSnapshot(us.tractat.kuilt.otel.MetricKey){}[0]
     final fun sumValue(us.tractat.kuilt.otel/MetricKey): kotlin/Long // us.tractat.kuilt.otel/WarpMetricExporter.sumValue|sumValue(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun upDownSumDoubleSnapshot(us.tractat.kuilt.otel/MetricKey): us.tractat.kuilt.crdt/PNCounterDouble // us.tractat.kuilt.otel/WarpMetricExporter.upDownSumDoubleSnapshot|upDownSumDoubleSnapshot(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun upDownSumDoubleValue(us.tractat.kuilt.otel/MetricKey): kotlin/Double // us.tractat.kuilt.otel/WarpMetricExporter.upDownSumDoubleValue|upDownSumDoubleValue(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun upDownSumSnapshot(us.tractat.kuilt.otel/MetricKey): us.tractat.kuilt.crdt/PNCounter // us.tractat.kuilt.otel/WarpMetricExporter.upDownSumSnapshot|upDownSumSnapshot(us.tractat.kuilt.otel.MetricKey){}[0]
+    final fun upDownSumValue(us.tractat.kuilt.otel/MetricKey): kotlin/Long // us.tractat.kuilt.otel/WarpMetricExporter.upDownSumValue|upDownSumValue(us.tractat.kuilt.otel.MetricKey){}[0]
     final suspend fun addCardinality(us.tractat.kuilt.otel/MetricKey, kotlin/String): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.addCardinality|addCardinality(us.tractat.kuilt.otel.MetricKey;kotlin.String){}[0]
+    final suspend fun addUpDownSum(us.tractat.kuilt.otel/MetricKey, kotlin/Long): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.addUpDownSum|addUpDownSum(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
+    final suspend fun addUpDownSumDouble(us.tractat.kuilt.otel/MetricKey, kotlin/Double): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.addUpDownSumDouble|addUpDownSumDouble(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
     final suspend fun clear(): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.clear|clear(){}[0]
     final suspend fun incrementSum(us.tractat.kuilt.otel/MetricKey, kotlin/Long = ...): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.incrementSum|incrementSum(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
     final suspend fun incrementSumDouble(us.tractat.kuilt.otel/MetricKey, kotlin/Double): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.incrementSumDouble|incrementSumDouble(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
@@ -1028,10 +1170,14 @@ final class us.tractat.kuilt.otel/WarpMetricExporter { // us.tractat.kuilt.otel/
     final suspend fun mergeHistogram(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/DDSketch): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeHistogram|mergeHistogram(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.DDSketch){}[0]
     final suspend fun mergeSum(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounter): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeSum|mergeSum(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.GCounter){}[0]
     final suspend fun mergeSumDouble(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/GCounterDouble): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeSumDouble|mergeSumDouble(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.GCounterDouble){}[0]
+    final suspend fun mergeUpDownSum(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/PNCounter): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeUpDownSum|mergeUpDownSum(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.PNCounter){}[0]
+    final suspend fun mergeUpDownSumDouble(us.tractat.kuilt.otel/MetricKey, us.tractat.kuilt.crdt/PNCounterDouble): us.tractat.kuilt.otel/MetricWriteResult // us.tractat.kuilt.otel/WarpMetricExporter.mergeUpDownSumDouble|mergeUpDownSumDouble(us.tractat.kuilt.otel.MetricKey;us.tractat.kuilt.crdt.PNCounterDouble){}[0]
     final suspend fun record(kotlin.collections/List<us.tractat.kuilt.otel/MetricUpdate>): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.record|record(kotlin.collections.List<us.tractat.kuilt.otel.MetricUpdate>){}[0]
     final suspend fun recordHistogram(us.tractat.kuilt.otel/MetricKey, kotlin/Double): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.recordHistogram|recordHistogram(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
     final suspend fun recover() // us.tractat.kuilt.otel/WarpMetricExporter.recover|recover(){}[0]
     final suspend fun setGauge(us.tractat.kuilt.otel/MetricKey, kotlin/Double, kotlin/Long): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.setGauge|setGauge(us.tractat.kuilt.otel.MetricKey;kotlin.Double;kotlin.Long){}[0]
+    final suspend fun setUpDownSum(us.tractat.kuilt.otel/MetricKey, kotlin/Long): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.setUpDownSum|setUpDownSum(us.tractat.kuilt.otel.MetricKey;kotlin.Long){}[0]
+    final suspend fun setUpDownSumDouble(us.tractat.kuilt.otel/MetricKey, kotlin/Double): us.tractat.kuilt.otel/MetricExportResult // us.tractat.kuilt.otel/WarpMetricExporter.setUpDownSumDouble|setUpDownSumDouble(us.tractat.kuilt.otel.MetricKey;kotlin.Double){}[0]
 }
 
 final class us.tractat.kuilt.otel/WarpOtlpBridge { // us.tractat.kuilt.otel/WarpOtlpBridge|null[0]

@@ -116,59 +116,59 @@ class KuiltMetricExporterTest {
     }
 
     @Test
-    fun upDownCounterGaugeHoldsTheLevelAcrossCollections() = runTest {
+    fun upDownCounterHoldsTheLevelAcrossCollections() = runTest {
         val exp = buffer()
         val sdk = Sdk(KuiltMetricExporter(exp, backgroundScope))
         val queue = sdk.meter.upDownCounterBuilder("queue.depth").build()
-        val key = MetricKey("queue.depth", MetricKind.GAUGE)
+        val key = MetricKey("queue.depth", MetricKind.UP_DOWN_SUM)
 
         queue.add(10)
         collect(sdk)
-        val afterFirst = exp.gaugeValue(key)
+        val afterFirst = exp.upDownSumValue(key)
         queue.add(2)
         collect(sdk)
 
         assertAll(
-            { assertEquals(10.0, afterFirst, "first collection (precondition)") },
-            { assertEquals(12.0, exp.gaugeValue(key), "level after +10 then +2") },
+            { assertEquals(10L, afterFirst, "first collection (precondition)") },
+            { assertEquals(12L, exp.upDownSumValue(key), "level after +10 then +2") },
         )
     }
 
     @Test
-    fun doubleUpDownCounterGaugeHoldsTheLevelAcrossCollections() = runTest {
+    fun doubleUpDownCounterHoldsTheLevelAcrossCollections() = runTest {
         val exp = buffer()
         val sdk = Sdk(KuiltMetricExporter(exp, backgroundScope))
         val balance = sdk.meter.upDownCounterBuilder("balance").ofDoubles().build()
-        val key = MetricKey("balance", MetricKind.GAUGE)
+        val key = MetricKey("balance", MetricKind.UP_DOWN_SUM)
 
         balance.add(1.5)
         collect(sdk)
-        val afterFirst = exp.gaugeValue(key)
+        val afterFirst = exp.upDownSumDoubleValue(key)
         balance.add(-0.25)
         collect(sdk)
 
         assertAll(
             { assertEquals(1.5, afterFirst, "first collection (precondition)") },
-            { assertEquals(1.25, exp.gaugeValue(key), "level after +1.5 then -0.25") },
+            { assertEquals(1.25, exp.upDownSumDoubleValue(key), "level after +1.5 then -0.25") },
         )
     }
 
     @Test
-    fun observableUpDownCounterGaugeHoldsTheObservedLevel() = runTest {
+    fun observableUpDownCounterHoldsTheObservedLevel() = runTest {
         val exp = buffer()
         val sdk = Sdk(KuiltMetricExporter(exp, backgroundScope))
         var observed = 10L
         sdk.meter.upDownCounterBuilder("connections").buildWithCallback { it.record(observed) }
-        val key = MetricKey("connections", MetricKind.GAUGE)
+        val key = MetricKey("connections", MetricKind.UP_DOWN_SUM)
 
         collect(sdk)
-        val afterFirst = exp.gaugeValue(key)
+        val afterFirst = exp.upDownSumValue(key)
         observed = 7L
         collect(sdk)
 
         assertAll(
-            { assertEquals(10.0, afterFirst, "first collection (precondition)") },
-            { assertEquals(7.0, exp.gaugeValue(key), "level after observing 10 then 7") },
+            { assertEquals(10L, afterFirst, "first collection (precondition)") },
+            { assertEquals(7L, exp.upDownSumValue(key), "level after observing 10 then 7") },
         )
     }
 
@@ -245,13 +245,110 @@ class KuiltMetricExporterTest {
     }
 
     @Test
-    fun cumulativeNonMonotonicSumBecomesGaugeLevel() = runTest {
+    fun cumulativeNonMonotonicSumSetsThisReplicasShare() = runTest {
         val exp = buffer()
         val bridge = KuiltMetricExporter(exp, backgroundScope)
         val md = metric("queue.depth", MetricDataType.LONG_SUM, sum(monotonic = false, points = listOf(longPoint(7L, epoch = 9L))))
         bridge.export(listOf(md))
         runCurrent()
-        assertEquals(7.0, exp.gaugeValue(MetricKey("queue.depth", MetricKind.GAUGE)))
+        assertEquals(7L, exp.upDownSumSnapshot(MetricKey("queue.depth", MetricKind.UP_DOWN_SUM)).count(ReplicaId("dev")))
+    }
+
+    // ---- #3307: an UpDownCounter sums across replicas, and survives a restart ----
+
+    /** Note test 11's twin: two replicas, each observing its own level, merge to the sum. */
+    @Test
+    fun twoReplicasUpDownCountersSumOnceMerged() = runTest {
+        val onA = WarpMetricExporter(replica = ReplicaId("a"), store = InMemoryDurableStore()).also { it.recover() }
+        val onB = WarpMetricExporter(replica = ReplicaId("b"), store = InMemoryDurableStore()).also { it.recover() }
+        val sdkA = Sdk(KuiltMetricExporter(onA, backgroundScope))
+        val sdkB = Sdk(KuiltMetricExporter(onB, backgroundScope))
+        sdkA.meter.upDownCounterBuilder("http.in_flight").buildWithCallback { it.record(3L) }
+        sdkB.meter.upDownCounterBuilder("http.in_flight").buildWithCallback { it.record(4L) }
+        val key = MetricKey("http.in_flight", MetricKind.UP_DOWN_SUM)
+
+        collect(sdkA)
+        collect(sdkB)
+        val levels = onA.upDownSumValue(key) to onB.upDownSumValue(key)
+        onA.mergeUpDownSum(key, onB.upDownSumSnapshot(key))
+
+        assertAll(
+            { assertEquals(3L to 4L, levels, "each replica holds its own level (precondition)") },
+            { assertEquals(7L, onA.upDownSumValue(key), "the fleet's figure is the sum of the levels") },
+        )
+    }
+
+    /**
+     * Note test 11: a restart is a second `SdkMeterProvider` over the same store and replica. The
+     * new process observes the same 7 and reports it in full; the share already holds 7, so it moves
+     * nothing. A delta mapping would read 14.
+     */
+    @Test
+    fun aRestartedProcessReportingTheSameLevelDoesNotCountItTwice() = runTest {
+        val store = InMemoryDurableStore()
+        val key = MetricKey("connections", MetricKind.UP_DOWN_SUM)
+        val first = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
+        val before = Sdk(KuiltMetricExporter(first, backgroundScope))
+        before.meter.upDownCounterBuilder("connections").buildWithCallback { it.record(7L) }
+        collect(before)
+        before.provider.close()
+
+        val restarted = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
+        val recovered = restarted.upDownSumValue(key)
+        val after = Sdk(KuiltMetricExporter(restarted, backgroundScope))
+        after.meter.upDownCounterBuilder("connections").buildWithCallback { it.record(7L) }
+        collect(after)
+
+        assertAll(
+            { assertEquals(7L, recovered, "the restarted exporter recovered the share (precondition)") },
+            { assertEquals(7L, restarted.upDownSumValue(key), "the same level after a restart reads once") },
+        )
+    }
+
+    /**
+     * Note test 12: an UpDownCounter written before #3307 lives under its name as a GAUGE. The batch
+     * that writes its up-down sum retires that twin, and a real gauge is untouched.
+     */
+    @Test
+    fun theGaugeTwinAnOlderBuildWroteIsRetiredByTheFirstExport() = runTest {
+        val store = InMemoryDurableStore()
+        val older = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
+        val twin = MetricKey("queue.depth", MetricKind.GAUGE)
+        val realGauge = MetricKey("temperature", MetricKind.GAUGE)
+        older.setGauge(twin, 5.0, 1L)
+        older.setGauge(realGauge, 21.0, 1L)
+
+        val exp = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
+        val recovered = exp.snapshotAll().gauges.keys
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val md = metric("queue.depth", MetricDataType.LONG_SUM, sum(monotonic = false, points = listOf(longPoint(6L))))
+        val code = bridge.export(listOf(md))
+        runCurrent()
+        val afterRestart = WarpMetricExporter(replica = ReplicaId("dev"), store = store).also { it.recover() }
+
+        assertAll(
+            { assertEquals(setOf(twin, realGauge), recovered, "the twin came back from the store (precondition)") },
+            { assertTrue(code.isSuccess, "the export landed") },
+            { assertEquals(setOf(realGauge), exp.snapshotAll().gauges.keys, "the twin is gone, the real gauge stays") },
+            { assertEquals(setOf(realGauge), afterRestart.snapshotAll().gauges.keys, "and gone from disk too") },
+            { assertEquals(6L, exp.upDownSumValue(MetricKey("queue.depth", MetricKind.UP_DOWN_SUM))) },
+        )
+    }
+
+    /** A NaN or infinite double level is dropped with a WARN; the rest of the export lands. */
+    @Test
+    fun aNonFiniteUpDownLevelIsDroppedNotFailed() = runTest {
+        val exp = buffer()
+        val bridge = KuiltMetricExporter(exp, backgroundScope)
+        val bad = metric("balance", MetricDataType.DOUBLE_SUM, sum(monotonic = false, points = listOf(doublePoint(Double.NaN))))
+        val good = metric("requests", MetricDataType.LONG_SUM, sum(monotonic = true, points = listOf(longPoint(2L))))
+        val code = bridge.export(listOf(bad, good))
+        runCurrent()
+        assertAll(
+            { assertTrue(code.isSuccess, "a dropped point is not a failed export") },
+            { assertEquals(2L, exp.sumValue(MetricKey("requests", MetricKind.SUM)), "the other point landed") },
+            { assertTrue(exp.snapshotAll().doubleUpDownSums.isEmpty(), "nothing stored for the NaN level") },
+        )
     }
 
     // A reader that does not consult the bridge's temporality (a custom MetricReader with its

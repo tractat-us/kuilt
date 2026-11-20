@@ -82,6 +82,24 @@ class OtlpEncodingTest {
         assertTrue(doubleJson.contains("\"isMonotonic\":true"), doubleJson)
     }
 
+    /** An up-down sum is a cumulative Sum that is not monotonic, so a fall reads as a value (#3307). */
+    @Test
+    fun upDownSumEncodesAsANonMonotonicCumulativeSum() {
+        val key = MetricKey("in_flight", MetricKind.UP_DOWN_SUM)
+        val long = MetricPoint.UpDownSum(key, value = -3L, startEpochNanos = 0L, timeEpochNanos = 5L)
+        val double = MetricPoint.DoubleUpDownSum(key, value = -1.25, startEpochNanos = 0L, timeEpochNanos = 5L)
+        val longJson = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(long), OtlpEnvelope.NONE))
+        val doubleJson = json.encodeToString(MetricsRequest.serializer(), metricsRequestOf(setOf(double), OtlpEnvelope.NONE))
+        assertAll(
+            { assertTrue(longJson.contains("\"isMonotonic\":false"), longJson) },
+            { assertTrue(longJson.contains("\"aggregationTemporality\":2"), longJson) },
+            { assertTrue(longJson.contains("\"asInt\":\"-3\""), longJson) },
+            { assertTrue(doubleJson.contains("\"isMonotonic\":false"), doubleJson) },
+            { assertTrue(doubleJson.contains("\"aggregationTemporality\":2"), doubleJson) },
+            { assertTrue(doubleJson.contains("\"asDouble\":-1.25"), doubleJson) },
+        )
+    }
+
     @Test
     fun exponentialHistogramEncodesBucketsScaleAndTemporality() {
         val p = MetricPoint.ExponentialHistogram(

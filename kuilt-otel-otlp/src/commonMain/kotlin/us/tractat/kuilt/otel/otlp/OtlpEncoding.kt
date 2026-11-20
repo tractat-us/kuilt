@@ -90,8 +90,8 @@ internal fun logsRequestOf(logs: Set<LogRecord>, envelope: OtlpEnvelope): LogsRe
 }
 
 /**
- * Render metric points into an OTLP/JSON metrics request (Sum for sums, Gauge for
- * gauge/cardinality, ExponentialHistogram for histograms).
+ * Render metric points into an OTLP/JSON metrics request (Sum for sums, non-monotonic Sum for
+ * up-down sums, Gauge for gauge/cardinality, ExponentialHistogram for histograms).
  */
 internal fun metricsRequestOf(points: Set<MetricPoint>, envelope: OtlpEnvelope): MetricsRequest {
     val metrics = points.map { p ->
@@ -120,6 +120,34 @@ internal fun metricsRequestOf(points: Set<MetricPoint>, envelope: OtlpEnvelope):
                             asDouble = p.value,
                         ),
                     ),
+                ),
+            )
+            is MetricPoint.UpDownSum -> OtlpMetric(
+                name = p.key.name,
+                sum = OtlpSum(
+                    listOf(
+                        NumberDataPoint(
+                            attributes = attrs(p.key.attributes),
+                            startTimeUnixNano = p.startEpochNanos.toString(),
+                            timeUnixNano = p.timeEpochNanos.toString(),
+                            asInt = p.value.toString(),
+                        ),
+                    ),
+                    isMonotonic = false,
+                ),
+            )
+            is MetricPoint.DoubleUpDownSum -> OtlpMetric(
+                name = p.key.name,
+                sum = OtlpSum(
+                    listOf(
+                        NumberDataPoint(
+                            attributes = attrs(p.key.attributes),
+                            startTimeUnixNano = p.startEpochNanos.toString(),
+                            timeUnixNano = p.timeEpochNanos.toString(),
+                            asDouble = p.value,
+                        ),
+                    ),
+                    isMonotonic = false,
                 ),
             )
             is MetricPoint.Gauge -> OtlpMetric(

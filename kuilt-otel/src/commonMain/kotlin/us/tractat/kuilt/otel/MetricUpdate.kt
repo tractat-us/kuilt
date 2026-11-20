@@ -11,8 +11,8 @@ package us.tractat.kuilt.otel
  *
  * Each variant rejects at construction the arguments its CRDT would reject when applied. What a
  * variant cannot know until it meets an exporter — [AddExponentialHistogram]'s scale against the
- * exporter's [WarpMetricExporter.histogramScale], and whether an [IncrementSum] or a histogram update
- * would carry one of the exporter's counts past [Long.MAX_VALUE] — [WarpMetricExporter.record]
+ * exporter's [WarpMetricExporter.histogramScale], and whether an [IncrementSum], a histogram update or an
+ * up-down update would carry one of the exporter's counts past what it holds — [WarpMetricExporter.record]
  * checks for every update before it applies any, so none leaves a batch applied half-way. The
  * one-by-one equivalence above holds for every batch `record` accepts.
  *
@@ -109,6 +109,76 @@ public sealed interface MetricUpdate {
             require(negativeCounts.all { it >= 0L }) { "AddExponentialHistogram.negativeCounts must not be negative" }
         }
     }
+
+    /**
+     * Move this replica's share of the up-down sum for [key] by [by], up or down —
+     * [WarpMetricExporter.addUpDownSum].
+     *
+     * @throws IllegalArgumentException if [by] is `0`, a change of nothing, or [Long.MIN_VALUE],
+     *   whose magnitude no `Long` holds.
+     */
+    public data class AddUpDownSum(override val key: MetricKey, public val by: Long) : MetricUpdate {
+        init {
+            require(by != 0L && by != Long.MIN_VALUE) { "AddUpDownSum.by must be non-zero and above Long.MIN_VALUE, was $by" }
+        }
+    }
+
+    /**
+     * Move this replica's share of the fractional up-down sum for [key] by [by], up or down —
+     * [WarpMetricExporter.addUpDownSumDouble].
+     *
+     * @throws IllegalArgumentException if [by] is zero, NaN or infinite.
+     */
+    public data class AddUpDownSumDouble(override val key: MetricKey, public val by: Double) : MetricUpdate {
+        init {
+            require(by != 0.0 && by.isFinite()) { "AddUpDownSumDouble.by must be non-zero and finite, was $by" }
+        }
+    }
+
+    /**
+     * Set this replica's share of the up-down sum for [key] to [level] — what an OpenTelemetry
+     * UpDownCounter reports each collection under cumulative temporality —
+     * [WarpMetricExporter.setUpDownSum].
+     *
+     * The exporter moves its own slot by `level − its share`, so setting the same level again changes
+     * nothing, and the series' value is the sum of every replica's level.
+     */
+    public data class SetUpDownSum(override val key: MetricKey, public val level: Long) : MetricUpdate
+
+    /**
+     * Set this replica's share of the fractional up-down sum for [key] to [level] —
+     * [WarpMetricExporter.setUpDownSumDouble].
+     *
+     * @throws IllegalArgumentException if [level] is NaN or infinite.
+     */
+    public data class SetUpDownSumDouble(override val key: MetricKey, public val level: Double) : MetricUpdate {
+        init {
+            require(level.isFinite()) { "SetUpDownSumDouble.level must be finite, was $level" }
+        }
+    }
+
+    /**
+     * Drop the series [key] names from this exporter, in memory and on disk, and nowhere else.
+     *
+     * **Local-only.** It deletes nothing a peer holds, and a later merge of a peer's state for [key]
+     * brings the series back, as after [WarpMetricExporter.clear]. It exists to retire a series this
+     * replica wrote under one key and now writes under another: an UpDownCounter written as a
+     * [MetricKind.GAUGE] before [MetricKind.UP_DOWN_SUM] existed is retired by the batch that writes
+     * its up-down sum.
+     *
+     * A [MetricKind.SUM] or [MetricKind.UP_DOWN_SUM] key names a series in both the integer and the
+     * fractional map, and both are dropped. Forgetting a series the exporter does not hold changes
+     * nothing, and writes nothing unless the store refused that kind's last write (see
+     * [WarpMetricExporter.record]).
+     *
+     * **Forgetting a [MetricKind.SUM] or [MetricKind.UP_DOWN_SUM] series rewinds this replica's slot
+     * for any peer that already saw it.** A later update starts the slot again from nothing, while
+     * the peer keeps the larger of its old and new counts, so a sum there stops growing until the
+     * slot passes its old count, and an up-down sum reads a stale share until its increments do.
+     * Here the series is right at once. Forget such a key only when nothing will write to it again,
+     * or no peer holds it. The SDK bridge forgets only a [MetricKind.GAUGE], which has no slots.
+     */
+    public data class Forget(override val key: MetricKey) : MetricUpdate
 }
 
 /** The lowest scale the OTLP data model permits; [MIN_OTLP_HISTOGRAM_SCALE] is the lowest kuilt can store. */

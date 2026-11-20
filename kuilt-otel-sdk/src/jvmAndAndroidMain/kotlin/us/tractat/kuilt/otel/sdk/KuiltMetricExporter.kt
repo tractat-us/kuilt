@@ -23,6 +23,7 @@ import us.tractat.kuilt.otel.MetricKey
 import us.tractat.kuilt.otel.MetricKind
 import us.tractat.kuilt.otel.MetricOverflowException
 import us.tractat.kuilt.otel.MetricSumOverflowException
+import us.tractat.kuilt.otel.MetricUpDownSumOverflowException
 import us.tractat.kuilt.otel.MetricUpdate
 import us.tractat.kuilt.otel.WarpMetricExporter
 import java.util.concurrent.ConcurrentHashMap
@@ -47,10 +48,12 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *   would be added again on every collection. A delta is exactly the increment to add, and
  *   it is additive, so two replicas' counters merge to the true total with no coordination.
  * - **UpDownCounters** (`UP_DOWN_COUNTER`, `OBSERVABLE_UP_DOWN_COUNTER`) →
- *   [AggregationTemporality.CUMULATIVE]. One becomes a gauge, which holds a level; under
- *   delta its point would be the change over the interval, and a queue going 10 → 12 would
- *   read 2. The cost: a cumulative series is re-sent on every collection whether or not it
- *   moved, so each one is a `setGauge` write per collection.
+ *   [AggregationTemporality.CUMULATIVE]. Its point is this process's level, which sets this
+ *   replica's share of an up-down sum (`MetricUpdate.SetUpDownSum`), so the series sums across
+ *   replicas and the same level re-sent moves nothing (#3307). Under delta the level would live
+ *   only in the buffer, and a process reporting its first observation in full after a restart
+ *   would count it twice. A cumulative series is re-sent on every collection; an unchanged one
+ *   writes nothing, unless the store refused that kind's last write (see `WarpMetricExporter.record`).
  * - **Gauges and histograms** → [AggregationTemporality.DELTA]. A gauge's point is a level
  *   either way; under delta the SDK sends it only when it was recorded in the interval, so
  *   an unchanged gauge is not rewritten with a fresh timestamp each collection. A histogram's
@@ -83,8 +86,11 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  *
  * ## Mapping
  * - monotonic `LONG_SUM` → `incrementSum`; monotonic `DOUBLE_SUM` → `incrementSumDouble`.
- * - non-monotonic sums (UpDownCounter) and gauges → `setGauge`. An UpDownCounter arrives
- *   cumulative (above), so the gauge it becomes holds its current level.
+ * - non-monotonic sums (UpDownCounter) → `MetricUpdate.SetUpDownSum`, this replica's share of
+ *   an up-down sum, `SetUpDownSumDouble` for a double one; a NaN or infinite double level is
+ *   dropped (WARN). The batch also forgets, locally, the gauge an older build wrote the same
+ *   counter as, so it does not linger beside the sum.
+ * - gauges → `setGauge`.
  * - delta exponential histograms → `MetricUpdate.AddExponentialHistogram`, which adds the
  *   interval's bucket counts to the series' `DDSketch`. The point's `sum`, `min`, `max` and
  *   exemplars are not kept; a sketch has no field for them.
@@ -96,8 +102,8 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.otel.sdk.KuiltMetric
  * - a delta of ≤ 0 for a monotonic sum is skipped (grow-only counters reject it), and so is a
  *   NaN delta (WARN). Either is one dropped point, never a failed export: the export is one
  *   batch, so a point it could not apply would otherwise take every other point with it.
- * - a monotonic sum or a histogram whose total count over every replica cannot grow past
- *   [Long.MAX_VALUE] is dropped from the export (WARN the first
+ * - a monotonic sum, a histogram or an up-down sum `record` refuses as saturated is dropped from
+ *   the export (WARN the first
  *   time) for the same reason: `record` refuses the whole batch for it, so the export is recorded
  *   again without that series, and every other point lands once.
  * - a sum whose own temporality is not the one asked for above — a cumulative counter, or a
@@ -175,20 +181,24 @@ public class KuiltMetricExporter @JvmOverloads constructor(
     }
 
     /**
-     * [WarpMetricExporter.record] the export, leaving out each sum or histogram series it refuses
-     * as saturated.
+     * [WarpMetricExporter.record] the export, leaving out each sum, histogram or up-down sum series
+     * it refuses as saturated.
      *
      * `record` refuses a whole batch, applying nothing, when one update would carry a sum or
-     * histogram series' total over every replica past [Long.MAX_VALUE]: a [MetricExportResult.Refused] whose
-     * `overflow` is a [MetricOverflowException]. A delta
-     * counter or histogram that has reached that point sends more in every export, so passing the
+     * histogram series' total over every replica past [Long.MAX_VALUE], or move an up-down sum
+     * series' share past what its slots hold: a [MetricExportResult.Refused] whose `overflow` is a
+     * [MetricOverflowException]. A delta counter or histogram that has reached that point sends more
+     * in every export, and an UpDownCounter re-sends its level in every export, so passing the
      * refusal on would drop every other point of every export from then on. Instead the refused
      * series' updates are taken out and the rest recorded again. A refused attempt applied
      * nothing, so the retry counts every other point exactly once.
      *
      * Only the refused series' updates of the refused kind leave: for a [MetricSumOverflowException]
      * its long increments, since a double sum under the same name and attributes is a different
-     * counter and is not refused; for a [MetricHistogramOverflowException] its histogram updates.
+     * counter and is not refused; for a [MetricHistogramOverflowException] its histogram updates; for
+     * a [MetricUpDownSumOverflowException] the up-down updates of the map it names, long or double by
+     * [MetricUpDownSumOverflowException.fractional], since the other map's series under the same key
+     * is a different series and is not refused.
      * The loop ends: every refusal names a series with such an update still in the batch, and they
      * leave with the retry, so there is at most one retry per distinct series; a `check` pins that a
      * refusal never names anything else. A refused batch was no turn of any kind, so the retry
@@ -219,28 +229,50 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             }
             val line = {
                 "KuiltMetricExporter: dropping this export's updates to ${saturated.what} ${saturated.key.name} " +
-                    "${saturated.key.attributes}: its total count over every replica cannot grow past Long.MAX_VALUE"
+                    "${saturated.key.attributes}: ${saturated.why}"
             }
             if (firstDrop(saturated)) logger.warn(line) else logger.debug(line)
             remaining = remaining.filterNot(saturated::carries)
         }
     }
 
-    /** A series `record` refused as saturated: a sum series, or a histogram series, under [key]. */
-    private data class Saturated(val key: MetricKey, val histogram: Boolean) {
-        val what: String get() = if (histogram) "histogram series" else "sum series"
+    /** Which of a key's series `record` refused as saturated, and why that series cannot take more. */
+    private enum class SeriesKind(val what: String, val why: String) {
+        SUM("sum series", "its total over every replica cannot grow past Long.MAX_VALUE"),
+        HISTOGRAM("histogram series", "its total count over every replica cannot grow past Long.MAX_VALUE"),
+        UP_DOWN_SUM(
+            "up-down sum series",
+            "this replica's share cannot move to the level without taking one of its slots past what it holds, " +
+                "or the total over every replica outside a Long",
+        ),
+        UP_DOWN_SUM_DOUBLE(
+            "double up-down sum series",
+            "this replica's share cannot move to the level without taking one of its slots past Double.MAX_VALUE",
+        ),
+    }
+
+    /** A series `record` refused as saturated: a sum, histogram or up-down sum series under [key]. */
+    private data class Saturated(val key: MetricKey, val kind: SeriesKind) {
+        val what: String get() = kind.what
+        val why: String get() = kind.why
 
         /** Whether [update] is one `record` refused this series for, and so leaves the retry. */
         fun carries(update: MetricUpdate): Boolean = update.key == key && when (update) {
-            is MetricUpdate.IncrementSum -> !histogram
-            is MetricUpdate.RecordHistogram, is MetricUpdate.AddExponentialHistogram -> histogram
-            is MetricUpdate.IncrementSumDouble, is MetricUpdate.SetGauge, is MetricUpdate.AddCardinality -> false
+            is MetricUpdate.IncrementSum -> kind == SeriesKind.SUM
+            is MetricUpdate.RecordHistogram, is MetricUpdate.AddExponentialHistogram -> kind == SeriesKind.HISTOGRAM
+            is MetricUpdate.AddUpDownSum, is MetricUpdate.SetUpDownSum -> kind == SeriesKind.UP_DOWN_SUM
+            is MetricUpdate.AddUpDownSumDouble, is MetricUpdate.SetUpDownSumDouble -> kind == SeriesKind.UP_DOWN_SUM_DOUBLE
+            is MetricUpdate.IncrementSumDouble, is MetricUpdate.SetGauge, is MetricUpdate.AddCardinality,
+            is MetricUpdate.Forget,
+            -> false
         }
 
         companion object {
             fun of(refused: MetricOverflowException): Saturated = when (refused) {
-                is MetricSumOverflowException -> Saturated(refused.key, histogram = false)
-                is MetricHistogramOverflowException -> Saturated(refused.key, histogram = true)
+                is MetricSumOverflowException -> Saturated(refused.key, SeriesKind.SUM)
+                is MetricHistogramOverflowException -> Saturated(refused.key, SeriesKind.HISTOGRAM)
+                is MetricUpDownSumOverflowException ->
+                    Saturated(refused.key, if (refused.fractional) SeriesKind.UP_DOWN_SUM_DOUBLE else SeriesKind.UP_DOWN_SUM)
             }
         }
     }
@@ -256,13 +288,21 @@ public class KuiltMetricExporter @JvmOverloads constructor(
      */
     private fun firstDrop(series: Saturated): Boolean {
         val held = exporter.snapshotAll()
-        dropped.removeIf { if (it.histogram) it.key !in held.histograms else it.key !in held.sums }
+        dropped.removeIf {
+            when (it.kind) {
+                SeriesKind.SUM -> it.key !in held.sums
+                SeriesKind.HISTOGRAM -> it.key !in held.histograms
+                SeriesKind.UP_DOWN_SUM -> it.key !in held.upDownSums
+                SeriesKind.UP_DOWN_SUM_DOUBLE -> it.key !in held.doubleUpDownSums
+            }
+        }
         return dropped.add(series)
     }
 
     /**
-     * Cumulative for an UpDownCounter, whose point becomes a gauge level; delta for everything
-     * else, so a counter's point is the increment `incrementSum` adds. See the class KDoc.
+     * Cumulative for an UpDownCounter, whose point is a level that sets this replica's share of an
+     * up-down sum; delta for everything else, so a counter's point is the increment `incrementSum`
+     * adds. See the class KDoc.
      */
     override fun getAggregationTemporality(instrumentType: InstrumentType): AggregationTemporality =
         when (instrumentType) {
@@ -288,16 +328,12 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             MetricDataType.LONG_SUM -> {
                 val s = md.longSumData
                 if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return
-                s.points.forEach { p ->
-                    if (s.isMonotonic) incLong(name, p, into) else gauge(name, p.attributes, p.value.toDouble(), p.epochNanos, into)
-                }
+                s.points.forEach { p -> if (s.isMonotonic) incLong(name, p, into) else upDownLong(name, p, into) }
             }
             MetricDataType.DOUBLE_SUM -> {
                 val s = md.doubleSumData
                 if (!sumTemporalityFits(name, s.isMonotonic, s.aggregationTemporality)) return
-                s.points.forEach { p ->
-                    if (s.isMonotonic) incDouble(name, p, into) else gauge(name, p.attributes, p.value, p.epochNanos, into)
-                }
+                s.points.forEach { p -> if (s.isMonotonic) incDouble(name, p, into) else upDownDouble(name, p, into) }
             }
             MetricDataType.LONG_GAUGE ->
                 md.longGaugeData.points.forEach { gauge(name, it.attributes, it.value.toDouble(), it.epochNanos, into) }
@@ -384,6 +420,46 @@ public class KuiltMetricExporter @JvmOverloads constructor(
             return
         }
         into += MetricUpdate.IncrementSumDouble(MetricKey(name, MetricKind.SUM, attrs(p.attributes)), p.value)
+    }
+
+    /**
+     * One cumulative UpDownCounter point: this replica's level, set as its share of the series'
+     * up-down sum, so the series sums across replicas (#3307). See [retireGaugeTwin].
+     */
+    private fun upDownLong(name: String, p: LongPointData, into: MutableList<MetricUpdate>) {
+        val key = MetricKey(name, MetricKind.UP_DOWN_SUM, attrs(p.attributes))
+        retireGaugeTwin(key, into)
+        into += MetricUpdate.SetUpDownSum(key, p.value)
+    }
+
+    /**
+     * The double twin of [upDownLong]. A NaN or infinite level is dropped with a WARN: a share
+     * cannot hold one, and [MetricUpdate.SetUpDownSumDouble] would reject it while the export is
+     * being collected, failing every valid point with it.
+     */
+    private fun upDownDouble(name: String, p: DoublePointData, into: MutableList<MetricUpdate>) {
+        if (!p.value.isFinite()) {
+            logger.warn { "KuiltMetricExporter: dropping a ${p.value} point of UpDownCounter '$name' — a share cannot hold it" }
+            return
+        }
+        val key = MetricKey(name, MetricKind.UP_DOWN_SUM, attrs(p.attributes))
+        retireGaugeTwin(key, into)
+        into += MetricUpdate.SetUpDownSumDouble(key, p.value)
+    }
+
+    /**
+     * Before #3307 this bridge wrote every UpDownCounter as a [MetricKind.GAUGE] under the same name
+     * and attributes. That series would linger beside the up-down sum, holding a cap slot and going
+     * out as a Gauge of the same name, so the batch that writes [upDown] forgets it, locally only.
+     *
+     * Only when the buffer holds it: a forget names the gauges' map, so it would make every export
+     * read that map, and fail when the store refuses it, long after the twin is gone. The check and
+     * the record are not atomic; the worst either way is one forget that finds nothing, or a twin
+     * retired one collection later.
+     */
+    private fun retireGaugeTwin(upDown: MetricKey, into: MutableList<MetricUpdate>) {
+        val twin = upDown.copy(kind = MetricKind.GAUGE)
+        if (exporter.gaugeValue(twin) != null) into += MetricUpdate.Forget(twin)
     }
 
     /**

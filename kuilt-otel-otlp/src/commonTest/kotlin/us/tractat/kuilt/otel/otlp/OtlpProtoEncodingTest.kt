@@ -130,6 +130,26 @@ class OtlpProtoEncodingTest {
         )
     }
 
+    /** An up-down sum decodes as a cumulative, non-monotonic Sum carrying its negative value (#3307). */
+    @Test
+    fun upDownSumRoundTripsAsANonMonotonicCumulativeSum() {
+        val key = MetricKey("in_flight", MetricKind.UP_DOWN_SUM)
+        fun roundTrip(p: MetricPoint) = proto.decodeFromByteArray(
+            ProtoMetricsRequest.serializer(),
+            proto.encodeToByteArray(ProtoMetricsRequest.serializer(), metricsProtoOf(setOf(p), OtlpEnvelope.NONE)),
+        ).resourceMetrics.single().scopeMetrics.single().metrics.single()
+        val long = roundTrip(MetricPoint.UpDownSum(key, value = -3L, startEpochNanos = 0L, timeEpochNanos = 5L))
+        val double = roundTrip(MetricPoint.DoubleUpDownSum(key, value = -1.25, startEpochNanos = 0L, timeEpochNanos = 5L))
+        assertAll(
+            { assertEquals(false, long.sum?.isMonotonic) },
+            { assertEquals(AGGREGATION_TEMPORALITY_CUMULATIVE, long.sum?.aggregationTemporality) },
+            { assertEquals(-3L, long.sum?.dataPoints?.single()?.asInt) },
+            { assertEquals(false, double.sum?.isMonotonic) },
+            { assertEquals(AGGREGATION_TEMPORALITY_CUMULATIVE, double.sum?.aggregationTemporality) },
+            { assertEquals(-1.25, double.sum?.dataPoints?.single()?.asDouble) },
+        )
+    }
+
     // Hand-verified against opentelemetry-proto metrics.proto. Layout (field, wire type):
     //   0a 47                  ExportMetricsServiceRequest.resource_metrics (f1, len 71)
     //     12 45                ResourceMetrics.scope_metrics (f2, len 69)

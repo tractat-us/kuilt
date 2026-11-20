@@ -76,8 +76,8 @@ internal fun logsProtoOf(logs: Set<LogRecord>, envelope: OtlpEnvelope): ProtoLog
 }
 
 /**
- * Render metric points into an OTLP/protobuf metrics request (Sum for sums, Gauge for
- * gauge/cardinality, ExponentialHistogram for histograms).
+ * Render metric points into an OTLP/protobuf metrics request (Sum for sums, non-monotonic Sum
+ * for up-down sums, Gauge for gauge/cardinality, ExponentialHistogram for histograms).
  */
 internal fun metricsProtoOf(points: Set<MetricPoint>, envelope: OtlpEnvelope): ProtoMetricsRequest {
     val metrics = points.map { p ->
@@ -110,6 +110,36 @@ internal fun metricsProtoOf(points: Set<MetricPoint>, envelope: OtlpEnvelope): P
                     ),
                     aggregationTemporality = AGGREGATION_TEMPORALITY_CUMULATIVE,
                     isMonotonic = true,
+                ),
+            )
+            is MetricPoint.UpDownSum -> ProtoMetric(
+                name = p.key.name,
+                sum = ProtoSum(
+                    dataPoints = listOf(
+                        ProtoNumberDataPoint(
+                            attributes = protoAttrs(p.key.attributes),
+                            startTimeUnixNano = p.startEpochNanos,
+                            timeUnixNano = p.timeEpochNanos,
+                            asInt = p.value,
+                        ),
+                    ),
+                    aggregationTemporality = AGGREGATION_TEMPORALITY_CUMULATIVE,
+                    isMonotonic = false,
+                ),
+            )
+            is MetricPoint.DoubleUpDownSum -> ProtoMetric(
+                name = p.key.name,
+                sum = ProtoSum(
+                    dataPoints = listOf(
+                        ProtoNumberDataPoint(
+                            attributes = protoAttrs(p.key.attributes),
+                            startTimeUnixNano = p.startEpochNanos,
+                            timeUnixNano = p.timeEpochNanos,
+                            asDouble = p.value,
+                        ),
+                    ),
+                    aggregationTemporality = AGGREGATION_TEMPORALITY_CUMULATIVE,
+                    isMonotonic = false,
                 ),
             )
             is MetricPoint.Gauge -> ProtoMetric(

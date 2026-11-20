@@ -108,8 +108,9 @@ internal data class OtlpSum(
     // @EncodeDefault(ALWAYS) forces these two onto the wire even under the encoder's
     // encodeDefaults = false. If omitted, a collector reads the absent enum as
     // AGGREGATION_TEMPORALITY_UNSPECIFIED (0), which makes an OTLP Sum malformed and is
-    // dropped/mis-aggregated — silent metric loss. kuilt's counter stores are grow-only
-    // cumulative (GCounter/GCounterDouble), so every emitted Sum is CUMULATIVE + monotonic.
+    // dropped/mis-aggregated — silent metric loss. Every emitted Sum is CUMULATIVE. A grow-only
+    // counter (GCounter/GCounterDouble) is monotonic; an up-down sum (PNCounter/PNCounterDouble)
+    // is not, and passes isMonotonic = false.
     @EncodeDefault(EncodeDefault.Mode.ALWAYS)
     val aggregationTemporality: Int = AGGREGATION_TEMPORALITY_CUMULATIVE,
     @EncodeDefault(EncodeDefault.Mode.ALWAYS)

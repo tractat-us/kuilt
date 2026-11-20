@@ -50,8 +50,29 @@ public class PNCounter private constructor(
      * @throws ArithmeticException if the net does not fit in a `Long`.
      */
     public val value: Long
-        get() = exactNet.toLongOrNull()
+        get() = valueOrNull()
             ?: throw ArithmeticException("PNCounter value $exactNet does not fit in a Long")
+
+    /**
+     * [value], or `null` when the net does not fit in a `Long`.
+     *
+     * For a caller that has to carry on past one counter it cannot read, such as an exporter
+     * draining many series: it skips that one and reports it, rather than catching an exception.
+     */
+    public fun valueOrNull(): Long? = exactNet.toLongOrNull()
+
+    /**
+     * [replica]'s own share of [value]: what it has incremented less what it has decremented, `0`
+     * for a replica with no slot. The shares of every replica add up to [value].
+     *
+     * Always fits: each half's slot is in `[0, Long.MAX_VALUE]`, so the difference is in
+     * `[-Long.MAX_VALUE, Long.MAX_VALUE]`.
+     *
+     * A replica that reports a level rather than a change — an in-flight count, a queue depth —
+     * moves its share to the level with an [increment] or [decrement] of `level − count(replica)`,
+     * and [value] is then the sum of every replica's level.
+     */
+    public fun count(replica: ReplicaId): Long = inc.count(replica) - dec.count(replica)
 
     /**
      * Total ever incremented across all replicas (monotonically non-decreasing).

@@ -18,6 +18,7 @@ delivery order or duplication.
 | `GCounter` | Sum of per-replica maxima | No |
 | `GCounterDouble` | Sum of per-replica maxima (`Double`, canonical-order sum) | No |
 | `PNCounter` | Two GCounters: inc − dec | No |
+| `PNCounterDouble` | Two GCounterDoubles: inc − dec, each replica's share summed in canonical order | No |
 | `GSet` | Set union | No |
 | `TwoPhaseSet` | Union; tombstones win permanently | Once |
 | `ORSet` | Causal: add-wins over concurrent remove | Yes |

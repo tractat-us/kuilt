@@ -94,8 +94,10 @@ bridge. The `Long` `incrementSum` path is untouched.
 > UpDownCounters: the SDK hands them over as *sums*, not gauges, so under delta the
 > gauge they become holds the interval's change, not the level. The bridge now asks
 > for `CUMULATIVE` on `UP_DOWN_COUNTER` and `OBSERVABLE_UP_DOWN_COUNTER` and `DELTA`
-> on everything else, and drops a sum whose own temporality does not match. The
-> current account is in `kuilt-otel/module.md`.
+> on everything else, and drops a sum whose own temporality does not match. Since
+> #3307 an UpDownCounter is no gauge at all: its level sets this replica's share of
+> an up-down sum (`MetricUpdate.SetUpDownSum`), so the mapping table's
+> non-monotonic row no longer holds. The current account is in `kuilt-otel/module.md`.
 
 `incrementSum(key, by)` **adds** `by` to the counter. That is a **delta**
 semantic: each call contributes an increment. OTLP sums, however, can be exported

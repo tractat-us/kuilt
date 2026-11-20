@@ -11,10 +11,11 @@ package us.tractat.kuilt.otel
  * Failed delivery or digest persistence can cause retries, so this is not an
  * exactly-once delivery guarantee. Nor does it deduplicate repeated increments.
  *
- * The five variants mirror the five kinds a [MetricCatalog] holds: a long cumulative
+ * The variants mirror the maps a [MetricCatalog] holds: a long cumulative
  * sum ([Sum]), a double-precision cumulative sum ([DoubleSum]), a last-writer-wins
- * gauge ([Gauge]), a distinct-count estimate ([Cardinality]), and a quantile sketch
- * ([ExponentialHistogram]).
+ * gauge ([Gauge]), a distinct-count estimate ([Cardinality]), a quantile sketch
+ * ([ExponentialHistogram]), and a level that goes both ways and adds up across replicas
+ * ([UpDownSum], [DoubleUpDownSum]).
  */
 public sealed interface MetricPoint {
     /** The series this point belongs to. */
@@ -37,6 +38,32 @@ public sealed interface MetricPoint {
 
     /** A double-precision cumulative monotonic total (OTLP Sum with `asDouble`). */
     public data class DoubleSum(
+        override val key: MetricKey,
+        public val value: Double,
+        public val startEpochNanos: Long,
+        public val timeEpochNanos: Long,
+    ) : MetricPoint {
+        override fun valueHash(): Long = value.toRawBits()
+    }
+
+    /**
+     * A long cumulative total that can fall as well as rise: an UpDownCounter's level summed over
+     * every replica (OTLP Sum, cumulative temporality, `isMonotonic = false`).
+     *
+     * A fall is a value, not a reset, so [startEpochNanos] stays unknown, as for [Sum]: the total
+     * spans many processes.
+     */
+    public data class UpDownSum(
+        override val key: MetricKey,
+        public val value: Long,
+        public val startEpochNanos: Long,
+        public val timeEpochNanos: Long,
+    ) : MetricPoint {
+        override fun valueHash(): Long = value
+    }
+
+    /** The double-precision [UpDownSum] (OTLP non-monotonic Sum with `asDouble`). */
+    public data class DoubleUpDownSum(
         override val key: MetricKey,
         public val value: Double,
         public val startEpochNanos: Long,

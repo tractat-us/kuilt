@@ -28,6 +28,7 @@ class CrdtSamplesRunTest {
             "sampleGCounterPiece" to ::sampleGCounterPiece,
             "sampleGCounterDouble" to ::sampleGCounterDouble,
             "samplePNCounter" to ::samplePNCounter,
+            "samplePNCounterDouble" to ::samplePNCounterDouble,
             "sampleGSet" to ::sampleGSet,
             "sampleTwoPhaseSet" to ::sampleTwoPhaseSet,
             "sampleORSet" to ::sampleORSet,

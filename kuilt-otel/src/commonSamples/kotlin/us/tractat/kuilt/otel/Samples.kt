@@ -246,19 +246,38 @@ internal suspend fun sampleWarpMetricExporterBatch() {
     )
     val ok = MetricKey("http.requests", MetricKind.SUM, mapOf("status" to "200"))
     val notFound = MetricKey("http.requests", MetricKind.SUM, mapOf("status" to "404"))
-    val inFlight = MetricKey("http.in_flight", MetricKind.GAUGE)
+    val inFlight = MetricKey("http.in_flight", MetricKind.UP_DOWN_SUM)
 
-    // Three updates over two kinds: one write of the sums, one of the gauges.
+    // Three updates over two kinds: one write of the sums, one of the up-down sums.
     val result = exporter.record(
         listOf(
             MetricUpdate.IncrementSum(ok, by = 40L),
             MetricUpdate.IncrementSum(notFound, by = 2L),
-            MetricUpdate.SetGauge(inFlight, value = 7.0, timestamp = 1_000L),
+            MetricUpdate.SetUpDownSum(inFlight, level = 7L),
         ),
     )
     check(result == MetricExportResult.Success) // every kind it touched is on disk
     check(exporter.sumValue(ok) == 40L)
-    check(exporter.gaugeValue(inFlight) == 7.0)
+    check(exporter.upDownSumValue(inFlight) == 7L)
+}
+
+/**
+ * A level that adds up across replicas, such as in-flight requests across a fleet: each replica sets
+ * its own share, and the merged series reads the sum of the levels.
+ */
+internal suspend fun sampleWarpMetricExporterUpDownSum() {
+    val inFlight = MetricKey("http.in_flight", MetricKind.UP_DOWN_SUM)
+    val serverA = WarpMetricExporter(ReplicaId("server-a"), InMemoryDurableStore())
+    val serverB = WarpMetricExporter(ReplicaId("server-b"), InMemoryDurableStore())
+
+    // Each server reports its current level, as often as it likes: a level set again moves nothing.
+    serverA.setUpDownSum(inFlight, level = 3L)
+    serverA.setUpDownSum(inFlight, level = 3L)
+    serverB.setUpDownSum(inFlight, level = 4L)
+
+    // Merged, the fleet's figure is the sum of the levels. A gauge would keep just one of them.
+    serverA.mergeUpDownSum(inFlight, serverB.upDownSumSnapshot(inFlight))
+    check(serverA.upDownSumValue(inFlight) == 7L)
 }
 
 /** @suppress — sample only */
