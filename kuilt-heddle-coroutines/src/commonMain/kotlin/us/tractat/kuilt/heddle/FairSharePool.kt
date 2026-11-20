@@ -364,6 +364,12 @@ public class FairSharePool(
     /** Called just before each grant or refusal is resumed, outside the lock. */
     internal var beforeResumeForTest: (SlotOutcome) -> Unit = {}
 
+    /** Called just before each failure is resumed to a waiter, outside the lock. */
+    internal var beforeFailForTest: (Throwable) -> Unit = {}
+
+    /** Called with each failure that reached no waiter, just before it is logged, outside the lock. */
+    internal var unclaimedForTest: (Throwable) -> Unit = {}
+
     /** Called under the lock after each [complete]'s engine answer, with the lease, the cost and the answer. */
     internal var afterCompleteForTest: (lease: LeaseId, actualCost: Long, outcome: LeaseOutcome) -> Unit = { _, _, _ -> }
 
@@ -550,8 +556,14 @@ public class FairSharePool(
                 beforeResumeForTest(resumption.outcome)
                 resumption.cont.resume(resumption.outcome)
             }
-            is Resumption.Fail -> resumption.cont.resumeWithException(resumption.failure)
-            is Resumption.Unclaimed -> logUnclaimed(resumption.failure)
+            is Resumption.Fail -> {
+                beforeFailForTest(resumption.failure)
+                resumption.cont.resumeWithException(resumption.failure)
+            }
+            is Resumption.Unclaimed -> {
+                unclaimedForTest(resumption.failure)
+                logUnclaimed(resumption.failure)
+            }
         }
     }
 
