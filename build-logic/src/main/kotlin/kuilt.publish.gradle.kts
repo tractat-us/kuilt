@@ -108,9 +108,10 @@ publishing {
 // not inside its `classes.jar`, which AGP builds without a Gradle `Jar` task (#3584, below).
 //
 // Both values change more often than the code (#3464): the version on every snapshot, the revision
-// on every commit. They may reach these archives and nothing else. A test task reads every jar on
-// its runtime classpath, manifest included, so the root build tells runtime-classpath normalization
-// to ignore both attributes (see "Stamp invariance" there).
+// on every commit. They may reach these archives, and `writeAarProvenance` (which writes the AAR's
+// manifest), and nothing else. A test task reads every jar on its runtime classpath, manifest
+// included, so the root build tells runtime-classpath normalization to ignore both attributes (see
+// "Stamp invariance" there).
 val sourceRevision: Provider<String> = providers.gradleProperty("kuilt.sourceRevision")
     .orElse(
         providers.of(SourceRevision::class.java) {
@@ -134,8 +135,10 @@ tasks.withType<org.gradle.jvm.tasks.Jar>()
 
 // The published AAR (#3584). Only `bundleReleaseAar`, the one the `androidRelease` publication
 // ships: matching every `BundleAar` would also stamp `bundle<Variant>LocalLintAar`, which a
-// dependent module's lint reads, and lint would then lose its cache on every commit. No in-build
-// task reads the release AAR, so the stamp reaches the published file and nothing else.
+// dependent module's lint reads, and lint would then lose its cache on every commit. No compile,
+// test or lint task reads the release AAR; only its publication tasks (module metadata, signing,
+// publish) and `assembleRelease` do, so the stamp reaches the published file and no task that
+// builds or checks the code.
 plugins.withId("com.android.library") {
     val aarProvenance = tasks.register<WriteAarProvenance>("writeAarProvenance") {
         libraryVersion.set(project.version.toString())

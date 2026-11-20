@@ -20,7 +20,8 @@ import java.util.jar.Manifest
  *
  * **Both inputs change more often than the code (#3464), and this task is what keeps them off every
  * compile and test task.** It reads nothing but [libraryVersion] and [revision], and only
- * `bundleReleaseAar` reads its output. No in-build task reads the release AAR: a dependent module
+ * `bundleReleaseAar` reads its output. No compile, test or lint task reads the release AAR; only its
+ * publication tasks (module metadata, signing, publish) and `assembleRelease` do. A dependent module
  * compiles and tests against AGP's intermediate jars, and its lint reads the separate
  * `bundle<Variant>LocalLintAar`, which this is not added to.
  *
