@@ -78,15 +78,21 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.WebCryptoDe
  * @param grantMedium how a call reaches the grants record; the real one opens [database] through
  *   [IndexedDbDurableStore]. A seam only so the conformance suite can make the grants record
  *   unreadable without touching the key.
+ * @param inPage the in-page mutex every call holds outside the Web Lock. Production shares one per
+ *   [database] through the secondary constructor; a test hands two stores two mutexes, so that only
+ *   the Web Lock stands between them, as it does between two tabs.
  * @param beforeKeyIsMade called each time this store is about to make a key, and at no other time:
  *   the conformance suite's gate.
  */
 internal class WebCryptoDeviceKeyStore(
     private val database: String,
     private val grantMedium: GrantMedium,
+    private val inPage: Mutex,
     private val beforeKeyIsMade: suspend () -> Unit,
 ) : DeviceKeyStore {
-    private val inPage: Mutex = mutexFor(database)
+    /** A store holding the mutex every store over [database] in this page shares. */
+    constructor(database: String, grantMedium: GrantMedium, beforeKeyIsMade: suspend () -> Unit) :
+        this(database, grantMedium, mutexFor(database), beforeKeyIsMade)
 
     /** Read and written only inside [exclusively] or as a plain read: wasmJs runs one thread per page. */
     private var key: DeviceKey? = null
