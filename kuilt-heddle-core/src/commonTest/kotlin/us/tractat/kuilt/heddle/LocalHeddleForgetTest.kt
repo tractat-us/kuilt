@@ -88,7 +88,7 @@ class LocalHeddleForgetTest {
 
     /**
      * The oracle, for RETIRED edges: the same calls on an engine that forgets and on one that keeps
-     * everything ([LocalHeddle.forgetsForTest]) give the same outcomes, picks included, and agree on
+     * everything ([LocalHeddle.keepingEverythingForTest]) give the same outcomes, picks included, and agree on
      * every live group's holdings, on conservation, on the open leases, and on the allocator's
      * memory of every edge the forgetting engine still holds, which is the only memory it keeps.
      * Every edge either engine adds is numbered above every generation the forgetting engine ever
@@ -108,7 +108,7 @@ class LocalHeddleForgetTest {
         var retiredForgets = 0
         for (seed in 0 until 8) {
             val subject = engine()
-            val reference = engine().also { it.forgetsForTest = false }
+            val reference = engine().keepingEverythingForTest()
             val attachedS = ArrayList<String>()
             val attachedR = ArrayList<String>()
             val rs = Random(seed)
@@ -158,7 +158,7 @@ class LocalHeddleForgetTest {
      */
     @Test
     fun aRestoredLedgerThatKeptItsRetiredEdgesCompactsInItsFirstSwap() {
-        val writer = engine().also { it.forgetsForTest = false }
+        val writer = engine().keepingEverythingForTest()
         repeat(50) { writer.cycle(it) }
         val kept = writer.persist()
         val h = LocalHeddle.restore(kept, policy, epoch = 1L)
