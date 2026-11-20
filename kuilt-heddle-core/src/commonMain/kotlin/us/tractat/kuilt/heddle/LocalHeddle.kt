@@ -533,6 +533,12 @@ public class LocalHeddle private constructor(
      * value class compiles to a class of its own. Never changes, so it lives outside [Core].
      */
     private val afterPick: ((GroupId) -> Unit)? = null,
+    /**
+     * Whether [run]'s swap forgets ([forgetQuiesced]). `true` in every engine but the one
+     * [keepingEverythingForTest] builds, which a test compares an engine that forgets against.
+     * Never changes, so it lives outside [Core].
+     */
+    private val forgets: Boolean = true,
 ) {
     init {
         require(epoch >= 0L) { "epoch must be non-negative, was $epoch" }
@@ -1277,7 +1283,7 @@ public class LocalHeddle private constructor(
      * What forgetting changes and what it does not is on [EntitlementLedger.forget].
      */
     private fun forgetQuiesced() {
-        if (!forgetsForTest) return
+        if (!forgets) return
         val quiesced = ledger.quiescedEdges()
         if (quiesced.isEmpty()) return
         val (prepared, retired) = quiesced.partition { ledger.lifecycle(it) == Lifecycle.PREPARED }
@@ -1506,21 +1512,21 @@ public class LocalHeddle private constructor(
     internal fun applyStepsForTest(steps: List<TopologyStep>): ApplyResult = atomically { run(steps, Attribution.CHILD) }
 
     /**
-     * Whether [run]'s swap forgets ([forgetQuiesced]); `true` unless a test turns it off, to compare
-     * an engine that forgets with one that keeps everything. Not engine state.
-     */
-    internal var forgetsForTest: Boolean = true
-
-    /**
      * A copy of this engine, its whole [Core] included, that calls [hook] after each level's pick:
      * see [afterPick]. The copy shares nothing mutable with this engine.
      */
-    internal fun withAfterPickForTest(hook: (GroupId) -> Unit): LocalHeddle =
-        LocalHeddle(root, policy, epoch, ledger, allocator, leasable, openElsewhere, afterPick = hook)
-            .also {
-                it.core = core.fork(core.revision)
-                it.forgetsForTest = forgetsForTest
-            }
+    internal fun withAfterPickForTest(hook: (GroupId) -> Unit): LocalHeddle = copyForTest(hook, forgets)
+
+    /**
+     * A copy of this engine, its whole [Core] included, whose swaps forget nothing: see [forgets].
+     * What this engine has already forgotten stays forgotten, so a copy taken straight after a boot
+     * keeps every edge the boot's own swap left. The copy shares nothing mutable with this engine.
+     */
+    internal fun keepingEverythingForTest(): LocalHeddle = copyForTest(afterPick, forgets = false)
+
+    private fun copyForTest(afterPick: ((GroupId) -> Unit)?, forgets: Boolean): LocalHeddle =
+        LocalHeddle(root, policy, epoch, ledger, allocator, leasable, openElsewhere, afterPick, forgets)
+            .also { it.core = core.fork(core.revision) }
 
     /** The path [lease] charges, for tests: what it was opened on, or what a reweight moved it onto. */
     internal fun capturedPath(lease: LeaseId): List<AttachmentId>? = open[lease]?.path
