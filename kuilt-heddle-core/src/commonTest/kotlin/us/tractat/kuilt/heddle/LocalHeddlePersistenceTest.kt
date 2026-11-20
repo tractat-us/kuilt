@@ -53,6 +53,10 @@ class LocalHeddlePersistenceTest {
         return LocalHeddle.restore(snapshot, with, epoch = snapshot.epoch + 1)
     }
 
+    /** This engine when [forgets], else a copy of it whose swaps forget nothing. */
+    private fun LocalHeddle.keepingEverythingUnless(forgets: Boolean): LocalHeddle =
+        if (forgets) this else keepingEverythingForTest()
+
     /**
      * What two engines must agree on to have the same books: each edge's summary, each group's
      * holdings, the totals minted and spent, the open leases and the wake memory. Not the ledger
@@ -556,11 +560,11 @@ class LocalHeddlePersistenceTest {
      * leases under it onto its new edge, and removes `spare`, which drains with its lease open; the
      * `batch/x` lease is cancelled; the engine is restored under epoch 1 and leases once more, so the
      * open leases span two epochs. Returns that engine and its open leases. With [forgets] false
-     * both engines keep every edge ([LocalHeddle.forgetsForTest]); nothing here is forgettable
+     * both engines keep every edge ([LocalHeddle.keepingEverythingForTest]); nothing here is forgettable
      * either way, since the one retired edge is a group's.
      */
     private fun richScenario(forgets: Boolean = true): Pair<LocalHeddle, List<Lease>> {
-        val h = LocalHeddle.bootWhole(richBefore, richPolicy, epoch = 0L).also { it.reconcileCapacity(4L); it.forgetsForTest = forgets }
+        val h = LocalHeddle.bootWhole(richBefore, richPolicy, epoch = 0L).also { it.reconcileCapacity(4L) }.keepingEverythingUnless(forgets)
         check(h.attach(listOf("tenants"), "t1", generation = 1L).refusals.isEmpty())
         val interactive = h.lease(setOf(richBefore.groupId("acme", "interactive")), reservation = 2L, startedAt = 10L)
         val spare = h.lease(setOf(richBefore.groupId("spare")), reservation = 3L, startedAt = 11L)
@@ -571,7 +575,7 @@ class LocalHeddlePersistenceTest {
         check(reload.refusals.single() is StepRefusal.Draining) { "spare drains: $reload" }
         check(h.capturedPath(interactive.id) != pathBefore) { "the reweight moved the interactive lease" }
         check(h.cancel(x.id) == LeaseOutcome.Done(0L, 0L, 0L)) { "cancelled" }
-        val restored = throughJson(h, richPolicy).also { it.forgetsForTest = forgets }
+        val restored = throughJson(h, richPolicy).keepingEverythingUnless(forgets)
         val later = restored.lease(setOf(richBefore.groupId("acme", "batch", "y")), reservation = 2L, startedAt = 20L)
         return restored to listOf(interactive, spare, inTenant, later)
     }

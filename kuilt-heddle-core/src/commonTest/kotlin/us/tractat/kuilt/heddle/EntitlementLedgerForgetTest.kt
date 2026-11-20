@@ -331,7 +331,7 @@ class EntitlementLedgerForgetTest {
         for (seed in 0 until 12) {
             val r = Random(seed)
             // An engine that keeps everything, so its ledger holds the retired edges this forgets.
-            val history = History(LocalHeddle.bootWhole(tree, policy, epoch = 0L).also { it.reconcileCapacity(4L); it.forgetsForTest = false })
+            val history = History(LocalHeddle.bootWhole(tree, policy, epoch = 0L).also { it.reconcileCapacity(4L) }.keepingEverythingForTest())
             repeat(6) { round ->
                 repeat(40) { step(history, r, at = round * 100L + it) }
                 checkpoint(history, r, tally, "seed $seed round $round")
