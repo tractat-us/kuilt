@@ -2,6 +2,8 @@
 
 package us.tractat.kuilt.identity
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.test.runTest
 import us.tractat.kuilt.test.assertAll
 import kotlin.js.JsAny
@@ -131,6 +133,58 @@ class WebCryptoDeviceKeyStoreTest {
         )
     }
 
+    /**
+     * WebCrypto refusing to verify the self-test's signature is the browser failing, not the record:
+     * [DeviceKeyStore.deviceKey] throws, and the key stays. Read as a failed self-test, it would be
+     * overwritten, and a transient browser fault would cost the device its name and every grant.
+     */
+    @Test
+    fun aVerifyFaultThrowsAndKeepsTheKey() = runTest { assertAWebCryptoFaultKeepsTheKey("verify") }
+
+    /** The same for the decode that names the stored public half, the other call a fault reached. */
+    @Test
+    fun aKeyImportFaultThrowsAndKeepsTheKey() = runTest { assertAWebCryptoFaultKeepsTheKey("importKey") }
+
+    /**
+     * The control: a signing fault already threw before the verify and decode arms above were fixed, so
+     * this arm is green either way and shows the rig and the assertions pass a store that keeps its key.
+     */
+    @Test
+    fun aSignFaultThrowsAndKeepsTheKey() = runTest { assertAWebCryptoFaultKeepsTheKey("sign") }
+
+    /**
+     * Makes `crypto.subtle.<method>` reject once, while a second store reads the key the first one made,
+     * and checks the read threw, no key was made, and the record still names the first key.
+     */
+    private suspend fun assertAWebCryptoFaultKeepsTheKey(method: String) {
+        val database = freshDatabase()
+        val original = store(database).deviceKey().id
+        var made = 0
+        val failure = try {
+            faultOnce(method)
+            try {
+                WebCryptoDeviceKeyStore(database, IndexedDbGrantMedium(database)) { made++ }.deviceKey()
+                null
+            } catch (e: IllegalStateException) {
+                currentCoroutineContext().ensureActive()
+                e
+            }
+        } finally {
+            clearFault(method)
+        }
+        val firings = faultFirings(method)
+        val kept = independentNameOf(publicKeyOf(assertNotNull(readRecord(database), "a record is still there")))
+        val afterwards = WebCryptoDeviceKeyStore(database, IndexedDbGrantMedium(database)) { made++ }.deviceKey().id
+
+        assertAll(
+            { assertEquals(1, firings, "rig: the $method fault fired once") },
+            { assertNotNull(failure, "a WebCrypto $method failure throws rather than replacing the key") },
+            { assertEquals(0, made, "no key is made") },
+            { assertEquals(original, kept, "the record still holds the original key") },
+            { assertEquals(original, afterwards, "and once WebCrypto answers again it is the same device") },
+        )
+    }
+
     private fun store(database: String) = WebCryptoDeviceKeyStore(database, IndexedDbGrantMedium(database)) {}
 
     /** The DOM error name exporting [key] as [format] rejected with, or `null` when it exported. */
@@ -140,6 +194,34 @@ class WebCryptoDeviceKeyStoreTest {
     private suspend fun cryptoPair(start: (onSuccess: (JsAny) -> Unit, onError: (String) -> Unit) -> Unit): JsAny =
         idbCall("generating", start)
 }
+
+/**
+ * Makes the next `crypto.subtle[method]` call reject with an `OperationError`, as a browser's own
+ * fault would, and count it. An own property on the `SubtleCrypto` instance shadows the prototype's
+ * method; the one call it answers deletes it again.
+ */
+@JsFun(
+    """
+    (method) => {
+        const subtle = crypto.subtle;
+        globalThis['kuiltFaultFirings_' + method] = 0;
+        subtle[method] = function () {
+            delete subtle[method];
+            globalThis['kuiltFaultFirings_' + method] += 1;
+            return Promise.reject(new DOMException('rigged ' + method + ' fault', 'OperationError'));
+        };
+    }
+    """,
+)
+private external fun faultOnce(method: String)
+
+/** Removes [faultOnce]'s rig if it never fired. */
+@JsFun("(method) => { if (Object.prototype.hasOwnProperty.call(crypto.subtle, method)) delete crypto.subtle[method]; }")
+private external fun clearFault(method: String)
+
+/** How many calls [faultOnce]'s rig answered. */
+@JsFun("(method) => globalThis['kuiltFaultFirings_' + method] | 0")
+private external fun faultFirings(method: String): Int
 
 @JsFun("(key) => key.extractable === true")
 private external fun isExtractable(key: JsAny): Boolean
