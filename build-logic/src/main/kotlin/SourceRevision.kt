@@ -8,8 +8,8 @@ import javax.inject.Inject
 
 /**
  * The commit this build was made from, for the `SCM-Revision` attribute `kuilt.publish` writes into
- * every published class and sources jar (#3576), so a consumer can read which commit built a jar
- * out of the jar itself.
+ * every published class and sources jar (#3576) and into the published Android AAR's manifest
+ * (#3584), so a consumer can read which commit built an artifact out of the artifact itself.
  *
  * In order: `git rev-parse HEAD` in [Parameters.rootDirectory], which works on a shallow or
  * detached CI checkout and in a linked worktree; then `GITHUB_SHA`, for a CI job that builds
@@ -19,13 +19,15 @@ import javax.inject.Inject
  * does not report that repository's commit.
  *
  * A `ValueSource` because the configuration cache forbids running a process while configuring. It
- * is wired only into archive tasks' inputs, so it is obtained when one of them runs, not while
- * configuring, and the revision is never a configuration-cache input: a new commit invalidates
- * the jars and nothing else. `-Pkuilt.sourceRevision=<sha>` overrides it (see `kuilt.publish`).
+ * is wired only into task inputs, never read while configuring: the archive tasks' manifests and
+ * the `@Input` of `writeAarProvenance`, the task that writes the AAR's manifest for
+ * `bundleReleaseAar`. So it is obtained when one of them runs, and the revision is never a
+ * configuration-cache input: a new commit invalidates the jars, that manifest and the AAR, and
+ * nothing else. `-Pkuilt.sourceRevision=<sha>` overrides it (see `kuilt.publish`).
  *
- * **The revision must reach archive tasks only, never a compile or test task (#3464).** It changes
- * on every commit, so a compile or test task that read it would lose its build cache on every
- * commit. A test task reads every jar on its runtime classpath, manifest included, which is why the
+ * **The revision must reach archive tasks and `writeAarProvenance` only, never a compile or test
+ * task (#3464).** It changes on every commit, so a compile or test task that read it would lose its
+ * build cache on every commit. A test task reads every jar on its runtime classpath, manifest included, which is why the
  * root build tells runtime-classpath normalization to ignore this attribute.
  */
 abstract class SourceRevision : ValueSource<String, SourceRevision.Parameters> {

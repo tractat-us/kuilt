@@ -8699,11 +8699,12 @@ allprojects {
 //
 // What it does not see: anything outside the selection. The archive tasks legitimately carry the
 // stamps and are not selected: POMs and Gradle module metadata carry the version, and every JVM
-// class jar (`jvmJar`, `jar`) and sources jar carries both the version and the commit in its
-// manifest. A class jar still reaches selected tasks, as the runtime classpath of a JVM `Test`, so
-// the stamps in its manifest are caught there unless the normalization block below ignores them;
-// the checker also requires that a jar this pass wrote carries the probe's commit, so the commit arm
-// cannot pass by never changing. The native/wasm test LINK tasks are not selected either, because a
+// class jar (`jvmJar`, `jar`), sources jar and release AAR carries both the version and the commit
+// in its manifest. No compile, test or lint task reads the release AAR; only its publication tasks
+// and `assembleRelease` do (#3584). A class jar still reaches selected tasks, as the runtime
+// classpath of a JVM `Test`, so the stamps in its manifest are caught there unless the
+// normalization block below ignores them; the checker also requires that a jar this pass wrote
+// carries the probe's commit, so the commit arm cannot pass by never changing. The native/wasm test LINK tasks are not selected either, because a
 // link re-runs only when a klib it reads changed, and that klib's compile task is selected.
 //
 // Positive control: `-Pkuilt.stampProbe.plantBaseEdge=true` gives `:kuilt-store` an

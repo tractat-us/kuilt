@@ -50,7 +50,8 @@ PROBE_JARS = ("*/build/libs/*.stamp-probe*.jar", "*/*/build/libs/*.stamp-probe*.
 
 def probe_revisions(since: float) -> dict[str, str]:
     """`SCM-Revision` of every probe jar written at or after `since`, by path. A jar without the
-    attribute (a metadata jar, say) is left out: `kuilt.publish` stamps class and sources jars only."""
+    attribute (a metadata jar, say) is left out: `kuilt.publish` stamps class and sources jars, and
+    the release AAR through the manifest `writeAarProvenance` writes, which these globs do not match."""
     found: dict[str, str] = {}
     for pattern in PROBE_JARS:
         for jar in Path(".").glob(pattern):
