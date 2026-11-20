@@ -8,7 +8,6 @@ import kotlinx.atomicfu.locks.withLock
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlin.time.ComparableTimeMark
 import kotlin.time.Duration
 import kotlin.time.TimeSource
@@ -82,8 +81,13 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.heddle.FairSharePool
  * the engine throwing, or an engine refusing a hand-back, while nobody waits. It means the engine
  * broke its own contract, so it is logged once the lock is released, and never thrown at the call
  * that set the hand-out going. A failure that does reach a waiter is not logged as well: that
- * waiter's [acquire] throws it. A failure handed to a waiter cancelled at that moment is still lost,
- * neither thrown nor logged; tracked by #3587.
+ * waiter's [acquire] throws it.
+ *
+ * A waiter cancelled before it takes its failure, as the failure is handed over or after that but
+ * before the waiter runs, drops it: its [acquire] throws the cancellation, as any cancelled call
+ * does. A failure every waiter it was handed to dropped reached nobody, so it is logged as above,
+ * once however many copies were dropped. One that any waiter took is not logged, though others
+ * dropped it.
  *
  * ## Threads
  *
@@ -227,11 +231,15 @@ public class FairSharePool(
         require(reservation in 1L..LocalHeddle.MAX_RESERVATION) {
             "reservation must be in 1..${LocalHeddle.MAX_RESERVATION}, was $reservation"
         }
-        return suspendCancellableCoroutine { cont ->
+        val delivery = suspendCancellableCoroutine { cont ->
             val waiter = Waiter(leaf, reservation, cont)
             // First, so a cancel that lands while the waiter is queued always finds the handler.
             cont.invokeOnCancellation { mutate { removeWaiter(waiter) } }
             mutate { if (cont.isActive) arrive(waiter) }
+        }
+        return when (delivery) {
+            is Delivery.Outcome -> delivery.outcome
+            is Delivery.Failed -> throw delivery.failure
         }
     }
 
@@ -514,13 +522,18 @@ public class FairSharePool(
         }
     }
 
-    /** Fail every queued waiter with [failure], or, with none queued, have it logged once the lock is released. */
+    /**
+     * Fail every queued waiter with [failure], or, with none queued, have it logged once the lock is
+     * released. Every waiter is handed the same [Delivery.Failed], which counts the copies its
+     * waiters drop, so a failure each of them drops is logged once (see [deliver]).
+     */
     private fun failAll(failure: Throwable) {
         if (queues.isEmpty()) {
             pending += Resumption.Unclaimed(failure)
             return
         }
-        queues.values.forEach { queue -> queue.forEach { pending += Resumption.Fail(it.cont, failure) } }
+        val failed = Delivery.Failed(failure, copies = queues.values.sumOf { it.size })
+        queues.values.forEach { queue -> queue.forEach { pending += Resumption.Fail(it.cont, failed) } }
         queues.clear()
     }
 
@@ -545,26 +558,42 @@ public class FairSharePool(
         }
     }
 
+    /**
+     * Resume one waiter, or log one unclaimed failure. A failure goes out as a value, not through
+     * `resumeWithException`, for the same reason a grant does: only a value resume calls back when
+     * its waiter was cancelled before taking it, whether before this resume or after it and before
+     * the waiter ran. An exception resume to an already-cancelled waiter is ignored outright, so the
+     * failure would reach nobody and say nothing.
+     */
     private fun deliver(resumption: Resumption) {
         when (resumption) {
             is Resumption.Grant -> {
                 beforeResumeForTest(resumption.outcome)
                 val lease = resumption.outcome.lease.id
-                resumption.cont.resume(resumption.outcome) { _, _, _ -> handBack(lease) }
+                resumption.cont.resume(Delivery.Outcome(resumption.outcome)) { _, _, _ -> handBack(lease) }
             }
             is Resumption.Refuse -> {
                 beforeResumeForTest(resumption.outcome)
-                resumption.cont.resume(resumption.outcome)
+                resumption.cont.resume(Delivery.Outcome(resumption.outcome))
             }
             is Resumption.Fail -> {
-                beforeFailForTest(resumption.failure)
-                resumption.cont.resumeWithException(resumption.failure)
+                beforeFailForTest(resumption.failed.failure)
+                resumption.cont.resume(resumption.failed) { _, failed, _ -> dropped(failed) }
             }
             is Resumption.Unclaimed -> {
                 unclaimedForTest(resumption.failure)
                 logUnclaimed(resumption.failure)
             }
         }
+    }
+
+    /**
+     * One waiter dropped its copy of [failed], cancelled before it took it. When that was the last
+     * copy, no waiter took the failure, so it is logged once the lock is released. This runs as a
+     * cancellation callback, so like [handBack] it throws nothing.
+     */
+    private fun dropped(failed: Delivery.Failed) {
+        if (failed.droppedLast()) mutate { pending += Resumption.Unclaimed(failed.failure) }
     }
 
     /**
@@ -583,12 +612,29 @@ public class FairSharePool(
     private fun nowUnits(): Long = origin.elapsedNow().coerceAtLeast(Duration.ZERO).inWholeNanoseconds / costUnitNanos
 
     /** One caller waiting for a slot. Compared by identity, so a cancelled waiter removes only itself. */
-    private class Waiter(val leaf: GroupId, val reservation: Long, val cont: CancellableContinuation<SlotOutcome>)
+    private class Waiter(val leaf: GroupId, val reservation: Long, val cont: CancellableContinuation<Delivery>)
+
+    /** What a waiter is resumed with: [acquire] answers an [Outcome] and throws a [Failed]. */
+    private sealed interface Delivery {
+        class Outcome(val outcome: SlotOutcome) : Delivery
+
+        /**
+         * One hand-out failure, the same instance to each of the [copies] waiters it was handed to.
+         * Only drops are counted, never takes: each copy is either taken or dropped, once, so the
+         * count reaches zero exactly when every copy was dropped, and only on the last drop.
+         */
+        class Failed(val failure: Throwable, copies: Int) : Delivery {
+            private val undropped = atomic(copies)
+
+            /** Count one dropped copy; `true` when it was the last, so no waiter took the failure. */
+            fun droppedLast(): Boolean = undropped.decrementAndGet() == 0
+        }
+    }
 
     private sealed interface Resumption {
-        class Grant(val cont: CancellableContinuation<SlotOutcome>, val outcome: SlotOutcome.Granted) : Resumption
-        class Refuse(val cont: CancellableContinuation<SlotOutcome>, val outcome: SlotOutcome.Refused) : Resumption
-        class Fail(val cont: CancellableContinuation<SlotOutcome>, val failure: Throwable) : Resumption
+        class Grant(val cont: CancellableContinuation<Delivery>, val outcome: SlotOutcome.Granted) : Resumption
+        class Refuse(val cont: CancellableContinuation<Delivery>, val outcome: SlotOutcome.Refused) : Resumption
+        class Fail(val cont: CancellableContinuation<Delivery>, val failed: Delivery.Failed) : Resumption
 
         /** A failure with no waiter queued to throw it to, logged rather than resumed. */
         class Unclaimed(val failure: Throwable) : Resumption
