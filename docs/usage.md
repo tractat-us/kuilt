@@ -39,8 +39,9 @@ Replace `VERSION` with the [latest release](https://central.sonatype.com/artifac
 To check which commit built a jar you downloaded, read its manifest:
 `unzip -p kuilt-core-jvm-VERSION.jar META-INF/MANIFEST.MF`. Every JVM class jar and
 every sources jar names its version in `Implementation-Version` and the full commit
-SHA in `SCM-Revision`. Android consumers find the same pair in the `-android`
-sources jar; the AAR does not carry it. The sources jars of `kuilt-base` also hold
+SHA in `SCM-Revision`. The Android AAR carries the same pair in its own
+`META-INF/MANIFEST.MF`, at the root of the AAR rather than inside its `classes.jar`:
+`unzip -p kuilt-core-android-VERSION.aar META-INF/MANIFEST.MF`. The sources jars of `kuilt-base` also hold
 `GeneratedVersion.kt`, which the build writes and the tag does not contain, so
 leave it out when you diff a sources jar against the tag.
 
