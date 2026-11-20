@@ -114,6 +114,45 @@ class FairSharePoolDroppedFailureTest {
         )
     }
 
+    /**
+     * The arm above with both waiters on one leaf, which is what makes the pool count a copy per
+     * waiter and not per leaf: across two leaves the two counts agree, so only here would a pool
+     * counting one copy per leaf log the dropper's drop as the last, though the taker took it.
+     */
+    @Test
+    fun aFailureOneWaiterTakesIsNotReportedThoughAnotherOnItsLeafDroppedIt() = runTest(timeout = TEST_WEDGE_BACKSTOP) {
+        val p = pool(slots = 1)
+        val a = p.acquire(web).granted()
+        val dropper = launch { p.acquire(web) }
+        val taker = async {
+            try {
+                p.acquire(web)
+                null
+            } catch (failure: Boom) {
+                failure
+            }
+        }
+        runCurrent()
+        check(p.view().queues.mapValues { it.value.size } == mapOf(web to 2)) { "the rig: both waiters did not queue on web" }
+        val boom = Boom()
+        var first = true
+        val rig = failTheHandOut(p, boom, onHandOver = {
+            // A leaf's queue is first in, first out, and the dropper queued first.
+            if (first) dropper.cancel()
+            first = false
+        }) { p.complete(a.id, 3L) }
+        runCurrent()
+        val taken = if (taker.isCompleted) taker.getCompleted() else null
+        // A regression strands the taker: free it, so the test reds instead of hanging.
+        taker.cancel()
+        assertAll(
+            { assertEquals(2, rig.handedOver, "the rig: the failure was handed to both waiters") },
+            { assertTrue(dropper.isCancelled, "the rig: the dropper was cancelled") },
+            { assertIs<Boom>(taken, "the taker's acquire throws the failure") },
+            { assertEquals(emptyList(), rig.unclaimed, "nothing is reported: the failure reached the taker") },
+        )
+    }
+
     private class Rig(val handedOver: Int, val unclaimed: List<Throwable>)
 
     /**
