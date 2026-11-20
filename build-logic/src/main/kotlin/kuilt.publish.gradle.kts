@@ -104,8 +104,8 @@ publishing {
 // Not the klib-producing archives (`wasmJsJar`, `allMetadataJar`): a downstream klib compile reads
 // those bytes as they are, with no runtime-classpath normalization to ignore an attribute, so a
 // per-commit manifest there would recompile every wasm and metadata dependent on every commit.
-// Not the AAR either: AGP builds its `classes.jar` without a Gradle `Jar` task. Android consumers
-// get provenance from `androidReleaseSourcesJar`.
+// The AAR gets the same two attributes in its own `META-INF/MANIFEST.MF`, at the AAR's root and
+// not inside its `classes.jar`, which AGP builds without a Gradle `Jar` task (#3584, below).
 //
 // Both values change more often than the code (#3464): the version on every snapshot, the revision
 // on every commit. They may reach these archives and nothing else. A test task reads every jar on
@@ -131,6 +131,21 @@ tasks.withType<org.gradle.jvm.tasks.Jar>()
             ),
         )
     }
+
+// The published AAR (#3584). Only `bundleReleaseAar`, the one the `androidRelease` publication
+// ships: matching every `BundleAar` would also stamp `bundle<Variant>LocalLintAar`, which a
+// dependent module's lint reads, and lint would then lose its cache on every commit. No in-build
+// task reads the release AAR, so the stamp reaches the published file and nothing else.
+plugins.withId("com.android.library") {
+    val aarProvenance = tasks.register<WriteAarProvenance>("writeAarProvenance") {
+        libraryVersion.set(project.version.toString())
+        revision.set(sourceRevision)
+        outputDirectory.set(layout.buildDirectory.dir("generated/aar-provenance"))
+    }
+    tasks.withType<Zip>().matching { it.name == "bundleReleaseAar" }.configureEach {
+        from(aarProvenance)
+    }
+}
 
 // Per-module POM description. Maven Central rejects publications without one, and
 // this text is what a reader sees in Central's search results and on aggregators
