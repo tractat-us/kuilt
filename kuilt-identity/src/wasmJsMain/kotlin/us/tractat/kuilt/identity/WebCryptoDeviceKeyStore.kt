@@ -61,8 +61,18 @@ private val logger = KotlinLogging.logger("us.tractat.kuilt.identity.WebCryptoDe
  * held. A store remembers the key it read, so a key another tab replaced afterwards is seen at the next
  * page load.
  *
- * Every IndexedDB connection is closed when the call that opened it returns, and closes itself when
- * another tab asks to upgrade the database, so this store never blocks a newer page's upgrade.
+ * Every IndexedDB connection is closed when the call that opened it returns, so this store holds none
+ * between calls. The connections that read and write the key pair also close themselves when another
+ * tab asks to upgrade the database. The grants connection, opened through [IndexedDbDurableStore], does
+ * not, so a newer page's upgrade can wait out one grants call.
+ *
+ * ## Changing the record means changing the version
+ *
+ * A change to what the `device-key` or `grants` record holds must bump the IndexedDB version the
+ * database is opened at. A tab still running the old code then gets a `VersionError`, which throws and
+ * keeps the key, rather than reading the new shape as damage and overwriting it. Every connection opens
+ * version 1 today, the grants one inside [IndexedDbDurableStore] included, which takes no version, so
+ * the bump has to reach that one too.
  *
  * @param database the IndexedDB database the key pair and the grants are kept in.
  * @param grantMedium how a call reaches the grants record; the real one opens [database] through

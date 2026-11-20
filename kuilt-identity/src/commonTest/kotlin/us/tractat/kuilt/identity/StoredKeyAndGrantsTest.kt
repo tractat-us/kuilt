@@ -13,8 +13,9 @@ import kotlin.test.assertTrue
 
 /**
  * The two records a store keeps, on every target: the key as a self-tested JWK, and the grants as one
- * strict record. The desktop store is the first user of both; the Apple and browser stores reuse them,
- * so a provider that cannot write or read a P-256 JWK shows up here, on its own target, first.
+ * strict record. The desktop store is the first user of both, and the Apple store reuses both. The
+ * Android and browser stores keep their keys in the platform's own key store and reuse only the grants
+ * record. So a provider that cannot write or read a P-256 JWK shows up here, on its own target, first.
  */
 class StoredKeyAndGrantsTest {
 
