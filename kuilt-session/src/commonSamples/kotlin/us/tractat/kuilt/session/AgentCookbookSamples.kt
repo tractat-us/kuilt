@@ -445,3 +445,60 @@ public suspend fun hostAdmissionSample(
     }
     return HostAdmission(policy, revocations)
 }
+
+// DRAFT (#3159 Task 2.7): uncompiled, as above. `host(…, admission = …)` is Task 2.4's parameter;
+// `MembershipEvent.Joined.returning` and `ReturningMark` are Task 2.6's.
+
+/**
+ * Host a room its regulars can come back to without being asked, across a restart of this host too.
+ *
+ * Two things outlive the host process, and both are the app's to keep. The host's own key, in the
+ * factory's [DeviceKeyStore]: every pass is signed by it, so a host whose key is new after a restart
+ * honours none of the old ones. And the room's id: a room pass ([GrantReach.ThisRoom]) names the room,
+ * so it works after a restart only if the room comes back under the same [RoomId]. A friend's
+ * [GrantReach.AnyRoomOfIssuer] pass names only the host's key, so it needs the first and not the second.
+ */
+public suspend fun hostARoomTheyCanReturnToSample(
+    factory: RoomFactory,
+    pattern: Pattern,
+    admission: HostAdmission,
+    lobbyCode: String,
+): Room =
+    // A minted id is new in every process, and so is every room pass that names it.
+    factory.host(pattern, roomId = RoomId(lobbyCode), admission = admission)
+
+/**
+ * Say "Ada is back" rather than "someone joined" when a device returns inside its pass: its seat had
+ * gone, but the pass let it back in without asking the admission policy.
+ */
+public suspend fun returningInsideAPassSample(room: Room) {
+    room.events.collect { event ->
+        if (event is MembershipEvent.Joined) {
+            when (val mark = event.returning) {
+                // A newcomer, or a device whose pass ran out or was revoked: the policy let it in.
+                null -> Unit // "Ada joined"
+                // previousId is its peer id last time, or null when the host has forgotten it (after a
+                // host restart, say). event.member.key names the device either way.
+                else -> Unit // "Ada is back"; move what you keyed on mark.previousId to event.member.id
+            }
+        }
+    }
+}
+
+/**
+ * Stop a device coming back: a lost phone, a guest who was asked to leave. Two steps, in this order,
+ * because each does half. Blocking makes the policy refuse it when it knocks as a newcomer; revoking
+ * voids the passes it already holds, and the seat held for it if it is away. Neither removes it from
+ * the room if it is there now.
+ */
+public suspend fun stopADeviceComingBackSample(
+    blocked: MutableStateFlow<Set<DidKey>>,
+    revocations: RevocationList,
+    device: DidKey,
+    nowEpochMs: Long,
+) {
+    // Block first: the moment its passes are void it is a newcomer, and the policy must already say no.
+    blocked.update { it + device }
+    // One past the clock: a pass issued in this same millisecond would otherwise stay good.
+    revocations.revoke(device, notBefore = nowEpochMs + 1)
+}
