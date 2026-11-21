@@ -493,7 +493,8 @@ class SupersededMembershipTest {
         val mark = raw.events.mark()
         val toCarol = raw.sentTo(carol).size
         raw.admit(second, bob, nonce = 3)
-        raw.advanceKeeping(setOf(carol), KEY_SEAT_HEARTBEAT.reconnectWindow / 2)
+        // Past the old seat's loss, and short of the new id's admit timeout, so its challenge is current.
+        raw.advanceKeeping(setOf(carol), KEY_SEAT_ADMIT_TIMEOUT * 3 / 5)
         val lostWhileHeld = raw.events.edgesSince(mark)
         val heardWhileHeld = raw.sentTo(carol).drop(toCarol).farewellsFor(first)
         hold.holdAnswer = null
