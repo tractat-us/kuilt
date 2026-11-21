@@ -133,11 +133,15 @@ public interface ElectionLobby {
      * this peer's pings and never acknowledges, so this keeps retrying until that member calls [leave],
      * goes silent, or this call is cancelled. An app that wants a limit sets its own.
      *
+     * [deviceId] is accepted for symmetry with [awaitRoom], since a peer does not know its role until
+     * the election settles. A host sends no `Hello`, so a host's room ignores it, as
+     * [us.tractat.kuilt.session.SeamRoomFactory.adopt] does.
+     *
      * @throws NotElectedHostException if this peer is not currently [host].
      * @throws LobbyTornException if the underlying seam tears mid-election, or a member drains away or
      *   goes silent (co-electors permanently gone). Terminal and retryable.
      */
-    public suspend fun start(memberName: String? = null): Room
+    public suspend fun start(memberName: String? = null, deviceId: String? = null): Room
 
     /**
      * Await the session as a member: suspend until the elected host freezes the lobby, acknowledge it,
@@ -153,8 +157,12 @@ public interface ElectionLobby {
      * It **does** suspend indefinitely while the lobby is simply empty or still weaving in, or while
      * the elected host is alive and has not called [start] — waiting is what a lobby is for, and is not
      * a collapse. An app that wants a limit sets its own: cancel this call, then [leave].
+     *
+     * [deviceId] is this device's own stable id. It travels in the joiner's `Hello`, and the host
+     * records it as the member's [us.tractat.kuilt.session.MemberIdentity.deviceId], exactly as
+     * [us.tractat.kuilt.session.RoomFactory.join] sends it. Null, the default, sends none.
      */
-    public suspend fun awaitRoom(memberName: String? = null): ElectionOutcome
+    public suspend fun awaitRoom(memberName: String? = null, deviceId: String? = null): ElectionOutcome
 
     /**
      * Leave the lobby, closing the underlying seam — unless a [Room] has already adopted it. Idempotent.
