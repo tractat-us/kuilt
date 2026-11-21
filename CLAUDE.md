@@ -58,7 +58,7 @@ outward unreviewed. It is a router and its reference files (#3601): `SKILL.md` c
 intercepts, the cookbook explains — and the cookbook is an index (`docs/agent-cookbook.md`) over
 seven family files (`docs/agent-cookbook/<family>.md`), so a route names one family file, not the
 whole thing. The seven families are the same seven everywhere: `.claude/rules/`, the cookbook, and
-`reference/`.
+`reference/`. `verifySkillReferences` holds `reference/` to `.claude/rules/` in both directions.
 
 kuilt is where this pattern started and two sibling libraries (`fgn`, `hanab-kt`) copy it, so treat
 the rules below as the reference version rather than a local convention.
@@ -140,8 +140,10 @@ the rules below as the reference version rather than a local convention.
   path components match `[A-Za-z0-9._-]` and do not start with `.` (and past 200 files, 1 MiB a
   file, 4 MiB in all), so a script or a dotfile dropped in here freezes every consumer on its last
   copy. A route-check script belongs under `.github/scripts/`. `verifySkillReferences` (in `check`
-  and the `doc-citations` job) refuses that, a reference file the router never names, a name with
-  no file, and a `Jump to` anchor no cookbook heading carries.
+  and the `doc-citations` job) refuses five things: a reference file the router never names
+  (ORPHAN), a name with no file (DANGLING), a `Jump to` anchor no cookbook heading carries (JUMP),
+  a reference file outside every `.claude/rules/<family>.md` family or a family with no reference
+  file (FAMILY), and anything the sync would refuse, a file containing a `\r` included (SYNC).
 - **Never hand-edit a vendored copy in a consumer repo.** It is a cache; fix it here and let the
   sync carry it down. The corollary is that this copy is the last line of defence — an auto-sync
   propagates corruption just as faithfully as content (#2541).
