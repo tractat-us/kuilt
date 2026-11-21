@@ -2,6 +2,7 @@
 
 package us.tractat.kuilt.conformance
 
+import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -36,6 +37,7 @@ import us.tractat.kuilt.test.TeardownFault
 import us.tractat.kuilt.core.InMemoryLoom
 import us.tractat.kuilt.core.InMemoryTag
 import us.tractat.kuilt.core.Pattern
+import us.tractat.kuilt.core.Tag
 import us.tractat.kuilt.core.PeerId
 import us.tractat.kuilt.core.Seam
 import us.tractat.kuilt.core.SeamState
@@ -332,6 +334,10 @@ public abstract class RoomConformanceSuite {
 
     /**
      * A harness that bundles host and joiner [RoomFactory]s plus its [FaultInjection] fixture.
+     *
+     * [hostFactory] and [joinerFactory] are **distinct devices**, each with its own device key, and
+     * every room [joinerFactory] makes is a device of its own: rooms that share one key store are one
+     * device, which the host's key-to-seat table treats as one key holding several seats (#3159).
      *
      * [clock] and [advanceClock] are shared across the harness so the injected
      * clock stays in sync with virtual-time advancement.
@@ -2252,7 +2258,8 @@ public abstract class RoomConformanceSuite {
         val innerLoom = InMemoryLoom()
         val faultyLoom = FaultyLoom(innerLoom, scope)
         // Fake device keys, so the suite stays on virtual time on wasmJs, where a real key is a
-        // WebCrypto promise. The host is one device and every joiner the harness makes is another.
+        // WebCrypto promise. The host is one device and every room the joiner factory makes is
+        // another: two joins from one shared store would be one device holding two seats.
         fun factory(device: Int) = SeamRoomFactory(
             loom = faultyLoom,
             scope = scope,
@@ -2260,9 +2267,17 @@ public abstract class RoomConformanceSuite {
             deviceKeyStore = fakeKeyStore(device),
             heartbeatConfig = fastHeartbeatConfig,
         )
+        val nextJoinerDevice = atomic(1)
+        val joinerFactory = object : RoomFactory {
+            override suspend fun host(pattern: Pattern, memberName: String?, roomId: RoomId?): Room =
+                factory(nextJoinerDevice.getAndIncrement()).host(pattern, memberName, roomId)
+
+            override suspend fun join(tag: Tag, memberName: String?, deviceId: String?): Room =
+                factory(nextJoinerDevice.getAndIncrement()).join(tag, memberName, deviceId)
+        }
         return RoomHarness(
             hostFactory = factory(device = 0),
-            joinerFactory = factory(device = 1),
+            joinerFactory = joinerFactory,
             faults = FaultInjection.Supported(faultyLoom),
             clock = clock,
             advanceClock = { ms -> clockMs += ms },
