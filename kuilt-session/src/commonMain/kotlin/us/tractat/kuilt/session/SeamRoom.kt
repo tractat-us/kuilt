@@ -833,14 +833,6 @@ internal class SeamRoom(
     private val episodeDetectedAtMs = mutableMapOf<PeerId, Long>()
 
     /**
-     * **Host only.** When each member was last heard from, in epoch-millis off the room clock: the
-     * [Seat.lastContact] that decides which of one key's partitioned seats a new id restores (Decided
-     * 30). Written for every inbound frame from a member ([noteContact]), seeded at admission, reaped
-     * with the member in [removeFromRoster]. Guarded by [lock].
-     */
-    private val lastContactMs = mutableMapOf<PeerId, Long>()
-
-    /**
      * **Host only.** Members whose seat a Proof restored through [JoinerReconnectController.tryResume]
      * whose [JoinerReconnectEvent.Resumed] the reconnect event loop has not handled yet (#3212).
      * Guarded by [lock].
@@ -1564,7 +1556,6 @@ internal class SeamRoom(
     private fun dispatchIncoming(swatch: Swatch) {
         val sender = swatch.sender ?: return
         val bytes = swatch.toByteArray()
-        noteContact(sender)
         when {
             HeartbeatPartitionDetector.isHeartbeatFrame(bytes) -> {
                 // Heartbeat frames are consumed by per-peer detectors via rawIncoming.
@@ -1613,17 +1604,6 @@ internal class SeamRoom(
             isAdmittedPeer(sender) -> routeApplicationFrame(sender, bytes)
             else -> { /* drop: application frame from unadmitted peer */ }
         }
-    }
-
-    /**
-     * **Host only.** Record that a member was just heard from, for [lastContactMs]. Any frame counts,
-     * heartbeats included, since that is what the host's detector counts as contact too. A joiner
-     * holds no seats and pays nothing.
-     */
-    private fun noteContact(sender: PeerId) {
-        if (_role.value != SessionRole.Host) return
-        val now = clock().toEpochMilliseconds()
-        lock.withLock { if (admittedById.containsKey(sender)) lastContactMs[sender] = now }
     }
 
     // ── Admit protocol ────────────────────────────────────────────────────────
@@ -1986,11 +1966,15 @@ internal class SeamRoom(
      * **Under [lock].** The seats the host holds for its joiners, as [decideSeat] reads them. The host's
      * own seat is never among them: [admittedById] holds other peers only.
      */
-    private fun heldSeats(): Map<PeerId, Seat> = admittedById.mapValues { (id, member) ->
+    private fun heldSeats(): Map<PeerId, Seat> = admittedById.mapValues { (_, member) ->
         Seat(
             key = member.key,
             liveness = if (member.liveness is Liveness.Partitioned) SeatLiveness.Partitioned else SeatLiveness.Connected,
-            lastContact = Instant.fromEpochMilliseconds(lastContactMs[id] ?: Long.MIN_VALUE),
+            // 1.6: record when each member was last heard from and pass it here. Until then every seat
+            // ties, so `decideSeat` falls to the lowest peer id; nothing in 1.5 acts on a
+            // `RestoreUnderNewId`. 1.6 adds the room-side test that a key holding two partitioned
+            // seats restores the one heard from most recently (Decided 30), not the lowest id.
+            lastContact = Instant.DISTANT_PAST,
         )
     }
 
@@ -2044,7 +2028,6 @@ internal class SeamRoom(
         )
         val existing = admittedById.values.toList()
         addToRoster(member)
-        if (!closed) lastContactMs[joinerPeerId] = clock().toEpochMilliseconds()
         // The resume secret is minted in the SAME critical section that admits the member — see
         // [resumeSecrets] for the invariant this keeps, and for why only a host that can answer a
         // resume holds one. `closed`: addToRoster admitted nobody, so there is no member to hold a
@@ -4155,7 +4138,6 @@ internal class SeamRoom(
             // Reaped with the member so a long-lived room does not accumulate an entry per peer
             // that ever left. refineWindow's Partitioned gate rejects an announcement for a gone member.
             episodeDetectedAtMs.remove(peerId)
-            lastContactMs.remove(peerId)
             proofResumes.remove(peerId)
             // Pruned with the member, keeping `resumeSecrets.keys == admittedById.keys` (#3165).
             resumeSecrets.remove(peerId)
