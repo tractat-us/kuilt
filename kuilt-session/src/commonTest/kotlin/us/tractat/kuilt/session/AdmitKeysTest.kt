@@ -18,10 +18,12 @@ import us.tractat.kuilt.identity.DeviceKey
 import us.tractat.kuilt.identity.DeviceKeyStore
 import us.tractat.kuilt.identity.DidKey
 import us.tractat.kuilt.identity.Grant
+import us.tractat.kuilt.identity.test.FakeKeyScheme
 import us.tractat.kuilt.identity.test.fakeKeyStore
 import us.tractat.kuilt.session.admit.AdmitMessage
 import us.tractat.kuilt.session.admit.ProtocolVersion
 import us.tractat.kuilt.test.assertAll
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -37,7 +39,7 @@ import kotlin.time.Instant
  * - each **bootstrap** Welcome carries an existing member's key, as the host recorded it;
  * - the **host intro** carries the host's own key, from its [DeviceKeyStore].
  *
- * Nothing here proves a key is held: in this version every key is the sender's claim. Each logical
+ * That a key is held is proved by `KeyAdmissionTest`; here only its passage is checked. Each logical
  * device gets its own `fakeKeyStore(n)` under its own number, so every key in a test is distinct and
  * an assertion that one key arrived cannot be satisfied by another's. The same exchange on real P-256
  * keys is `RealKeyAdmitTest`, on the JVM.
@@ -120,12 +122,12 @@ class AdmitKeysTest {
      */
     @Test
     fun `a host store that fails after its first read does not affect the running host`() =
-        admitsDespiteLaterReadFailure(hostStore = KeyStore(TEST_KEY_A, answers = 1), bobStore = KeyStore(TEST_KEY_B))
+        admitsDespiteLaterReadFailure(hostStore = KeyStore(TEST_DEVICE_A, answers = 1), bobStore = KeyStore(TEST_DEVICE_B))
 
     /** The joiner half of the test above: the joiner's Hello must not read the store again. */
     @Test
     fun `a joiner store that fails after its first read does not affect the running joiner`() =
-        admitsDespiteLaterReadFailure(hostStore = KeyStore(TEST_KEY_A), bobStore = KeyStore(TEST_KEY_B, answers = 1))
+        admitsDespiteLaterReadFailure(hostStore = KeyStore(TEST_DEVICE_A), bobStore = KeyStore(TEST_DEVICE_B, answers = 1))
 
     private fun admitsDespiteLaterReadFailure(hostStore: KeyStore, bobStore: KeyStore) = runTest {
         val loom = InMemoryLoom()
@@ -153,15 +155,13 @@ class AdmitKeysTest {
 
     /**
      * A store that answers its first [answers] [deviceKey] reads and throws on every later one. Its key
-     * is a fixed name that signs nothing, since nothing signs in this protocol version, so the test
-     * never waits on a platform provider.
+     * is a fake device key on the fake scheme, so the room signs and checks the key-proving exchange
+     * (#3211) without ever waiting on a platform provider.
      */
-    private class KeyStore(name: DidKey, val answers: Int = Int.MAX_VALUE) : DeviceKeyStore {
-        val key: DeviceKey = object : DeviceKey {
-            override val id: DidKey = name
+    private class KeyStore(val key: DeviceKey, val answers: Int = Int.MAX_VALUE) : DeviceKeyStore {
+        @OptIn(us.tractat.kuilt.identity.IdentityInternalApi::class)
+        override val keyScheme: us.tractat.kuilt.identity.KeyScheme = FakeKeyScheme(Random(0))
 
-            override suspend fun sign(message: ByteArray): ByteArray = error("nothing signs before the key-proving exchange")
-        }
         var reads = 0
             private set
 
