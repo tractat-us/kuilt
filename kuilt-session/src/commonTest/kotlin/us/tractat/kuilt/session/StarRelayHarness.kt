@@ -371,14 +371,15 @@ internal const val MESH_CHANNEL = "mesh-data"
 internal suspend fun TestScope.meshTrio(): MeshTrio {
     val clock: () -> Instant = { Instant.fromEpochMilliseconds(testScheduler.currentTime) }
     val loom = InMemoryLoom()
-    val factory = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(2), relayHeartbeat)
+    // One factory per device, each with its own key store, so the three rooms are three devices.
+    fun device(index: Int) = SeamRoomFactory(loom, backgroundScope, clock, fakeKeyStore(index), relayHeartbeat)
 
-    val hostRoom = factory.host(Pattern(ROOM))
-    val originRoom = factory.join(InMemoryTag("origin"))
+    val hostRoom = device(2).host(Pattern(ROOM))
+    val originRoom = device(3).join(InMemoryTag("origin"))
     hostRoom.roster.first { it.size == 1 }
 
     val subjectWire = WireTapSeam(loom.join(InMemoryTag("subject")), backgroundScope)
-    val subjectRoom = factory.adopt(subjectWire, SessionRole.Joiner)
+    val subjectRoom = device(4).adopt(subjectWire, SessionRole.Joiner)
     val subject = observe(subjectRoom, subjectWire)
 
     hostRoom.roster.first { it.size == 2 }
