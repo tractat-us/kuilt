@@ -327,7 +327,8 @@ class ProvenRestoreTest {
             { assertEquals(daveKey.id, host.member(dave)?.key, "and Dave keeps his own") },
             { assertEquals(Liveness.Connected, host.member(dave)?.liveness) },
             { assertTrue(edges.none { it is MembershipEvent.Left && it.peerId == dave }, "Dave's connected seat is never superseded") },
-            { assertTrue(edges.none { it is MembershipEvent.Left && it.reason is LeaveReason.Superseded }, edges.render()) },
+            // No seat but the released one leaves: nothing is superseded (a 1.6 reason, not yet a type).
+            { assertTrue(edges.none { it is MembershipEvent.Left && it.peerId != bob }, edges.render()) },
             { assertTrue(host.hold.calls.isEmpty()) },
         )
         host.room.leave()
