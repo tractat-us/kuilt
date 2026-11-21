@@ -70,14 +70,16 @@ internal class PendingChallenges(private val clock: () -> Instant) {
     /**
      * Records a challenge sent to [sender] in answer to [hello], replacing any entry [sender] already
      * had, and first sweeps every expired entry of every sender. The entry stops being takeable or
-     * current at [deadline]. [hostNonce] is copied.
+     * current at [deadline]. [hostNonce] is copied. Returns the new entry's generation, for a caller
+     * that must [retire] it without first taking it.
      */
-    fun open(sender: PeerId, hello: Hello, hostNonce: ByteArray, deadline: Instant) {
+    fun open(sender: PeerId, hello: Hello, hostNonce: ByteArray, deadline: Instant): Long {
         val now = clock()
-        lock.withLock {
+        return lock.withLock {
             entries.values.removeAll { it.pending.expiredAt(now) }
             val generation = ++nextGeneration
             entries[sender] = Entry(Pending(generation, hello, hostNonce.copyOf(), deadline))
+            generation
         }
     }
 
