@@ -520,16 +520,20 @@ class SupersededMembershipTest {
 
     /**
      * Two tabs of one device come back under two new ids against its one partitioned seat, and both
-     * proofs are decided while the window is being asked about. Only one exchange asks: the other
-     * waits for that one to act on its answer and then decides again. So the first takes the seat
-     * over, the second finds the key's seat connected and gets one of its own (Decided 30), and no
-     * one sees a `Resumed`, an `Unpaused` or a `ResumeAck` for the seat that left.
+     * proofs are decided while the window is being asked about. The first exchange's `Success` is
+     * then held before the room acts on it, which is where a second ask's refusal used to land and
+     * release the seat the first one had just been given. Only one exchange asks: the other waits
+     * for that one to act on its answer and then decides again. So the first takes the seat over,
+     * the second finds the key's seat connected and gets one of its own (Decided 30), and no one
+     * sees a `Resumed`, an `Unpaused` or a `ResumeAck` for the seat that left.
      */
     @Test
     fun twoNewIdsForOneSeatTakeItOverOnceAndSeatTheOtherBeside() = runTest {
         val third = PeerId("bob-3")
         val gate = CompletableDeferred<Unit>()
         val hold = ObservedHold(gate = gate)
+        val firstAnswer = CompletableDeferred<Unit>()
+        hold.holdCall[0] = firstAnswer
         val raw = rawHost(setOf(first, second, third, carol), hold)
         val bob = fakeDeviceKey(1)
         raw.admit(first, bob, nonce = 1)
@@ -543,12 +547,16 @@ class SupersededMembershipTest {
         val welcomedThirdWhileAsking = raw.sentTo(third).welcomesFor(third).size
         gate.complete(Unit)
         testScheduler.runCurrent()
+        val firstVerdict = hold.verdicts.firstOrNull()
+        firstAnswer.complete(Unit)
+        testScheduler.runCurrent()
         val events = raw.events.since(mark)
         val edges = raw.events.edgesSince(mark)
         val heard = raw.sentTo(carol).drop(toCarol)
 
         assertAll(
             { assertEquals(0, welcomedThirdWhileAsking, "rig: the second exchange was decided while the first asked") },
+            { assertEquals(ResumeResult.Success, firstVerdict, "rig: the first exchange's Success was held before it was acted on") },
             { assertEquals(listOf(first), hold.calls.map { it.peerId }, "one exchange asks about the seat") },
             { assertEquals(listOf(superseded(first, by = second)), edges.filterIsInstance<MembershipEvent.Left>(), edges.render()) },
             { assertEquals(listOf(second, third), edges.filterIsInstance<MembershipEvent.Joined>().map { it.member.id }, edges.render()) },
@@ -587,7 +595,8 @@ class SupersededMembershipTest {
         val mark = raw.events.mark()
         val toCarol = raw.sentTo(carol).size
         raw.admit(second, bob, nonce = 3)
-        raw.advanceKeeping(setOf(carol), KEY_SEAT_HEARTBEAT.interval * 2)
+        // The healed seat keeps talking, so it is still connected when the test reads it.
+        raw.advanceKeeping(setOf(carol, first), KEY_SEAT_HEARTBEAT.interval * 2)
         val events = raw.events.since(mark)
         val heard = raw.sentTo(carol).drop(toCarol)
 
