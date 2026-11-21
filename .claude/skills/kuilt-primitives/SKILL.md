@@ -5,49 +5,32 @@ description: Use BEFORE writing any networking, session, shared-state, telemetry
 
 # kuilt primitives — check before you build
 
-Read the **one** file your symptom names.
+kuilt very likely ships the thing you are about to write. The four below are the ones
+written by hand most often, so they route from here. For anything else, open the one
+reference file your family names: it lists every route, row by row.
 
-## Don't build this yourself
-
-Rows pair `;`-separated groups in order.
+## The four everyone hand-rolls
 
 |You're about to write…|Use instead|Jump to|
 |---|---|---|
-|a rejoin/reconnect loop, a resume token, a grace window; why a rejoin was refused|`Room.resumeToken` + `Room.resume`; `ResumeResult.JoinerOutcome` (`code.retryable`)|`session.md#rejoin--reconnect`|
-|a device key/did:key kept across launches, a returning device; a "remember this device" pass, revoked across restarts; who joins, testing it|`DeviceKeyStore.platform` (`DeviceKeyStoreConformanceSuite`) → `DeviceKey` + `DidKey`; `Grant` + `GrantTrust`/`RevocationList.open`; `AdmissionPolicy`/`HostAdmission`/`admissionRequest`|`session.md#device-identity--return`|
-|a "why did we drop" classifier; a retry/back-off loop; a per-session id every peer agrees on|`MembershipEvent.Partitioned.reason` + `HostLost.reason` (`ReconnectReason`/`FailureReason`); `ExponentialBackoff`; `Room.roomId`/`RoomFactory.host(…, roomId = …)`|`session.md#rejoin--reconnect`|
-|a heartbeat, an idle reaper, "is this peer alive"; reaping an unjoined room; a `pendingSeats` map|`HeartbeatPartitionDetector`; `SoloDeadlineDetector`; `JoinerReconnectController`|`session.md#liveness--presence`|
-|a "reconnecting…" flag, a `lastSeen` map, a seat-release countdown; that surface for a **game**; "you are offline" vs "theirs"|`Room.roster` + `Member.liveness` + `Liveness.Partitioned` (not `Room.events`); `RoomGameSession.presence`/`.roster` via `gameOverRoom`; `Room.localFabric` + `MembershipEvent.LocalFabricLost`/`LocalFabricRestored`|`session.md#liveness--presence`|
-|`room.incoming.filter { it.sender == peer }`, a member's first frame lost before subscribing|`Room.incomingFrom` (`FramesLost`)|`session.md#per-member-frames`|
-|a `delay` between a last send and `leave`/`close`|`Room`/`Seam.flush` → `FlushOutcome`|`session.md#a-last-frame-before-leaving`|
-|a `host == selfId` check, re-electing a host that left mid-lobby|`SeamRoomFactory.electLobby` → `awaitRoom` → `ElectionOutcome.BecameHost` → `start()`|`session.md#host-election--the-lobby`|
-|a propose→commit turn/session facade, host election with a term|`GameSession` + `TurnSequencer`|`consensus.md#consensus--turns`|
-|a server holding the log clients propose into, a client outliving its server|`ClusterClient` (`clusterClient`/`clusterClientWithNode`) + `ServerCluster` (`serverCluster`)|`consensus.md#when-one-of-the-peers-is-a-server`|
-|a Raft term/vote/log surviving a restart, an `expect`/`actual` `RaftStorage`|`DurableStoreRaftStorage.open(store)` + `RaftStorageConformanceSuite`|`consensus.md#durable-consensus-state`|
-|a last-write-wins register, a grow-only or add/remove set, a shared JSON document; trimming a log that only grows; wanting the *edits* not the value|`LWWRegister`/`LWWMap`, `GSet`/`GCounter`/`PNCounter`, `ORSet`/`ORMap`, `BoundedCounter`, `Causal`, `CausalMap`, `EphemeralMap`, `JsonCrdt` (`Patch`); `Rga.dropWindow` + `VersionVector.contiguous`; `OpLogCrdt` (`operations`/`classify`/`dotOf`)|`replication.md#replicated-data`|
-|replicating a CRDT by hand; "claim it only if it's free"; a hop so two guests can see each other; averaging model updates privately; comparing two peers' state as one number; a write lost to close|`Quilter`; `Quilter.mutateOrSkip { … }`; `Room.channel(id)`; `FedAvg` + `TrainingUpdate`; `canonicalDigest`; `Quilter.drainAndClose`|`replication.md#replicated-data`|
-|a session too big for all-to-all|`GossipSeam` + `deltaTargets = { gossip.activePeers.value }` (`recommendedActiveViewSize`, `FullFanout`, `hostedOverlay`)|`replication.md#scaling-to-many-peers`|
-|dealing cards nobody can peek at|`DealSession` + `SraScheme()`|`replication.md#dealing-cards-nobody-can-peek-at`|
-|a shared random nobody could steer — a seed, a die roll|`FairRandom.roll()`|`replication.md#nobody-chose-that-number`|
-|a `seenIds` set|`GSet`/kuilt dedup|`replication.md#dedup`|
-|a `Long` total that must not wrap; cross-multiplied fractions, `a * b / c`|`plusOrNull`/`timesOrNull`; `compareProducts`, `mulDiv`, `WideSum`, `Int128`|`replication.md#counting-past-what-a-long-holds`|
-|a longer-lived copy of a replicated log; replaying it, a resume cursor|`BoltDecorator` + `AppliedOpSink` (`WarpLogRecordExporter(appliedOps = …)`); `Bolt.replay` + `ReplayScope` → `CleanTail`/`Truncated`; `Bolt.durability()`|`replication.md#archiving-what-the-live-replica-forgets`|
-|merging discovery feeds into one roster; a `try`/`catch` per browse feed|`discoveryRoster` (`onSourceFailure`)|`fabrics.md#discovery`|
-|a sweeper over a discovery list — departed peers on screen|`PeerDiscoverySource.departures()` + `DiscoverySourceConformanceSuite`|`fabrics.md#peers-pile-up-and-are-never-removed`|
-|a peer-supplied id straight into a `Set<PeerId>`|`PeerIdentityRegistry`|`fabrics.md#a-peer-id-off-the-wire-straight-into-a-setpeerid`|
-|a 4-byte length prefix, a reassembly loop over a socket|`framed()` → `handshaking()`|`fabrics.md#your-own-transport`|
-|that, over plain TCP|`TcpLoom.host`/`.join`|`fabrics.md#plain-tcp-is-already-assembled`|
-|a bare `webSocketSession`; a socket a cancelled dial left open|`ownedWebSocketSession`|`fabrics.md#a-cancelled-dial`|
-|looping a frame back to yourself, a `peers.forEach { sendTo(it, …) }` fan-out|`broadcast`; `sendTo(selfId, …)` throws|`fabrics.md#sending-to-yourself`|
+|a rejoin/reconnect loop, a resume token, a grace window|`Room.resumeToken` + `Room.resume`|`session.md#rejoin--reconnect`|
+|a last-write-wins register, a set, a shared JSON document; replicating a CRDT by hand|`LWWRegister`/`LWWMap`, `GSet`, `ORSet`/`ORMap`, `JsonCrdt`; `Quilter`|`replication.md#replicated-data`|
+|a `try` inside `onEach { … }.launchIn(scope)`, a pump that dies silently|`Flow.pumpIn` (`PumpFailure.ITEM`/`UPSTREAM`)|`fabrics.md#long-lived-pumps`|
 |a hard-coded chunk size, a `FrameTooLargeException`|`Room`/`Seam.maxPayloadBytes`, then `PayloadTooLarge`|`fabrics.md#payload-limits`|
-|a `try` inside `onEach { … }.launchIn(scope)`, a pump that dies silently|`Flow.pumpIn` (`PumpFailure.ITEM`/`UPSTREAM`, `PumpVerdict`)|`fabrics.md#long-lived-pumps`|
-|a `MutableStateFlow<SeamState>` or a `closed` flag|`SeamStateGate`|`fabrics.md#a-seams-terminal-state`|
-|bytes outliving the process, an `fsync`-rename dance; which kuilt wrote them|`DurableStore` + `StoreKey` (`InMemoryDurableStore`, one per platform); `KuiltVersion.VERSION` (`:kuilt-base`)|`fabrics.md#durable-storage`|
-|encrypting to a public key, bytes only one recipient can open|`SealedBox.seal`/`open` + `SealPublicKey`/`SealPrivateKey`|`replication.md#sealed-boxes`|
-|fair-share scheduler, "3× the share", a lease per slot, awaiting a slot; config trees, reloads, attached children, N at once, why it waits, orphans, restart; quota ledger across peers; minting quota at runtime; gating a `WarpNode` by lane; the bare pick|`LocalHeddle`, `FairSharePool.withSlot`; `Topology.from`, `apply`/`attach`, `maxConcurrent`, `explain`, `reconcileLeases`, `persist`/`restore`; `HeddleNode.reserve`/`complete`; `heddleGoverned`; `HeddleAdmissionControl`; `HeddlePolicy.pick`, `FairShareAllocator`|`heddle.md#which-engine-one-process-or-many-peers`|
-|"only run on a GPU / in-region peer", a placement predicate|`Affinity` + `TaskDescriptor.where` + `CapSet`|`warp.md#where-a-task-may-run-location-eligibility`|
-|a content-hash blob cache; running code another peer sent you, an `eval`|`Creel` + `BobbinExchange`; `WasmRuntime` + `WasmSandboxConfig` + `WarpLazyFetch`|`warp.md#code-mobility`|
-|a flush-per-line log exporter, "logging stalls the app"; stamping a line's session/game; resetting a telemetry store; is telemetry landing; a loop of metric writes|`WarpLogRecordExporter.export(records)` + `installLogCapture`; `withLogContext { … }`, **not** `CaptureConfig.attributeMapper`; `WarpTelemetry.clear()`; `WarpTelemetry.health` + `LogCaptureInstallation.health` (`CaptureHealth.droppedEvents`); `WarpMetricExporter.record`|`otel.md#telemetry--log-capture`|
+
+## Everything else — read your family's file
+
+Paths are relative to this skill's directory. Each file is a few rows; read it whole.
+
+|Family|Read|What it routes, and its top symbols|
+|---|---|---|
+|Session|`reference/session.md`|rejoin and why a drop happened, a device's key and its pass back in, liveness and presence, per-member frames, a last frame, host election — `Room`, `DeviceKeyStore`, `Grant`, `AdmissionPolicy`, `HeartbeatPartitionDetector`, `JoinerReconnectController`, `Room.incomingFrom`, `Room.flush`, `SeamRoomFactory.electLobby`|
+|Replication|`reference/replication.md`|converging state, a room too big for all-to-all, dealing, fair random, dedup, overflow-safe totals, archives, sealed boxes — the CRDT zoo, `Quilter`, `GossipSeam`, `DealSession`, `FairRandom`, `mulDiv`/`WideSum`, `BoltDecorator`, `SealedBox`|
+|Fabrics|`reference/fabrics.md`|discovery, a peer id off the wire, framing a stream, TCP, a cancelled dial, sending to yourself, a seam's terminal state, durable storage — `discoveryRoster`, `PeerIdentityRegistry`, `framed()`, `TcpLoom`, `ownedWebSocketSession`, `SeamStateGate`, `DurableStore`, `KuiltVersion`|
+|Consensus|`reference/consensus.md`|propose/commit turns, a server holding the log, Raft state across a restart — `GameSession`, `TurnSequencer`, `ClusterClient`, `ServerCluster`, `DurableStoreRaftStorage`|
+|Heddle|`reference/heddle.md`|fair-share scheduling and quota ledgers — `LocalHeddle`, `FairSharePool`, `HeddleNode`, `heddleGoverned`|
+|Otel|`reference/otel.md`|log capture, log context, telemetry health, batched metrics — `installLogCapture`, `withLogContext`, `WarpTelemetry`, `WarpMetricExporter`|
+|Warp|`reference/warp.md`|where a task may run, a blob cache, running code another peer sent — `Affinity`, `Creel`, `WasmRuntime`|
 
 ## Fetching a route
 
@@ -58,5 +41,6 @@ In kuilt, read it directly; consumers take the first working rung:
 2. `gh api -H 'Accept: application/vnd.github.raw' "repos/tractat-us/kuilt/contents/<path>?ref=main"`
 3. `curl -fsSL https://raw.githubusercontent.com/tractat-us/kuilt/main/<path>`
 
-**Editing this skill:** description ≤ 1,536 chars, body ≤ 8 KiB.
-Move prose to `docs/agent-cookbook*`, never drop a route.
+**Editing this skill:** description ≤ 1,536 chars, this body ≤ 8 KiB, each `reference/` file ≤ 4 KiB.
+A new route is a row in its family's file; past 4 KiB, split it into `reference/<family>/<section>.md`.
+Name every reference file here. Move prose to `docs/agent-cookbook*`, never drop a route.
